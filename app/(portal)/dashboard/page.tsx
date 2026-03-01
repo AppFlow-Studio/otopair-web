@@ -71,9 +71,10 @@ const teamStatusCycle = [
 ];
 
 export default function DashboardPage() {
-  const { user } = useUser();
+  const { user, isLoaded: isUserLoaded, isSignedIn } = useUser();
   const router = useRouter();
-  const myShops = useQuery(api.shops.getMyShops);
+  const shouldFetchShops = isUserLoaded && isSignedIn;
+  const myShops = useQuery(api.shops.getMyShops, shouldFetchShops ? {} : "skip");
   const shopId = myShops?.[0]?._id;
   const teamMembers = useQuery(
     api.invitations.getTeamMembers,
@@ -89,12 +90,18 @@ export default function DashboardPage() {
   );
 
   useEffect(() => {
-    if (myShops !== undefined && myShops.length === 0) {
-      router.replace("/shop/setup");
-    }
-  }, [myShops, router]);
+    if (!shouldFetchShops || myShops === undefined || myShops.length > 0) return;
 
-  if (myShops === undefined || myShops.length === 0) return null;
+    // On initial sign-in, auth/user records can settle asynchronously.
+    // Delay redirect slightly so transient empty states do not mis-route.
+    const redirectTimer = window.setTimeout(() => {
+      router.replace("/shop/setup");
+    }, 1200);
+
+    return () => window.clearTimeout(redirectTimer);
+  }, [myShops, router, shouldFetchShops]);
+
+  if (!shouldFetchShops || myShops === undefined || myShops.length === 0) return null;
 
   const firstName = user?.firstName ?? "";
   const userInitials = `${user?.firstName?.[0] ?? ""}${user?.lastName?.[0] ?? ""}`.toUpperCase() || "U";
@@ -102,7 +109,7 @@ export default function DashboardPage() {
   return (
     <div>
       {/* Desktop sub-header with search */}
-      <div className="-mx-6 -mt-6 hidden lg:flex items-center justify-between px-8 py-4 bg-card border-b border-border mb-8">
+      <div className="-mx-6 -mt-6 hidden lg:flex items-center justify-between px-8 py-2.5 bg-card border-b border-border mb-4">
         <div className="flex-1 max-w-lg">
           <div className="relative text-muted-foreground focus-within:text-foreground">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -133,30 +140,30 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto space-y-8">
+      <div className="max-w-7xl mx-auto space-y-4 lg:space-y-3">
         {/* Greeting + Action pills */}
-        <div className="space-y-6">
-          <h1 className="text-3xl font-semibold text-foreground tracking-tight">
+        <div className="space-y-3 lg:space-y-2">
+          <h1 className="text-2xl lg:text-xl font-semibold text-foreground tracking-tight">
             Welcome{firstName ? `, ${firstName}` : ""}
           </h1>
-          <div className="flex flex-wrap gap-3">
-            <button className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-full text-sm font-medium hover:opacity-90 transition-opacity">
+          <div className="flex flex-wrap gap-2">
+            <button className="flex items-center gap-2 px-3 py-1.5 bg-primary text-primary-foreground rounded-full text-sm font-medium hover:opacity-90 transition-opacity">
               <Plus className="w-4 h-4" />
               Accept Job
             </button>
-            <button className="flex items-center gap-2 px-4 py-2 bg-card border border-border rounded-full text-sm font-medium text-secondary-foreground hover:bg-muted transition-colors">
+            <button className="flex items-center gap-2 px-3 py-1.5 bg-card border border-border rounded-full text-sm font-medium text-secondary-foreground hover:bg-muted transition-colors">
               <CalendarDays className="w-4 h-4" />
               New Booking
             </button>
-            <button className="flex items-center gap-2 px-4 py-2 bg-card border border-border rounded-full text-sm font-medium text-secondary-foreground hover:bg-muted transition-colors">
+            <button className="flex items-center gap-2 px-3 py-1.5 bg-card border border-border rounded-full text-sm font-medium text-secondary-foreground hover:bg-muted transition-colors">
               <TrendingUp className="w-4 h-4" />
               View Revenue
             </button>
-            <Link href="/team" className="flex items-center gap-2 px-4 py-2 bg-card border border-border rounded-full text-sm font-medium text-secondary-foreground hover:bg-muted transition-colors">
+            <Link href="/team" className="flex items-center gap-2 px-3 py-1.5 bg-card border border-border rounded-full text-sm font-medium text-secondary-foreground hover:bg-muted transition-colors">
               <UserPlus className="w-4 h-4" />
               Manage Team
             </Link>
-            <button className="flex items-center gap-2 px-4 py-2 ml-auto bg-card border border-dashed border-border rounded-full text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+            <button className="flex items-center gap-2 px-3 py-1.5 lg:ml-auto bg-card border border-dashed border-border rounded-full text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
               <SlidersHorizontal className="w-4 h-4" />
               Customize
             </button>
@@ -164,17 +171,17 @@ export default function DashboardPage() {
         </div>
 
         {/* Main grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
           {/* Revenue Card */}
-          <div className="bg-card border border-border rounded-xl shadow-sm hover:shadow-md transition-shadow p-6 flex flex-col justify-between relative overflow-hidden">
+          <div className="bg-card border border-border rounded-xl shadow-sm hover:shadow-md transition-shadow p-4 lg:p-3.5 h-[22rem] lg:h-[19.5rem] flex flex-col justify-between relative overflow-hidden">
             <div className="flex justify-between items-start z-10 relative">
               <div>
-                <div className="flex items-center gap-2 mb-1">
+                <div className="flex items-center gap-2 mb-0.5">
                   <span className="text-sm font-medium text-muted-foreground">Total Revenue</span>
                   <BadgeCheck className="w-4 h-4 text-blue-500" />
                 </div>
-                <div className="text-4xl font-semibold text-foreground tracking-tight">$15,420.00</div>
+                <div className="text-3xl lg:text-2xl font-semibold text-foreground tracking-tight">$15,420.00</div>
               </div>
               <div className="flex gap-2">
                 <button className="p-1.5 text-muted-foreground hover:text-foreground border border-border rounded hover:bg-muted bg-card transition-colors">
@@ -194,13 +201,13 @@ export default function DashboardPage() {
               </span>
             </div>
             {/* Decorative area chart — SVG fill/stroke can't use CSS vars in attributes */}
-            <div className="absolute bottom-0 left-0 right-0 h-48 pointer-events-none">
+            <div className="absolute bottom-0 left-0 right-0 h-24 pointer-events-none">
               <svg className="w-full h-full" viewBox="0 0 100 50" preserveAspectRatio="none">
                 <path d="M0 50 L0 35 Q 10 30 20 38 T 40 32 T 60 25 T 80 15 T 100 5 L 100 50 Z" fill="#EEF2FF" />
                 <path d="M0 35 Q 10 30 20 38 T 40 32 T 60 25 T 80 15 T 100 5" fill="none" stroke="#6366F1" strokeWidth="0.5" vectorEffect="non-scaling-stroke" />
               </svg>
             </div>
-            <div className="flex justify-between text-xs text-muted-foreground z-10 relative pt-4 mt-auto">
+            <div className="flex justify-between text-xs text-muted-foreground z-10 relative pt-2 mt-auto">
               <span>Oct 1</span>
               <span>Oct 8</span>
               <span>Oct 15</span>
@@ -210,17 +217,17 @@ export default function DashboardPage() {
           </div>
 
           {/* Active Jobs + Pending sub-grid */}
-          <div className="grid grid-cols-2 gap-6">
+          <div className="grid grid-cols-2 gap-4 h-[22rem] lg:h-[19.5rem]">
 
             {/* Active Jobs */}
-            <div className="bg-card border border-border rounded-xl shadow-sm hover:shadow-md transition-shadow p-6 flex flex-col">
-              <div className="flex justify-between items-center mb-4">
+            <div className="bg-card border border-border rounded-xl shadow-sm hover:shadow-md transition-shadow p-4 lg:p-3.5 flex flex-col min-h-0">
+              <div className="flex justify-between items-center mb-3">
                 <h3 className="text-lg font-medium text-foreground">Active Jobs</h3>
                 <button className="text-muted-foreground hover:text-foreground transition-colors">
                   <MoreVertical className="w-5 h-5" />
                 </button>
               </div>
-              <div className="flex-1 space-y-4 overflow-y-auto">
+              <div className="flex-1 space-y-3 overflow-y-auto">
                 {activeJobs === undefined ? (
                   <p className="text-sm text-muted-foreground">Loading…</p>
                 ) : activeJobs.length === 0 ? (
@@ -245,7 +252,7 @@ export default function DashboardPage() {
                   })
                 )}
               </div>
-              <div className="mt-auto pt-4">
+              <div className="mt-auto pt-3">
                 <button className="w-full text-xs font-medium text-muted-foreground hover:text-foreground flex items-center justify-center transition-colors">
                   View Board
                   <ArrowRight className="w-3.5 h-3.5 ml-1" />
@@ -254,8 +261,8 @@ export default function DashboardPage() {
             </div>
 
             {/* Pending Jobs */}
-            <div className="bg-muted/50 border border-dashed border-border rounded-xl p-6 flex flex-col">
-              <div className="flex justify-between items-start mb-4">
+            <div className="bg-muted/50 border border-dashed border-border rounded-xl p-4 lg:p-3.5 flex flex-col min-h-0">
+              <div className="flex justify-between items-start mb-3">
                 <div>
                   <h3 className="text-lg font-medium text-foreground">Pending</h3>
                   <p className="text-xs text-muted-foreground mt-1">Needs Approval</p>
@@ -264,7 +271,7 @@ export default function DashboardPage() {
                   {pendingJobs.length}
                 </span>
               </div>
-              <div className="flex-1 space-y-3 overflow-y-auto">
+              <div className="flex-1 space-y-2 overflow-y-auto">
                 {pendingJobs.map((job) => (
                   <div key={job.id} className="bg-card p-3 rounded-lg border border-border shadow-sm">
                     <div className="flex justify-between items-start mb-2">
@@ -289,14 +296,14 @@ export default function DashboardPage() {
           </div>
 
           {/* Today's Bookings */}
-          <div className="bg-card border border-border rounded-xl shadow-sm hover:shadow-md transition-shadow p-6 h-96 flex flex-col">
-            <div className="flex justify-between items-center mb-6">
+          <div className="bg-card border border-border rounded-xl shadow-sm hover:shadow-md transition-shadow p-4 lg:p-3.5 h-64 lg:h-56 flex flex-col">
+            <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium text-foreground">Today&apos;s Bookings</h3>
               <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-muted text-muted-foreground transition-colors">
                 <Plus className="w-5 h-5" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto pr-2 space-y-4">
+            <div className="flex-1 overflow-y-auto pr-2 space-y-3">
               {todaysBookings === undefined ? (
                 <p className="text-sm text-muted-foreground">Loading…</p>
               ) : todaysBookings.length === 0 ? (
@@ -304,7 +311,7 @@ export default function DashboardPage() {
               ) : (
                 todaysBookings.map((booking, index) => (
                   <div key={booking._id} className="flex items-center justify-between cursor-pointer p-2 -mx-2 rounded-lg hover:bg-muted transition-colors">
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-3">
                       <div className={`w-10 h-10 rounded-full flex items-center justify-center font-medium text-sm shrink-0 ${avatarColors[index % avatarColors.length]}`}>
                         {booking.initials}
                       </div>
@@ -323,7 +330,7 @@ export default function DashboardPage() {
                 ))
               )}
             </div>
-            <div className="mt-4 pt-4 border-t border-border">
+            <div className="mt-3 pt-3 border-t border-border">
               <Link href="/jobs" className="flex items-center text-sm font-medium text-primary hover:text-primary/80 transition-colors">
                 View all bookings
                 <ArrowRight className="w-4 h-4 ml-1" />
@@ -332,8 +339,8 @@ export default function DashboardPage() {
           </div>
 
           {/* Team Status */}
-          <div className="bg-card border border-border rounded-xl shadow-sm hover:shadow-md transition-shadow p-6">
-            <div className="flex justify-between items-center mb-6">
+          <div className="bg-card border border-border rounded-xl shadow-sm hover:shadow-md transition-shadow p-4 lg:p-3.5 h-64 lg:h-56 flex flex-col">
+            <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-medium text-foreground">Team Status</h3>
               <Link href="/team">
                 <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-muted text-muted-foreground transition-colors">
@@ -341,7 +348,7 @@ export default function DashboardPage() {
                 </button>
               </Link>
             </div>
-            <div className="space-y-4">
+            <div className="flex-1 overflow-y-auto space-y-3">
               {teamMembers === undefined ? (
                 <p className="text-sm text-muted-foreground">Loading…</p>
               ) : teamMembers.length === 0 ? (
@@ -376,7 +383,7 @@ export default function DashboardPage() {
                 })
               )}
             </div>
-            <div className="mt-8 flex justify-between items-center pt-4 border-t border-border text-sm">
+            <div className="mt-4 flex justify-between items-center pt-3 border-t border-border text-sm">
               <span className="text-muted-foreground">
                 {teamMembers ? `${teamMembers.length} member${teamMembers.length !== 1 ? "s" : ""}` : ""}
               </span>

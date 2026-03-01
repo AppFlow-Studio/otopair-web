@@ -6,7 +6,6 @@ import { usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import {
   LayoutDashboard,
-  Store,
   Briefcase,
   Calendar,
   Users,
@@ -18,7 +17,6 @@ import { useState } from "react";
 
 const sidebarLinks = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/shop", label: "Shop", icon: Store },
   { href: "/jobs", label: "Jobs", icon: Briefcase },
   { href: "/schedule", label: "Schedule", icon: Calendar },
   { href: "/team", label: "Team", icon: Users },

@@ -12,15 +12,21 @@ import {
   Settings,
   Menu,
   X,
+  ChevronDown,
+  PlusCircle,
+  List,
 } from "lucide-react";
 import { useState } from "react";
 
 const sidebarLinks = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/jobs", label: "Jobs", icon: Briefcase },
   { href: "/schedule", label: "Schedule", icon: Calendar },
   { href: "/team", label: "Team", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
+];
+
+const jobsSubLinks = [
+  { href: "/jobs/create", label: "Create Job", icon: PlusCircle },
+  { href: "/jobs", label: "All Jobs", icon: List },
 ];
 
 export default function PortalLayout({
@@ -30,6 +36,8 @@ export default function PortalLayout({
 }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const isJobsActive = pathname === "/jobs" || pathname.startsWith("/jobs/");
+  const [jobsOpen, setJobsOpen] = useState(isJobsActive);
 
   return (
     <div className="min-h-screen flex bg-gray-50">
@@ -59,6 +67,67 @@ export default function PortalLayout({
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1">
+          {/* Dashboard */}
+          <Link
+            href="/dashboard"
+            onClick={() => setSidebarOpen(false)}
+            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              pathname === "/dashboard" || pathname.startsWith("/dashboard/")
+                ? "bg-blue-50 text-blue-700"
+                : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+            }`}
+          >
+            <LayoutDashboard className="w-5 h-5" />
+            Dashboard
+          </Link>
+
+          {/* Jobs accordion */}
+          <div>
+            <button
+              onClick={() => setJobsOpen(!jobsOpen)}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors w-full ${
+                isJobsActive
+                  ? "bg-blue-50 text-blue-700"
+                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+              }`}
+            >
+              <Briefcase className="w-5 h-5" />
+              <span className="flex-1 text-left">Jobs</span>
+              <ChevronDown
+                className={`w-4 h-4 transition-transform duration-200 ${jobsOpen ? "rotate-180" : ""}`}
+              />
+            </button>
+            <div
+              className="overflow-hidden transition-all duration-200"
+              style={{ maxHeight: jobsOpen ? "120px" : "0px" }}
+            >
+              <div className="mt-1 ml-4 space-y-1 border-l border-gray-200 pl-3">
+                {jobsSubLinks.map((link) => {
+                  const isActive =
+                    link.href === "/jobs"
+                      ? pathname === "/jobs"
+                      : pathname === link.href || pathname.startsWith(link.href + "/");
+                  return (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      onClick={() => setSidebarOpen(false)}
+                      className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-blue-50 text-blue-700"
+                          : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                      }`}
+                    >
+                      <link.icon className="w-4 h-4" />
+                      {link.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Remaining links */}
           {sidebarLinks.map((link) => {
             const isActive = pathname === link.href || pathname.startsWith(link.href + "/");
             return (

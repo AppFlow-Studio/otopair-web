@@ -433,7 +433,7 @@ export default function DashboardPage() {
                 <MoreVertical className="w-5 h-5" />
               </button>
             </div>
-            <div className="flex-1 max-h-72 overflow-y-auto overflow-x-hidden space-y-3">
+            <div className="flex-1 space-y-3">
               {activeJobs === undefined ? (
                 <div className="space-y-3">
                   <Skeleton className="h-14" />
@@ -445,7 +445,7 @@ export default function DashboardPage() {
                   {q ? `No active jobs match "${searchQuery}".` : "No active jobs right now."}
                 </p>
               ) : (
-                (filteredActive ?? []).slice(0, 5).map((job) => {
+                (filteredActive ?? []).slice(0, 4).map((job) => {
                   const { label, color } = liveStageInfo(job.liveStage);
                   const displayName = job.mechanicName ?? job.customerName;
                   return (
@@ -477,7 +477,7 @@ export default function DashboardPage() {
             <div className="flex justify-between items-center mb-5">
               <h3 className="text-base font-semibold text-foreground">Today&apos;s Bookings</h3>
             </div>
-            <div className="flex-1 max-h-72 overflow-y-auto space-y-3">
+            <div className="flex-1 space-y-3">
               {todaysBookings === undefined ? (
                 <div className="space-y-3">
                   <Skeleton className="h-14" />
@@ -489,7 +489,7 @@ export default function DashboardPage() {
                   {q ? `No bookings match "${searchQuery}".` : "No bookings scheduled for today."}
                 </p>
               ) : (
-                (filteredToday ?? []).slice(0, 5).map((booking, index) => (
+                (filteredToday ?? []).slice(0, 4).map((booking, index) => (
                   <div key={booking._id} className="flex items-center justify-between cursor-pointer p-2 rounded-lg hover:bg-muted transition-colors">
                     <div className="flex items-center gap-3">
                       <div className={`w-9 h-9 rounded-full flex items-center justify-center font-medium text-sm shrink-0 ${avatarColors[index % avatarColors.length]}`}>

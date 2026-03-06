@@ -1,17 +1,35 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 
+/** Clamp minutes-since-midnight to 0–1439 and format as "HH:MM". */
+function minutesToTime(minutes: number): string {
+  const c = Math.max(0, Math.min(1439, Math.round(minutes)));
+  const h = Math.floor(c / 60);
+  const m = c % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** Add minutes to "HH:MM" and return "HH:MM" (clamped to same day). */
+function addMinutesToTime(hhmm: string, deltaMinutes: number): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const total = h * 60 + m + deltaMinutes;
+  return minutesToTime(total);
+}
+
 /**
  * Seeds the bookings table with realistic dashboard demo data for a given shop.
+ * All times are derived from the current UTC time when the seed runs, so you get
+ * completed bookings from earlier today, in-progress jobs, and confirmed bookings
+ * later today regardless of when you run it.
  *
  * Usage:
  *   npx convex run seed:seedDashboardBookings '{"shopId":"<shops_id>"}'
  *   npx convex run seed:seedDashboardBookings '{"shopId":"<shops_id>","clearExisting":true}'
  *
- * Produces:
- *   - 2 active jobs (status: "in_progress") — one mid-service, one nearly done
+ * Produces (relative to current time):
+ *   - 2 completed bookings (earlier today)
  *   - 3 confirmed bookings scheduled later today
- *   - 2 pending bookings (status: "pending") — awaiting shop approval
+ *   - 4 pending bookings (status: "pending") — awaiting shop acceptance
  *
  * Prerequisites: the shop must already exist. Mechanics are re-used from the shop
  * if any exist; otherwise a placeholder mechanic is created. Demo users, vehicles,
@@ -28,6 +46,10 @@ export const seedDashboardBookings = mutation({
 
     const now = Date.now();
     const today = new Date(now).toISOString().split("T")[0]; // "YYYY-MM-DD"
+
+    // Current time as minutes since midnight (UTC) so we can place bookings relative to "now"
+    const d = new Date(now);
+    const nowMinutes = d.getUTCHours() * 60 + d.getUTCMinutes();
 
     // ── Optional clear ────────────────────────────────────────────────────────
     if (args.clearExisting ?? false) {
@@ -221,8 +243,7 @@ export const seedDashboardBookings = mutation({
       partsCost: number;
       key: string;
     }) => {
-      const [startHour] = scheduledTime.split(":").map(Number);
-      const endTime = `${String(startHour + 1).padStart(2, "0")}:00`;
+      const endTime = addMinutesToTime(scheduledTime, 60);
 
       const timeSlotId = await ctx.db.insert("time_slots", {
         shop_id: args.shopId,
@@ -263,42 +284,74 @@ export const seedDashboardBookings = mutation({
       return bookingId;
     };
 
-    // ── Active Jobs — status: "in_progress" ───────────────────────────────────
-    // These appear in the Active Jobs card.
+    // Times relative to "now" (UTC) so the mix is correct at any hour
+    const timeCompleted1 = minutesToTime(nowMinutes - 180);  // 3h ago
+    const timeCompleted2 = minutesToTime(nowMinutes - 120);  // 2h ago
+    const timeActive1    = minutesToTime(nowMinutes - 60);   // 1h ago — in progress
+    const timeActive2    = minutesToTime(nowMinutes - 15);   // 15 min ago — nearly done
+    const timeLater1     = minutesToTime(nowMinutes + 60);   // in 1h
+    const timeLater2     = minutesToTime(nowMinutes + 120);  // in 2h
+    const timeLater3     = minutesToTime(nowMinutes + 180);  // in 3h
+    const timePending1   = minutesToTime(nowMinutes + 90);   // in 1.5h
+    const timePending2   = minutesToTime(nowMinutes + 240);  // in 4h
+
+    // ── Completed earlier today ───────────────────────────────────────────────
     await createBooking({
-      userIdx: 3,     // Jordan Park
-      vinIdx: 3,      // 2020 Chevy Silverado
+      userIdx: 0,
+      vinIdx: 0,
+      serviceId: oilChangeId,
+      mechanicId: mech0._id,
+      scheduledTime: timeCompleted1,
+      status: "completed",
+      laborCost: 47.5,
+      partsCost: 45,
+      key: "completed_1",
+    });
+
+    await createBooking({
+      userIdx: 1,
+      vinIdx: 1,
+      serviceId: tireRotationId,
+      mechanicId: mech1._id,
+      scheduledTime: timeCompleted2,
+      status: "completed",
+      laborCost: 30,
+      partsCost: 0,
+      key: "completed_2",
+    });
+
+    // ── Pending — awaiting shop acceptance ────────────────────────────────────
+    await createBooking({
+      userIdx: 3,
+      vinIdx: 3,
       serviceId: brakePadsId,
       mechanicId: mech0._id,
-      scheduledTime: "09:00",
-      status: "in_progress",
-      liveStage: "service_in_progress",
+      scheduledTime: timeActive1,
+      status: "pending",
       laborCost: 95,
       partsCost: 60,
       key: "active_1",
     });
 
     await createBooking({
-      userIdx: 6,     // Riley Quinn
-      vinIdx: 6,      // 2017 BMW X5
+      userIdx: 6,
+      vinIdx: 6,
       serviceId: alignmentId,
       mechanicId: mech1._id,
-      scheduledTime: "09:00",
-      status: "in_progress",
-      liveStage: "vehicle_ready",
+      scheduledTime: timeActive2,
+      status: "pending",
       laborCost: 89,
       partsCost: 0,
       key: "active_2",
     });
 
-    // ── Today's Confirmed Bookings — later in the day ─────────────────────────
-    // These appear in the Today's Bookings card.
+    // ── Today's Confirmed Bookings — later today ──────────────────────────────
     await createBooking({
-      userIdx: 0,     // James Sullivan
-      vinIdx: 0,      // 2018 Ford F-150
+      userIdx: 0,
+      vinIdx: 0,
       serviceId: oilChangeId,
       mechanicId: mech0._id,
-      scheduledTime: "11:00",
+      scheduledTime: timeLater1,
       status: "confirmed",
       laborCost: 47.5,
       partsCost: 45,
@@ -306,11 +359,11 @@ export const seedDashboardBookings = mutation({
     });
 
     await createBooking({
-      userIdx: 1,     // Maria Rodriguez
-      vinIdx: 1,      // 2021 Toyota RAV4
+      userIdx: 1,
+      vinIdx: 1,
       serviceId: brakePadsId,
       mechanicId: mech1._id,
-      scheduledTime: "13:30",
+      scheduledTime: timeLater2,
       status: "confirmed",
       laborCost: 95,
       partsCost: 70,
@@ -318,25 +371,24 @@ export const seedDashboardBookings = mutation({
     });
 
     await createBooking({
-      userIdx: 2,     // Alex Lee
-      vinIdx: 2,      // 2015 Honda Civic
+      userIdx: 2,
+      vinIdx: 2,
       serviceId: tireRotationId,
       mechanicId: mech0._id,
-      scheduledTime: "15:00",
+      scheduledTime: timeLater3,
       status: "confirmed",
       laborCost: 30,
       partsCost: 0,
       key: "today_3",
     });
 
-    // ── Pending Jobs — status: "pending" ─────────────────────────────────────
-    // These appear in the Pending card (awaiting shop approval).
+    // ── Pending Jobs ─────────────────────────────────────────────────────────
     await createBooking({
-      userIdx: 4,     // Casey Morgan
-      vinIdx: 4,      // 2019 Subaru Outback
+      userIdx: 4,
+      vinIdx: 4,
       serviceId: brakePadsId,
       mechanicId: mech0._id,
-      scheduledTime: "14:00",
+      scheduledTime: timePending1,
       status: "pending",
       laborCost: 95,
       partsCost: 65,
@@ -344,11 +396,11 @@ export const seedDashboardBookings = mutation({
     });
 
     await createBooking({
-      userIdx: 5,     // Taylor Brooks
-      vinIdx: 5,      // 2022 Jeep Wrangler
+      userIdx: 5,
+      vinIdx: 5,
       serviceId: acServiceId,
       mechanicId: mech1._id,
-      scheduledTime: "16:00",
+      scheduledTime: timePending2,
       status: "pending",
       laborCost: 95,
       partsCost: 35,
@@ -359,10 +411,12 @@ export const seedDashboardBookings = mutation({
       success: true,
       shopId: args.shopId,
       date: today,
+      nowMinutes,
       created: {
-        activeJobs: 2,
+        completed: 2,
+        activeJobs: 0,
         todayBookings: 3,
-        pendingJobs: 2,
+        pendingJobs: 4,
       },
     };
   },

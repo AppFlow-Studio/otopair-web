@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { UserPlus, Mail, Clock, X, Users, Crown, Wrench, Shield } from "lucide-react";
+import { UserPlus, Mail, Clock, X, Users, Crown, Wrench } from "lucide-react";
 
 function getInitials(firstName?: string | null, lastName?: string | null, email?: string): string {
   if (firstName && lastName) return `${firstName[0]}${lastName[0]}`.toUpperCase();
@@ -25,14 +25,17 @@ function getTimeAgo(timestamp: number): string {
 }
 
 function getRoleBadgeClass(role: string) {
-  if (role === "owner") return "bg-yellow-50 text-yellow-700 border-yellow-200";
-  if (role === "manager") return "bg-blue-50 text-blue-700 border-blue-200";
+  if (role === "owner" || role === "shop_owner") return "bg-yellow-50 text-yellow-700 border-yellow-200";
   return "bg-gray-50 text-gray-600 border-gray-200";
 }
 
+function getRoleLabel(role: string): string {
+  if (role === "shop_owner") return "Shop Owner";
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
 function RoleIcon({ role }: { role: string }) {
-  if (role === "owner") return <Crown className="w-3.5 h-3.5" />;
-  if (role === "manager") return <Shield className="w-3.5 h-3.5" />;
+  if (role === "owner" || role === "shop_owner") return <Crown className="w-3.5 h-3.5" />;
   return <Wrench className="w-3.5 h-3.5" />;
 }
 
@@ -41,7 +44,7 @@ export default function TeamPage() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [title, setTitle] = useState("");
-  const [role, setRole] = useState<"mechanic" | "manager">("mechanic");
+  const [role, setRole] = useState<"mechanic" | "shop_owner">("mechanic");
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSuccess, setInviteSuccess] = useState(false);
   const [sending, setSending] = useState(false);
@@ -212,11 +215,11 @@ export default function TeamPage() {
               </label>
               <select
                 value={role}
-                onChange={(e) => setRole(e.target.value as "mechanic" | "manager")}
+                onChange={(e) => setRole(e.target.value as "mechanic" | "shop_owner")}
                 className={inputClass}
               >
                 <option value="mechanic">Mechanic</option>
-                <option value="manager">Manager</option>
+                <option value="shop_owner">Shop Owner</option>
               </select>
             </div>
           </div>
@@ -290,7 +293,7 @@ export default function TeamPage() {
                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${getRoleBadgeClass(member.role)}`}
                 >
                   <RoleIcon role={member.role} />
-                  {member.role.charAt(0).toUpperCase() + member.role.slice(1)}
+                  {getRoleLabel(member.role)}
                 </span>
               </div>
             ))}
@@ -330,7 +333,7 @@ export default function TeamPage() {
                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border shrink-0 ${getRoleBadgeClass(inv.role)}`}
                 >
                   <RoleIcon role={inv.role} />
-                  {inv.role.charAt(0).toUpperCase() + inv.role.slice(1)}
+                  {getRoleLabel(inv.role)}
                 </span>
                 <button
                   onClick={() => handleRevoke(inv._id as Id<"shop_invitations">)}

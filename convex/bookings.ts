@@ -199,6 +199,71 @@ async function logBookingStatusChange(
 }
 
 /**
+ * Returns all pending bookings for a shop (status "pending" or
+ * "pending_shop_acceptance") for the Pending dashboard card.
+ */
+export const getPendingJobsByShop = query({
+  args: { shopId: v.id("shops") },
+  handler: async (ctx, args) => {
+    const allPending = await Promise.all([
+      ctx.db
+        .query("bookings")
+        .withIndex("by_shop_and_status", (q) =>
+          q.eq("shop_id", args.shopId).eq("status", "pending")
+        )
+        .order("desc")
+        .collect(),
+      ctx.db
+        .query("bookings")
+        .withIndex("by_shop_and_status", (q) =>
+          q.eq("shop_id", args.shopId).eq("status", "pending_shop_acceptance")
+        )
+        .order("desc")
+        .collect(),
+    ]);
+
+    const bookings = [...allPending[0], ...allPending[1]].sort(
+      (a, b) => b.created_at - a.created_at
+    );
+
+    return await Promise.all(
+      bookings.map(async (booking) => {
+        const user = await ctx.db.get(booking.user_id);
+        const firstName = user?.first_name ?? "";
+        const lastName = user?.last_name ?? "";
+        const customerName =
+          `${firstName} ${lastName}`.trim() || user?.email || "Unknown";
+
+        const vehicleLabel = await resolveVehicleLabel(ctx, booking.vin);
+
+        let serviceName = "";
+        if (booking.service_ids && booking.service_ids.length > 0) {
+          const svc = await ctx.db.get(booking.service_ids[0]);
+          if (svc) serviceName = svc.name;
+          if (booking.service_ids.length > 1)
+            serviceName += ` +${booking.service_ids.length - 1}`;
+        }
+
+        const createdAt = booking.created_at;
+        const seconds = Math.floor((Date.now() - createdAt) / 1000);
+        let ago = "just now";
+        if (seconds >= 86400) ago = `${Math.floor(seconds / 86400)}d ago`;
+        else if (seconds >= 3600) ago = `${Math.floor(seconds / 3600)}h ago`;
+        else if (seconds >= 60) ago = `${Math.floor(seconds / 60)}m ago`;
+
+        return {
+          _id: booking._id,
+          customerName,
+          vehicle: vehicleLabel,
+          service: serviceName,
+          ago,
+        };
+      })
+    );
+  },
+});
+
+/**
  * Returns all in_progress bookings for a shop, with joined customer, vehicle,
  * service, and mechanic data for the Active Jobs dashboard card.
  */
@@ -659,7 +724,7 @@ export const update = mutation({
   },
 });
 
-/** Job CRUD: accept pending booking into confirmed state. */
+/** Job CRUD: accept pending booking — moves it directly into active/in_progress state. */
 export const accept = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -675,14 +740,15 @@ export const accept = mutation({
     }
 
     await ctx.db.patch(booking._id, {
-      status: "confirmed",
+      status: "in_progress",
+      live_stage: "service_in_progress",
       updated_at: Date.now(),
     });
     await logBookingStatusChange(
       ctx,
       booking._id,
       booking.status,
-      "confirmed",
+      "in_progress",
       user._id,
       "accepted_by_shop"
     );

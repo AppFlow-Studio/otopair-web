@@ -257,7 +257,7 @@ export const getPendingJobsByShop = query({
           vehicle: vehicleLabel,
           service: serviceName,
           ago,
-          scheduledTime: booking.scheduled_time ?? "",
+          scheduledTime: booking.scheduled_time ? formatTime(booking.scheduled_time) : "",
         };
       })
     );
@@ -385,9 +385,32 @@ export const getTodaysBookingsByShop = query({
           vehicle: vehicleLabel,
           service: serviceName,
           scheduledTime: formatTime(booking.scheduled_time),
+          totalCost: booking.total_cost ?? 0,
         };
       })
     );
+  },
+});
+
+/**
+ * Returns completed-job summary for today: count + collected revenue.
+ * Used by the "Completed Today" dashboard card as a complement to the
+ * Executive Summary Bar (which shows scheduled/total numbers).
+ */
+export const getCompletedTodayByShop = query({
+  args: { shopId: v.id("shops") },
+  handler: async (ctx, args) => {
+    const today = new Date().toISOString().split("T")[0];
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_date", (q) =>
+        q.eq("shop_id", args.shopId).eq("scheduled_date", today)
+      )
+      .filter((q) => q.eq(q.field("status"), "completed"))
+      .collect();
+    const count = bookings.length;
+    const revenue = bookings.reduce((sum, b) => sum + (b.total_cost ?? 0), 0);
+    return { count, revenue };
   },
 });
 

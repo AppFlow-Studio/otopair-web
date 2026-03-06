@@ -257,9 +257,33 @@ export const getPendingJobsByShop = query({
           vehicle: vehicleLabel,
           service: serviceName,
           ago,
+          scheduledTime: booking.scheduled_time ?? "",
         };
       })
     );
+  },
+});
+
+/**
+ * Returns a map of mechanic_id → active job count for the Team Status card.
+ * Used to show real "On a Job" / "Available" status per team member.
+ */
+export const getMechanicStatuses = query({
+  args: { shopId: v.id("shops") },
+  handler: async (ctx, args) => {
+    const active = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_status", (q) =>
+        q.eq("shop_id", args.shopId).eq("status", "in_progress")
+      )
+      .collect();
+    const counts: Record<string, number> = {};
+    for (const b of active) {
+      if (b.mechanic_id) {
+        counts[b.mechanic_id] = (counts[b.mechanic_id] ?? 0) + 1;
+      }
+    }
+    return counts;
   },
 });
 

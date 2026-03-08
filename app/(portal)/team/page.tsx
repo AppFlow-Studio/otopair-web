@@ -2,9 +2,26 @@
 
 import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
+import { useUser } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { UserPlus, Mail, Clock, X, Users, Crown, Wrench } from "lucide-react";
+import { UserPlus, Mail, Clock, X, Users, Crown, Wrench, Ellipsis } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectItem,
+  SelectListBox,
+  SelectPopover,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 function getInitials(firstName?: string | null, lastName?: string | null, email?: string): string {
   if (firstName && lastName) return `${firstName[0]}${lastName[0]}`.toUpperCase();
@@ -30,7 +47,8 @@ function getRoleBadgeClass(role: string) {
 }
 
 function getRoleLabel(role: string): string {
-  if (role === "shop_owner") return "Shop Owner";
+  if (role === "owner" || role === "shop_owner") return "Shop Owner";
+  if (role === "shop_mechanic" || role === "mechanic") return "Mechanic";
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
@@ -44,11 +62,15 @@ export default function TeamPage() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [title, setTitle] = useState("");
-  const [role, setRole] = useState<"mechanic" | "shop_owner">("mechanic");
+  const [role, setRole] = useState<"shop_mechanic" | "shop_owner">("shop_mechanic");
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteSuccess, setInviteSuccess] = useState(false);
   const [sending, setSending] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [changingRoleFor, setChangingRoleFor] = useState<{ shopUserId: Id<"shop_users">; currentRole: string } | null>(null);
+  const [newRole, setNewRole] = useState<string>("");
+
+  const { user: clerkUser } = useUser();
 
   const myShops = useQuery(api.shops.getMyShops);
   const shopId = myShops?.[0]?._id as Id<"shops"> | undefined;
@@ -62,6 +84,8 @@ export default function TeamPage() {
     shopId ? { shopId } : "skip"
   );
   const revokeInvitation = useMutation(api.invitations.revoke);
+  const removeMember = useMutation(api.invitations.removeMember);
+  const updateMemberRole = useMutation(api.invitations.updateMemberRole);
 
   const pendingInvitations = invitations?.filter((inv) => inv.status === "pending") ?? [];
 
@@ -89,6 +113,7 @@ export default function TeamPage() {
       if (!res.ok) {
         setInviteError(data.error || "Failed to send invitation.");
       } else {
+        if (data.token) console.log("Invite token:", data.token);
         setInviteSuccess(true);
         setEmail("");
         setFirstName("");
@@ -110,6 +135,15 @@ export default function TeamPage() {
     } finally {
       setRevoking(null);
     }
+  }
+
+  async function handleRemoveMember(shopUserId: Id<"shop_users">) {
+    await removeMember({ shopUserId });
+  }
+
+  async function handleChangeRole(shopUserId: Id<"shop_users">, role: string) {
+    await updateMemberRole({ shopUserId, role });
+    setChangingRoleFor(null);
   }
 
   const inputClass =
@@ -213,14 +247,30 @@ export default function TeamPage() {
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
                 Role
               </label>
-              <select
-                value={role}
-                onChange={(e) => setRole(e.target.value as "mechanic" | "shop_owner")}
-                className={inputClass}
+              <Select
+                selectedKey={role}
+                onSelectionChange={(key) => setRole(key as "shop_mechanic" | "shop_owner")}
               >
-                <option value="mechanic">Mechanic</option>
-                <option value="shop_owner">Shop Owner</option>
-              </select>
+                <SelectTrigger className="bg-white h-[42px] rounded-lg border-border text-sm px-3.5">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopover>
+                  <SelectListBox>
+                    <SelectItem id="shop_mechanic" textValue="Mechanic">
+                      <span className="flex items-center gap-2">
+                        <Wrench className="w-3.5 h-3.5 text-gray-500" />
+                        Mechanic
+                      </span>
+                    </SelectItem>
+                    <SelectItem id="shop_owner" textValue="Shop Owner">
+                      <span className="flex items-center gap-2">
+                        <Crown className="w-3.5 h-3.5 text-yellow-600" />
+                        Shop Owner
+                      </span>
+                    </SelectItem>
+                  </SelectListBox>
+                </SelectPopover>
+              </Select>
             </div>
           </div>
 
@@ -265,38 +315,109 @@ export default function TeamPage() {
           <p className="text-sm text-gray-500 text-center py-4">No team members yet.</p>
         ) : (
           <div className="space-y-2">
-            {teamMembers.map((member) => (
-              <div
-                key={member._id}
-                className="flex items-center gap-3 p-3 rounded-lg bg-muted/40"
-              >
-                <div className="w-9 h-9 rounded-full bg-accent flex items-center justify-center text-xs font-semibold text-accent-foreground shrink-0 overflow-hidden">
-                  {member.user.profile_photo_url ? (
-                    <img
-                      src={member.user.profile_photo_url}
-                      alt=""
-                      className="w-full h-full object-cover"
-                    />
+            {[...teamMembers].sort((a, b) => {
+              const aIsMe = a.user.clerkUserId === clerkUser?.id ? -1 : 1;
+              const bIsMe = b.user.clerkUserId === clerkUser?.id ? -1 : 1;
+              return aIsMe - bIsMe;
+            }).map((member) => {
+              const isCurrentUser = member.user.clerkUserId === clerkUser?.id;
+              const isChangingRole = changingRoleFor?.shopUserId === member._id;
+              return (
+                <div
+                  key={member._id}
+                  className="flex items-center gap-3 p-3 rounded-lg bg-muted/40"
+                >
+                  <div className="w-9 h-9 rounded-full bg-accent flex items-center justify-center text-xs font-semibold text-accent-foreground shrink-0 overflow-hidden">
+                    {member.user.profile_photo_url ? (
+                      <img
+                        src={member.user.profile_photo_url}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      getInitials(member.user.first_name, member.user.last_name, member.user.email)
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">
+                      {member.user.first_name && member.user.last_name
+                        ? `${member.user.first_name} ${member.user.last_name}`
+                        : member.user.email}
+                    </p>
+                    <p className="text-xs text-muted-foreground truncate">{member.user.email}</p>
+                  </div>
+
+                  {isChangingRole ? (
+                    <div className="flex items-center gap-2 shrink-0">
+                      <select
+                        autoFocus
+                        defaultValue={changingRoleFor.currentRole}
+                        onChange={(e) => setNewRole(e.target.value)}
+                        className="text-xs border border-border rounded-md px-2 py-1 bg-white text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                      >
+                        <option value="shop_mechanic">Mechanic</option>
+                        <option value="shop_owner">Shop Owner</option>
+                      </select>
+                      <button
+                        onClick={() => handleChangeRole(member._id as Id<"shop_users">, newRole || changingRoleFor.currentRole)}
+                        className="text-xs px-2 py-1 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setChangingRoleFor(null)}
+                        className="text-xs px-2 py-1 rounded-md border border-border text-foreground hover:bg-muted transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   ) : (
-                    getInitials(member.user.first_name, member.user.last_name, member.user.email)
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${getRoleBadgeClass(member.role)}`}
+                    >
+                      <RoleIcon role={member.role} />
+                      {getRoleLabel(member.role)}
+                    </span>
+                  )}
+
+                  {!isChangingRole && (
+                    isCurrentUser ? (
+                      <div className="h-8 w-8 shrink-0" />
+                    ) : (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="rounded-full shadow-none shrink-0 h-8 w-8"
+                            aria-label="Member options"
+                          >
+                            <Ellipsis size={16} strokeWidth={2} aria-hidden="true" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              setNewRole(member.role);
+                              setChangingRoleFor({ shopUserId: member._id as Id<"shop_users">, currentRole: member.role });
+                            }}
+                          >
+                            Change Role
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive focus:bg-destructive/10"
+                            onSelect={() => handleRemoveMember(member._id as Id<"shop_users">)}
+                          >
+                            Remove Member
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )
                   )}
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">
-                    {member.user.first_name && member.user.last_name
-                      ? `${member.user.first_name} ${member.user.last_name}`
-                      : member.user.email}
-                  </p>
-                  <p className="text-xs text-muted-foreground truncate">{member.user.email}</p>
-                </div>
-                <span
-                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium border ${getRoleBadgeClass(member.role)}`}
-                >
-                  <RoleIcon role={member.role} />
-                  {getRoleLabel(member.role)}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

@@ -245,6 +245,24 @@ export const acceptAsCurrentUser = mutation({
   },
 });
 
+export const removeMember = mutation({
+  args: { shopUserId: v.id("shop_users") },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    await ctx.db.patch(args.shopUserId, { is_active: false, updated_at: Date.now() });
+  },
+});
+
+export const updateMemberRole = mutation({
+  args: { shopUserId: v.id("shop_users"), role: v.string() },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    await ctx.db.patch(args.shopUserId, { role: args.role, updated_at: Date.now() });
+  },
+});
+
 // Called from invitation.accepted webhook event as a fallback/supplement to user.created.
 // Looks up the user by email since the invitation.accepted event doesn't include clerkUserId.
 export const acceptByClerkInvitationId = mutation({

@@ -18,10 +18,25 @@ export const create = mutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
-    const user = await ctx.db
+    let user = await ctx.db
       .query("users")
       .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
       .unique();
+
+    if (!user) {
+      const now = Date.now();
+      const userId = await ctx.db.insert("users", {
+        clerkUserId: identity.subject,
+        email: identity.email ?? "",
+        first_name: identity.givenName ?? undefined,
+        last_name: identity.familyName ?? undefined,
+        profile_photo_url: identity.pictureUrl ?? undefined,
+        role: "shop_owner",
+        onboardingCompleted: false,
+        createdAt: now,
+      });
+      user = await ctx.db.get(userId);
+    }
 
     if (!user) throw new Error("User not found");
 
@@ -51,7 +66,7 @@ export const create = mutation({
     await ctx.db.insert("shop_users", {
       shop_id: shopId,
       user_id: user._id,
-      role: "owner",
+      role: "shop_owner",
       is_active: true,
       invited_at: now,
       accepted_at: now,

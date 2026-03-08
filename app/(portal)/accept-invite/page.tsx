@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
+import { useSession } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import Image from "next/image";
@@ -11,6 +12,7 @@ export default function AcceptInvitePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
+  const { session } = useSession();
 
   const invitation = useQuery(
     api.invitations.getByToken,
@@ -46,8 +48,18 @@ export default function AcceptInvitePage() {
     }
 
     if (invitation.status === "accepted") {
-      setStatus("accepted");
-      setTimeout(() => router.push("/dashboard"), 2500);
+      // Still ensure Clerk metadata is set in case it was missed, then reload session
+      fetch("/api/finalize-invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "shop_mechanic" }),
+      })
+        .then(() => session?.reload())
+        .catch(() => {})
+        .finally(() => {
+          setStatus("accepted");
+          setTimeout(() => router.push("/dashboard"), 2500);
+        });
       return;
     }
 
@@ -56,7 +68,22 @@ export default function AcceptInvitePage() {
     if (!hasAccepted.current) {
       hasAccepted.current = true;
       acceptAsCurrentUser({ token })
-        .then(() => {
+        .then(async () => {
+          // Explicitly set Clerk public_metadata.role so the middleware JWT check passes.
+          // This is needed because Clerk may not have propagated the invitation metadata
+          // to the user's session token yet (timing issue on new account creation).
+          try {
+            await fetch("/api/finalize-invite", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ role: "shop_mechanic" }),
+            });
+            // Reload the session so the fresh JWT claims (with role) are used when
+            // the middleware checks on the next navigation.
+            await session?.reload();
+          } catch {
+            // Non-fatal — the user may still get through if Clerk already set the role
+          }
           setStatus("accepted");
           setTimeout(() => router.push("/dashboard"), 2500);
         })
@@ -71,7 +98,7 @@ export default function AcceptInvitePage() {
           }
         });
     }
-  }, [invitation, router, token, acceptAsCurrentUser]);
+  }, [invitation, router, token, acceptAsCurrentUser, session]);
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">

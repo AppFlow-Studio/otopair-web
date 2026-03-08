@@ -159,8 +159,8 @@ export const acceptIfInvited = mutation({
       });
     }
 
-    // Update Convex user role to shop_mechanic
-    await ctx.db.patch(user._id, { role: "shop_mechanic" });
+    // Update Convex user role to match the invitation
+    await ctx.db.patch(user._id, { role: invitation.role });
 
     // Mark invitation as accepted (idempotent)
     if (invitation.status === "pending") {
@@ -182,30 +182,9 @@ export const acceptAsCurrentUser = mutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
-    let user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-
-    // Existing Clerk user with no Convex record yet — create it on the fly.
-    if (!user) {
-      const now = Date.now();
-      const userId = await ctx.db.insert("users", {
-        clerkUserId: identity.subject,
-        email: identity.email ?? "",
-        first_name: identity.givenName ?? undefined,
-        last_name: identity.familyName ?? undefined,
-        profile_photo_url: identity.pictureUrl ?? undefined,
-        role: "shop_mechanic",
-        onboardingCompleted: false,
-        createdAt: now,
-      });
-      user = await ctx.db.get(userId);
-    }
-
-    if (!user) throw new Error("User not found");
-
     const now = Date.now();
+
+    // Look up invitation first so we know the correct role before creating user
     const invitation = await ctx.db
       .query("shop_invitations")
       .withIndex("by_token", (q) => q.eq("token", args.token))
@@ -213,9 +192,31 @@ export const acceptAsCurrentUser = mutation({
 
     if (!invitation) throw new Error("Invitation not found.");
     if (invitation.status === "revoked") throw new Error("This invitation has been revoked.");
-    if (invitation.status === "accepted") return invitation.shop_id;
+    if (invitation.status === "accepted") return { shopId: invitation.shop_id, role: invitation.role };
     if (invitation.status === "expired" || Date.now() > invitation.expires_at)
       throw new Error("This invitation has expired.");
+
+    let user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+
+    // Existing Clerk user with no Convex record yet — create it on the fly.
+    if (!user) {
+      const userId = await ctx.db.insert("users", {
+        clerkUserId: identity.subject,
+        email: identity.email ?? "",
+        first_name: identity.givenName ?? undefined,
+        last_name: identity.familyName ?? undefined,
+        profile_photo_url: identity.pictureUrl ?? undefined,
+        role: invitation.role,
+        onboardingCompleted: false,
+        createdAt: now,
+      });
+      user = await ctx.db.get(userId);
+    }
+
+    if (!user) throw new Error("User not found");
 
     const existingShopUser = await ctx.db
       .query("shop_users")
@@ -238,10 +239,10 @@ export const acceptAsCurrentUser = mutation({
       });
     }
 
-    await ctx.db.patch(user._id, { role: "shop_mechanic" });
+    await ctx.db.patch(user._id, { role: invitation.role });
     await ctx.db.patch(invitation._id, { status: "accepted", accepted_at: now });
 
-    return invitation.shop_id;
+    return { shopId: invitation.shop_id, role: invitation.role };
   },
 });
 
@@ -309,7 +310,7 @@ export const acceptByClerkInvitationId = mutation({
       });
     }
 
-    await ctx.db.patch(user._id, { role: "shop_mechanic" });
+    await ctx.db.patch(user._id, { role: invitation.role });
 
     if (invitation.status === "pending") {
       await ctx.db.patch(invitation._id, {

@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
-import { useSession } from "@clerk/nextjs";
+import { useSession, useUser, useClerk } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
-import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, AlertTriangle } from "lucide-react";
 import Image from "next/image";
 
 export default function AcceptInvitePage() {
@@ -13,6 +13,8 @@ export default function AcceptInvitePage() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
   const { session } = useSession();
+  const { user: clerkUser, isLoaded: isUserLoaded } = useUser();
+  const { signOut } = useClerk();
 
   const invitation = useQuery(
     api.invitations.getByToken,
@@ -21,13 +23,18 @@ export default function AcceptInvitePage() {
 
   const acceptAsCurrentUser = useMutation(api.invitations.acceptAsCurrentUser);
 
-  const [status, setStatus] = useState<"loading" | "accepted" | "error">("loading");
+  const [status, setStatus] = useState<
+    "loading" | "accepted" | "wrong_account" | "error"
+  >("loading");
   const [errorMessage, setErrorMessage] = useState("");
-  // Prevent calling acceptAsCurrentUser more than once
   const hasAccepted = useRef(false);
 
+  // Check if the logged-in user matches the invitation email
+  const loggedInEmail = clerkUser?.primaryEmailAddress?.emailAddress;
+  const invitationEmail = invitation?.email;
+
   useEffect(() => {
-    if (invitation === undefined) return; // still loading
+    if (invitation === undefined || !isUserLoaded) return; // still loading
 
     if (invitation === null) {
       setStatus("error");
@@ -41,64 +48,101 @@ export default function AcceptInvitePage() {
       return;
     }
 
-    if (invitation.status === "expired" || Date.now() > invitation.expires_at) {
+    if (
+      invitation.status === "expired" ||
+      Date.now() > invitation.expires_at
+    ) {
       setStatus("error");
-      setErrorMessage("This invitation has expired. Please ask the shop owner to send a new one.");
+      setErrorMessage(
+        "This invitation has expired. Please ask the shop owner to send a new one."
+      );
+      return;
+    }
+
+    // If a user is logged in but their email doesn't match the invitation,
+    // show a mismatch screen so they can switch accounts.
+    if (
+      clerkUser &&
+      loggedInEmail &&
+      invitationEmail &&
+      loggedInEmail.toLowerCase() !== invitationEmail.toLowerCase()
+    ) {
+      setStatus("wrong_account");
       return;
     }
 
     if (invitation.status === "accepted") {
-      // Still ensure Clerk metadata is set in case it was missed, then reload session
-      fetch("/api/finalize-invite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role: "shop_mechanic" }),
-      })
-        .then(() => session?.reload())
-        .catch(() => {})
-        .finally(() => {
-          setStatus("accepted");
-          setTimeout(() => router.push("/dashboard"), 2500);
-        });
+      // Ensure Clerk metadata is set, reload session, then redirect
+      (async () => {
+        try {
+          await fetch("/api/finalize-invite", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ role: invitation.role }),
+          });
+          await session?.reload();
+        } catch {
+          // Non-fatal
+        }
+        setStatus("accepted");
+        setTimeout(() => router.push("/dashboard"), 2500);
+      })();
       return;
     }
 
     // Invitation is pending — try to accept it directly.
-    // This handles existing Clerk users (no user.created webhook fires for them).
     if (!hasAccepted.current) {
       hasAccepted.current = true;
       acceptAsCurrentUser({ token })
-        .then(async () => {
-          // Explicitly set Clerk public_metadata.role so the middleware JWT check passes.
-          // This is needed because Clerk may not have propagated the invitation metadata
-          // to the user's session token yet (timing issue on new account creation).
+        .then(async (result) => {
+          const role =
+            result && typeof result === "object" && "role" in result
+              ? (result as { role: string }).role
+              : invitation.role;
           try {
             await fetch("/api/finalize-invite", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ role: "shop_mechanic" }),
+              body: JSON.stringify({ role }),
             });
-            // Reload the session so the fresh JWT claims (with role) are used when
-            // the middleware checks on the next navigation.
             await session?.reload();
           } catch {
-            // Non-fatal — the user may still get through if Clerk already set the role
+            // Non-fatal
           }
           setStatus("accepted");
           setTimeout(() => router.push("/dashboard"), 2500);
         })
         .catch((err: Error) => {
-          // If not authenticated, the user needs to sign in first then come back
           if (err.message?.includes("Not authenticated")) {
             const signInUrl = `/sign-in?redirect_url=${encodeURIComponent(window.location.href)}`;
             router.push(signInUrl);
           } else {
             setStatus("error");
-            setErrorMessage(err.message || "Something went wrong. Please try again.");
+            setErrorMessage(
+              err.message || "Something went wrong. Please try again."
+            );
           }
         });
     }
-  }, [invitation, router, token, acceptAsCurrentUser, session]);
+  }, [
+    invitation,
+    router,
+    token,
+    acceptAsCurrentUser,
+    session,
+    clerkUser,
+    isUserLoaded,
+    loggedInEmail,
+    invitationEmail,
+  ]);
+
+  async function handleSwitchAccount() {
+    // Sign out the current user and redirect to sign-in with a return URL
+    // back to this accept-invite page so the correct user can sign in.
+    const returnUrl = window.location.href;
+    await signOut();
+    router.push(`/sign-in?redirect_url=${encodeURIComponent(returnUrl)}`);
+  }
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -116,7 +160,8 @@ export default function AcceptInvitePage() {
               Setting up your account…
             </h1>
             <p className="text-sm text-gray-500">
-              Just a moment while we verify your invitation and set up your shop access.
+              Just a moment while we verify your invitation and set up your shop
+              access.
             </p>
           </>
         )}
@@ -130,6 +175,33 @@ export default function AcceptInvitePage() {
             <p className="text-sm text-gray-500">
               Your account is set up. Redirecting you to your dashboard…
             </p>
+          </>
+        )}
+
+        {status === "wrong_account" && (
+          <>
+            <AlertTriangle className="w-10 h-10 text-amber-500 mx-auto mb-4" />
+            <h1 className="text-xl font-semibold text-gray-900 mb-2">
+              Wrong account
+            </h1>
+            <p className="text-sm text-gray-500 mb-2">
+              You&apos;re currently signed in as{" "}
+              <span className="font-medium text-gray-700">{loggedInEmail}</span>,
+              but this invitation was sent to{" "}
+              <span className="font-medium text-gray-700">
+                {invitationEmail}
+              </span>
+              .
+            </p>
+            <p className="text-sm text-gray-500 mb-6">
+              Please sign in with the correct account to accept this invitation.
+            </p>
+            <button
+              onClick={handleSwitchAccount}
+              className="inline-block px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+            >
+              Switch Account
+            </button>
           </>
         )}
 

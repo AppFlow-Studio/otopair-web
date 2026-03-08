@@ -149,7 +149,7 @@ export default function PortalLayout({
         </nav>
 
         <div className="px-6 py-4 border-t border-gray-200">
-          <UserButton afterSignOutUrl="/" />
+          <UserButton afterSignOutUrl="/" showName />
         </div>
       </aside>
 

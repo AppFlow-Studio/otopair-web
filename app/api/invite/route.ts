@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         email_address: email,
         public_metadata: {
-          role: "shop_mechanic",
+          role,
           shop_id: shopId,
           invitation_token: invitationToken,
           ...(resolvedMechanicId ? { mechanic_id: resolvedMechanicId } : {}),
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
               body: JSON.stringify({
                 public_metadata: {
                   ...((existingClerkUser.public_metadata as object) ?? {}),
-                  role: "shop_mechanic",
+                  role,
                   shop_id: shopId,
                   invitation_token: invitationToken,
                   ...(resolvedMechanicId ? { mechanic_id: resolvedMechanicId } : {}),

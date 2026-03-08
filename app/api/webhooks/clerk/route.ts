@@ -17,9 +17,16 @@ export async function POST(req: NextRequest) {
     const eventType = evt.type;
 
     if (eventType === "user.created" || eventType === "user.updated") {
-      const { id, email_addresses, first_name, last_name, image_url, public_metadata } = evt.data;
+      const { id, email_addresses, first_name, last_name, image_url, public_metadata, primary_email_address_id } = evt.data;
 
-      const primaryEmail = email_addresses?.[0]?.email_address;
+      // Find the primary email address (not just the first one in the array).
+      // When a user changes their email in Clerk and sets a new primary,
+      // this ensures we always sync the correct one to Convex.
+      const primaryEmailObj = email_addresses?.find(
+        (e: { id: string }) => e.id === primary_email_address_id
+      ) ?? email_addresses?.[0];
+      const primaryEmail = primaryEmailObj?.email_address;
+
       if (!primaryEmail) {
         return new Response("No email address found", { status: 400 });
       }
@@ -38,9 +45,9 @@ export async function POST(req: NextRequest) {
         role,
       });
 
-      // If this event has shop invite metadata (new mechanic OR existing user invited),
+      // If this event has shop invite metadata (any shop role — shop_mechanic, shop_owner, etc.),
       // attempt to create the shop_users record. Idempotent — safe to call on user.updated too.
-      if (meta.role === "shop_mechanic" && meta.invitation_token) {
+      if (meta.role && meta.invitation_token) {
         await fetchMutation(api.invitations.acceptIfInvited, {
           clerkUserId: id,
           email: primaryEmail,

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { useUser } from "@clerk/nextjs";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -17,6 +18,7 @@ import {
   Clock,
   X,
 } from "lucide-react";
+import JeepWranglerImage from "@/components/images/2022-Jeep-Wrangler-front_50724_032_1959x1052_PDN_cropped.png";
 
 function getStatusBadgeClass(color: string) {
   switch (color) {
@@ -382,9 +384,18 @@ export default function DashboardPage() {
                               <p className="text-xs text-muted-foreground truncate">{job.customerName}</p>
                             </div>
                             {job.scheduledTime && (
-                              <div className="flex items-center gap-1 shrink-0 text-xs text-muted-foreground">
-                                <Clock className="w-3 h-3" />
-                                {job.scheduledTime}
+                              <div className="flex flex-col items-end gap-1 shrink-0 text-xs text-muted-foreground">
+                                <div className="flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {job.scheduledTime}
+                                </div>
+                                <Image
+                                  src={JeepWranglerImage}
+                                  alt="Jeep Wrangler"
+                                  width={72}
+                                  height={40}
+                                  className="mt-0.5 py-3 rounded-md object-contain"
+                                />
                               </div>
                             )}
                           </div>

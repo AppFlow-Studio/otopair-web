@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { fetchMutation } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
+import { sendInviteEmail } from "@/email/send";
 
 export async function POST(req: NextRequest) {
   try {
@@ -88,6 +89,9 @@ export async function POST(req: NextRequest) {
                 },
               }),
             });
+
+            // Send invite link via Resend since Clerk won't email existing users
+            await sendInviteEmail({ email, inviteUrl: redirectUrl });
           }
         }
       } else if (!alreadyInvited) {

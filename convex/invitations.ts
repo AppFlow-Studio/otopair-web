@@ -182,10 +182,27 @@ export const acceptAsCurrentUser = mutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
-    const user = await ctx.db
+    let user = await ctx.db
       .query("users")
       .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
       .unique();
+
+    // Existing Clerk user with no Convex record yet — create it on the fly.
+    if (!user) {
+      const now = Date.now();
+      const userId = await ctx.db.insert("users", {
+        clerkUserId: identity.subject,
+        email: identity.email ?? "",
+        first_name: identity.givenName ?? undefined,
+        last_name: identity.familyName ?? undefined,
+        profile_photo_url: identity.pictureUrl ?? undefined,
+        role: "shop_mechanic",
+        onboardingCompleted: false,
+        createdAt: now,
+      });
+      user = await ctx.db.get(userId);
+    }
+
     if (!user) throw new Error("User not found");
 
     const now = Date.now();

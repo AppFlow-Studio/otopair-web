@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { UserButton } from "@clerk/nextjs";
+import { UserButton, useUser } from "@clerk/nextjs";
 import {
   LayoutDashboard,
   Briefcase,
@@ -35,6 +35,8 @@ export default function PortalLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const { user } = useUser();
+  const displayName = user ? [user.firstName, user.lastName].filter(Boolean).join(" ") : "";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const isJobsActive = pathname === "/jobs" || pathname.startsWith("/jobs/");
   const [jobsOpen, setJobsOpen] = useState(isJobsActive);
@@ -148,8 +150,11 @@ export default function PortalLayout({
           })}
         </nav>
 
-        <div className="px-6 py-4 border-t border-gray-200">
-          <UserButton afterSignOutUrl="/" showName />
+        <div className="px-6 py-4 border-t border-gray-200 flex items-center gap-2.5">
+          <UserButton />
+          {displayName && (
+            <span className="text-sm font-medium text-gray-700 truncate">{displayName}</span>
+          )}
         </div>
       </aside>
 
@@ -163,7 +168,7 @@ export default function PortalLayout({
           <Image src="/logo.png" alt="Otopair" width={28} height={28} />
           <span className="text-base font-semibold text-gray-900">Otopair</span>
           <div className="ml-auto">
-            <UserButton afterSignOutUrl="/" />
+            <UserButton />
           </div>
         </header>
 

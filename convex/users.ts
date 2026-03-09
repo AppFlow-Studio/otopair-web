@@ -59,6 +59,26 @@ export const deleteFromClerk = mutation({
         deletionRequestedAt: Date.now(),
         lastUpdated: Date.now(),
       });
+
+      // Deactivate all shop memberships so re-inviting is possible
+      const shopUsers = await ctx.db
+        .query("shop_users")
+        .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+        .filter((q) => q.eq(q.field("is_active"), true))
+        .collect();
+      for (const su of shopUsers) {
+        await ctx.db.patch(su._id, { is_active: false, updated_at: Date.now() });
+      }
+
+      // Revoke any pending invitations for this email so re-inviting is possible
+      const pendingInvites = await ctx.db
+        .query("shop_invitations")
+        .withIndex("by_email", (q) => q.eq("email", user.email))
+        .filter((q) => q.eq(q.field("status"), "pending"))
+        .collect();
+      for (const inv of pendingInvites) {
+        await ctx.db.patch(inv._id, { status: "revoked" });
+      }
     }
   },
 });
@@ -83,5 +103,49 @@ export const getByClerkUserId = query({
       .query("users")
       .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", args.clerkUserId))
       .unique();
+  },
+});
+
+export const getByEmail = query({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .first();
+  },
+});
+
+// Resets a user's role to "user" by clerkUserId (called when an invitation is revoked).
+export const resetRoleToUser = mutation({
+  args: { clerkUserId: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", args.clerkUserId))
+      .unique();
+    if (user) {
+      await ctx.db.patch(user._id, { role: "user", lastUpdated: Date.now() });
+    }
+  },
+});
+
+// Returns true if the user with this email has an active shop membership.
+export const hasActiveShopMembership = query({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .first();
+    if (!user) return false;
+
+    const shopUser = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+      .filter((q) => q.eq(q.field("is_active"), true))
+      .first();
+
+    return !!shopUser;
   },
 });

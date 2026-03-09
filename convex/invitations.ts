@@ -26,7 +26,19 @@ export const create = mutation({
         q.and(q.eq(q.field("shop_id"), args.shopId), q.eq(q.field("status"), "pending"))
       )
       .first();
-    if (existing) throw new Error("A pending invitation already exists for this email.");
+    if (existing) {
+      // If the invited user's account no longer exists or is pending deletion,
+      // treat the old invitation as stale and revoke it so a fresh one can be sent.
+      const existingUser = await ctx.db
+        .query("users")
+        .withIndex("by_email", (q) => q.eq("email", args.email))
+        .first();
+      if (!existingUser || existingUser.isPendingDeletion) {
+        await ctx.db.patch(existing._id, { status: "revoked" });
+      } else {
+        throw new Error("A pending invitation already exists for this email.");
+      }
+    }
 
     const now = Date.now();
     return await ctx.db.insert("shop_invitations", {
@@ -55,6 +67,13 @@ export const getByShop = query({
   },
 });
 
+export const getById = query({
+  args: { invitationId: v.id("shop_invitations") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.invitationId);
+  },
+});
+
 export const getByToken = query({
   args: { token: v.string() },
   handler: async (ctx, args) => {
@@ -68,9 +87,8 @@ export const getByToken = query({
 export const revoke = mutation({
   args: { invitationId: v.id("shop_invitations") },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-
+    // Auth is enforced at the API route level (/api/revoke-invite) when called from the server.
+    // This mutation is no longer called directly from the client.
     await ctx.db.patch(args.invitationId, { status: "revoked" });
   },
 });
@@ -246,11 +264,20 @@ export const acceptAsCurrentUser = mutation({
   },
 });
 
+export const getMemberWithUser = query({
+  args: { shopUserId: v.id("shop_users") },
+  handler: async (ctx, args) => {
+    const shopUser = await ctx.db.get(args.shopUserId);
+    if (!shopUser) return null;
+    const user = await ctx.db.get(shopUser.user_id);
+    return user ? { ...shopUser, user } : null;
+  },
+});
+
 export const removeMember = mutation({
   args: { shopUserId: v.id("shop_users") },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+    // Auth is enforced at the API route level (/api/remove-member) when called from the server.
     await ctx.db.patch(args.shopUserId, { is_active: false, updated_at: Date.now() });
   },
 });

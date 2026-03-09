@@ -79,7 +79,7 @@ export default function AdminLayout({
         </nav>
 
         <div className="px-6 py-4 border-t border-gray-700">
-          <UserButton afterSignOutUrl="/" />
+          <UserButton />
         </div>
       </aside>
 
@@ -93,7 +93,7 @@ export default function AdminLayout({
             Admin Panel
           </span>
           <div className="ml-auto">
-            <UserButton afterSignOutUrl="/" />
+            <UserButton />
           </div>
         </header>
 

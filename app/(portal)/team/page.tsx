@@ -83,8 +83,6 @@ export default function TeamPage() {
     api.invitations.getByShop,
     shopId ? { shopId } : "skip"
   );
-  const revokeInvitation = useMutation(api.invitations.revoke);
-  const removeMember = useMutation(api.invitations.removeMember);
   const updateMemberRole = useMutation(api.invitations.updateMemberRole);
 
   const pendingInvitations = invitations?.filter((inv) => inv.status === "pending") ?? [];
@@ -131,14 +129,22 @@ export default function TeamPage() {
   async function handleRevoke(invitationId: Id<"shop_invitations">) {
     setRevoking(invitationId);
     try {
-      await revokeInvitation({ invitationId });
+      await fetch("/api/revoke-invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ invitationId }),
+      });
     } finally {
       setRevoking(null);
     }
   }
 
   async function handleRemoveMember(shopUserId: Id<"shop_users">) {
-    await removeMember({ shopUserId });
+    await fetch("/api/remove-member", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shopUserId }),
+    });
   }
 
   async function handleChangeRole(shopUserId: Id<"shop_users">, role: string) {

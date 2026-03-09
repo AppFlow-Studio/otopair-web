@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import {
   LayoutDashboard,
   Briefcase,
@@ -15,10 +17,12 @@ import {
   ChevronDown,
   PlusCircle,
   List,
+  Loader2,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-const sidebarLinks = [
+// Links visible only to owner/manager roles
+const ownerManagerLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
   { href: "/team", label: "Team", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -29,17 +33,68 @@ const jobsSubLinks = [
   { href: "/jobs", label: "All Jobs", icon: List },
 ];
 
+const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"];
+
 export default function PortalLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { user } = useUser();
-  const displayName = user ? [user.firstName, user.lastName].filter(Boolean).join(" ") : "";
+  const displayName = user
+    ? [user.firstName, user.lastName].filter(Boolean).join(" ")
+    : "";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const isJobsActive = pathname === "/jobs" || pathname.startsWith("/jobs/");
   const [jobsOpen, setJobsOpen] = useState(isJobsActive);
+
+  // Portal access check (deactivation, onboarding)
+  const portalAccess = useQuery(api.shops.getMyPortalAccess);
+  const hasRedirected = useRef(false);
+
+  // Skip redirect checks on the accept-invite page (it handles its own flow)
+  const isAcceptInvite = pathname.startsWith("/accept-invite");
+
+  useEffect(() => {
+    if (portalAccess === undefined || hasRedirected.current || isAcceptInvite)
+      return;
+
+    if (portalAccess === null) return; // Not authenticated yet
+
+    if (portalAccess.status === "deactivated") {
+      hasRedirected.current = true;
+      router.replace("/account-deactivated");
+      return;
+    }
+
+    if (
+      portalAccess.status === "no_shop" &&
+      portalAccess.userRole === "shop_owner"
+    ) {
+      // Shop owner without a shop — redirect to onboarding (unless already there)
+      if (!pathname.startsWith("/shop/setup")) {
+        hasRedirected.current = true;
+        router.replace("/shop/setup");
+      }
+    }
+  }, [portalAccess, router, pathname, isAcceptInvite]);
+
+  const isOwnerManager = portalAccess?.status === "active" &&
+    OWNER_MANAGER_ROLES.includes(portalAccess.role);
+
+  // Show loading while portal access is being determined (avoid flash of wrong UI)
+  if (portalAccess === undefined && !isAcceptInvite) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+      </div>
+    );
+  }
+
+  // Filter sidebar links based on role
+  const sidebarLinks = isOwnerManager ? ownerManagerLinks : [];
 
   return (
     <div className="min-h-screen flex bg-gray-50">
@@ -108,7 +163,8 @@ export default function PortalLayout({
                   const isActive =
                     link.href === "/jobs"
                       ? pathname === "/jobs"
-                      : pathname === link.href || pathname.startsWith(link.href + "/");
+                      : pathname === link.href ||
+                        pathname.startsWith(link.href + "/");
                   return (
                     <Link
                       key={link.href}
@@ -129,9 +185,10 @@ export default function PortalLayout({
             </div>
           </div>
 
-          {/* Remaining links */}
+          {/* Role-specific links (owner/manager only) */}
           {sidebarLinks.map((link) => {
-            const isActive = pathname === link.href || pathname.startsWith(link.href + "/");
+            const isActive =
+              pathname === link.href || pathname.startsWith(link.href + "/");
             return (
               <Link
                 key={link.href}
@@ -153,7 +210,9 @@ export default function PortalLayout({
         <div className="px-6 py-4 border-t border-gray-200 flex items-center gap-2.5">
           <UserButton />
           {displayName && (
-            <span className="text-sm font-medium text-gray-700 truncate">{displayName}</span>
+            <span className="text-sm font-medium text-gray-700 truncate">
+              {displayName}
+            </span>
           )}
         </div>
       </aside>

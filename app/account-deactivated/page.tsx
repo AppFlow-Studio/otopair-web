@@ -1,20 +1,17 @@
-import Link from "next/link";
 import Image from "next/image";
+import Link from "next/link";
 
-export default function ShopOnlyPage() {
+export default function AccountDeactivatedPage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-4">
       <Image src="/logo.png" alt="Otopair" width={64} height={64} className="mb-6" />
       <h1 className="text-2xl font-bold text-gray-900 mb-3 text-center">
-        This portal is for Otopair partner shops
+        Your account has been deactivated
       </h1>
-      <p className="text-gray-600 mb-2 text-center max-w-md">
-        If you&apos;re a shop owner, contact us to get started and set up your
-        shop on Otopair.
-      </p>
       <p className="text-gray-600 mb-8 text-center max-w-md">
-        If you&apos;re looking for car service, the Otopair consumer app is
-        coming soon.
+        Your shop portal access has been deactivated. If you believe this is a
+        mistake, please contact your shop owner or reach out to Otopair support
+        for assistance.
       </p>
       <div className="flex gap-4">
         <Link
@@ -27,7 +24,7 @@ export default function ShopOnlyPage() {
           href="mailto:support@otopair.com"
           className="px-5 py-2.5 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-100 transition-colors"
         >
-          Contact Us
+          Contact Support
         </a>
       </div>
     </div>

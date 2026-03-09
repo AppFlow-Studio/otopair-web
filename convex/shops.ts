@@ -144,3 +144,46 @@ export const getMyShops = query({
     return shops.filter(Boolean);
   },
 });
+
+/**
+ * Returns the current user's portal access status.
+ * Used by the portal layout to handle onboarding/deactivation redirects.
+ */
+export const getMyPortalAccess = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+
+    if (!user) return null;
+
+    // Check for any shop_users record (active or inactive)
+    const allMemberships = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+      .collect();
+
+    const activeMembership = allMemberships.find((m) => m.is_active);
+    const inactiveMembership = allMemberships.find((m) => !m.is_active);
+
+    if (activeMembership) {
+      return {
+        status: "active" as const,
+        role: activeMembership.role,
+        shopId: activeMembership.shop_id,
+      };
+    }
+
+    if (inactiveMembership) {
+      return { status: "deactivated" as const };
+    }
+
+    // User has a shop role but no shop_users record — needs onboarding
+    return { status: "no_shop" as const, userRole: user.role };
+  },
+});

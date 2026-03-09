@@ -9,6 +9,7 @@ const isPublicRoute = createRouteMatcher([
   "/api/waitlist",
   "/api/webhooks(.*)",
   "/shop-only",
+  "/account-deactivated",
 ]);
 
 const isPortalRoute = createRouteMatcher([
@@ -20,7 +21,23 @@ const isPortalRoute = createRouteMatcher([
   "/settings(.*)",
 ]);
 
+// Routes only accessible to owner/manager roles (mechanics cannot access)
+const isOwnerManagerRoute = createRouteMatcher([
+  "/team(.*)",
+  "/settings(.*)",
+  "/schedule(.*)",
+]);
+
+// Routes only accessible to mechanics (owners/managers cannot access)
+const isMechanicRoute = createRouteMatcher([
+  "/my-jobs(.*)",
+]);
+
 const isAdminRoute = createRouteMatcher(["/admin(.*)"]);
+
+const SHOP_ROLES = ["shop_owner", "shop_mechanic", "mechanic", "admin"];
+const OWNER_MANAGER_ROLES = ["shop_owner", "admin"];
+const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
 
 export default clerkMiddleware(async (auth, request) => {
   const { userId, sessionClaims } = await auth();
@@ -41,13 +58,18 @@ export default clerkMiddleware(async (auth, request) => {
 
   // Portal routes require a shop role or admin
   if (isPortalRoute(request)) {
-    if (
-      role !== "shop_owner" &&
-      role !== "shop_mechanic" &&
-      role !== "mechanic" &&
-      role !== "admin"
-    ) {
+    if (!role || !SHOP_ROLES.includes(role)) {
       return NextResponse.redirect(new URL("/shop-only", request.url));
+    }
+
+    // Owner/manager-only routes — redirect mechanics to dashboard
+    if (isOwnerManagerRoute(request) && !OWNER_MANAGER_ROLES.includes(role)) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+
+    // Mechanic-only routes — redirect owners/managers to dashboard
+    if (isMechanicRoute(request) && !MECHANIC_ROLES.includes(role)) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
     }
   }
 

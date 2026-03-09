@@ -15,6 +15,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
+    // Fetch shop name for the invite email
+    const shop = await fetchQuery(api.shops.getById, { shopId: shopId as Id<"shops"> });
+    const shopName = shop?.name;
+
     // Block invites to users who are already an active member of any shop
     const alreadyMember = await fetchQuery(api.users.hasActiveShopMembership, { email });
     if (alreadyMember) {
@@ -113,7 +117,7 @@ export async function POST(req: NextRequest) {
           }
           // Send invite link via Resend in both cases — Clerk won't email existing users,
           // and for stale-duplicate cases there's no active Clerk invitation to send from.
-          await sendInviteEmail({ email, inviteUrl: redirectUrl });
+          await sendInviteEmail({ email, inviteUrl: redirectUrl, shopName });
         }
       } else {
         return NextResponse.json(

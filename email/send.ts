@@ -8,15 +8,19 @@ const resend = new Resend(process.env.RESEND_KEY);
 export async function sendInviteEmail({
   email,
   inviteUrl,
+  shopName,
 }: {
   email: string;
   inviteUrl: string;
+  shopName?: string;
 }) {
   try {
     const result = await resend.emails.send({
       from: 'Otopair <info@otopair.com>',
       to: email,
-      subject: "You've been invited to join Otopair",
+      subject: shopName
+        ? `You've been invited to join ${shopName} on Otopair`
+        : "You've been invited to join a shop on Otopair",
       html: `
 <!DOCTYPE html>
 <html lang="en">
@@ -45,7 +49,7 @@ export async function sendInviteEmail({
               </p>
 
               <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
-                You've been invited to join a shop on <strong>Otopair</strong>. Click the button below to accept your invitation and get started.
+                You've been invited to join ${shopName ? `<strong>${shopName}</strong> on ` : ''}<strong>Otopair</strong>. Click the button below to accept your invitation and get started.
               </p>
 
               <!-- CTA Button -->

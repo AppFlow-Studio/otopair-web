@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         email_address: email,
         public_metadata: {
-          role,
+          // role is intentionally omitted — it is only granted after the invite token is used
           shop_id: shopId,
           invitation_token: invitationToken,
           ...(resolvedMechanicId ? { mechanic_id: resolvedMechanicId } : {}),
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
               body: JSON.stringify({
                 public_metadata: {
                   ...((existingClerkUser.public_metadata as object) ?? {}),
-                  role,
+                  // role is intentionally omitted — it is only granted after the invite token is used
                   shop_id: shopId,
                   invitation_token: invitationToken,
                   ...(resolvedMechanicId ? { mechanic_id: resolvedMechanicId } : {}),

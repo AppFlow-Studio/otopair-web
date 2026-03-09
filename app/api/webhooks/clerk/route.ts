@@ -45,23 +45,17 @@ export async function POST(req: NextRequest) {
         role,
       });
 
-      // If this event has shop invite metadata (any shop role — shop_mechanic, shop_owner, etc.),
-      // attempt to create the shop_users record. Idempotent — safe to call on user.updated too.
-      if (meta.role && meta.invitation_token) {
+      // If this event has an invitation token, attempt to accept the invitation.
+      // Token is required — email alone is not sufficient (security: prevents auto-accept
+      // if someone signs up directly without using the invite link).
+      if (meta.invitation_token) {
         await fetchMutation(api.invitations.acceptIfInvited, {
           clerkUserId: id,
           email: primaryEmail,
-          invitationToken: meta.invitation_token ?? undefined,
+          invitationToken: meta.invitation_token,
           mechanicId: meta.mechanic_id
             ? (meta.mechanic_id as Id<"mechanics">)
             : undefined,
-        });
-      } else if (eventType === "user.created") {
-        // For regular signups (no invite metadata), still check by email in case there's
-        // a pending invitation that wasn't reflected in Clerk metadata.
-        await fetchMutation(api.invitations.acceptIfInvited, {
-          clerkUserId: id,
-          email: primaryEmail,
         });
       }
     }

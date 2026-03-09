@@ -114,16 +114,18 @@ export const getTeamMembers = query({
 });
 
 // Called from user.created webhook to auto-join a shop when invitation metadata is present.
-// Also handles existing Clerk users invited to a new shop.
+// Requires an invitation token — email alone is not sufficient to prevent unauthorized acceptance.
 export const acceptIfInvited = mutation({
   args: {
     clerkUserId: v.string(),
     email: v.string(),
-    // Passed when otopair_role is in Clerk public_metadata (from invitation)
     invitationToken: v.optional(v.string()),
     mechanicId: v.optional(v.id("mechanics")),
   },
   handler: async (ctx, args) => {
+    // Token is required — users must use the invite link to accept
+    if (!args.invitationToken) return null;
+
     const user = await ctx.db
       .query("users")
       .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", args.clerkUserId))
@@ -132,30 +134,17 @@ export const acceptIfInvited = mutation({
 
     const now = Date.now();
 
-    // Prefer token lookup (more reliable), fall back to email
-    let invitation = null;
-    if (args.invitationToken) {
-      invitation = await ctx.db
-        .query("shop_invitations")
-        .withIndex("by_token", (q) => q.eq("token", args.invitationToken!))
-        .filter((q) =>
-          q.and(q.eq(q.field("status"), "pending"), q.gt(q.field("expires_at"), now))
-        )
-        .first();
-    }
-    if (!invitation) {
-      invitation = await ctx.db
-        .query("shop_invitations")
-        .withIndex("by_email", (q) => q.eq("email", args.email))
-        .filter((q) =>
-          q.and(q.eq(q.field("status"), "pending"), q.gt(q.field("expires_at"), now))
-        )
-        .first();
-    }
+    const invitation = await ctx.db
+      .query("shop_invitations")
+      .withIndex("by_token", (q) => q.eq("token", args.invitationToken!))
+      .filter((q) =>
+        q.and(q.eq(q.field("status"), "pending"), q.gt(q.field("expires_at"), now))
+      )
+      .first();
 
     if (!invitation) return null;
 
-    // Idempotency: only create shop_users if it doesn't already exist
+    // Create or reactivate shop_users record
     const existingShopUser = await ctx.db
       .query("shop_users")
       .withIndex("by_user_and_shop", (q) =>
@@ -173,6 +162,15 @@ export const acceptIfInvited = mutation({
         invited_at: invitation.created_at,
         accepted_at: now,
         created_at: now,
+        updated_at: now,
+      });
+    } else if (!existingShopUser.is_active) {
+      // Previously removed — reactivate with updated role
+      await ctx.db.patch(existingShopUser._id, {
+        is_active: true,
+        role: invitation.role,
+        mechanic_id: args.mechanicId ?? invitation.mechanic_id,
+        accepted_at: now,
         updated_at: now,
       });
     }
@@ -253,6 +251,15 @@ export const acceptAsCurrentUser = mutation({
         invited_at: invitation.created_at,
         accepted_at: now,
         created_at: now,
+        updated_at: now,
+      });
+    } else if (!existingShopUser.is_active) {
+      // Previously removed — reactivate with updated role
+      await ctx.db.patch(existingShopUser._id, {
+        is_active: true,
+        role: invitation.role,
+        mechanic_id: invitation.mechanic_id,
+        accepted_at: now,
         updated_at: now,
       });
     }

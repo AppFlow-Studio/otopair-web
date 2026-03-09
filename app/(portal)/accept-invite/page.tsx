@@ -59,10 +59,16 @@ export default function AcceptInvitePage() {
       return;
     }
 
+    // Require sign-in before any acceptance logic — finalize-invite needs an auth'd session.
+    if (!clerkUser) {
+      const signInUrl = `/sign-in?redirect_url=${encodeURIComponent(window.location.href)}`;
+      router.push(signInUrl);
+      return;
+    }
+
     // If a user is logged in but their email doesn't match the invitation,
     // show a mismatch screen so they can switch accounts.
     if (
-      clerkUser &&
       loggedInEmail &&
       invitationEmail &&
       loggedInEmail.toLowerCase() !== invitationEmail.toLowerCase()
@@ -90,7 +96,7 @@ export default function AcceptInvitePage() {
       return;
     }
 
-    // Invitation is pending — try to accept it directly.
+    // Invitation is pending — accept it now that the user is signed in.
     if (!hasAccepted.current) {
       hasAccepted.current = true;
       acceptAsCurrentUser({ token })
@@ -113,15 +119,10 @@ export default function AcceptInvitePage() {
           setTimeout(() => router.push("/dashboard"), 2500);
         })
         .catch((err: Error) => {
-          if (err.message?.includes("Not authenticated")) {
-            const signInUrl = `/sign-in?redirect_url=${encodeURIComponent(window.location.href)}`;
-            router.push(signInUrl);
-          } else {
-            setStatus("error");
-            setErrorMessage(
-              err.message || "Something went wrong. Please try again."
-            );
-          }
+          setStatus("error");
+          setErrorMessage(
+            err.message || "Something went wrong. Please try again."
+          );
         });
     }
   }, [

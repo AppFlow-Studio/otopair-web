@@ -1,7 +1,18 @@
+"use client";
+
 import Image from "next/image";
-import Link from "next/link";
+import { useClerk } from "@clerk/nextjs";
+import { useRouter } from "next/navigation";
 
 export default function AccountDeactivatedPage() {
+  const { signOut } = useClerk();
+  const router = useRouter();
+
+  async function handleGoHome() {
+    await signOut();
+    router.push("/");
+  }
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 px-4">
       <Image src="/logo.png" alt="Otopair" width={64} height={64} className="mb-6" />
@@ -14,12 +25,12 @@ export default function AccountDeactivatedPage() {
         for assistance.
       </p>
       <div className="flex gap-4">
-        <Link
-          href="/"
+        <button
+          onClick={handleGoHome}
           className="px-5 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
         >
           Go Home
-        </Link>
+        </button>
         <a
           href="mailto:support@otopair.com"
           className="px-5 py-2.5 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-100 transition-colors"

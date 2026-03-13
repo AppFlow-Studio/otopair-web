@@ -13,7 +13,6 @@ export default function SettingsPage() {
   const router = useRouter();
   const shops = useQuery(api.shops.getMyShops);
   const shop = shops?.[0] ?? null;
-
   async function handleSignOut() {
     await signOut();
     router.push("/");
@@ -148,6 +147,7 @@ export default function SettingsPage() {
             </p>
           </div>
         </div>
+
       </div>
     </div>
   );

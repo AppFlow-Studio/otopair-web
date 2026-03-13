@@ -187,3 +187,31 @@ export const getMyPortalAccess = query({
     return { status: "no_shop" as const, userRole: user.role };
   },
 });
+
+export const deactivateMyAccount = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+
+    if (!user) throw new Error("User not found");
+
+    const activeMembership = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+      .filter((q) => q.eq(q.field("is_active"), true))
+      .first();
+
+    if (!activeMembership) throw new Error("No active membership found");
+
+    await ctx.db.patch(activeMembership._id, {
+      is_active: false,
+      updated_at: Date.now(),
+    });
+  },
+});

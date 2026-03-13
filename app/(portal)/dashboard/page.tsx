@@ -389,6 +389,9 @@ export default function DashboardPage() {
                                   <Clock className="w-3 h-3" />
                                   {job.scheduledTime}
                                 </div>
+                                {job.estimatedMinutes && (
+                                  <span>Est. {job.estimatedMinutes < 60 ? `${job.estimatedMinutes}m` : `${(job.estimatedMinutes / 60).toFixed(1).replace(/\.0$/, "")} hrs`}</span>
+                                )}
                                 <Image
                                   src={JeepWranglerImage}
                                   alt="Jeep Wrangler"

@@ -230,6 +230,7 @@ export const seedDashboardBookings = mutation({
       liveStage,
       laborCost,
       partsCost,
+      estimatedMinutes,
       key,
     }: {
       userIdx: number;
@@ -241,9 +242,10 @@ export const seedDashboardBookings = mutation({
       liveStage?: string;
       laborCost: number;
       partsCost: number;
+      estimatedMinutes?: number;
       key: string;
     }) => {
-      const endTime = addMinutesToTime(scheduledTime, 60);
+      const endTime = addMinutesToTime(scheduledTime, estimatedMinutes ?? 60);
 
       const timeSlotId = await ctx.db.insert("time_slots", {
         shop_id: args.shopId,
@@ -267,6 +269,7 @@ export const seedDashboardBookings = mutation({
         labor_cost: laborCost,
         parts_cost: partsCost,
         total_cost: totalCost,
+        ...(estimatedMinutes !== undefined ? { estimated_labor_minutes: estimatedMinutes } : {}),
         status,
         ...(liveStage ? { live_stage: liveStage } : {}),
         created_at: now,
@@ -305,6 +308,7 @@ export const seedDashboardBookings = mutation({
       status: "completed",
       laborCost: 47.5,
       partsCost: 45,
+      estimatedMinutes: 45,
       key: "completed_1",
     });
 
@@ -317,6 +321,7 @@ export const seedDashboardBookings = mutation({
       status: "completed",
       laborCost: 30,
       partsCost: 0,
+      estimatedMinutes: 30,
       key: "completed_2",
     });
 
@@ -330,6 +335,7 @@ export const seedDashboardBookings = mutation({
       status: "pending",
       laborCost: 95,
       partsCost: 60,
+      estimatedMinutes: 90,
       key: "active_1",
     });
 
@@ -342,6 +348,7 @@ export const seedDashboardBookings = mutation({
       status: "pending",
       laborCost: 89,
       partsCost: 0,
+      estimatedMinutes: 60,
       key: "active_2",
     });
 
@@ -355,6 +362,7 @@ export const seedDashboardBookings = mutation({
       status: "confirmed",
       laborCost: 47.5,
       partsCost: 45,
+      estimatedMinutes: 45,
       key: "today_1",
     });
 
@@ -367,6 +375,7 @@ export const seedDashboardBookings = mutation({
       status: "confirmed",
       laborCost: 95,
       partsCost: 70,
+      estimatedMinutes: 90,
       key: "today_2",
     });
 
@@ -379,6 +388,7 @@ export const seedDashboardBookings = mutation({
       status: "confirmed",
       laborCost: 30,
       partsCost: 0,
+      estimatedMinutes: 30,
       key: "today_3",
     });
 
@@ -392,6 +402,7 @@ export const seedDashboardBookings = mutation({
       status: "pending",
       laborCost: 95,
       partsCost: 65,
+      estimatedMinutes: 90,
       key: "pending_1",
     });
 
@@ -404,6 +415,7 @@ export const seedDashboardBookings = mutation({
       status: "pending",
       laborCost: 95,
       partsCost: 35,
+      estimatedMinutes: 120,
       key: "pending_2",
     });
 

@@ -258,6 +258,7 @@ export const getPendingJobsByShop = query({
           service: serviceName,
           ago,
           scheduledTime: booking.scheduled_time ? formatTime(booking.scheduled_time) : "",
+          estimatedMinutes: booking.estimated_labor_minutes ?? null,
         };
       })
     );

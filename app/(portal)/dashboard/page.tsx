@@ -639,7 +639,7 @@ export default function DashboardPage() {
       {pendingJobs && pendingJobs.length > 0 && (
         <button
           onClick={() => document.querySelector("[data-pending-section]")?.scrollIntoView({ behavior: "smooth" })}
-          className="fixed bottom-8 left-8 flex items-center gap-2 px-5 py-3 bg-primary text-primary-foreground rounded-full shadow-lg hover:shadow-xl hover:opacity-90 transition-all z-50 text-sm font-semibold"
+          className="fixed bottom-20 left-8 flex items-center gap-2 px-5 py-3 bg-primary text-primary-foreground rounded-full shadow-lg hover:shadow-xl hover:opacity-90 transition-all z-50 text-sm font-semibold"
           style={{ animation: "ringPulse 2s ease-out infinite" }}
         >
           Review Pending

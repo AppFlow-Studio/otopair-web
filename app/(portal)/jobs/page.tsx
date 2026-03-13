@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { ChevronDown, X } from "lucide-react";
+import { Calendar, ChevronDown, Search, X } from "lucide-react";
 
 type JobStatusFilter =
   | "all"
@@ -43,8 +43,21 @@ const statusLabel: Record<string, string> = {
   declined: "Declined",
 };
 
+function todayString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export default function JobsPage() {
   const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("all");
+  const [customerFilter, setCustomerFilter] = useState("");
+  const [vehicleFilter, setVehicleFilter] = useState("");
+  const [serviceFilter, setServiceFilter] = useState("");
+  const [mechanicFilter, setMechanicFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState(todayString);
+  const [timeFrom, setTimeFrom] = useState("");
+  const [dateTo, setDateTo] = useState(todayString);
+  const [timeTo, setTimeTo] = useState("");
+
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [assigningMechanicId, setAssigningMechanicId] = useState("");
   const [actionError, setActionError] = useState<string>("");
@@ -68,22 +81,74 @@ export default function JobsPage() {
     [assigningMechanicId, mechanics]
   );
 
-  // Compute counts per status from all jobs
+  // Unique values for filter dropdowns
+  const uniqueServices = useMemo(() => {
+    if (!allJobs) return [];
+    return [...new Set(allJobs.flatMap((j) => j.serviceNames))].sort();
+  }, [allJobs]);
+
+  const uniqueMechanics = useMemo(() => {
+    if (!allJobs) return [];
+    return [...new Set(allJobs.map((j) => j.mechanicName).filter(Boolean) as string[])].sort();
+  }, [allJobs]);
+
+  // Compute counts per status from all jobs.
+  // "pending" and "pending_shop_acceptance" are the same bucket for display.
   const statusCounts = useMemo(() => {
     if (!allJobs) return {};
     const counts: Record<string, number> = { all: allJobs.length };
     for (const job of allJobs) {
-      counts[job.status] = (counts[job.status] ?? 0) + 1;
+      const key = job.status === "pending" ? "pending_shop_acceptance" : job.status;
+      counts[key] = (counts[key] ?? 0) + 1;
     }
     return counts;
   }, [allJobs]);
 
-  // Filter jobs client-side
+  // Filter jobs client-side with all filters
   const filteredJobs = useMemo(() => {
     if (!allJobs) return undefined;
-    if (statusFilter === "all") return allJobs;
-    return allJobs.filter((j) => j.status === statusFilter);
-  }, [allJobs, statusFilter]);
+    return allJobs.filter((j) => {
+      if (statusFilter !== "all") {
+        const isPending = statusFilter === "pending_shop_acceptance";
+        const jobIsPending = j.status === "pending" || j.status === "pending_shop_acceptance";
+        if (isPending ? !jobIsPending : j.status !== statusFilter) return false;
+      }
+      if (customerFilter && !j.customerName.toLowerCase().includes(customerFilter.toLowerCase()) && !j.customerEmail.toLowerCase().includes(customerFilter.toLowerCase())) return false;
+      if (vehicleFilter && !j.vehicle.toLowerCase().includes(vehicleFilter.toLowerCase())) return false;
+      if (serviceFilter && !j.serviceNames.some((s) => s === serviceFilter)) return false;
+      if (mechanicFilter && (j.mechanicName ?? "") !== mechanicFilter) return false;
+
+      // Date + time filtering
+      if (dateFrom) {
+        const jobDateTime = j.scheduledDate + "T" + (j.scheduledTime || "00:00");
+        const fromDateTime = dateFrom + "T" + (timeFrom || "00:00");
+        if (jobDateTime < fromDateTime) return false;
+      }
+      if (dateTo) {
+        const jobDateTime = j.scheduledDate + "T" + (j.scheduledTime || "23:59");
+        const toDateTime = dateTo + "T" + (timeTo || "23:59");
+        if (jobDateTime > toDateTime) return false;
+      }
+
+      return true;
+    });
+  }, [allJobs, statusFilter, customerFilter, vehicleFilter, serviceFilter, mechanicFilter, dateFrom, timeFrom, dateTo, timeTo]);
+
+  const today = todayString();
+  const isDefaultDateRange = dateFrom === today && dateTo === today && !timeFrom && !timeTo;
+  const hasAnyFilter = statusFilter !== "all" || customerFilter || vehicleFilter || serviceFilter || mechanicFilter || !isDefaultDateRange;
+
+  function clearAllFilters() {
+    setStatusFilter("all");
+    setCustomerFilter("");
+    setVehicleFilter("");
+    setServiceFilter("");
+    setMechanicFilter("");
+    setDateFrom(today);
+    setTimeFrom("");
+    setDateTo(today);
+    setTimeTo("");
+  }
 
   useEffect(() => {
     if (!selectedJob) return;
@@ -120,9 +185,6 @@ export default function JobsPage() {
       {/* Page header */}
       <div>
         <h1 className="text-2xl font-bold text-foreground">All Jobs</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          View, assign, and manage jobs through their lifecycle.
-        </p>
       </div>
 
       {context === undefined ? (
@@ -166,10 +228,66 @@ export default function JobsPage() {
           <div className="bg-card rounded-xl border border-border overflow-hidden">
             {/* Filter row */}
             <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-              <div className="flex items-center gap-2">
-                <FilterPill label="Status" value={statusFilter !== "all" ? statusLabel[statusFilter] ?? statusFilter : undefined} onClear={() => setStatusFilter("all")} />
+              <div className="flex items-center gap-2 flex-wrap">
+                <TextFilterPill
+                  label="Customer"
+                  value={customerFilter}
+                  onChange={setCustomerFilter}
+                  placeholder="Search by name or email…"
+                />
+                <TextFilterPill
+                  label="Vehicle"
+                  value={vehicleFilter}
+                  onChange={setVehicleFilter}
+                  placeholder="Search by vehicle…"
+                />
+                <DropdownFilterPill
+                  label="Service"
+                  value={serviceFilter}
+                  options={uniqueServices}
+                  onChange={setServiceFilter}
+                />
+                <DropdownFilterPill
+                  label="Status"
+                  value={statusFilter !== "all" ? (statusLabel[statusFilter] ?? statusFilter) : ""}
+                  options={STATUS_TABS.filter((t) => t.key !== "all").map((t) => t.label)}
+                  onChange={(val) => {
+                    if (!val) { setStatusFilter("all"); return; }
+                    const found = STATUS_TABS.find((t) => t.label === val);
+                    if (found) setStatusFilter(found.key);
+                  }}
+                />
+                <DropdownFilterPill
+                  label="Mechanic"
+                  value={mechanicFilter}
+                  options={uniqueMechanics}
+                  onChange={setMechanicFilter}
+                />
+
+                <div className="w-px h-5 bg-border mx-1" />
+
+                <DateTimeFilterPill
+                  dateFrom={dateFrom}
+                  timeFrom={timeFrom}
+                  dateTo={dateTo}
+                  timeTo={timeTo}
+                  defaultDate={today}
+                  onDateFromChange={setDateFrom}
+                  onTimeFromChange={setTimeFrom}
+                  onDateToChange={setDateTo}
+                  onTimeToChange={setTimeTo}
+                />
+
+                {hasAnyFilter && (
+                  <button
+                    onClick={clearAllFilters}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
+                  >
+                    Clear all
+                  </button>
+                )}
               </div>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground shrink-0 ml-4">
                 {filteredJobs ? `${filteredJobs.length} result${filteredJobs.length !== 1 ? "s" : ""}` : ""}
               </p>
             </div>
@@ -391,30 +509,276 @@ export default function JobsPage() {
   );
 }
 
-/** Small filter pill component */
-function FilterPill({
+/* ------------------------------------------------------------------ */
+/*  Filter pill components                                             */
+/* ------------------------------------------------------------------ */
+
+function useClickOutside(ref: React.RefObject<HTMLElement | null>, handler: () => void) {
+  useEffect(() => {
+    function onMouseDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) handler();
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [ref, handler]);
+}
+
+/** Text search filter pill (Customer) */
+function TextFilterPill({
   label,
   value,
-  onClear,
+  onChange,
+  placeholder,
 }: {
   label: string;
-  value?: string;
-  onClear: () => void;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
 }) {
-  if (!value) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground px-3 py-1.5 rounded-full border border-border bg-card">
-        <ChevronDown className="w-3 h-3" />
-        {label}
-      </span>
-    );
-  }
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useClickOutside(ref, close);
+
+  const hasValue = !!value;
+
   return (
-    <span className="inline-flex items-center gap-1 text-xs font-medium text-primary px-3 py-1.5 rounded-full border border-primary/30 bg-primary/5">
-      {label}: {value}
-      <button onClick={onClear} className="ml-0.5 hover:text-primary/70 transition-colors">
-        <X className="w-3 h-3" />
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(!open)}
+        className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+          hasValue
+            ? "font-medium text-primary border-primary/30 bg-primary/5"
+            : "text-muted-foreground border-border bg-card hover:bg-muted/50"
+        }`}
+      >
+        {hasValue ? (
+          <>
+            {label}: {value}
+            <button
+              onClick={(e) => { e.stopPropagation(); onChange(""); }}
+              className="ml-0.5 hover:text-primary/70"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </>
+        ) : (
+          <>
+            <Search className="w-3 h-3" />
+            {label}
+          </>
+        )}
       </button>
-    </span>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-2 min-w-56">
+          <input
+            autoFocus
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder}
+            className="w-full text-xs px-3 py-2 rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Dropdown select filter pill (Vehicle, Service, Status, Mechanic) */
+function DropdownFilterPill({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useClickOutside(ref, close);
+
+  const hasValue = !!value;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(!open)}
+        className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+          hasValue
+            ? "font-medium text-primary border-primary/30 bg-primary/5"
+            : "text-muted-foreground border-border bg-card hover:bg-muted/50"
+        }`}
+      >
+        {hasValue ? (
+          <>
+            {label}: {value}
+            <button
+              onClick={(e) => { e.stopPropagation(); onChange(""); }}
+              className="ml-0.5 hover:text-primary/70"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </>
+        ) : (
+          <>
+            <ChevronDown className="w-3 h-3" />
+            {label}
+          </>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg py-1 min-w-40 max-h-52 overflow-y-auto">
+          {options.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">No options</p>
+          ) : (
+            options.map((opt) => (
+              <button
+                key={opt}
+                onClick={() => { onChange(opt); setOpen(false); }}
+                className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                  value === opt
+                    ? "bg-primary/10 text-primary font-medium"
+                    : "text-foreground hover:bg-muted/50"
+                }`}
+              >
+                {opt}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Date & time range filter pill */
+function DateTimeFilterPill({
+  dateFrom,
+  timeFrom,
+  dateTo,
+  timeTo,
+  defaultDate,
+  onDateFromChange,
+  onTimeFromChange,
+  onDateToChange,
+  onTimeToChange,
+}: {
+  dateFrom: string;
+  timeFrom: string;
+  dateTo: string;
+  timeTo: string;
+  defaultDate: string;
+  onDateFromChange: (v: string) => void;
+  onTimeFromChange: (v: string) => void;
+  onDateToChange: (v: string) => void;
+  onTimeToChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useClickOutside(ref, close);
+
+  const isDefault = dateFrom === defaultDate && dateTo === defaultDate && !timeFrom && !timeTo;
+  const hasValue = !isDefault;
+
+  function formatSummary() {
+    if (dateFrom === dateTo && dateFrom) return dateFrom === defaultDate ? "Today" : dateFrom;
+    if (dateFrom && dateTo) return `${dateFrom} – ${dateTo}`;
+    if (dateFrom) return `From ${dateFrom}`;
+    if (dateTo) return `Until ${dateTo}`;
+    return "Today";
+  }
+
+  function clearDate() {
+    onDateFromChange(defaultDate);
+    onTimeFromChange("");
+    onDateToChange(defaultDate);
+    onTimeToChange("");
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(!open)}
+        className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+          hasValue
+            ? "font-medium text-primary border-primary/30 bg-primary/5"
+            : "text-muted-foreground border-border bg-card hover:bg-muted/50"
+        }`}
+      >
+        {hasValue ? (
+          <>
+            Date: {formatSummary()}
+            <button
+              onClick={(e) => { e.stopPropagation(); clearDate(); }}
+              className="ml-0.5 hover:text-primary/70"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </>
+        ) : (
+          <>
+            <Calendar className="w-3 h-3" />
+            Today
+          </>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 min-w-64">
+          <div className="space-y-3">
+            <div>
+              <p className="text-[11px] font-medium text-muted-foreground mb-1.5">From</p>
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => onDateFromChange(e.target.value)}
+                  className="flex-1 text-xs px-2.5 py-1.5 rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <input
+                  type="time"
+                  value={timeFrom}
+                  onChange={(e) => onTimeFromChange(e.target.value)}
+                  className="w-24 text-xs px-2.5 py-1.5 rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+            </div>
+            <div>
+              <p className="text-[11px] font-medium text-muted-foreground mb-1.5">To</p>
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => onDateToChange(e.target.value)}
+                  className="flex-1 text-xs px-2.5 py-1.5 rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <input
+                  type="time"
+                  value={timeTo}
+                  onChange={(e) => onTimeToChange(e.target.value)}
+                  className="w-24 text-xs px-2.5 py-1.5 rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+            </div>
+            {hasValue && (
+              <button
+                onClick={clearDate}
+                className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Clear dates
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

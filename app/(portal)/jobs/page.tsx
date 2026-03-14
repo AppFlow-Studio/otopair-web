@@ -61,6 +61,7 @@ export default function JobsPage() {
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [assigningMechanicId, setAssigningMechanicId] = useState("");
   const [actionError, setActionError] = useState<string>("");
+  const detailPanelRef = useRef<HTMLDivElement>(null);
 
   const context = useQuery(api.bookings.getMyShopJobContext);
   const allJobs = useQuery(api.bookings.listForMyShop, {});
@@ -154,6 +155,15 @@ export default function JobsPage() {
     if (!selectedJob) return;
     setAssigningMechanicId(selectedJob.mechanicId ? String(selectedJob.mechanicId) : "");
   }, [selectedJob]);
+
+  useEffect(() => {
+    if (!selectedJobId) return;
+    // Small timeout lets React render the panel before we scroll to it
+    const t = setTimeout(() => {
+      detailPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [selectedJobId]);
 
   async function handleStatusAction(action: "accept" | "complete" | "cancel") {
     if (!selectedJob?._id) return;
@@ -369,7 +379,7 @@ export default function JobsPage() {
 
           {/* Job detail panel */}
           {selectedJobId && (
-            <div className="bg-card rounded-xl border border-border p-5">
+            <div ref={detailPanelRef} className="bg-card rounded-xl border border-border p-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-semibold text-foreground">Job Detail</h2>
                 <button

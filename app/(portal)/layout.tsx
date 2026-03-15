@@ -18,7 +18,9 @@ import {
   PlusCircle,
   List,
   Loader2,
+  LifeBuoy,
 } from "lucide-react";
+import { UserSupportPage } from "./user-support-page";
 import { useEffect, useRef, useState } from "react";
 import { PortalSidebarContext } from "./portal-context";
 
@@ -246,7 +248,21 @@ export default function PortalLayout({
           {/* User section */}
           <div className="flex items-center gap-3 px-4 py-4 border-t border-gray-200">
             <div className="shrink-0">
-              <UserButton />
+              <UserButton
+                userProfileProps={{
+                  appearance: {
+                    elements: { profileSection__danger: { display: "none" } },
+                  },
+                }}
+              >
+                <UserButton.UserProfilePage
+                  label="Support"
+                  url="support"
+                  labelIcon={<LifeBuoy className="w-4 h-4" />}
+                >
+                  <UserSupportPage />
+                </UserButton.UserProfilePage>
+              </UserButton>
             </div>
             {displayName && <NavText>{displayName}</NavText>}
           </div>
@@ -265,7 +281,21 @@ export default function PortalLayout({
             <Image src="/logo.png" alt="Otopair" width={28} height={28} />
             <span className="text-base font-semibold text-gray-900">Otopair</span>
             <div className="ml-auto">
-              <UserButton />
+              <UserButton
+                userProfileProps={{
+                  appearance: {
+                    elements: { profileSection__danger: { display: "none" } },
+                  },
+                }}
+              >
+                <UserButton.UserProfilePage
+                  label="Support"
+                  url="support"
+                  labelIcon={<LifeBuoy className="w-4 h-4" />}
+                >
+                  <UserSupportPage />
+                </UserButton.UserProfilePage>
+              </UserButton>
             </div>
           </header>
 

@@ -622,6 +622,11 @@ export default defineSchema({
     accepted_at: v.optional(v.float64()),
     created_at: v.float64(),
     updated_at: v.float64(),
+    isPendingDeletion: v.optional(v.boolean()),
+    deletionRequestedAt: v.optional(v.float64()),
+    deletionSurveyReason: v.optional(v.string()),
+    deletionSurveyResponse: v.optional(v.string()),
+    deletionSurveyImprovement: v.optional(v.string()), // follows deletionSurveyResponse intentionally
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])

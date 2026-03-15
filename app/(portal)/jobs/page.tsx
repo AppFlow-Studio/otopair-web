@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Calendar, ChevronDown, ClipboardList, Search, X } from "lucide-react";
+import { Calendar, ChevronDown, ClipboardList, Loader2, Search, X } from "lucide-react";
+import { usePortalSidebar } from "../portal-context";
 
 /* ------------------------------------------------------------------ */
 /*  Types & constants                                                   */
@@ -80,6 +81,7 @@ function formatJobDate(scheduledDate: string, scheduledTime: string): string {
 }
 
 function pendingCountdown(creationTime: number): string | null {
+  if (!creationTime || isNaN(creationTime)) return null;
   const deadline = creationTime + 24 * 60 * 60 * 1000;
   const remaining = deadline - Date.now();
   if (remaining <= 0) return null;
@@ -90,7 +92,6 @@ function pendingCountdown(creationTime: number): string | null {
 }
 
 function isSystemReason(reason: string): boolean {
-  // Hide reasons that look like system identifiers (underscores or all-lowercase-with-digits)
   return /_/.test(reason) || /^[a-z][a-z0-9]*$/.test(reason);
 }
 
@@ -113,6 +114,8 @@ export default function JobsPage() {
   const [assigningMechanicId, setAssigningMechanicId] = useState("");
   const [actionError, setActionError] = useState<string>("");
   const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
+  const [isActioning, setIsActioning] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
 
   // Decline modal
   const [showDeclineModal, setShowDeclineModal] = useState(false);
@@ -121,6 +124,9 @@ export default function JobsPage() {
 
   // Complete confirmation modal
   const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
+
+  // Cancel confirmation modal (for confirmed/in_progress jobs)
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const context = useQuery(api.bookings.getMyShopJobContext);
   const allJobs = useQuery(api.bookings.listForMyShop, {});
@@ -208,12 +214,23 @@ export default function JobsPage() {
     setAssigningMechanicId(selectedJob.mechanicId ? String(selectedJob.mechanicId) : "");
   }, [selectedJob]);
 
-  // Keyboard navigation: arrows move row focus, Enter opens drawer, Escape closes
+  // Auto-clear success toast after 3s
+  useEffect(() => {
+    if (!successMessage) return;
+    const t = setTimeout(() => setSuccessMessage(""), 3000);
+    return () => clearTimeout(t);
+  }, [successMessage]);
+
+  // Keyboard navigation — guard against firing inside form inputs
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
       if (e.key === "Escape") {
         if (showDeclineModal) { setShowDeclineModal(false); return; }
         if (showCompleteConfirm) { setShowCompleteConfirm(false); return; }
+        if (showCancelConfirm) { setShowCancelConfirm(false); return; }
         if (selectedJobId) { setSelectedJobId(null); return; }
         return;
       }
@@ -235,17 +252,26 @@ export default function JobsPage() {
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [filteredJobs, focusedRowIndex, selectedJobId, showDeclineModal, showCompleteConfirm]);
+  }, [filteredJobs, focusedRowIndex, selectedJobId, showDeclineModal, showCompleteConfirm, showCancelConfirm]);
 
   async function handleStatusAction(action: "accept" | "complete") {
     if (!selectedJob?._id) return;
     setActionError("");
+    setIsActioning(true);
     try {
-      if (action === "accept") await acceptJob({ bookingId: selectedJob._id });
-      if (action === "complete") await completeJob({ bookingId: selectedJob._id });
+      if (action === "accept") {
+        await acceptJob({ bookingId: selectedJob._id });
+        setSuccessMessage("Job accepted");
+      }
+      if (action === "complete") {
+        await completeJob({ bookingId: selectedJob._id });
+        setSuccessMessage("Job completed");
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Could not update status.";
       setActionError(message);
+    } finally {
+      setIsActioning(false);
     }
   }
 
@@ -253,36 +279,68 @@ export default function JobsPage() {
     if (!selectedJob?._id) return;
     setActionError("");
     const reason = declineReason === "Other" ? (declineOtherText.trim() || "Other") : declineReason;
+    setIsActioning(true);
     try {
       await cancelJob({ bookingId: selectedJob._id, reason });
       setShowDeclineModal(false);
       setDeclineReason(DECLINE_REASONS[0]);
       setDeclineOtherText("");
+      setSuccessMessage("Job declined");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Could not decline job.";
       setActionError(message);
+    } finally {
+      setIsActioning(false);
+    }
+  }
+
+  async function handleCancelJob() {
+    if (!selectedJob?._id) return;
+    setActionError("");
+    setIsActioning(true);
+    try {
+      await cancelJob({ bookingId: selectedJob._id, reason: "cancelled_by_shop" });
+      setShowCancelConfirm(false);
+      setSuccessMessage("Job cancelled");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Could not cancel job.";
+      setActionError(message);
+    } finally {
+      setIsActioning(false);
     }
   }
 
   async function handleAssignMechanic() {
     if (!selectedJob?._id || !selectedMechanicId) return;
     setActionError("");
+    setIsActioning(true);
     try {
       await updateJob({ bookingId: selectedJob._id, mechanicId: selectedMechanicId });
+      setSuccessMessage("Mechanic assigned");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Could not assign mechanic.";
       setActionError(message);
+    } finally {
+      setIsActioning(false);
     }
   }
 
   const drawerOpen = !!selectedJobId;
 
+  const { setSidebarCompact } = usePortalSidebar();
+  useEffect(() => {
+    setSidebarCompact(drawerOpen);
+    return () => setSidebarCompact(false);
+  }, [drawerOpen, setSidebarCompact]);
+
+  const drawerTitle = selectedJob
+    ? `${selectedJob.serviceNames.join(", ")} — ${selectedJob.customerName}`
+    : "Job Detail";
+
   return (
     <div className="space-y-6">
-      {/* Page header */}
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">All Jobs</h1>
-      </div>
+      {/* Page header — full width, above the flex row */}
+      <h1 className="text-2xl font-bold text-foreground">All Jobs</h1>
 
       {context === undefined ? (
         <div className="bg-card rounded-xl border border-border p-8 text-center text-muted-foreground">
@@ -293,416 +351,452 @@ export default function JobsPage() {
           This page is for shop team members. If you need access, reach out to your shop owner.
         </div>
       ) : (
-        <>
-          {/* Status summary tabs */}
-          <div className="flex gap-0 border border-border rounded-xl overflow-hidden bg-card">
-            {STATUS_TABS.map((tab, i) => {
-              const count = statusCounts[tab.key] ?? 0;
-              const isActive = statusFilter === tab.key;
-              return (
-                <button
-                  key={tab.key}
-                  onClick={() => setStatusFilter(tab.key)}
-                  className={`flex-1 py-3 px-4 text-left transition-colors relative ${
-                    i > 0 ? "border-l border-border" : ""
-                  } ${isActive ? "bg-primary/5" : "hover:bg-muted/50"}`}
-                >
-                  {isActive && (
-                    <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary" />
-                  )}
-                  <p className={`text-xs font-medium ${isActive ? "text-primary" : "text-muted-foreground"}`}>
-                    {tab.label}
-                  </p>
-                  <p className={`text-lg font-semibold mt-0.5 ${isActive ? "text-primary" : "text-foreground"}`}>
-                    {allJobs === undefined ? "–" : count}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Table card */}
-          <div className="bg-card rounded-xl border border-border overflow-hidden">
-            {/* Filter row */}
-            <div className="flex items-center justify-between px-5 py-3 border-b border-border">
-              <div className="flex items-center gap-2 flex-wrap">
-                <TextFilterPill
-                  label="Customer"
-                  value={customerFilter}
-                  onChange={setCustomerFilter}
-                  placeholder="Search by name or email…"
-                />
-                <TextFilterPill
-                  label="Vehicle"
-                  value={vehicleFilter}
-                  onChange={setVehicleFilter}
-                  placeholder="Search by vehicle…"
-                />
-                <DropdownFilterPill
-                  label="Service"
-                  value={serviceFilter}
-                  options={uniqueServices}
-                  onChange={setServiceFilter}
-                />
-                <DropdownFilterPill
-                  label="Mechanic"
-                  value={mechanicFilter}
-                  options={uniqueMechanics}
-                  onChange={setMechanicFilter}
-                />
-
-                <div className="w-px h-5 bg-border mx-1" />
-
-                <DateTimeFilterPill
-                  dateFrom={dateFrom}
-                  timeFrom={timeFrom}
-                  dateTo={dateTo}
-                  timeTo={timeTo}
-                  defaultDate={today}
-                  onDateFromChange={setDateFrom}
-                  onTimeFromChange={setTimeFrom}
-                  onDateToChange={setDateTo}
-                  onTimeToChange={setTimeTo}
-                />
-
-                {hasAnyFilter && (
-                  <button
-                    onClick={clearAllFilters}
-                    className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
-                  >
-                    Clear all
-                  </button>
-                )}
+        /* Flex row: tabs + table alongside drawer — starts here so drawer aligns with status tabs */
+        <div className="flex items-start">
+          {/* Main content */}
+          <div className="flex-1 min-w-0 space-y-6">
+            {/* Status summary tabs */}
+              <div className="flex gap-0 border border-border rounded-xl overflow-hidden bg-card">
+                {STATUS_TABS.map((tab, i) => {
+                  const count = statusCounts[tab.key] ?? 0;
+                  const isActive = statusFilter === tab.key;
+                  return (
+                    <button
+                      key={tab.key}
+                      onClick={() => setStatusFilter(tab.key)}
+                      className={`flex-1 py-3 px-4 text-left transition-colors relative ${
+                        i > 0 ? "border-l border-border" : ""
+                      } ${isActive ? "bg-primary/5" : "hover:bg-muted/50"}`}
+                    >
+                      {isActive && (
+                        <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary" />
+                      )}
+                      <p className={`text-xs font-medium ${isActive ? "text-primary" : "text-muted-foreground"}`}>
+                        {tab.label}
+                      </p>
+                      <p className={`text-lg font-semibold mt-0.5 ${isActive ? "text-primary" : "text-foreground"}`}>
+                        {allJobs === undefined ? "–" : count}
+                      </p>
+                    </button>
+                  );
+                })}
               </div>
-              <p className="text-xs text-muted-foreground shrink-0 ml-4">
-                {filteredJobs ? `${filteredJobs.length} result${filteredJobs.length !== 1 ? "s" : ""}` : ""}
-              </p>
-            </div>
 
-            {/* Table */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left text-xs text-muted-foreground font-medium">
-                    <th className="pl-5 pr-3 py-3">Customer</th>
-                    <th className="px-3 py-3">Vehicle</th>
-                    <th className="px-3 py-3">Service</th>
-                    <th className="px-3 py-3">Status</th>
-                    <th className="px-3 py-3">Mechanic</th>
-                    <th className="px-3 py-3">Date</th>
-                    <th className="px-3 py-3 text-right pr-5">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredJobs === undefined ? (
-                    // Loading skeleton: 5 shimmer rows
-                    Array.from({ length: 5 }).map((_, i) => (
-                      <tr key={i} className="border-b border-border last:border-b-0">
-                        <td className="pl-5 pr-3 py-4">
-                          <div className="h-4 bg-muted rounded animate-pulse w-32 mb-1.5" />
-                          <div className="h-3 bg-muted rounded animate-pulse w-44" />
-                        </td>
-                        <td className="px-3 py-4">
-                          <div className="h-4 bg-muted rounded animate-pulse w-28" />
-                        </td>
-                        <td className="px-3 py-4">
-                          <div className="h-4 bg-muted rounded animate-pulse w-36" />
-                        </td>
-                        <td className="px-3 py-4">
-                          <div className="h-5 bg-muted rounded-full animate-pulse w-20" />
-                        </td>
-                        <td className="px-3 py-4">
-                          <div className="h-4 bg-muted rounded animate-pulse w-24" />
-                        </td>
-                        <td className="px-3 py-4">
-                          <div className="h-4 bg-muted rounded animate-pulse w-28" />
-                        </td>
-                        <td className="px-3 py-4 pr-5">
-                          <div className="h-4 bg-muted rounded animate-pulse w-16 ml-auto" />
-                        </td>
+              {/* Table card */}
+              <div className="bg-card rounded-xl border border-border overflow-hidden">
+                {/* Filter row */}
+                <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <TextFilterPill
+                      label="Customer"
+                      value={customerFilter}
+                      onChange={setCustomerFilter}
+                      placeholder="Search by name or email…"
+                    />
+                    <TextFilterPill
+                      label="Vehicle"
+                      value={vehicleFilter}
+                      onChange={setVehicleFilter}
+                      placeholder="Search by vehicle…"
+                    />
+                    <DropdownFilterPill
+                      label="Service"
+                      value={serviceFilter}
+                      options={uniqueServices}
+                      onChange={setServiceFilter}
+                    />
+                    <DropdownFilterPill
+                      label="Mechanic"
+                      value={mechanicFilter}
+                      options={uniqueMechanics}
+                      onChange={setMechanicFilter}
+                    />
+
+                    <div className="w-px h-5 bg-border mx-1" />
+
+                    <DateTimeFilterPill
+                      dateFrom={dateFrom}
+                      timeFrom={timeFrom}
+                      dateTo={dateTo}
+                      timeTo={timeTo}
+                      defaultDate={today}
+                      onDateFromChange={setDateFrom}
+                      onTimeFromChange={setTimeFrom}
+                      onDateToChange={setDateTo}
+                      onTimeToChange={setTimeTo}
+                    />
+
+                    {hasAnyFilter && (
+                      <button
+                        onClick={clearAllFilters}
+                        className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
+                      >
+                        Clear all
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground shrink-0 ml-4">
+                    {filteredJobs ? `${filteredJobs.length} result${filteredJobs.length !== 1 ? "s" : ""}` : ""}
+                  </p>
+                </div>
+
+                {/* Table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-left text-xs text-muted-foreground font-medium">
+                        <th className="pl-5 pr-3 py-3">Customer</th>
+                        <th className="px-3 py-3">Vehicle</th>
+                        <th className="px-3 py-3">Service</th>
+                        <th className="px-3 py-3">Status</th>
+                        <th className="px-3 py-3">Mechanic</th>
+                        {!drawerOpen && <th className="px-3 py-3">Date</th>}
+                        <th className="px-3 py-3 text-right pr-5">Total</th>
                       </tr>
-                    ))
-                  ) : filteredJobs.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="px-5 py-14">
-                        <div className="flex flex-col items-center gap-2">
-                          <ClipboardList className="w-9 h-9 text-muted-foreground opacity-40" />
-                          <p className="text-sm font-medium text-muted-foreground">No jobs found</p>
-                          <p className="text-xs text-muted-foreground">
-                            Try adjusting your filters or check back later.
-                          </p>
-                        </div>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredJobs.map((job, idx) => {
-                      const isSelected = selectedJobId === job._id;
-                      const isFocused = focusedRowIndex === idx;
-                      const isPending =
-                        job.status === "pending" || job.status === "pending_shop_acceptance";
-                      const countdown = isPending
-                        ? pendingCountdown(job._creationTime)
-                        : null;
-                      return (
-                        <tr
-                          key={String(job._id)}
-                          onClick={() => {
-                            setSelectedJobId(isSelected ? null : job._id);
-                            setFocusedRowIndex(idx);
-                          }}
-                          className={`border-b border-border last:border-b-0 cursor-pointer transition-colors ${
-                            isSelected
-                              ? "bg-primary/5"
-                              : isFocused
-                              ? "bg-muted/70"
-                              : "hover:bg-muted/50"
-                          }`}
-                        >
-                          <td className="pl-5 pr-3 py-4">
-                            <p className="font-medium text-foreground">{job.customerName}</p>
-                            <p className="text-xs text-muted-foreground">{job.customerEmail}</p>
-                          </td>
-                          <td className="px-3 py-4 text-foreground">{job.vehicle}</td>
-                          <td className="px-3 py-4 text-foreground max-w-48 truncate">
-                            {job.serviceNames.join(", ")}
-                          </td>
-                          <td className="px-3 py-4">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span
-                                className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
-                                  statusBadgeClass[job.status] ?? "bg-muted text-muted-foreground"
-                                }`}
-                              >
-                                {statusLabel[job.status] ?? job.status}
-                              </span>
-                              {countdown && (
-                                <span className="text-amber-600 text-[11px] whitespace-nowrap">
-                                  {countdown}
-                                </span>
-                              )}
+                    </thead>
+                    <tbody>
+                      {filteredJobs === undefined ? (
+                        // Loading skeleton: 5 shimmer rows
+                        Array.from({ length: 5 }).map((_, i) => (
+                          <tr key={i} className="border-b border-border last:border-b-0">
+                            <td className="pl-5 pr-3 py-4">
+                              <div className="h-4 bg-muted rounded animate-pulse w-32 mb-1.5" />
+                              <div className="h-3 bg-muted rounded animate-pulse w-44" />
+                            </td>
+                            <td className="px-3 py-4">
+                              <div className="h-4 bg-muted rounded animate-pulse w-28" />
+                            </td>
+                            <td className="px-3 py-4">
+                              <div className="h-4 bg-muted rounded animate-pulse w-36" />
+                            </td>
+                            <td className="px-3 py-4">
+                              <div className="h-5 bg-muted rounded-full animate-pulse w-20" />
+                            </td>
+                            <td className="px-3 py-4">
+                              <div className="h-4 bg-muted rounded animate-pulse w-24" />
+                            </td>
+                            {!drawerOpen && (
+                              <td className="px-3 py-4">
+                                <div className="h-4 bg-muted rounded animate-pulse w-28" />
+                              </td>
+                            )}
+                            <td className="px-3 py-4 pr-5">
+                              <div className="h-4 bg-muted rounded animate-pulse w-16 ml-auto" />
+                            </td>
+                          </tr>
+                        ))
+                      ) : filteredJobs.length === 0 ? (
+                        <tr>
+                          <td colSpan={drawerOpen ? 6 : 7} className="px-5 py-14">
+                            <div className="flex flex-col items-center gap-2">
+                              <ClipboardList className="w-9 h-9 text-muted-foreground opacity-40" />
+                              <p className="text-sm font-medium text-muted-foreground">No jobs found</p>
+                              <p className="text-xs text-muted-foreground">
+                                Try adjusting your filters or check back later.
+                              </p>
+                              <a href="/jobs/create" className="text-xs text-primary hover:underline mt-1">
+                                Create a new job
+                              </a>
                             </div>
                           </td>
-                          <td className="px-3 py-4 text-foreground">
-                            {job.mechanicName ?? (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-4 text-muted-foreground whitespace-nowrap">
-                            {formatJobDate(job.scheduledDate, job.scheduledTime)}
-                          </td>
-                          <td className="px-3 py-4 text-right pr-5 font-medium text-foreground whitespace-nowrap">
-                            ${job.totalCost.toFixed(2)}
-                          </td>
                         </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
+                      ) : (
+                        filteredJobs.map((job, idx) => {
+                          const isSelected = selectedJobId === job._id;
+                          const isFocused = focusedRowIndex === idx;
+                          const isPending =
+                            job.status === "pending" || job.status === "pending_shop_acceptance";
+                          const countdown = isPending
+                            ? pendingCountdown(job._creationTime)
+                            : null;
+                          return (
+                            <tr
+                              key={String(job._id)}
+                              onClick={() => {
+                                setSelectedJobId(isSelected ? null : job._id);
+                                setFocusedRowIndex(idx);
+                              }}
+                              className={`border-b border-border last:border-b-0 cursor-pointer transition-colors ${
+                                isSelected
+                                  ? "bg-primary/5"
+                                  : isFocused
+                                  ? "bg-muted/70"
+                                  : "hover:bg-muted/50"
+                              }`}
+                            >
+                              <td className="pl-5 pr-3 py-4">
+                                <p className="font-medium text-foreground">{job.customerName}</p>
+                                <p className="text-xs text-muted-foreground">{job.customerEmail}</p>
+                              </td>
+                              <td className="px-3 py-4 text-foreground">{job.vehicle}</td>
+                              <td className="px-3 py-4 text-foreground max-w-48 truncate">
+                                {job.serviceNames.join(", ")}
+                              </td>
+                              <td className="px-3 py-4">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span
+                                    className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
+                                      statusBadgeClass[job.status] ?? "bg-muted text-muted-foreground"
+                                    }`}
+                                  >
+                                    {statusLabel[job.status] ?? job.status}
+                                  </span>
+                                  {countdown && (
+                                    <span className="text-amber-600 text-[11px] whitespace-nowrap">
+                                      {countdown}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-3 py-4 text-foreground">
+                                {job.mechanicName ?? (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </td>
+                              {!drawerOpen && (
+                                <td className="px-3 py-4 text-muted-foreground whitespace-nowrap">
+                                  {formatJobDate(job.scheduledDate, job.scheduledTime)}
+                                </td>
+                              )}
+                              <td className="px-3 py-4 text-right pr-5 font-medium text-foreground whitespace-nowrap">
+                                ${job.totalCost.toFixed(2)}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
-          </div>
-        </>
-      )}
 
-      {/* Slide-over backdrop */}
-      {drawerOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/40"
-          onClick={() => setSelectedJobId(null)}
-        />
-      )}
-
-      {/* Slide-over drawer (always in DOM, translated off-screen when closed) */}
-      <div
-        className={`fixed top-0 right-0 h-full z-50 w-[480px] bg-card shadow-xl flex flex-col transition-transform duration-200 ease-out ${
-          drawerOpen ? "translate-x-0" : "translate-x-full pointer-events-none"
-        }`}
-      >
-        {/* Drawer header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
-          <h2 className="text-lg font-semibold text-foreground">Job Detail</h2>
-          <button
-            onClick={() => setSelectedJobId(null)}
-            className="p-1 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Drawer body */}
-        <div className="flex-1 overflow-y-auto p-5">
-          {selectedJob === undefined ? (
-            <div className="space-y-3">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="h-4 bg-muted rounded animate-pulse"
-                  style={{ width: `${55 + (i % 4) * 12}%` }}
-                />
-              ))}
+          {/* Drawer — card style with 24px left gap (ml-6) matching left margin */}
+          <div
+          className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
+            drawerOpen ? "w-[504px]" : "w-0"
+          }`}
+        >
+          <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden">
+            {/* Drawer header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+              <h2 className="text-base font-semibold text-foreground truncate pr-2">
+                {drawerTitle}
+              </h2>
+              <button
+                onClick={() => setSelectedJobId(null)}
+                className="p-2 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-          ) : !selectedJob ? (
-            <p className="text-sm text-muted-foreground">Job not found.</p>
-          ) : (
-            <div className="space-y-5">
-              {/* Job info grid */}
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p className="text-muted-foreground text-xs mb-1">Customer</p>
-                  <p className="font-medium text-foreground">{selectedJob.customerName}</p>
-                  <p className="text-muted-foreground text-xs">
-                    {selectedJob.customerEmail || "No email on file"}
-                  </p>
+
+            {/* Drawer body */}
+            <div className="flex-1 overflow-y-auto p-5">
+              {selectedJob === undefined ? (
+                <div className="space-y-3">
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <div
+                      key={i}
+                      className="h-4 bg-muted rounded animate-pulse"
+                      style={{ width: `${55 + (i % 4) * 12}%` }}
+                    />
+                  ))}
                 </div>
-                <div>
-                  <p className="text-muted-foreground text-xs mb-1">Vehicle</p>
-                  <p className="font-medium text-foreground">{selectedJob.vehicle}</p>
-                  <p className="text-muted-foreground text-xs">{selectedJob.vin}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs mb-1">Schedule</p>
-                  <p className="font-medium text-foreground">
-                    {formatJobDate(selectedJob.scheduledDate, selectedJob.scheduledTime)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs mb-1">Services</p>
-                  <p className="font-medium text-foreground">
-                    {selectedJob.serviceNames.join(", ")}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs mb-1">Costs</p>
-                  <p className="font-medium text-foreground">
-                    ${selectedJob.totalCost.toFixed(2)} total
-                  </p>
-                  <p className="text-muted-foreground text-xs">
-                    Labor ${selectedJob.laborCost.toFixed(2)} · Parts ${selectedJob.partsCost.toFixed(2)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs mb-1">Status</p>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span
-                      className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
-                        statusBadgeClass[selectedJob.status] ?? "bg-muted text-muted-foreground"
-                      }`}
-                    >
-                      {statusLabel[selectedJob.status] ?? selectedJob.status}
-                    </span>
-                    {(selectedJob.status === "pending" ||
-                      selectedJob.status === "pending_shop_acceptance") &&
-                      (() => {
-                        const cd = pendingCountdown(selectedJob._creationTime);
-                        return cd ? (
-                          <span className="text-amber-600 text-xs font-medium">{cd}</span>
-                        ) : null;
-                      })()}
+              ) : !selectedJob ? (
+                <p className="text-sm text-muted-foreground">Job not found.</p>
+              ) : (
+                <div className="space-y-5">
+                  {/* Job info grid */}
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-muted-foreground text-xs mb-1">Customer</p>
+                      <p className="font-medium text-foreground">{selectedJob.customerName}</p>
+                      <p className="text-muted-foreground text-xs">
+                        {selectedJob.customerEmail || "No email on file"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs mb-1">Vehicle</p>
+                      <p className="font-medium text-foreground">{selectedJob.vehicle}</p>
+                      <p className="text-muted-foreground text-xs">{selectedJob.vin}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs mb-1">Schedule</p>
+                      <p className="font-medium text-foreground">
+                        {formatJobDate(selectedJob.scheduledDate, selectedJob.scheduledTime)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs mb-1">Services</p>
+                      <p className="font-medium text-foreground">
+                        {selectedJob.serviceNames.join(", ")}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs mb-1">Costs</p>
+                      <p className="font-medium text-foreground">
+                        ${selectedJob.totalCost.toFixed(2)} total
+                      </p>
+                      <p className="text-muted-foreground text-xs">
+                        Labor ${selectedJob.laborCost.toFixed(2)} · Parts ${selectedJob.partsCost.toFixed(2)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground text-xs mb-1">Status</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
+                            statusBadgeClass[selectedJob.status] ?? "bg-muted text-muted-foreground"
+                          }`}
+                        >
+                          {statusLabel[selectedJob.status] ?? selectedJob.status}
+                        </span>
+                        {(selectedJob.status === "pending" ||
+                          selectedJob.status === "pending_shop_acceptance") &&
+                          (() => {
+                            const cd = pendingCountdown(selectedJob._creationTime);
+                            return cd ? (
+                              <span className="text-amber-600 text-xs font-medium">{cd}</span>
+                            ) : null;
+                          })()}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
 
-              {/* Assign mechanic */}
-              <div className="border-t border-border pt-4">
-                <p className="text-xs font-medium text-foreground mb-2">Assign mechanic</p>
-                <div className="flex flex-wrap gap-2">
-                  <select
-                    className="border border-border rounded-lg px-3 py-2 text-sm bg-card text-foreground min-w-48"
-                    value={assigningMechanicId}
-                    onChange={(e) => setAssigningMechanicId(e.target.value)}
-                  >
-                    <option value="">Unassigned</option>
-                    {mechanics.map((m) => (
-                      <option key={String(m._id)} value={String(m._id)}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={handleAssignMechanic}
-                    disabled={!assigningMechanicId}
-                    className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-                  >
-                    Save assignment
-                  </button>
-                </div>
-              </div>
-
-              {/* Status transitions — only show buttons relevant to current status */}
-              {(() => {
-                const s = selectedJob.status;
-                const canAccept = s === "pending" || s === "pending_shop_acceptance";
-                const canComplete = s === "confirmed" || s === "in_progress";
-                const canDecline = !["completed", "cancelled", "declined"].includes(s);
-                if (!canAccept && !canComplete && !canDecline) return null;
-                return (
+                  {/* Assign mechanic */}
                   <div className="border-t border-border pt-4">
-                    <p className="text-xs font-medium text-foreground mb-2">Actions</p>
+                    <p className="text-xs font-medium text-foreground mb-2">Assign mechanic</p>
                     <div className="flex flex-wrap gap-2">
-                      {canAccept && (
-                        <button
-                          onClick={() => handleStatusAction("accept")}
-                          className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
-                        >
-                          Accept
-                        </button>
-                      )}
-                      {canComplete && (
-                        <button
-                          onClick={() => setShowCompleteConfirm(true)}
-                          className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
-                        >
-                          Mark completed
-                        </button>
-                      )}
-                      {canDecline && (
-                        <button
-                          onClick={() => setShowDeclineModal(true)}
-                          className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-red-50 transition-colors"
-                        >
-                          Decline
-                        </button>
+                      <select
+                        className="border border-border rounded-lg px-3 py-2 text-sm bg-card text-foreground min-w-48"
+                        value={assigningMechanicId}
+                        onChange={(e) => setAssigningMechanicId(e.target.value)}
+                      >
+                        <option value="">Unassigned</option>
+                        {mechanics.map((m) => (
+                          <option key={String(m._id)} value={String(m._id)}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={handleAssignMechanic}
+                        disabled={!assigningMechanicId || isActioning}
+                        className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
+                      >
+                        {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                        Assign
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Status transitions */}
+                  {(() => {
+                    const s = selectedJob.status;
+                    const canAccept = s === "pending" || s === "pending_shop_acceptance";
+                    const canComplete = s === "confirmed" || s === "in_progress";
+                    const canStartJob = s === "confirmed";
+                    // Decline: only for pending jobs (not yet confirmed)
+                    const canDecline = s === "pending" || s === "pending_shop_acceptance";
+                    // Cancel: for confirmed/in_progress (customer already knows)
+                    const canCancel = s === "confirmed" || s === "in_progress";
+
+                    if (!canAccept && !canComplete && !canDecline && !canCancel) return null;
+                    return (
+                      <div className="border-t border-border pt-4">
+                        <p className="text-xs font-medium text-foreground mb-2">Actions</p>
+                        <div className="flex flex-wrap gap-2">
+                          {canAccept && (
+                            <button
+                              onClick={() => handleStatusAction("accept")}
+                              disabled={isActioning}
+                              className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+                            >
+                              {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                              {isActioning ? "Accepting…" : "Accept"}
+                            </button>
+                          )}
+                          {canStartJob && (
+                            // TODO: wire up a startJob mutation (transitions confirmed → in_progress)
+                            <button
+                              disabled
+                              title="Coming soon"
+                              className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground opacity-50 cursor-not-allowed"
+                            >
+                              Start Job
+                            </button>
+                          )}
+                          {canComplete && (
+                            <button
+                              onClick={() => setShowCompleteConfirm(true)}
+                              disabled={isActioning}
+                              className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+                            >
+                              Mark completed
+                            </button>
+                          )}
+                          {canDecline && (
+                            <button
+                              onClick={() => setShowDeclineModal(true)}
+                              disabled={isActioning}
+                              className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-red-50 transition-colors disabled:opacity-50"
+                            >
+                              Decline
+                            </button>
+                          )}
+                          {canCancel && (
+                            <button
+                              onClick={() => setShowCancelConfirm(true)}
+                              disabled={isActioning}
+                              className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-red-50 transition-colors disabled:opacity-50"
+                            >
+                              Cancel job
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Status history */}
+                  <div className="border-t border-border pt-4">
+                    <p className="text-xs font-medium text-foreground mb-2">Status history</p>
+                    <div className="space-y-1 max-h-28 overflow-y-auto">
+                      {selectedJob.history.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No history entries yet.</p>
+                      ) : (
+                        selectedJob.history.map((h) => (
+                          <p key={String(h._id)} className="text-xs text-muted-foreground">
+                            {new Date(h.changed_at).toLocaleString()}:{" "}
+                            <span className="font-medium text-foreground">
+                              {h.old_status ?? "none"}
+                            </span>
+                            {" → "}
+                            <span className="font-medium text-foreground">{h.new_status}</span>
+                            {h.reason && !isSystemReason(h.reason) ? ` (${h.reason})` : ""}
+                          </p>
+                        ))
                       )}
                     </div>
                   </div>
-                );
-              })()}
 
-              {/* Status history */}
-              <div className="border-t border-border pt-4">
-                <p className="text-xs font-medium text-foreground mb-2">Status history</p>
-                <div className="space-y-1 max-h-28 overflow-y-auto">
-                  {selectedJob.history.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No history entries yet.</p>
-                  ) : (
-                    selectedJob.history.map((h) => (
-                      <p key={String(h._id)} className="text-xs text-muted-foreground">
-                        {new Date(h.changed_at).toLocaleString()}:{" "}
-                        <span className="font-medium text-foreground">
-                          {h.old_status ?? "none"}
-                        </span>
-                        {" → "}
-                        <span className="font-medium text-foreground">{h.new_status}</span>
-                        {h.reason && !isSystemReason(h.reason) ? ` (${h.reason})` : ""}
-                      </p>
-                    ))
+                  {actionError && (
+                    <p className="text-xs text-destructive">{actionError}</p>
                   )}
                 </div>
-              </div>
-
-              {actionError && (
-                <p className="text-xs text-destructive">{actionError}</p>
               )}
             </div>
-          )}
+          </div>
         </div>
       </div>
+      )}
 
       {/* Decline modal */}
       {showDeclineModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div
-            className="absolute inset-0 bg-black/50"
+            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
             onClick={() => setShowDeclineModal(false)}
           />
           <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
@@ -735,15 +829,18 @@ export default function JobsPage() {
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setShowDeclineModal(false)}
-                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors"
+                disabled={isActioning}
+                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={handleDecline}
-                className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity"
+                disabled={isActioning}
+                className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
               >
-                Confirm Decline
+                {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {isActioning ? "Declining…" : "Confirm Decline"}
               </button>
             </div>
           </div>
@@ -754,7 +851,7 @@ export default function JobsPage() {
       {showCompleteConfirm && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div
-            className="absolute inset-0 bg-black/50"
+            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
             onClick={() => setShowCompleteConfirm(false)}
           />
           <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
@@ -767,7 +864,8 @@ export default function JobsPage() {
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setShowCompleteConfirm(false)}
-                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors"
+                disabled={isActioning}
+                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -776,12 +874,56 @@ export default function JobsPage() {
                   await handleStatusAction("complete");
                   setShowCompleteConfirm(false);
                 }}
-                className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+                disabled={isActioning}
+                className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
               >
-                Mark completed
+                {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {isActioning ? "Completing…" : "Mark completed"}
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Cancel confirmation modal (confirmed/in_progress jobs) */}
+      {showCancelConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+            onClick={() => setShowCancelConfirm(false)}
+          />
+          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
+            <h3 className="text-base font-semibold text-foreground mb-2">
+              Cancel this job?
+            </h3>
+            <p className="text-sm text-muted-foreground mb-5">
+              The customer has already been confirmed and will be notified of the cancellation.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowCancelConfirm(false)}
+                disabled={isActioning}
+                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
+              >
+                Keep job
+              </button>
+              <button
+                onClick={handleCancelJob}
+                disabled={isActioning}
+                className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+              >
+                {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {isActioning ? "Cancelling…" : "Cancel job"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success toast */}
+      {successMessage && (
+        <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground">
+          {successMessage}
         </div>
       )}
     </div>

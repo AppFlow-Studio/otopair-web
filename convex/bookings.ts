@@ -509,6 +509,7 @@ export const listForMyShop = query({
 
         return {
           _id: booking._id,
+          _creationTime: booking._creationTime,
           status: booking.status,
           scheduledDate: booking.scheduled_date,
           scheduledTime: booking.scheduled_time,
@@ -555,6 +556,7 @@ export const getJobDetail = query({
 
     return {
       _id: booking._id,
+      _creationTime: booking._creationTime,
       shopId: booking.shop_id,
       status: booking.status,
       liveStage: booking.live_stage ?? null,

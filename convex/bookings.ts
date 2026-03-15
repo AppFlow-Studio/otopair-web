@@ -132,7 +132,8 @@ async function resolveVehicleLabel(
   if (!modelName && vehicle.metadata?.model) modelName = String(vehicle.metadata.model);
 
   const full = [vehicle.year, makeName, modelName].filter(Boolean).join(" ") || vin;
-  const short = [vehicle.year, modelName].filter(Boolean).join(" ") || vin;
+  const makeAbbr = makeName ? `${makeName[0]}.` : "";
+  const short = [vehicle.year, makeAbbr, modelName].filter(Boolean).join(" ") || vin;
   return { full, short };
 }
 

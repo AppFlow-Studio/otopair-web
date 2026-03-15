@@ -462,7 +462,7 @@ export default function JobsPage() {
                         <th className="px-3 py-3">Service</th>
                         <th className="px-3 py-3">Status</th>
                         <th className="px-3 py-3">Mechanic</th>
-                        {!drawerOpen && <th className="px-3 py-3">Date</th>}
+                        <th className="px-3 py-3">Date</th>
                         <th className="px-3 py-3 text-right pr-5">Total</th>
                       </tr>
                     </thead>
@@ -487,11 +487,9 @@ export default function JobsPage() {
                             <td className="px-3 py-4">
                               <div className="h-4 bg-muted rounded animate-pulse w-24" />
                             </td>
-                            {!drawerOpen && (
-                              <td className="px-3 py-4">
-                                <div className="h-4 bg-muted rounded animate-pulse w-28" />
-                              </td>
-                            )}
+                            <td className="px-3 py-4">
+                              <div className="h-4 bg-muted rounded animate-pulse w-28" />
+                            </td>
                             <td className="px-3 py-4 pr-5">
                               <div className="h-4 bg-muted rounded animate-pulse w-16 ml-auto" />
                             </td>
@@ -499,7 +497,7 @@ export default function JobsPage() {
                         ))
                       ) : filteredJobs.length === 0 ? (
                         <tr>
-                          <td colSpan={drawerOpen ? 6 : 7} className="px-5 py-14">
+                          <td colSpan={7} className="px-5 py-14">
                             <div className="flex flex-col items-center gap-2">
                               <ClipboardList className="w-9 h-9 text-muted-foreground opacity-40" />
                               <p className="text-sm font-medium text-muted-foreground">No jobs found</p>
@@ -537,8 +535,14 @@ export default function JobsPage() {
                               }`}
                             >
                               <td className="pl-5 pr-3 py-4">
-                                <p className="font-medium text-foreground">{job.customerName}</p>
-                                <p className="text-xs text-muted-foreground">{job.customerEmail}</p>
+                                <p className="font-medium text-foreground whitespace-nowrap">
+                                  {drawerCompact ? (() => {
+                                    const parts = job.customerName.trim().split(" ");
+                                    return parts.length >= 2
+                                      ? `${parts[0]} ${parts[parts.length - 1][0]}.`
+                                      : job.customerName;
+                                  })() : job.customerName}
+                                </p>
                               </td>
                               <td className="px-3 py-4 text-foreground whitespace-nowrap">{drawerCompact ? (job.vehicleShort ?? job.vehicle) : job.vehicle}</td>
                               <td className="px-3 py-4 text-foreground max-w-48 truncate">
@@ -574,11 +578,9 @@ export default function JobsPage() {
                                   <span className="text-muted-foreground">—</span>
                                 )}
                               </td>
-                              {!drawerOpen && (
-                                <td className="px-3 py-4 text-muted-foreground whitespace-nowrap">
-                                  {formatJobDate(job.scheduledDate, job.scheduledTime)}
-                                </td>
-                              )}
+                              <td className="px-3 py-4 text-muted-foreground whitespace-nowrap">
+                                {formatJobDate(job.scheduledDate, job.scheduledTime)}
+                              </td>
                               <td className="px-3 py-4 text-right pr-5 font-medium text-foreground whitespace-nowrap">
                                 ${job.totalCost.toFixed(2)}
                               </td>

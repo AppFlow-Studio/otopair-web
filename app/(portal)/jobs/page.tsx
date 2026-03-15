@@ -4,7 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Calendar, ChevronDown, Search, X } from "lucide-react";
+import { Calendar, ChevronDown, ClipboardList, Search, X } from "lucide-react";
+
+/* ------------------------------------------------------------------ */
+/*  Types & constants                                                   */
+/* ------------------------------------------------------------------ */
 
 type JobStatusFilter =
   | "all"
@@ -24,13 +28,13 @@ const STATUS_TABS: { key: JobStatusFilter; label: string }[] = [
 ];
 
 const statusBadgeClass: Record<string, string> = {
-  pending_shop_acceptance: "bg-amber-100 text-amber-700",
-  pending: "bg-amber-100 text-amber-700",
-  confirmed: "bg-blue-100 text-blue-700",
-  in_progress: "bg-emerald-100 text-emerald-700",
-  completed: "bg-gray-100 text-gray-700",
-  cancelled: "bg-red-100 text-red-700",
-  declined: "bg-red-100 text-red-700",
+  pending_shop_acceptance: "bg-amber-50 text-amber-600",
+  pending: "bg-amber-50 text-amber-600",
+  confirmed: "bg-accent text-primary",
+  in_progress: "bg-emerald-50 text-emerald-600",
+  completed: "bg-muted text-muted-foreground",
+  cancelled: "bg-red-50 text-destructive",
+  declined: "bg-red-50 text-destructive",
 };
 
 const statusLabel: Record<string, string> = {
@@ -43,9 +47,56 @@ const statusLabel: Record<string, string> = {
   declined: "Declined",
 };
 
+const DECLINE_REASONS = [
+  "Mechanic unavailable",
+  "Can't service this vehicle",
+  "Scheduling conflict",
+  "Other",
+];
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
 function todayString() {
   return new Date().toISOString().slice(0, 10);
 }
+
+function formatTime(time: string): string {
+  if (!time) return "";
+  const [hours, minutes] = time.split(":").map(Number);
+  const d = new Date();
+  d.setHours(hours, minutes, 0, 0);
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+}
+
+function formatJobDate(scheduledDate: string, scheduledTime: string): string {
+  const today = todayString();
+  const timeLabel = formatTime(scheduledTime);
+  if (scheduledDate === today) return `Today, ${timeLabel}`;
+  const d = new Date(scheduledDate + "T00:00:00");
+  const dateLabel = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${dateLabel}, ${timeLabel}`;
+}
+
+function pendingCountdown(creationTime: number): string | null {
+  const deadline = creationTime + 24 * 60 * 60 * 1000;
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return null;
+  const hours = Math.floor(remaining / (1000 * 60 * 60));
+  const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) return `${hours}h ${minutes}m left`;
+  return `${minutes}m left`;
+}
+
+function isSystemReason(reason: string): boolean {
+  // Hide reasons that look like system identifiers (underscores or all-lowercase-with-digits)
+  return /_/.test(reason) || /^[a-z][a-z0-9]*$/.test(reason);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Main page component                                                 */
+/* ------------------------------------------------------------------ */
 
 export default function JobsPage() {
   const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("all");
@@ -61,7 +112,15 @@ export default function JobsPage() {
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [assigningMechanicId, setAssigningMechanicId] = useState("");
   const [actionError, setActionError] = useState<string>("");
-  const detailPanelRef = useRef<HTMLDivElement>(null);
+  const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
+
+  // Decline modal
+  const [showDeclineModal, setShowDeclineModal] = useState(false);
+  const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
+  const [declineOtherText, setDeclineOtherText] = useState("");
+
+  // Complete confirmation modal
+  const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
 
   const context = useQuery(api.bookings.getMyShopJobContext);
   const allJobs = useQuery(api.bookings.listForMyShop, {});
@@ -82,7 +141,6 @@ export default function JobsPage() {
     [assigningMechanicId, mechanics]
   );
 
-  // Unique values for filter dropdowns
   const uniqueServices = useMemo(() => {
     if (!allJobs) return [];
     return [...new Set(allJobs.flatMap((j) => j.serviceNames))].sort();
@@ -93,8 +151,6 @@ export default function JobsPage() {
     return [...new Set(allJobs.map((j) => j.mechanicName).filter(Boolean) as string[])].sort();
   }, [allJobs]);
 
-  // Compute counts per status from all jobs.
-  // "pending" and "pending_shop_acceptance" are the same bucket for display.
   const statusCounts = useMemo(() => {
     if (!allJobs) return {};
     const counts: Record<string, number> = { all: allJobs.length };
@@ -105,7 +161,6 @@ export default function JobsPage() {
     return counts;
   }, [allJobs]);
 
-  // Filter jobs client-side with all filters
   const filteredJobs = useMemo(() => {
     if (!allJobs) return undefined;
     return allJobs.filter((j) => {
@@ -118,8 +173,6 @@ export default function JobsPage() {
       if (vehicleFilter && !j.vehicle.toLowerCase().includes(vehicleFilter.toLowerCase())) return false;
       if (serviceFilter && !j.serviceNames.some((s) => s === serviceFilter)) return false;
       if (mechanicFilter && (j.mechanicName ?? "") !== mechanicFilter) return false;
-
-      // Date + time filtering
       if (dateFrom) {
         const jobDateTime = j.scheduledDate + "T" + (j.scheduledTime || "00:00");
         const fromDateTime = dateFrom + "T" + (timeFrom || "00:00");
@@ -130,7 +183,6 @@ export default function JobsPage() {
         const toDateTime = dateTo + "T" + (timeTo || "23:59");
         if (jobDateTime > toDateTime) return false;
       }
-
       return true;
     });
   }, [allJobs, statusFilter, customerFilter, vehicleFilter, serviceFilter, mechanicFilter, dateFrom, timeFrom, dateTo, timeTo]);
@@ -156,25 +208,58 @@ export default function JobsPage() {
     setAssigningMechanicId(selectedJob.mechanicId ? String(selectedJob.mechanicId) : "");
   }, [selectedJob]);
 
+  // Keyboard navigation: arrows move row focus, Enter opens drawer, Escape closes
   useEffect(() => {
-    if (!selectedJobId) return;
-    // Small timeout lets React render the panel before we scroll to it
-    const t = setTimeout(() => {
-      detailPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 50);
-    return () => clearTimeout(t);
-  }, [selectedJobId]);
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        if (showDeclineModal) { setShowDeclineModal(false); return; }
+        if (showCompleteConfirm) { setShowCompleteConfirm(false); return; }
+        if (selectedJobId) { setSelectedJobId(null); return; }
+        return;
+      }
+      if (!filteredJobs || filteredJobs.length === 0) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setFocusedRowIndex((prev) => Math.min(prev + 1, filteredJobs.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setFocusedRowIndex((prev) => Math.max(prev - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" && focusedRowIndex >= 0 && focusedRowIndex < filteredJobs.length) {
+        const job = filteredJobs[focusedRowIndex];
+        setSelectedJobId((prev) => (prev === job._id ? null : job._id));
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [filteredJobs, focusedRowIndex, selectedJobId, showDeclineModal, showCompleteConfirm]);
 
-  async function handleStatusAction(action: "accept" | "complete" | "cancel") {
+  async function handleStatusAction(action: "accept" | "complete") {
     if (!selectedJob?._id) return;
     setActionError("");
     try {
       if (action === "accept") await acceptJob({ bookingId: selectedJob._id });
       if (action === "complete") await completeJob({ bookingId: selectedJob._id });
-      if (action === "cancel")
-        await cancelJob({ bookingId: selectedJob._id, reason: "cancelled_from_jobs_page" });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Could not update status.";
+      setActionError(message);
+    }
+  }
+
+  async function handleDecline() {
+    if (!selectedJob?._id) return;
+    setActionError("");
+    const reason = declineReason === "Other" ? (declineOtherText.trim() || "Other") : declineReason;
+    try {
+      await cancelJob({ bookingId: selectedJob._id, reason });
+      setShowDeclineModal(false);
+      setDeclineReason(DECLINE_REASONS[0]);
+      setDeclineOtherText("");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Could not decline job.";
       setActionError(message);
     }
   }
@@ -190,6 +275,8 @@ export default function JobsPage() {
     }
   }
 
+  const drawerOpen = !!selectedJobId;
+
   return (
     <div className="space-y-6">
       {/* Page header */}
@@ -203,7 +290,7 @@ export default function JobsPage() {
         </div>
       ) : !hasContext ? (
         <div className="bg-card rounded-xl border border-border p-8 text-center text-muted-foreground">
-          You must be an active shop staff member to manage jobs.
+          This page is for shop team members. If you need access, reach out to your shop owner.
         </div>
       ) : (
         <>
@@ -258,16 +345,6 @@ export default function JobsPage() {
                   onChange={setServiceFilter}
                 />
                 <DropdownFilterPill
-                  label="Status"
-                  value={statusFilter !== "all" ? (statusLabel[statusFilter] ?? statusFilter) : ""}
-                  options={STATUS_TABS.filter((t) => t.key !== "all").map((t) => t.label)}
-                  onChange={(val) => {
-                    if (!val) { setStatusFilter("all"); return; }
-                    const found = STATUS_TABS.find((t) => t.label === val);
-                    if (found) setStatusFilter(found.key);
-                  }}
-                />
-                <DropdownFilterPill
                   label="Mechanic"
                   value={mechanicFilter}
                   options={uniqueMechanics}
@@ -318,54 +395,102 @@ export default function JobsPage() {
                 </thead>
                 <tbody>
                   {filteredJobs === undefined ? (
-                    <tr>
-                      <td colSpan={7} className="px-5 py-8 text-center text-muted-foreground">
-                        Loading jobs…
-                      </td>
-                    </tr>
+                    // Loading skeleton: 5 shimmer rows
+                    Array.from({ length: 5 }).map((_, i) => (
+                      <tr key={i} className="border-b border-border last:border-b-0">
+                        <td className="pl-5 pr-3 py-4">
+                          <div className="h-4 bg-muted rounded animate-pulse w-32 mb-1.5" />
+                          <div className="h-3 bg-muted rounded animate-pulse w-44" />
+                        </td>
+                        <td className="px-3 py-4">
+                          <div className="h-4 bg-muted rounded animate-pulse w-28" />
+                        </td>
+                        <td className="px-3 py-4">
+                          <div className="h-4 bg-muted rounded animate-pulse w-36" />
+                        </td>
+                        <td className="px-3 py-4">
+                          <div className="h-5 bg-muted rounded-full animate-pulse w-20" />
+                        </td>
+                        <td className="px-3 py-4">
+                          <div className="h-4 bg-muted rounded animate-pulse w-24" />
+                        </td>
+                        <td className="px-3 py-4">
+                          <div className="h-4 bg-muted rounded animate-pulse w-28" />
+                        </td>
+                        <td className="px-3 py-4 pr-5">
+                          <div className="h-4 bg-muted rounded animate-pulse w-16 ml-auto" />
+                        </td>
+                      </tr>
+                    ))
                   ) : filteredJobs.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-5 py-8 text-center text-muted-foreground">
-                        No jobs match this filter.
+                      <td colSpan={7} className="px-5 py-14">
+                        <div className="flex flex-col items-center gap-2">
+                          <ClipboardList className="w-9 h-9 text-muted-foreground opacity-40" />
+                          <p className="text-sm font-medium text-muted-foreground">No jobs found</p>
+                          <p className="text-xs text-muted-foreground">
+                            Try adjusting your filters or check back later.
+                          </p>
+                        </div>
                       </td>
                     </tr>
                   ) : (
-                    filteredJobs.map((job) => {
+                    filteredJobs.map((job, idx) => {
                       const isSelected = selectedJobId === job._id;
+                      const isFocused = focusedRowIndex === idx;
+                      const isPending =
+                        job.status === "pending" || job.status === "pending_shop_acceptance";
+                      const countdown = isPending
+                        ? pendingCountdown(job._creationTime)
+                        : null;
                       return (
                         <tr
                           key={String(job._id)}
-                          onClick={() => setSelectedJobId(isSelected ? null : job._id)}
+                          onClick={() => {
+                            setSelectedJobId(isSelected ? null : job._id);
+                            setFocusedRowIndex(idx);
+                          }}
                           className={`border-b border-border last:border-b-0 cursor-pointer transition-colors ${
                             isSelected
                               ? "bg-primary/5"
+                              : isFocused
+                              ? "bg-muted/70"
                               : "hover:bg-muted/50"
                           }`}
                         >
-                          <td className="pl-5 pr-3 py-3">
+                          <td className="pl-5 pr-3 py-4">
                             <p className="font-medium text-foreground">{job.customerName}</p>
                             <p className="text-xs text-muted-foreground">{job.customerEmail}</p>
                           </td>
-                          <td className="px-3 py-3 text-foreground">{job.vehicle}</td>
-                          <td className="px-3 py-3 text-foreground max-w-48 truncate">
+                          <td className="px-3 py-4 text-foreground">{job.vehicle}</td>
+                          <td className="px-3 py-4 text-foreground max-w-48 truncate">
                             {job.serviceNames.join(", ")}
                           </td>
-                          <td className="px-3 py-3">
-                            <span
-                              className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
-                                statusBadgeClass[job.status] ?? "bg-gray-100 text-gray-700"
-                              }`}
-                            >
-                              {statusLabel[job.status] ?? job.status}
-                            </span>
+                          <td className="px-3 py-4">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
+                                  statusBadgeClass[job.status] ?? "bg-muted text-muted-foreground"
+                                }`}
+                              >
+                                {statusLabel[job.status] ?? job.status}
+                              </span>
+                              {countdown && (
+                                <span className="text-amber-600 text-[11px] whitespace-nowrap">
+                                  {countdown}
+                                </span>
+                              )}
+                            </div>
                           </td>
-                          <td className="px-3 py-3 text-foreground">
-                            {job.mechanicName ?? <span className="text-muted-foreground">—</span>}
+                          <td className="px-3 py-4 text-foreground">
+                            {job.mechanicName ?? (
+                              <span className="text-muted-foreground">—</span>
+                            )}
                           </td>
-                          <td className="px-3 py-3 text-muted-foreground whitespace-nowrap">
-                            {job.scheduledDate}, {job.scheduledTime}
+                          <td className="px-3 py-4 text-muted-foreground whitespace-nowrap">
+                            {formatJobDate(job.scheduledDate, job.scheduledTime)}
                           </td>
-                          <td className="px-3 py-3 text-right pr-5 font-medium text-foreground whitespace-nowrap">
+                          <td className="px-3 py-4 text-right pr-5 font-medium text-foreground whitespace-nowrap">
                             ${job.totalCost.toFixed(2)}
                           </td>
                         </tr>
@@ -376,144 +501,288 @@ export default function JobsPage() {
               </table>
             </div>
           </div>
+        </>
+      )}
 
-          {/* Job detail panel */}
-          {selectedJobId && (
-            <div ref={detailPanelRef} className="bg-card rounded-xl border border-border p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-foreground">Job Detail</h2>
-                <button
-                  onClick={() => setSelectedJobId(null)}
-                  className="p-1 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+      {/* Slide-over backdrop */}
+      {drawerOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40"
+          onClick={() => setSelectedJobId(null)}
+        />
+      )}
+
+      {/* Slide-over drawer (always in DOM, translated off-screen when closed) */}
+      <div
+        className={`fixed top-0 right-0 h-full z-50 w-[480px] bg-card shadow-xl flex flex-col transition-transform duration-200 ease-out ${
+          drawerOpen ? "translate-x-0" : "translate-x-full pointer-events-none"
+        }`}
+      >
+        {/* Drawer header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+          <h2 className="text-lg font-semibold text-foreground">Job Detail</h2>
+          <button
+            onClick={() => setSelectedJobId(null)}
+            className="p-1 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Drawer body */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {selectedJob === undefined ? (
+            <div className="space-y-3">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-4 bg-muted rounded animate-pulse"
+                  style={{ width: `${55 + (i % 4) * 12}%` }}
+                />
+              ))}
+            </div>
+          ) : !selectedJob ? (
+            <p className="text-sm text-muted-foreground">Job not found.</p>
+          ) : (
+            <div className="space-y-5">
+              {/* Job info grid */}
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-muted-foreground text-xs mb-1">Customer</p>
+                  <p className="font-medium text-foreground">{selectedJob.customerName}</p>
+                  <p className="text-muted-foreground text-xs">
+                    {selectedJob.customerEmail || "No email on file"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs mb-1">Vehicle</p>
+                  <p className="font-medium text-foreground">{selectedJob.vehicle}</p>
+                  <p className="text-muted-foreground text-xs">{selectedJob.vin}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs mb-1">Schedule</p>
+                  <p className="font-medium text-foreground">
+                    {formatJobDate(selectedJob.scheduledDate, selectedJob.scheduledTime)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs mb-1">Services</p>
+                  <p className="font-medium text-foreground">
+                    {selectedJob.serviceNames.join(", ")}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs mb-1">Costs</p>
+                  <p className="font-medium text-foreground">
+                    ${selectedJob.totalCost.toFixed(2)} total
+                  </p>
+                  <p className="text-muted-foreground text-xs">
+                    Labor ${selectedJob.laborCost.toFixed(2)} · Parts ${selectedJob.partsCost.toFixed(2)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs mb-1">Status</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span
+                      className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
+                        statusBadgeClass[selectedJob.status] ?? "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {statusLabel[selectedJob.status] ?? selectedJob.status}
+                    </span>
+                    {(selectedJob.status === "pending" ||
+                      selectedJob.status === "pending_shop_acceptance") &&
+                      (() => {
+                        const cd = pendingCountdown(selectedJob._creationTime);
+                        return cd ? (
+                          <span className="text-amber-600 text-xs font-medium">{cd}</span>
+                        ) : null;
+                      })()}
+                  </div>
+                </div>
               </div>
-              {selectedJob === undefined ? (
-                <p className="text-sm text-muted-foreground">Loading details…</p>
-              ) : !selectedJob ? (
-                <p className="text-sm text-muted-foreground">Job not found.</p>
-              ) : (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Customer</p>
-                      <p className="font-medium text-foreground">{selectedJob.customerName}</p>
-                      <p className="text-muted-foreground text-xs">{selectedJob.customerEmail || "No email on file"}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Vehicle</p>
-                      <p className="font-medium text-foreground">{selectedJob.vehicle}</p>
-                      <p className="text-muted-foreground text-xs">{selectedJob.vin}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Schedule</p>
-                      <p className="font-medium text-foreground">
-                        {selectedJob.scheduledDate} at {selectedJob.scheduledTime}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Services</p>
-                      <p className="font-medium text-foreground">{selectedJob.serviceNames.join(", ")}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Costs</p>
-                      <p className="font-medium text-foreground">${selectedJob.totalCost.toFixed(2)} total</p>
-                      <p className="text-muted-foreground text-xs">
-                        Labor ${selectedJob.laborCost.toFixed(2)} · Parts ${selectedJob.partsCost.toFixed(2)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Status</p>
-                      <span
-                        className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
-                          statusBadgeClass[selectedJob.status] ?? "bg-gray-100 text-gray-700"
-                        }`}
-                      >
-                        {statusLabel[selectedJob.status] ?? selectedJob.status}
-                      </span>
-                    </div>
-                  </div>
 
+              {/* Assign mechanic */}
+              <div className="border-t border-border pt-4">
+                <p className="text-xs font-medium text-foreground mb-2">Assign mechanic</p>
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    className="border border-border rounded-lg px-3 py-2 text-sm bg-card text-foreground min-w-48"
+                    value={assigningMechanicId}
+                    onChange={(e) => setAssigningMechanicId(e.target.value)}
+                  >
+                    <option value="">Unassigned</option>
+                    {mechanics.map((m) => (
+                      <option key={String(m._id)} value={String(m._id)}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={handleAssignMechanic}
+                    disabled={!assigningMechanicId}
+                    className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    Save assignment
+                  </button>
+                </div>
+              </div>
+
+              {/* Status transitions — only show buttons relevant to current status */}
+              {(() => {
+                const s = selectedJob.status;
+                const canAccept = s === "pending" || s === "pending_shop_acceptance";
+                const canComplete = s === "confirmed" || s === "in_progress";
+                const canDecline = !["completed", "cancelled", "declined"].includes(s);
+                if (!canAccept && !canComplete && !canDecline) return null;
+                return (
                   <div className="border-t border-border pt-4">
-                    <p className="text-xs font-medium text-foreground mb-2">Assign mechanic</p>
+                    <p className="text-xs font-medium text-foreground mb-2">Actions</p>
                     <div className="flex flex-wrap gap-2">
-                      <select
-                        className="border border-border rounded-lg px-3 py-2 text-sm bg-card text-foreground min-w-48"
-                        value={assigningMechanicId}
-                        onChange={(e) => setAssigningMechanicId(e.target.value)}
-                      >
-                        <option value="">Unassigned</option>
-                        {mechanics.map((m) => (
-                          <option key={String(m._id)} value={String(m._id)}>
-                            {m.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        onClick={handleAssignMechanic}
-                        disabled={!assigningMechanicId}
-                        className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-                      >
-                        Save assignment
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="border-t border-border pt-4">
-                    <p className="text-xs font-medium text-foreground mb-2">Status transitions</p>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        onClick={() => handleStatusAction("accept")}
-                        disabled={!["pending", "pending_shop_acceptance"].includes(selectedJob.status)}
-                        className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-                      >
-                        Accept
-                      </button>
-                      <button
-                        onClick={() => handleStatusAction("complete")}
-                        disabled={!["confirmed", "in_progress"].includes(selectedJob.status)}
-                        className="px-3 py-2 text-sm rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 transition-colors disabled:opacity-50"
-                      >
-                        Mark completed
-                      </button>
-                      <button
-                        onClick={() => handleStatusAction("cancel")}
-                        disabled={["completed", "cancelled"].includes(selectedJob.status)}
-                        className="px-3 py-2 text-sm rounded-lg border border-red-300 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="border-t border-border pt-4">
-                    <p className="text-xs font-medium text-foreground mb-2">Status history</p>
-                    <div className="space-y-1 max-h-28 overflow-y-auto">
-                      {selectedJob.history.length === 0 ? (
-                        <p className="text-xs text-muted-foreground">No history entries yet.</p>
-                      ) : (
-                        selectedJob.history.map((h) => (
-                          <p key={String(h._id)} className="text-xs text-muted-foreground">
-                            {new Date(h.changed_at).toLocaleString()}:{" "}
-                            <span className="font-medium text-foreground">{h.old_status ?? "none"}</span>
-                            {" → "}
-                            <span className="font-medium text-foreground">{h.new_status}</span>
-                            {h.reason ? ` (${h.reason})` : ""}
-                          </p>
-                        ))
+                      {canAccept && (
+                        <button
+                          onClick={() => handleStatusAction("accept")}
+                          className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+                        >
+                          Accept
+                        </button>
+                      )}
+                      {canComplete && (
+                        <button
+                          onClick={() => setShowCompleteConfirm(true)}
+                          className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+                        >
+                          Mark completed
+                        </button>
+                      )}
+                      {canDecline && (
+                        <button
+                          onClick={() => setShowDeclineModal(true)}
+                          className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-red-50 transition-colors"
+                        >
+                          Decline
+                        </button>
                       )}
                     </div>
                   </div>
+                );
+              })()}
 
-                  {actionError && (
-                    <p className="text-xs text-red-600">{actionError}</p>
+              {/* Status history */}
+              <div className="border-t border-border pt-4">
+                <p className="text-xs font-medium text-foreground mb-2">Status history</p>
+                <div className="space-y-1 max-h-28 overflow-y-auto">
+                  {selectedJob.history.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No history entries yet.</p>
+                  ) : (
+                    selectedJob.history.map((h) => (
+                      <p key={String(h._id)} className="text-xs text-muted-foreground">
+                        {new Date(h.changed_at).toLocaleString()}:{" "}
+                        <span className="font-medium text-foreground">
+                          {h.old_status ?? "none"}
+                        </span>
+                        {" → "}
+                        <span className="font-medium text-foreground">{h.new_status}</span>
+                        {h.reason && !isSystemReason(h.reason) ? ` (${h.reason})` : ""}
+                      </p>
+                    ))
                   )}
                 </div>
+              </div>
+
+              {actionError && (
+                <p className="text-xs text-destructive">{actionError}</p>
               )}
             </div>
           )}
-        </>
+        </div>
+      </div>
+
+      {/* Decline modal */}
+      {showDeclineModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setShowDeclineModal(false)}
+          />
+          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
+            <h3 className="text-base font-semibold text-foreground mb-1">Decline this job?</h3>
+            <p className="text-sm text-muted-foreground mb-4">Select a reason for declining:</p>
+            <div className="space-y-2.5 mb-4">
+              {DECLINE_REASONS.map((r) => (
+                <label key={r} className="flex items-center gap-2.5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="declineReason"
+                    value={r}
+                    checked={declineReason === r}
+                    onChange={() => setDeclineReason(r)}
+                    className="accent-primary"
+                  />
+                  <span className="text-sm text-foreground">{r}</span>
+                </label>
+              ))}
+            </div>
+            {declineReason === "Other" && (
+              <textarea
+                value={declineOtherText}
+                onChange={(e) => setDeclineOtherText(e.target.value)}
+                placeholder="Please describe the reason…"
+                rows={2}
+                className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none mb-4"
+              />
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowDeclineModal(false)}
+                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDecline}
+                className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity"
+              >
+                Confirm Decline
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Complete confirmation modal */}
+      {showCompleteConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setShowCompleteConfirm(false)}
+          />
+          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
+            <h3 className="text-base font-semibold text-foreground mb-2">
+              Mark as completed?
+            </h3>
+            <p className="text-sm text-muted-foreground mb-5">
+              Mark this job as completed? The customer will be notified.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setShowCompleteConfirm(false)}
+                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  await handleStatusAction("complete");
+                  setShowCompleteConfirm(false);
+                }}
+                className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+              >
+                Mark completed
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -533,7 +802,7 @@ function useClickOutside(ref: React.RefObject<HTMLElement | null>, handler: () =
   }, [ref, handler]);
 }
 
-/** Text search filter pill (Customer) */
+/** Text search filter pill */
 function TextFilterPill({
   label,
   value,
@@ -566,8 +835,11 @@ function TextFilterPill({
           <>
             {label}: {value}
             <button
-              onClick={(e) => { e.stopPropagation(); onChange(""); }}
-              className="ml-0.5 hover:text-primary/70"
+              onClick={(e) => {
+                e.stopPropagation();
+                onChange("");
+              }}
+              className="ml-0.5 p-1.5 -m-1.5 hover:text-primary/70"
             >
               <X className="w-3 h-3" />
             </button>
@@ -596,7 +868,7 @@ function TextFilterPill({
   );
 }
 
-/** Dropdown select filter pill (Vehicle, Service, Status, Mechanic) */
+/** Dropdown select filter pill */
 function DropdownFilterPill({
   label,
   value,
@@ -629,8 +901,11 @@ function DropdownFilterPill({
           <>
             {label}: {value}
             <button
-              onClick={(e) => { e.stopPropagation(); onChange(""); }}
-              className="ml-0.5 hover:text-primary/70"
+              onClick={(e) => {
+                e.stopPropagation();
+                onChange("");
+              }}
+              className="ml-0.5 p-1.5 -m-1.5 hover:text-primary/70"
             >
               <X className="w-3 h-3" />
             </button>
@@ -651,7 +926,10 @@ function DropdownFilterPill({
             options.map((opt) => (
               <button
                 key={opt}
-                onClick={() => { onChange(opt); setOpen(false); }}
+                onClick={() => {
+                  onChange(opt);
+                  setOpen(false);
+                }}
                 className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
                   value === opt
                     ? "bg-primary/10 text-primary font-medium"
@@ -699,7 +977,8 @@ function DateTimeFilterPill({
   const hasValue = !isDefault;
 
   function formatSummary() {
-    if (dateFrom === dateTo && dateFrom) return dateFrom === defaultDate ? "Today" : dateFrom;
+    if (dateFrom === dateTo && dateFrom)
+      return dateFrom === defaultDate ? "Today" : dateFrom;
     if (dateFrom && dateTo) return `${dateFrom} – ${dateTo}`;
     if (dateFrom) return `From ${dateFrom}`;
     if (dateTo) return `Until ${dateTo}`;
@@ -727,8 +1006,11 @@ function DateTimeFilterPill({
           <>
             Date: {formatSummary()}
             <button
-              onClick={(e) => { e.stopPropagation(); clearDate(); }}
-              className="ml-0.5 hover:text-primary/70"
+              onClick={(e) => {
+                e.stopPropagation();
+                clearDate();
+              }}
+              className="ml-0.5 p-1.5 -m-1.5 hover:text-primary/70"
             >
               <X className="w-3 h-3" />
             </button>

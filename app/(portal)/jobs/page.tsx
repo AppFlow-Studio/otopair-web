@@ -327,6 +327,18 @@ export default function JobsPage() {
 
   const drawerOpen = !!selectedJobId;
 
+  // Stays true until the drawer's 200ms close animation finishes,
+  // so table columns don't re-expand before the panel is gone.
+  const [drawerCompact, setDrawerCompact] = useState(false);
+  useEffect(() => {
+    if (drawerOpen) {
+      setDrawerCompact(true);
+    } else {
+      const t = setTimeout(() => setDrawerCompact(false), 200);
+      return () => clearTimeout(t);
+    }
+  }, [drawerOpen]);
+
   const { setSidebarCompact } = usePortalSidebar();
   useEffect(() => {
     setSidebarCompact(drawerOpen);
@@ -528,7 +540,7 @@ export default function JobsPage() {
                                 <p className="font-medium text-foreground">{job.customerName}</p>
                                 <p className="text-xs text-muted-foreground">{job.customerEmail}</p>
                               </td>
-                              <td className="px-3 py-4 text-foreground">{job.vehicle}</td>
+                              <td className="px-3 py-4 text-foreground whitespace-nowrap">{drawerCompact ? (job.vehicleShort ?? job.vehicle) : job.vehicle}</td>
                               <td className="px-3 py-4 text-foreground max-w-48 truncate">
                                 {job.serviceNames.join(", ")}
                               </td>
@@ -541,15 +553,24 @@ export default function JobsPage() {
                                   >
                                     {statusLabel[job.status] ?? job.status}
                                   </span>
-                                  {countdown && (
+                                  {countdown && !drawerCompact && (
                                     <span className="text-amber-600 text-[11px] whitespace-nowrap">
                                       {countdown}
                                     </span>
                                   )}
                                 </div>
                               </td>
-                              <td className="px-3 py-4 text-foreground">
-                                {job.mechanicName ?? (
+                              <td className="px-3 py-4 text-foreground whitespace-nowrap">
+                                {job.mechanicName ? (
+                                  drawerCompact
+                                    ? (() => {
+                                        const parts = job.mechanicName!.trim().split(" ");
+                                        return parts.length >= 2
+                                          ? `${parts[0]} ${parts[parts.length - 1][0]}.`
+                                          : job.mechanicName;
+                                      })()
+                                    : job.mechanicName
+                                ) : (
                                   <span className="text-muted-foreground">—</span>
                                 )}
                               </td>

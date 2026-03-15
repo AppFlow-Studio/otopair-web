@@ -102,13 +102,16 @@ async function getPrimaryAuthorizedShop(ctx: any, userId: any) {
   return null;
 }
 
-async function resolveVehicleLabel(ctx: any, vin: string): Promise<string> {
+async function resolveVehicleLabel(
+  ctx: any,
+  vin: string
+): Promise<{ full: string; short: string }> {
   const vehicle = await ctx.db
     .query("vehicles")
     .withIndex("by_vin", (q: any) => q.eq("vin", vin))
     .first();
 
-  if (!vehicle) return vin;
+  if (!vehicle) return { full: vin, short: vin };
 
   let makeName = "";
   let modelName = "";
@@ -128,7 +131,9 @@ async function resolveVehicleLabel(ctx: any, vin: string): Promise<string> {
   if (!makeName && vehicle.metadata?.make) makeName = String(vehicle.metadata.make);
   if (!modelName && vehicle.metadata?.model) modelName = String(vehicle.metadata.model);
 
-  return [vehicle.year, makeName, modelName].filter(Boolean).join(" ") || vin;
+  const full = [vehicle.year, makeName, modelName].filter(Boolean).join(" ") || vin;
+  const short = [vehicle.year, modelName].filter(Boolean).join(" ") || vin;
+  return { full, short };
 }
 
 async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
@@ -254,7 +259,7 @@ export const getPendingJobsByShop = query({
         return {
           _id: booking._id,
           customerName,
-          vehicle: vehicleLabel,
+          vehicle: vehicleLabel.full,
           service: serviceName,
           ago,
           scheduledTime: booking.scheduled_time ? formatTime(booking.scheduled_time) : "",
@@ -330,7 +335,7 @@ export const getActiveJobsByShop = query({
         return {
           _id: booking._id,
           customerName,
-          vehicle: vehicleLabel,
+          vehicle: vehicleLabel.full,
           service: serviceName,
           liveStage: booking.live_stage ?? null,
           mechanicName,
@@ -383,7 +388,7 @@ export const getTodaysBookingsByShop = query({
           _id: booking._id,
           customerName: fullName,
           initials,
-          vehicle: vehicleLabel,
+          vehicle: vehicleLabel.full,
           service: serviceName,
           scheduledTime: formatTime(booking.scheduled_time),
           totalCost: booking.total_cost ?? 0,
@@ -501,7 +506,7 @@ export const listForMyShop = query({
           customer?.email ||
           "Unknown";
 
-        const vehicle = await resolveVehicleLabel(ctx, booking.vin);
+        const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
         const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
         const mechanic = booking.mechanic_id
           ? await ctx.db.get(booking.mechanic_id)
@@ -515,7 +520,8 @@ export const listForMyShop = query({
           scheduledTime: booking.scheduled_time,
           customerName,
           customerEmail: customer?.email ?? "",
-          vehicle,
+          vehicle: vehicleLabels.full,
+          vehicleShort: vehicleLabels.short,
           serviceNames,
           laborCost: booking.labor_cost,
           partsCost: booking.parts_cost,
@@ -541,7 +547,7 @@ export const getJobDetail = query({
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
     const customer = await ctx.db.get(booking.user_id);
-    const vehicle = await resolveVehicleLabel(ctx, booking.vin);
+    const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
     const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
     const mechanic = booking.mechanic_id
       ? await ctx.db.get(booking.mechanic_id)
@@ -574,7 +580,8 @@ export const getJobDetail = query({
         customer?.email ||
         "Unknown",
       customerEmail: customer?.email ?? "",
-      vehicle,
+      vehicle: vehicleLabels.full,
+      vehicleShort: vehicleLabels.short,
       serviceNames,
       mechanicName: mechanic
         ? `${mechanic.first_name} ${mechanic.last_name}`.trim()

@@ -6,6 +6,14 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Calendar, ChevronDown, ClipboardList, Loader2, Search, X } from "lucide-react";
 import { usePortalSidebar } from "../portal-context";
+import {
+  Select,
+  SelectItem,
+  SelectListBox,
+  SelectPopover,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 /* ------------------------------------------------------------------ */
 /*  Types & constants                                                   */
@@ -120,6 +128,7 @@ export default function JobsPage() {
   // Decline modal
   const [showDeclineModal, setShowDeclineModal] = useState(false);
   const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
+  const declineTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [declineOtherText, setDeclineOtherText] = useState("");
 
   // Complete confirmation modal
@@ -221,6 +230,21 @@ export default function JobsPage() {
     return () => clearTimeout(t);
   }, [successMessage]);
 
+  // Reset decline modal state when it closes
+  useEffect(() => {
+    if (!showDeclineModal) {
+      setDeclineReason(DECLINE_REASONS[0]);
+      setDeclineOtherText("");
+    }
+  }, [showDeclineModal]);
+
+  // Auto-focus the "Other" textarea when it appears
+  useEffect(() => {
+    if (showDeclineModal && declineReason === "Other") {
+      declineTextareaRef.current?.focus();
+    }
+  }, [showDeclineModal, declineReason]);
+
   // Keyboard navigation — guard against firing inside form inputs
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -234,6 +258,30 @@ export default function JobsPage() {
         if (selectedJobId) { setSelectedJobId(null); return; }
         return;
       }
+
+      // Decline modal keyboard nav
+      if (showDeclineModal) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setDeclineReason((prev) => {
+            const idx = DECLINE_REASONS.indexOf(prev);
+            return DECLINE_REASONS[Math.min(idx + 1, DECLINE_REASONS.length - 1)];
+          });
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setDeclineReason((prev) => {
+            const idx = DECLINE_REASONS.indexOf(prev);
+            return DECLINE_REASONS[Math.max(idx - 1, 0)];
+          });
+          return;
+        }
+        if (e.key === "d" || e.key === "Enter") { e.preventDefault(); handleDecline(); return; }
+        if (e.key === "c") { e.preventDefault(); setShowDeclineModal(false); return; }
+        return;
+      }
+
       if (!filteredJobs || filteredJobs.length === 0) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -248,11 +296,23 @@ export default function JobsPage() {
       if (e.key === "Enter" && focusedRowIndex >= 0 && focusedRowIndex < filteredJobs.length) {
         const job = filteredJobs[focusedRowIndex];
         setSelectedJobId((prev) => (prev === job._id ? null : job._id));
+        return;
+      }
+
+      // Drawer action hotkeys — only when drawer is open and no modal is active
+      if (selectedJob && !showDeclineModal && !showCompleteConfirm && !showCancelConfirm) {
+        const s = selectedJob.status;
+        const isPending = s === "pending" || s === "pending_shop_acceptance";
+        const isActive = s === "confirmed" || s === "in_progress";
+        if (e.key === "a" && isPending) { e.preventDefault(); handleStatusAction("accept"); return; }
+        if (e.key === "d" && isPending) { e.preventDefault(); setShowDeclineModal(true); return; }
+        if (e.key === "a" && isActive) { e.preventDefault(); setShowCompleteConfirm(true); return; }
+        if (e.key === "c" && isActive) { e.preventDefault(); setShowCancelConfirm(true); return; }
       }
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [filteredJobs, focusedRowIndex, selectedJobId, showDeclineModal, showCompleteConfirm, showCancelConfirm]);
+  }, [filteredJobs, focusedRowIndex, selectedJobId, selectedJob, showDeclineModal, showCompleteConfirm, showCancelConfirm]);
 
   async function handleStatusAction(action: "accept" | "complete") {
     if (!selectedJob?._id) return;
@@ -691,18 +751,26 @@ export default function JobsPage() {
                   <div className="border-t border-border pt-4">
                     <p className="text-xs font-medium text-foreground mb-2">Assign mechanic</p>
                     <div className="flex flex-wrap gap-2">
-                      <select
-                        className="border border-border rounded-lg px-3 py-2 text-sm bg-card text-foreground min-w-48"
-                        value={assigningMechanicId}
-                        onChange={(e) => setAssigningMechanicId(e.target.value)}
+                      <Select
+                        selectedKey={assigningMechanicId || "unassigned"}
+                        onSelectionChange={(key) => setAssigningMechanicId(key === "unassigned" ? "" : String(key))}
                       >
-                        <option value="">Unassigned</option>
-                        {mechanics.map((m) => (
-                          <option key={String(m._id)} value={String(m._id)}>
-                            {m.name}
-                          </option>
-                        ))}
-                      </select>
+                        <SelectTrigger className="min-w-48 h-9 rounded-lg border-border bg-card text-sm px-3">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectPopover placement="bottom start">
+                          <SelectListBox>
+                            <SelectItem id="unassigned" textValue="Unassigned">
+                              <span className="text-muted-foreground">Unassigned</span>
+                            </SelectItem>
+                            {mechanics.map((m) => (
+                              <SelectItem key={String(m._id)} id={String(m._id)} textValue={m.name}>
+                                {m.name}
+                              </SelectItem>
+                            ))}
+                          </SelectListBox>
+                        </SelectPopover>
+                      </Select>
                       <button
                         onClick={handleAssignMechanic}
                         disabled={!assigningMechanicId || isActioning}
@@ -737,7 +805,7 @@ export default function JobsPage() {
                               className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
                             >
                               {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                              {isActioning ? "Accepting…" : "Accept"}
+                              {isActioning ? "Accepting…" : <span><span style={{ textDecorationLine: "underline" }}>A</span>ccept</span>}
                             </button>
                           )}
                           {canStartJob && (
@@ -756,7 +824,7 @@ export default function JobsPage() {
                               disabled={isActioning}
                               className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
                             >
-                              Mark completed
+                              <span>M<span style={{ textDecorationLine: "underline" }}>a</span>rk completed</span>
                             </button>
                           )}
                           {canDecline && (
@@ -765,7 +833,7 @@ export default function JobsPage() {
                               disabled={isActioning}
                               className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-red-50 transition-colors disabled:opacity-50"
                             >
-                              Decline
+                              <span><span style={{ textDecorationLine: "underline" }}>D</span>ecline</span>
                             </button>
                           )}
                           {canCancel && (
@@ -774,7 +842,7 @@ export default function JobsPage() {
                               disabled={isActioning}
                               className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-red-50 transition-colors disabled:opacity-50"
                             >
-                              Cancel job
+                              <span><span style={{ textDecorationLine: "underline" }}>C</span>ancel job</span>
                             </button>
                           )}
                         </div>
@@ -842,8 +910,10 @@ export default function JobsPage() {
             </div>
             {declineReason === "Other" && (
               <textarea
+                ref={declineTextareaRef}
                 value={declineOtherText}
                 onChange={(e) => setDeclineOtherText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); e.stopPropagation(); e.currentTarget.blur(); } }}
                 placeholder="Please describe the reason…"
                 rows={2}
                 className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none mb-4"
@@ -855,7 +925,7 @@ export default function JobsPage() {
                 disabled={isActioning}
                 className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
               >
-                Cancel
+                <span><span style={{ textDecorationLine: "underline" }}>C</span>ancel</span>
               </button>
               <button
                 onClick={handleDecline}
@@ -863,7 +933,7 @@ export default function JobsPage() {
                 className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
               >
                 {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {isActioning ? "Declining…" : "Confirm Decline"}
+                {isActioning ? "Declining…" : <span>Confirm <span style={{ textDecorationLine: "underline" }}>D</span>ecline</span>}
               </button>
             </div>
           </div>

@@ -19,8 +19,10 @@ import {
   List,
   Loader2,
   LifeBuoy,
+  Keyboard,
 } from "lucide-react";
 import { UserSupportPage } from "./user-support-page";
+import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
 import { useEffect, useRef, useState } from "react";
 import { PortalSidebarContext } from "./portal-context";
 
@@ -50,6 +52,7 @@ export default function PortalLayout({
     : "";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCompact, setSidebarCompact] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const isJobsActive = pathname === "/jobs" || pathname.startsWith("/jobs/");
   const [jobsOpen, setJobsOpen] = useState(isJobsActive);
 
@@ -255,6 +258,13 @@ export default function PortalLayout({
                   },
                 }}
               >
+                <UserButton.MenuItems>
+                  <UserButton.Action
+                    label="Keyboard shortcuts"
+                    labelIcon={<Keyboard className="w-4 h-4" />}
+                    onClick={() => setShowShortcuts(true)}
+                  />
+                </UserButton.MenuItems>
                 <UserButton.UserProfilePage
                   label="Support"
                   url="support"
@@ -288,6 +298,13 @@ export default function PortalLayout({
                   },
                 }}
               >
+                <UserButton.MenuItems>
+                  <UserButton.Action
+                    label="Keyboard shortcuts"
+                    labelIcon={<Keyboard className="w-4 h-4" />}
+                    onClick={() => setShowShortcuts(true)}
+                  />
+                </UserButton.MenuItems>
                 <UserButton.UserProfilePage
                   label="Support"
                   url="support"
@@ -302,6 +319,7 @@ export default function PortalLayout({
           <main className="flex-1 p-6">{children}</main>
         </div>
       </div>
+      <KeyboardShortcutsModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </PortalSidebarContext.Provider>
   );
 }

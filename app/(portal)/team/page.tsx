@@ -261,7 +261,7 @@ export default function TeamPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectPopover>
-                  <SelectListBox>
+                  <SelectListBox shouldFocusWrap>
                     <SelectItem id="shop_mechanic" textValue="Mechanic">
                       <span className="flex items-center gap-2">
                         <Wrench className="w-3.5 h-3.5 text-gray-500" />

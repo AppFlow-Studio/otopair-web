@@ -121,6 +121,7 @@ export default function JobsPage() {
 
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [assigningMechanicId, setAssigningMechanicId] = useState("");
+  const assignTriggerRef = useRef<HTMLDivElement>(null);
   const [actionError, setActionError] = useState<string>("");
   const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
   const [isActioning, setIsActioning] = useState(false);
@@ -253,17 +254,20 @@ export default function JobsPage() {
   // Keyboard navigation — guard against firing inside form inputs
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if ((e.target as HTMLElement).closest("[data-filter-dropdown]")) return;
-
       if (e.key === "Escape") {
+        // If focus is inside the assign dropdown, let react-aria close it first
+        if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
         if (showDeclineModal) { setShowDeclineModal(false); return; }
         if (showCompleteConfirm) { setShowCompleteConfirm(false); return; }
         if (showCancelConfirm) { setShowCancelConfirm(false); return; }
         if (selectedJobId) { setSelectedJobId(null); return; }
         return;
       }
+
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if ((e.target as HTMLElement).closest("[data-filter-dropdown]")) return;
+      if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
 
       // Decline modal keyboard nav
       if (showDeclineModal) {
@@ -312,13 +316,15 @@ export default function JobsPage() {
         const isActive = s === "confirmed" || s === "in_progress";
         if (e.key === "a" && isPending) { e.preventDefault(); handleStatusAction("accept"); return; }
         if (e.key === "d" && isPending) { e.preventDefault(); setShowDeclineModal(true); return; }
-        if (e.key === "a" && isActive) { e.preventDefault(); setShowCompleteConfirm(true); return; }
+        if (e.key === "r" && isActive) { e.preventDefault(); setShowCompleteConfirm(true); return; }
         if (e.key === "c" && isActive) { e.preventDefault(); setShowCancelConfirm(true); return; }
+        if (e.key === "a" && !isPending) { e.preventDefault(); assignTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.click(); return; }
+        if (e.key === "s" && !isPending) { e.preventDefault(); handleAssignMechanic(); return; }
       }
 
       // Filter hotkeys — only when drawer is closed and no modal is active
       if (!selectedJobId && !showDeclineModal && !showCompleteConfirm && !showCancelConfirm) {
-        if (e.key === "a") { e.preventDefault(); clearAllFilters(); return; }
+        if (e.key === "x") { e.preventDefault(); clearAllFilters(); return; }
         if (e.key === "c") { e.preventDefault(); customerFilterRef.current?.open(); return; }
         if (e.key === "v") { e.preventDefault(); vehicleFilterRef.current?.open(); return; }
         if (e.key === "s") { e.preventDefault(); serviceFilterRef.current?.open(); return; }
@@ -391,6 +397,7 @@ export default function JobsPage() {
     setIsActioning(true);
     try {
       await updateJob({ bookingId: selectedJob._id, mechanicId: selectedMechanicId });
+      setAssigningMechanicId("");
       setSuccessMessage("Mechanic assigned");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Could not assign mechanic.";
@@ -768,35 +775,42 @@ export default function JobsPage() {
 
                   {/* Assign mechanic */}
                   <div className="border-t border-border pt-4">
-                    <p className="text-xs font-medium text-foreground mb-2">Assign mechanic</p>
+                    <p className="text-xs font-medium text-foreground mb-2"><span style={{ textDecorationLine: "underline" }}>A</span>ssign mechanic</p>
                     <div className="flex flex-wrap gap-2">
-                      <Select
-                        selectedKey={assigningMechanicId || "unassigned"}
-                        onSelectionChange={(key) => setAssigningMechanicId(key === "unassigned" ? "" : String(key))}
-                      >
-                        <SelectTrigger className="min-w-48 h-9 rounded-lg border-border bg-card text-sm px-3">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectPopover placement="bottom start">
-                          <SelectListBox>
-                            <SelectItem id="unassigned" textValue="Unassigned">
-                              <span className="text-muted-foreground">Unassigned</span>
-                            </SelectItem>
-                            {mechanics.map((m) => (
-                              <SelectItem key={String(m._id)} id={String(m._id)} textValue={m.name}>
-                                {m.name}
+                      <div ref={assignTriggerRef}>
+                        <Select
+                          selectedKey={assigningMechanicId || "unassigned"}
+                          onSelectionChange={(key) => {
+                            setAssigningMechanicId(key === "unassigned" ? "" : String(key));
+                            requestAnimationFrame(() => {
+                              assignTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.blur();
+                            });
+                          }}
+                        >
+                          <SelectTrigger className="min-w-48 h-9 rounded-lg border-border bg-card text-sm px-3" data-assign-dropdown>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectPopover placement="bottom start" data-assign-dropdown>
+                            <SelectListBox shouldFocusWrap>
+                              <SelectItem id="unassigned" textValue="Unassigned">
+                                <span className="text-muted-foreground">Unassigned</span>
                               </SelectItem>
-                            ))}
-                          </SelectListBox>
-                        </SelectPopover>
-                      </Select>
+                              {mechanics.map((m) => (
+                                <SelectItem key={String(m._id)} id={String(m._id)} textValue={m.name}>
+                                  {m.name}
+                                </SelectItem>
+                              ))}
+                            </SelectListBox>
+                          </SelectPopover>
+                        </Select>
+                      </div>
                       <button
                         onClick={handleAssignMechanic}
                         disabled={!assigningMechanicId || isActioning}
                         className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
                       >
                         {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                        Assign
+                        <span>A<span style={{ textDecorationLine: "underline" }}>s</span>sign</span>
                       </button>
                     </div>
                   </div>
@@ -843,7 +857,7 @@ export default function JobsPage() {
                               disabled={isActioning}
                               className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
                             >
-                              <span>M<span style={{ textDecorationLine: "underline" }}>a</span>rk completed</span>
+                              <span>Ma<span style={{ textDecorationLine: "underline" }}>r</span>k completed</span>
                             </button>
                           )}
                           {canDecline && (

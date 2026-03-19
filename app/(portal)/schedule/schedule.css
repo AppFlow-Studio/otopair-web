@@ -1,0 +1,39 @@
+/* Schedule calendar — react-big-calendar style overrides */
+
+.schedule-calendar .rbc-header {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  border-color: var(--border);
+}
+
+.schedule-calendar .rbc-time-gutter .rbc-label {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.schedule-calendar .rbc-day-slot .rbc-time-slot {
+  border-color: var(--border);
+}
+
+.schedule-calendar .rbc-month-view .rbc-month-row {
+  border-color: var(--border);
+}
+
+.schedule-calendar .rbc-today {
+  background-color: rgba(99, 102, 241, 0.03); /* --primary at 3% */
+}
+
+.schedule-calendar .rbc-event {
+  border: none;
+  padding: 0;
+}
+
+.schedule-calendar .rbc-off-range-bg {
+  background-color: var(--muted);
+}
+
+.schedule-calendar .rbc-current-time-indicator {
+  background-color: var(--destructive);
+  height: 2px;
+}

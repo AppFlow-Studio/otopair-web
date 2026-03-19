@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   Calendar as CalendarIcon,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -24,6 +25,7 @@ import {
 import { format, parse, startOfWeek, getDay, addDays, subDays, startOfMonth, endOfMonth, addMonths, subMonths } from "date-fns";
 import { enUS } from "date-fns/locale/en-US";
 import "react-big-calendar/lib/css/react-big-calendar.css";
+import "./schedule.css";
 
 /* ------------------------------------------------------------------ */
 /*  Localizer setup                                                     */
@@ -55,12 +57,12 @@ interface CalendarEvent {
 /* ------------------------------------------------------------------ */
 
 const statusColors: Record<string, { bg: string; text: string; border: string }> = {
-  pending_shop_acceptance: { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
-  pending: { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
-  confirmed: { bg: "rgb(224 231 255)", text: "rgb(99 102 241)", border: "rgb(165 180 252)" },
-  in_progress: { bg: "rgb(236 253 245)", text: "rgb(5 150 105)", border: "rgb(110 231 183)" },
-  completed: { bg: "rgb(243 244 246)", text: "rgb(107 114 128)", border: "rgb(209 213 219)" },
-  blocked: { bg: "rgb(254 242 242)", text: "rgb(220 38 38)", border: "rgb(252 165 165)" },
+  pending_shop_acceptance: { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" }, /* amber (extension) */
+  pending:                 { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" }, /* amber (extension) */
+  confirmed:              { bg: "rgb(224 231 255)", text: "rgb(99 102 241)", border: "rgb(165 180 252)" }, /* --accent / --primary */
+  in_progress:            { bg: "rgb(236 253 245)", text: "rgb(5 150 105)", border: "rgb(110 231 183)" }, /* emerald (extension) */
+  completed:              { bg: "rgb(243 244 246)", text: "rgb(107 114 128)", border: "rgb(209 213 219)" }, /* --muted / --muted-foreground */
+  blocked:                { bg: "rgb(254 242 242)", text: "rgb(239 68 68)", border: "rgb(252 165 165)" },  /* --destructive */
 };
 
 const statusLabel: Record<string, string> = {
@@ -70,6 +72,13 @@ const statusLabel: Record<string, string> = {
   in_progress: "In Progress",
   completed: "Completed",
 };
+
+const DECLINE_REASONS = [
+  "Mechanic unavailable",
+  "Can't service this vehicle",
+  "Scheduling conflict",
+  "Other",
+];
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
@@ -118,8 +127,18 @@ export default function SchedulePage() {
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("week");
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
+  const [hoursExpanded, setHoursExpanded] = useState(false);
+  const [showDeclineModal, setShowDeclineModal] = useState(false);
+  const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
+  const [declineOtherText, setDeclineOtherText] = useState("");
+  const [isActioning, setIsActioning] = useState(false);
+  const [actionError, setActionError] = useState("");
+  const declineTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const context = useQuery(api.schedule.getScheduleContext);
+  const acceptJob = useMutation(api.bookings.accept);
+  const completeJob = useMutation(api.bookings.complete);
+  const cancelJob = useMutation(api.bookings.cancel);
 
   // Compute date range based on current view
   const dateRange = useMemo(() => {
@@ -327,42 +346,60 @@ export default function SchedulePage() {
         </div>
       </div>
 
-      {/* Shop hours summary */}
+      {/* Shop hours summary — collapsed by default */}
       <div className="bg-card border border-border rounded-xl p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Clock className="w-4 h-4 text-primary" />
-          <h3 className="text-sm font-semibold text-foreground">Operating Hours</h3>
-        </div>
-        <div className="grid grid-cols-7 gap-2">
-          {context.hours.map((h) => (
-            <div
-              key={h._id}
-              className={`text-center px-2 py-2 rounded-lg text-xs ${
-                h.isClosed
-                  ? "bg-muted/50 text-muted-foreground"
-                  : "bg-primary/5 text-foreground"
-              }`}
-            >
-              <p className="font-medium">{h.dayName.slice(0, 3)}</p>
-              {h.isClosed ? (
-                <p className="text-muted-foreground mt-0.5">Closed</p>
-              ) : (
-                <p className="mt-0.5">
-                  {formatTimeDisplay(h.openTime)} – {formatTimeDisplay(h.closeTime)}
-                </p>
-              )}
-            </div>
-          ))}
+        <button
+          onClick={() => setHoursExpanded((v) => !v)}
+          className="flex items-center gap-2 w-full text-left"
+        >
+          <Clock className="w-4 h-4 text-primary shrink-0" />
+          <span className="text-sm font-semibold text-foreground">Operating Hours</span>
+          <span className="text-sm text-muted-foreground ml-1">{computeHoursSummary(context.hours)}</span>
+          <ChevronDown
+            className={`w-4 h-4 text-muted-foreground ml-auto shrink-0 transition-transform duration-200 ${hoursExpanded ? "rotate-180" : ""}`}
+          />
+        </button>
+        <div
+          className="overflow-hidden transition-all duration-300"
+          style={{ maxHeight: hoursExpanded ? "200px" : "0px" }}
+        >
+          <div className="grid grid-cols-7 gap-2 mt-3">
+            {context.hours.map((h) => (
+              <div
+                key={h._id}
+                className={`text-center px-2 py-2 rounded-lg text-xs ${
+                  h.isClosed
+                    ? "bg-muted/50 text-muted-foreground"
+                    : "bg-primary/5 text-foreground"
+                }`}
+              >
+                <p className="font-medium">{h.dayName.slice(0, 3)}</p>
+                {h.isClosed ? (
+                  <p className="text-muted-foreground mt-0.5">Closed</p>
+                ) : (
+                  <p className="mt-0.5">
+                    {formatTimeDisplay(h.openTime)} – {formatTimeDisplay(h.closeTime)}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
       {/* Calendar */}
-      <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar">
+      <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar relative">
         {bookings === undefined ? (
           <div className="flex items-center justify-center h-[600px]">
             <Loader2 className="w-6 h-6 text-primary animate-spin" />
           </div>
-        ) : (
+        ) : events.length === 0 ? (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center pointer-events-none">
+            <CalendarIcon className="w-10 h-10 text-muted-foreground/40 mb-2" />
+            <p className="text-sm text-muted-foreground">No bookings scheduled</p>
+          </div>
+        ) : null}
+        {bookings !== undefined && (
           <Calendar
             localizer={localizer}
             events={events}
@@ -374,25 +411,26 @@ export default function SchedulePage() {
             onView={handleViewChange as any}
             min={minTime}
             max={maxTime}
+            getNow={() => new Date()}
             step={30}
             timeslots={2}
-            style={{ height: 650 }}
+            style={{ height: "calc(100vh - 320px)", minHeight: 500 }}
             onSelectEvent={(event) => setSelectedEvent(event as CalendarEvent)}
+            formats={{
+              dayFormat: (date: Date) => format(date, "EEE d"),
+              weekdayFormat: (date: Date) => format(date, "EEE"),
+            }}
             components={{
               event: EventComponent as any,
               toolbar: CustomToolbar as any,
             }}
-            eventPropGetter={(event) => {
-              const e = event as CalendarEvent;
-              const colors = statusColors[e.status ?? "confirmed"] ?? statusColors.confirmed;
-              return {
-                style: {
-                  backgroundColor: "transparent",
-                  border: "none",
-                  padding: 0,
-                },
-              };
-            }}
+            eventPropGetter={() => ({
+              style: {
+                backgroundColor: "transparent",
+                border: "none",
+                padding: 0,
+              },
+            })}
             dayPropGetter={(date) => {
               const today = new Date();
               const isToday =
@@ -400,6 +438,7 @@ export default function SchedulePage() {
                 date.getMonth() === today.getMonth() &&
                 date.getFullYear() === today.getFullYear();
               return {
+                /* --primary at 3% opacity */
                 style: isToday ? { backgroundColor: "rgba(99, 102, 241, 0.03)" } : {},
               };
             }}
@@ -411,19 +450,21 @@ export default function SchedulePage() {
       <div className="bg-card border border-border rounded-xl p-4">
         <p className="text-xs font-medium text-muted-foreground mb-2">Status Legend</p>
         <div className="flex items-center gap-4 flex-wrap">
-          {Object.entries(statusLabel).map(([key, label]) => {
-            const colors = statusColors[key];
-            if (!colors) return null;
-            return (
-              <div key={key} className="flex items-center gap-1.5">
-                <div
-                  className="w-3 h-3 rounded-sm"
-                  style={{ backgroundColor: colors.border }}
-                />
-                <span className="text-xs text-foreground">{label}</span>
-              </div>
-            );
-          })}
+          {Object.entries(statusLabel)
+            .filter(([key], i, arr) => arr.findIndex(([, l]) => l === statusLabel[key]) === i)
+            .map(([key, label]) => {
+              const colors = statusColors[key];
+              if (!colors) return null;
+              return (
+                <div key={key} className="flex items-center gap-1.5">
+                  <div
+                    className="w-3 h-3 rounded-sm"
+                    style={{ backgroundColor: colors.border }}
+                  />
+                  <span className="text-xs text-foreground">{label}</span>
+                </div>
+              );
+            })}
         </div>
       </div>
 
@@ -498,13 +539,145 @@ export default function SchedulePage() {
               </div>
             </div>
 
-            <div className="mt-5 flex justify-end">
+            {/* Inline actions */}
+            <div className="mt-5 space-y-3">
+              {actionError && (
+                <p className="text-xs text-destructive">{actionError}</p>
+              )}
+              <div className="flex gap-2">
+                {(selectedEvent.status === "pending" || selectedEvent.status === "pending_shop_acceptance") && (
+                  <>
+                    <button
+                      disabled={isActioning}
+                      onClick={async () => {
+                        setActionError("");
+                        setIsActioning(true);
+                        try {
+                          await acceptJob({ bookingId: selectedEvent.id as any });
+                          setSelectedEvent(null);
+                        } catch (err: unknown) {
+                          setActionError(err instanceof Error ? err.message : "Could not accept.");
+                        } finally {
+                          setIsActioning(false);
+                        }
+                      }}
+                      className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+                    >
+                      {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      Accept
+                    </button>
+                    <button
+                      disabled={isActioning}
+                      onClick={() => setShowDeclineModal(true)}
+                      className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-destructive/5 transition-colors disabled:opacity-50"
+                    >
+                      Decline
+                    </button>
+                  </>
+                )}
+                {(selectedEvent.status === "confirmed" || selectedEvent.status === "in_progress") && (
+                  <button
+                    disabled={isActioning}
+                    onClick={async () => {
+                      setActionError("");
+                      setIsActioning(true);
+                      try {
+                        await completeJob({ bookingId: selectedEvent.id as any });
+                        setSelectedEvent(null);
+                      } catch (err: unknown) {
+                        setActionError(err instanceof Error ? err.message : "Could not complete.");
+                      } finally {
+                        setIsActioning(false);
+                      }
+                    }}
+                    className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+                  >
+                    {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    Mark completed
+                  </button>
+                )}
+              </div>
+              {/* TODO: Jobs page does not yet support ?highlight= query param */}
               <a
-                href="/jobs"
-                className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+                href={`/jobs?highlight=${selectedEvent.id}`}
+                className="text-xs text-primary hover:underline"
               >
-                View in Jobs
+                View full details in Jobs &rarr;
               </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Decline reason modal */}
+      {showDeclineModal && selectedEvent && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+            onClick={() => setShowDeclineModal(false)}
+          />
+          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
+            <h3 className="text-base font-semibold text-foreground mb-1">Decline this booking?</h3>
+            <p className="text-sm text-muted-foreground mb-4">Select a reason for declining:</p>
+            <div className="space-y-2.5 mb-4">
+              {DECLINE_REASONS.map((r) => (
+                <label key={r} className="flex items-center gap-2.5 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="declineReason"
+                    value={r}
+                    checked={declineReason === r}
+                    onChange={() => setDeclineReason(r)}
+                    className="accent-primary"
+                  />
+                  <span className="text-sm text-foreground">{r}</span>
+                </label>
+              ))}
+            </div>
+            {declineReason === "Other" && (
+              <textarea
+                ref={declineTextareaRef}
+                value={declineOtherText}
+                onChange={(e) => setDeclineOtherText(e.target.value)}
+                placeholder="Please describe the reason…"
+                rows={2}
+                className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none mb-4"
+              />
+            )}
+            {actionError && (
+              <p className="text-xs text-destructive mb-3">{actionError}</p>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => { setShowDeclineModal(false); setActionError(""); }}
+                disabled={isActioning}
+                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setActionError("");
+                  setIsActioning(true);
+                  const reason = declineReason === "Other" ? (declineOtherText.trim() || "Other") : declineReason;
+                  try {
+                    await cancelJob({ bookingId: selectedEvent.id as any, reason });
+                    setShowDeclineModal(false);
+                    setSelectedEvent(null);
+                    setDeclineReason(DECLINE_REASONS[0]);
+                    setDeclineOtherText("");
+                  } catch (err: unknown) {
+                    setActionError(err instanceof Error ? err.message : "Could not decline.");
+                  } finally {
+                    setIsActioning(false);
+                  }
+                }}
+                disabled={isActioning}
+                className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+              >
+                {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                {isActioning ? "Declining…" : "Confirm Decline"}
+              </button>
             </div>
           </div>
         </div>
@@ -516,6 +689,29 @@ export default function SchedulePage() {
 /* ------------------------------------------------------------------ */
 /*  Utility                                                             */
 /* ------------------------------------------------------------------ */
+
+/** Compute a one-line summary like "Mon–Sat, 8 AM – 6 PM" from hours data. */
+function computeHoursSummary(hours: Array<{ dayName: string; isClosed: boolean; openTime: string; closeTime: string }>): string {
+  const open = hours.filter((h) => !h.isClosed);
+  if (open.length === 0) return "Closed every day";
+
+  const dayAbbrs = open.map((h) => h.dayName.slice(0, 3));
+  let dayRange: string;
+  if (dayAbbrs.length === 7) {
+    dayRange = "Every day";
+  } else if (dayAbbrs.length === 1) {
+    dayRange = dayAbbrs[0];
+  } else {
+    dayRange = `${dayAbbrs[0]}–${dayAbbrs[dayAbbrs.length - 1]}`;
+  }
+
+  // Check if all open days share the same hours
+  const allSame = open.every((h) => h.openTime === open[0].openTime && h.closeTime === open[0].closeTime);
+  if (allSame) {
+    return `${dayRange}, ${formatTimeDisplay(open[0].openTime)} – ${formatTimeDisplay(open[0].closeTime)}`;
+  }
+  return dayRange;
+}
 
 function formatTimeDisplay(hhmm: string): string {
   const [h, m] = hhmm.split(":").map(Number);

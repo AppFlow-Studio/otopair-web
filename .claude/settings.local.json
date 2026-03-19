@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ls \"g:\\\\GitHub\\\\otopair-web\\\\app\\\\\\(portal\\)\\\\jobs\"\")"
+      "Bash(ls \"g:\\\\GitHub\\\\otopair-web\\\\app\\\\\\(portal\\)\\\\jobs\"\")",
+      "Bash(ls \"g:/GitHub/otopair-web/app/\\(portal\\)/schedule/\")"
     ]
   }
 }

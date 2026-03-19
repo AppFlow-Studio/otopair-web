@@ -122,6 +122,7 @@ export default function JobsPage() {
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [assigningMechanicId, setAssigningMechanicId] = useState("");
   const assignTriggerRef = useRef<HTMLDivElement>(null);
+  const drawerPanelRef = useRef<HTMLDivElement>(null);
   const [actionError, setActionError] = useState<string>("");
   const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
   const [isActioning, setIsActioning] = useState(false);
@@ -686,7 +687,11 @@ export default function JobsPage() {
             drawerOpen ? "w-[504px]" : "w-0"
           }`}
         >
-          <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden">
+          <div
+            ref={drawerPanelRef}
+            tabIndex={-1}
+            className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden focus:outline-none"
+          >
             {/* Drawer header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
               <h2 className="text-base font-semibold text-foreground truncate pr-2">
@@ -783,6 +788,7 @@ export default function JobsPage() {
                           onSelectionChange={(key) => {
                             setAssigningMechanicId(key === "unassigned" ? "" : String(key));
                             requestAnimationFrame(() => {
+                              drawerPanelRef.current?.focus();
                               assignTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.blur();
                             });
                           }}

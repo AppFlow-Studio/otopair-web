@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { useUser } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
@@ -69,6 +69,8 @@ export default function TeamPage() {
   const [revoking, setRevoking] = useState<string | null>(null);
   const [changingRoleFor, setChangingRoleFor] = useState<{ shopUserId: Id<"shop_users">; currentRole: string } | null>(null);
   const [newRole, setNewRole] = useState<string>("");
+  const inviteFormRef = useRef<HTMLFormElement>(null);
+  const roleTriggerRef = useRef<HTMLDivElement>(null);
 
   const { user: clerkUser } = useUser();
 
@@ -192,7 +194,7 @@ export default function TeamPage() {
           <UserPlus className="w-5 h-5 text-primary" />
           <h2 className="text-base font-semibold text-gray-900">Invite a Team Member</h2>
         </div>
-        <form onSubmit={handleInvite} noValidate className="space-y-4">
+        <form ref={inviteFormRef} tabIndex={-1} onSubmit={handleInvite} noValidate className="space-y-4 focus:outline-none">
           {/* Mechanic profile fields — creates a mechanics record on submit */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -249,13 +251,19 @@ export default function TeamPage() {
                 className={inputClass}
               />
             </div>
-            <div>
+            <div ref={roleTriggerRef}>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
                 Role
               </label>
               <Select
                 selectedKey={role}
-                onSelectionChange={(key) => setRole(key as "shop_mechanic" | "shop_owner")}
+                onSelectionChange={(key) => {
+                  setRole(key as "shop_mechanic" | "shop_owner");
+                  requestAnimationFrame(() => {
+                    inviteFormRef.current?.focus();
+                    roleTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.blur();
+                  });
+                }}
               >
                 <SelectTrigger className="bg-white h-[42px] rounded-lg border-border text-sm px-3.5">
                   <SelectValue />

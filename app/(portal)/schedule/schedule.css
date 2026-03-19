@@ -5,6 +5,7 @@
   font-weight: 500;
   color: var(--muted-foreground);
   border-color: var(--border);
+  text-transform: none;
 }
 
 .schedule-calendar .rbc-time-gutter .rbc-label {

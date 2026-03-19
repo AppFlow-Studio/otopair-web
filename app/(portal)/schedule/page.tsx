@@ -5,7 +5,6 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
-  Calendar as CalendarIcon,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -351,11 +350,6 @@ export default function SchedulePage() {
         {bookings === undefined ? (
           <div className="flex items-center justify-center h-[600px]">
             <Loader2 className="w-6 h-6 text-primary animate-spin" />
-          </div>
-        ) : events.length === 0 ? (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center pointer-events-none">
-            <CalendarIcon className="w-10 h-10 text-muted-foreground/40 mb-2" />
-            <p className="text-sm text-muted-foreground">No bookings scheduled</p>
           </div>
         ) : null}
         {bookings !== undefined && currentView === "day" && useDaySwimLanes && (

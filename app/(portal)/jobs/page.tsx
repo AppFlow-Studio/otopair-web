@@ -318,6 +318,7 @@ export default function JobsPage() {
 
       // Filter hotkeys — only when drawer is closed and no modal is active
       if (!selectedJobId && !showDeclineModal && !showCompleteConfirm && !showCancelConfirm) {
+        if (e.key === "a") { e.preventDefault(); clearAllFilters(); return; }
         if (e.key === "c") { e.preventDefault(); customerFilterRef.current?.open(); return; }
         if (e.key === "v") { e.preventDefault(); vehicleFilterRef.current?.open(); return; }
         if (e.key === "s") { e.preventDefault(); serviceFilterRef.current?.open(); return; }
@@ -521,7 +522,7 @@ export default function JobsPage() {
                         onClick={clearAllFilters}
                         className="text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
                       >
-                        Clear all
+                        <span>Clear <span style={{ textDecorationLine: "underline" }}>a</span>ll</span>
                       </button>
                     )}
                   </div>

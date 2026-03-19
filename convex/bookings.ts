@@ -434,10 +434,32 @@ export const getMyShopJobContext = query({
     const shop = await ctx.db.get(primary.shopId);
     if (!shop) return null;
 
-    const mechanics = await ctx.db
+    const allMechanics = await ctx.db
       .query("mechanics")
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
       .collect();
+
+    // Only include mechanics linked to an accepted shop_user with a mechanic role
+    const mechanicShopUsers = await ctx.db
+      .query("shop_users")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
+      .filter((q: any) =>
+        q.and(
+          q.neq(q.field("mechanic_id"), undefined),
+          q.neq(q.field("accepted_at"), undefined),
+          q.or(
+            q.eq(q.field("role"), "shop_mechanic"),
+            q.eq(q.field("role"), "mechanic")
+          )
+        )
+      )
+      .collect();
+
+    const acceptedMechanicIds = new Set(
+      mechanicShopUsers.map((su: any) => su.mechanic_id as string)
+    );
+
+    const mechanics = allMechanics.filter((m: any) => acceptedMechanicIds.has(m._id));
 
     const offered = await ctx.db
       .query("shop_services")

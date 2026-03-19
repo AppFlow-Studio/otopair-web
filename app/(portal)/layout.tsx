@@ -4,7 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import {
   LayoutDashboard,
@@ -20,6 +20,7 @@ import {
   Loader2,
   LifeBuoy,
   Keyboard,
+  Sprout,
 } from "lucide-react";
 import { UserSupportPage } from "./user-support-page";
 import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
@@ -57,6 +58,8 @@ export default function PortalLayout({
   const [jobsOpen, setJobsOpen] = useState(isJobsActive);
 
   const portalAccess = useQuery(api.shops.getMyPortalAccess);
+  const seedBookings = useMutation(api.seed.seedDashboardBookings);
+  const [seeding, setSeeding] = useState(false);
   const hasRedirected = useRef(false);
   const isAcceptInvite = pathname.startsWith("/accept-invite");
 
@@ -264,6 +267,20 @@ export default function PortalLayout({
                     labelIcon={<Keyboard className="w-4 h-4" />}
                     onClick={() => setShowShortcuts(true)}
                   />
+                  {portalAccess?.shopId && (
+                    <UserButton.Action
+                      label="Seed demo bookings"
+                      labelIcon={<Sprout className="w-4 h-4" />}
+                      onClick={async () => {
+                        setSeeding(true);
+                        try {
+                          await seedBookings({ shopId: portalAccess.shopId!, clearExisting: true });
+                        } finally {
+                          setSeeding(false);
+                        }
+                      }}
+                    />
+                  )}
                 </UserButton.MenuItems>
                 <UserButton.UserProfilePage
                   label="Support"
@@ -304,6 +321,20 @@ export default function PortalLayout({
                     labelIcon={<Keyboard className="w-4 h-4" />}
                     onClick={() => setShowShortcuts(true)}
                   />
+                  {portalAccess?.shopId && (
+                    <UserButton.Action
+                      label="Seed demo bookings"
+                      labelIcon={<Sprout className="w-4 h-4" />}
+                      onClick={async () => {
+                        setSeeding(true);
+                        try {
+                          await seedBookings({ shopId: portalAccess.shopId!, clearExisting: true });
+                        } finally {
+                          setSeeding(false);
+                        }
+                      }}
+                    />
+                  )}
                 </UserButton.MenuItems>
                 <UserButton.UserProfilePage
                   label="Support"

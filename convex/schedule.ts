@@ -70,6 +70,27 @@ export const getScheduleContext = query({
       .filter((q: any) => q.eq(q.field("is_active"), true))
       .collect();
 
+    const mechanicShopUsers = await ctx.db
+      .query("shop_users")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
+      .filter((q: any) =>
+        q.and(
+          q.neq(q.field("mechanic_id"), undefined),
+          q.neq(q.field("accepted_at"), undefined),
+          q.or(
+            q.eq(q.field("role"), "shop_mechanic"),
+            q.eq(q.field("role"), "mechanic")
+          )
+        )
+      )
+      .collect();
+
+    const acceptedMechanicIds = new Set(
+      mechanicShopUsers.map((su: any) => su.mechanic_id as string)
+    );
+
+    const mechanics = allMechanics.filter((m: any) => acceptedMechanicIds.has(m._id));
+
     return {
       shopId: shop._id,
       shopName: shop.name,
@@ -81,7 +102,7 @@ export const getScheduleContext = query({
         closeTime: h.close_time ?? "17:00",
         isClosed: h.is_closed,
       })),
-      mechanics: allMechanics.map((m: any) => ({
+      mechanics: mechanics.map((m: any) => ({
         _id: m._id,
         name: `${m.first_name} ${m.last_name}`.trim(),
         firstName: m.first_name,

@@ -10,10 +10,17 @@ import {
   ChevronRight,
   Clock,
   Loader2,
-  User,
   X,
 } from "lucide-react";
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
+import {
+  Select,
+  SelectItem,
+  SelectListBox,
+  SelectPopover,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { format, parse, startOfWeek, getDay, addDays, subDays, startOfMonth, endOfMonth, addMonths, subMonths } from "date-fns";
 import { enUS } from "date-fns/locale/en-US";
 import "react-big-calendar/lib/css/react-big-calendar.css";
@@ -280,21 +287,24 @@ export default function SchedulePage() {
           <div className="flex items-center gap-3">
             {/* Mechanic filter */}
             {context.mechanics.length > 0 && (
-              <div className="flex items-center gap-1.5">
-                <User className="w-4 h-4 text-muted-foreground" />
-                <select
-                  value={mechanicFilter}
-                  onChange={(e) => setMechanicFilter(e.target.value)}
-                  className="text-sm border border-border rounded-lg px-2.5 py-1.5 bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-                >
-                  <option value="all">All Mechanics</option>
-                  {context.mechanics.map((m) => (
-                    <option key={m._id} value={m._id}>
-                      {m.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <Select
+                selectedKey={mechanicFilter}
+                onSelectionChange={(key) => setMechanicFilter(String(key))}
+              >
+                <SelectTrigger className="h-9 rounded-lg border-border bg-card text-sm px-3 min-w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopover placement="bottom end">
+                  <SelectListBox shouldFocusWrap>
+                    <SelectItem id="all" textValue="All Mechanics">All Mechanics</SelectItem>
+                    {context.mechanics.map((m) => (
+                      <SelectItem key={m._id} id={m._id} textValue={m.name}>
+                        {m.name}
+                      </SelectItem>
+                    ))}
+                  </SelectListBox>
+                </SelectPopover>
+              </Select>
             )}
 
             {/* View switcher */}

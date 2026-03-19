@@ -123,6 +123,10 @@ export default function JobsPage() {
   const [assigningMechanicId, setAssigningMechanicId] = useState("");
   const assignTriggerRef = useRef<HTMLDivElement>(null);
   const drawerPanelRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  const handleAssignMechanicRef = useRef<() => Promise<void>>(async () => {});
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  const handleStartJobRef = useRef<() => Promise<void>>(async () => {});
   const [actionError, setActionError] = useState<string>("");
   const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
   const [isActioning, setIsActioning] = useState(false);
@@ -227,9 +231,9 @@ export default function JobsPage() {
   }
 
   useEffect(() => {
-    if (!selectedJob) return;
+    if (!selectedJobId || !selectedJob) return;
     setAssigningMechanicId(selectedJob.mechanicId ? String(selectedJob.mechanicId) : "");
-  }, [selectedJob]);
+  }, [selectedJobId, selectedJob?.mechanicId]);
 
   // Auto-clear success toast after 3s
   useEffect(() => {
@@ -333,7 +337,8 @@ export default function JobsPage() {
         if (e.key === "r" && isActive) { e.preventDefault(); setShowCompleteConfirm(true); return; }
         if (e.key === "c" && isActive) { e.preventDefault(); setShowCancelConfirm(true); return; }
         if (e.key === "a" && !isPending) { e.preventDefault(); assignTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.click(); return; }
-        if (e.key === "s" && !isPending) { e.preventDefault(); handleAssignMechanic(); return; }
+        if (e.key === "t" && s === "confirmed" && selectedJob.mechanicId) { e.preventDefault(); handleStartJobRef.current(); return; }
+        if (e.key === "s" && !isPending) { e.preventDefault(); handleAssignMechanicRef.current(); return; }
       }
 
       // Filter hotkeys — only when drawer is closed and no modal is active
@@ -420,6 +425,22 @@ export default function JobsPage() {
       setIsActioning(false);
     }
   }
+  handleAssignMechanicRef.current = handleAssignMechanic;
+
+  async function handleStartJob() {
+    if (!selectedJob?._id || !selectedJob.mechanicId) return;
+    setActionError("");
+    setIsActioning(true);
+    try {
+      await startJob({ bookingId: selectedJob._id });
+      setSuccessMessage("Job started");
+    } catch (err: unknown) {
+      setActionError(err instanceof Error ? err.message : "Could not start job.");
+    } finally {
+      setIsActioning(false);
+    }
+  }
+  handleStartJobRef.current = handleStartJob;
 
   const drawerOpen = !!selectedJobId;
 
@@ -870,23 +891,12 @@ export default function JobsPage() {
                           )}
                           {canStartJob && (
                             <button
-                              onClick={async () => {
-                                setActionError("");
-                                setIsActioning(true);
-                                try {
-                                  await startJob({ bookingId: selectedJob._id });
-                                  setSuccessMessage("Job started");
-                                } catch (err: unknown) {
-                                  setActionError(err instanceof Error ? err.message : "Could not start job.");
-                                } finally {
-                                  setIsActioning(false);
-                                }
-                              }}
+                              onClick={handleStartJob}
                               disabled={!selectedJob.mechanicId || isActioning}
                               title={selectedJob.mechanicId ? undefined : "Assign a mechanic first"}
                               className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
                             >
-                              Start job
+                              <span>S<span style={{ textDecorationLine: "underline" }}>t</span>art job</span>
                             </button>
                           )}
                           {canComplete && (

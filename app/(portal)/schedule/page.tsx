@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -23,7 +23,7 @@ import { enUS } from "date-fns/locale/en-US";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "./schedule.css";
 import DaySwimLanes from "./day-swim-lanes";
-import JobDetailPanel from "@/components/job-detail-panel";
+import JobDetailPanel, { type JobDetailPanelHandle } from "@/components/job-detail-panel";
 
 /* ------------------------------------------------------------------ */
 /*  Localizer setup                                                     */
@@ -116,6 +116,8 @@ export default function SchedulePage() {
   const [selectedBookingId, setSelectedBookingId] = useState<Id<"bookings"> | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
 
+  const jobDetailRef = useRef<JobDetailPanelHandle>(null);
+
   const context = useQuery(api.schedule.getScheduleContext);
 
   const selectedJobDetail = useQuery(
@@ -129,6 +131,46 @@ export default function SchedulePage() {
     const t = setTimeout(() => setSuccessMessage(""), 3000);
     return () => clearTimeout(t);
   }, [successMessage]);
+
+  // Keyboard shortcuts for the job detail modal
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!selectedBookingId) return;
+
+      if (e.key === "Escape") {
+        if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
+        if (jobDetailRef.current?.handleEscape()) return;
+        setSelectedBookingId(null);
+        return;
+      }
+
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
+
+      // Delegate modal-specific keys (decline/complete/cancel confirmation)
+      if (jobDetailRef.current?.handleKeyDown(e)) {
+        e.preventDefault();
+        return;
+      }
+
+      // Action hotkeys — only when no sub-modal is open
+      if (selectedJobDetail && !jobDetailRef.current?.hasOpenModal()) {
+        const s = selectedJobDetail.status;
+        const isPending = s === "pending" || s === "pending_shop_acceptance";
+        const isActive = s === "confirmed" || s === "in_progress";
+        if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
+        if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
+        if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
+        if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
+        if (e.key === "a" && !isPending) { e.preventDefault(); jobDetailRef.current?.openAssignDropdown(); return; }
+        if (e.key === "t" && s === "confirmed" && selectedJobDetail.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
+        if (e.key === "s" && !isPending) { e.preventDefault(); jobDetailRef.current?.assignMechanic(); return; }
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [selectedBookingId, selectedJobDetail]);
 
   // Compute date range based on current view
   const dateRange = useMemo(() => {
@@ -433,6 +475,7 @@ export default function SchedulePage() {
           />
           <div className="relative bg-card rounded-xl border border-border shadow-xl w-full max-w-[480px] flex flex-col max-h-[90vh] overflow-hidden">
             <JobDetailPanel
+              ref={jobDetailRef}
               job={selectedJobDetail}
               mechanics={mechanics}
               onClose={() => setSelectedBookingId(null)}
@@ -440,13 +483,12 @@ export default function SchedulePage() {
               showJobsLink
             />
           </div>
-        </div>
-      )}
-
-      {/* Success toast */}
-      {successMessage && (
-        <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground">
-          {successMessage}
+          {/* Toast inside the modal's stacking context to preserve backdrop-blur */}
+          {successMessage && (
+            <div className="fixed bottom-6 right-6 bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground">
+              {successMessage}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -236,7 +236,7 @@ export const seedDashboardBookings = mutation({
       userIdx: number;
       vinIdx: number;
       serviceId: any;
-      mechanicId: any;
+      mechanicId?: any;
       scheduledTime: string;   // "HH:MM"
       status: string;
       liveStage?: string;
@@ -249,7 +249,7 @@ export const seedDashboardBookings = mutation({
 
       const timeSlotId = await ctx.db.insert("time_slots", {
         shop_id: args.shopId,
-        mechanic_id: mechanicId,
+        ...(mechanicId !== undefined ? { mechanic_id: mechanicId } : {}),
         date: today,
         start_time: scheduledTime,
         end_time: endTime,
@@ -261,7 +261,7 @@ export const seedDashboardBookings = mutation({
         user_id: userIds[userIdx],
         vin: demoVehicles[vinIdx].vin,
         shop_id: args.shopId,
-        mechanic_id: mechanicId,
+        ...(mechanicId !== undefined ? { mechanic_id: mechanicId } : {}),
         service_ids: [serviceId],
         time_slot_id: timeSlotId,
         scheduled_date: today,
@@ -330,7 +330,6 @@ export const seedDashboardBookings = mutation({
       userIdx: 3,
       vinIdx: 3,
       serviceId: brakePadsId,
-      mechanicId: mech0._id,
       scheduledTime: timeActive1,
       status: "pending",
       laborCost: 95,
@@ -343,7 +342,6 @@ export const seedDashboardBookings = mutation({
       userIdx: 6,
       vinIdx: 6,
       serviceId: alignmentId,
-      mechanicId: mech1._id,
       scheduledTime: timeActive2,
       status: "pending",
       laborCost: 89,
@@ -397,7 +395,6 @@ export const seedDashboardBookings = mutation({
       userIdx: 4,
       vinIdx: 4,
       serviceId: brakePadsId,
-      mechanicId: mech0._id,
       scheduledTime: timePending1,
       status: "pending",
       laborCost: 95,
@@ -410,7 +407,6 @@ export const seedDashboardBookings = mutation({
       userIdx: 5,
       vinIdx: 5,
       serviceId: acServiceId,
-      mechanicId: mech1._id,
       scheduledTime: timePending2,
       status: "pending",
       laborCost: 95,

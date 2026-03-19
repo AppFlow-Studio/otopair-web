@@ -257,6 +257,14 @@ export default function TeamPage() {
               </label>
               <Select
                 selectedKey={role}
+                onOpenChange={(isOpen) => {
+                  if (!isOpen) {
+                    requestAnimationFrame(() => {
+                      inviteFormRef.current?.focus();
+                      roleTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.blur();
+                    });
+                  }
+                }}
                 onSelectionChange={(key) => {
                   setRole(key as "shop_mechanic" | "shop_owner");
                   requestAnimationFrame(() => {

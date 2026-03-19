@@ -152,6 +152,7 @@ export default function JobsPage() {
   );
 
   const acceptJob = useMutation(api.bookings.accept);
+  const startJob = useMutation(api.bookings.start);
   const completeJob = useMutation(api.bookings.complete);
   const cancelJob = useMutation(api.bookings.cancel);
   const updateJob = useMutation(api.bookings.update);
@@ -290,6 +291,18 @@ export default function JobsPage() {
         }
         if (e.key === "d" || e.key === "Enter") { e.preventDefault(); handleDecline(); return; }
         if (e.key === "c") { e.preventDefault(); setShowDeclineModal(false); return; }
+        return;
+      }
+
+      if (showCompleteConfirm) {
+        if (e.key === "r") { e.preventDefault(); handleStatusAction("complete").then(() => setShowCompleteConfirm(false)); return; }
+        if (e.key === "c") { e.preventDefault(); setShowCompleteConfirm(false); return; }
+        return;
+      }
+
+      if (showCancelConfirm) {
+        if (e.key === "c") { e.preventDefault(); handleCancelJob(); return; }
+        if (e.key === "e") { e.preventDefault(); setShowCancelConfirm(false); return; }
         return;
       }
 
@@ -662,7 +675,7 @@ export default function JobsPage() {
                                       })()
                                     : job.mechanicName
                                 ) : (
-                                  <span className="text-muted-foreground">—</span>
+                                  <span className="italic text-muted-foreground/70">Unassigned</span>
                                 )}
                               </td>
                               <td className="px-3 py-4 text-muted-foreground whitespace-nowrap">
@@ -785,6 +798,14 @@ export default function JobsPage() {
                       <div ref={assignTriggerRef}>
                         <Select
                           selectedKey={assigningMechanicId || "unassigned"}
+                          onOpenChange={(isOpen) => {
+                            if (!isOpen) {
+                              requestAnimationFrame(() => {
+                                drawerPanelRef.current?.focus();
+                                assignTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.blur();
+                              });
+                            }
+                          }}
                           onSelectionChange={(key) => {
                             setAssigningMechanicId(key === "unassigned" ? "" : String(key));
                             requestAnimationFrame(() => {
@@ -848,13 +869,24 @@ export default function JobsPage() {
                             </button>
                           )}
                           {canStartJob && (
-                            // TODO: wire up a startJob mutation (transitions confirmed → in_progress)
                             <button
-                              disabled
-                              title="Coming soon"
-                              className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground opacity-50 cursor-not-allowed"
+                              onClick={async () => {
+                                setActionError("");
+                                setIsActioning(true);
+                                try {
+                                  await startJob({ bookingId: selectedJob._id });
+                                  setSuccessMessage("Job started");
+                                } catch (err: unknown) {
+                                  setActionError(err instanceof Error ? err.message : "Could not start job.");
+                                } finally {
+                                  setIsActioning(false);
+                                }
+                              }}
+                              disabled={!selectedJob.mechanicId || isActioning}
+                              title={selectedJob.mechanicId ? undefined : "Assign a mechanic first"}
+                              className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
                             >
-                              Start Job
+                              Start job
                             </button>
                           )}
                           {canComplete && (
@@ -999,7 +1031,7 @@ export default function JobsPage() {
                 disabled={isActioning}
                 className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
               >
-                Cancel
+                <span><span style={{ textDecorationLine: "underline" }}>C</span>ancel</span>
               </button>
               <button
                 onClick={async () => {
@@ -1010,7 +1042,7 @@ export default function JobsPage() {
                 className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
               >
                 {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {isActioning ? "Completing…" : "Mark completed"}
+                {isActioning ? "Completing…" : <span>Ma<span style={{ textDecorationLine: "underline" }}>r</span>k completed</span>}
               </button>
             </div>
           </div>
@@ -1037,7 +1069,7 @@ export default function JobsPage() {
                 disabled={isActioning}
                 className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
               >
-                Keep job
+                <span>K<span style={{ textDecorationLine: "underline" }}>e</span>ep job</span>
               </button>
               <button
                 onClick={handleCancelJob}
@@ -1045,7 +1077,7 @@ export default function JobsPage() {
                 className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
               >
                 {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {isActioning ? "Cancelling…" : "Cancel job"}
+                {isActioning ? "Cancelling…" : <span><span style={{ textDecorationLine: "underline" }}>C</span>ancel job</span>}
               </button>
             </div>
           </div>

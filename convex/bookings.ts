@@ -804,7 +804,7 @@ export const update = mutation({
   },
 });
 
-/** Job CRUD: accept pending booking — moves it directly into active/in_progress state. */
+/** Job CRUD: accept pending booking — moves it to confirmed state. */
 export const accept = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -820,6 +820,38 @@ export const accept = mutation({
     }
 
     await ctx.db.patch(booking._id, {
+      status: "confirmed",
+      live_stage: "confirmed",
+      updated_at: Date.now(),
+    });
+    await logBookingStatusChange(
+      ctx,
+      booking._id,
+      booking.status,
+      "confirmed",
+      user._id,
+      "accepted_by_shop"
+    );
+
+    return booking._id;
+  },
+});
+
+/** Job CRUD: start confirmed booking — moves it to in_progress. */
+export const start = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    if (booking.status !== "confirmed") {
+      throw new Error("Only confirmed jobs can be started");
+    }
+
+    await ctx.db.patch(booking._id, {
       status: "in_progress",
       live_stage: "service_in_progress",
       updated_at: Date.now(),
@@ -830,7 +862,7 @@ export const accept = mutation({
       booking.status,
       "in_progress",
       user._id,
-      "accepted_by_shop"
+      "started_by_shop"
     );
 
     return booking._id;

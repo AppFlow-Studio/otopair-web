@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -111,8 +112,8 @@ export default function JobsPage() {
   const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("all");
   const [customerFilter, setCustomerFilter] = useState("");
   const [vehicleFilter, setVehicleFilter] = useState("");
-  const [serviceFilter, setServiceFilter] = useState("");
-  const [mechanicFilter, setMechanicFilter] = useState("");
+  const [serviceFilter, setServiceFilter] = useState<string[]>([]);
+  const [mechanicFilter, setMechanicFilter] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState(todayString);
   const [timeFrom, setTimeFrom] = useState("");
   const [dateTo, setDateTo] = useState(todayString);
@@ -129,6 +130,10 @@ export default function JobsPage() {
   const [showDeclineModal, setShowDeclineModal] = useState(false);
   const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
   const declineTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const customerFilterRef = useRef<{ open: () => void }>(null);
+  const vehicleFilterRef = useRef<{ open: () => void }>(null);
+  const serviceFilterRef = useRef<{ open: () => void }>(null);
+  const mechanicFilterRef = useRef<{ open: () => void }>(null);
   const [declineOtherText, setDeclineOtherText] = useState("");
 
   // Complete confirmation modal
@@ -186,8 +191,8 @@ export default function JobsPage() {
       }
       if (customerFilter && !j.customerName.toLowerCase().includes(customerFilter.toLowerCase()) && !j.customerEmail.toLowerCase().includes(customerFilter.toLowerCase())) return false;
       if (vehicleFilter && !j.vehicle.toLowerCase().includes(vehicleFilter.toLowerCase())) return false;
-      if (serviceFilter && !j.serviceNames.some((s) => s === serviceFilter)) return false;
-      if (mechanicFilter && (j.mechanicName ?? "") !== mechanicFilter) return false;
+      if (serviceFilter.length > 0 && !j.serviceNames.some((s) => serviceFilter.includes(s))) return false;
+      if (mechanicFilter.length > 0 && !mechanicFilter.includes(j.mechanicName ?? "")) return false;
       if (dateFrom) {
         const jobDateTime = j.scheduledDate + "T" + (j.scheduledTime || "00:00");
         const fromDateTime = dateFrom + "T" + (timeFrom || "00:00");
@@ -204,14 +209,14 @@ export default function JobsPage() {
 
   const today = todayString();
   const isDefaultDateRange = dateFrom === today && dateTo === today && !timeFrom && !timeTo;
-  const hasAnyFilter = statusFilter !== "all" || customerFilter || vehicleFilter || serviceFilter || mechanicFilter || !isDefaultDateRange;
+  const hasAnyFilter = statusFilter !== "all" || customerFilter || vehicleFilter || serviceFilter.length > 0 || mechanicFilter.length > 0 || !isDefaultDateRange;
 
   function clearAllFilters() {
     setStatusFilter("all");
     setCustomerFilter("");
     setVehicleFilter("");
-    setServiceFilter("");
-    setMechanicFilter("");
+    setServiceFilter([]);
+    setMechanicFilter([]);
     setDateFrom(today);
     setTimeFrom("");
     setDateTo(today);
@@ -250,6 +255,7 @@ export default function JobsPage() {
     function onKeyDown(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if ((e.target as HTMLElement).closest("[data-filter-dropdown]")) return;
 
       if (e.key === "Escape") {
         if (showDeclineModal) { setShowDeclineModal(false); return; }
@@ -308,6 +314,14 @@ export default function JobsPage() {
         if (e.key === "d" && isPending) { e.preventDefault(); setShowDeclineModal(true); return; }
         if (e.key === "a" && isActive) { e.preventDefault(); setShowCompleteConfirm(true); return; }
         if (e.key === "c" && isActive) { e.preventDefault(); setShowCancelConfirm(true); return; }
+      }
+
+      // Filter hotkeys — only when drawer is closed and no modal is active
+      if (!selectedJobId && !showDeclineModal && !showCompleteConfirm && !showCancelConfirm) {
+        if (e.key === "c") { e.preventDefault(); customerFilterRef.current?.open(); return; }
+        if (e.key === "v") { e.preventDefault(); vehicleFilterRef.current?.open(); return; }
+        if (e.key === "s") { e.preventDefault(); serviceFilterRef.current?.open(); return; }
+        if (e.key === "m") { e.preventDefault(); mechanicFilterRef.current?.open(); return; }
       }
     }
     document.addEventListener("keydown", onKeyDown);
@@ -460,24 +474,28 @@ export default function JobsPage() {
                 <div className="flex items-center justify-between px-5 py-3 border-b border-border">
                   <div className="flex items-center gap-2 flex-wrap">
                     <TextFilterPill
+                      ref={customerFilterRef}
                       label="Customer"
                       value={customerFilter}
                       onChange={setCustomerFilter}
                       placeholder="Search by name or email…"
                     />
                     <TextFilterPill
+                      ref={vehicleFilterRef}
                       label="Vehicle"
                       value={vehicleFilter}
                       onChange={setVehicleFilter}
                       placeholder="Search by vehicle…"
                     />
                     <DropdownFilterPill
+                      ref={serviceFilterRef}
                       label="Service"
                       value={serviceFilter}
                       options={uniqueServices}
                       onChange={setServiceFilter}
                     />
                     <DropdownFilterPill
+                      ref={mechanicFilterRef}
                       label="Mechanic"
                       value={mechanicFilter}
                       options={uniqueMechanics}
@@ -1027,37 +1045,33 @@ export default function JobsPage() {
 /*  Filter pill components                                             */
 /* ------------------------------------------------------------------ */
 
-function useClickOutside(ref: React.RefObject<HTMLElement | null>, handler: () => void) {
+function useClickOutside(refs: React.RefObject<HTMLElement | null> | React.RefObject<HTMLElement | null>[], handler: () => void) {
   useEffect(() => {
+    const refsArr = Array.isArray(refs) ? refs : [refs];
     function onMouseDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) handler();
+      if (refsArr.every((r) => r.current && !r.current.contains(e.target as Node))) handler();
     }
     document.addEventListener("mousedown", onMouseDown);
     return () => document.removeEventListener("mousedown", onMouseDown);
-  }, [ref, handler]);
+  }, [refs, handler]);
 }
 
 /** Text search filter pill */
-function TextFilterPill({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
+const TextFilterPill = forwardRef<
+  { open: () => void },
+  { label: string; value: string; onChange: (v: string) => void; placeholder?: string }
+>(function TextFilterPill({ label, value, onChange, placeholder }, ref) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
-  useClickOutside(ref, close);
+  useClickOutside(containerRef, close);
+
+  useImperativeHandle(ref, () => ({ open: () => setOpen(true) }));
 
   const hasValue = !!value;
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative" ref={containerRef}>
       <button
         onClick={() => setOpen(!open)}
         className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-full border transition-colors ${
@@ -1082,7 +1096,7 @@ function TextFilterPill({
         ) : (
           <>
             <Search className="w-3 h-3" />
-            {label}
+            <span><span style={{ textDecorationLine: "underline" }}>{label[0]}</span>{label.slice(1)}</span>
           </>
         )}
       </button>
@@ -1094,6 +1108,14 @@ function TextFilterPill({
             type="text"
             value={value}
             onChange={(e) => onChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                e.currentTarget.blur();
+                setOpen(false);
+              }
+            }}
             placeholder={placeholder}
             className="w-full text-xs px-3 py-2 rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           />
@@ -1101,31 +1123,52 @@ function TextFilterPill({
       )}
     </div>
   );
-}
+});
 
-/** Dropdown select filter pill */
-function DropdownFilterPill({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (v: string) => void;
-}) {
+/** Dropdown multi-select filter pill */
+const DropdownFilterPill = forwardRef<
+  { open: () => void },
+  { label: string; value: string[]; options: string[]; onChange: (v: string[]) => void }
+>(function DropdownFilterPill({ label, value, options, onChange }, ref) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useClickOutside(ref, close);
+  const [focusedIndex, setFocusedIndex] = useState(-1);
+  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => { setOpen(false); setFocusedIndex(-1); }, []);
+  useClickOutside([containerRef, listRef], close);
 
-  const hasValue = !!value;
+  function openDropdown() {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setDropdownPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setFocusedIndex(-1);
+    setOpen(true);
+  }
+
+  useImperativeHandle(ref, () => ({
+    open: () => { openDropdown(); setFocusedIndex(0); },
+  }));
+
+  // Focus the list container when opened via keyboard so it captures key events
+  useEffect(() => {
+    if (open) listRef.current?.focus();
+  }, [open]);
+
+  function toggle(opt: string) {
+    onChange(value.includes(opt) ? value.filter((v) => v !== opt) : [...value, opt]);
+  }
+
+  const hasValue = value.length > 0;
+  const pillLabel = value.length === 1 ? value[0] : `${value.length} selected`;
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative" ref={containerRef}>
       <button
-        onClick={() => setOpen(!open)}
+        ref={triggerRef}
+        onClick={() => { open ? close() : openDropdown(); }}
         className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-full border transition-colors ${
           hasValue
             ? "font-medium text-primary border-primary/30 bg-primary/5"
@@ -1134,11 +1177,11 @@ function DropdownFilterPill({
       >
         {hasValue ? (
           <>
-            {label}: {value}
+            {label}: {pillLabel}
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onChange("");
+                onChange([]);
               }}
               className="ml-0.5 p-1.5 -m-1.5 hover:text-primary/70"
             >
@@ -1148,38 +1191,74 @@ function DropdownFilterPill({
         ) : (
           <>
             <ChevronDown className="w-3 h-3" />
-            {label}
+            <span><span style={{ textDecorationLine: "underline" }}>{label[0]}</span>{label.slice(1)}</span>
           </>
         )}
       </button>
 
-      {open && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg py-1 min-w-40 max-h-52 overflow-y-auto">
+      {open && createPortal(
+        <div
+          ref={listRef}
+          tabIndex={-1}
+          data-filter-dropdown
+          style={{ position: "fixed", top: dropdownPos.top, left: dropdownPos.left }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              e.stopPropagation();
+              setFocusedIndex((i) => Math.min(i + 1, options.length - 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              e.stopPropagation();
+              setFocusedIndex((i) => Math.max(i - 1, 0));
+            } else if (e.key === "Enter" && focusedIndex >= 0) {
+              e.preventDefault();
+              e.stopPropagation();
+              toggle(options[focusedIndex]);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              setOpen(false);
+              setFocusedIndex(-1);
+            }
+          }}
+          className="z-[100] bg-card border border-border rounded-lg shadow-lg py-1 w-48 max-h-52 overflow-y-auto outline-none"
+        >
           {options.length === 0 ? (
             <p className="px-3 py-2 text-xs text-muted-foreground">No options</p>
           ) : (
-            options.map((opt) => (
-              <button
-                key={opt}
-                onClick={() => {
-                  onChange(opt);
-                  setOpen(false);
-                }}
-                className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
-                  value === opt
-                    ? "bg-primary/10 text-primary font-medium"
-                    : "text-foreground hover:bg-muted/50"
-                }`}
-              >
-                {opt}
-              </button>
-            ))
+            options.map((opt, idx) => {
+              const selected = value.includes(opt);
+              return (
+                <button
+                  key={opt}
+                  onClick={() => toggle(opt)}
+                  className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center gap-2 ${
+                    idx === focusedIndex
+                      ? "bg-primary/10 text-primary font-medium"
+                      : selected
+                      ? "text-primary font-medium"
+                      : "text-foreground hover:bg-muted/50"
+                  }`}
+                >
+                  <span className="w-3 h-3 shrink-0 flex items-center justify-center">
+                    {selected && (
+                      <svg viewBox="0 0 10 8" className="w-3 h-2.5 text-primary">
+                        <path d="M1 4l2.5 2.5L9 1" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    )}
+                  </span>
+                  {opt}
+                </button>
+              );
+            })
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
-}
+});
 
 /** Date & time range filter pill */
 function DateTimeFilterPill({

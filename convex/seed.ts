@@ -47,10 +47,6 @@ export const seedDashboardBookings = mutation({
     const now = Date.now();
     const today = new Date(now).toISOString().split("T")[0]; // "YYYY-MM-DD"
 
-    // Current time as minutes since midnight (UTC) so we can place bookings relative to "now"
-    const d = new Date(now);
-    const nowMinutes = d.getUTCHours() * 60 + d.getUTCMinutes();
-
     // ── Optional clear ────────────────────────────────────────────────────────
     if (args.clearExisting ?? false) {
       const existing = await ctx.db
@@ -78,6 +74,20 @@ export const seedDashboardBookings = mutation({
             .collect();
           for (const o of owners) await ctx.db.delete(o._id);
           await ctx.db.delete(u._id);
+        }
+      }
+      // Clean up demo mechanics created by a previous seed run
+      const DEMO_MECHANIC_NAMES = [
+        { first: "Mike", last: "Turner" },
+        { first: "Sarah", last: "Jenkins" },
+      ];
+      const allMechanics = await ctx.db
+        .query("mechanics")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      for (const m of allMechanics) {
+        if (DEMO_MECHANIC_NAMES.some((n) => n.first === m.first_name && n.last === m.last_name)) {
+          await ctx.db.delete(m._id);
         }
       }
     }
@@ -124,37 +134,32 @@ export const seedDashboardBookings = mutation({
     const acServiceId    = await ensureService("ac-service",        "AC System Service",    "Maintenance");
 
     // ── Mechanics ─────────────────────────────────────────────────────────────
-    // Use existing mechanics for this shop. If none, create two demo ones.
-    let shopMechanics = await ctx.db
+    // Only use mechanics with an active shop_users record (mirrors the Jobs page dropdown logic).
+    // Removing a team member sets is_active=false on shop_users, not on the mechanics record.
+    const activeShopUsers = await ctx.db
+      .query("shop_users")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("is_active"), true),
+          q.neq(q.field("mechanic_id"), undefined),
+          q.neq(q.field("accepted_at"), undefined),
+          q.or(
+            q.eq(q.field("role"), "shop_mechanic"),
+            q.eq(q.field("role"), "mechanic")
+          )
+        )
+      )
+      .collect();
+    const activeMechanicIds = new Set(activeShopUsers.map((su) => su.mechanic_id as string));
+    const shopMechanics = (await ctx.db
       .query("mechanics")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
-      .collect();
+      .collect()
+    ).filter((m) => activeMechanicIds.has(m._id));
 
-    if (shopMechanics.length === 0) {
-      const m1Id = await ctx.db.insert("mechanics", {
-        shop_id: args.shopId,
-        first_name: "Mike",
-        last_name: "Turner",
-        is_active: true,
-        rating: 4.8,
-        review_count: 42,
-      });
-      const m2Id = await ctx.db.insert("mechanics", {
-        shop_id: args.shopId,
-        first_name: "Sarah",
-        last_name: "Jenkins",
-        is_active: true,
-        rating: 4.7,
-        review_count: 31,
-      });
-      shopMechanics = [
-        (await ctx.db.get(m1Id))!,
-        (await ctx.db.get(m2Id))!,
-      ];
-    }
-
-    const mech0 = shopMechanics[0];
-    const mech1 = shopMechanics[1] ?? shopMechanics[0];
+    const mech0 = shopMechanics[0] as (typeof shopMechanics)[0] | undefined;
+    const mech1 = (shopMechanics[1] ?? shopMechanics[0]) as (typeof shopMechanics)[0] | undefined;
 
     // ── Demo users + vehicles ─────────────────────────────────────────────────
     const demoVehicles = [
@@ -287,23 +292,23 @@ export const seedDashboardBookings = mutation({
       return bookingId;
     };
 
-    // Times relative to "now" (UTC) so the mix is correct at any hour
-    const timeCompleted1 = minutesToTime(nowMinutes - 180);  // 3h ago
-    const timeCompleted2 = minutesToTime(nowMinutes - 120);  // 2h ago
-    const timeActive1    = minutesToTime(nowMinutes - 60);   // 1h ago — in progress
-    const timeActive2    = minutesToTime(nowMinutes - 15);   // 15 min ago — nearly done
-    const timeLater1     = minutesToTime(nowMinutes + 60);   // in 1h
-    const timeLater2     = minutesToTime(nowMinutes + 120);  // in 2h
-    const timeLater3     = minutesToTime(nowMinutes + 180);  // in 3h
-    const timePending1   = minutesToTime(nowMinutes + 90);   // in 1.5h
-    const timePending2   = minutesToTime(nowMinutes + 240);  // in 4h
+    // Fixed booking times — always the same regardless of when the seed runs
+    const timeCompleted1 = "08:00";
+    const timeCompleted2 = "09:30";
+    const timeActive1    = "10:00";
+    const timeActive2    = "11:00";
+    const timeLater1     = "12:00";
+    const timeLater2     = "13:30";
+    const timeLater3     = "15:00";
+    const timePending1   = "14:00";
+    const timePending2   = "16:00";
 
     // ── Completed earlier today ───────────────────────────────────────────────
     await createBooking({
       userIdx: 0,
       vinIdx: 0,
       serviceId: oilChangeId,
-      mechanicId: mech0._id,
+      mechanicId: mech0?._id,
       scheduledTime: timeCompleted1,
       status: "completed",
       laborCost: 47.5,
@@ -316,7 +321,7 @@ export const seedDashboardBookings = mutation({
       userIdx: 1,
       vinIdx: 1,
       serviceId: tireRotationId,
-      mechanicId: mech1._id,
+      mechanicId: mech1?._id,
       scheduledTime: timeCompleted2,
       status: "completed",
       laborCost: 30,
@@ -355,7 +360,7 @@ export const seedDashboardBookings = mutation({
       userIdx: 0,
       vinIdx: 0,
       serviceId: oilChangeId,
-      mechanicId: mech0._id,
+      mechanicId: mech0?._id,
       scheduledTime: timeLater1,
       status: "confirmed",
       laborCost: 47.5,
@@ -368,7 +373,7 @@ export const seedDashboardBookings = mutation({
       userIdx: 1,
       vinIdx: 1,
       serviceId: brakePadsId,
-      mechanicId: mech1._id,
+      mechanicId: mech1?._id,
       scheduledTime: timeLater2,
       status: "confirmed",
       laborCost: 95,
@@ -381,7 +386,7 @@ export const seedDashboardBookings = mutation({
       userIdx: 2,
       vinIdx: 2,
       serviceId: tireRotationId,
-      mechanicId: mech0._id,
+      mechanicId: mech0?._id,
       scheduledTime: timeLater3,
       status: "confirmed",
       laborCost: 30,
@@ -419,7 +424,6 @@ export const seedDashboardBookings = mutation({
       success: true,
       shopId: args.shopId,
       date: today,
-      nowMinutes,
       created: {
         completed: 2,
         activeJobs: 0,

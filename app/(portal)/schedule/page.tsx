@@ -6,10 +6,8 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   Calendar as CalendarIcon,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Clock,
   Loader2,
   X,
 } from "lucide-react";
@@ -26,6 +24,7 @@ import { format, parse, startOfWeek, getDay, addDays, subDays, startOfMonth, end
 import { enUS } from "date-fns/locale/en-US";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "./schedule.css";
+import DaySwimLanes from "./day-swim-lanes";
 
 /* ------------------------------------------------------------------ */
 /*  Localizer setup                                                     */
@@ -127,7 +126,6 @@ export default function SchedulePage() {
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("week");
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
-  const [hoursExpanded, setHoursExpanded] = useState(false);
   const [showDeclineModal, setShowDeclineModal] = useState(false);
   const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
   const [declineOtherText, setDeclineOtherText] = useState("");
@@ -179,26 +177,24 @@ export default function SchedulePage() {
       });
   }, [bookings, mechanicFilter]);
 
-  // Shop hours → min/max time for the calendar
-  const { minTime, maxTime } = useMemo(() => {
-    if (!context?.hours) return { minTime: new Date(0, 0, 0, 8, 0), maxTime: new Date(0, 0, 0, 18, 0) };
-
-    let earliest = 24;
-    let latest = 0;
-    for (const h of context.hours) {
-      if (h.isClosed) continue;
-      const [oh] = h.openTime.split(":").map(Number);
-      const [ch] = h.closeTime.split(":").map(Number);
-      if (oh < earliest) earliest = oh;
-      if (ch > latest) latest = ch;
+  // Day view: determine which mechanics to show as columns
+  const dayViewMechanics = useMemo(() => {
+    if (!context?.mechanics) return [];
+    if (mechanicFilter !== "all") {
+      // Single mechanic selected — return just that one
+      return context.mechanics.filter((m) => m._id === mechanicFilter);
     }
-    if (earliest >= latest) { earliest = 8; latest = 18; }
+    return context.mechanics;
+  }, [context?.mechanics, mechanicFilter]);
 
-    return {
-      minTime: new Date(0, 0, 0, earliest, 0),
-      maxTime: new Date(0, 0, 0, latest, 0),
-    };
-  }, [context?.hours]);
+  // Use swim lanes when in day view and there are 2+ columns (mechanics + possibly unassigned)
+  const hasUnassignedEvents = events.some((e) => !e.resourceId);
+  const dayColumnCount = dayViewMechanics.length + (hasUnassignedEvents ? 1 : 0);
+  const useDaySwimLanes = dayColumnCount > 1;
+
+  // Full 24-hour range for day/week views
+  const minTime = new Date(0, 0, 0, 0, 0);
+  const maxTime = new Date(0, 0, 0, 23, 59);
 
   // Navigation handlers
   const handleNavigate = useCallback((date: Date) => {
@@ -223,9 +219,12 @@ export default function SchedulePage() {
     else setCurrentDate((d) => addDays(d, 1));
   }, [currentView]);
 
-  // Custom event component
+  // Custom event component — abbreviated in week view
   const EventComponent = useCallback(({ event }: { event: CalendarEvent }) => {
     const colors = statusColors[event.status ?? "confirmed"] ?? statusColors.confirmed;
+    const customerDisplay = currentView === "week"
+      ? (event.customerName?.split(" ")[0] ?? "")
+      : (event.customerName ?? "");
     return (
       <div
         className="px-1.5 py-0.5 rounded text-[11px] leading-tight overflow-hidden h-full"
@@ -235,11 +234,11 @@ export default function SchedulePage() {
           borderLeft: `3px solid ${colors.border}`,
         }}
       >
-        <p className="font-medium truncate">{event.customerName}</p>
+        <p className="font-medium truncate">{customerDisplay}</p>
         <p className="truncate opacity-80">{event.serviceNames?.join(", ")}</p>
       </div>
     );
-  }, []);
+  }, [currentView]);
 
   // Custom toolbar — we render our own
   const CustomToolbar = useCallback(() => null, []);
@@ -346,46 +345,6 @@ export default function SchedulePage() {
         </div>
       </div>
 
-      {/* Shop hours summary — collapsed by default */}
-      <div className="bg-card border border-border rounded-xl p-4">
-        <button
-          onClick={() => setHoursExpanded((v) => !v)}
-          className="flex items-center gap-2 w-full text-left"
-        >
-          <Clock className="w-4 h-4 text-primary shrink-0" />
-          <span className="text-sm font-semibold text-foreground">Operating Hours</span>
-          <span className="text-sm text-muted-foreground ml-1">{computeHoursSummary(context.hours)}</span>
-          <ChevronDown
-            className={`w-4 h-4 text-muted-foreground ml-auto shrink-0 transition-transform duration-200 ${hoursExpanded ? "rotate-180" : ""}`}
-          />
-        </button>
-        <div
-          className="overflow-hidden transition-all duration-300"
-          style={{ maxHeight: hoursExpanded ? "200px" : "0px" }}
-        >
-          <div className="grid grid-cols-7 gap-2 mt-3">
-            {context.hours.map((h) => (
-              <div
-                key={h._id}
-                className={`text-center px-2 py-2 rounded-lg text-xs ${
-                  h.isClosed
-                    ? "bg-muted/50 text-muted-foreground"
-                    : "bg-primary/5 text-foreground"
-                }`}
-              >
-                <p className="font-medium">{h.dayName.slice(0, 3)}</p>
-                {h.isClosed ? (
-                  <p className="text-muted-foreground mt-0.5">Closed</p>
-                ) : (
-                  <p className="mt-0.5">
-                    {formatTimeDisplay(h.openTime)} – {formatTimeDisplay(h.closeTime)}
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
 
       {/* Calendar */}
       <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar relative">
@@ -399,7 +358,16 @@ export default function SchedulePage() {
             <p className="text-sm text-muted-foreground">No bookings scheduled</p>
           </div>
         ) : null}
-        {bookings !== undefined && (
+        {bookings !== undefined && currentView === "day" && useDaySwimLanes && (
+          <DaySwimLanes
+            mechanics={dayViewMechanics}
+            events={events}
+            minTime={minTime}
+            maxTime={maxTime}
+            onSelectEvent={setSelectedEvent}
+          />
+        )}
+        {bookings !== undefined && !(currentView === "day" && useDaySwimLanes) && (
           <Calendar
             localizer={localizer}
             events={events}

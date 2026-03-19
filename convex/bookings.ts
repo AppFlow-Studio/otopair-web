@@ -445,6 +445,7 @@ export const getMyShopJobContext = query({
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
       .filter((q: any) =>
         q.and(
+          q.eq(q.field("is_active"), true),
           q.neq(q.field("mechanic_id"), undefined),
           q.neq(q.field("accepted_at"), undefined),
           q.or(

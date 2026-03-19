@@ -1,14 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   ChevronLeft,
   ChevronRight,
   Loader2,
-  X,
 } from "lucide-react";
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
 import {
@@ -24,6 +23,7 @@ import { enUS } from "date-fns/locale/en-US";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "./schedule.css";
 import DaySwimLanes from "./day-swim-lanes";
+import JobDetailPanel from "@/components/job-detail-panel";
 
 /* ------------------------------------------------------------------ */
 /*  Localizer setup                                                     */
@@ -55,12 +55,12 @@ interface CalendarEvent {
 /* ------------------------------------------------------------------ */
 
 const statusColors: Record<string, { bg: string; text: string; border: string }> = {
-  pending_shop_acceptance: { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" }, /* amber (extension) */
-  pending:                 { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" }, /* amber (extension) */
-  confirmed:              { bg: "rgb(224 231 255)", text: "rgb(99 102 241)", border: "rgb(165 180 252)" }, /* --accent / --primary */
-  in_progress:            { bg: "rgb(236 253 245)", text: "rgb(5 150 105)", border: "rgb(110 231 183)" }, /* emerald (extension) */
-  completed:              { bg: "rgb(243 244 246)", text: "rgb(107 114 128)", border: "rgb(209 213 219)" }, /* --muted / --muted-foreground */
-  blocked:                { bg: "rgb(254 242 242)", text: "rgb(239 68 68)", border: "rgb(252 165 165)" },  /* --destructive */
+  pending_shop_acceptance: { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
+  pending:                 { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
+  confirmed:              { bg: "rgb(224 231 255)", text: "rgb(99 102 241)", border: "rgb(165 180 252)" },
+  in_progress:            { bg: "rgb(236 253 245)", text: "rgb(5 150 105)", border: "rgb(110 231 183)" },
+  completed:              { bg: "rgb(243 244 246)", text: "rgb(107 114 128)", border: "rgb(209 213 219)" },
+  blocked:                { bg: "rgb(254 242 242)", text: "rgb(239 68 68)", border: "rgb(252 165 165)" },
 };
 
 const statusLabel: Record<string, string> = {
@@ -71,23 +71,12 @@ const statusLabel: Record<string, string> = {
   completed: "Completed",
 };
 
-const DECLINE_REASONS = [
-  "Mechanic unavailable",
-  "Can't service this vehicle",
-  "Scheduling conflict",
-  "Other",
-];
-
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
 function formatDateRange(date: Date): string {
   return format(date, "MMMM yyyy");
-}
-
-function todayString() {
-  return format(new Date(), "yyyy-MM-dd");
 }
 
 function dateToString(d: Date) {
@@ -123,19 +112,23 @@ function getDayRange(date: Date) {
 export default function SchedulePage() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("week");
-  const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
-  const [showDeclineModal, setShowDeclineModal] = useState(false);
-  const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
-  const [declineOtherText, setDeclineOtherText] = useState("");
-  const [isActioning, setIsActioning] = useState(false);
-  const [actionError, setActionError] = useState("");
-  const declineTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [selectedBookingId, setSelectedBookingId] = useState<Id<"bookings"> | null>(null);
+  const [successMessage, setSuccessMessage] = useState("");
 
   const context = useQuery(api.schedule.getScheduleContext);
-  const acceptJob = useMutation(api.bookings.accept);
-  const completeJob = useMutation(api.bookings.complete);
-  const cancelJob = useMutation(api.bookings.cancel);
+
+  const selectedJobDetail = useQuery(
+    api.bookings.getJobDetail,
+    selectedBookingId ? { bookingId: selectedBookingId } : "skip"
+  );
+
+  // Auto-clear success toast after 3s
+  useEffect(() => {
+    if (!successMessage) return;
+    const t = setTimeout(() => setSuccessMessage(""), 3000);
+    return () => clearTimeout(t);
+  }, [successMessage]);
 
   // Compute date range based on current view
   const dateRange = useMemo(() => {
@@ -180,7 +173,6 @@ export default function SchedulePage() {
   const dayViewMechanics = useMemo(() => {
     if (!context?.mechanics) return [];
     if (mechanicFilter !== "all") {
-      // Single mechanic selected — return just that one
       return context.mechanics.filter((m) => m._id === mechanicFilter);
     }
     return context.mechanics;
@@ -241,6 +233,8 @@ export default function SchedulePage() {
 
   // Custom toolbar — we render our own
   const CustomToolbar = useCallback(() => null, []);
+
+  const mechanics = context?.mechanics ?? [];
 
   if (context === undefined) {
     return (
@@ -358,7 +352,7 @@ export default function SchedulePage() {
             events={events}
             minTime={minTime}
             maxTime={maxTime}
-            onSelectEvent={setSelectedEvent}
+            onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
           />
         )}
         {bookings !== undefined && !(currentView === "day" && useDaySwimLanes) && (
@@ -377,7 +371,7 @@ export default function SchedulePage() {
             step={30}
             timeslots={2}
             style={{ height: "calc(100vh - 320px)", minHeight: 500 }}
-            onSelectEvent={(event) => setSelectedEvent(event as CalendarEvent)}
+            onSelectEvent={(event) => setSelectedBookingId((event as CalendarEvent).id as Id<"bookings">)}
             formats={{
               dayFormat: (date: Date) => format(date, "EEE d"),
               weekdayFormat: (date: Date) => format(date, "EEE"),
@@ -430,255 +424,31 @@ export default function SchedulePage() {
         </div>
       </div>
 
-      {/* Event detail modal */}
-      {selectedEvent && selectedEvent.type === "booking" && (
+      {/* Job detail modal */}
+      {selectedBookingId && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={() => setSelectedEvent(null)}
+            onClick={() => setSelectedBookingId(null)}
           />
-          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-semibold text-foreground">Booking Details</h3>
-              <button
-                onClick={() => setSelectedEvent(null)}
-                className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3 text-sm">
-              <div>
-                <p className="text-xs text-muted-foreground">Customer</p>
-                <p className="font-medium text-foreground">{selectedEvent.customerName}</p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Services</p>
-                <p className="font-medium text-foreground">
-                  {selectedEvent.serviceNames?.join(", ") || "—"}
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-xs text-muted-foreground">Date & Time</p>
-                  <p className="font-medium text-foreground">
-                    {format(selectedEvent.start, "MMM d, h:mm a")}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Duration</p>
-                  <p className="font-medium text-foreground">
-                    {Math.round((selectedEvent.end.getTime() - selectedEvent.start.getTime()) / 60000)}m
-                  </p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-xs text-muted-foreground">Mechanic</p>
-                  <p className="font-medium text-foreground">
-                    {selectedEvent.mechanicName || "Unassigned"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Total</p>
-                  <p className="font-medium text-foreground">
-                    ${selectedEvent.totalCost?.toFixed(2) ?? "0.00"}
-                  </p>
-                </div>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Status</p>
-                <span
-                  className="inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium mt-1"
-                  style={{
-                    backgroundColor: (statusColors[selectedEvent.status ?? "confirmed"] ?? statusColors.confirmed).bg,
-                    color: (statusColors[selectedEvent.status ?? "confirmed"] ?? statusColors.confirmed).text,
-                  }}
-                >
-                  {statusLabel[selectedEvent.status ?? "confirmed"] ?? selectedEvent.status}
-                </span>
-              </div>
-            </div>
-
-            {/* Inline actions */}
-            <div className="mt-5 space-y-3">
-              {actionError && (
-                <p className="text-xs text-destructive">{actionError}</p>
-              )}
-              <div className="flex gap-2">
-                {(selectedEvent.status === "pending" || selectedEvent.status === "pending_shop_acceptance") && (
-                  <>
-                    <button
-                      disabled={isActioning}
-                      onClick={async () => {
-                        setActionError("");
-                        setIsActioning(true);
-                        try {
-                          await acceptJob({ bookingId: selectedEvent.id as any });
-                          setSelectedEvent(null);
-                        } catch (err: unknown) {
-                          setActionError(err instanceof Error ? err.message : "Could not accept.");
-                        } finally {
-                          setIsActioning(false);
-                        }
-                      }}
-                      className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-                    >
-                      {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      Accept
-                    </button>
-                    <button
-                      disabled={isActioning}
-                      onClick={() => setShowDeclineModal(true)}
-                      className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-destructive/5 transition-colors disabled:opacity-50"
-                    >
-                      Decline
-                    </button>
-                  </>
-                )}
-                {(selectedEvent.status === "confirmed" || selectedEvent.status === "in_progress") && (
-                  <button
-                    disabled={isActioning}
-                    onClick={async () => {
-                      setActionError("");
-                      setIsActioning(true);
-                      try {
-                        await completeJob({ bookingId: selectedEvent.id as any });
-                        setSelectedEvent(null);
-                      } catch (err: unknown) {
-                        setActionError(err instanceof Error ? err.message : "Could not complete.");
-                      } finally {
-                        setIsActioning(false);
-                      }
-                    }}
-                    className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-                  >
-                    {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    Mark completed
-                  </button>
-                )}
-              </div>
-              {/* TODO: Jobs page does not yet support ?highlight= query param */}
-              <a
-                href={`/jobs?highlight=${selectedEvent.id}`}
-                className="text-xs text-primary hover:underline"
-              >
-                View full details in Jobs &rarr;
-              </a>
-            </div>
+          <div className="relative bg-card rounded-xl border border-border shadow-xl w-full max-w-[480px] flex flex-col max-h-[90vh] overflow-hidden">
+            <JobDetailPanel
+              job={selectedJobDetail}
+              mechanics={mechanics}
+              onClose={() => setSelectedBookingId(null)}
+              onSuccess={setSuccessMessage}
+              showJobsLink
+            />
           </div>
         </div>
       )}
 
-      {/* Decline reason modal */}
-      {showDeclineModal && selectedEvent && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={() => setShowDeclineModal(false)}
-          />
-          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
-            <h3 className="text-base font-semibold text-foreground mb-1">Decline this booking?</h3>
-            <p className="text-sm text-muted-foreground mb-4">Select a reason for declining:</p>
-            <div className="space-y-2.5 mb-4">
-              {DECLINE_REASONS.map((r) => (
-                <label key={r} className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="declineReason"
-                    value={r}
-                    checked={declineReason === r}
-                    onChange={() => setDeclineReason(r)}
-                    className="accent-primary"
-                  />
-                  <span className="text-sm text-foreground">{r}</span>
-                </label>
-              ))}
-            </div>
-            {declineReason === "Other" && (
-              <textarea
-                ref={declineTextareaRef}
-                value={declineOtherText}
-                onChange={(e) => setDeclineOtherText(e.target.value)}
-                placeholder="Please describe the reason…"
-                rows={2}
-                className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none mb-4"
-              />
-            )}
-            {actionError && (
-              <p className="text-xs text-destructive mb-3">{actionError}</p>
-            )}
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => { setShowDeclineModal(false); setActionError(""); }}
-                disabled={isActioning}
-                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  setActionError("");
-                  setIsActioning(true);
-                  const reason = declineReason === "Other" ? (declineOtherText.trim() || "Other") : declineReason;
-                  try {
-                    await cancelJob({ bookingId: selectedEvent.id as any, reason });
-                    setShowDeclineModal(false);
-                    setSelectedEvent(null);
-                    setDeclineReason(DECLINE_REASONS[0]);
-                    setDeclineOtherText("");
-                  } catch (err: unknown) {
-                    setActionError(err instanceof Error ? err.message : "Could not decline.");
-                  } finally {
-                    setIsActioning(false);
-                  }
-                }}
-                disabled={isActioning}
-                className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-              >
-                {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {isActioning ? "Declining…" : "Confirm Decline"}
-              </button>
-            </div>
-          </div>
+      {/* Success toast */}
+      {successMessage && (
+        <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground">
+          {successMessage}
         </div>
       )}
     </div>
   );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Utility                                                             */
-/* ------------------------------------------------------------------ */
-
-/** Compute a one-line summary like "Mon–Sat, 8 AM – 6 PM" from hours data. */
-function computeHoursSummary(hours: Array<{ dayName: string; isClosed: boolean; openTime: string; closeTime: string }>): string {
-  const open = hours.filter((h) => !h.isClosed);
-  if (open.length === 0) return "Closed every day";
-
-  const dayAbbrs = open.map((h) => h.dayName.slice(0, 3));
-  let dayRange: string;
-  if (dayAbbrs.length === 7) {
-    dayRange = "Every day";
-  } else if (dayAbbrs.length === 1) {
-    dayRange = dayAbbrs[0];
-  } else {
-    dayRange = `${dayAbbrs[0]}–${dayAbbrs[dayAbbrs.length - 1]}`;
-  }
-
-  // Check if all open days share the same hours
-  const allSame = open.every((h) => h.openTime === open[0].openTime && h.closeTime === open[0].closeTime);
-  if (allSame) {
-    return `${dayRange}, ${formatTimeDisplay(open[0].openTime)} – ${formatTimeDisplay(open[0].closeTime)}`;
-  }
-  return dayRange;
-}
-
-function formatTimeDisplay(hhmm: string): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  const ampm = h >= 12 ? "PM" : "AM";
-  const hour = h % 12 || 12;
-  if (m === 0) return `${hour} ${ampm}`;
-  return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
 }

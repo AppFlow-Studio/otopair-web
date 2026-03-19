@@ -2,19 +2,13 @@
 
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
 import { createPortal } from "react-dom";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Calendar, ChevronDown, ClipboardList, Loader2, Search, X } from "lucide-react";
+import { Calendar, ChevronDown, ClipboardList, Search, X } from "lucide-react";
 import { usePortalSidebar } from "../portal-context";
-import {
-  Select,
-  SelectItem,
-  SelectListBox,
-  SelectPopover,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import JobDetailPanel from "@/components/job-detail-panel";
+import type { JobDetailPanelHandle } from "@/components/job-detail-panel";
 
 /* ------------------------------------------------------------------ */
 /*  Types & constants                                                   */
@@ -57,13 +51,6 @@ const statusLabel: Record<string, string> = {
   declined: "Declined",
 };
 
-const DECLINE_REASONS = [
-  "Mechanic unavailable",
-  "Can't service this vehicle",
-  "Scheduling conflict",
-  "Other",
-];
-
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
@@ -100,10 +87,6 @@ function pendingCountdown(creationTime: number): string | null {
   return `${minutes}m left`;
 }
 
-function isSystemReason(reason: string): boolean {
-  return /_/.test(reason) || /^[a-z][a-z0-9]*$/.test(reason);
-}
-
 /* ------------------------------------------------------------------ */
 /*  Main page component                                                 */
 /* ------------------------------------------------------------------ */
@@ -120,33 +103,14 @@ export default function JobsPage() {
   const [timeTo, setTimeTo] = useState("");
 
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
-  const [assigningMechanicId, setAssigningMechanicId] = useState("");
-  const assignTriggerRef = useRef<HTMLDivElement>(null);
-  const drawerPanelRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-empty-function
-  const handleAssignMechanicRef = useRef<() => Promise<void>>(async () => {});
-  // eslint-disable-next-line @typescript-eslint/no-empty-function
-  const handleStartJobRef = useRef<() => Promise<void>>(async () => {});
-  const [actionError, setActionError] = useState<string>("");
   const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
-  const [isActioning, setIsActioning] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
 
-  // Decline modal
-  const [showDeclineModal, setShowDeclineModal] = useState(false);
-  const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
-  const declineTextareaRef = useRef<HTMLTextAreaElement>(null);
   const customerFilterRef = useRef<{ open: () => void }>(null);
   const vehicleFilterRef = useRef<{ open: () => void }>(null);
   const serviceFilterRef = useRef<{ open: () => void }>(null);
   const mechanicFilterRef = useRef<{ open: () => void }>(null);
-  const [declineOtherText, setDeclineOtherText] = useState("");
-
-  // Complete confirmation modal
-  const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
-
-  // Cancel confirmation modal (for confirmed/in_progress jobs)
-  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const jobDetailRef = useRef<JobDetailPanelHandle>(null);
 
   const context = useQuery(api.bookings.getMyShopJobContext);
   const allJobs = useQuery(api.bookings.listForMyShop, {});
@@ -155,18 +119,8 @@ export default function JobsPage() {
     selectedJobId ? { bookingId: selectedJobId } : "skip"
   );
 
-  const acceptJob = useMutation(api.bookings.accept);
-  const startJob = useMutation(api.bookings.start);
-  const completeJob = useMutation(api.bookings.complete);
-  const cancelJob = useMutation(api.bookings.cancel);
-  const updateJob = useMutation(api.bookings.update);
-
   const hasContext = !!context?.shopId;
   const mechanics = useMemo(() => context?.mechanics ?? [], [context?.mechanics]);
-  const selectedMechanicId = useMemo(
-    () => mechanics.find((m) => String(m._id) === assigningMechanicId)?._id,
-    [assigningMechanicId, mechanics]
-  );
 
   const uniqueServices = useMemo(() => {
     if (!allJobs) return [];
@@ -230,11 +184,6 @@ export default function JobsPage() {
     setTimeTo("");
   }
 
-  useEffect(() => {
-    if (!selectedJobId || !selectedJob) return;
-    setAssigningMechanicId(selectedJob.mechanicId ? String(selectedJob.mechanicId) : "");
-  }, [selectedJobId, selectedJob?.mechanicId]);
-
   // Auto-clear success toast after 3s
   useEffect(() => {
     if (!successMessage) return;
@@ -242,30 +191,14 @@ export default function JobsPage() {
     return () => clearTimeout(t);
   }, [successMessage]);
 
-  // Reset decline modal state when it closes
-  useEffect(() => {
-    if (!showDeclineModal) {
-      setDeclineReason(DECLINE_REASONS[0]);
-      setDeclineOtherText("");
-    }
-  }, [showDeclineModal]);
-
-  // Auto-focus the "Other" textarea when it appears
-  useEffect(() => {
-    if (showDeclineModal && declineReason === "Other") {
-      declineTextareaRef.current?.focus();
-    }
-  }, [showDeclineModal, declineReason]);
-
-  // Keyboard navigation — guard against firing inside form inputs
+  // Keyboard navigation
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         // If focus is inside the assign dropdown, let react-aria close it first
         if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
-        if (showDeclineModal) { setShowDeclineModal(false); return; }
-        if (showCompleteConfirm) { setShowCompleteConfirm(false); return; }
-        if (showCancelConfirm) { setShowCancelConfirm(false); return; }
+        // Let the component handle modal Escape
+        if (jobDetailRef.current?.handleEscape()) return;
         if (selectedJobId) { setSelectedJobId(null); return; }
         return;
       }
@@ -275,38 +208,9 @@ export default function JobsPage() {
       if ((e.target as HTMLElement).closest("[data-filter-dropdown]")) return;
       if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
 
-      // Decline modal keyboard nav
-      if (showDeclineModal) {
-        if (e.key === "ArrowDown") {
-          e.preventDefault();
-          setDeclineReason((prev) => {
-            const idx = DECLINE_REASONS.indexOf(prev);
-            return DECLINE_REASONS[Math.min(idx + 1, DECLINE_REASONS.length - 1)];
-          });
-          return;
-        }
-        if (e.key === "ArrowUp") {
-          e.preventDefault();
-          setDeclineReason((prev) => {
-            const idx = DECLINE_REASONS.indexOf(prev);
-            return DECLINE_REASONS[Math.max(idx - 1, 0)];
-          });
-          return;
-        }
-        if (e.key === "d" || e.key === "Enter") { e.preventDefault(); handleDecline(); return; }
-        if (e.key === "c") { e.preventDefault(); setShowDeclineModal(false); return; }
-        return;
-      }
-
-      if (showCompleteConfirm) {
-        if (e.key === "r") { e.preventDefault(); handleStatusAction("complete").then(() => setShowCompleteConfirm(false)); return; }
-        if (e.key === "c") { e.preventDefault(); setShowCompleteConfirm(false); return; }
-        return;
-      }
-
-      if (showCancelConfirm) {
-        if (e.key === "c") { e.preventDefault(); handleCancelJob(); return; }
-        if (e.key === "e") { e.preventDefault(); setShowCancelConfirm(false); return; }
+      // Delegate modal-specific keys to component
+      if (jobDetailRef.current?.handleKeyDown(e)) {
+        e.preventDefault();
         return;
       }
 
@@ -328,21 +232,21 @@ export default function JobsPage() {
       }
 
       // Drawer action hotkeys — only when drawer is open and no modal is active
-      if (selectedJob && !showDeclineModal && !showCompleteConfirm && !showCancelConfirm) {
+      if (selectedJob && !jobDetailRef.current?.hasOpenModal()) {
         const s = selectedJob.status;
         const isPending = s === "pending" || s === "pending_shop_acceptance";
         const isActive = s === "confirmed" || s === "in_progress";
-        if (e.key === "a" && isPending) { e.preventDefault(); handleStatusAction("accept"); return; }
-        if (e.key === "d" && isPending) { e.preventDefault(); setShowDeclineModal(true); return; }
-        if (e.key === "r" && isActive) { e.preventDefault(); setShowCompleteConfirm(true); return; }
-        if (e.key === "c" && isActive) { e.preventDefault(); setShowCancelConfirm(true); return; }
-        if (e.key === "a" && !isPending) { e.preventDefault(); assignTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.click(); return; }
-        if (e.key === "t" && s === "confirmed" && selectedJob.mechanicId) { e.preventDefault(); handleStartJobRef.current(); return; }
-        if (e.key === "s" && !isPending) { e.preventDefault(); handleAssignMechanicRef.current(); return; }
+        if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
+        if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
+        if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
+        if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
+        if (e.key === "a" && !isPending) { e.preventDefault(); jobDetailRef.current?.openAssignDropdown(); return; }
+        if (e.key === "t" && s === "confirmed" && selectedJob.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
+        if (e.key === "s" && !isPending) { e.preventDefault(); jobDetailRef.current?.assignMechanic(); return; }
       }
 
       // Filter hotkeys — only when drawer is closed and no modal is active
-      if (!selectedJobId && !showDeclineModal && !showCompleteConfirm && !showCancelConfirm) {
+      if (!selectedJobId) {
         if (e.key === "x") { e.preventDefault(); clearAllFilters(); return; }
         if (e.key === "c") { e.preventDefault(); customerFilterRef.current?.open(); return; }
         if (e.key === "v") { e.preventDefault(); vehicleFilterRef.current?.open(); return; }
@@ -352,95 +256,7 @@ export default function JobsPage() {
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [filteredJobs, focusedRowIndex, selectedJobId, selectedJob, showDeclineModal, showCompleteConfirm, showCancelConfirm]);
-
-  async function handleStatusAction(action: "accept" | "complete") {
-    if (!selectedJob?._id) return;
-    setActionError("");
-    setIsActioning(true);
-    try {
-      if (action === "accept") {
-        await acceptJob({ bookingId: selectedJob._id });
-        setSuccessMessage("Job accepted");
-      }
-      if (action === "complete") {
-        await completeJob({ bookingId: selectedJob._id });
-        setSuccessMessage("Job completed");
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Could not update status.";
-      setActionError(message);
-    } finally {
-      setIsActioning(false);
-    }
-  }
-
-  async function handleDecline() {
-    if (!selectedJob?._id) return;
-    setActionError("");
-    const reason = declineReason === "Other" ? (declineOtherText.trim() || "Other") : declineReason;
-    setIsActioning(true);
-    try {
-      await cancelJob({ bookingId: selectedJob._id, reason });
-      setShowDeclineModal(false);
-      setDeclineReason(DECLINE_REASONS[0]);
-      setDeclineOtherText("");
-      setSuccessMessage("Job declined");
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Could not decline job.";
-      setActionError(message);
-    } finally {
-      setIsActioning(false);
-    }
-  }
-
-  async function handleCancelJob() {
-    if (!selectedJob?._id) return;
-    setActionError("");
-    setIsActioning(true);
-    try {
-      await cancelJob({ bookingId: selectedJob._id, reason: "cancelled_by_shop" });
-      setShowCancelConfirm(false);
-      setSuccessMessage("Job cancelled");
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Could not cancel job.";
-      setActionError(message);
-    } finally {
-      setIsActioning(false);
-    }
-  }
-
-  async function handleAssignMechanic() {
-    if (!selectedJob?._id || !selectedMechanicId) return;
-    setActionError("");
-    setIsActioning(true);
-    try {
-      await updateJob({ bookingId: selectedJob._id, mechanicId: selectedMechanicId });
-      setAssigningMechanicId("");
-      setSuccessMessage("Mechanic assigned");
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Could not assign mechanic.";
-      setActionError(message);
-    } finally {
-      setIsActioning(false);
-    }
-  }
-  handleAssignMechanicRef.current = handleAssignMechanic;
-
-  async function handleStartJob() {
-    if (!selectedJob?._id || !selectedJob.mechanicId) return;
-    setActionError("");
-    setIsActioning(true);
-    try {
-      await startJob({ bookingId: selectedJob._id });
-      setSuccessMessage("Job started");
-    } catch (err: unknown) {
-      setActionError(err instanceof Error ? err.message : "Could not start job.");
-    } finally {
-      setIsActioning(false);
-    }
-  }
-  handleStartJobRef.current = handleStartJob;
+  }, [filteredJobs, focusedRowIndex, selectedJobId, selectedJob]);
 
   const drawerOpen = !!selectedJobId;
 
@@ -461,10 +277,6 @@ export default function JobsPage() {
     setSidebarCompact(drawerOpen);
     return () => setSidebarCompact(false);
   }, [drawerOpen, setSidebarCompact]);
-
-  const drawerTitle = selectedJob
-    ? `${selectedJob.serviceNames.join(", ")} — ${selectedJob.customerName}`
-    : "Job Detail";
 
   return (
     <div className="space-y-6">
@@ -715,383 +527,23 @@ export default function JobsPage() {
               </div>
             </div>
 
-          {/* Drawer — card style with 24px left gap (ml-6) matching left margin */}
+          {/* Drawer */}
           <div
           className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
             drawerOpen ? "w-[504px]" : "w-0"
           }`}
         >
-          <div
-            ref={drawerPanelRef}
-            tabIndex={-1}
-            className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden focus:outline-none"
-          >
-            {/* Drawer header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
-              <h2 className="text-base font-semibold text-foreground truncate pr-2">
-                {drawerTitle}
-              </h2>
-              <button
-                onClick={() => setSelectedJobId(null)}
-                className="p-2 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Drawer body */}
-            <div className="flex-1 overflow-y-auto p-5">
-              {selectedJob === undefined ? (
-                <div className="space-y-3">
-                  {Array.from({ length: 8 }).map((_, i) => (
-                    <div
-                      key={i}
-                      className="h-4 bg-muted rounded animate-pulse"
-                      style={{ width: `${55 + (i % 4) * 12}%` }}
-                    />
-                  ))}
-                </div>
-              ) : !selectedJob ? (
-                <p className="text-sm text-muted-foreground">Job not found.</p>
-              ) : (
-                <div className="space-y-5">
-                  {/* Job info grid */}
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Customer</p>
-                      <p className="font-medium text-foreground">{selectedJob.customerName}</p>
-                      <p className="text-muted-foreground text-xs">
-                        {selectedJob.customerEmail || "No email on file"}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Vehicle</p>
-                      <p className="font-medium text-foreground">{selectedJob.vehicle}</p>
-                      <p className="text-muted-foreground text-xs">{selectedJob.vin}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Schedule</p>
-                      <p className="font-medium text-foreground">
-                        {formatJobDate(selectedJob.scheduledDate, selectedJob.scheduledTime)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Services</p>
-                      <p className="font-medium text-foreground">
-                        {selectedJob.serviceNames.join(", ")}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Costs</p>
-                      <p className="font-medium text-foreground">
-                        ${selectedJob.totalCost.toFixed(2)} total
-                      </p>
-                      <p className="text-muted-foreground text-xs">
-                        Labor ${selectedJob.laborCost.toFixed(2)} · Parts ${selectedJob.partsCost.toFixed(2)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground text-xs mb-1">Status</p>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span
-                          className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
-                            statusBadgeClass[selectedJob.status] ?? "bg-muted text-muted-foreground"
-                          }`}
-                        >
-                          {statusLabel[selectedJob.status] ?? selectedJob.status}
-                        </span>
-                        {(selectedJob.status === "pending" ||
-                          selectedJob.status === "pending_shop_acceptance") &&
-                          (() => {
-                            const cd = pendingCountdown(selectedJob._creationTime);
-                            return cd ? (
-                              <span className="text-amber-600 text-xs font-medium">{cd}</span>
-                            ) : null;
-                          })()}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Assign mechanic */}
-                  <div className="border-t border-border pt-4">
-                    <p className="text-xs font-medium text-foreground mb-2"><span style={{ textDecorationLine: "underline" }}>A</span>ssign mechanic</p>
-                    <div className="flex flex-wrap gap-2">
-                      <div ref={assignTriggerRef}>
-                        <Select
-                          selectedKey={assigningMechanicId || "unassigned"}
-                          onOpenChange={(isOpen) => {
-                            if (!isOpen) {
-                              requestAnimationFrame(() => {
-                                drawerPanelRef.current?.focus();
-                                assignTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.blur();
-                              });
-                            }
-                          }}
-                          onSelectionChange={(key) => {
-                            setAssigningMechanicId(key === "unassigned" ? "" : String(key));
-                            requestAnimationFrame(() => {
-                              drawerPanelRef.current?.focus();
-                              assignTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.blur();
-                            });
-                          }}
-                        >
-                          <SelectTrigger className="min-w-48 h-9 rounded-lg border-border bg-card text-sm px-3" data-assign-dropdown>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectPopover placement="bottom start" data-assign-dropdown>
-                            <SelectListBox shouldFocusWrap>
-                              <SelectItem id="unassigned" textValue="Unassigned">
-                                <span className="text-muted-foreground">Unassigned</span>
-                              </SelectItem>
-                              {mechanics.map((m) => (
-                                <SelectItem key={String(m._id)} id={String(m._id)} textValue={m.name}>
-                                  {m.name}
-                                </SelectItem>
-                              ))}
-                            </SelectListBox>
-                          </SelectPopover>
-                        </Select>
-                      </div>
-                      <button
-                        onClick={handleAssignMechanic}
-                        disabled={!assigningMechanicId || isActioning}
-                        className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
-                      >
-                        {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                        <span>A<span style={{ textDecorationLine: "underline" }}>s</span>sign</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Status transitions */}
-                  {(() => {
-                    const s = selectedJob.status;
-                    const canAccept = s === "pending" || s === "pending_shop_acceptance";
-                    const canComplete = s === "confirmed" || s === "in_progress";
-                    const canStartJob = s === "confirmed";
-                    // Decline: only for pending jobs (not yet confirmed)
-                    const canDecline = s === "pending" || s === "pending_shop_acceptance";
-                    // Cancel: for confirmed/in_progress (customer already knows)
-                    const canCancel = s === "confirmed" || s === "in_progress";
-
-                    if (!canAccept && !canComplete && !canDecline && !canCancel) return null;
-                    return (
-                      <div className="border-t border-border pt-4">
-                        <p className="text-xs font-medium text-foreground mb-2">Actions</p>
-                        <div className="flex flex-wrap gap-2">
-                          {canAccept && (
-                            <button
-                              onClick={() => handleStatusAction("accept")}
-                              disabled={isActioning}
-                              className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-                            >
-                              {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                              {isActioning ? "Accepting…" : <span><span style={{ textDecorationLine: "underline" }}>A</span>ccept</span>}
-                            </button>
-                          )}
-                          {canStartJob && (
-                            <button
-                              onClick={handleStartJob}
-                              disabled={!selectedJob.mechanicId || isActioning}
-                              title={selectedJob.mechanicId ? undefined : "Assign a mechanic first"}
-                              className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-                            >
-                              <span>S<span style={{ textDecorationLine: "underline" }}>t</span>art job</span>
-                            </button>
-                          )}
-                          {canComplete && (
-                            <button
-                              onClick={() => setShowCompleteConfirm(true)}
-                              disabled={isActioning}
-                              className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-                            >
-                              <span>Ma<span style={{ textDecorationLine: "underline" }}>r</span>k completed</span>
-                            </button>
-                          )}
-                          {canDecline && (
-                            <button
-                              onClick={() => setShowDeclineModal(true)}
-                              disabled={isActioning}
-                              className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-red-50 transition-colors disabled:opacity-50"
-                            >
-                              <span><span style={{ textDecorationLine: "underline" }}>D</span>ecline</span>
-                            </button>
-                          )}
-                          {canCancel && (
-                            <button
-                              onClick={() => setShowCancelConfirm(true)}
-                              disabled={isActioning}
-                              className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-red-50 transition-colors disabled:opacity-50"
-                            >
-                              <span><span style={{ textDecorationLine: "underline" }}>C</span>ancel job</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {/* Status history */}
-                  <div className="border-t border-border pt-4">
-                    <p className="text-xs font-medium text-foreground mb-2">Status history</p>
-                    <div className="space-y-1 max-h-28 overflow-y-auto">
-                      {selectedJob.history.length === 0 ? (
-                        <p className="text-xs text-muted-foreground">No history entries yet.</p>
-                      ) : (
-                        selectedJob.history.map((h) => (
-                          <p key={String(h._id)} className="text-xs text-muted-foreground">
-                            {new Date(h.changed_at).toLocaleString()}:{" "}
-                            <span className="font-medium text-foreground">
-                              {h.old_status ?? "none"}
-                            </span>
-                            {" → "}
-                            <span className="font-medium text-foreground">{h.new_status}</span>
-                            {h.reason && !isSystemReason(h.reason) ? ` (${h.reason})` : ""}
-                          </p>
-                        ))
-                      )}
-                    </div>
-                  </div>
-
-                  {actionError && (
-                    <p className="text-xs text-destructive">{actionError}</p>
-                  )}
-                </div>
-              )}
-            </div>
+          <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden">
+            <JobDetailPanel
+              ref={jobDetailRef}
+              job={selectedJob}
+              mechanics={mechanics}
+              onClose={() => setSelectedJobId(null)}
+              onSuccess={setSuccessMessage}
+            />
           </div>
         </div>
       </div>
-      )}
-
-      {/* Decline modal */}
-      {showDeclineModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={() => setShowDeclineModal(false)}
-          />
-          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
-            <h3 className="text-base font-semibold text-foreground mb-1">Decline this job?</h3>
-            <p className="text-sm text-muted-foreground mb-4">Select a reason for declining:</p>
-            <div className="space-y-2.5 mb-4">
-              {DECLINE_REASONS.map((r) => (
-                <label key={r} className="flex items-center gap-2.5 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="declineReason"
-                    value={r}
-                    checked={declineReason === r}
-                    onChange={() => setDeclineReason(r)}
-                    className="accent-primary"
-                  />
-                  <span className="text-sm text-foreground">{r}</span>
-                </label>
-              ))}
-            </div>
-            {declineReason === "Other" && (
-              <textarea
-                ref={declineTextareaRef}
-                value={declineOtherText}
-                onChange={(e) => setDeclineOtherText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); e.stopPropagation(); e.currentTarget.blur(); } }}
-                placeholder="Please describe the reason…"
-                rows={2}
-                className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none mb-4"
-              />
-            )}
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setShowDeclineModal(false)}
-                disabled={isActioning}
-                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                <span><span style={{ textDecorationLine: "underline" }}>C</span>ancel</span>
-              </button>
-              <button
-                onClick={handleDecline}
-                disabled={isActioning}
-                className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-              >
-                {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {isActioning ? "Declining…" : <span>Confirm <span style={{ textDecorationLine: "underline" }}>D</span>ecline</span>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Complete confirmation modal */}
-      {showCompleteConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={() => setShowCompleteConfirm(false)}
-          />
-          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
-            <h3 className="text-base font-semibold text-foreground mb-2">
-              Mark as completed?
-            </h3>
-            <p className="text-sm text-muted-foreground mb-5">
-              Mark this job as completed? The customer will be notified.
-            </p>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setShowCompleteConfirm(false)}
-                disabled={isActioning}
-                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                <span><span style={{ textDecorationLine: "underline" }}>C</span>ancel</span>
-              </button>
-              <button
-                onClick={async () => {
-                  await handleStatusAction("complete");
-                  setShowCompleteConfirm(false);
-                }}
-                disabled={isActioning}
-                className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-              >
-                {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {isActioning ? "Completing…" : <span>Ma<span style={{ textDecorationLine: "underline" }}>r</span>k completed</span>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Cancel confirmation modal (confirmed/in_progress jobs) */}
-      {showCancelConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={() => setShowCancelConfirm(false)}
-          />
-          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
-            <h3 className="text-base font-semibold text-foreground mb-2">
-              Cancel this job?
-            </h3>
-            <p className="text-sm text-muted-foreground mb-5">
-              The customer has already been confirmed and will be notified of the cancellation.
-            </p>
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setShowCancelConfirm(false)}
-                disabled={isActioning}
-                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                <span>K<span style={{ textDecorationLine: "underline" }}>e</span>ep job</span>
-              </button>
-              <button
-                onClick={handleCancelJob}
-                disabled={isActioning}
-                className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-              >
-                {isActioning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {isActioning ? "Cancelling…" : <span><span style={{ textDecorationLine: "underline" }}>C</span>ancel job</span>}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Success toast */}

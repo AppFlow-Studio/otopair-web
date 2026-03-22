@@ -447,6 +447,7 @@ export default function SchedulePage() {
             currentDate={currentDate}
             onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
             onProposeReschedule={handleProposeReschedule}
+            onDragError={(msg) => setSuccessMessage(msg)}
           />
         )}
         {bookings !== undefined && !(currentView === "day" && useDaySwimLanes) && (
@@ -537,7 +538,7 @@ export default function SchedulePage() {
           </div>
           {/* Toast inside the modal's stacking context to preserve backdrop-blur */}
           {successMessage && (
-            <div className="fixed bottom-6 right-6 bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground">
+            <div className="fixed bottom-6 right-6 bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
               {successMessage}
             </div>
           )}
@@ -634,7 +635,7 @@ export default function SchedulePage() {
 
       {/* Success toast — shown outside modals when neither is open */}
       {successMessage && !selectedBookingId && (
-        <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground">
+        <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
           {successMessage}
         </div>
       )}

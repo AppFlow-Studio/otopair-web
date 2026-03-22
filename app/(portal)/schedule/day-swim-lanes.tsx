@@ -46,6 +46,7 @@ interface DaySwimLanesProps {
   maxTime: Date;
   onSelectEvent: (event: CalendarEvent) => void;
   onProposeReschedule?: (proposal: RescheduleProposal) => void;
+  onDragError?: (message: string) => void;
   currentDate?: Date;
 }
 
@@ -117,6 +118,7 @@ export default function DaySwimLanes({
   maxTime,
   onSelectEvent,
   onProposeReschedule,
+  onDragError,
   currentDate,
 }: DaySwimLanesProps) {
   const startHour = minTime.getHours();
@@ -185,6 +187,8 @@ export default function DaySwimLanes({
   onProposeRescheduleRef.current = onProposeReschedule;
   const currentDateRef = useRef(currentDate);
   currentDateRef.current = currentDate;
+  const onDragErrorRef = useRef(onDragError);
+  onDragErrorRef.current = onDragError;
 
   /** Given a viewport coordinate, return which column + slot the pointer is over. */
   const getDropTarget = useCallback((clientX: number, clientY: number) => {
@@ -307,6 +311,44 @@ export default function DaySwimLanes({
       dragging = false;
     }
 
+    /** Animate the floating clone back to the booking's original position, then clean up. */
+    function animateBackAndCleanup(onDone: () => void) {
+      // Hide the drop-zone highlight immediately
+      setDropTarget(null);
+      dropTargetRef.current = null;
+
+      const floating = floatingRef.current;
+      if (!floating) {
+        setDragEventId(null);
+        setDragSlotCount(1);
+        document.body.style.cursor = "";
+        dragging = false;
+        onDone();
+        return;
+      }
+
+      // Fire callback immediately so the toast appears as the animation begins
+      onDone();
+
+      floating.style.transition = "transform 0.28s cubic-bezier(0.2, 0, 0.2, 1)";
+      floating.style.transform = `translate(${elRect.left}px, ${elRect.top}px)`;
+
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        floating.remove();
+        floatingRef.current = null;
+        setDragEventId(null);
+        setDragSlotCount(1);
+        document.body.style.cursor = "";
+        dragging = false;
+      };
+
+      floating.addEventListener("transitionend", finish, { once: true });
+      setTimeout(finish, 400); // fallback in case transitionend doesn't fire
+    }
+
     function onMove(me: PointerEvent) {
       if (!dragging) {
         const dx = me.clientX - startX;
@@ -352,8 +394,17 @@ export default function DaySwimLanes({
         return;
       }
 
-      // Check if the drop target differs from the original position
       const target = dropTargetRef.current;
+
+      // Forbidden drop: cannot reschedule to the Unassigned column
+      if (target?.colId === "__unassigned__") {
+        animateBackAndCleanup(() => {
+          onDragErrorRef.current?.("Cannot reschedule to an unassigned mechanic");
+        });
+        return;
+      }
+
+      // Check if the drop target differs from the original position
       if (target && onProposeRescheduleRef.current) {
         const sls = slotsRef.current;
         const slot = sls[target.slotIndex];

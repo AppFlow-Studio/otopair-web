@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 
 /** Format "HH:MM" -> "10:00 AM" */
@@ -584,6 +584,13 @@ export const getJobDetail = query({
 
     history.sort((a: any, b: any) => b.changed_at - a.changed_at);
 
+    // Resolve previous mechanic name if a reschedule is pending
+    let previousMechanicName: string | null = null;
+    if (booking.previous_mechanic_id) {
+      const prevMech = await ctx.db.get(booking.previous_mechanic_id);
+      if (prevMech) previousMechanicName = `${prevMech.first_name} ${prevMech.last_name}`.trim();
+    }
+
     return {
       _id: booking._id,
       _creationTime: booking._creationTime,
@@ -611,6 +618,12 @@ export const getJobDetail = query({
         ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
         : null,
       history,
+      // Reschedule fields
+      previousScheduledDate: booking.previous_scheduled_date ?? null,
+      previousScheduledTime: booking.previous_scheduled_time ?? null,
+      previousMechanicId: booking.previous_mechanic_id ?? null,
+      previousMechanicName,
+      rescheduleProposedAt: booking.reschedule_proposed_at ?? null,
     };
   },
 });
@@ -925,5 +938,188 @@ export const cancel = mutation({
     );
 
     return booking._id;
+  },
+});
+
+/**
+ * Propose a reschedule — shop drags an event to a new time/mechanic.
+ * Sets status to pending_customer_acceptance and stores original values for revert.
+ */
+export const proposeReschedule = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    newScheduledDate: v.string(),
+    newScheduledTime: v.string(),
+    newMechanicId: v.optional(v.id("mechanics")),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const allowed = ["pending", "pending_shop_acceptance", "confirmed", "pending_customer_acceptance"];
+    if (!allowed.includes(booking.status)) {
+      throw new Error("Cannot reschedule a booking with status: " + booking.status);
+    }
+
+    const patch: any = {
+      scheduled_date: args.newScheduledDate,
+      scheduled_time: args.newScheduledTime,
+      reschedule_proposed_at: Date.now(),
+      status: "pending_customer_acceptance",
+      updated_at: Date.now(),
+    };
+
+    if (args.newMechanicId !== undefined) {
+      patch.mechanic_id = args.newMechanicId;
+    }
+
+    // Only save previous_* fields if this is the first reschedule proposal.
+    // If already pending_customer_acceptance, keep original previous_* values
+    // so revert goes back to the true original, not an intermediate proposal.
+    if (booking.status !== "pending_customer_acceptance") {
+      patch.previous_scheduled_date = booking.scheduled_date;
+      patch.previous_scheduled_time = booking.scheduled_time;
+      patch.previous_mechanic_id = booking.mechanic_id;
+    }
+
+    await ctx.db.patch(booking._id, patch);
+
+    await logBookingStatusChange(
+      ctx,
+      booking._id,
+      booking.status,
+      "pending_customer_acceptance",
+      user._id,
+      "reschedule_proposed_by_shop"
+    );
+
+    // TODO: Trigger push notification / email to customer about the proposed reschedule.
+
+    return booking._id;
+  },
+});
+
+/** Customer approves a proposed reschedule. */
+export const customerApproveReschedule = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    if (booking.status !== "pending_customer_acceptance") {
+      throw new Error("Booking is not pending customer acceptance");
+    }
+
+    await ctx.db.patch(booking._id, {
+      status: "confirmed",
+      previous_scheduled_date: undefined,
+      previous_scheduled_time: undefined,
+      previous_mechanic_id: undefined,
+      reschedule_proposed_at: undefined,
+      updated_at: Date.now(),
+    });
+
+    await logBookingStatusChange(
+      ctx,
+      booking._id,
+      "pending_customer_acceptance",
+      "confirmed",
+      booking.user_id,
+      "customer_approved_reschedule"
+    );
+
+    // TODO: Notify the shop that the customer approved the reschedule.
+
+    return booking._id;
+  },
+});
+
+/** Customer declines a proposed reschedule — reverts to original values. */
+export const customerDeclineReschedule = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    if (booking.status !== "pending_customer_acceptance") {
+      throw new Error("Booking is not pending customer acceptance");
+    }
+
+    await ctx.db.patch(booking._id, {
+      status: "confirmed",
+      scheduled_date: booking.previous_scheduled_date ?? booking.scheduled_date,
+      scheduled_time: booking.previous_scheduled_time ?? booking.scheduled_time,
+      mechanic_id: booking.previous_mechanic_id,
+      previous_scheduled_date: undefined,
+      previous_scheduled_time: undefined,
+      previous_mechanic_id: undefined,
+      reschedule_proposed_at: undefined,
+      updated_at: Date.now(),
+    });
+
+    await logBookingStatusChange(
+      ctx,
+      booking._id,
+      "pending_customer_acceptance",
+      "confirmed",
+      booking.user_id,
+      "customer_declined_reschedule"
+    );
+
+    // TODO: Notify the shop that the customer declined and the booking has been reverted.
+
+    return booking._id;
+  },
+});
+
+/**
+ * Internal mutation: revert expired pending_customer_acceptance bookings.
+ * Called by a cron job every 15 minutes.
+ */
+export const revertExpiredReschedules = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+
+    const expired = await ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q) => q.eq("status", "pending_customer_acceptance"))
+      .filter((q: any) =>
+        q.and(
+          q.neq(q.field("reschedule_proposed_at"), undefined),
+          q.lte(q.field("reschedule_proposed_at"), cutoff)
+        )
+      )
+      .collect();
+
+    for (const booking of expired) {
+      await ctx.db.patch(booking._id, {
+        status: "confirmed",
+        scheduled_date: booking.previous_scheduled_date ?? booking.scheduled_date,
+        scheduled_time: booking.previous_scheduled_time ?? booking.scheduled_time,
+        mechanic_id: booking.previous_mechanic_id,
+        previous_scheduled_date: undefined,
+        previous_scheduled_time: undefined,
+        previous_mechanic_id: undefined,
+        reschedule_proposed_at: undefined,
+        updated_at: Date.now(),
+      });
+
+      await logBookingStatusChange(
+        ctx,
+        booking._id,
+        "pending_customer_acceptance",
+        "confirmed",
+        booking.user_id,
+        "reschedule_auto_reverted_24h"
+      );
+
+      // TODO: Notify both the shop and customer that the reschedule expired.
+    }
+
+    return expired.length;
   },
 });

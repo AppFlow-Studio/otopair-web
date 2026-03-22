@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
@@ -23,6 +23,7 @@ import { enUS } from "date-fns/locale/en-US";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "./schedule.css";
 import DaySwimLanes from "./day-swim-lanes";
+import type { RescheduleProposal } from "./day-swim-lanes";
 import JobDetailPanel, { type JobDetailPanelHandle } from "@/components/job-detail-panel";
 
 /* ------------------------------------------------------------------ */
@@ -55,17 +56,19 @@ interface CalendarEvent {
 /* ------------------------------------------------------------------ */
 
 const statusColors: Record<string, { bg: string; text: string; border: string }> = {
-  pending_shop_acceptance: { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
-  pending:                 { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
-  confirmed:              { bg: "rgb(224 231 255)", text: "rgb(99 102 241)", border: "rgb(165 180 252)" },
-  in_progress:            { bg: "rgb(236 253 245)", text: "rgb(5 150 105)", border: "rgb(110 231 183)" },
-  completed:              { bg: "rgb(243 244 246)", text: "rgb(107 114 128)", border: "rgb(209 213 219)" },
-  blocked:                { bg: "rgb(254 242 242)", text: "rgb(239 68 68)", border: "rgb(252 165 165)" },
+  pending_shop_acceptance:      { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
+  pending:                      { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
+  pending_customer_acceptance:  { bg: "rgb(243 232 255)", text: "rgb(147 51 234)", border: "rgb(192 132 252)" },
+  confirmed:                    { bg: "rgb(224 231 255)", text: "rgb(99 102 241)", border: "rgb(165 180 252)" },
+  in_progress:                  { bg: "rgb(236 253 245)", text: "rgb(5 150 105)", border: "rgb(110 231 183)" },
+  completed:                    { bg: "rgb(243 244 246)", text: "rgb(107 114 128)", border: "rgb(209 213 219)" },
+  blocked:                      { bg: "rgb(254 242 242)", text: "rgb(239 68 68)", border: "rgb(252 165 165)" },
 };
 
 const statusLabel: Record<string, string> = {
-  pending_shop_acceptance: "Pending",
-  pending: "Pending",
+  pending_shop_acceptance: "Pending Shop",
+  pending: "Pending Shop",
+  pending_customer_acceptance: "Pending Customer",
   confirmed: "Confirmed",
   in_progress: "In Progress",
   completed: "Completed",
@@ -105,6 +108,13 @@ function getDayRange(date: Date) {
   };
 }
 
+function formatTimeLabel(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 || 12;
+  return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main component                                                      */
 /* ------------------------------------------------------------------ */
@@ -115,9 +125,13 @@ export default function SchedulePage() {
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
   const [selectedBookingId, setSelectedBookingId] = useState<Id<"bookings"> | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
+  const [rescheduleProposal, setRescheduleProposal] = useState<RescheduleProposal | null>(null);
+  const [rescheduleError, setRescheduleError] = useState("");
+  const [isRescheduling, setIsRescheduling] = useState(false);
 
   const jobDetailRef = useRef<JobDetailPanelHandle>(null);
 
+  const proposeReschedule = useMutation(api.bookings.proposeReschedule);
   const context = useQuery(api.schedule.getScheduleContext);
 
   const selectedJobDetail = useQuery(
@@ -171,6 +185,36 @@ export default function SchedulePage() {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [selectedBookingId, selectedJobDetail]);
+
+  // Reschedule handlers
+  const handleProposeReschedule = useCallback((proposal: RescheduleProposal) => {
+    setRescheduleProposal(proposal);
+    setRescheduleError("");
+  }, []);
+
+  async function handleConfirmReschedule() {
+    if (!rescheduleProposal) return;
+    setIsRescheduling(true);
+    setRescheduleError("");
+    try {
+      await proposeReschedule({
+        bookingId: rescheduleProposal.eventId as Id<"bookings">,
+        newScheduledDate: rescheduleProposal.newDate,
+        newScheduledTime: rescheduleProposal.newTime,
+        newMechanicId: rescheduleProposal.newMechanicId
+          ? (rescheduleProposal.newMechanicId as Id<"mechanics">)
+          : undefined,
+      });
+      setRescheduleProposal(null);
+      setSuccessMessage("Reschedule proposed — awaiting customer approval");
+    } catch (err: unknown) {
+      setRescheduleError(
+        err instanceof Error ? err.message : "Could not propose reschedule.",
+      );
+    } finally {
+      setIsRescheduling(false);
+    }
+  }
 
   // Compute date range based on current view
   const dateRange = useMemo(() => {
@@ -258,17 +302,23 @@ export default function SchedulePage() {
     const customerDisplay = currentView === "week"
       ? (event.customerName?.split(" ")[0] ?? "")
       : (event.customerName ?? "");
+    const isPendingCustomer = event.status === "pending_customer_acceptance";
     return (
       <div
         className="px-1.5 py-0.5 rounded text-[11px] leading-tight overflow-hidden h-full"
         style={{
           backgroundColor: colors.bg,
           color: colors.text,
-          borderLeft: `3px solid ${colors.border}`,
+          borderLeft: isPendingCustomer
+            ? `3px dashed ${colors.border}`
+            : `3px solid ${colors.border}`,
         }}
       >
         <p className="font-medium truncate">{customerDisplay}</p>
         <p className="truncate opacity-80">{event.serviceNames?.join(", ")}</p>
+        {isPendingCustomer && (
+          <p className="truncate opacity-70 text-[10px]">Awaiting approval</p>
+        )}
       </div>
     );
   }, [currentView]);
@@ -394,7 +444,9 @@ export default function SchedulePage() {
             events={events}
             minTime={minTime}
             maxTime={maxTime}
+            currentDate={currentDate}
             onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
+            onProposeReschedule={handleProposeReschedule}
           />
         )}
         {bookings !== undefined && !(currentView === "day" && useDaySwimLanes) && (
@@ -489,6 +541,101 @@ export default function SchedulePage() {
               {successMessage}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Reschedule confirmation dialog */}
+      {rescheduleProposal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+            onClick={() => setRescheduleProposal(null)}
+          />
+          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
+            <h3 className="text-base font-semibold text-foreground mb-2">
+              Reschedule this booking?
+            </h3>
+            <div className="text-sm text-muted-foreground mb-4 space-y-1">
+              {rescheduleProposal.timeChanged && rescheduleProposal.mechanicChanged ? (
+                <p>
+                  Move from{" "}
+                  <span className="font-medium text-foreground">
+                    {rescheduleProposal.originalMechanicName ?? "Unassigned"}
+                  </span>{" "}
+                  at{" "}
+                  <span className="font-medium text-foreground">
+                    {formatTimeLabel(rescheduleProposal.originalTime)}
+                  </span>{" "}
+                  to{" "}
+                  <span className="font-medium text-foreground">
+                    {rescheduleProposal.newMechanicName ?? "Unassigned"}
+                  </span>{" "}
+                  at{" "}
+                  <span className="font-medium text-foreground">
+                    {formatTimeLabel(rescheduleProposal.newTime)}
+                  </span>
+                  ?
+                </p>
+              ) : rescheduleProposal.timeChanged ? (
+                <p>
+                  Move from{" "}
+                  <span className="font-medium text-foreground">
+                    {formatTimeLabel(rescheduleProposal.originalTime)}
+                  </span>{" "}
+                  to{" "}
+                  <span className="font-medium text-foreground">
+                    {formatTimeLabel(rescheduleProposal.newTime)}
+                  </span>
+                  ? The customer will be asked to approve the new time.
+                </p>
+              ) : (
+                <p>
+                  Reassign from{" "}
+                  <span className="font-medium text-foreground">
+                    {rescheduleProposal.originalMechanicName ?? "Unassigned"}
+                  </span>{" "}
+                  to{" "}
+                  <span className="font-medium text-foreground">
+                    {rescheduleProposal.newMechanicName ?? "Unassigned"}
+                  </span>
+                  ? The customer will be asked to approve the change.
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground mt-2">
+                The booking will be set to Pending Customer until the customer responds. If they
+                don&apos;t respond within 24 hours, the original time will be restored automatically.
+              </p>
+            </div>
+            {rescheduleError && (
+              <p className="text-xs text-destructive mb-3">{rescheduleError}</p>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setRescheduleProposal(null)}
+                disabled={isRescheduling}
+                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmReschedule}
+                disabled={isRescheduling}
+                className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+              >
+                {isRescheduling && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                )}
+                {isRescheduling ? "Confirming…" : "Confirm reschedule"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success toast — shown outside modals when neither is open */}
+      {successMessage && !selectedBookingId && (
+        <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground">
+          {successMessage}
         </div>
       )}
     </div>

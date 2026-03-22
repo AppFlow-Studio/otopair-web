@@ -28,6 +28,7 @@ import {
 const statusBadgeClass: Record<string, string> = {
   pending_shop_acceptance: "bg-amber-50 text-amber-600",
   pending: "bg-amber-50 text-amber-600",
+  pending_customer_acceptance: "bg-purple-50 text-purple-600",
   confirmed: "bg-accent text-primary",
   in_progress: "bg-emerald-50 text-emerald-600",
   completed: "bg-muted text-muted-foreground",
@@ -36,8 +37,9 @@ const statusBadgeClass: Record<string, string> = {
 };
 
 const statusLabel: Record<string, string> = {
-  pending_shop_acceptance: "Pending",
-  pending: "Pending",
+  pending_shop_acceptance: "Pending Shop",
+  pending: "Pending Shop",
+  pending_customer_acceptance: "Pending Customer",
   confirmed: "Confirmed",
   in_progress: "In Progress",
   completed: "Completed",
@@ -130,6 +132,12 @@ export interface JobDetailData {
     new_status: string;
     reason?: string;
   }>;
+  // Reschedule fields
+  previousScheduledDate?: string | null;
+  previousScheduledTime?: string | null;
+  previousMechanicId?: Id<"mechanics"> | null;
+  previousMechanicName?: string | null;
+  rescheduleProposedAt?: number | null;
 }
 
 export interface JobDetailPanelHandle {
@@ -138,6 +146,7 @@ export interface JobDetailPanelHandle {
   startJob: () => void;
   showMarkCompleted: () => void;
   showCancelJob: () => void;
+  showCancelReschedule: () => void;
   openAssignDropdown: () => void;
   assignMechanic: () => void;
   hasOpenModal: () => boolean;
@@ -170,6 +179,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [declineOtherText, setDeclineOtherText] = useState("");
     const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+    const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
 
     const wrapperRef = useRef<HTMLDivElement>(null);
     const assignTriggerRef = useRef<HTMLDivElement>(null);
@@ -180,6 +190,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const completeJob = useMutation(api.bookings.complete);
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
+    const declineReschedule = useMutation(api.bookings.customerDeclineReschedule);
 
     const selectedMechanicId = useMemo(
       () =>
@@ -277,6 +288,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
     }
 
+    async function handleCancelReschedule() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await declineReschedule({ bookingId: job._id });
+        setShowCancelRescheduleConfirm(false);
+        onSuccess?.("Reschedule cancelled — original time restored");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not cancel reschedule.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
     async function handleAssignMechanic() {
       if (!job?._id || !selectedMechanicId) return;
       setActionError("");
@@ -327,6 +355,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       },
       showMarkCompleted: () => setShowCompleteConfirm(true),
       showCancelJob: () => setShowCancelConfirm(true),
+      showCancelReschedule: () => setShowCancelRescheduleConfirm(true),
       openAssignDropdown: () => {
         assignTriggerRef.current
           ?.querySelector<HTMLButtonElement>("button")
@@ -336,7 +365,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         handleAssignMechanic();
       },
       hasOpenModal: () =>
-        showDeclineModal || showCompleteConfirm || showCancelConfirm,
+        showDeclineModal || showCompleteConfirm || showCancelConfirm || showCancelRescheduleConfirm,
       handleEscape: (): boolean => {
         if (showDeclineModal) {
           setShowDeclineModal(false);
@@ -348,6 +377,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         }
         if (showCancelConfirm) {
           setShowCancelConfirm(false);
+          return true;
+        }
+        if (showCancelRescheduleConfirm) {
+          setShowCancelRescheduleConfirm(false);
           return true;
         }
         return false;
@@ -400,6 +433,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           }
           if (e.key === "e") {
             setShowCancelConfirm(false);
+            return true;
+          }
+          return true;
+        }
+        if (showCancelRescheduleConfirm) {
+          if (e.key === "r") {
+            handleCancelReschedule();
+            return true;
+          }
+          if (e.key === "c") {
+            setShowCancelRescheduleConfirm(false);
             return true;
           }
           return true;
@@ -530,6 +574,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             </span>
                           ) : null;
                         })()}
+                      {job.status === "pending_customer_acceptance" &&
+                        job.rescheduleProposedAt &&
+                        (() => {
+                          const cd = pendingCountdown(job.rescheduleProposedAt);
+                          return cd ? (
+                            <span className="text-purple-600 text-xs font-medium">
+                              {cd}
+                            </span>
+                          ) : null;
+                        })()}
                     </div>
                   </div>
                 </div>
@@ -626,6 +680,25 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     </button>
                   </div>
                 </div>
+
+                {/* Pending customer acceptance — awaiting approval info */}
+                {job.status === "pending_customer_acceptance" && (
+                  <div className="border-t border-border pt-4">
+                    <p className="text-xs font-medium text-foreground mb-2">
+                      Actions
+                    </p>
+                    <p className="text-xs text-muted-foreground italic mb-2">
+                      Awaiting customer approval
+                    </p>
+                    <button
+                      onClick={() => setShowCancelRescheduleConfirm(true)}
+                      disabled={isActioning}
+                      className="px-3 py-2 text-sm rounded-lg border border-border text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                    >
+                      Cancel reschedule
+                    </button>
+                  </div>
+                )}
 
                 {/* Status transitions */}
                 {(() => {
@@ -1021,6 +1094,57 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         C
                       </span>
                       ancel job
+                    </span>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Cancel reschedule confirmation modal */}
+        {showCancelRescheduleConfirm && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+              onClick={() => setShowCancelRescheduleConfirm(false)}
+            />
+            <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
+              <h3 className="text-base font-semibold text-foreground mb-2">
+                Cancel the proposed reschedule?
+              </h3>
+              <p className="text-sm text-muted-foreground mb-5">
+                The booking will revert to its original time and mechanic.
+              </p>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowCancelRescheduleConfirm(false)}
+                  disabled={isActioning}
+                  className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
+                >
+                  <span>
+                    <span style={{ textDecorationLine: "underline" }}>
+                      C
+                    </span>
+                    ancel
+                  </span>
+                </button>
+                <button
+                  onClick={handleCancelReschedule}
+                  disabled={isActioning}
+                  className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+                >
+                  {isActioning && (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  )}
+                  {isActioning ? (
+                    "Reverting…"
+                  ) : (
+                    <span>
+                      <span style={{ textDecorationLine: "underline" }}>
+                        R
+                      </span>
+                      evert to original
                     </span>
                   )}
                 </button>

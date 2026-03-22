@@ -17,6 +17,7 @@ import type { JobDetailPanelHandle } from "@/components/job-detail-panel";
 type JobStatusFilter =
   | "all"
   | "pending_shop_acceptance"
+  | "pending_customer_acceptance"
   | "confirmed"
   | "in_progress"
   | "completed"
@@ -24,7 +25,8 @@ type JobStatusFilter =
 
 const STATUS_TABS: { key: JobStatusFilter; label: string }[] = [
   { key: "all", label: "All" },
-  { key: "pending_shop_acceptance", label: "Pending" },
+  { key: "pending_shop_acceptance", label: "Pending Shop" },
+  { key: "pending_customer_acceptance", label: "Pending Customer" },
   { key: "confirmed", label: "Confirmed" },
   { key: "in_progress", label: "In Progress" },
   { key: "completed", label: "Completed" },
@@ -34,6 +36,7 @@ const STATUS_TABS: { key: JobStatusFilter; label: string }[] = [
 const statusBadgeClass: Record<string, string> = {
   pending_shop_acceptance: "bg-amber-50 text-amber-600",
   pending: "bg-amber-50 text-amber-600",
+  pending_customer_acceptance: "bg-purple-50 text-purple-600",
   confirmed: "bg-accent text-primary",
   in_progress: "bg-emerald-50 text-emerald-600",
   completed: "bg-muted text-muted-foreground",
@@ -42,8 +45,9 @@ const statusBadgeClass: Record<string, string> = {
 };
 
 const statusLabel: Record<string, string> = {
-  pending_shop_acceptance: "Pending",
-  pending: "Pending",
+  pending_shop_acceptance: "Pending Shop",
+  pending: "Pending Shop",
+  pending_customer_acceptance: "Pending Customer",
   confirmed: "Confirmed",
   in_progress: "In Progress",
   completed: "Completed",

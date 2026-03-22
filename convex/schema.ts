@@ -84,6 +84,11 @@ export default defineSchema({
     vin: v.string(), // canonical VIN reference
     created_at: v.float64(),
     updated_at: v.float64(),
+    // Reschedule fields — store original values so they can be reverted if customer declines
+    previous_scheduled_date: v.optional(v.string()),
+    previous_scheduled_time: v.optional(v.string()),
+    previous_mechanic_id: v.optional(v.id("mechanics")),
+    reschedule_proposed_at: v.optional(v.float64()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])

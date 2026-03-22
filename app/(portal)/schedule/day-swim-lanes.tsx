@@ -326,7 +326,9 @@ export default function DaySwimLanes({
         floatingRef.current.style.transform = `translate(${me.clientX - offX}px, ${me.clientY - offY}px)`;
       }
 
-      const target = getDropTarget(me.clientX, me.clientY);
+      // Use the top-left of the floating booking block (not the raw cursor)
+      // so the drop slot reflects where the booking visually sits.
+      const target = getDropTarget(me.clientX - offX + w / 2, me.clientY - offY);
       dropTargetRef.current = target;
       setDropTarget((prev) => {
         if (!target && !prev) return prev;

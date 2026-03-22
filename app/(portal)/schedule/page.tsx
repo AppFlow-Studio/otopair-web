@@ -124,7 +124,7 @@ export default function SchedulePage() {
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("week");
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
   const [selectedBookingId, setSelectedBookingId] = useState<Id<"bookings"> | null>(null);
-  const [successMessage, setSuccessMessage] = useState("");
+  const [toast, setToast] = useState<{ msg: string; key: number } | null>(null);
   const [rescheduleProposal, setRescheduleProposal] = useState<RescheduleProposal | null>(null);
   const [rescheduleError, setRescheduleError] = useState("");
   const [isRescheduling, setIsRescheduling] = useState(false);
@@ -139,12 +139,12 @@ export default function SchedulePage() {
     selectedBookingId ? { bookingId: selectedBookingId } : "skip"
   );
 
-  // Auto-clear success toast after 3s
+  // Auto-clear toast after 3s; key changes on every trigger so the timer always resets
   useEffect(() => {
-    if (!successMessage) return;
-    const t = setTimeout(() => setSuccessMessage(""), 3000);
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
-  }, [successMessage]);
+  }, [toast]);
 
   // Keyboard shortcuts for the job detail modal
   useEffect(() => {
@@ -206,7 +206,7 @@ export default function SchedulePage() {
           : undefined,
       });
       setRescheduleProposal(null);
-      setSuccessMessage("Reschedule proposed — awaiting customer approval");
+      setToast({ msg: "Reschedule proposed — awaiting customer approval", key: Date.now() });
     } catch (err: unknown) {
       setRescheduleError(
         err instanceof Error ? err.message : "Could not propose reschedule.",
@@ -447,7 +447,7 @@ export default function SchedulePage() {
             currentDate={currentDate}
             onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
             onProposeReschedule={handleProposeReschedule}
-            onDragError={(msg) => setSuccessMessage(msg)}
+            onDragError={(msg) => setToast({ msg, key: Date.now() })}
           />
         )}
         {bookings !== undefined && !(currentView === "day" && useDaySwimLanes) && (
@@ -532,14 +532,14 @@ export default function SchedulePage() {
               job={selectedJobDetail}
               mechanics={mechanics}
               onClose={() => setSelectedBookingId(null)}
-              onSuccess={setSuccessMessage}
+              onSuccess={(msg) => setToast({ msg, key: Date.now() })}
               showJobsLink
             />
           </div>
           {/* Toast inside the modal's stacking context to preserve backdrop-blur */}
-          {successMessage && (
+          {toast && (
             <div className="fixed bottom-6 right-6 bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
-              {successMessage}
+              {toast.msg}
             </div>
           )}
         </div>
@@ -634,9 +634,9 @@ export default function SchedulePage() {
       )}
 
       {/* Success toast — shown outside modals when neither is open */}
-      {successMessage && !selectedBookingId && (
+      {toast && !selectedBookingId && (
         <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
-          {successMessage}
+          {toast.msg}
         </div>
       )}
     </div>

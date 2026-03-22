@@ -207,7 +207,7 @@ export default function DaySwimLanes({
     const colIndex = Math.min(Math.max(Math.floor(gridX / colWidth), 0), cols.length - 1);
 
     const contentY = cy - HEADER_HEIGHT + container.scrollTop;
-    const slotIndex = Math.min(Math.max(Math.floor(contentY / ROW_HEIGHT), 0), sls.length - 1);
+    const slotIndex = Math.min(Math.max(Math.round(contentY / ROW_HEIGHT), 0), sls.length - 1);
 
     return { colId: cols[colIndex].id, slotIndex };
   }, []);

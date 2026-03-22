@@ -167,6 +167,7 @@ export default function DaySwimLanes({
   // ---- Drag state ----
   const [dragEventId, setDragEventId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ colId: string; slotIndex: number } | null>(null);
+  const [dragSlotCount, setDragSlotCount] = useState(1);
   const floatingRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropTargetRef = useRef<{ colId: string; slotIndex: number } | null>(null);
@@ -300,6 +301,7 @@ export default function DaySwimLanes({
       }
       setDragEventId(null);
       setDropTarget(null);
+      setDragSlotCount(1);
       dropTargetRef.current = null;
       document.body.style.cursor = "";
       dragging = false;
@@ -315,6 +317,8 @@ export default function DaySwimLanes({
         dragging = true;
         createFloating();
         setDragEventId(ev.id);
+        const evDurationMin = (ev.end.getTime() - ev.start.getTime()) / 60000;
+        setDragSlotCount(Math.max(1, Math.ceil(evDurationMin / STEP_MINUTES)));
         document.body.style.cursor = "grabbing";
       }
 
@@ -464,33 +468,29 @@ export default function DaySwimLanes({
 
               {/* Time grid + events */}
               <div className="relative" style={{ height: totalHeight }}>
-                {/* Gridlines + drop zone highlights */}
-                {slots.map((s, i) => {
-                  const isDropHere =
-                    dropTarget?.colId === col.id &&
-                    dropTarget?.slotIndex === i;
-                  return (
-                    <div key={i}>
-                      {isDropHere && (
-                        <div
-                          className="absolute left-0 right-0 bg-primary/10 border border-primary/20 rounded"
-                          style={{
-                            top: i * ROW_HEIGHT,
-                            height: ROW_HEIGHT,
-                          }}
-                        />
-                      )}
-                      <div
-                        className={`absolute left-0 right-0 pointer-events-none ${
-                          s.minute === 0
-                            ? "border-b border-border"
-                            : "border-b border-border/40"
-                        }`}
-                        style={{ top: i * ROW_HEIGHT + ROW_HEIGHT - 1 }}
-                      />
-                    </div>
-                  );
-                })}
+                {/* Drop zone highlight — spans the full booking duration */}
+                {dropTarget?.colId === col.id && (
+                  <div
+                    className="absolute left-0 right-0 bg-primary/10 border border-primary/20 rounded"
+                    style={{
+                      top: dropTarget.slotIndex * ROW_HEIGHT,
+                      height: dragSlotCount * ROW_HEIGHT,
+                    }}
+                  />
+                )}
+
+                {/* Gridlines */}
+                {slots.map((s, i) => (
+                  <div
+                    key={i}
+                    className={`absolute left-0 right-0 pointer-events-none ${
+                      s.minute === 0
+                        ? "border-b border-border"
+                        : "border-b border-border/40"
+                    }`}
+                    style={{ top: i * ROW_HEIGHT + ROW_HEIGHT - 1 }}
+                  />
+                ))}
 
                 {/* Current time indicator */}
                 {showNowLine && (

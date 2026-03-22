@@ -42,15 +42,15 @@ export interface RescheduleProposal {
 interface DaySwimLanesProps {
   mechanics: Mechanic[];
   events: CalendarEvent[];
-  minTime: Date; // Date with hours/minutes set for start of day
-  maxTime: Date; // Date with hours/minutes set for end of day
+  minTime: Date;
+  maxTime: Date;
   onSelectEvent: (event: CalendarEvent) => void;
   onProposeReschedule?: (proposal: RescheduleProposal) => void;
   currentDate?: Date;
 }
 
 /* ------------------------------------------------------------------ */
-/*  Status colors (duplicated to keep component self-contained)         */
+/*  Status colors                                                       */
 /* ------------------------------------------------------------------ */
 
 const statusColors: Record<string, { bg: string; text: string; border: string }> = {
@@ -74,9 +74,11 @@ const DRAGGABLE_STATUSES = new Set([
 /*  Constants                                                           */
 /* ------------------------------------------------------------------ */
 
-const GUTTER_WIDTH = 70;        // px — left time-label gutter
-const ROW_HEIGHT = 48;          // px per 30-minute slot
+const GUTTER_WIDTH = 70;
+const ROW_HEIGHT = 48;
 const STEP_MINUTES = 30;
+const HEADER_HEIGHT = 36;
+const DRAG_THRESHOLD = 5;
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
@@ -89,7 +91,6 @@ function formatGutterLabel(hour: number, minute: number): string {
   return `${h}:${String(minute).padStart(2, "0")} ${ampm}`;
 }
 
-/** Minutes elapsed from `base` hour/min to given hour/min. */
 function minutesFromBase(baseH: number, baseM: number, h: number, m: number): number {
   return (h - baseH) * 60 + (m - baseM);
 }
@@ -98,18 +99,11 @@ function formatHHMM(h: number, m: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-function formatTimeLabel(hhmm: string): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  const ampm = h >= 12 ? "PM" : "AM";
-  const hour = h % 12 || 12;
-  return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
-}
-
 function dateToString(d: Date): string {
   const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  return `${y}-${mo}-${day}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -130,18 +124,6 @@ export default function DaySwimLanes({
   const endHour = maxTime.getHours();
   const endMinute = maxTime.getMinutes();
 
-  // Drag state
-  const [dragEventId, setDragEventId] = useState<string | null>(null);
-  const [dropTarget, setDropTarget] = useState<{ colId: string; slotIndex: number } | null>(null);
-  const dragDataRef = useRef<{
-    eventId: string;
-    originalColId: string;
-    originalTime: string;
-    originalDate: string;
-    originalMechanicName: string | undefined;
-  } | null>(null);
-
-  // Build time slots (30-min increments)
   const slots = useMemo(() => {
     const result: Array<{ hour: number; minute: number }> = [];
     let h = startHour;
@@ -157,22 +139,14 @@ export default function DaySwimLanes({
   const totalMinutes = minutesFromBase(startHour, startMinute, endHour, endMinute);
   const totalHeight = (totalMinutes / STEP_MINUTES) * ROW_HEIGHT;
 
-  // Build columns: if mechanic filter already applied, just use what we get.
-  // Determine if any events lack a mechanic → need "Unassigned" column.
   const hasUnassigned = events.some((e) => !e.resourceId);
 
   const columns: Array<{ id: string; label: string }> = useMemo(() => {
-    const cols = mechanics.map((m) => ({
-      id: m._id,
-      label: m.name,
-    }));
-    if (hasUnassigned) {
-      cols.push({ id: "__unassigned__", label: "Unassigned" });
-    }
+    const cols = mechanics.map((m) => ({ id: m._id, label: m.name }));
+    if (hasUnassigned) cols.push({ id: "__unassigned__", label: "Unassigned" });
     return cols;
   }, [mechanics, hasUnassigned]);
 
-  // Group events by column
   const eventsByColumn = useMemo(() => {
     const map = new Map<string, CalendarEvent[]>();
     for (const col of columns) map.set(col.id, []);
@@ -184,119 +158,285 @@ export default function DaySwimLanes({
     return map;
   }, [columns, events]);
 
-  // Current time indicator position
+  // Current time indicator
   const now = new Date();
   const nowMinutes = minutesFromBase(startHour, startMinute, now.getHours(), now.getMinutes());
   const showNowLine = nowMinutes >= 0 && nowMinutes <= totalMinutes;
   const nowTop = (nowMinutes / totalMinutes) * totalHeight;
 
-  // Drag handlers
-  const handleDragStart = useCallback((e: React.DragEvent, ev: CalendarEvent, colId: string) => {
-    if (!DRAGGABLE_STATUSES.has(ev.status ?? "")) {
-      e.preventDefault();
-      return;
+  // ---- Drag state ----
+  const [dragEventId, setDragEventId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ colId: string; slotIndex: number } | null>(null);
+  const floatingRef = useRef<HTMLDivElement | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dropTargetRef = useRef<{ colId: string; slotIndex: number } | null>(null);
+
+  // Stable refs for values used inside pointer event closures
+  const columnsRef = useRef(columns);
+  columnsRef.current = columns;
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
+  const mechanicsRef = useRef(mechanics);
+  mechanicsRef.current = mechanics;
+  const onSelectEventRef = useRef(onSelectEvent);
+  onSelectEventRef.current = onSelectEvent;
+  const onProposeRescheduleRef = useRef(onProposeReschedule);
+  onProposeRescheduleRef.current = onProposeReschedule;
+  const currentDateRef = useRef(currentDate);
+  currentDateRef.current = currentDate;
+
+  /** Given a viewport coordinate, return which column + slot the pointer is over. */
+  const getDropTarget = useCallback((clientX: number, clientY: number) => {
+    const container = containerRef.current;
+    if (!container) return null;
+
+    const rect = container.getBoundingClientRect();
+    const cx = clientX - rect.left;
+    const cy = clientY - rect.top;
+
+    if (cx < 0 || cy < HEADER_HEIGHT || cx > rect.width || cy > rect.height) return null;
+
+    const cols = columnsRef.current;
+    const sls = slotsRef.current;
+
+    const gridX = cx + container.scrollLeft - GUTTER_WIDTH;
+    if (gridX < 0) return null;
+
+    const colWidth = (container.scrollWidth - GUTTER_WIDTH) / cols.length;
+    const colIndex = Math.min(Math.max(Math.floor(gridX / colWidth), 0), cols.length - 1);
+
+    const contentY = cy - HEADER_HEIGHT + container.scrollTop;
+    const slotIndex = Math.min(Math.max(Math.floor(contentY / ROW_HEIGHT), 0), sls.length - 1);
+
+    return { colId: cols[colIndex].id, slotIndex };
+  }, []);
+
+  /** Pointer-based drag: creates a floating DOM element that follows the cursor. */
+  const handlePointerDown = useCallback((e: React.PointerEvent, ev: CalendarEvent, colId: string) => {
+    if (!DRAGGABLE_STATUSES.has(ev.status ?? "")) return;
+    if (e.button !== 0) return;
+    e.preventDefault();
+
+    const el = e.currentTarget as HTMLElement;
+    const elRect = el.getBoundingClientRect();
+    const offX = e.clientX - elRect.left;
+    const offY = e.clientY - elRect.top;
+    const w = elRect.width;
+    const h = elRect.height;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let dragging = false;
+
+    function createFloating() {
+      const colors = statusColors[ev.status ?? "confirmed"] ?? statusColors.confirmed;
+      const isPendingCustomer = ev.status === "pending_customer_acceptance";
+
+      const floating = document.createElement("div");
+      Object.assign(floating.style, {
+        position: "fixed",
+        zIndex: "50",
+        pointerEvents: "none",
+        width: `${w}px`,
+        height: `${h}px`,
+        backgroundColor: colors.bg,
+        color: colors.text,
+        borderLeft: isPendingCustomer
+          ? `3px dashed ${colors.border}`
+          : `3px solid ${colors.border}`,
+        borderRadius: "0.375rem",
+        padding: "4px 8px",
+        fontSize: "12px",
+        lineHeight: "1.25",
+        overflow: "hidden",
+        boxShadow:
+          "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)",
+        top: "0px",
+        left: "0px",
+        willChange: "transform",
+        transform: `translate(${startX - offX}px, ${startY - offY}px)`,
+      });
+
+      const nameP = document.createElement("p");
+      Object.assign(nameP.style, {
+        fontWeight: "500",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      });
+      nameP.textContent = ev.customerName ?? "";
+      floating.appendChild(nameP);
+
+      const svcP = document.createElement("p");
+      Object.assign(svcP.style, {
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        opacity: "0.8",
+      });
+      svcP.textContent = ev.serviceNames?.join(", ") ?? "";
+      floating.appendChild(svcP);
+
+      if (isPendingCustomer) {
+        const awaitP = document.createElement("p");
+        Object.assign(awaitP.style, {
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          opacity: "0.7",
+          fontSize: "10px",
+        });
+        awaitP.textContent = "Awaiting approval";
+        floating.appendChild(awaitP);
+      }
+
+      document.body.appendChild(floating);
+      floatingRef.current = floating;
     }
-    const time = formatHHMM(ev.start.getHours(), ev.start.getMinutes());
-    const date = currentDate ? dateToString(currentDate) : dateToString(ev.start);
-    const mechanic = mechanics.find((m) => m._id === (ev.resourceId || ""));
 
-    dragDataRef.current = {
-      eventId: ev.id,
-      originalColId: colId,
-      originalTime: time,
-      originalDate: date,
-      originalMechanicName: mechanic?.name,
-    };
-    setDragEventId(ev.id);
-
-    // Set drag image to the element
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", ev.id);
-  }, [currentDate, mechanics]);
-
-  const handleDragOver = useCallback((e: React.DragEvent, colId: string, slotIndex: number) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDropTarget({ colId, slotIndex });
-  }, []);
-
-  const handleDragLeave = useCallback(() => {
-    // Only clear if we leave the grid entirely — handled by container onDragLeave
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent, colId: string, slotIndex: number) => {
-    e.preventDefault();
-    setDragEventId(null);
-    setDropTarget(null);
-
-    const data = dragDataRef.current;
-    if (!data || !onProposeReschedule) return;
-
-    const slot = slots[slotIndex];
-    if (!slot) return;
-
-    const newTime = formatHHMM(slot.hour, slot.minute);
-    const newMechanicId = colId === "__unassigned__" ? undefined : colId;
-    const originalMechanicId = data.originalColId === "__unassigned__" ? undefined : data.originalColId;
-
-    const timeChanged = newTime !== data.originalTime;
-    const mechanicChanged = newMechanicId !== originalMechanicId;
-
-    if (!timeChanged && !mechanicChanged) return;
-
-    const newMechanic = mechanics.find((m) => m._id === newMechanicId);
-
-    onProposeReschedule({
-      eventId: data.eventId,
-      originalDate: data.originalDate,
-      originalTime: data.originalTime,
-      originalMechanicId,
-      originalMechanicName: data.originalMechanicName,
-      newDate: data.originalDate, // same day — drag is within day view
-      newTime,
-      newMechanicId,
-      newMechanicName: newMechanic?.name,
-      timeChanged,
-      mechanicChanged,
-    });
-
-    dragDataRef.current = null;
-  }, [slots, mechanics, onProposeReschedule]);
-
-  const handleDragEnd = useCallback(() => {
-    setDragEventId(null);
-    setDropTarget(null);
-    dragDataRef.current = null;
-  }, []);
-
-  const handleContainerDragLeave = useCallback((e: React.DragEvent) => {
-    // Only clear drop target if we leave the container
-    const container = e.currentTarget as HTMLElement;
-    const related = e.relatedTarget as HTMLElement | null;
-    if (!related || !container.contains(related)) {
+    function cleanup() {
+      if (floatingRef.current) {
+        floatingRef.current.remove();
+        floatingRef.current = null;
+      }
+      setDragEventId(null);
       setDropTarget(null);
+      dropTargetRef.current = null;
+      document.body.style.cursor = "";
+      dragging = false;
     }
-  }, []);
+
+    function onMove(me: PointerEvent) {
+      if (!dragging) {
+        const dx = me.clientX - startX;
+        const dy = me.clientY - startY;
+        if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD)
+          return;
+
+        dragging = true;
+        createFloating();
+        setDragEventId(ev.id);
+        document.body.style.cursor = "grabbing";
+      }
+
+      if (floatingRef.current) {
+        floatingRef.current.style.transform = `translate(${me.clientX - offX}px, ${me.clientY - offY}px)`;
+      }
+
+      const target = getDropTarget(me.clientX, me.clientY);
+      dropTargetRef.current = target;
+      setDropTarget((prev) => {
+        if (!target && !prev) return prev;
+        if (
+          target &&
+          prev &&
+          target.colId === prev.colId &&
+          target.slotIndex === prev.slotIndex
+        )
+          return prev;
+        return target;
+      });
+    }
+
+    function onUp() {
+      removeListeners();
+
+      if (!dragging) {
+        // Below threshold — treat as click
+        onSelectEventRef.current(ev);
+        return;
+      }
+
+      // Check if the drop target differs from the original position
+      const target = dropTargetRef.current;
+      if (target && onProposeRescheduleRef.current) {
+        const sls = slotsRef.current;
+        const slot = sls[target.slotIndex];
+        if (slot) {
+          const newTime = formatHHMM(slot.hour, slot.minute);
+          const originalTime = formatHHMM(
+            ev.start.getHours(),
+            ev.start.getMinutes(),
+          );
+          const newMechanicId =
+            target.colId === "__unassigned__" ? undefined : target.colId;
+          const originalMechanicId =
+            colId === "__unassigned__" ? undefined : colId;
+
+          const timeChanged = newTime !== originalTime;
+          const mechanicChanged = newMechanicId !== originalMechanicId;
+
+          if (timeChanged || mechanicChanged) {
+            const date = currentDateRef.current
+              ? dateToString(currentDateRef.current)
+              : dateToString(ev.start);
+            const mechs = mechanicsRef.current;
+            const origMech = mechs.find((m) => m._id === originalMechanicId);
+            const newMech = mechs.find((m) => m._id === newMechanicId);
+
+            onProposeRescheduleRef.current({
+              eventId: ev.id,
+              originalDate: date,
+              originalTime,
+              originalMechanicId,
+              originalMechanicName: origMech?.name,
+              newDate: date,
+              newTime,
+              newMechanicId,
+              newMechanicName: newMech?.name,
+              timeChanged,
+              mechanicChanged,
+            });
+          }
+        }
+      }
+
+      cleanup();
+    }
+
+    function onEscape(ke: KeyboardEvent) {
+      if (ke.key === "Escape" && dragging) {
+        removeListeners();
+        cleanup();
+      }
+    }
+
+    function removeListeners() {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+      document.removeEventListener("keydown", onEscape);
+      window.removeEventListener("blur", onUp);
+    }
+
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+    document.addEventListener("keydown", onEscape);
+    window.addEventListener("blur", onUp);
+  }, [getDropTarget]);
+
+  /* ---- Render ---- */
 
   return (
     <div
+      ref={containerRef}
       className="overflow-auto"
       style={{ height: "calc(100vh - 320px)", minHeight: 500 }}
-      onDragLeave={handleContainerDragLeave}
     >
-      <div className="flex" style={{ minWidth: GUTTER_WIDTH + columns.length * 150 }}>
+      <div
+        className="flex"
+        style={{ minWidth: GUTTER_WIDTH + columns.length * 150 }}
+      >
         {/* Time gutter */}
         <div className="shrink-0" style={{ width: GUTTER_WIDTH }}>
-          {/* Spacer for header row */}
           <div className="h-9 border-b border-border" />
-          {/* Time labels */}
           <div className="relative" style={{ height: totalHeight }}>
             {slots.map((s, i) => (
               <div
                 key={i}
                 className="absolute right-0 pr-2 text-xs text-muted-foreground"
                 style={{
-                  top: i * ROW_HEIGHT - 7, // offset to center label on the gridline
+                  top: i * ROW_HEIGHT - 7,
                   width: GUTTER_WIDTH,
                   textAlign: "right",
                 }}
@@ -324,28 +464,33 @@ export default function DaySwimLanes({
 
               {/* Time grid + events */}
               <div className="relative" style={{ height: totalHeight }}>
-                {/* Drop zone slots — invisible but receive drag events */}
+                {/* Gridlines + drop zone highlights */}
                 {slots.map((s, i) => {
-                  const isDropHere = dropTarget?.colId === col.id && dropTarget?.slotIndex === i;
+                  const isDropHere =
+                    dropTarget?.colId === col.id &&
+                    dropTarget?.slotIndex === i;
                   return (
-                    <div
-                      key={`drop-${i}`}
-                      className={`absolute left-0 right-0 ${isDropHere ? "bg-primary/5" : ""}`}
-                      style={{ top: i * ROW_HEIGHT, height: ROW_HEIGHT }}
-                      onDragOver={(e) => handleDragOver(e, col.id, i)}
-                      onDrop={(e) => handleDrop(e, col.id, i)}
-                    />
+                    <div key={i}>
+                      {isDropHere && (
+                        <div
+                          className="absolute left-0 right-0 bg-primary/10 border border-primary/20 rounded"
+                          style={{
+                            top: i * ROW_HEIGHT,
+                            height: ROW_HEIGHT,
+                          }}
+                        />
+                      )}
+                      <div
+                        className={`absolute left-0 right-0 pointer-events-none ${
+                          s.minute === 0
+                            ? "border-b border-border"
+                            : "border-b border-border/40"
+                        }`}
+                        style={{ top: i * ROW_HEIGHT + ROW_HEIGHT - 1 }}
+                      />
+                    </div>
                   );
                 })}
-
-                {/* Gridlines */}
-                {slots.map((s, i) => (
-                  <div
-                    key={i}
-                    className={`absolute left-0 right-0 pointer-events-none ${s.minute === 0 ? "border-b border-border" : "border-b border-border/40"}`}
-                    style={{ top: i * ROW_HEIGHT + ROW_HEIGHT - 1 }}
-                  />
-                ))}
 
                 {/* Current time indicator */}
                 {showNowLine && (
@@ -358,23 +503,56 @@ export default function DaySwimLanes({
                 {/* Event blocks */}
                 {colEvents.map((ev) => {
                   const evStartMin = minutesFromBase(
-                    startHour, startMinute,
-                    ev.start.getHours(), ev.start.getMinutes()
+                    startHour,
+                    startMinute,
+                    ev.start.getHours(),
+                    ev.start.getMinutes(),
                   );
-                  const evDuration = (ev.end.getTime() - ev.start.getTime()) / 60000;
+                  const evDuration =
+                    (ev.end.getTime() - ev.start.getTime()) / 60000;
                   const top = (evStartMin / totalMinutes) * totalHeight;
                   const height = (evDuration / totalMinutes) * totalHeight;
-                  const colors = statusColors[ev.status ?? "confirmed"] ?? statusColors.confirmed;
+                  const colors =
+                    statusColors[ev.status ?? "confirmed"] ??
+                    statusColors.confirmed;
                   const isDraggable = DRAGGABLE_STATUSES.has(ev.status ?? "");
                   const isBeingDragged = dragEventId === ev.id;
-                  const isPendingCustomer = ev.status === "pending_customer_acceptance";
+                  const isPendingCustomer =
+                    ev.status === "pending_customer_acceptance";
+
+                  // Placeholder at original position while dragging
+                  if (isBeingDragged) {
+                    return (
+                      <div
+                        key={ev.id}
+                        className="absolute left-1 right-1 rounded-md text-xs px-2 py-1 overflow-hidden z-10"
+                        style={{
+                          top: Math.max(0, top),
+                          height: Math.max(ROW_HEIGHT * 0.8, height),
+                          backgroundColor: "transparent",
+                          color: colors.text,
+                          border: `2px dashed ${colors.border}`,
+                          opacity: 0.4,
+                        }}
+                      >
+                        <p className="font-medium truncate">
+                          {ev.customerName}
+                        </p>
+                        <p className="truncate opacity-80">
+                          {ev.serviceNames?.join(", ")}
+                        </p>
+                      </div>
+                    );
+                  }
 
                   return (
                     <div
                       key={ev.id}
-                      className={`absolute left-1 right-1 rounded-md text-xs px-2 py-1 overflow-hidden z-10 ${
-                        isDraggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
-                      } ${isBeingDragged ? "opacity-50" : ""}`}
+                      className={`absolute left-1 right-1 rounded-md text-xs px-2 py-1 overflow-hidden z-10 select-none ${
+                        isDraggable
+                          ? "cursor-grab active:cursor-grabbing"
+                          : "cursor-pointer"
+                      }`}
                       style={{
                         top: Math.max(0, top),
                         height: Math.max(ROW_HEIGHT * 0.8, height),
@@ -384,15 +562,25 @@ export default function DaySwimLanes({
                           ? `3px dashed ${colors.border}`
                           : `3px solid ${colors.border}`,
                       }}
-                      draggable={isDraggable}
-                      onDragStart={(e) => handleDragStart(e, ev, col.id)}
-                      onDragEnd={handleDragEnd}
-                      onClick={() => onSelectEvent(ev)}
+                      onPointerDown={
+                        isDraggable
+                          ? (e) => handlePointerDown(e, ev, col.id)
+                          : undefined
+                      }
+                      onClick={
+                        !isDraggable ? () => onSelectEvent(ev) : undefined
+                      }
                     >
-                      <p className="font-medium truncate">{ev.customerName}</p>
-                      <p className="truncate opacity-80">{ev.serviceNames?.join(", ")}</p>
+                      <p className="font-medium truncate">
+                        {ev.customerName}
+                      </p>
+                      <p className="truncate opacity-80">
+                        {ev.serviceNames?.join(", ")}
+                      </p>
                       {isPendingCustomer && (
-                        <p className="truncate opacity-70 text-[10px]">Awaiting approval</p>
+                        <p className="truncate opacity-70 text-[10px]">
+                          Awaiting approval
+                        </p>
                       )}
                     </div>
                   );

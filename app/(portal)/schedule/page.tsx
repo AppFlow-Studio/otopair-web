@@ -7,6 +7,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import {
   ChevronLeft,
   ChevronRight,
+  Copy,
   Loader2,
 } from "lucide-react";
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
@@ -23,7 +24,8 @@ import { enUS } from "date-fns/locale/en-US";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "./schedule.css";
 import DaySwimLanes from "./day-swim-lanes";
-import type { RescheduleProposal } from "./day-swim-lanes";
+import type { RescheduleProposal, ContextMenuCellInfo, ContextMenuBlockedInfo } from "./day-swim-lanes";
+import WeekSwimLanes from "./week-swim-lanes";
 import JobDetailPanel, { type JobDetailPanelHandle } from "@/components/job-detail-panel";
 
 /* ------------------------------------------------------------------ */
@@ -39,6 +41,7 @@ const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales
 
 interface CalendarEvent {
   id: string;
+  slotId?: string;
   title: string;
   start: Date;
   end: Date;
@@ -128,10 +131,20 @@ export default function SchedulePage() {
   const [rescheduleProposal, setRescheduleProposal] = useState<RescheduleProposal | null>(null);
   const [rescheduleError, setRescheduleError] = useState("");
   const [isRescheduling, setIsRescheduling] = useState(false);
+  const [contextMenu, setContextMenu] = useState<
+    | { type: "block"; info: ContextMenuCellInfo }
+    | { type: "unblock"; slotId: string; clientX: number; clientY: number }
+    | null
+  >(null);
 
   const jobDetailRef = useRef<JobDetailPanelHandle>(null);
 
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
+  const blockSlot = useMutation(api.schedule.blockSlot);
+  const unblockSlot = useMutation(api.schedule.unblockSlot);
+  const blockMechanicDay = useMutation(api.schedule.blockMechanicDay);
+  const copyBlockedToNextWeek = useMutation(api.schedule.copyBlockedSlotsToNextWeek);
+  const [isCopyingBlocks, setIsCopyingBlocks] = useState(false);
   const context = useQuery(api.schedule.getScheduleContext);
 
   const selectedJobDetail = useQuery(
@@ -186,6 +199,58 @@ export default function SchedulePage() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [selectedBookingId, selectedJobDetail]);
 
+  // Dismiss context menu on click-outside or Escape
+  useEffect(() => {
+    if (!contextMenu) return;
+    const dismiss = () => setContextMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [contextMenu]);
+
+  // Context menu action handlers
+  const handleBlockSlot = useCallback(async (info: ContextMenuCellInfo) => {
+    setContextMenu(null);
+    try {
+      await blockSlot({
+        mechanicId: info.mechanicId as Id<"mechanics">,
+        date: info.date,
+        startTime: info.startTime,
+        endTime: info.endTime,
+      });
+      setToast({ msg: `Blocked ${formatTimeLabel(info.startTime)}–${formatTimeLabel(info.endTime)} for ${info.mechanicName}`, key: Date.now() });
+    } catch (err: unknown) {
+      setToast({ msg: err instanceof Error ? err.message : "Failed to block slot", key: Date.now() });
+    }
+  }, [blockSlot]);
+
+  const handleBlockFullDay = useCallback(async (mechanicId: string, mechanicName: string, date: string) => {
+    setContextMenu(null);
+    try {
+      await blockMechanicDay({
+        mechanicId: mechanicId as Id<"mechanics">,
+        date,
+      });
+      setToast({ msg: `Blocked full day for ${mechanicName}`, key: Date.now() });
+    } catch (err: unknown) {
+      setToast({ msg: err instanceof Error ? err.message : "Failed to block day", key: Date.now() });
+    }
+  }, [blockMechanicDay]);
+
+  const handleUnblockSlot = useCallback(async (slotId: string) => {
+    setContextMenu(null);
+    try {
+      await unblockSlot({ slotId: slotId as Id<"time_slots"> });
+      setToast({ msg: "Slot unblocked", key: Date.now() });
+    } catch (err: unknown) {
+      setToast({ msg: err instanceof Error ? err.message : "Failed to unblock slot", key: Date.now() });
+    }
+  }, [unblockSlot]);
+
   // Reschedule handlers
   const handleProposeReschedule = useCallback((proposal: RescheduleProposal) => {
     setRescheduleProposal(proposal);
@@ -228,10 +293,15 @@ export default function SchedulePage() {
     dateTo: dateRange.to,
   });
 
+  const blockedSlots = useQuery(api.schedule.getBlockedSlots, {
+    dateFrom: dateRange.from,
+    dateTo: dateRange.to,
+  });
+
   // Map bookings to calendar events
   const events: CalendarEvent[] = useMemo(() => {
     if (!bookings) return [];
-    return bookings
+    const bookingEvents: CalendarEvent[] = bookings
       .filter((b) => mechanicFilter === "all" || b.mechanicId === mechanicFilter)
       .map((b) => {
         const [h, m] = b.scheduledTime.split(":").map(Number);
@@ -253,7 +323,31 @@ export default function SchedulePage() {
           totalCost: b.totalCost,
         };
       });
-  }, [bookings, mechanicFilter]);
+
+    // Merge blocked slots as "blocked" events
+    const blockedEvents: CalendarEvent[] = (blockedSlots ?? [])
+      .filter((s) => mechanicFilter === "all" || s.mechanicId === mechanicFilter)
+      .map((s) => {
+        const [sh, sm] = s.startTime.split(":").map(Number);
+        const [eh, em] = s.endTime.split(":").map(Number);
+        const start = new Date(s.date + "T00:00:00");
+        start.setHours(sh, sm, 0, 0);
+        const end = new Date(s.date + "T00:00:00");
+        end.setHours(eh, em, 0, 0);
+        return {
+          id: `blocked-${s._id}`,
+          slotId: s._id,
+          title: "Blocked",
+          start,
+          end,
+          resourceId: s.mechanicId ?? undefined,
+          type: "blocked" as const,
+          status: "blocked",
+        };
+      });
+
+    return [...bookingEvents, ...blockedEvents];
+  }, [bookings, blockedSlots, mechanicFilter]);
 
   // Day view: determine which mechanics to show as columns
   const dayViewMechanics = useMemo(() => {
@@ -410,6 +504,33 @@ export default function SchedulePage() {
               </Select>
             )}
 
+            {/* Copy blocks to next week — week view only */}
+            {currentView === "week" && (
+              <button
+                disabled={isCopyingBlocks}
+                onClick={async () => {
+                  setIsCopyingBlocks(true);
+                  try {
+                    const weekStartDate = dateToString(startOfWeek(currentDate, { weekStartsOn: 0 }));
+                    const result = await copyBlockedToNextWeek({ weekStartDate });
+                    setToast({ msg: `Copied ${result.copied} blocked slot(s) to next week`, key: Date.now() });
+                  } catch (err: unknown) {
+                    setToast({ msg: err instanceof Error ? err.message : "Failed to copy blocks", key: Date.now() });
+                  } finally {
+                    setIsCopyingBlocks(false);
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
+              >
+                {isCopyingBlocks ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+                Copy blocks to next week
+              </button>
+            )}
+
             {/* View switcher */}
             <div className="flex border border-border rounded-lg overflow-hidden">
               {(["day", "week", "month"] as const).map((view) => (
@@ -448,12 +569,29 @@ export default function SchedulePage() {
             onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
             onProposeReschedule={handleProposeReschedule}
             onDragError={(msg) => setToast({ msg, key: Date.now() })}
+            onContextMenuCell={(info) => setContextMenu({ type: "block", info })}
+            onContextMenuBlocked={(info) => setContextMenu({ type: "unblock", slotId: info.slotId, clientX: info.clientX, clientY: info.clientY })}
+            onBlockDayClick={(mechanicId, mechanicName) => handleBlockFullDay(mechanicId, mechanicName, dateToString(currentDate))}
           />
         )}
-        {bookings !== undefined && !(currentView === "day" && useDaySwimLanes) && (
+        {bookings !== undefined && currentView === "week" && (
+          <WeekSwimLanes
+            mechanics={context.mechanics}
+            events={events}
+            weekStart={startOfWeek(currentDate, { weekStartsOn: 0 })}
+            shopHours={context.hours}
+            onNavigateToDay={(date, mechanicId) => {
+              setCurrentDate(date);
+              setCurrentView("day");
+              if (mechanicId) setMechanicFilter(mechanicId);
+            }}
+            onBlockDay={(mechanicId, mechanicName, date) => handleBlockFullDay(mechanicId, mechanicName, date)}
+          />
+        )}
+        {bookings !== undefined && !(currentView === "day" && useDaySwimLanes) && currentView !== "week" && (
           <Calendar
             localizer={localizer}
-            events={events}
+            events={events.filter((e) => e.type !== "blocked")}
             startAccessor="start"
             endAccessor="end"
             date={currentDate}
@@ -516,6 +654,10 @@ export default function SchedulePage() {
                 </div>
               );
             })}
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-3 rounded-sm blocked-slot-pattern" />
+            <span className="text-xs text-foreground">Blocked</span>
+          </div>
         </div>
       </div>
 
@@ -630,6 +772,43 @@ export default function SchedulePage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Right-click context menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-[80] bg-card border border-border rounded-lg shadow-xl py-1 min-w-[200px]"
+          style={{
+            left: contextMenu.type === "block" ? contextMenu.info.clientX : contextMenu.clientX,
+            top: contextMenu.type === "block" ? contextMenu.info.clientY : contextMenu.clientY,
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {contextMenu.type === "block" && (
+            <>
+              <button
+                className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors"
+                onClick={() => handleBlockSlot(contextMenu.info)}
+              >
+                Block {formatTimeLabel(contextMenu.info.startTime)}–{formatTimeLabel(contextMenu.info.endTime)}
+              </button>
+              <button
+                className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors"
+                onClick={() => handleBlockFullDay(contextMenu.info.mechanicId, contextMenu.info.mechanicName, contextMenu.info.date)}
+              >
+                Block full day for {contextMenu.info.mechanicName}
+              </button>
+            </>
+          )}
+          {contextMenu.type === "unblock" && (
+            <button
+              className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors"
+              onClick={() => handleUnblockSlot(contextMenu.slotId)}
+            >
+              Unblock this slot
+            </button>
+          )}
         </div>
       )}
 

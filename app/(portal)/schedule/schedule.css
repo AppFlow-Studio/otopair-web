@@ -38,3 +38,26 @@
   background-color: var(--destructive);
   height: 2px;
 }
+
+/* Blocked slot diagonal stripe pattern */
+.blocked-slot-pattern {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(239, 68, 68, 0.06),
+    rgba(239, 68, 68, 0.06) 4px,
+    rgba(239, 68, 68, 0.14) 4px,
+    rgba(239, 68, 68, 0.14) 8px
+  );
+  border: 1px dashed rgba(239, 68, 68, 0.35);
+  border-radius: 0.25rem;
+}
+
+.blocked-slot-pattern:hover {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(239, 68, 68, 0.1),
+    rgba(239, 68, 68, 0.1) 4px,
+    rgba(239, 68, 68, 0.2) 4px,
+    rgba(239, 68, 68, 0.2) 8px
+  );
+}

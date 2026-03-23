@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { Ban } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -8,6 +9,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 
 interface CalendarEvent {
   id: string;
+  slotId?: string;
   title: string;
   start: Date;
   end: Date;
@@ -39,6 +41,22 @@ export interface RescheduleProposal {
   mechanicChanged: boolean;
 }
 
+export interface ContextMenuCellInfo {
+  mechanicId: string;
+  mechanicName: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  clientX: number;
+  clientY: number;
+}
+
+export interface ContextMenuBlockedInfo {
+  slotId: string;
+  clientX: number;
+  clientY: number;
+}
+
 interface DaySwimLanesProps {
   mechanics: Mechanic[];
   events: CalendarEvent[];
@@ -47,6 +65,9 @@ interface DaySwimLanesProps {
   onSelectEvent: (event: CalendarEvent) => void;
   onProposeReschedule?: (proposal: RescheduleProposal) => void;
   onDragError?: (message: string) => void;
+  onContextMenuCell?: (info: ContextMenuCellInfo) => void;
+  onContextMenuBlocked?: (info: ContextMenuBlockedInfo) => void;
+  onBlockDayClick?: (mechanicId: string, mechanicName: string) => void;
   currentDate?: Date;
 }
 
@@ -119,6 +140,9 @@ export default function DaySwimLanes({
   onSelectEvent,
   onProposeReschedule,
   onDragError,
+  onContextMenuCell,
+  onContextMenuBlocked,
+  onBlockDayClick,
   currentDate,
 }: DaySwimLanesProps) {
   const startHour = minTime.getHours();
@@ -141,7 +165,7 @@ export default function DaySwimLanes({
   const totalMinutes = minutesFromBase(startHour, startMinute, endHour, endMinute);
   const totalHeight = (totalMinutes / STEP_MINUTES) * ROW_HEIGHT;
 
-  const hasUnassigned = events.some((e) => !e.resourceId);
+  const hasUnassigned = events.some((e) => e.type !== "blocked" && !e.resourceId);
 
   const columns: Array<{ id: string; label: string }> = useMemo(() => {
     const cols = mechanics.map((m) => ({ id: m._id, label: m.name }));
@@ -149,15 +173,22 @@ export default function DaySwimLanes({
     return cols;
   }, [mechanics, hasUnassigned]);
 
-  const eventsByColumn = useMemo(() => {
-    const map = new Map<string, CalendarEvent[]>();
-    for (const col of columns) map.set(col.id, []);
+  const { bookingsByColumn, blockedByColumn } = useMemo(() => {
+    const bkMap = new Map<string, CalendarEvent[]>();
+    const blMap = new Map<string, CalendarEvent[]>();
+    for (const col of columns) {
+      bkMap.set(col.id, []);
+      blMap.set(col.id, []);
+    }
     for (const ev of events) {
       const colId = ev.resourceId || "__unassigned__";
-      const list = map.get(colId);
-      if (list) list.push(ev);
+      if (ev.type === "blocked") {
+        blMap.get(colId)?.push(ev);
+      } else {
+        bkMap.get(colId)?.push(ev);
+      }
     }
-    return map;
+    return { bookingsByColumn: bkMap, blockedByColumn: blMap };
   }, [columns, events]);
 
   // Current time indicator
@@ -189,6 +220,8 @@ export default function DaySwimLanes({
   currentDateRef.current = currentDate;
   const onDragErrorRef = useRef(onDragError);
   onDragErrorRef.current = onDragError;
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
 
   /** Given a viewport coordinate, return which column + slot the pointer is over. */
   const getDropTarget = useCallback((clientX: number, clientY: number) => {
@@ -404,6 +437,37 @@ export default function DaySwimLanes({
         return;
       }
 
+      // Forbidden drop: cannot reschedule onto a blocked time slot
+      if (target) {
+        const sls = slotsRef.current;
+        const slot = sls[target.slotIndex];
+        if (slot) {
+          const dropTime = formatHHMM(slot.hour, slot.minute);
+          const evDurationMin = (ev.end.getTime() - ev.start.getTime()) / 60000;
+          const dropEndTotalMin = slot.hour * 60 + slot.minute + evDurationMin;
+          const deh = Math.floor(Math.min(1439, dropEndTotalMin) / 60);
+          const dem = Math.min(1439, dropEndTotalMin) % 60;
+          const dropEndTime = formatHHMM(deh, dem);
+
+          const blocked = eventsRef.current.filter(
+            (be) =>
+              be.type === "blocked" &&
+              (be.resourceId === target.colId || !be.resourceId),
+          );
+          const overlapsBlocked = blocked.some((bl) => {
+            const blStart = formatHHMM(bl.start.getHours(), bl.start.getMinutes());
+            const blEnd = formatHHMM(bl.end.getHours(), bl.end.getMinutes());
+            return blStart < dropEndTime && blEnd > dropTime;
+          });
+          if (overlapsBlocked) {
+            animateBackAndCleanup(() => {
+              onDragErrorRef.current?.("Cannot reschedule onto a blocked time slot");
+            });
+            return;
+          }
+        }
+      }
+
       // Check if the drop target differs from the original position
       if (target && onProposeRescheduleRef.current) {
         const sls = slotsRef.current;
@@ -506,21 +570,61 @@ export default function DaySwimLanes({
 
         {/* Mechanic columns */}
         {columns.map((col, colIdx) => {
-          const colEvents = eventsByColumn.get(col.id) ?? [];
+          const colBookings = bookingsByColumn.get(col.id) ?? [];
+          const colBlocked = blockedByColumn.get(col.id) ?? [];
           return (
             <div
               key={col.id}
               className={`flex-1 min-w-[150px] ${colIdx < columns.length - 1 ? "border-r border-border" : ""}`}
             >
               {/* Column header */}
-              <div className="h-9 flex items-center justify-center border-b border-border bg-card sticky top-0 z-10">
-                <span className="text-xs font-medium text-muted-foreground truncate px-2">
+              <div className="h-9 flex items-center justify-center border-b border-border bg-card sticky top-0 z-10 group/header gap-1 px-2">
+                <span className="text-xs font-medium text-muted-foreground truncate">
                   {col.label}
                 </span>
+                {col.id !== "__unassigned__" && onBlockDayClick && (
+                  <button
+                    className="opacity-0 group-hover/header:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-destructive"
+                    title={`Block full day for ${col.label}`}
+                    onClick={() => onBlockDayClick(col.id, col.label)}
+                  >
+                    <Ban className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
               {/* Time grid + events */}
-              <div className="relative" style={{ height: totalHeight }}>
+              <div
+                className="relative"
+                style={{ height: totalHeight }}
+                onContextMenu={(e) => {
+                  // Only fire for empty cell clicks — ignore if target is an event block or blocked overlay
+                  if ((e.target as HTMLElement).closest("[data-event-block]") || (e.target as HTMLElement).closest(".blocked-slot-pattern")) return;
+                  if (!onContextMenuCell || col.id === "__unassigned__") return;
+                  e.preventDefault();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const relY = e.clientY - rect.top;
+                  const slotIndex = Math.min(Math.max(Math.floor(relY / ROW_HEIGHT), 0), slots.length - 1);
+                  const slot = slots[slotIndex];
+                  const nextSlotIndex = Math.min(slotIndex + 1, slots.length - 1);
+                  const nextSlot = slots[nextSlotIndex];
+                  const startTime = formatHHMM(slot.hour, slot.minute);
+                  const endTime = slotIndex === nextSlotIndex
+                    ? formatHHMM(slot.hour, slot.minute + STEP_MINUTES)
+                    : formatHHMM(nextSlot.hour, nextSlot.minute);
+                  const date = currentDate ? dateToString(currentDate) : dateToString(new Date());
+                  const mech = mechanics.find((m) => m._id === col.id);
+                  onContextMenuCell({
+                    mechanicId: col.id,
+                    mechanicName: mech?.name ?? col.label,
+                    date,
+                    startTime,
+                    endTime,
+                    clientX: e.clientX,
+                    clientY: e.clientY,
+                  });
+                }}
+              >
                 {/* Drop zone highlight — spans the full booking duration */}
                 {dropTarget?.colId === col.id && (
                   <div
@@ -545,6 +649,33 @@ export default function DaySwimLanes({
                   />
                 ))}
 
+                {/* Blocked slot overlays */}
+                {colBlocked.map((bl) => {
+                  const blStartMin = minutesFromBase(startHour, startMinute, bl.start.getHours(), bl.start.getMinutes());
+                  const blDuration = (bl.end.getTime() - bl.start.getTime()) / 60000;
+                  const blTop = (blStartMin / totalMinutes) * totalHeight;
+                  const blHeight = (blDuration / totalMinutes) * totalHeight;
+                  return (
+                    <div
+                      key={bl.id}
+                      className="absolute left-0 right-0 z-[5] blocked-slot-pattern"
+                      style={{
+                        top: Math.max(0, blTop),
+                        height: Math.max(ROW_HEIGHT * 0.5, blHeight),
+                      }}
+                      onContextMenu={(e) => {
+                        if (!bl.slotId || !onContextMenuBlocked) return;
+                        e.preventDefault();
+                        onContextMenuBlocked({ slotId: bl.slotId, clientX: e.clientX, clientY: e.clientY });
+                      }}
+                    >
+                      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-medium text-red-400 select-none pointer-events-none">
+                        Blocked
+                      </span>
+                    </div>
+                  );
+                })}
+
                 {/* Current time indicator */}
                 {showNowLine && (
                   <div
@@ -554,7 +685,7 @@ export default function DaySwimLanes({
                 )}
 
                 {/* Event blocks */}
-                {colEvents.map((ev) => {
+                {colBookings.map((ev: CalendarEvent) => {
                   const evStartMin = minutesFromBase(
                     startHour,
                     startMinute,
@@ -601,6 +732,7 @@ export default function DaySwimLanes({
                   return (
                     <div
                       key={ev.id}
+                      data-event-block
                       className={`absolute left-1 right-1 rounded-md text-xs px-2 py-1 overflow-hidden z-10 select-none ${
                         isDraggable
                           ? "cursor-grab active:cursor-grabbing"

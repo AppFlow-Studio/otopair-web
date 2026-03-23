@@ -6,6 +6,15 @@ import { v } from "convex/values";
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
+/** Add minutes to "HH:MM" and return "HH:MM" (clamped to same day). */
+function addMinutesToHHMM(hhmm: string, deltaMinutes: number): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const total = Math.max(0, Math.min(1439, h * 60 + m + deltaMinutes));
+  const rh = Math.floor(total / 60);
+  const rm = total % 60;
+  return `${String(rh).padStart(2, "0")}:${String(rm).padStart(2, "0")}`;
+}
+
 async function getCurrentUserOrNull(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) return null;
@@ -202,14 +211,21 @@ export const getBlockedSlots = query({
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
       .collect();
 
-    // Return only manually blocked slots (not booked ones — those come from bookings)
+    // Collect all time_slot_ids referenced by bookings — these are booking-created slots
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+    const bookingSlotIds = new Set(bookings.map((b: any) => String(b.time_slot_id)));
+
+    // Return only manually blocked slots (not booking-created ones)
     return slots
       .filter(
         (s: any) =>
           s.date >= args.dateFrom &&
           s.date <= args.dateTo &&
           !s.is_available &&
-          !s.booking_id // Only manual blocks, not booking-created slots
+          !bookingSlotIds.has(String(s._id))
       )
       .map((s: any) => ({
         _id: s._id,
@@ -268,6 +284,23 @@ export const blockSlot = mutation({
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) throw new Error("Not authorized");
+
+    // Check for overlapping bookings on this date/mechanic
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+    const overlapping = bookings.filter((b: any) => {
+      if (b.scheduled_date !== args.date) return false;
+      if (b.status === "cancelled" || b.status === "declined") return false;
+      if (args.mechanicId && b.mechanic_id && String(b.mechanic_id) !== String(args.mechanicId)) return false;
+      // Check time overlap
+      const bEnd = addMinutesToHHMM(b.scheduled_time, b.estimated_labor_minutes ?? 60);
+      return b.scheduled_time < args.endTime && bEnd > args.startTime;
+    });
+    if (overlapping.length > 0) {
+      throw new Error("Cannot block a slot that overlaps an existing booking");
+    }
 
     await ctx.db.insert("time_slots", {
       shop_id: primary.shopId,
@@ -329,6 +362,23 @@ export const blockMechanicDay = mutation({
     const openTime = dayHours.open_time ?? "09:00";
     const closeTime = dayHours.close_time ?? "17:00";
 
+    // Check for existing bookings for this mechanic on this date
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+    const hasBookings = bookings.some(
+      (b: any) =>
+        b.scheduled_date === args.date &&
+        b.mechanic_id &&
+        String(b.mechanic_id) === String(args.mechanicId) &&
+        b.status !== "cancelled" &&
+        b.status !== "declined"
+    );
+    if (hasBookings) {
+      throw new Error("Cannot block full day — mechanic has bookings on this date");
+    }
+
     // Create a single block for the entire day
     await ctx.db.insert("time_slots", {
       shop_id: primary.shopId,
@@ -338,5 +388,93 @@ export const blockMechanicDay = mutation({
       end_time: closeTime,
       is_available: false,
     });
+  },
+});
+
+/** Copy all blocked slots from the given week to the following week. */
+export const copyBlockedSlotsToNextWeek = mutation({
+  args: {
+    weekStartDate: v.string(), // YYYY-MM-DD of current week's Sunday
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) throw new Error("Not authorized");
+
+    // Compute date range for the current week (Sun–Sat)
+    const start = new Date(args.weekStartDate + "T00:00:00");
+    const endDate = new Date(start);
+    endDate.setDate(endDate.getDate() + 6);
+    const dateFrom = args.weekStartDate;
+    const dateTo = endDate.toISOString().split("T")[0];
+
+    // Get all time slots in this week
+    const slots = await ctx.db
+      .query("time_slots")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+
+    // Collect booking slot IDs to exclude them
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+    const bookingSlotIds = new Set(bookings.map((b: any) => String(b.time_slot_id)));
+
+    const blockedSlots = slots.filter(
+      (s: any) =>
+        s.date >= dateFrom &&
+        s.date <= dateTo &&
+        !s.is_available &&
+        !bookingSlotIds.has(String(s._id))
+    );
+
+    // Get existing blocked slots for next week to avoid duplicates
+    const nextStart = new Date(start);
+    nextStart.setDate(nextStart.getDate() + 7);
+    const nextEnd = new Date(nextStart);
+    nextEnd.setDate(nextEnd.getDate() + 6);
+    const nextDateFrom = nextStart.toISOString().split("T")[0];
+    const nextDateTo = nextEnd.toISOString().split("T")[0];
+
+    const nextWeekSlots = slots.filter(
+      (s: any) =>
+        s.date >= nextDateFrom &&
+        s.date <= nextDateTo &&
+        !s.is_available &&
+        !bookingSlotIds.has(String(s._id))
+    );
+
+    let copied = 0;
+    for (const slot of blockedSlots) {
+      // Shift date by 7 days
+      const slotDate = new Date(slot.date + "T00:00:00");
+      slotDate.setDate(slotDate.getDate() + 7);
+      const newDate = slotDate.toISOString().split("T")[0];
+
+      // Check for duplicate (same mechanic, date, start_time, end_time)
+      const isDuplicate = nextWeekSlots.some(
+        (ns: any) =>
+          ns.date === newDate &&
+          ns.start_time === slot.start_time &&
+          ns.end_time === slot.end_time &&
+          String(ns.mechanic_id ?? "") === String(slot.mechanic_id ?? "")
+      );
+      if (isDuplicate) continue;
+
+      await ctx.db.insert("time_slots", {
+        shop_id: primary.shopId,
+        ...(slot.mechanic_id ? { mechanic_id: slot.mechanic_id } : {}),
+        date: newDate,
+        start_time: slot.start_time,
+        end_time: slot.end_time,
+        is_available: false,
+      });
+      copied++;
+    }
+
+    return { copied };
   },
 });

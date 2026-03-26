@@ -111,13 +111,23 @@ export const getScheduleContext = query({
         closeTime: h.close_time ?? "17:00",
         isClosed: h.is_closed,
       })),
-      mechanics: mechanics.map((m: any) => ({
-        _id: m._id,
-        name: `${m.first_name} ${m.last_name}`.trim(),
-        firstName: m.first_name,
-        lastName: m.last_name,
-        title: m.title ?? null,
-      })),
+      mechanics: await Promise.all(
+        mechanics.map(async (m: any) => {
+          let imageUrl: string | null = null;
+          if (m.photo) {
+            const asset: any = await ctx.db.get(m.photo);
+            if (asset?.url) imageUrl = asset.url;
+          }
+          return {
+            _id: m._id,
+            name: `${m.first_name} ${m.last_name}`.trim(),
+            firstName: m.first_name,
+            lastName: m.last_name,
+            title: m.title ?? null,
+            imageUrl,
+          };
+        })
+      ),
     };
   },
 });
@@ -294,7 +304,7 @@ export const blockSlot = mutation({
       if (b.scheduled_date !== args.date) return false;
       if (b.status === "cancelled" || b.status === "declined") return false;
       // When blocking for a specific mechanic, only check that mechanic's bookings
-      if (args.mechanicId && String(b.mechanic_id) !== String(args.mechanicId)) return false;
+      if (args.mechanicId && String(b.mechanic_id ?? "") !== String(args.mechanicId)) return false;
       // Check time overlap
       const bEnd = addMinutesToHHMM(b.scheduled_time, b.estimated_labor_minutes ?? 60);
       return b.scheduled_time < args.endTime && bEnd > args.startTime;

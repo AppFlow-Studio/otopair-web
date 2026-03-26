@@ -267,7 +267,7 @@ export default function PortalLayout({
                     labelIcon={<Keyboard className="w-4 h-4" />}
                     onClick={() => setShowShortcuts(true)}
                   />
-                  {portalAccess?.shopId && (
+                  {process.env.NODE_ENV === "development" && portalAccess?.shopId && (
                     <UserButton.Action
                       label="Seed demo bookings"
                       labelIcon={<Sprout className="w-4 h-4" />}
@@ -321,7 +321,7 @@ export default function PortalLayout({
                     labelIcon={<Keyboard className="w-4 h-4" />}
                     onClick={() => setShowShortcuts(true)}
                   />
-                  {portalAccess?.shopId && (
+                  {process.env.NODE_ENV === "development" && portalAccess?.shopId && (
                     <UserButton.Action
                       label="Seed demo bookings"
                       labelIcon={<Sprout className="w-4 h-4" />}

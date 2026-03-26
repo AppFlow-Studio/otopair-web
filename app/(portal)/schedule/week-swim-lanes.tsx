@@ -2,25 +2,8 @@
 
 import { useMemo } from "react";
 import { format, addDays } from "date-fns";
-
-/* ------------------------------------------------------------------ */
-/*  Types                                                               */
-/* ------------------------------------------------------------------ */
-
-interface CalendarEvent {
-  id: string;
-  slotId?: string;
-  title: string;
-  start: Date;
-  end: Date;
-  resourceId?: string;
-  type: "booking" | "blocked";
-  status?: string;
-  customerName?: string;
-  mechanicName?: string | null;
-  serviceNames?: string[];
-  totalCost?: number;
-}
+import { dateToString } from "./schedule-constants";
+import type { CalendarEvent } from "./schedule-constants";
 
 interface Mechanic {
   _id: string;
@@ -57,13 +40,6 @@ const statusBarColors: Record<string, string> = {
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
-
-function dateToString(d: Date): string {
-  const y = d.getFullYear();
-  const mo = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${mo}-${day}`;
-}
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                           */

@@ -6,17 +6,17 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   CalendarOff,
-  CalendarPlus,
-  CalendarRange,
   ChevronLeft,
   ChevronRight,
   Copy,
+  Info,
   Loader2,
   Pen,
-  Settings2,
   X,
 } from "lucide-react";
 import { usePortalSidebar } from "../portal-context";
+import { statusColors, statusLabel, dateToString } from "./schedule-constants";
+import type { CalendarEvent } from "./schedule-constants";
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
 import {
   Select,
@@ -46,54 +46,12 @@ const localizer = dateFnsLocalizer({ format, parse, startOfWeek, getDay, locales
 /*  Types                                                               */
 /* ------------------------------------------------------------------ */
 
-interface CalendarEvent {
-  id: string;
-  slotId?: string;
-  title: string;
-  start: Date;
-  end: Date;
-  resourceId?: string;
-  type: "booking" | "blocked";
-  status?: string;
-  customerName?: string;
-  mechanicName?: string | null;
-  serviceNames?: string[];
-  totalCost?: number;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Status colors                                                       */
-/* ------------------------------------------------------------------ */
-
-const statusColors: Record<string, { bg: string; text: string; border: string }> = {
-  pending_shop_acceptance:      { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
-  pending:                      { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
-  pending_customer_acceptance:  { bg: "rgb(243 232 255)", text: "rgb(147 51 234)", border: "rgb(192 132 252)" },
-  confirmed:                    { bg: "rgb(224 231 255)", text: "rgb(99 102 241)", border: "rgb(165 180 252)" },
-  in_progress:                  { bg: "rgb(236 253 245)", text: "rgb(5 150 105)", border: "rgb(110 231 183)" },
-  completed:                    { bg: "rgb(243 244 246)", text: "rgb(107 114 128)", border: "rgb(209 213 219)" },
-  blocked:                      { bg: "rgb(254 242 242)", text: "rgb(239 68 68)", border: "rgb(252 165 165)" },
-};
-
-const statusLabel: Record<string, string> = {
-  pending_shop_acceptance: "Pending Shop",
-  pending: "Pending Shop",
-  pending_customer_acceptance: "Pending Customer",
-  confirmed: "Confirmed",
-  in_progress: "In Progress",
-  completed: "Completed",
-};
-
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
 function formatDateRange(date: Date): string {
   return format(date, "MMMM yyyy");
-}
-
-function dateToString(d: Date) {
-  return format(d, "yyyy-MM-dd");
 }
 
 function getWeekRange(date: Date) {
@@ -146,7 +104,7 @@ function overlapsMechanicBooking(
   return bookings.some((b) => {
     if (b.scheduledDate !== date) return false;
     if (b.status === "cancelled" || b.status === "declined") return false;
-    if (b.mechanicId && b.mechanicId !== mechanicId) return false;
+    if (b.mechanicId !== mechanicId) return false;
     const bStart = toMins(b.scheduledTime);
     const bEnd = bStart + (b.estimatedMinutes ?? 60);
     return bStart < blockEnd && bEnd > blockStart;
@@ -210,6 +168,8 @@ export default function SchedulePage() {
   const blockMechanicDay = useMutation(api.schedule.blockMechanicDay);
   const copyBlockedToNextWeek = useMutation(api.schedule.copyBlockedSlotsToNextWeek);
   const [isCopyingBlocks, setIsCopyingBlocks] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const legendRef = useRef<HTMLDivElement>(null);
   const context = useQuery(api.schedule.getScheduleContext);
 
   const selectedJobDetail = useQuery(
@@ -253,6 +213,17 @@ export default function SchedulePage() {
     const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // Dismiss legend popover on click-outside
+  useEffect(() => {
+    if (!legendOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (legendRef.current?.contains(e.target as Node)) return;
+      setLegendOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [legendOpen]);
 
   // Keyboard shortcuts for the job detail modal
   useEffect(() => {
@@ -461,9 +432,25 @@ export default function SchedulePage() {
   // Always use swim lanes for the day view
   const useDaySwimLanes = currentView === "day";
 
-  // Full 24-hour range for day/week views
-  const minTime = new Date(0, 0, 0, 0, 0);
-  const maxTime = new Date(0, 0, 0, 23, 59);
+  // Constrain time grid to operating hours
+  const { minTime, maxTime } = useMemo(() => {
+    let earliest = 24;
+    let latest = 0;
+    if (context?.hours) {
+      for (const h of context.hours) {
+        if (h.isClosed) continue;
+        const [oh] = h.openTime.split(":").map(Number);
+        const [ch] = h.closeTime.split(":").map(Number);
+        if (oh < earliest) earliest = oh;
+        if (ch > latest) latest = ch;
+      }
+    }
+    if (earliest >= latest) { earliest = 8; latest = 18; }
+    return {
+      minTime: new Date(0, 0, 0, earliest, 0),
+      maxTime: new Date(0, 0, 0, latest, 0),
+    };
+  }, [context?.hours]);
 
   // Navigation handlers
   const handleNavigate = useCallback((date: Date) => {
@@ -607,6 +594,43 @@ export default function SchedulePage() {
               </Select>
             )}
 
+            {/* Legend popover */}
+            <div className="relative" ref={legendRef}>
+              <button
+                onClick={() => setLegendOpen((o) => !o)}
+                className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                title="Status legend"
+              >
+                <Info className="w-5 h-5" />
+              </button>
+              {legendOpen && (
+                <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 min-w-[200px]">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Status Legend</p>
+                  <div className="flex flex-col gap-1.5">
+                    {Object.entries(statusLabel)
+                      .filter(([key], i, arr) => arr.findIndex(([, l]) => l === statusLabel[key]) === i)
+                      .map(([key, label]) => {
+                        const colors = statusColors[key];
+                        if (!colors) return null;
+                        return (
+                          <div key={key} className="flex items-center gap-1.5">
+                            <div
+                              className="w-3 h-3 rounded-sm shrink-0"
+                              style={{ backgroundColor: colors.border }}
+                            />
+                            <span className="text-xs text-foreground">{label}</span>
+                          </div>
+                        );
+                      })}
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-3 h-3 rounded-sm blocked-slot-pattern shrink-0" />
+                      <span className="text-xs text-foreground">Blocked</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Copy blocks to next week — week view only */}
             {currentView === "week" && (
               <button
@@ -744,31 +768,6 @@ export default function SchedulePage() {
         )}
       </div>
 
-      {/* Legend */}
-      <div className="bg-card border border-border rounded-xl p-4">
-        <p className="text-xs font-medium text-muted-foreground mb-2">Status Legend</p>
-        <div className="flex items-center gap-4 flex-wrap">
-          {Object.entries(statusLabel)
-            .filter(([key], i, arr) => arr.findIndex(([, l]) => l === statusLabel[key]) === i)
-            .map(([key, label]) => {
-              const colors = statusColors[key];
-              if (!colors) return null;
-              return (
-                <div key={key} className="flex items-center gap-1.5">
-                  <div
-                    className="w-3 h-3 rounded-sm"
-                    style={{ backgroundColor: colors.border }}
-                  />
-                  <span className="text-xs text-foreground">{label}</span>
-                </div>
-              );
-            })}
-          <div className="flex items-center gap-1.5">
-            <div className="w-3 h-3 rounded-sm blocked-slot-pattern" />
-            <span className="text-xs text-foreground">Blocked</span>
-          </div>
-        </div>
-      </div>
 
       </div>{/* end main content */}
 
@@ -940,7 +939,7 @@ export default function SchedulePage() {
                       setBtSaving(false);
                     }
                   }}
-                  className="w-full py-2.5 text-sm font-medium rounded-lg bg-foreground text-background hover:opacity-90 transition-opacity disabled:opacity-40 inline-flex items-center justify-center gap-2"
+                  className="w-full py-2.5 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 inline-flex items-center justify-center gap-2"
                 >
                   {btSaving && <Loader2 className="w-4 h-4 animate-spin" />}
                   Save
@@ -1090,20 +1089,6 @@ export default function SchedulePage() {
               <div className="py-1">
                 <button
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
-                  onClick={() => setContextMenu(null)}
-                >
-                  <CalendarPlus className="w-4 h-4 text-muted-foreground shrink-0" />
-                  Add appointment
-                </button>
-                <button
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
-                  onClick={() => setContextMenu(null)}
-                >
-                  <CalendarRange className="w-4 h-4 text-muted-foreground shrink-0" />
-                  Add group appointment
-                </button>
-                <button
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
                   onClick={() => {
                     setBlockTimeDrawer({
                       mechanicId: contextMenu.info.mechanicId,
@@ -1117,15 +1102,6 @@ export default function SchedulePage() {
                 >
                   <CalendarOff className="w-4 h-4 text-muted-foreground shrink-0" />
                   Add blocked time
-                </button>
-              </div>
-              <div className="border-t border-border py-1">
-                <button
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-primary hover:bg-muted transition-colors"
-                  onClick={() => setContextMenu(null)}
-                >
-                  <Settings2 className="w-4 h-4 shrink-0" />
-                  Quick actions settings
                 </button>
               </div>
             </>

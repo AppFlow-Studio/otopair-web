@@ -2,29 +2,15 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Ban } from "lucide-react";
-
-/* ------------------------------------------------------------------ */
-/*  Types                                                               */
-/* ------------------------------------------------------------------ */
-
-interface CalendarEvent {
-  id: string;
-  slotId?: string;
-  title: string;
-  start: Date;
-  end: Date;
-  resourceId?: string;
-  type: "booking" | "blocked";
-  status?: string;
-  customerName?: string;
-  mechanicName?: string | null;
-  serviceNames?: string[];
-  totalCost?: number;
-}
+import { statusColors, dateToString } from "./schedule-constants";
+import type { CalendarEvent } from "./schedule-constants";
 
 interface Mechanic {
   _id: string;
   name: string;
+  firstName?: string;
+  lastName?: string;
+  imageUrl?: string | null;
 }
 
 export interface RescheduleProposal {
@@ -72,18 +58,10 @@ interface DaySwimLanesProps {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Status colors                                                       */
+/*  Re-export CalendarEvent for consumers that import types from here   */
 /* ------------------------------------------------------------------ */
 
-const statusColors: Record<string, { bg: string; text: string; border: string }> = {
-  pending_shop_acceptance:      { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
-  pending:                      { bg: "rgb(255 251 235)", text: "rgb(217 119 6)", border: "rgb(252 211 77)" },
-  pending_customer_acceptance:  { bg: "rgb(243 232 255)", text: "rgb(147 51 234)", border: "rgb(192 132 252)" },
-  confirmed:                    { bg: "rgb(224 231 255)", text: "rgb(99 102 241)", border: "rgb(165 180 252)" },
-  in_progress:                  { bg: "rgb(236 253 245)", text: "rgb(5 150 105)", border: "rgb(110 231 183)" },
-  completed:                    { bg: "rgb(243 244 246)", text: "rgb(107 114 128)", border: "rgb(209 213 219)" },
-  blocked:                      { bg: "rgb(254 242 242)", text: "rgb(239 68 68)", border: "rgb(252 165 165)" },
-};
+export type { CalendarEvent };
 
 const DRAGGABLE_STATUSES = new Set([
   "pending_shop_acceptance",
@@ -99,7 +77,7 @@ const DRAGGABLE_STATUSES = new Set([
 const GUTTER_WIDTH = 70;
 const ROW_HEIGHT = 48;
 const STEP_MINUTES = 30;
-const HEADER_HEIGHT = 36;
+const HEADER_HEIGHT = 84;
 const DRAG_THRESHOLD = 5;
 
 /* ------------------------------------------------------------------ */
@@ -119,13 +97,6 @@ function minutesFromBase(baseH: number, baseM: number, h: number, m: number): nu
 
 function formatHHMM(h: number, m: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-function dateToString(d: Date): string {
-  const y = d.getFullYear();
-  const mo = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${mo}-${day}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -167,9 +138,13 @@ export default function DaySwimLanes({
 
   const hasUnassigned = events.some((e) => e.type !== "blocked" && !e.resourceId);
 
-  const columns: Array<{ id: string; label: string }> = useMemo(() => {
-    const cols = mechanics.map((m) => ({ id: m._id, label: m.name }));
-    if (hasUnassigned) cols.push({ id: "__unassigned__", label: "Unassigned" });
+  const columns: Array<{ id: string; label: string; initials: string; imageUrl?: string | null }> = useMemo(() => {
+    const cols = mechanics.map((m) => {
+      const first = (m.firstName ?? m.name.split(" ")[0] ?? "").charAt(0).toUpperCase();
+      const last = (m.lastName ?? m.name.split(" ").slice(-1)[0] ?? "").charAt(0).toUpperCase();
+      return { id: m._id, label: m.name, initials: first + last, imageUrl: m.imageUrl };
+    });
+    if (hasUnassigned) cols.push({ id: "__unassigned__", label: "Unassigned", initials: "?", imageUrl: null });
     return cols;
   }, [mechanics, hasUnassigned]);
 
@@ -566,7 +541,7 @@ export default function DaySwimLanes({
       >
         {/* Time gutter */}
         <div className="shrink-0" style={{ width: GUTTER_WIDTH }}>
-          <div className="h-9 bg-card sticky top-0 z-30" />
+          <div className="bg-card sticky top-0 z-30 border-b border-border" style={{ height: HEADER_HEIGHT }} />
           <div className="relative" style={{ height: totalHeight }}>
             {/* Time labels */}
             {slots.map((s, i) => {
@@ -610,13 +585,37 @@ export default function DaySwimLanes({
               className={`flex-1 min-w-[150px] ${colIdx < columns.length - 1 ? "border-r border-border" : ""}`}
             >
               {/* Column header */}
-              <div className="h-9 flex items-center justify-center border-b border-border bg-card sticky top-0 z-30 group/header gap-1 px-2">
-                <span className="text-xs font-medium text-muted-foreground truncate">
-                  {col.label}
-                </span>
+              <div className="relative flex flex-col items-center justify-center border-b border-border bg-card sticky top-0 z-30 group/header gap-1.5 px-2 py-3" style={{ height: HEADER_HEIGHT }}>
+                {/* Avatar */}
+                <div className="shrink-0" style={{ width: 40, height: 40, borderRadius: 9999, padding: 2, background: 'rgba(99,102,241,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {col.imageUrl ? (
+                    <img
+                      src={col.imageUrl}
+                      alt={col.label}
+                      style={{ width: 36, height: 36, borderRadius: 9999, objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <div
+                      className="bg-white text-primary font-semibold flex items-center justify-center"
+                      style={{ width: 36, height: 36, borderRadius: 9999, fontSize: 13 }}
+                    >
+                      {col.initials}
+                    </div>
+                  )}
+                </div>
+                <div className="flex flex-col items-center min-w-0">
+                  <span className="text-xs font-medium text-muted-foreground truncate">
+                    {col.label}
+                  </span>
+                  {colBookings.length > 0 && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {colBookings.length} job{colBookings.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
                 {col.id !== "__unassigned__" && onBlockDayClick && (
                   <button
-                    className="opacity-0 group-hover/header:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-destructive"
+                    className="absolute top-1 right-1 opacity-0 group-hover/header:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-destructive"
                     title={`Block full day for ${col.label}`}
                     onClick={() => onBlockDayClick(col.id, col.label)}
                   >

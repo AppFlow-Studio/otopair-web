@@ -113,7 +113,10 @@ export default function TeamPage() {
       if (!res.ok) {
         setInviteError(data.error || "Failed to send invitation.");
       } else {
-        if (data.token) console.log("Invite token:", data.token);
+        if (data.token) {
+          const inviteLink = `${window.location.origin}/accept-invite?token=${data.token}`;
+          console.log("Invite link:", inviteLink);
+        }
         setInviteSuccess(true);
         setEmail("");
         setFirstName("");

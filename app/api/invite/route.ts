@@ -138,7 +138,7 @@ export async function POST(req: NextRequest) {
       clerkInvitationId,
     });
 
-    console.log("Invite token:", invitationToken);
+    console.log("Invite link:", redirectUrl);
     return NextResponse.json({ success: true, token: invitationToken });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";

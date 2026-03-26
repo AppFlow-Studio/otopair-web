@@ -5,10 +5,14 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
+  CalendarOff,
+  CalendarPlus,
+  CalendarRange,
   ChevronLeft,
   ChevronRight,
   Copy,
   Loader2,
+  Settings2,
 } from "lucide-react";
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
 import {
@@ -116,6 +120,13 @@ function formatTimeLabel(hhmm: string): string {
   const ampm = h >= 12 ? "PM" : "AM";
   const hour = h % 12 || 12;
   return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function formatTimeLabelCompact(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const ampm = h >= 12 ? "pm" : "am";
+  const hour = h % 12 || 12;
+  return `${hour}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -358,10 +369,8 @@ export default function SchedulePage() {
     return context.mechanics;
   }, [context?.mechanics, mechanicFilter]);
 
-  // Use swim lanes when in day view and there are 2+ columns (mechanics + possibly unassigned)
-  const hasUnassignedEvents = events.some((e) => !e.resourceId);
-  const dayColumnCount = dayViewMechanics.length + (hasUnassignedEvents ? 1 : 0);
-  const useDaySwimLanes = dayColumnCount > 1;
+  // Always use swim lanes for the day view
+  const useDaySwimLanes = currentView === "day";
 
   // Full 24-hour range for day/week views
   const minTime = new Date(0, 0, 0, 0, 0);
@@ -778,7 +787,7 @@ export default function SchedulePage() {
       {/* Right-click context menu */}
       {contextMenu && (
         <div
-          className="fixed z-[80] bg-card border border-border rounded-lg shadow-xl py-1 min-w-[200px]"
+          className="fixed z-[80] bg-card border border-border rounded-xl shadow-2xl overflow-hidden min-w-[220px]"
           style={{
             left: contextMenu.type === "block" ? contextMenu.info.clientX : contextMenu.clientX,
             top: contextMenu.type === "block" ? contextMenu.info.clientY : contextMenu.clientY,
@@ -787,27 +796,57 @@ export default function SchedulePage() {
         >
           {contextMenu.type === "block" && (
             <>
-              <button
-                className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors"
-                onClick={() => handleBlockSlot(contextMenu.info)}
-              >
-                Block {formatTimeLabel(contextMenu.info.startTime)}–{formatTimeLabel(contextMenu.info.endTime)}
-              </button>
-              <button
-                className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors"
-                onClick={() => handleBlockFullDay(contextMenu.info.mechanicId, contextMenu.info.mechanicName, contextMenu.info.date)}
-              >
-                Block full day for {contextMenu.info.mechanicName}
-              </button>
+              {/* Time header */}
+              <div className="px-4 py-3 border-b border-border">
+                <span className="text-sm font-semibold text-foreground">
+                  {formatTimeLabelCompact(contextMenu.info.startTime)}
+                </span>
+              </div>
+              {/* Menu items */}
+              <div className="py-1">
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
+                  onClick={() => setContextMenu(null)}
+                >
+                  <CalendarPlus className="w-4 h-4 text-muted-foreground shrink-0" />
+                  Add appointment
+                </button>
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
+                  onClick={() => setContextMenu(null)}
+                >
+                  <CalendarRange className="w-4 h-4 text-muted-foreground shrink-0" />
+                  Add group appointment
+                </button>
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
+                  onClick={() => handleBlockSlot(contextMenu.info)}
+                >
+                  <CalendarOff className="w-4 h-4 text-muted-foreground shrink-0" />
+                  Add blocked time
+                </button>
+              </div>
+              <div className="border-t border-border py-1">
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-primary hover:bg-muted transition-colors"
+                  onClick={() => setContextMenu(null)}
+                >
+                  <Settings2 className="w-4 h-4 shrink-0" />
+                  Quick actions settings
+                </button>
+              </div>
             </>
           )}
           {contextMenu.type === "unblock" && (
-            <button
-              className="w-full text-left px-3 py-2 text-sm hover:bg-muted transition-colors"
-              onClick={() => handleUnblockSlot(contextMenu.slotId)}
-            >
-              Unblock this slot
-            </button>
+            <div className="py-1">
+              <button
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
+                onClick={() => handleUnblockSlot(contextMenu.slotId)}
+              >
+                <CalendarOff className="w-4 h-4 text-muted-foreground shrink-0" />
+                Unblock this slot
+              </button>
+            </div>
           )}
         </div>
       )}

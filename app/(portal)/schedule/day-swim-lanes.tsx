@@ -573,10 +573,10 @@ export default function DaySwimLanes({
             {/* Current time pill in gutter */}
             {showNowLine && (
               <div
-                className="absolute right-0 z-20 pointer-events-none flex items-center justify-end pr-1"
+                className="absolute left-0 right-0 z-30 pointer-events-none flex items-center justify-end pr-1.5"
                 style={{ top: nowTop - 9, width: GUTTER_WIDTH }}
               >
-                <span className="text-[10px] font-medium text-destructive bg-destructive/10 rounded-full px-1.5 py-0.5 leading-none">
+                <span className="text-[10px] font-semibold text-destructive bg-card border-2 border-destructive rounded-full px-1.5 py-[3px] leading-none">
                   {`${now.getHours() % 12 || 12}:${String(now.getMinutes()).padStart(2, "0")}`}
                 </span>
               </div>

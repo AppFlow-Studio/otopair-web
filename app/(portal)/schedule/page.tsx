@@ -132,6 +132,27 @@ function formatTimeLabelCompact(hhmm: string): string {
   return `${hour}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
+/** Returns true if the [startTime, endTime) window overlaps any active booking for the given mechanic/date. */
+function overlapsMechanicBooking(
+  mechanicId: string,
+  date: string,
+  startTime: string,
+  endTime: string,
+  bookings: Array<{ scheduledDate: string; scheduledTime: string; estimatedMinutes: number; status: string; mechanicId: string | null }>
+): boolean {
+  const toMins = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
+  const blockStart = toMins(startTime);
+  const blockEnd = toMins(endTime);
+  return bookings.some((b) => {
+    if (b.scheduledDate !== date) return false;
+    if (b.status === "cancelled" || b.status === "declined") return false;
+    if (b.mechanicId && b.mechanicId !== mechanicId) return false;
+    const bStart = toMins(b.scheduledTime);
+    const bEnd = bStart + (b.estimatedMinutes ?? 60);
+    return bStart < blockEnd && bEnd > blockStart;
+  });
+}
+
 function generateTimeOptions(): Array<{ value: string; label: string }> {
   const options: Array<{ value: string; label: string }> = [];
   for (let h = 0; h < 24; h++) {
@@ -651,7 +672,13 @@ export default function SchedulePage() {
             onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
             onProposeReschedule={handleProposeReschedule}
             onDragError={(msg) => setToast({ msg, key: Date.now() })}
-            onContextMenuCell={(info) => setContextMenu({ type: "block", info })}
+            onContextMenuCell={(info) => {
+              if (
+                bookings &&
+                overlapsMechanicBooking(info.mechanicId, info.date, info.startTime, info.endTime, bookings)
+              ) return;
+              setContextMenu({ type: "block", info });
+            }}
             onContextMenuBlocked={(info) => setContextMenu({ type: "unblock", slotId: info.slotId, clientX: info.clientX, clientY: info.clientY })}
             onBlockDayClick={(mechanicId, mechanicName) => handleBlockFullDay(mechanicId, mechanicName, dateToString(currentDate))}
           />
@@ -834,6 +861,12 @@ export default function SchedulePage() {
                     </select>
                   </div>
                 </div>
+                {btFrom && btTo && btMechanicId && btDate && bookings &&
+                  overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings) && (
+                  <p className="text-xs text-destructive">
+                    This time overlaps an existing booking and cannot be blocked.
+                  </p>
+                )}
 
                 {/* Team member */}
                 <div>
@@ -886,7 +919,10 @@ export default function SchedulePage() {
               {/* Footer */}
               <div className="px-5 py-4 border-t border-border">
                 <button
-                  disabled={btSaving || !btDate || !btFrom || !btTo || !btMechanicId}
+                  disabled={
+                    btSaving || !btDate || !btFrom || !btTo || !btMechanicId ||
+                    !!(bookings && overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings))
+                  }
                   onClick={async () => {
                     setBtSaving(true);
                     try {

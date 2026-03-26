@@ -465,6 +465,22 @@ export default function DaySwimLanes({
             });
             return;
           }
+
+          // Forbidden drop: cannot reschedule onto a time occupied by another booking
+          const otherBookings = eventsRef.current.filter(
+            (be) => be.type === "booking" && be.id !== ev.id && be.resourceId === target.colId,
+          );
+          const overlapsBooking = otherBookings.some((bk) => {
+            const bkStart = formatHHMM(bk.start.getHours(), bk.start.getMinutes());
+            const bkEnd = formatHHMM(bk.end.getHours(), bk.end.getMinutes());
+            return bkStart < dropEndTime && bkEnd > dropTime;
+          });
+          if (overlapsBooking) {
+            animateBackAndCleanup(() => {
+              onDragErrorRef.current?.("Cannot reschedule onto a time already booked");
+            });
+            return;
+          }
         }
       }
 

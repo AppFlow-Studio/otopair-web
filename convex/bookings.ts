@@ -431,7 +431,7 @@ export const getMyShopJobContext = query({
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return null;
 
-    const shop = await ctx.db.get(primary.shopId);
+    const shop: any = await ctx.db.get(primary.shopId);
     if (!shop) return null;
 
     const allMechanics = await ctx.db
@@ -470,7 +470,7 @@ export const getMyShopJobContext = query({
 
     const services = await Promise.all(
       offered.map(async (entry: any) => {
-        const service = await ctx.db.get(entry.service_id);
+        const service: any = await ctx.db.get(entry.service_id);
         return service
           ? {
               _id: service._id,
@@ -962,6 +962,25 @@ export const proposeReschedule = mutation({
     const allowed = ["pending", "pending_shop_acceptance", "confirmed", "pending_customer_acceptance"];
     if (!allowed.includes(booking.status)) {
       throw new Error("Cannot reschedule a booking with status: " + booking.status);
+    }
+
+    // Check for overlap with other bookings at the target time/mechanic
+    const targetMechanicId = args.newMechanicId !== undefined ? args.newMechanicId : booking.mechanic_id;
+    const newEnd = addMinutes(args.newScheduledTime, booking.estimated_labor_minutes ?? 60);
+    const allBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", booking.shop_id))
+      .collect();
+    const conflicting = allBookings.filter((b: any) => {
+      if (String(b._id) === String(args.bookingId)) return false;
+      if (b.scheduled_date !== args.newScheduledDate) return false;
+      if (b.status === "cancelled" || b.status === "declined") return false;
+      if (targetMechanicId && b.mechanic_id && String(b.mechanic_id) !== String(targetMechanicId)) return false;
+      const bEnd = addMinutes(b.scheduled_time, b.estimated_labor_minutes ?? 60);
+      return b.scheduled_time < newEnd && bEnd > args.newScheduledTime;
+    });
+    if (conflicting.length > 0) {
+      throw new Error("Cannot reschedule: the new time overlaps an existing booking");
     }
 
     const patch: any = {

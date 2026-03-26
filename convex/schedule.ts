@@ -293,7 +293,8 @@ export const blockSlot = mutation({
     const overlapping = bookings.filter((b: any) => {
       if (b.scheduled_date !== args.date) return false;
       if (b.status === "cancelled" || b.status === "declined") return false;
-      if (args.mechanicId && b.mechanic_id && String(b.mechanic_id) !== String(args.mechanicId)) return false;
+      // When blocking for a specific mechanic, only check that mechanic's bookings
+      if (args.mechanicId && String(b.mechanic_id) !== String(args.mechanicId)) return false;
       // Check time overlap
       const bEnd = addMinutesToHHMM(b.scheduled_time, b.estimated_labor_minutes ?? 60);
       return b.scheduled_time < args.endTime && bEnd > args.startTime;

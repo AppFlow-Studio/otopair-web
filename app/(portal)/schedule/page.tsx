@@ -12,8 +12,11 @@ import {
   ChevronRight,
   Copy,
   Loader2,
+  Pen,
   Settings2,
+  X,
 } from "lucide-react";
+import { usePortalSidebar } from "../portal-context";
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
 import {
   Select,
@@ -129,6 +132,20 @@ function formatTimeLabelCompact(hhmm: string): string {
   return `${hour}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
+function generateTimeOptions(): Array<{ value: string; label: string }> {
+  const options: Array<{ value: string; label: string }> = [];
+  for (let h = 0; h < 24; h++) {
+    for (const m of [0, 15, 30, 45]) {
+      const value = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+      const ampm = h >= 12 ? "pm" : "am";
+      const hour = h % 12 || 12;
+      const label = `${hour}:${String(m).padStart(2, "0")}${ampm}`;
+      options.push({ value, label });
+    }
+  }
+  return options;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Main component                                                      */
 /* ------------------------------------------------------------------ */
@@ -148,6 +165,22 @@ export default function SchedulePage() {
     | null
   >(null);
 
+  // Blocked time drawer state
+  const [blockTimeDrawer, setBlockTimeDrawer] = useState<{
+    mechanicId: string;
+    mechanicName: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+  } | null>(null);
+  const [btTitle, setBtTitle] = useState("");
+  const [btDate, setBtDate] = useState("");
+  const [btFrom, setBtFrom] = useState("");
+  const [btTo, setBtTo] = useState("");
+  const [btMechanicId, setBtMechanicId] = useState("");
+  const [btDescription, setBtDescription] = useState("");
+  const [btSaving, setBtSaving] = useState(false);
+
   const jobDetailRef = useRef<JobDetailPanelHandle>(null);
 
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
@@ -162,6 +195,36 @@ export default function SchedulePage() {
     api.bookings.getJobDetail,
     selectedBookingId ? { bookingId: selectedBookingId } : "skip"
   );
+
+  // Sidebar compresses when drawer is open (same pattern as jobs page)
+  const drawerOpen = !!blockTimeDrawer;
+  const { setSidebarCompact } = usePortalSidebar();
+  useEffect(() => {
+    setSidebarCompact(drawerOpen);
+    return () => setSidebarCompact(false);
+  }, [drawerOpen, setSidebarCompact]);
+
+  // Pre-fill drawer form fields when drawer opens
+  useEffect(() => {
+    if (blockTimeDrawer) {
+      setBtTitle("");
+      setBtDate(blockTimeDrawer.date);
+      setBtFrom(blockTimeDrawer.startTime);
+      setBtTo(blockTimeDrawer.endTime);
+      setBtMechanicId(blockTimeDrawer.mechanicId);
+      setBtDescription("");
+    }
+  }, [blockTimeDrawer]);
+
+  // Close drawer on Escape
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setBlockTimeDrawer(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [drawerOpen]);
 
   // Auto-clear toast after 3s; key changes on every trigger so the timer always resets
   useEffect(() => {
@@ -211,10 +274,15 @@ export default function SchedulePage() {
   }, [selectedBookingId, selectedJobDetail]);
 
   // Dismiss context menu on click-outside or Escape
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!contextMenu) return;
-    const dismiss = () => setContextMenu(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
+    const dismiss = (e: PointerEvent) => {
+      // Don't dismiss if click is inside the context menu itself
+      if (contextMenuRef.current?.contains(e.target as Node)) return;
+      setContextMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setContextMenu(null); };
     document.addEventListener("pointerdown", dismiss);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -457,6 +525,11 @@ export default function SchedulePage() {
         <h1 className="text-2xl font-bold text-foreground">Schedule</h1>
       </div>
 
+      {/* Flex row: main content + drawer */}
+      <div className="flex items-start">
+      {/* Main content */}
+      <div className="flex-1 min-w-0 space-y-6">
+
       {/* Toolbar: nav + view switcher + mechanic filter */}
       <div className="bg-card border border-border rounded-xl p-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -670,6 +743,180 @@ export default function SchedulePage() {
         </div>
       </div>
 
+      </div>{/* end main content */}
+
+      {/* Blocked time drawer */}
+      <div
+        className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
+          drawerOpen ? "w-[420px]" : "w-0"
+        }`}
+      >
+        <div className="w-[396px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden">
+          {blockTimeDrawer && (
+            <div className="flex flex-col h-full">
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+                <h2 className="text-base font-semibold text-foreground">Add blocked time</h2>
+                <button
+                  onClick={() => setBlockTimeDrawer(null)}
+                  className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+                {/* Block time type */}
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-2 block">Block time type</label>
+                  <div className="flex gap-3">
+                    <div className="flex flex-col items-center gap-1.5 px-5 py-3 border-2 border-primary rounded-xl bg-primary/5 cursor-pointer">
+                      <Pen className="w-5 h-5 text-foreground" />
+                      <span className="text-xs font-medium text-foreground">Custom</span>
+                      <span className="text-[10px] text-muted-foreground">New blocked time</span>
+                    </div>
+                    <div className="flex flex-col items-center gap-1.5 px-5 py-3 border border-border rounded-xl cursor-pointer hover:bg-muted/50 transition-colors">
+                      <span className="text-lg">🍞</span>
+                      <span className="text-xs font-medium text-foreground">Lunch</span>
+                      <span className="text-[10px] text-muted-foreground">30min · Unpaid</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Title */}
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">Title</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. lunch meeting (optional)"
+                    value={btTitle}
+                    onChange={(e) => setBtTitle(e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                  />
+                </div>
+
+                {/* Date */}
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">Date</label>
+                  <input
+                    type="date"
+                    value={btDate}
+                    onChange={(e) => setBtDate(e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                  />
+                </div>
+
+                {/* From / To */}
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="text-sm font-medium text-foreground mb-1.5 block">From</label>
+                    <select
+                      value={btFrom}
+                      onChange={(e) => setBtFrom(e.target.value)}
+                      className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                    >
+                      {generateTimeOptions().map((t) => (
+                        <option key={t.value} value={t.value}>{t.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-sm font-medium text-foreground mb-1.5 block">To</label>
+                    <select
+                      value={btTo}
+                      onChange={(e) => setBtTo(e.target.value)}
+                      className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                    >
+                      {generateTimeOptions().map((t) => (
+                        <option key={t.value} value={t.value}>{t.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Team member */}
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">Team member</label>
+                  <select
+                    value={btMechanicId}
+                    onChange={(e) => setBtMechanicId(e.target.value)}
+                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                  >
+                    <option value="">Select team member</option>
+                    {mechanics.map((m) => (
+                      <option key={m._id} value={m._id}>{m.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Frequency */}
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">Frequency</label>
+                  <select
+                    disabled
+                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-muted text-foreground cursor-not-allowed"
+                  >
+                    <option>Doesn&apos;t repeat</option>
+                  </select>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="text-sm font-medium text-foreground mb-1.5 block">
+                    Description <span className="font-normal text-muted-foreground">(Optional)</span>
+                  </label>
+                  <div className="relative">
+                    <textarea
+                      placeholder="Add description or note"
+                      value={btDescription}
+                      onChange={(e) => {
+                        if (e.target.value.length <= 255) setBtDescription(e.target.value);
+                      }}
+                      rows={3}
+                      className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors resize-none"
+                    />
+                    <span className="absolute bottom-2 right-3 text-[10px] text-muted-foreground">
+                      {btDescription.length}/255
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="px-5 py-4 border-t border-border">
+                <button
+                  disabled={btSaving || !btDate || !btFrom || !btTo || !btMechanicId}
+                  onClick={async () => {
+                    setBtSaving(true);
+                    try {
+                      await blockSlot({
+                        mechanicId: btMechanicId as Id<"mechanics">,
+                        date: btDate,
+                        startTime: btFrom,
+                        endTime: btTo,
+                      });
+                      setToast({ msg: `Blocked ${formatTimeLabel(btFrom)}–${formatTimeLabel(btTo)} for ${blockTimeDrawer.mechanicName}`, key: Date.now() });
+                      setBlockTimeDrawer(null);
+                    } catch (err: unknown) {
+                      setToast({ msg: err instanceof Error ? err.message : "Failed to block slot", key: Date.now() });
+                    } finally {
+                      setBtSaving(false);
+                    }
+                  }}
+                  className="w-full py-2.5 text-sm font-medium rounded-lg bg-foreground text-background hover:opacity-90 transition-opacity disabled:opacity-40 inline-flex items-center justify-center gap-2"
+                >
+                  {btSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      </div>{/* end flex row */}
+
       {/* Job detail modal */}
       {selectedBookingId && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -787,6 +1034,7 @@ export default function SchedulePage() {
       {/* Right-click context menu */}
       {contextMenu && (
         <div
+          ref={contextMenuRef}
           className="fixed z-[80] bg-card border border-border rounded-xl shadow-2xl overflow-hidden min-w-[220px]"
           style={{
             left: contextMenu.type === "block" ? contextMenu.info.clientX : contextMenu.clientX,
@@ -820,7 +1068,16 @@ export default function SchedulePage() {
                 </button>
                 <button
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
-                  onClick={() => handleBlockSlot(contextMenu.info)}
+                  onClick={() => {
+                    setBlockTimeDrawer({
+                      mechanicId: contextMenu.info.mechanicId,
+                      mechanicName: contextMenu.info.mechanicName,
+                      date: contextMenu.info.date,
+                      startTime: contextMenu.info.startTime,
+                      endTime: contextMenu.info.endTime,
+                    });
+                    setContextMenu(null);
+                  }}
                 >
                   <CalendarOff className="w-4 h-4 text-muted-foreground shrink-0" />
                   Add blocked time

@@ -550,7 +550,7 @@ export default function DaySwimLanes({
       >
         {/* Time gutter */}
         <div className="shrink-0" style={{ width: GUTTER_WIDTH }}>
-          <div className="h-9 border-b border-border" />
+          <div className="h-9 border-b border-border bg-card sticky top-0 z-30" />
           <div className="relative" style={{ height: totalHeight }}>
             {slots.map((s, i) => (
               <div
@@ -578,7 +578,7 @@ export default function DaySwimLanes({
               className={`flex-1 min-w-[150px] ${colIdx < columns.length - 1 ? "border-r border-border" : ""}`}
             >
               {/* Column header */}
-              <div className="h-9 flex items-center justify-center border-b border-border bg-card sticky top-0 z-10 group/header gap-1 px-2">
+              <div className="h-9 flex items-center justify-center border-b border-border bg-card sticky top-0 z-30 group/header gap-1 px-2">
                 <span className="text-xs font-medium text-muted-foreground truncate">
                   {col.label}
                 </span>

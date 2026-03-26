@@ -33,10 +33,9 @@ export default function Footer() {
                         We're building bookings that<br /> don't need phone-tag
                     </h2>
                 </div>
-                <p className="text-sm sm:text-base text-neutral-600 mb-8 text-center flex sm:flex-row flex-col items-center justify-center gap-2 sm:mt-0 mt-8">
+                <div className="text-sm sm:text-base text-neutral-600 mb-8 text-center flex sm:flex-row flex-col items-center justify-center gap-2 sm:mt-0 mt-8">
                     If that sounds interesting to you, <span className='text-black underline flex items-center gap-2'>come work with us <ChevronMarqueeButton className='' /></span>{' '}
-                   
-                </p>
+                </div>
             </div>
 
             {/* Navigation & Subscription Section */}

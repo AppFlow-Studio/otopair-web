@@ -106,11 +106,11 @@ const DRAG_THRESHOLD = 5;
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-function formatGutterLabel(hour: number, minute: number): string {
-  const ampm = hour >= 12 ? "PM" : "AM";
+function formatGutterTime(hour: number, minute: number): { time: string; period: string } | null {
+  if (minute !== 0) return null;
+  const ampm = hour >= 12 ? "pm" : "am";
   const h = hour % 12 || 12;
-  if (minute === 0) return `${h} ${ampm}`;
-  return `${h}:${String(minute).padStart(2, "0")} ${ampm}`;
+  return { time: `${h}:${String(minute).padStart(2, "0")}`, period: ampm };
 }
 
 function minutesFromBase(baseH: number, baseM: number, h: number, m: number): number {
@@ -550,21 +550,37 @@ export default function DaySwimLanes({
       >
         {/* Time gutter */}
         <div className="shrink-0" style={{ width: GUTTER_WIDTH }}>
-          <div className="h-9 border-b border-border bg-card sticky top-0 z-30" />
+          <div className="h-9 bg-card sticky top-0 z-30" />
           <div className="relative" style={{ height: totalHeight }}>
-            {slots.map((s, i) => (
+            {/* Time labels */}
+            {slots.map((s, i) => {
+              const label = formatGutterTime(s.hour, s.minute);
+              if (!label) return null;
+              return (
+                <div
+                  key={i}
+                  className="absolute right-0 pr-2 flex flex-col items-end leading-none text-muted-foreground"
+                  style={{
+                    top: i * ROW_HEIGHT + 4,
+                    width: GUTTER_WIDTH,
+                  }}
+                >
+                  <span className="text-[11px] font-medium">{label.time}</span>
+                  <span className="text-[10px]">{label.period}</span>
+                </div>
+              );
+            })}
+            {/* Current time pill in gutter */}
+            {showNowLine && (
               <div
-                key={i}
-                className="absolute right-0 pr-2 text-xs text-muted-foreground"
-                style={{
-                  top: i * ROW_HEIGHT - 7,
-                  width: GUTTER_WIDTH,
-                  textAlign: "right",
-                }}
+                className="absolute right-0 z-20 pointer-events-none flex items-center justify-end pr-1"
+                style={{ top: nowTop - 9, width: GUTTER_WIDTH }}
               >
-                {s.minute === 0 ? formatGutterLabel(s.hour, s.minute) : ""}
+                <span className="text-[10px] font-medium text-destructive bg-destructive/10 rounded-full px-1.5 py-0.5 leading-none">
+                  {`${now.getHours() % 12 || 12}:${String(now.getMinutes()).padStart(2, "0")}`}
+                </span>
               </div>
-            ))}
+            )}
           </div>
         </div>
 
@@ -595,7 +611,7 @@ export default function DaySwimLanes({
 
               {/* Time grid + events */}
               <div
-                className="relative"
+                className="relative bg-muted/30"
                 style={{ height: totalHeight }}
                 onContextMenu={(e) => {
                   // Only fire for empty cell clicks — ignore if target is an event block or blocked overlay
@@ -679,9 +695,14 @@ export default function DaySwimLanes({
                 {/* Current time indicator */}
                 {showNowLine && (
                   <div
-                    className="absolute left-0 right-0 h-0.5 bg-destructive z-20 pointer-events-none"
+                    className="absolute left-0 right-0 z-20 pointer-events-none"
                     style={{ top: nowTop }}
-                  />
+                  >
+                    <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-[1.5px] bg-destructive" />
+                    {colIdx === 0 && (
+                      <div className="absolute -left-[5px] top-1/2 -translate-y-1/2 w-[10px] h-[10px] rounded-full bg-destructive" />
+                    )}
+                  </div>
                 )}
 
                 {/* Event blocks */}
@@ -694,8 +715,9 @@ export default function DaySwimLanes({
                   );
                   const evDuration =
                     (ev.end.getTime() - ev.start.getTime()) / 60000;
-                  const top = (evStartMin / totalMinutes) * totalHeight;
-                  const height = (evDuration / totalMinutes) * totalHeight;
+                  // Snap to grid so bookings perfectly cover their slot rows
+                  const slotTop = Math.round(evStartMin / STEP_MINUTES) * ROW_HEIGHT;
+                  const slotHeight = Math.max(ROW_HEIGHT, Math.ceil(evDuration / STEP_MINUTES) * ROW_HEIGHT);
                   const colors =
                     statusColors[ev.status ?? "confirmed"] ??
                     statusColors.confirmed;
@@ -709,10 +731,10 @@ export default function DaySwimLanes({
                     return (
                       <div
                         key={ev.id}
-                        className="absolute left-1 right-1 rounded-md text-xs px-2 py-1 overflow-hidden z-10"
+                        className="absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10"
                         style={{
-                          top: Math.max(0, top),
-                          height: Math.max(ROW_HEIGHT * 0.8, height),
+                          top: slotTop,
+                          height: slotHeight,
                           backgroundColor: "transparent",
                           color: colors.text,
                           border: `2px dashed ${colors.border}`,
@@ -733,14 +755,14 @@ export default function DaySwimLanes({
                     <div
                       key={ev.id}
                       data-event-block
-                      className={`absolute left-1 right-1 rounded-md text-xs px-2 py-1 overflow-hidden z-10 select-none ${
+                      className={`absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10 select-none ${
                         isDraggable
                           ? "cursor-grab active:cursor-grabbing"
                           : "cursor-pointer"
                       }`}
                       style={{
-                        top: Math.max(0, top),
-                        height: Math.max(ROW_HEIGHT * 0.8, height),
+                        top: slotTop,
+                        height: slotHeight,
                         backgroundColor: colors.bg,
                         color: colors.text,
                         borderLeft: isPendingCustomer

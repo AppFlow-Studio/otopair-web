@@ -75,8 +75,8 @@ const DRAGGABLE_STATUSES = new Set([
 /* ------------------------------------------------------------------ */
 
 const GUTTER_WIDTH = 70;
-const ROW_HEIGHT = 48;
-const STEP_MINUTES = 30;
+const ROW_HEIGHT = 24;
+const STEP_MINUTES = 15;
 const HEADER_HEIGHT = 84;
 const DRAG_THRESHOLD = 5;
 
@@ -84,11 +84,16 @@ const DRAG_THRESHOLD = 5;
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-function formatGutterTime(hour: number, minute: number): { time: string; period: string } | null {
-  if (minute !== 0) return null;
-  const ampm = hour >= 12 ? "pm" : "am";
-  const h = hour % 12 || 12;
-  return { time: `${h}:${String(minute).padStart(2, "0")}`, period: ampm };
+function formatGutterTime(hour: number, minute: number): { time: string; period: string; isHalf: boolean } | null {
+  if (minute === 0) {
+    const ampm = hour >= 12 ? "pm" : "am";
+    const h = hour % 12 || 12;
+    return { time: `${h}:00`, period: ampm, isHalf: false };
+  }
+  if (minute === 30) {
+    return { time: ":30", period: "", isHalf: true };
+  }
+  return null;
 }
 
 function minutesFromBase(baseH: number, baseM: number, h: number, m: number): number {
@@ -118,7 +123,9 @@ export default function DaySwimLanes({
 }: DaySwimLanesProps) {
   const startHour = minTime.getHours();
   const startMinute = minTime.getMinutes();
-  const endHour = maxTime.getHours();
+  // maxTime of next-day midnight (e.g. new Date(0,0,1,0,0)) has getHours()===0 but is later than minTime;
+  // treat that as hour 24 so the slot loop and height calculation don't collapse.
+  const endHour = (maxTime.getHours() === 0 && maxTime > minTime) ? 24 : maxTime.getHours();
   const endMinute = maxTime.getMinutes();
 
   const slots = useMemo(() => {
@@ -552,12 +559,13 @@ export default function DaySwimLanes({
                   key={i}
                   className="absolute right-0 pr-2 flex flex-col items-end leading-none text-muted-foreground"
                   style={{
-                    top: i * ROW_HEIGHT + 4,
+                    top: i * ROW_HEIGHT + 2,
                     width: GUTTER_WIDTH,
+                    opacity: label.isHalf ? 0.45 : 1,
                   }}
                 >
-                  <span className="text-[11px] font-medium">{label.time}</span>
-                  <span className="text-[10px]">{label.period}</span>
+                  <span className={label.isHalf ? "text-[9px]" : "text-[11px] font-medium"}>{label.time}</span>
+                  {!label.isHalf && <span className="text-[10px]">{label.period}</span>}
                 </div>
               );
             })}
@@ -730,9 +738,8 @@ export default function DaySwimLanes({
                   );
                   const evDuration =
                     (ev.end.getTime() - ev.start.getTime()) / 60000;
-                  // Snap to grid so bookings perfectly cover their slot rows
-                  const slotTop = Math.round(evStartMin / STEP_MINUTES) * ROW_HEIGHT;
-                  const slotHeight = Math.max(ROW_HEIGHT, Math.ceil(evDuration / STEP_MINUTES) * ROW_HEIGHT);
+                  const slotTop = (evStartMin / totalMinutes) * totalHeight;
+                  const slotHeight = Math.max(ROW_HEIGHT * 0.5, (evDuration / totalMinutes) * totalHeight);
                   const colors =
                     statusColors[ev.status ?? "confirmed"] ??
                     statusColors.confirmed;

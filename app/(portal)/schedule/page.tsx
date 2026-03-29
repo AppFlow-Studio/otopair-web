@@ -90,6 +90,24 @@ function formatTimeLabelCompact(hhmm: string): string {
   return `${hour}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
+/** Returns true if the [startTime, endTime) window overlaps an existing manually-blocked slot for the given mechanic/date. */
+function overlapsBlockedSlot(
+  mechanicId: string,
+  date: string,
+  startTime: string,
+  endTime: string,
+  blockedSlots: Array<{ date: string; startTime: string; endTime: string; mechanicId: string | null }>
+): boolean {
+  const toMins = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
+  const newStart = toMins(startTime);
+  const newEnd = toMins(endTime);
+  return blockedSlots.some((s) => {
+    if (s.date !== date) return false;
+    if (s.mechanicId !== mechanicId) return false;
+    return toMins(s.startTime) < newEnd && toMins(s.endTime) > newStart;
+  });
+}
+
 /** Returns true if the [startTime, endTime) window overlaps any active booking for the given mechanic/date. */
 function overlapsMechanicBooking(
   mechanicId: string,
@@ -143,6 +161,14 @@ export default function SchedulePage() {
     | { type: "unblock"; slotId: string; clientX: number; clientY: number }
     | null
   >(null);
+
+  // Block-full-day confirmation dialog
+  const [blockDayConfirm, setBlockDayConfirm] = useState<{
+    mechanicId: string;
+    mechanicName: string;
+    date: string;
+    bookingCount: number;
+  } | null>(null);
 
   // Blocked time drawer state
   const [blockTimeDrawer, setBlockTimeDrawer] = useState<{
@@ -299,14 +325,33 @@ export default function SchedulePage() {
     }
   }, [blockSlot]);
 
-  const handleBlockFullDay = useCallback(async (mechanicId: string, mechanicName: string, date: string) => {
+  const bookingsRef = useRef<typeof bookings>(undefined);
+  const handleBlockFullDay = useCallback(async (mechanicId: string, mechanicName: string, date: string, force = false) => {
     setContextMenu(null);
+
+    // Check existing bookings for this mechanic on this date before calling the mutation
+    if (!force) {
+      const current = bookingsRef.current;
+      if (current) {
+        const count = current.filter(
+          (b) => b.mechanicId === mechanicId && b.scheduledDate === date &&
+                 b.status !== "cancelled" && b.status !== "declined"
+        ).length;
+        if (count > 0) {
+          setBlockDayConfirm({ mechanicId, mechanicName, date, bookingCount: count });
+          return;
+        }
+      }
+    }
+
     try {
       await blockMechanicDay({
         mechanicId: mechanicId as Id<"mechanics">,
         date,
+        ...(force ? { force: true } : {}),
       });
       setToast({ msg: `Blocked full day for ${mechanicName}`, key: Date.now() });
+      setBlockDayConfirm(null);
     } catch (err: unknown) {
       setToast({ msg: err instanceof Error ? err.message : "Failed to block day", key: Date.now() });
     }
@@ -363,6 +408,7 @@ export default function SchedulePage() {
     dateFrom: dateRange.from,
     dateTo: dateRange.to,
   });
+  bookingsRef.current = bookings;
 
   const blockedSlots = useQuery(api.schedule.getBlockedSlots, {
     dateFrom: dateRange.from,
@@ -445,10 +491,11 @@ export default function SchedulePage() {
         if (ch > latest) latest = ch;
       }
     }
-    if (earliest >= latest) { earliest = 8; latest = 18; }
+    if (earliest >= latest) { earliest = 0; latest = 24; }
     return {
       minTime: new Date(0, 0, 0, earliest, 0),
-      maxTime: new Date(0, 0, 0, latest, 0),
+      // hour=24 rolls over via Date constructor: use next-day midnight (day=1, hour=0) as sentinel
+      maxTime: latest === 24 ? new Date(0, 0, 1, 0, 0) : new Date(0, 0, 0, latest, 0),
     };
   }, [context?.hours]);
 
@@ -866,6 +913,13 @@ export default function SchedulePage() {
                     This time overlaps an existing booking and cannot be blocked.
                   </p>
                 )}
+                {btFrom && btTo && btMechanicId && btDate && blockedSlots &&
+                  !overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings ?? []) &&
+                  overlapsBlockedSlot(btMechanicId, btDate, btFrom, btTo, blockedSlots) && (
+                  <p className="text-xs text-destructive">
+                    Cannot add blocked time onto a time already blocked.
+                  </p>
+                )}
 
                 {/* Team member */}
                 <div>
@@ -920,7 +974,8 @@ export default function SchedulePage() {
                 <button
                   disabled={
                     btSaving || !btDate || !btFrom || !btTo || !btMechanicId ||
-                    !!(bookings && overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings))
+                    !!(bookings && overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings)) ||
+                    !!(blockedSlots && overlapsBlockedSlot(btMechanicId, btDate, btFrom, btTo, blockedSlots))
                   }
                   onClick={async () => {
                     setBtSaving(true);
@@ -1124,6 +1179,37 @@ export default function SchedulePage() {
       {toast && !selectedBookingId && (
         <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
           {toast.msg}
+        </div>
+      )}
+
+      {/* Block-full-day confirmation dialog */}
+      {blockDayConfirm && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40"
+          onPointerDown={(e) => { if (e.target === e.currentTarget) setBlockDayConfirm(null); }}
+        >
+          <div className="bg-card border border-border rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
+            <h3 className="text-base font-semibold text-foreground mb-2">Block remaining time?</h3>
+            <p className="text-sm text-muted-foreground mb-5">
+              <span className="font-medium text-foreground">{blockDayConfirm.mechanicName}</span> has{" "}
+              {blockDayConfirm.bookingCount} existing booking{blockDayConfirm.bookingCount !== 1 ? "s" : ""} on this day.
+              Confirming will block all open time around those bookings and clear any existing manual blocks.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setBlockDayConfirm(null)}
+                className="flex-1 px-4 py-2 text-sm font-medium border border-border rounded-lg hover:bg-muted transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleBlockFullDay(blockDayConfirm.mechanicId, blockDayConfirm.mechanicName, blockDayConfirm.date, true)}
+                className="flex-1 px-4 py-2 text-sm font-semibold bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition-opacity"
+              >
+                Block remaining time
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

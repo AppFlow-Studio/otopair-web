@@ -61,6 +61,14 @@ export const seedDashboardBookings = mutation({
         }
         await ctx.db.delete(b._id);
       }
+      // Clear all manually-blocked time slots for this shop
+      const blockedSlots = await ctx.db
+        .query("time_slots")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      for (const s of blockedSlots) {
+        await ctx.db.delete(s._id);
+      }
       // Clean up demo users and vehicles created by a previous seed run
       const seedUsers = await ctx.db
         .query("users")

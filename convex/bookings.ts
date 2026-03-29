@@ -975,7 +975,7 @@ export const proposeReschedule = mutation({
       if (String(b._id) === String(args.bookingId)) return false;
       if (b.scheduled_date !== args.newScheduledDate) return false;
       if (b.status === "cancelled" || b.status === "declined") return false;
-      if (targetMechanicId && b.mechanic_id && String(b.mechanic_id) !== String(targetMechanicId)) return false;
+      if (targetMechanicId && String(b.mechanic_id) !== String(targetMechanicId)) return false;
       const bEnd = addMinutes(b.scheduled_time, b.estimated_labor_minutes ?? 60);
       return b.scheduled_time < newEnd && bEnd > args.newScheduledTime;
     });

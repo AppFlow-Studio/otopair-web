@@ -313,6 +313,24 @@ export const blockSlot = mutation({
       throw new Error("Cannot block a slot that overlaps an existing booking");
     }
 
+    // Reject if any existing manually-blocked slot overlaps the new range
+    const bookingSlotIds = new Set(bookings.map((b: any) => String(b.time_slot_id)));
+    const existingSlots = await ctx.db
+      .query("time_slots")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+    const overlappingBlock = existingSlots.find((s: any) => {
+      if (s.date !== args.date) return false;
+      if (s.is_available) return false;
+      if (bookingSlotIds.has(String(s._id))) return false;
+      if (args.mechanicId && (!s.mechanic_id || String(s.mechanic_id) !== String(args.mechanicId))) return false;
+      if (!args.mechanicId && s.mechanic_id) return false;
+      return s.start_time < args.endTime && s.end_time > args.startTime;
+    });
+    if (overlappingBlock) {
+      throw new Error("Cannot add blocked time onto a time already blocked");
+    }
+
     await ctx.db.insert("time_slots", {
       shop_id: primary.shopId,
       mechanic_id: args.mechanicId,
@@ -345,11 +363,14 @@ export const unblockSlot = mutation({
   },
 });
 
-/** Block all slots for a mechanic on a given date (full day off). */
+/** Block all slots for a mechanic on a given date (full day off).
+ *  When `force` is true and the mechanic has bookings, blocks all gaps
+ *  around those bookings rather than throwing. */
 export const blockMechanicDay = mutation({
   args: {
     mechanicId: v.id("mechanics"),
     date: v.string(),
+    force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
@@ -368,17 +389,18 @@ export const blockMechanicDay = mutation({
       .collect();
 
     const dayHours = hours.find((h: any) => h.day_of_week === dayOfWeek);
-    if (!dayHours || dayHours.is_closed) return;
+    if (dayHours?.is_closed) throw new Error("Shop is closed on this day");
 
-    const openTime = dayHours.open_time ?? "09:00";
-    const closeTime = dayHours.close_time ?? "17:00";
+    // Fall back to full day when no hours are configured (matches the schedule grid fallback)
+    const openTime = dayHours?.open_time ?? "00:00";
+    const closeTime = dayHours?.close_time ?? "24:00";
 
-    // Check for existing bookings for this mechanic on this date
-    const bookings = await ctx.db
+    // Fetch bookings for this mechanic on this date
+    const allBookings = await ctx.db
       .query("bookings")
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
       .collect();
-    const hasBookings = bookings.some(
+    const mechanicBookings = allBookings.filter(
       (b: any) =>
         b.scheduled_date === args.date &&
         b.mechanic_id &&
@@ -386,19 +408,74 @@ export const blockMechanicDay = mutation({
         b.status !== "cancelled" &&
         b.status !== "declined"
     );
-    if (hasBookings) {
-      throw new Error("Cannot block full day — mechanic has bookings on this date");
+
+    // force=true means the frontend already confirmed with the user; proceed around bookings
+
+    // Remove any existing manually-blocked slots for this mechanic on this date
+    const bookingSlotIds = new Set(allBookings.map((b: any) => String(b.time_slot_id)));
+    const existingSlots = await ctx.db
+      .query("time_slots")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+    const toDelete = existingSlots.filter((s: any) =>
+      s.date === args.date &&
+      !s.is_available &&
+      !bookingSlotIds.has(String(s._id)) &&
+      s.mechanic_id &&
+      String(s.mechanic_id) === String(args.mechanicId)
+    );
+    for (const slot of toDelete) {
+      await ctx.db.delete(slot._id);
     }
 
-    // Create a single block for the entire day
-    await ctx.db.insert("time_slots", {
-      shop_id: primary.shopId,
-      mechanic_id: args.mechanicId,
-      date: args.date,
-      start_time: openTime,
-      end_time: closeTime,
-      is_available: false,
-    });
+    if (mechanicBookings.length === 0) {
+      // No bookings — block the entire day as a single slot
+      await ctx.db.insert("time_slots", {
+        shop_id: primary.shopId,
+        mechanic_id: args.mechanicId,
+        date: args.date,
+        start_time: openTime,
+        end_time: closeTime,
+        is_available: false,
+      });
+    } else {
+      // Block gaps around existing bookings
+      // Sort bookings by start time
+      const sorted = mechanicBookings.sort((a: any, b: any) =>
+        a.scheduled_time < b.scheduled_time ? -1 : 1
+      );
+
+      // Build list of booked intervals
+      const booked: Array<{ start: string; end: string }> = sorted.map((b: any) => ({
+        start: b.scheduled_time,
+        end: addMinutesToHHMM(b.scheduled_time, b.estimated_labor_minutes ?? 60),
+      }));
+
+      // Collect gaps: [openTime, first booking), (between bookings), (last booking, closeTime]
+      const gaps: Array<{ start: string; end: string }> = [];
+      let cursor = openTime;
+      for (const interval of booked) {
+        if (cursor < interval.start) {
+          gaps.push({ start: cursor, end: interval.start });
+        }
+        // Advance cursor past this booking (take the later of cursor and booking end)
+        if (interval.end > cursor) cursor = interval.end;
+      }
+      if (cursor < closeTime) {
+        gaps.push({ start: cursor, end: closeTime });
+      }
+
+      for (const gap of gaps) {
+        await ctx.db.insert("time_slots", {
+          shop_id: primary.shopId,
+          mechanic_id: args.mechanicId,
+          date: args.date,
+          start_time: gap.start,
+          end_time: gap.end,
+          is_available: false,
+        });
+      }
+    }
   },
 });
 

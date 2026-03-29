@@ -138,6 +138,7 @@ export interface JobDetailData {
   previousMechanicId?: Id<"mechanics"> | null;
   previousMechanicName?: string | null;
   rescheduleProposedAt?: number | null;
+  estimatedLaborMinutes?: number | null;
 }
 
 export interface JobDetailPanelHandle {
@@ -530,6 +531,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         job.scheduledTime,
                       )}
                     </p>
+                    {job.estimatedLaborMinutes != null && job.estimatedLaborMinutes > 0 && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Est.{" "}
+                        {job.estimatedLaborMinutes < 60
+                          ? `${job.estimatedLaborMinutes}m`
+                          : `${(job.estimatedLaborMinutes / 60).toFixed(1).replace(/\.0$/, "")} hrs`}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <p className="text-muted-foreground text-xs mb-1">

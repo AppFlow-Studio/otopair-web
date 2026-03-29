@@ -219,13 +219,13 @@ export default function SchedulePage() {
     selectedBookingId ? { bookingId: selectedBookingId } : "skip"
   );
 
-  // Sidebar compresses when drawer is open (same pattern as jobs page)
+  // Sidebar compresses when either drawer is open (same pattern as jobs page)
   const drawerOpen = !!blockTimeDrawer;
   const { setSidebarCompact } = usePortalSidebar();
   useEffect(() => {
-    setSidebarCompact(drawerOpen);
+    setSidebarCompact(drawerOpen || !!selectedBookingId);
     return () => setSidebarCompact(false);
-  }, [drawerOpen, setSidebarCompact]);
+  }, [drawerOpen, selectedBookingId, setSidebarCompact]);
 
   // Pre-fill drawer form fields when drawer opens
   useEffect(() => {
@@ -1112,16 +1112,10 @@ export default function SchedulePage() {
         </div>
       </div>
 
-      </div>{/* end flex row */}
-
-      {/* Job detail modal */}
-      {selectedBookingId && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={() => setSelectedBookingId(null)}
-          />
-          <div className="relative bg-card rounded-xl border border-border shadow-xl w-full max-w-[480px] flex flex-col max-h-[90vh] overflow-hidden">
+      {/* Job detail drawer */}
+      <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[504px]" : "w-0"}`}>
+        <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden sticky top-6 h-[calc(100vh-3rem)]">
+          {selectedBookingId && (
             <JobDetailPanel
               ref={jobDetailRef}
               job={selectedJobDetail}
@@ -1130,15 +1124,11 @@ export default function SchedulePage() {
               onSuccess={(msg) => setToast({ msg, key: Date.now() })}
               showJobsLink
             />
-          </div>
-          {/* Toast inside the modal's stacking context to preserve backdrop-blur */}
-          {toast && (
-            <div className="fixed bottom-6 right-6 bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
-              {toast.msg}
-            </div>
           )}
         </div>
-      )}
+      </div>
+
+      </div>{/* end flex row */}
 
       {/* Reschedule confirmation dialog */}
       {rescheduleProposal && (
@@ -1308,7 +1298,7 @@ export default function SchedulePage() {
       )}
 
       {/* Success toast — shown outside modals when neither is open */}
-      {toast && !selectedBookingId && (
+      {toast && (
         <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
           {toast.msg}
         </div>

@@ -20,32 +20,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { StatusPill } from "@/components/status-pill";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                           */
 /* ------------------------------------------------------------------ */
-
-const statusBadgeClass: Record<string, string> = {
-  pending_shop_acceptance: "bg-amber-50 text-amber-600",
-  pending: "bg-amber-50 text-amber-600",
-  pending_customer_acceptance: "bg-purple-50 text-purple-600",
-  confirmed: "bg-accent text-primary",
-  in_progress: "bg-emerald-50 text-emerald-600",
-  completed: "bg-muted text-muted-foreground",
-  cancelled: "bg-red-50 text-destructive",
-  declined: "bg-red-50 text-destructive",
-};
-
-const statusLabel: Record<string, string> = {
-  pending_shop_acceptance: "Pending Shop",
-  pending: "Pending Shop",
-  pending_customer_acceptance: "Pending Customer",
-  confirmed: "Confirmed",
-  in_progress: "In Progress",
-  completed: "Completed",
-  cancelled: "Cancelled",
-  declined: "Declined",
-};
 
 const DECLINE_REASONS = [
   "Mechanic unavailable",
@@ -565,14 +544,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                       Status
                     </p>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span
-                        className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
-                          statusBadgeClass[job.status] ??
-                          "bg-muted text-muted-foreground"
-                        }`}
-                      >
-                        {statusLabel[job.status] ?? job.status}
-                      </span>
+                      <StatusPill status={job.status} />
                       {(job.status === "pending" ||
                         job.status === "pending_shop_acceptance") &&
                         (() => {

@@ -9,6 +9,7 @@ import { Calendar, ChevronDown, ClipboardList, Search, X } from "lucide-react";
 import { usePortalSidebar } from "../portal-context";
 import JobDetailPanel from "@/components/job-detail-panel";
 import type { JobDetailPanelHandle } from "@/components/job-detail-panel";
+import { StatusPill } from "@/components/status-pill";
 
 /* ------------------------------------------------------------------ */
 /*  Types & constants                                                   */
@@ -32,28 +33,6 @@ const STATUS_TABS: { key: JobStatusFilter; label: string }[] = [
   { key: "completed", label: "Completed" },
   { key: "cancelled", label: "Cancelled" },
 ];
-
-const statusBadgeClass: Record<string, string> = {
-  pending_shop_acceptance: "bg-amber-50 text-amber-600",
-  pending: "bg-amber-50 text-amber-600",
-  pending_customer_acceptance: "bg-purple-50 text-purple-600",
-  confirmed: "bg-accent text-primary",
-  in_progress: "bg-emerald-50 text-emerald-600",
-  completed: "bg-muted text-muted-foreground",
-  cancelled: "bg-red-50 text-destructive",
-  declined: "bg-red-50 text-destructive",
-};
-
-const statusLabel: Record<string, string> = {
-  pending_shop_acceptance: "Pending Shop",
-  pending: "Pending Shop",
-  pending_customer_acceptance: "Pending Customer",
-  confirmed: "Confirmed",
-  in_progress: "In Progress",
-  completed: "Completed",
-  cancelled: "Cancelled",
-  declined: "Declined",
-};
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
@@ -487,13 +466,7 @@ export default function JobsPage() {
                               </td>
                               <td className="px-3 py-4">
                                 <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span
-                                    className={`inline-flex text-[11px] px-2.5 py-1 rounded-full font-medium ${
-                                      statusBadgeClass[job.status] ?? "bg-muted text-muted-foreground"
-                                    }`}
-                                  >
-                                    {statusLabel[job.status] ?? job.status}
-                                  </span>
+                                  <StatusPill status={job.status} />
                                   {countdown && !drawerCompact && (
                                     <span className="text-amber-600 text-[11px] whitespace-nowrap">
                                       {countdown}

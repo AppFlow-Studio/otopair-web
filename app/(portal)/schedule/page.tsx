@@ -15,8 +15,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import {
+  BOOKING_STATUS_LEGEND_KEYS,
+  getBookingStatusLabel,
+} from "@/lib/booking-status";
 import { usePortalSidebar } from "../portal-context";
-import { statusColors, statusLabel, dateToString } from "./schedule-constants";
+import { statusColors, dateToString } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
 import {
@@ -681,9 +685,7 @@ export default function SchedulePage() {
                 <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 min-w-[200px]">
                   <p className="text-xs font-medium text-muted-foreground mb-2">Status Legend</p>
                   <div className="flex flex-col gap-1.5">
-                    {Object.entries(statusLabel)
-                      .filter(([key], i, arr) => arr.findIndex(([, l]) => l === statusLabel[key]) === i)
-                      .map(([key, label]) => {
+                    {BOOKING_STATUS_LEGEND_KEYS.map((key) => {
                         const colors = statusColors[key];
                         if (!colors) return null;
                         return (
@@ -692,7 +694,7 @@ export default function SchedulePage() {
                               className="w-3 h-3 rounded-sm shrink-0"
                               style={{ backgroundColor: colors.border }}
                             />
-                            <span className="text-xs text-foreground">{label}</span>
+                            <span className="text-xs text-foreground">{getBookingStatusLabel(key)}</span>
                           </div>
                         );
                       })}

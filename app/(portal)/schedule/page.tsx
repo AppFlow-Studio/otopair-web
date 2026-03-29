@@ -1106,7 +1106,7 @@ export default function SchedulePage() {
                   className="w-full py-2.5 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 inline-flex items-center justify-center gap-2"
                 >
                   {btSaving && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Save
+                  {blockTimeDrawer.editingSlotId ? "Update" : "Save"}
                 </button>
               </div>
             </div>
@@ -1309,10 +1309,10 @@ export default function SchedulePage() {
       {/* Block-full-day confirmation dialog */}
       {blockDayConfirm && (
         <div
-          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40"
-          onPointerDown={(e) => { if (e.target === e.currentTarget) setBlockDayConfirm(null); }}
+          className="fixed inset-0 z-[80] flex items-center justify-center"
         >
-          <div className="bg-card border border-border rounded-2xl shadow-xl p-6 w-full max-w-sm mx-4">
+          <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setBlockDayConfirm(null)} />
+          <div className="relative bg-card border border-border rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
             <h3 className="text-base font-semibold text-foreground mb-2">Block remaining time?</h3>
             <p className="text-sm text-muted-foreground mb-5">
               <span className="font-medium text-foreground">{blockDayConfirm.mechanicName}</span> has{" "}

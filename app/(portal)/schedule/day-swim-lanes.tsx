@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Ban } from "lucide-react";
+import { Ban, Users } from "lucide-react";
 import { statusColors, dateToString } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 
@@ -103,6 +103,12 @@ function minutesFromBase(baseH: number, baseM: number, h: number, m: number): nu
 
 function formatHHMM(h: number, m: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function formatCompactTime(h: number, m: number): string {
+  const ampm = h >= 12 ? "p" : "a";
+  const hour = h % 12 || 12;
+  return m === 0 ? `${hour}${ampm}` : `${hour}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -538,6 +544,16 @@ export default function DaySwimLanes({
 
   /* ---- Render ---- */
 
+  if (mechanics.length === 0 && !hasUnassigned) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[400px] gap-2">
+        <Users className="w-8 h-8 text-muted-foreground opacity-40" />
+        <p className="text-sm font-medium text-muted-foreground">No mechanics configured</p>
+        <p className="text-xs text-muted-foreground">Add team members in the Team page to see their schedules here.</p>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={containerRef}
@@ -792,7 +808,7 @@ export default function DaySwimLanes({
                     <div
                       key={ev.id}
                       data-event-block
-                      className={`absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10 select-none ${
+                      className={`absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10 select-none relative ${
                         isDraggable
                           ? "cursor-grab active:cursor-grabbing"
                           : "cursor-pointer"
@@ -815,6 +831,9 @@ export default function DaySwimLanes({
                         !isDraggable ? () => onSelectEvent(ev) : undefined
                       }
                     >
+                      <span className="absolute top-0.5 right-1 text-[10px] opacity-50 font-medium">
+                        {formatCompactTime(ev.start.getHours(), ev.start.getMinutes())}
+                      </span>
                       <p className="font-medium truncate">
                         {ev.customerName}
                       </p>

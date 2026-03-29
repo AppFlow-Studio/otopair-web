@@ -50,9 +50,9 @@ export const BOOKING_STATUS_VISUALS: Record<BookingStatus, BookingStatusVisuals>
     label: "Confirmed",
     pillClass: "bg-primary/15 text-primary",
     calendarColors: {
-      bg: "rgb(224 231 255)",
-      text: "rgb(99 102 241)",
-      border: "rgb(165 180 252)",
+      bg: "rgb(219 234 255)",
+      text: "rgb(82 153 254)",
+      border: "rgb(147 197 254)",
     },
   },
   in_progress: {
@@ -68,9 +68,9 @@ export const BOOKING_STATUS_VISUALS: Record<BookingStatus, BookingStatusVisuals>
     label: "Completed",
     pillClass: "bg-muted text-muted-foreground",
     calendarColors: {
-      bg: "rgb(243 244 246)",
-      text: "rgb(107 114 128)",
-      border: "rgb(209 213 219)",
+      bg: "rgb(245 245 247)",
+      text: "rgb(104 112 118)",
+      border: "rgb(214 218 222)",
     },
   },
   cancelled: {

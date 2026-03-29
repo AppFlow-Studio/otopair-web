@@ -760,13 +760,20 @@ export default defineSchema({
    *   FK → mechanics(mechanic_id)
    *   Becomes-reference → bookings (via time_slot_id)
    */
+  block_time_types: defineTable({
+    shop_id: v.id("shops"),
+    title: v.string(),
+  }).index("by_shop_id", ["shop_id"]),
+
   time_slots: defineTable({
     date: v.string(),
     end_time: v.string(),
     is_available: v.boolean(),
     mechanic_id: v.optional(v.id("mechanics")),
+    note: v.optional(v.string()),
     shop_id: v.id("shops"),
     start_time: v.string(),
+    title: v.optional(v.string()),
   })
     .index("by_shop_id", ["shop_id"])
     .index("by_mechanic_id", ["mechanic_id"])

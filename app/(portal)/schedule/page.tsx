@@ -12,6 +12,7 @@ import {
   Info,
   Loader2,
   Pen,
+  Trash2,
   X,
 } from "lucide-react";
 import { usePortalSidebar } from "../portal-context";
@@ -90,18 +91,21 @@ function formatTimeLabelCompact(hhmm: string): string {
   return `${hour}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
-/** Returns true if the [startTime, endTime) window overlaps an existing manually-blocked slot for the given mechanic/date. */
+/** Returns true if the [startTime, endTime) window overlaps an existing manually-blocked slot for the given mechanic/date.
+ *  Pass excludeSlotId to skip the slot currently being edited. */
 function overlapsBlockedSlot(
   mechanicId: string,
   date: string,
   startTime: string,
   endTime: string,
-  blockedSlots: Array<{ date: string; startTime: string; endTime: string; mechanicId: string | null }>
+  blockedSlots: Array<{ _id: string; date: string; startTime: string; endTime: string; mechanicId: string | null }>,
+  excludeSlotId?: string
 ): boolean {
   const toMins = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
   const newStart = toMins(startTime);
   const newEnd = toMins(endTime);
   return blockedSlots.some((s) => {
+    if (excludeSlotId && s._id === excludeSlotId) return false;
     if (s.date !== date) return false;
     if (s.mechanicId !== mechanicId) return false;
     return toMins(s.startTime) < newEnd && toMins(s.endTime) > newStart;
@@ -159,6 +163,7 @@ export default function SchedulePage() {
   const [contextMenu, setContextMenu] = useState<
     | { type: "block"; info: ContextMenuCellInfo }
     | { type: "unblock"; slotId: string; clientX: number; clientY: number }
+    | { type: "deleteBlockType"; typeId: string; title: string; clientX: number; clientY: number }
     | null
   >(null);
 
@@ -177,6 +182,9 @@ export default function SchedulePage() {
     date: string;
     startTime: string;
     endTime: string;
+    editingSlotId?: string;
+    initialTitle?: string;
+    initialDescription?: string;
   } | null>(null);
   const [btTitle, setBtTitle] = useState("");
   const [btDate, setBtDate] = useState("");
@@ -184,12 +192,20 @@ export default function SchedulePage() {
   const [btTo, setBtTo] = useState("");
   const [btMechanicId, setBtMechanicId] = useState("");
   const [btDescription, setBtDescription] = useState("");
+  const [btType, setBtType] = useState("custom");
+  const [saveAsType, setSaveAsType] = useState(false);
+  const savedBlockTypesQuery = useQuery(api.schedule.getBlockTimeTypes);
   const [btSaving, setBtSaving] = useState(false);
 
   const jobDetailRef = useRef<JobDetailPanelHandle>(null);
 
+  const savedBlockTypes = savedBlockTypesQuery ?? [];
+  const saveBlockTimeType = useMutation(api.schedule.saveBlockTimeType);
+  const deleteBlockTimeType = useMutation(api.schedule.deleteBlockTimeType);
+
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
   const blockSlot = useMutation(api.schedule.blockSlot);
+  const updateBlockedSlot = useMutation(api.schedule.updateBlockedSlot);
   const unblockSlot = useMutation(api.schedule.unblockSlot);
   const blockMechanicDay = useMutation(api.schedule.blockMechanicDay);
   const copyBlockedToNextWeek = useMutation(api.schedule.copyBlockedSlotsToNextWeek);
@@ -214,14 +230,23 @@ export default function SchedulePage() {
   // Pre-fill drawer form fields when drawer opens
   useEffect(() => {
     if (blockTimeDrawer) {
-      setBtTitle("");
+      const initialTitle = blockTimeDrawer.initialTitle ?? "";
+      setBtTitle(initialTitle);
       setBtDate(blockTimeDrawer.date);
       setBtFrom(blockTimeDrawer.startTime);
       setBtTo(blockTimeDrawer.endTime);
       setBtMechanicId(blockTimeDrawer.mechanicId);
-      setBtDescription("");
+      setBtDescription(blockTimeDrawer.initialDescription ?? "");
+      // Detect type from title
+      if (initialTitle.toLowerCase() === "lunch") {
+        setBtType("lunch");
+      } else {
+        const matched = savedBlockTypes.find((t) => t.title === initialTitle);
+        setBtType(matched ? matched._id : "custom");
+      }
+      setSaveAsType(false);
     }
-  }, [blockTimeDrawer]);
+  }, [blockTimeDrawer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close drawer on Escape
   useEffect(() => {
@@ -460,6 +485,8 @@ export default function SchedulePage() {
           resourceId: s.mechanicId ?? undefined,
           type: "blocked" as const,
           status: "blocked",
+          blockTitle: s.title ?? null,
+          note: s.note ?? null,
         };
       });
 
@@ -751,6 +778,19 @@ export default function SchedulePage() {
               setContextMenu({ type: "block", info });
             }}
             onContextMenuBlocked={(info) => setContextMenu({ type: "unblock", slotId: info.slotId, clientX: info.clientX, clientY: info.clientY })}
+            onSelectBlocked={(info) => {
+              const mech = context?.mechanics.find((m) => m._id === info.mechanicId);
+              setBlockTimeDrawer({
+                mechanicId: info.mechanicId ?? "",
+                mechanicName: mech ? mech.name : "",
+                date: info.date,
+                startTime: info.startTime,
+                endTime: info.endTime,
+                editingSlotId: info.slotId,
+                initialTitle: info.blockTitle ?? undefined,
+                initialDescription: info.note ?? undefined,
+              });
+            }}
             onBlockDayClick={(mechanicId, mechanicName) => handleBlockFullDay(mechanicId, mechanicName, dateToString(currentDate))}
           />
         )}
@@ -829,7 +869,7 @@ export default function SchedulePage() {
             <div className="flex flex-col h-full">
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-                <h2 className="text-base font-semibold text-foreground">Add blocked time</h2>
+                <h2 className="text-base font-semibold text-foreground">{blockTimeDrawer.editingSlotId ? "Edit blocked time" : "Add blocked time"}</h2>
                 <button
                   onClick={() => setBlockTimeDrawer(null)}
                   className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
@@ -843,31 +883,79 @@ export default function SchedulePage() {
                 {/* Block time type */}
                 <div>
                   <label className="text-sm font-medium text-foreground mb-2 block">Block time type</label>
-                  <div className="flex gap-3">
-                    <div className="flex flex-col items-center gap-1.5 px-5 py-3 border-2 border-primary rounded-xl bg-primary/5 cursor-pointer">
+                  <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-none">
+                    <div
+                      onClick={() => setBtType("custom")}
+                      className={`flex flex-col items-center gap-1.5 px-5 py-3 border-2 rounded-xl cursor-pointer transition-colors shrink-0 ${
+                        btType === "custom" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+                      }`}
+                    >
                       <Pen className="w-5 h-5 text-foreground" />
                       <span className="text-xs font-medium text-foreground">Custom</span>
                       <span className="text-[10px] text-muted-foreground">New blocked time</span>
                     </div>
-                    <div className="flex flex-col items-center gap-1.5 px-5 py-3 border border-border rounded-xl cursor-pointer hover:bg-muted/50 transition-colors">
+                    <div
+                      onClick={() => { setBtType("lunch"); setBtTitle("Lunch"); }}
+                      className={`flex flex-col items-center gap-1.5 px-5 py-3 border-2 rounded-xl cursor-pointer transition-colors shrink-0 ${
+                        btType === "lunch" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+                      }`}
+                    >
                       <span className="text-lg">🍞</span>
                       <span className="text-xs font-medium text-foreground">Lunch</span>
-                      <span className="text-[10px] text-muted-foreground">30min · Unpaid</span>
                     </div>
+                    {savedBlockTypes.map((t) => (
+                      <div
+                        key={t._id}
+                        onClick={() => { setBtType(t._id); setBtTitle(t.title); }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setContextMenu({ type: "deleteBlockType", typeId: t._id, title: t.title, clientX: e.clientX, clientY: e.clientY });
+                        }}
+                        className={`flex flex-col items-center gap-1.5 px-5 py-3 border-2 rounded-xl cursor-pointer transition-colors shrink-0 ${
+                          btType === t._id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+                        }`}
+                      >
+                        <span className="text-lg">🏷️</span>
+                        <span className="text-xs font-medium text-foreground">{t.title}</span>
+                      </div>
+                    ))}
                   </div>
+
+                  {/* "Save as new block time type?" toggle — only for custom type with a title */}
+                  {btType === "custom" && btTitle.trim() && (
+                    <div className="flex items-center justify-between mt-3">
+                      <span className="text-sm text-muted-foreground">Save as new block time type?</span>
+                      <button
+                        role="switch"
+                        aria-checked={saveAsType}
+                        onClick={() => setSaveAsType(!saveAsType)}
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-1 ${
+                          saveAsType ? "bg-primary" : "bg-muted-foreground/25"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform duration-200 ease-in-out ${
+                            saveAsType ? "translate-x-[18px]" : "translate-x-[3px]"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                {/* Title */}
-                <div>
-                  <label className="text-sm font-medium text-foreground mb-1.5 block">Title</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. lunch meeting (optional)"
-                    value={btTitle}
-                    onChange={(e) => setBtTitle(e.target.value)}
-                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
-                  />
-                </div>
+                {/* Title — only shown for custom type */}
+                {btType === "custom" && (
+                  <div>
+                    <label className="text-sm font-medium text-foreground mb-1.5 block">Title</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. lunch meeting (optional)"
+                      value={btTitle}
+                      onChange={(e) => setBtTitle(e.target.value)}
+                      className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                    />
+                  </div>
+                )}
 
                 {/* Date */}
                 <div>
@@ -915,7 +1003,7 @@ export default function SchedulePage() {
                 )}
                 {btFrom && btTo && btMechanicId && btDate && blockedSlots &&
                   !overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings ?? []) &&
-                  overlapsBlockedSlot(btMechanicId, btDate, btFrom, btTo, blockedSlots) && (
+                  overlapsBlockedSlot(btMechanicId, btDate, btFrom, btTo, blockedSlots, blockTimeDrawer?.editingSlotId) && (
                   <p className="text-xs text-destructive">
                     Cannot add blocked time onto a time already blocked.
                   </p>
@@ -975,21 +1063,40 @@ export default function SchedulePage() {
                   disabled={
                     btSaving || !btDate || !btFrom || !btTo || !btMechanicId ||
                     !!(bookings && overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings)) ||
-                    !!(blockedSlots && overlapsBlockedSlot(btMechanicId, btDate, btFrom, btTo, blockedSlots))
+                    !!(blockedSlots && overlapsBlockedSlot(btMechanicId, btDate, btFrom, btTo, blockedSlots, blockTimeDrawer?.editingSlotId))
                   }
                   onClick={async () => {
                     setBtSaving(true);
                     try {
-                      await blockSlot({
-                        mechanicId: btMechanicId as Id<"mechanics">,
-                        date: btDate,
-                        startTime: btFrom,
-                        endTime: btTo,
-                      });
-                      setToast({ msg: `Blocked ${formatTimeLabel(btFrom)}–${formatTimeLabel(btTo)} for ${blockTimeDrawer.mechanicName}`, key: Date.now() });
+                      if (blockTimeDrawer.editingSlotId) {
+                        await updateBlockedSlot({
+                          slotId: blockTimeDrawer.editingSlotId as Id<"time_slots">,
+                          mechanicId: btMechanicId as Id<"mechanics">,
+                          date: btDate,
+                          startTime: btFrom,
+                          endTime: btTo,
+                          ...(btTitle.trim() ? { title: btTitle.trim() } : {}),
+                          ...(btDescription.trim() ? { note: btDescription.trim() } : {}),
+                        });
+                        setToast({ msg: "Blocked time updated", key: Date.now() });
+                      } else {
+                        await blockSlot({
+                          mechanicId: btMechanicId as Id<"mechanics">,
+                          date: btDate,
+                          startTime: btFrom,
+                          endTime: btTo,
+                          ...(btTitle.trim() ? { title: btTitle.trim() } : {}),
+                          ...(btDescription.trim() ? { note: btDescription.trim() } : {}),
+                        });
+                        setToast({ msg: `Blocked ${formatTimeLabel(btFrom)}–${formatTimeLabel(btTo)} for ${blockTimeDrawer.mechanicName}`, key: Date.now() });
+                      }
+                      // Persist as a new saved type if the toggle is on
+                      if (saveAsType && btTitle.trim() && btType === "custom") {
+                        await saveBlockTimeType({ title: btTitle.trim() });
+                      }
                       setBlockTimeDrawer(null);
                     } catch (err: unknown) {
-                      setToast({ msg: err instanceof Error ? err.message : "Failed to block slot", key: Date.now() });
+                      setToast({ msg: err instanceof Error ? err.message : "Failed to save blocked time", key: Date.now() });
                     } finally {
                       setBtSaving(false);
                     }
@@ -1126,10 +1233,14 @@ export default function SchedulePage() {
         <div
           ref={contextMenuRef}
           className="fixed z-[80] bg-card border border-border rounded-xl shadow-2xl overflow-hidden min-w-[220px]"
-          style={{
-            left: contextMenu.type === "block" ? contextMenu.info.clientX : contextMenu.clientX,
-            top: contextMenu.type === "block" ? contextMenu.info.clientY : contextMenu.clientY,
-          }}
+          style={
+            contextMenu.type === "deleteBlockType"
+              ? { right: window.innerWidth - contextMenu.clientX - 6, top: contextMenu.clientY }
+              : {
+                  left: contextMenu.type === "block" ? contextMenu.info.clientX : contextMenu.clientX,
+                  top: contextMenu.type === "block" ? contextMenu.info.clientY : contextMenu.clientY,
+                }
+          }
           onPointerDown={(e) => e.stopPropagation()}
         >
           {contextMenu.type === "block" && (
@@ -1171,6 +1282,27 @@ export default function SchedulePage() {
                 Unblock this slot
               </button>
             </div>
+          )}
+          {contextMenu.type === "deleteBlockType" && (
+            <>
+              <div className="py-1">
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-destructive hover:bg-muted transition-colors"
+                  onClick={async () => {
+                    setContextMenu(null);
+                    if (btType === contextMenu.typeId) { setBtType("custom"); setBtTitle(""); }
+                    try {
+                      await deleteBlockTimeType({ typeId: contextMenu.typeId as Id<"block_time_types"> });
+                    } catch (err: unknown) {
+                      setToast({ msg: err instanceof Error ? err.message : "Failed to delete type", key: Date.now() });
+                    }
+                  }}
+                >
+                  <Trash2 className="w-4 h-4 shrink-0" />
+                  Delete block time type
+                </button>
+              </div>
+            </>
           )}
         </div>
       )}

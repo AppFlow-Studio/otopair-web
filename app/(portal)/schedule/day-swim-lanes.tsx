@@ -53,6 +53,7 @@ interface DaySwimLanesProps {
   onDragError?: (message: string) => void;
   onContextMenuCell?: (info: ContextMenuCellInfo) => void;
   onContextMenuBlocked?: (info: ContextMenuBlockedInfo) => void;
+  onSelectBlocked?: (info: { slotId: string; date: string; startTime: string; endTime: string; mechanicId: string | null; blockTitle: string | null; note: string | null }) => void;
   onBlockDayClick?: (mechanicId: string, mechanicName: string) => void;
   currentDate?: Date;
 }
@@ -118,6 +119,7 @@ export default function DaySwimLanes({
   onDragError,
   onContextMenuCell,
   onContextMenuBlocked,
+  onSelectBlocked,
   onBlockDayClick,
   currentDate,
 }: DaySwimLanesProps) {
@@ -675,16 +677,16 @@ export default function DaySwimLanes({
                   />
                 )}
 
-                {/* Gridlines */}
+                {/* Gridlines — drawn at the top of each slot so hour marks land exactly on the hour */}
                 {slots.map((s, i) => (
                   <div
                     key={i}
                     className={`absolute left-0 right-0 pointer-events-none ${
                       s.minute === 0
-                        ? "border-b border-border"
-                        : "border-b border-border/40"
+                        ? "border-t border-border"
+                        : "border-t border-border/40"
                     }`}
-                    style={{ top: i * ROW_HEIGHT + ROW_HEIGHT - 1 }}
+                    style={{ top: i * ROW_HEIGHT }}
                   />
                 ))}
 
@@ -697,10 +699,23 @@ export default function DaySwimLanes({
                   return (
                     <div
                       key={bl.id}
-                      className="absolute left-0 right-0 z-[5] blocked-slot-pattern"
+                      className="absolute left-0 right-0 z-[5] blocked-slot-pattern group cursor-pointer"
                       style={{
                         top: Math.max(0, blTop),
                         height: Math.max(ROW_HEIGHT * 0.5, blHeight),
+                      }}
+                      title={bl.note ?? undefined}
+                      onClick={() => {
+                        if (!bl.slotId || !onSelectBlocked) return;
+                        onSelectBlocked({
+                          slotId: bl.slotId,
+                          date: `${bl.start.getFullYear()}-${String(bl.start.getMonth() + 1).padStart(2, "0")}-${String(bl.start.getDate()).padStart(2, "0")}`,
+                          startTime: `${String(bl.start.getHours()).padStart(2, "0")}:${String(bl.start.getMinutes()).padStart(2, "0")}`,
+                          endTime: `${String(bl.end.getHours()).padStart(2, "0")}:${String(bl.end.getMinutes()).padStart(2, "0")}`,
+                          mechanicId: bl.resourceId ?? null,
+                          blockTitle: bl.blockTitle ?? null,
+                          note: bl.note ?? null,
+                        });
                       }}
                       onContextMenu={(e) => {
                         if (!bl.slotId || !onContextMenuBlocked) return;
@@ -708,8 +723,8 @@ export default function DaySwimLanes({
                         onContextMenuBlocked({ slotId: bl.slotId, clientX: e.clientX, clientY: e.clientY });
                       }}
                     >
-                      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-medium text-red-400 select-none pointer-events-none">
-                        Blocked
+                      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-medium text-red-400 select-none pointer-events-none px-1 truncate">
+                        {bl.blockTitle ?? "Blocked"}
                       </span>
                     </div>
                   );

@@ -15,6 +15,8 @@ export interface CalendarEvent {
   mechanicName?: string | null;
   serviceNames?: string[];
   totalCost?: number;
+  blockTitle?: string | null;
+  note?: string | null;
 }
 
 export const statusColors: Record<string, { bg: string; text: string; border: string }> = {

@@ -203,6 +203,71 @@ async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
   return names;
 }
 
+/** Returns custom block time types for the shop. */
+export const getBlockTimeTypes = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return [];
+
+    const types = await ctx.db
+      .query("block_time_types")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+
+    return types.map((t: any) => ({ _id: t._id, title: t.title }));
+  },
+});
+
+/** Delete a custom block time type. */
+export const deleteBlockTimeType = mutation({
+  args: { typeId: v.id("block_time_types") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const record = await ctx.db.get(args.typeId);
+    if (!record) throw new Error("Block time type not found");
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary || String(primary.shopId) !== String(record.shop_id)) {
+      throw new Error("Not authorized");
+    }
+
+    await ctx.db.delete(args.typeId);
+  },
+});
+
+/** Save a custom block time type for the shop. */
+export const saveBlockTimeType = mutation({
+  args: { title: v.string() },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) throw new Error("Not authorized");
+
+    // Avoid duplicates
+    const existing = await ctx.db
+      .query("block_time_types")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+    const duplicate = existing.find(
+      (t: any) => t.title.toLowerCase() === args.title.toLowerCase()
+    );
+    if (duplicate) return duplicate._id;
+
+    return await ctx.db.insert("block_time_types", {
+      shop_id: primary.shopId,
+      title: args.title,
+    });
+  },
+});
+
 /** Returns blocked (unavailable) time slots for a date range. */
 export const getBlockedSlots = query({
   args: {
@@ -243,6 +308,8 @@ export const getBlockedSlots = query({
         startTime: s.start_time,
         endTime: s.end_time,
         mechanicId: s.mechanic_id ?? null,
+        title: s.title ?? null,
+        note: s.note ?? null,
       }));
   },
 });
@@ -287,6 +354,8 @@ export const blockSlot = mutation({
     date: v.string(),
     startTime: v.string(),
     endTime: v.string(),
+    title: v.optional(v.string()),
+    note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
@@ -338,6 +407,77 @@ export const blockSlot = mutation({
       start_time: args.startTime,
       end_time: args.endTime,
       is_available: false,
+      ...(args.title ? { title: args.title } : {}),
+      ...(args.note ? { note: args.note } : {}),
+    });
+  },
+});
+
+/** Update an existing manually-blocked time slot. */
+export const updateBlockedSlot = mutation({
+  args: {
+    slotId: v.id("time_slots"),
+    mechanicId: v.optional(v.id("mechanics")),
+    date: v.string(),
+    startTime: v.string(),
+    endTime: v.string(),
+    title: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const slot = await ctx.db.get(args.slotId);
+    if (!slot) throw new Error("Slot not found");
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary || String(primary.shopId) !== String(slot.shop_id)) {
+      throw new Error("Not authorized");
+    }
+
+    // Check for overlapping bookings (excluding the slot itself)
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+    const overlapping = bookings.filter((b: any) => {
+      if (b.scheduled_date !== args.date) return false;
+      if (b.status === "cancelled" || b.status === "declined") return false;
+      if (args.mechanicId && String(b.mechanic_id ?? "") !== String(args.mechanicId)) return false;
+      const bEnd = addMinutesToHHMM(b.scheduled_time, b.estimated_labor_minutes ?? 60);
+      return b.scheduled_time < args.endTime && bEnd > args.startTime;
+    });
+    if (overlapping.length > 0) {
+      throw new Error("Cannot block a slot that overlaps an existing booking");
+    }
+
+    // Check for overlapping blocked slots (excluding self)
+    const bookingSlotIds = new Set(bookings.map((b: any) => String(b.time_slot_id)));
+    const existingSlots = await ctx.db
+      .query("time_slots")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+    const overlappingBlock = existingSlots.find((s: any) => {
+      if (String(s._id) === String(args.slotId)) return false; // exclude self
+      if (s.date !== args.date) return false;
+      if (s.is_available) return false;
+      if (bookingSlotIds.has(String(s._id))) return false;
+      if (args.mechanicId && (!s.mechanic_id || String(s.mechanic_id) !== String(args.mechanicId))) return false;
+      if (!args.mechanicId && s.mechanic_id) return false;
+      return s.start_time < args.endTime && s.end_time > args.startTime;
+    });
+    if (overlappingBlock) {
+      throw new Error("Cannot add blocked time onto a time already blocked");
+    }
+
+    await ctx.db.patch(args.slotId, {
+      mechanic_id: args.mechanicId,
+      date: args.date,
+      start_time: args.startTime,
+      end_time: args.endTime,
+      title: args.title ?? undefined,
+      note: args.note ?? undefined,
     });
   },
 });

@@ -2,8 +2,10 @@
 
 import { useMemo } from "react";
 import { format, addDays } from "date-fns";
+import { Users } from "lucide-react";
 import { dateToString } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
+import { BOOKING_STATUS_VISUALS, type BookingStatus } from "@/lib/booking-status";
 
 interface Mechanic {
   _id: string;
@@ -25,17 +27,12 @@ interface WeekSwimLanesProps {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Status colors (bar colors)                                          */
+/*  Status colors (bar colors) — derived from shared booking-status     */
 /* ------------------------------------------------------------------ */
 
-const statusBarColors: Record<string, string> = {
-  pending_shop_acceptance: "rgb(252 211 77)",
-  pending: "rgb(252 211 77)",
-  pending_customer_acceptance: "rgb(192 132 252)",
-  confirmed: "rgb(165 180 252)",
-  in_progress: "rgb(110 231 183)",
-  completed: "rgb(209 213 219)",
-};
+const statusBarColors: Record<string, string> = Object.fromEntries(
+  Object.entries(BOOKING_STATUS_VISUALS).map(([k, v]) => [k, v.calendarColors.border])
+);
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
@@ -93,6 +90,16 @@ export default function WeekSwimLanes({
   }, [mechanics, days, events]);
 
   const isToday = (dateStr: string) => dateToString(new Date()) === dateStr;
+
+  if (mechanics.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[400px] gap-2">
+        <Users className="w-8 h-8 text-muted-foreground opacity-40" />
+        <p className="text-sm font-medium text-muted-foreground">No mechanics configured</p>
+        <p className="text-xs text-muted-foreground">Add team members in the Team page to see their schedules here.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="overflow-auto" style={{ height: "calc(100vh - 320px)", minHeight: 500 }}>

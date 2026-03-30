@@ -613,7 +613,7 @@ export default function DaySwimLanes({
               {/* Column header */}
               <div className="relative flex flex-col items-center justify-center border-b border-border bg-card sticky top-0 z-30 group/header gap-1.5 px-2 py-3" style={{ height: HEADER_HEIGHT }}>
                 {/* Avatar */}
-                <div className="shrink-0" style={{ width: 40, height: 40, borderRadius: 9999, padding: 2, background: 'rgba(99,102,241,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div className="shrink-0 w-10 h-10 rounded-full bg-primary/15 flex items-center justify-center p-0.5">
                   {col.imageUrl ? (
                     <img
                       src={col.imageUrl}

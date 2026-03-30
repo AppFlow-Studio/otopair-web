@@ -849,8 +849,8 @@ export default function SchedulePage() {
                 date.getMonth() === today.getMonth() &&
                 date.getFullYear() === today.getFullYear();
               return {
-                /* --primary at 3% opacity */
-                style: isToday ? { backgroundColor: "rgba(99, 102, 241, 0.03)" } : {},
+                /* --primary rgb(82,153,254) at 3% opacity */
+                style: isToday ? { backgroundColor: "rgba(82, 153, 254, 0.03)" } : {},
               };
             }}
           />

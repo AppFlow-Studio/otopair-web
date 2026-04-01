@@ -6,13 +6,19 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   CalendarOff,
+  Car,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Copy,
   Info,
   Loader2,
+  MessageCircle,
   Pen,
+  Tag,
   Trash2,
+  Utensils,
+  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -152,6 +158,19 @@ function generateTimeOptions(): Array<{ value: string; label: string }> {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Block time type defaults                                            */
+/* ------------------------------------------------------------------ */
+
+const BUILT_IN_TYPES = [
+  { id: "break", label: "Break", Icon: Clock },
+  { id: "lunch", label: "Lunch", Icon: Utensils },
+  { id: "meeting", label: "Meeting", Icon: MessageCircle },
+  { id: "maintenance", label: "Maintenance", Icon: Wrench },
+  { id: "pickup", label: "Pickup", Icon: Car },
+  { id: "personal", label: "Personal", Icon: CalendarOff },
+];
+
+/* ------------------------------------------------------------------ */
 /*  Main component                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -242,8 +261,9 @@ export default function SchedulePage() {
       setBtMechanicId(blockTimeDrawer.mechanicId);
       setBtDescription(blockTimeDrawer.initialDescription ?? "");
       // Detect type from title
-      if (initialTitle.toLowerCase() === "lunch") {
-        setBtType("lunch");
+      const builtIn = BUILT_IN_TYPES.find((t) => t.label.toLowerCase() === initialTitle.toLowerCase());
+      if (builtIn) {
+        setBtType(builtIn.id);
       } else {
         const matched = savedBlockTypes.find((t) => t.title === initialTitle);
         setBtType(matched ? matched._id : "custom");
@@ -894,17 +914,19 @@ export default function SchedulePage() {
                     >
                       <Pen className="w-5 h-5 text-foreground" />
                       <span className="text-xs font-medium text-foreground">Custom</span>
-                      <span className="text-[10px] text-muted-foreground">New blocked time</span>
                     </div>
-                    <div
-                      onClick={() => { setBtType("lunch"); setBtTitle("Lunch"); }}
-                      className={`flex flex-col items-center gap-1.5 px-5 py-3 border-2 rounded-xl cursor-pointer transition-colors shrink-0 ${
-                        btType === "lunch" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
-                      }`}
-                    >
-                      <span className="text-lg">🍞</span>
-                      <span className="text-xs font-medium text-foreground">Lunch</span>
-                    </div>
+                    {BUILT_IN_TYPES.map(({ id, label, Icon }) => (
+                      <div
+                        key={id}
+                        onClick={() => { setBtType(id); setBtTitle(label); }}
+                        className={`flex flex-col items-center gap-1.5 px-5 py-3 border-2 rounded-xl cursor-pointer transition-colors shrink-0 ${
+                          btType === id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+                        }`}
+                      >
+                        <Icon className="w-5 h-5 text-foreground" />
+                        <span className="text-xs font-medium text-foreground">{label}</span>
+                      </div>
+                    ))}
                     {savedBlockTypes.map((t) => (
                       <div
                         key={t._id}
@@ -917,7 +939,7 @@ export default function SchedulePage() {
                           btType === t._id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
                         }`}
                       >
-                        <span className="text-lg">🏷️</span>
+                        <Tag className="w-5 h-5 text-foreground" />
                         <span className="text-xs font-medium text-foreground">{t.title}</span>
                       </div>
                     ))}
@@ -1092,9 +1114,15 @@ export default function SchedulePage() {
                         });
                         setToast({ msg: `Blocked ${formatTimeLabel(btFrom)}–${formatTimeLabel(btTo)} for ${blockTimeDrawer.mechanicName}`, key: Date.now() });
                       }
-                      // Persist as a new saved type if the toggle is on
+                      // Persist as a new saved type if the toggle is on and the title isn't already a known type
                       if (saveAsType && btTitle.trim() && btType === "custom") {
-                        await saveBlockTimeType({ title: btTitle.trim() });
+                        const trimmed = btTitle.trim().toLowerCase();
+                        const alreadyExists =
+                          BUILT_IN_TYPES.some((t) => t.label.toLowerCase() === trimmed) ||
+                          savedBlockTypes.some((t) => t.title.toLowerCase() === trimmed);
+                        if (!alreadyExists) {
+                          await saveBlockTimeType({ title: btTitle.trim() });
+                        }
                       }
                       setBlockTimeDrawer(null);
                     } catch (err: unknown) {

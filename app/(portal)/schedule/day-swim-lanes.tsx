@@ -808,7 +808,7 @@ export default function DaySwimLanes({
                     <div
                       key={ev.id}
                       data-event-block
-                      className={`absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10 select-none relative ${
+                      className={`absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10 select-none ${
                         isDraggable
                           ? "cursor-grab active:cursor-grabbing"
                           : "cursor-pointer"

@@ -1167,19 +1167,24 @@ export default function SchedulePage() {
         </div>
       </div>
 
-      </div>{/* end flex row */}
-
       {/* Create booking drawer */}
       {createBookingDrawer && (
-        <CreateBookingDrawer
-          initialDate={createBookingDrawer.date}
-          initialTime={createBookingDrawer.time}
-          initialMechanicId={createBookingDrawer.mechanicId}
-          mechanics={mechanics}
-          onClose={() => setCreateBookingDrawer(null)}
-          onToast={(msg) => setToast({ msg, key: Date.now() })}
-        />
+        <div className="flex-shrink-0 self-stretch w-[420px]">
+          <div className="w-[396px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden h-full">
+            <CreateBookingDrawer
+              initialDate={createBookingDrawer.date}
+              initialTime={createBookingDrawer.time}
+              initialMechanicId={createBookingDrawer.mechanicId}
+              mechanics={mechanics}
+              bookings={bookings ?? []}
+              onClose={() => setCreateBookingDrawer(null)}
+              onToast={(msg) => setToast({ msg, key: Date.now() })}
+            />
+          </div>
+        </div>
       )}
+
+      </div>{/* end flex row */}
 
       {/* Reschedule confirmation dialog */}
       {rescheduleProposal && (

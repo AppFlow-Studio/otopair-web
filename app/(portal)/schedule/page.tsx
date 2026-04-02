@@ -11,7 +11,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
-  Copy,
   Info,
   Loader2,
   MessageCircle,
@@ -240,8 +239,7 @@ export default function SchedulePage() {
   const updateBlockedSlot = useMutation(api.schedule.updateBlockedSlot);
   const unblockSlot = useMutation(api.schedule.unblockSlot);
   const blockMechanicDay = useMutation(api.schedule.blockMechanicDay);
-  const copyBlockedToNextWeek = useMutation(api.schedule.copyBlockedSlotsToNextWeek);
-  const [isCopyingBlocks, setIsCopyingBlocks] = useState(false);
+
   const [legendOpen, setLegendOpen] = useState(false);
   const legendRef = useRef<HTMLDivElement>(null);
   const context = useQuery(api.schedule.getScheduleContext);
@@ -587,11 +585,16 @@ export default function SchedulePage() {
     const colors = statusColors[event.status ?? "confirmed"] ?? statusColors.confirmed;
     const customerDisplay = currentView === "week"
       ? (event.customerName?.split(" ")[0] ?? "")
+      : currentView === "month"
+      ? (() => {
+          const parts = event.customerName?.split(" ") ?? [];
+          return parts.length > 1 ? `${parts[0]} ${parts[1][0]}.` : parts[0] ?? "";
+        })()
       : (event.customerName ?? "");
     const isPendingCustomer = event.status === "pending_customer_acceptance";
     return (
       <div
-        className="px-1.5 py-0.5 rounded text-[11px] leading-tight overflow-hidden h-full"
+        className="px-1.5 py-0.5 rounded text-[11px] leading-tight overflow-hidden h-full cursor-pointer"
         style={{
           backgroundColor: colors.bg,
           color: colors.text,
@@ -731,32 +734,6 @@ export default function SchedulePage() {
               )}
             </div>
 
-            {/* Copy blocks to next week — week view only */}
-            {currentView === "week" && (
-              <button
-                disabled={isCopyingBlocks}
-                onClick={async () => {
-                  setIsCopyingBlocks(true);
-                  try {
-                    const weekStartDate = dateToString(startOfWeek(currentDate, { weekStartsOn: 0 }));
-                    const result = await copyBlockedToNextWeek({ weekStartDate });
-                    setToast({ msg: `Copied ${result.copied} blocked slot(s) to next week`, key: Date.now() });
-                  } catch (err: unknown) {
-                    setToast({ msg: err instanceof Error ? err.message : "Failed to copy blocks", key: Date.now() });
-                  } finally {
-                    setIsCopyingBlocks(false);
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                {isCopyingBlocks ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5" />
-                )}
-                Copy blocks to next week
-              </button>
-            )}
 
             {/* View switcher */}
             <div className="flex border border-border rounded-lg overflow-hidden">
@@ -870,17 +847,11 @@ export default function SchedulePage() {
                 padding: 0,
               },
             })}
-            dayPropGetter={(date) => {
-              const today = new Date();
-              const isToday =
-                date.getDate() === today.getDate() &&
-                date.getMonth() === today.getMonth() &&
-                date.getFullYear() === today.getFullYear();
-              return {
-                /* --primary rgb(82,153,254) at 3% opacity */
-                style: isToday ? { backgroundColor: "rgba(82, 153, 254, 0.03)" } : {},
-              };
-            }}
+            dayPropGetter={() => ({ style: {} })}
+            selectable
+            onSelectSlot={(slotInfo) => { setCurrentDate(slotInfo.start); setCurrentView("day"); }}
+            onDrillDown={(date) => { setCurrentDate(date); setCurrentView("day"); }}
+            drilldownView="day"
           />
         )}
       </div>

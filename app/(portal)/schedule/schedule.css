@@ -22,7 +22,22 @@
 }
 
 .schedule-calendar .rbc-today {
-  background-color: rgba(99, 102, 241, 0.03); /* --primary at 3% */
+  background-color: color-mix(in srgb, var(--secondary) 6%, transparent);
+}
+
+.schedule-calendar .rbc-month-view .rbc-row-content {
+  pointer-events: none;
+}
+
+.schedule-calendar .rbc-month-view .rbc-row-content .rbc-event,
+.schedule-calendar .rbc-month-view .rbc-row-content .rbc-date-cell,
+.schedule-calendar .rbc-month-view .rbc-row-content .rbc-show-more {
+  pointer-events: auto;
+}
+
+.schedule-calendar .rbc-day-bg:hover {
+  background-color: color-mix(in srgb, var(--primary) 4%, transparent);
+  cursor: pointer;
 }
 
 .schedule-calendar .rbc-event {

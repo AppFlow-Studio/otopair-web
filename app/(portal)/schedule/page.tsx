@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   CalendarOff,
+  CalendarPlus,
   Car,
   ChevronLeft,
   ChevronRight,
@@ -45,6 +46,7 @@ import DaySwimLanes from "./day-swim-lanes";
 import type { RescheduleProposal, ContextMenuCellInfo, ContextMenuBlockedInfo } from "./day-swim-lanes";
 import WeekSwimLanes from "./week-swim-lanes";
 import JobDetailPanel, { type JobDetailPanelHandle } from "@/components/job-detail-panel";
+import CreateBookingDrawer from "./create-booking-drawer";
 
 /* ------------------------------------------------------------------ */
 /*  Localizer setup                                                     */
@@ -189,6 +191,13 @@ export default function SchedulePage() {
     | { type: "deleteBlockType"; typeId: string; title: string; clientX: number; clientY: number }
     | null
   >(null);
+
+  // Create booking drawer
+  const [createBookingDrawer, setCreateBookingDrawer] = useState<{
+    date: string;
+    time: string;
+    mechanicId: string;
+  } | null>(null);
 
   // Block-full-day confirmation dialog
   const [blockDayConfirm, setBlockDayConfirm] = useState<{
@@ -1160,6 +1169,18 @@ export default function SchedulePage() {
 
       </div>{/* end flex row */}
 
+      {/* Create booking drawer */}
+      {createBookingDrawer && (
+        <CreateBookingDrawer
+          initialDate={createBookingDrawer.date}
+          initialTime={createBookingDrawer.time}
+          initialMechanicId={createBookingDrawer.mechanicId}
+          mechanics={mechanics}
+          onClose={() => setCreateBookingDrawer(null)}
+          onToast={(msg) => setToast({ msg, key: Date.now() })}
+        />
+      )}
+
       {/* Reschedule confirmation dialog */}
       {rescheduleProposal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
@@ -1273,6 +1294,20 @@ export default function SchedulePage() {
               </div>
               {/* Menu items */}
               <div className="py-1">
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
+                  onClick={() => {
+                    setCreateBookingDrawer({
+                      date: contextMenu.info.date,
+                      time: contextMenu.info.startTime,
+                      mechanicId: contextMenu.info.mechanicId,
+                    });
+                    setContextMenu(null);
+                  }}
+                >
+                  <CalendarPlus className="w-4 h-4 text-muted-foreground shrink-0" />
+                  Create new booking
+                </button>
                 <button
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
                   onClick={() => {

@@ -117,30 +117,51 @@ export const seedDashboardBookings = mutation({
     ) => {
       const services = await ctx.db.query("services").collect();
       const existing = services.find((s) => s.slug === slug);
-      if (existing) return existing._id;
+      let serviceId: any;
 
-      let catId: any;
-      const cats = await ctx.db.query("service_categories").collect();
-      const existingCat = cats.find((c) => c.name === categoryName);
-      if (existingCat) {
-        catId = existingCat._id;
+      if (existing) {
+        serviceId = existing._id;
       } else {
-        catId = await ctx.db.insert("service_categories", {
-          name: categoryName,
-          icon_name: "wrench",
+        let catId: any;
+        const cats = await ctx.db.query("service_categories").collect();
+        const existingCat = cats.find((c) => c.name === categoryName);
+        if (existingCat) {
+          catId = existingCat._id;
+        } else {
+          catId = await ctx.db.insert("service_categories", {
+            name: categoryName,
+            icon_name: "wrench",
+            display_order: 99,
+          });
+        }
+        serviceId = await ctx.db.insert("services", {
+          name,
+          slug,
+          description: name,
+          service_category_id: catId,
+          default_labor_hours: 1,
+          is_labor_only: false,
+          has_options: false,
           display_order: 99,
         });
       }
-      return await ctx.db.insert("services", {
-        name,
-        slug,
-        description: name,
-        service_category_id: catId,
-        default_labor_hours: 1,
-        is_labor_only: false,
-        has_options: false,
-        display_order: 99,
-      });
+
+      // Ensure shop_services row exists for this shop
+      const existing_ss = await ctx.db
+        .query("shop_services")
+        .withIndex("by_shop_and_service", (q: any) =>
+          q.eq("shop_id", args.shopId).eq("service_id", serviceId)
+        )
+        .first();
+      if (!existing_ss) {
+        await ctx.db.insert("shop_services", {
+          shop_id: args.shopId,
+          service_id: serviceId,
+          is_offered: true,
+        });
+      }
+
+      return serviceId;
     };
 
     const oilChangeId    = await ensureService("oil-change",        "Oil Change",           "Maintenance");

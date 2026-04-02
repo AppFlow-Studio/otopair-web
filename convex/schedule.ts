@@ -706,3 +706,66 @@ export const copyBlockedSlotsToNextWeek = mutation({
     return { copied };
   },
 });
+
+/** Returns service categories with their services for the shop.
+ *  Uses shop_services (is_offered) when rows exist; falls back to all platform services otherwise. */
+export const getShopServicesWithCategories = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return null;
+
+    const offered = await ctx.db
+      .query("shop_services")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .filter((q: any) => q.eq(q.field("is_offered"), true))
+      .collect();
+
+    // Fall back to all platform services if this shop has no shop_services rows yet
+    let serviceIds: string[];
+    if (offered.length > 0) {
+      serviceIds = offered.map((e: any) => e.service_id as string);
+    } else {
+      const all = await ctx.db.query("services").collect();
+      serviceIds = all.map((s: any) => s._id as string);
+    }
+
+    const rows = (
+      await Promise.all(
+        serviceIds.map(async (sid) => {
+          const service: any = await ctx.db.get(sid as any);
+          if (!service) return null;
+          const category: any = await ctx.db.get(service.service_category_id);
+          return {
+            _id: service._id as string,
+            name: service.name as string,
+            defaultLaborHours: (service.default_labor_hours ?? 1) as number,
+            displayOrder: (service.display_order ?? 0) as number,
+            categoryId: service.service_category_id as string,
+            categoryName: (category?.name ?? "Other") as string,
+            categoryDisplayOrder: (category?.display_order ?? 99) as number,
+          };
+        })
+      )
+    ).filter(Boolean) as Array<{
+      _id: string; name: string; defaultLaborHours: number; displayOrder: number;
+      categoryId: string; categoryName: string; categoryDisplayOrder: number;
+    }>;
+
+    const catMap = new Map<string, { id: string; name: string; displayOrder: number; services: typeof rows }>();
+    for (const s of rows) {
+      if (!catMap.has(s.categoryId)) {
+        catMap.set(s.categoryId, { id: s.categoryId, name: s.categoryName, displayOrder: s.categoryDisplayOrder, services: [] });
+      }
+      catMap.get(s.categoryId)!.services.push(s);
+    }
+
+    const categories = Array.from(catMap.values())
+      .sort((a, b) => a.displayOrder - b.displayOrder)
+      .map((c) => ({ ...c, services: c.services.sort((a, b) => a.displayOrder - b.displayOrder) }));
+
+    return { shopId: primary.shopId as string, categories };
+  },
+});

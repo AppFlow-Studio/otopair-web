@@ -22,7 +22,19 @@
 }
 
 .schedule-calendar .rbc-today {
-  background-color: color-mix(in srgb, var(--secondary) 6%, transparent);
+  background-color: transparent;
+}
+
+.schedule-calendar .rbc-date-cell.rbc-now > a,
+.schedule-calendar .rbc-date-cell.rbc-now > button {
+  background-color: rgb(82 153 254);
+  color: #fff;
+  border-radius: 9999px;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .schedule-calendar .rbc-month-view .rbc-row-content {
@@ -43,6 +55,13 @@
 .schedule-calendar .rbc-event {
   border: none;
   padding: 0;
+}
+
+.schedule-calendar .rbc-month-view .rbc-event {
+  padding: 1px 2px;
+  background: transparent;
+  box-shadow: none;
+  width: 100%;
 }
 
 .schedule-calendar .rbc-off-range-bg {

@@ -5,7 +5,7 @@ import { format, addDays } from "date-fns";
 import { Users } from "lucide-react";
 import { dateToString } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
-import { BOOKING_STATUS_VISUALS, type BookingStatus } from "@/lib/booking-status";
+import { BOOKING_STATUS_VISUALS, getBookingStatusLabel, type BookingStatus } from "@/lib/booking-status";
 
 interface Mechanic {
   _id: string;
@@ -15,6 +15,8 @@ interface Mechanic {
 interface ShopDayHours {
   dayOfWeek: number;
   isClosed: boolean;
+  openTime?: string;  // "HH:MM"
+  closeTime?: string; // "HH:MM"
 }
 
 interface WeekSwimLanesProps {
@@ -40,6 +42,40 @@ const STATUS_DISPLAY_ORDER: string[] = [
   "declined",
   "no_show",
 ];
+
+function parseMinutes(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + (m ?? 0);
+}
+
+function isDayFullyBlocked(blocked: CalendarEvent[], hours: ShopDayHours | undefined): boolean {
+  if (blocked.length === 0) return false;
+  const dayStart = hours?.openTime ? parseMinutes(hours.openTime) : 0;
+  const dayEnd = hours?.closeTime ? parseMinutes(hours.closeTime) : 24 * 60;
+  const totalMinutes = dayEnd - dayStart;
+  if (totalMinutes <= 0) return false;
+
+  // Merge blocked intervals and check coverage.
+  // Compute times relative to midnight of the start day so next-day midnight
+  // (getHours() === 0 on a different date) resolves to 1440 instead of 0.
+  const intervals = blocked
+    .map((b) => {
+      const midnight = new Date(b.start);
+      midnight.setHours(0, 0, 0, 0);
+      const start = (b.start.getTime() - midnight.getTime()) / 60000;
+      const end = Math.min((b.end.getTime() - midnight.getTime()) / 60000, 24 * 60);
+      return { start, end };
+    })
+    .sort((a, b) => a.start - b.start);
+
+  let covered = 0;
+  let cursor = dayStart;
+  for (const { start, end } of intervals) {
+    if (start > cursor) break;
+    if (end > cursor) { covered += end - cursor; cursor = end; }
+  }
+  return covered >= totalMinutes;
+}
 
 function groupByStatus(bookings: CalendarEvent[]): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -115,16 +151,16 @@ export default function WeekSwimLanes({
 
   return (
     <div className="overflow-auto" style={{ height: "calc(100vh - 320px)", minHeight: 500 }}>
-      <table className="w-full border-collapse min-w-[700px]">
+      <table className="w-full border-collapse min-w-[700px] table-fixed">
         <thead>
           <tr>
-            <th className="sticky top-0 z-10 bg-card border-b border-border px-3 py-2 text-left text-xs font-medium text-muted-foreground w-[160px]">
+            <th className="sticky top-0 z-10 bg-card border-b border-r border-border px-3 py-2 text-left text-xs font-medium text-muted-foreground w-[160px]">
               Mechanic
             </th>
             {days.map((day) => (
               <th
                 key={day.dateStr}
-                className={`sticky top-0 z-10 bg-card border-b border-border px-2 py-2 text-center text-xs font-medium ${
+                className={`sticky top-0 z-10 bg-card border-b border-r border-border px-2 py-2 text-center text-xs font-medium ${
                   isToday(day.dateStr) ? "text-primary" : "text-muted-foreground"
                 }`}
               >
@@ -135,21 +171,22 @@ export default function WeekSwimLanes({
         </thead>
         <tbody>
           {mechanics.map((mech) => (
-            <tr key={mech._id} className="border-b border-border/50">
-              <td className="px-3 py-2 text-sm font-medium text-foreground whitespace-nowrap">
+            <tr key={mech._id} className="border-b border-border">
+              <td className="px-3 py-2 text-sm font-medium text-foreground whitespace-nowrap border-r border-border">
                 {mech.name}
               </td>
               {days.map((day) => {
                 const cell = grid.get(`${mech._id}:${day.dateStr}`);
                 const bookings = cell?.bookings ?? [];
                 const blocked = cell?.blocked ?? [];
-                const hasBlock = blocked.length > 0;
+                const dayHours = shopHours.find((h) => h.dayOfWeek === day.date.getDay());
+                const hasBlock = isDayFullyBlocked(blocked, dayHours);
 
                 if (day.isClosed) {
                   return (
                     <td
                       key={day.dateStr}
-                      className="px-1 py-2 text-center bg-muted/50"
+                      className="px-1 py-2 text-center bg-muted/50 border-r border-border"
                     >
                       <span className="text-[10px] text-muted-foreground">Closed</span>
                     </td>
@@ -159,7 +196,7 @@ export default function WeekSwimLanes({
                 return (
                   <td
                     key={day.dateStr}
-                    className={`px-1 py-2 cursor-pointer transition-colors relative ${hasBlock ? "blocked-slot-pattern" : ""}`}
+                    className={`px-1 py-2 cursor-pointer transition-colors relative border-r border-border ${hasBlock ? "blocked-slot-pattern" : ""}`}
                     style={!hasBlock ? { backgroundColor: "#fbfbfb" } : undefined}
                     onMouseEnter={(e) => { if (!hasBlock) (e.currentTarget as HTMLElement).style.backgroundColor = "#f0f0f0"; }}
                     onMouseLeave={(e) => { if (!hasBlock) (e.currentTarget as HTMLElement).style.backgroundColor = "#fbfbfb"; }}
@@ -170,7 +207,7 @@ export default function WeekSwimLanes({
                       onBlockDay(mech._id, mech.name, day.dateStr);
                     }}
                   >
-                    <div className="flex flex-wrap gap-1 justify-center items-center min-h-[32px]">
+                    <div className="flex flex-col gap-0.5 h-[108px] w-full overflow-hidden">
                       {(() => {
                         const grouped = groupByStatus(bookings);
                         return Object.entries(grouped)
@@ -185,13 +222,15 @@ export default function WeekSwimLanes({
                             return (
                               <span
                                 key={status}
-                                className="text-[10px] font-semibold px-1.5 rounded-full leading-4 inline-flex items-center justify-center"
+                                className="text-[10px] font-semibold px-1.5 rounded leading-5 inline-flex items-center gap-1 w-full truncate"
                                 style={{
-                                  backgroundColor: visuals.calendarColors.border,
-                                  color: "#fff",
+                                  backgroundColor: visuals.calendarColors.bg,
+                                  color: visuals.calendarColors.text,
+                                  borderLeft: `3px solid ${visuals.calendarColors.border}`,
                                 }}
                               >
-                                {count}
+                                <span className="font-bold">{count}</span>
+                                <span className="truncate">{getBookingStatusLabel(status as BookingStatus)}</span>
                               </span>
                             );
                           });

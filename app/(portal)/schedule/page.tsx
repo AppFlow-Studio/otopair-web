@@ -23,7 +23,9 @@ import {
 } from "lucide-react";
 import {
   BOOKING_STATUS_LEGEND_KEYS,
+  BOOKING_STATUS_VISUALS,
   getBookingStatusLabel,
+  type BookingStatus,
 } from "@/lib/booking-status";
 import { usePortalSidebar } from "../portal-context";
 import { statusColors, dateToString } from "./schedule-constants";
@@ -524,6 +526,50 @@ export default function SchedulePage() {
     return [...bookingEvents, ...blockedEvents];
   }, [bookings, blockedSlots, mechanicFilter]);
 
+  const MONTH_STATUS_ORDER = [
+    "pending_shop_acceptance",
+    "pending_customer_acceptance",
+    "confirmed",
+    "in_progress",
+    "completed",
+    "cancelled",
+    "declined",
+    "no_show",
+  ];
+
+  // For month view: collapse individual bookings into one chip per status per day
+  const calendarEvents = useMemo(() => {
+    const base = events.filter((e) => e.type !== "blocked");
+    if (currentView !== "month") return base;
+
+    const groups = new Map<string, { date: Date; status: string; count: number }>();
+    for (const ev of base) {
+      const dateStr = dateToString(ev.start);
+      const status = ev.status ?? "confirmed";
+      const key = `${dateStr}:${status}`;
+      if (!groups.has(key)) {
+        groups.set(key, { date: ev.start, status, count: 0 });
+      }
+      groups.get(key)!.count++;
+    }
+
+    return Array.from(groups.entries()).map(([key, { date, status, count }]) => {
+      const orderIdx = MONTH_STATUS_ORDER.indexOf(status);
+      const start = new Date(date);
+      start.setHours(orderIdx === -1 ? 23 : orderIdx, 0, 0, 0);
+      const end = new Date(start);
+      end.setMinutes(30);
+      return {
+        id: `month-summary-${key}`,
+        title: String(count),
+        start,
+        end,
+        type: "booking" as const,
+        status,
+      } satisfies CalendarEvent;
+    });
+  }, [events, currentView]);
+
   // Day view: determine which mechanics to show as columns
   const dayViewMechanics = useMemo(() => {
     if (!context?.mechanics) return [];
@@ -582,6 +628,24 @@ export default function SchedulePage() {
 
   // Custom event component — abbreviated in week view
   const EventComponent = useCallback(({ event }: { event: CalendarEvent }) => {
+    // Month view — summary chip
+    if (event.id.startsWith("month-summary-")) {
+      const visuals = BOOKING_STATUS_VISUALS[event.status as BookingStatus];
+      if (!visuals) return null;
+      return (
+        <span
+          className="text-[10px] font-semibold px-2 py-0.5 rounded-full inline-flex items-center gap-1 cursor-pointer w-full"
+          style={{
+            backgroundColor: visuals.calendarColors.border,
+            color: "#fff",
+          }}
+        >
+          <span className="font-bold">{event.title}</span>
+          <span>{getBookingStatusLabel(event.status as BookingStatus)}</span>
+        </span>
+      );
+    }
+
     const colors = statusColors[event.status ?? "confirmed"] ?? statusColors.confirmed;
     const customerDisplay = currentView === "week"
       ? (event.customerName?.split(" ")[0] ?? "")
@@ -818,7 +882,7 @@ export default function SchedulePage() {
         {bookings !== undefined && !(currentView === "day" && useDaySwimLanes) && currentView !== "week" && (
           <Calendar
             localizer={localizer}
-            events={events.filter((e) => e.type !== "blocked")}
+            events={calendarEvents}
             startAccessor="start"
             endAccessor="end"
             date={currentDate}
@@ -831,7 +895,15 @@ export default function SchedulePage() {
             step={30}
             timeslots={2}
             style={{ height: "calc(100vh - 320px)", minHeight: 500 }}
-            onSelectEvent={(event) => setSelectedBookingId((event as CalendarEvent).id as Id<"bookings">)}
+            onSelectEvent={(event) => {
+              const ev = event as CalendarEvent;
+              if (ev.id.startsWith("month-summary-")) {
+                setCurrentDate(ev.start);
+                setCurrentView("day");
+                return;
+              }
+              setSelectedBookingId(ev.id as Id<"bookings">);
+            }}
             formats={{
               dayFormat: (date: Date) => format(date, "EEE d"),
               weekdayFormat: (date: Date) => format(date, "EEE"),

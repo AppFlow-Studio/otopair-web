@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -882,257 +883,269 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         </div>
 
         {/* Decline modal */}
-        {showDeclineModal && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-            <div
-              className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-              onClick={() => setShowDeclineModal(false)}
-            />
-            <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
-              <h3 className="text-base font-semibold text-foreground mb-1">
-                Decline this job?
-              </h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                Select a reason for declining:
-              </p>
-              <div className="space-y-2.5 mb-4">
-                {DECLINE_REASONS.map((r) => (
-                  <label
-                    key={r}
-                    className="flex items-center gap-2.5 cursor-pointer"
+        {showDeclineModal &&
+          typeof document !== "undefined" &&
+          createPortal(
+            <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+              <div
+                className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+                onClick={() => setShowDeclineModal(false)}
+              />
+              <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
+                <h3 className="text-base font-semibold text-foreground mb-1">
+                  Decline this job?
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Select a reason for declining:
+                </p>
+                <div className="space-y-2.5 mb-4">
+                  {DECLINE_REASONS.map((r) => (
+                    <label
+                      key={r}
+                      className="flex items-center gap-2.5 cursor-pointer"
+                    >
+                      <input
+                        type="radio"
+                        name="declineReason"
+                        value={r}
+                        checked={declineReason === r}
+                        onChange={() => setDeclineReason(r)}
+                        className="accent-primary"
+                      />
+                      <span className="text-sm text-foreground">{r}</span>
+                    </label>
+                  ))}
+                </div>
+                {declineReason === "Other" && (
+                  <textarea
+                    ref={declineTextareaRef}
+                    value={declineOtherText}
+                    onChange={(e) => setDeclineOtherText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    placeholder="Please describe the reason…"
+                    rows={2}
+                    className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none mb-4"
+                  />
+                )}
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setShowDeclineModal(false)}
+                    disabled={isActioning}
+                    className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
                   >
-                    <input
-                      type="radio"
-                      name="declineReason"
-                      value={r}
-                      checked={declineReason === r}
-                      onChange={() => setDeclineReason(r)}
-                      className="accent-primary"
-                    />
-                    <span className="text-sm text-foreground">{r}</span>
-                  </label>
-                ))}
-              </div>
-              {declineReason === "Other" && (
-                <textarea
-                  ref={declineTextareaRef}
-                  value={declineOtherText}
-                  onChange={(e) => setDeclineOtherText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === "Escape") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      e.currentTarget.blur();
-                    }
-                  }}
-                  placeholder="Please describe the reason…"
-                  rows={2}
-                  className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none mb-4"
-                />
-              )}
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => setShowDeclineModal(false)}
-                  disabled={isActioning}
-                  className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-                >
-                  <span>
-                    <span style={{ textDecorationLine: "underline" }}>
-                      C
-                    </span>
-                    ancel
-                  </span>
-                </button>
-                <button
-                  onClick={handleDecline}
-                  disabled={isActioning}
-                  className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-                >
-                  {isActioning && (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  )}
-                  {isActioning ? (
-                    "Declining…"
-                  ) : (
-                    <span>
-                      Confirm{" "}
-                      <span
-                        style={{ textDecorationLine: "underline" }}
-                      >
-                        D
-                      </span>
-                      ecline
-                    </span>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Complete confirmation modal */}
-        {showCompleteConfirm && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-            <div
-              className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-              onClick={() => setShowCompleteConfirm(false)}
-            />
-            <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
-              <h3 className="text-base font-semibold text-foreground mb-2">
-                Mark as completed?
-              </h3>
-              <p className="text-sm text-muted-foreground mb-5">
-                Mark this job as completed? The customer will be
-                notified.
-              </p>
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => setShowCompleteConfirm(false)}
-                  disabled={isActioning}
-                  className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-                >
-                  <span>
-                    <span style={{ textDecorationLine: "underline" }}>
-                      C
-                    </span>
-                    ancel
-                  </span>
-                </button>
-                <button
-                  onClick={async () => {
-                    await handleStatusAction("complete");
-                    setShowCompleteConfirm(false);
-                  }}
-                  disabled={isActioning}
-                  className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-                >
-                  {isActioning && (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  )}
-                  {isActioning ? (
-                    "Completing…"
-                  ) : (
-                    <span>
-                      Ma
-                      <span
-                        style={{ textDecorationLine: "underline" }}
-                      >
-                        r
-                      </span>
-                      k completed
-                    </span>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Cancel confirmation modal */}
-        {showCancelConfirm && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-            <div
-              className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-              onClick={() => setShowCancelConfirm(false)}
-            />
-            <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
-              <h3 className="text-base font-semibold text-foreground mb-2">
-                Cancel this job?
-              </h3>
-              <p className="text-sm text-muted-foreground mb-5">
-                The customer has already been confirmed and will be
-                notified of the cancellation.
-              </p>
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => setShowCancelConfirm(false)}
-                  disabled={isActioning}
-                  className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-                >
-                  <span>
-                    K
-                    <span style={{ textDecorationLine: "underline" }}>
-                      e
-                    </span>
-                    ep job
-                  </span>
-                </button>
-                <button
-                  onClick={handleCancelJob}
-                  disabled={isActioning}
-                  className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-                >
-                  {isActioning && (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  )}
-                  {isActioning ? (
-                    "Cancelling…"
-                  ) : (
-                    <span>
-                      <span
-                        style={{ textDecorationLine: "underline" }}
-                      >
-                        C
-                      </span>
-                      ancel job
-                    </span>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Cancel reschedule confirmation modal */}
-        {showCancelRescheduleConfirm && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-            <div
-              className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-              onClick={() => setShowCancelRescheduleConfirm(false)}
-            />
-            <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
-              <h3 className="text-base font-semibold text-foreground mb-2">
-                Cancel the proposed reschedule?
-              </h3>
-              <p className="text-sm text-muted-foreground mb-5">
-                The booking will revert to its original time and mechanic.
-              </p>
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => setShowCancelRescheduleConfirm(false)}
-                  disabled={isActioning}
-                  className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-                >
-                  <span>
-                    <span style={{ textDecorationLine: "underline" }}>
-                      C
-                    </span>
-                    ancel
-                  </span>
-                </button>
-                <button
-                  onClick={handleCancelReschedule}
-                  disabled={isActioning}
-                  className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-                >
-                  {isActioning && (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  )}
-                  {isActioning ? (
-                    "Reverting…"
-                  ) : (
                     <span>
                       <span style={{ textDecorationLine: "underline" }}>
-                        R
+                        C
                       </span>
-                      evert to original
+                      ancel
                     </span>
-                  )}
-                </button>
+                  </button>
+                  <button
+                    onClick={handleDecline}
+                    disabled={isActioning}
+                    className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+                  >
+                    {isActioning && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    )}
+                    {isActioning ? (
+                      "Declining…"
+                    ) : (
+                      <span>
+                        Confirm{" "}
+                        <span
+                          style={{ textDecorationLine: "underline" }}
+                        >
+                          D
+                        </span>
+                        ecline
+                      </span>
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>
-        )}
+            </div>,
+            document.body
+          )}
+
+        {/* Complete confirmation modal */}
+        {showCompleteConfirm &&
+          typeof document !== "undefined" &&
+          createPortal(
+            <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+              <div
+                className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+                onClick={() => setShowCompleteConfirm(false)}
+              />
+              <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
+                <h3 className="text-base font-semibold text-foreground mb-2">
+                  Mark as completed?
+                </h3>
+                <p className="text-sm text-muted-foreground mb-5">
+                  Mark this job as completed? The customer will be
+                  notified.
+                </p>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setShowCompleteConfirm(false)}
+                    disabled={isActioning}
+                    className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    <span>
+                      <span style={{ textDecorationLine: "underline" }}>
+                        C
+                      </span>
+                      ancel
+                    </span>
+                  </button>
+                  <button
+                    onClick={async () => {
+                      await handleStatusAction("complete");
+                      setShowCompleteConfirm(false);
+                    }}
+                    disabled={isActioning}
+                    className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+                  >
+                    {isActioning && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    )}
+                    {isActioning ? (
+                      "Completing…"
+                    ) : (
+                      <span>
+                        Ma
+                        <span
+                          style={{ textDecorationLine: "underline" }}
+                        >
+                          r
+                        </span>
+                        k completed
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
+
+        {/* Cancel confirmation modal */}
+        {showCancelConfirm &&
+          typeof document !== "undefined" &&
+          createPortal(
+            <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+              <div
+                className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+                onClick={() => setShowCancelConfirm(false)}
+              />
+              <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
+                <h3 className="text-base font-semibold text-foreground mb-2">
+                  Cancel this job?
+                </h3>
+                <p className="text-sm text-muted-foreground mb-5">
+                  The customer has already been confirmed and will be
+                  notified of the cancellation.
+                </p>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setShowCancelConfirm(false)}
+                    disabled={isActioning}
+                    className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    <span>
+                      K
+                      <span style={{ textDecorationLine: "underline" }}>
+                        e
+                      </span>
+                      ep job
+                    </span>
+                  </button>
+                  <button
+                    onClick={handleCancelJob}
+                    disabled={isActioning}
+                    className="px-3 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+                  >
+                    {isActioning && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    )}
+                    {isActioning ? (
+                      "Cancelling…"
+                    ) : (
+                      <span>
+                        <span
+                          style={{ textDecorationLine: "underline" }}
+                        >
+                          C
+                        </span>
+                        ancel job
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
+
+        {/* Cancel reschedule confirmation modal */}
+        {showCancelRescheduleConfirm &&
+          typeof document !== "undefined" &&
+          createPortal(
+            <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+              <div
+                className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+                onClick={() => setShowCancelRescheduleConfirm(false)}
+              />
+              <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
+                <h3 className="text-base font-semibold text-foreground mb-2">
+                  Cancel the proposed reschedule?
+                </h3>
+                <p className="text-sm text-muted-foreground mb-5">
+                  The booking will revert to its original time and mechanic.
+                </p>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setShowCancelRescheduleConfirm(false)}
+                    disabled={isActioning}
+                    className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    <span>
+                      <span style={{ textDecorationLine: "underline" }}>
+                        C
+                      </span>
+                      ancel
+                    </span>
+                  </button>
+                  <button
+                    onClick={handleCancelReschedule}
+                    disabled={isActioning}
+                    className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+                  >
+                    {isActioning && (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    )}
+                    {isActioning ? (
+                      "Reverting…"
+                    ) : (
+                      <span>
+                        <span style={{ textDecorationLine: "underline" }}>
+                          R
+                        </span>
+                        evert to original
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
       </>
     );
   },

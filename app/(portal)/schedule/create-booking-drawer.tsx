@@ -121,7 +121,7 @@ export default function CreateBookingDrawer({
   /* ---- Services ---- */
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
-  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
 
   /* ---- Scheduling ---- */
   const [date, setDate] = useState(initialDate);
@@ -165,7 +165,7 @@ export default function CreateBookingDrawer({
   }, [categories, search]);
 
   const toggleCat = (id: string) => {
-    setCollapsedCats((prev) => {
+    setExpandedCats((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
@@ -303,7 +303,7 @@ export default function CreateBookingDrawer({
           ) : (
             <div className="space-y-4">
               {filteredCats.map((cat) => {
-                const isExpanded = !collapsedCats.has(cat.id) || !!search.trim();
+                const isExpanded = expandedCats.has(cat.id) || !!search.trim();
                 return (
                   <div key={cat.id}>
                     <button

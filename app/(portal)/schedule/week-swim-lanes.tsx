@@ -27,16 +27,28 @@ interface WeekSwimLanesProps {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Status colors (bar colors) — derived from shared booking-status     */
-/* ------------------------------------------------------------------ */
-
-const statusBarColors: Record<string, string> = Object.fromEntries(
-  Object.entries(BOOKING_STATUS_VISUALS).map(([k, v]) => [k, v.calendarColors.border])
-);
-
-/* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
+
+const STATUS_DISPLAY_ORDER: string[] = [
+  "pending_shop_acceptance",
+  "pending_customer_acceptance",
+  "confirmed",
+  "in_progress",
+  "completed",
+  "cancelled",
+  "declined",
+  "no_show",
+];
+
+function groupByStatus(bookings: CalendarEvent[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const bk of bookings) {
+    const status = bk.status ?? "confirmed";
+    counts[status] = (counts[status] || 0) + 1;
+  }
+  return counts;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                           */
@@ -147,9 +159,10 @@ export default function WeekSwimLanes({
                 return (
                   <td
                     key={day.dateStr}
-                    className={`px-1 py-2 cursor-pointer hover:bg-muted/40 transition-colors relative ${
-                      isToday(day.dateStr) ? "bg-primary/[0.02]" : ""
-                    } ${hasBlock ? "blocked-slot-pattern" : ""}`}
+                    className={`px-1 py-2 cursor-pointer transition-colors relative ${hasBlock ? "blocked-slot-pattern" : ""}`}
+                    style={!hasBlock ? { backgroundColor: "#fbfbfb" } : undefined}
+                    onMouseEnter={(e) => { if (!hasBlock) (e.currentTarget as HTMLElement).style.backgroundColor = "#f0f0f0"; }}
+                    onMouseLeave={(e) => { if (!hasBlock) (e.currentTarget as HTMLElement).style.backgroundColor = "#fbfbfb"; }}
                     onClick={() => onNavigateToDay(day.date, mech._id)}
                     onContextMenu={(e) => {
                       if (!onBlockDay) return;
@@ -157,30 +170,33 @@ export default function WeekSwimLanes({
                       onBlockDay(mech._id, mech.name, day.dateStr);
                     }}
                   >
-                    <div className="flex flex-col gap-0.5 min-h-[32px]">
-                      {/* Booking bars */}
-                      {bookings.slice(0, 5).map((bk) => (
-                        <div
-                          key={bk.id}
-                          className="h-1 rounded-full"
-                          style={{
-                            backgroundColor:
-                              statusBarColors[bk.status ?? "confirmed"] ?? statusBarColors.confirmed,
-                          }}
-                        />
-                      ))}
-                      {bookings.length > 5 && (
-                        <span className="text-[9px] text-muted-foreground leading-none">
-                          +{bookings.length - 5}
-                        </span>
-                      )}
+                    <div className="flex flex-wrap gap-1 justify-center items-center min-h-[32px]">
+                      {(() => {
+                        const grouped = groupByStatus(bookings);
+                        return Object.entries(grouped)
+                          .sort(([a], [b]) => {
+                            const ai = STATUS_DISPLAY_ORDER.indexOf(a);
+                            const bi = STATUS_DISPLAY_ORDER.indexOf(b);
+                            return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+                          })
+                          .map(([status, count]) => {
+                            const visuals = BOOKING_STATUS_VISUALS[status as BookingStatus];
+                            if (!visuals) return null;
+                            return (
+                              <span
+                                key={status}
+                                className="text-[10px] font-semibold px-1.5 rounded-full leading-4 inline-flex items-center justify-center"
+                                style={{
+                                  backgroundColor: visuals.calendarColors.border,
+                                  color: "#fff",
+                                }}
+                              >
+                                {count}
+                              </span>
+                            );
+                          });
+                      })()}
                     </div>
-                    {/* Booking count badge */}
-                    {bookings.length > 0 && (
-                      <span className="absolute top-1 right-1 text-[9px] font-medium text-muted-foreground bg-muted rounded-full w-4 h-4 flex items-center justify-center">
-                        {bookings.length}
-                      </span>
-                    )}
                   </td>
                 );
               })}

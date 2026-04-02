@@ -640,11 +640,6 @@ export default function SchedulePage() {
         <h1 className="text-2xl font-bold text-foreground">Schedule</h1>
       </div>
 
-      {/* Flex row: main content + drawer */}
-      <div className="flex items-start">
-      {/* Main content */}
-      <div className="flex-1 min-w-0 space-y-6">
-
       {/* Toolbar: nav + view switcher + mechanic filter */}
       <div className="bg-card border border-border rounded-xl p-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -783,6 +778,10 @@ export default function SchedulePage() {
         </div>
       </div>
 
+      {/* Flex row: calendar + drawers */}
+      <div className="flex items-start">
+      {/* Main content */}
+      <div className="flex-1 min-w-0">
 
       {/* Calendar */}
       <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar relative">
@@ -895,7 +894,7 @@ export default function SchedulePage() {
           drawerOpen ? "w-[420px]" : "w-0"
         }`}
       >
-        <div className="w-[396px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden">
+        <div className="w-[396px] ml-6 flex h-[calc(100vh-320px)] min-h-[500px] flex-col overflow-hidden rounded-xl border border-border bg-card">
           {blockTimeDrawer && (
             <div className="flex flex-col h-full">
               {/* Header */}
@@ -1169,8 +1168,8 @@ export default function SchedulePage() {
 
       {/* Create booking drawer */}
       {createBookingDrawer && (
-        <div className="flex-shrink-0 self-stretch w-[420px]">
-          <div className="w-[396px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden h-full">
+        <div className="flex-shrink-0 w-[420px] h-[calc(100vh-320px)] min-h-[500px]">
+          <div className="w-[396px] ml-6 flex h-full flex-col overflow-hidden rounded-xl border border-border bg-card">
             <CreateBookingDrawer
               initialDate={createBookingDrawer.date}
               initialTime={createBookingDrawer.time}

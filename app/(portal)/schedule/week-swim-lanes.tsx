@@ -25,7 +25,7 @@ interface WeekSwimLanesProps {
   weekStart: Date;
   shopHours: ShopDayHours[];
   onNavigateToDay: (date: Date, mechanicId?: string) => void;
-  onBlockDay?: (mechanicId: string, mechanicName: string, date: string) => void;
+  onContextMenuBlockDay?: (info: { mechanicId: string; mechanicName: string; date: string; isBlocked: boolean; slotId?: string; clientX: number; clientY: number }) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -96,7 +96,7 @@ export default function WeekSwimLanes({
   weekStart,
   shopHours,
   onNavigateToDay,
-  onBlockDay,
+  onContextMenuBlockDay,
 }: WeekSwimLanesProps) {
   // Build 7 day columns (Sun–Sat)
   const days = useMemo(() => {
@@ -150,7 +150,7 @@ export default function WeekSwimLanes({
   }
 
   return (
-    <div className="overflow-auto" style={{ height: "calc(100vh - 320px)", minHeight: 500 }}>
+    <div className="overflow-auto" style={{ maxHeight: "calc(100vh - 240px)" }}>
       <table className="w-full border-collapse min-w-[700px] table-fixed">
         <thead>
           <tr>
@@ -202,9 +202,18 @@ export default function WeekSwimLanes({
                     onMouseLeave={(e) => { if (!hasBlock) (e.currentTarget as HTMLElement).style.backgroundColor = "#fbfbfb"; }}
                     onClick={() => onNavigateToDay(day.date, mech._id)}
                     onContextMenu={(e) => {
-                      if (!onBlockDay) return;
+                      if (!onContextMenuBlockDay) return;
                       e.preventDefault();
-                      onBlockDay(mech._id, mech.name, day.dateStr);
+                      const firstBlockedSlot = blocked[0];
+                      onContextMenuBlockDay({
+                        mechanicId: mech._id,
+                        mechanicName: mech.name,
+                        date: day.dateStr,
+                        isBlocked: hasBlock,
+                        slotId: firstBlockedSlot?.slotId,
+                        clientX: e.clientX,
+                        clientY: e.clientY,
+                      });
                     }}
                   >
                     <div className="flex flex-col gap-0.5 h-[108px] w-full overflow-hidden">
@@ -222,11 +231,10 @@ export default function WeekSwimLanes({
                             return (
                               <span
                                 key={status}
-                                className="text-[10px] font-semibold px-1.5 rounded leading-5 inline-flex items-center gap-1 w-full truncate"
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded-full inline-flex items-center gap-1 w-full truncate"
                                 style={{
-                                  backgroundColor: visuals.calendarColors.bg,
-                                  color: visuals.calendarColors.text,
-                                  borderLeft: `3px solid ${visuals.calendarColors.border}`,
+                                  backgroundColor: visuals.calendarColors.border,
+                                  color: "#fff",
                                 }}
                               >
                                 <span className="font-bold">{count}</span>

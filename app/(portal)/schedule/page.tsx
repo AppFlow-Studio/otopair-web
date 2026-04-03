@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
+  Calendar as CalendarIcon,
   CalendarOff,
   CalendarPlus,
   Car,
@@ -50,6 +51,7 @@ import "./schedule.css";
 import DaySwimLanes from "./day-swim-lanes";
 import type { RescheduleProposal, ContextMenuCellInfo, ContextMenuBlockedInfo } from "./day-swim-lanes";
 import WeekSwimLanes from "./week-swim-lanes";
+import WeekSingleMechanicLanes from "./week-single-mechanic-lanes";
 import JobDetailPanel, { type JobDetailPanelHandle } from "@/components/job-detail-panel";
 import CreateBookingDrawer from "./create-booking-drawer";
 
@@ -152,6 +154,7 @@ export default function SchedulePage() {
     | { type: "block"; info: ContextMenuCellInfo }
     | { type: "unblock"; slotId: string; clientX: number; clientY: number }
     | { type: "deleteBlockType"; typeId: string; title: string; clientX: number; clientY: number }
+    | { type: "blockDay"; mechanicId: string; mechanicName: string; date: string; isBlocked: boolean; slotId?: string; clientX: number; clientY: number }
     | null
   >(null);
 
@@ -713,28 +716,6 @@ export default function SchedulePage() {
 
           {/* Right: filters + view switcher */}
           <div className="flex items-center gap-3">
-            {/* Mechanic filter */}
-            {context.mechanics.length > 0 && (
-              <Select
-                selectedKey={mechanicFilter}
-                onSelectionChange={(key) => setMechanicFilter(String(key))}
-              >
-                <SelectTrigger className="h-9 rounded-lg border-border bg-card text-sm px-3 min-w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectPopover placement="bottom end">
-                  <SelectListBox shouldFocusWrap>
-                    <SelectItem id="all" textValue="All Mechanics">All Mechanics</SelectItem>
-                    {context.mechanics.map((m) => (
-                      <SelectItem key={m._id} id={m._id} textValue={m.name}>
-                        {m.name}
-                      </SelectItem>
-                    ))}
-                  </SelectListBox>
-                </SelectPopover>
-              </Select>
-            )}
-
             {/* Legend popover */}
             <div className="relative" ref={legendRef}>
               <button
@@ -770,6 +751,27 @@ export default function SchedulePage() {
               )}
             </div>
 
+            {/* Mechanic filter */}
+            {context.mechanics.length > 0 && (
+              <Select
+                selectedKey={mechanicFilter}
+                onSelectionChange={(key) => setMechanicFilter(String(key))}
+              >
+                <SelectTrigger className="h-9 rounded-lg border-border bg-card text-sm px-3 min-w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopover placement="bottom end">
+                  <SelectListBox shouldFocusWrap>
+                    <SelectItem id="all" textValue="All Mechanics">All Mechanics</SelectItem>
+                    {context.mechanics.map((m) => (
+                      <SelectItem key={m._id} id={m._id} textValue={m.name}>
+                        {m.name}
+                      </SelectItem>
+                    ))}
+                  </SelectListBox>
+                </SelectPopover>
+              </Select>
+            )}
 
             {/* View switcher */}
             <div className="flex border border-border rounded-lg overflow-hidden">
@@ -837,7 +839,7 @@ export default function SchedulePage() {
             onBlockDayClick={(mechanicId, mechanicName) => handleBlockFullDay(mechanicId, mechanicName, dateToString(currentDate))}
           />
         )}
-        {bookings !== undefined && currentView === "week" && (
+        {bookings !== undefined && currentView === "week" && mechanicFilter === "all" && (
           <WeekSwimLanes
             mechanics={context.mechanics}
             events={events}
@@ -848,9 +850,46 @@ export default function SchedulePage() {
               setCurrentView("day");
               if (mechanicId) setMechanicFilter(mechanicId);
             }}
-            onBlockDay={(mechanicId, mechanicName, date) => handleBlockFullDay(mechanicId, mechanicName, date)}
+            onContextMenuBlockDay={(info) => setContextMenu({ type: "blockDay", ...info })}
           />
         )}
+        {bookings !== undefined && currentView === "week" && mechanicFilter !== "all" && (() => {
+          const selectedMechanic = context.mechanics.find((m) => m._id === mechanicFilter);
+          if (!selectedMechanic) return null;
+          return (
+            <WeekSingleMechanicLanes
+              mechanic={selectedMechanic}
+              events={events}
+              weekStart={startOfWeek(currentDate, { weekStartsOn: 0 })}
+              minTime={minTime}
+              maxTime={maxTime}
+              onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
+              onProposeReschedule={handleProposeReschedule}
+              onDragError={(msg) => setToast({ msg, key: Date.now() })}
+              onContextMenuCell={(info) => {
+                if (
+                  bookings &&
+                  overlapsMechanicBooking(info.mechanicId, info.date, info.startTime, info.endTime, bookings)
+                ) return;
+                setContextMenu({ type: "block", info });
+              }}
+              onContextMenuBlocked={(info) => setContextMenu({ type: "unblock", slotId: info.slotId, clientX: info.clientX, clientY: info.clientY })}
+              onSelectBlocked={(info) => {
+                const mech = context?.mechanics.find((m) => m._id === info.mechanicId);
+                setBlockTimeDrawer({
+                  mechanicId: info.mechanicId ?? "",
+                  mechanicName: mech ? mech.name : "",
+                  date: info.date,
+                  startTime: info.startTime,
+                  endTime: info.endTime,
+                  editingSlotId: info.slotId,
+                  initialTitle: info.blockTitle ?? undefined,
+                  initialDescription: info.note ?? undefined,
+                });
+              }}
+            />
+          );
+        })()}
         {bookings !== undefined && !(currentView === "day" && useDaySwimLanes) && currentView !== "week" && (
           <Calendar
             localizer={localizer}
@@ -1191,7 +1230,7 @@ export default function SchedulePage() {
 
       {/* Job detail drawer */}
       <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[504px]" : "w-0"}`}>
-        <div className="w-[480px] ml-6 flex h-[calc(100vh-320px)] min-h-[500px] flex-col overflow-hidden rounded-xl border border-border bg-card">
+        <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden sticky top-6 h-[calc(100vh-3rem)]">
           {selectedBookingId && (
             <JobDetailPanel
               ref={jobDetailRef}
@@ -1261,6 +1300,42 @@ export default function SchedulePage() {
                   </span>
                   ?
                 </p>
+              ) : rescheduleProposal.dateChanged && rescheduleProposal.timeChanged ? (
+                <p>
+                  Move from{" "}
+                  <span className="font-medium text-foreground">
+                    {format(new Date(rescheduleProposal.originalDate + "T00:00:00"), "EEE MMM d")}
+                  </span>{" "}
+                  at{" "}
+                  <span className="font-medium text-foreground">
+                    {formatTimeLabel(rescheduleProposal.originalTime)}
+                  </span>{" "}
+                  to{" "}
+                  <span className="font-medium text-foreground">
+                    {format(new Date(rescheduleProposal.newDate + "T00:00:00"), "EEE MMM d")}
+                  </span>{" "}
+                  at{" "}
+                  <span className="font-medium text-foreground">
+                    {formatTimeLabel(rescheduleProposal.newTime)}
+                  </span>
+                  ? The customer will be asked to approve the new time.
+                </p>
+              ) : rescheduleProposal.dateChanged ? (
+                <p>
+                  Move from{" "}
+                  <span className="font-medium text-foreground">
+                    {format(new Date(rescheduleProposal.originalDate + "T00:00:00"), "EEE MMM d")}
+                  </span>{" "}
+                  to{" "}
+                  <span className="font-medium text-foreground">
+                    {format(new Date(rescheduleProposal.newDate + "T00:00:00"), "EEE MMM d")}
+                  </span>{" "}
+                  at{" "}
+                  <span className="font-medium text-foreground">
+                    {formatTimeLabel(rescheduleProposal.newTime)}
+                  </span>
+                  ? The customer will be asked to approve the new date.
+                </p>
               ) : rescheduleProposal.timeChanged ? (
                 <p>
                   Move from{" "}
@@ -1325,10 +1400,9 @@ export default function SchedulePage() {
           style={
             contextMenu.type === "deleteBlockType"
               ? { right: window.innerWidth - contextMenu.clientX - 6, top: contextMenu.clientY }
-              : {
-                  left: contextMenu.type === "block" ? contextMenu.info.clientX : contextMenu.clientX,
-                  top: contextMenu.type === "block" ? contextMenu.info.clientY : contextMenu.clientY,
-                }
+              : contextMenu.type === "block"
+              ? { left: contextMenu.info.clientX, top: contextMenu.info.clientY }
+              : { left: contextMenu.clientX, top: contextMenu.clientY }
           }
           onPointerDown={(e) => e.stopPropagation()}
         >
@@ -1406,6 +1480,30 @@ export default function SchedulePage() {
                 </button>
               </div>
             </>
+          )}
+          {contextMenu.type === "blockDay" && (
+            <div className="py-1">
+              {contextMenu.isBlocked && contextMenu.slotId ? (
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
+                  onClick={() => handleUnblockSlot(contextMenu.slotId!)}
+                >
+                  <CalendarIcon className="w-4 h-4 text-muted-foreground shrink-0" />
+                  Unblock this slot
+                </button>
+              ) : (
+                <button
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
+                  onClick={() => {
+                    handleBlockFullDay(contextMenu.mechanicId, contextMenu.mechanicName, contextMenu.date);
+                    setContextMenu(null);
+                  }}
+                >
+                  <CalendarOff className="w-4 h-4 text-muted-foreground shrink-0" />
+                  Block full day
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

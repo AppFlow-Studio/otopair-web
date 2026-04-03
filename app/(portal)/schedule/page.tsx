@@ -1230,7 +1230,7 @@ export default function SchedulePage() {
 
       {/* Job detail drawer */}
       <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[504px]" : "w-0"}`}>
-        <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden sticky top-6 h-[calc(100vh-3rem)]">
+        <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden h-[calc(100vh-320px)] min-h-[500px]">
           {selectedBookingId && (
             <JobDetailPanel
               ref={jobDetailRef}

@@ -5,6 +5,14 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { ArrowRight, Calendar, Car, ChevronDown, Loader2, Search, User, Wrench, X } from "lucide-react";
+import {
+  Select,
+  SelectItem,
+  SelectListBox,
+  SelectPopover,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -351,22 +359,41 @@ export default function CreateBookingDrawer({
               </div>
               <div>
                 <FieldLabel>Time</FieldLabel>
-                <select value={time} onChange={(e) => setTime(e.target.value)} className={selectCls}>
-                  {TIME_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
+                <Select selectedKey={time} onSelectionChange={(key) => setTime(String(key))}>
+                  <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopover placement="bottom start">
+                    <SelectListBox shouldFocusWrap>
+                      {TIME_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} id={o.value} textValue={o.label}>{o.label}</SelectItem>
+                      ))}
+                    </SelectListBox>
+                  </SelectPopover>
+                </Select>
               </div>
             </div>
             {mechanics.length > 0 && (
               <div>
                 <FieldLabel>Mechanic</FieldLabel>
-                <select value={mechanicId} onChange={(e) => setMechanicId(e.target.value)} className={selectCls}>
-                  <option value="">Unassigned</option>
-                  {mechanics.map((m) => (
-                    <option key={m._id} value={m._id}>{m.name}</option>
-                  ))}
-                </select>
+                <Select
+                  selectedKey={mechanicId || "unassigned"}
+                  onSelectionChange={(key) => setMechanicId(key === "unassigned" ? "" : String(key))}
+                >
+                  <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopover placement="bottom start">
+                    <SelectListBox shouldFocusWrap>
+                      <SelectItem id="unassigned" textValue="Unassigned">
+                        <span className="text-muted-foreground">Unassigned</span>
+                      </SelectItem>
+                      {mechanics.map((m) => (
+                        <SelectItem key={m._id} id={m._id} textValue={m.name}>{m.name}</SelectItem>
+                      ))}
+                    </SelectListBox>
+                  </SelectPopover>
+                </Select>
               </div>
             )}
             {overlapError && (

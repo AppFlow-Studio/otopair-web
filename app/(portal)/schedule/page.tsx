@@ -1047,27 +1047,39 @@ export default function SchedulePage() {
                 <div className="flex gap-3">
                   <div className="flex-1">
                     <label className="text-sm font-medium text-foreground mb-1.5 block">From</label>
-                    <select
-                      value={btFrom}
-                      onChange={(e) => setBtFrom(e.target.value)}
-                      className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                    <Select
+                      selectedKey={btFrom}
+                      onSelectionChange={(key) => setBtFrom(String(key))}
                     >
-                      {generateTimeOptions().map((t) => (
-                        <option key={t.value} value={t.value}>{t.label}</option>
-                      ))}
-                    </select>
+                      <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopover placement="bottom start">
+                        <SelectListBox shouldFocusWrap>
+                          {generateTimeOptions().map((t) => (
+                            <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
+                          ))}
+                        </SelectListBox>
+                      </SelectPopover>
+                    </Select>
                   </div>
                   <div className="flex-1">
                     <label className="text-sm font-medium text-foreground mb-1.5 block">To</label>
-                    <select
-                      value={btTo}
-                      onChange={(e) => setBtTo(e.target.value)}
-                      className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                    <Select
+                      selectedKey={btTo}
+                      onSelectionChange={(key) => setBtTo(String(key))}
                     >
-                      {generateTimeOptions().map((t) => (
-                        <option key={t.value} value={t.value}>{t.label}</option>
-                      ))}
-                    </select>
+                      <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopover placement="bottom start">
+                        <SelectListBox shouldFocusWrap>
+                          {generateTimeOptions().map((t) => (
+                            <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
+                          ))}
+                        </SelectListBox>
+                      </SelectPopover>
+                    </Select>
                   </div>
                 </div>
                 {btFrom && btTo && btMechanicId && btDate && bookings &&
@@ -1087,27 +1099,39 @@ export default function SchedulePage() {
                 {/* Team member */}
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1.5 block">Team member</label>
-                  <select
-                    value={btMechanicId}
-                    onChange={(e) => setBtMechanicId(e.target.value)}
-                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                  <Select
+                    selectedKey={btMechanicId || "none"}
+                    onSelectionChange={(key) => setBtMechanicId(key === "none" ? "" : String(key))}
                   >
-                    <option value="">Select team member</option>
-                    {mechanics.map((m) => (
-                      <option key={m._id} value={m._id}>{m.name}</option>
-                    ))}
-                  </select>
+                    <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopover placement="bottom start">
+                      <SelectListBox shouldFocusWrap>
+                        <SelectItem id="none" textValue="Select team member">
+                          <span className="text-muted-foreground">Select team member</span>
+                        </SelectItem>
+                        {mechanics.map((m) => (
+                          <SelectItem key={m._id} id={m._id} textValue={m.name}>{m.name}</SelectItem>
+                        ))}
+                      </SelectListBox>
+                    </SelectPopover>
+                  </Select>
                 </div>
 
                 {/* Frequency */}
                 <div>
                   <label className="text-sm font-medium text-foreground mb-1.5 block">Frequency</label>
-                  <select
-                    disabled
-                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-muted text-foreground cursor-not-allowed"
-                  >
-                    <option>Doesn&apos;t repeat</option>
-                  </select>
+                  <Select isDisabled selectedKey="none">
+                    <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopover placement="bottom start">
+                      <SelectListBox>
+                        <SelectItem id="none" textValue="Doesn't repeat">Doesn&apos;t repeat</SelectItem>
+                      </SelectListBox>
+                    </SelectPopover>
+                  </Select>
                 </div>
 
                 {/* Description */}

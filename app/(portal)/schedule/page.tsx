@@ -30,6 +30,10 @@ import {
 import { usePortalSidebar } from "../portal-context";
 import { statusColors, dateToString } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
+import {
+  overlapsBlockedSlot,
+  overlapsMechanicBooking,
+} from "@/lib/schedule-overlap";
 import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
 import {
   Select,
@@ -102,48 +106,6 @@ function formatTimeLabelCompact(hhmm: string): string {
   const ampm = h >= 12 ? "pm" : "am";
   const hour = h % 12 || 12;
   return `${hour}:${String(m).padStart(2, "0")}${ampm}`;
-}
-
-/** Returns true if the [startTime, endTime) window overlaps an existing manually-blocked slot for the given mechanic/date.
- *  Pass excludeSlotId to skip the slot currently being edited. */
-function overlapsBlockedSlot(
-  mechanicId: string,
-  date: string,
-  startTime: string,
-  endTime: string,
-  blockedSlots: Array<{ _id: string; date: string; startTime: string; endTime: string; mechanicId: string | null }>,
-  excludeSlotId?: string
-): boolean {
-  const toMins = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
-  const newStart = toMins(startTime);
-  const newEnd = toMins(endTime);
-  return blockedSlots.some((s) => {
-    if (excludeSlotId && s._id === excludeSlotId) return false;
-    if (s.date !== date) return false;
-    if (s.mechanicId !== mechanicId) return false;
-    return toMins(s.startTime) < newEnd && toMins(s.endTime) > newStart;
-  });
-}
-
-/** Returns true if the [startTime, endTime) window overlaps any active booking for the given mechanic/date. */
-function overlapsMechanicBooking(
-  mechanicId: string,
-  date: string,
-  startTime: string,
-  endTime: string,
-  bookings: Array<{ scheduledDate: string; scheduledTime: string; estimatedMinutes: number; status: string; mechanicId: string | null }>
-): boolean {
-  const toMins = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
-  const blockStart = toMins(startTime);
-  const blockEnd = toMins(endTime);
-  return bookings.some((b) => {
-    if (b.scheduledDate !== date) return false;
-    if (b.status === "cancelled" || b.status === "declined") return false;
-    if (b.mechanicId !== mechanicId) return false;
-    const bStart = toMins(b.scheduledTime);
-    const bEnd = bStart + (b.estimatedMinutes ?? 60);
-    return bStart < blockEnd && bEnd > blockStart;
-  });
 }
 
 function generateTimeOptions(): Array<{ value: string; label: string }> {
@@ -290,6 +252,16 @@ export default function SchedulePage() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [drawerOpen]);
+
+  // Close create booking drawer on Escape
+  useEffect(() => {
+    if (!createBookingDrawer) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCreateBookingDrawer(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [createBookingDrawer]);
 
   // Auto-clear toast after 3s; key changes on every trigger so the timer always resets
   useEffect(() => {
@@ -1219,12 +1191,17 @@ export default function SchedulePage() {
 
       {/* Job detail drawer */}
       <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[504px]" : "w-0"}`}>
-        <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden sticky top-6 h-[calc(100vh-3rem)]">
+        <div className="w-[480px] ml-6 flex h-[calc(100vh-320px)] min-h-[500px] flex-col overflow-hidden rounded-xl border border-border bg-card">
           {selectedBookingId && (
             <JobDetailPanel
               ref={jobDetailRef}
               job={selectedJobDetail}
               mechanics={mechanics}
+              scheduleConflicts={{
+                bookings: bookings ?? [],
+                blockedSlots: blockedSlots ?? [],
+              }}
+              onRequestRescheduleConfirmation={handleProposeReschedule}
               onClose={() => setSelectedBookingId(null)}
               onSuccess={(msg) => setToast({ msg, key: Date.now() })}
               showJobsLink

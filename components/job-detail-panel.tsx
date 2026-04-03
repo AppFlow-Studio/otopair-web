@@ -14,6 +14,12 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Loader2, X } from "lucide-react";
 import {
+  getMechanicAssignmentConflict,
+  type ScheduleBlockedSlot,
+  type ScheduleBooking,
+  shouldConfirmMechanicChange,
+} from "@/lib/schedule-overlap";
+import {
   Select,
   SelectItem,
   SelectListBox,
@@ -135,9 +141,28 @@ export interface JobDetailPanelHandle {
   handleKeyDown: (e: KeyboardEvent) => boolean;
 }
 
+interface RescheduleRequest {
+  eventId: string;
+  originalDate: string;
+  originalTime: string;
+  originalMechanicId: string | undefined;
+  originalMechanicName: string | undefined;
+  newDate: string;
+  newTime: string;
+  newMechanicId: string | undefined;
+  newMechanicName: string | undefined;
+  timeChanged: boolean;
+  mechanicChanged: boolean;
+}
+
 interface JobDetailPanelProps {
   job: JobDetailData | null | undefined;
   mechanics: Array<{ _id: string; name: string }>;
+  scheduleConflicts?: {
+    bookings: ScheduleBooking[];
+    blockedSlots: ScheduleBlockedSlot[];
+  };
+  onRequestRescheduleConfirmation?: (proposal: RescheduleRequest) => void;
   onClose: () => void;
   onSuccess?: (message: string) => void;
   showJobsLink?: boolean;
@@ -149,7 +174,15 @@ interface JobDetailPanelProps {
 
 const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
   function JobDetailPanel(
-    { job, mechanics, onClose, onSuccess, showJobsLink },
+    {
+      job,
+      mechanics,
+      scheduleConflicts,
+      onRequestRescheduleConfirmation,
+      onClose,
+      onSuccess,
+      showJobsLink,
+    },
     ref,
   ) {
     const [assigningMechanicId, setAssigningMechanicId] = useState("");
@@ -178,10 +211,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         mechanics.find((m) => String(m._id) === assigningMechanicId)?._id,
       [assigningMechanicId, mechanics],
     );
+    const showAssignMechanicError = actionError.startsWith(
+      "Cannot assign this mechanic"
+    );
 
     // Sync assign dropdown with job's current mechanic
     useEffect(() => {
       if (!job) return;
+      setActionError("");
       setAssigningMechanicId(
         job.mechanicId ? String(job.mechanicId) : "",
       );
@@ -289,6 +326,69 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     async function handleAssignMechanic() {
       if (!job?._id || !selectedMechanicId) return;
       setActionError("");
+      const assignmentConflict =
+        scheduleConflicts &&
+        getMechanicAssignmentConflict(
+          {
+            _id: String(job._id),
+            scheduledDate: job.scheduledDate,
+            scheduledTime: job.scheduledTime,
+            estimatedMinutes: job.estimatedLaborMinutes ?? 60,
+          },
+          String(selectedMechanicId),
+          scheduleConflicts.bookings,
+          scheduleConflicts.blockedSlots
+        );
+
+      if (assignmentConflict === "booking") {
+        setActionError(
+          "Cannot assign this mechanic because that time is already booked."
+        );
+        return;
+      }
+
+      if (assignmentConflict === "blocked") {
+        setActionError(
+          "Cannot assign this mechanic because that time is blocked."
+        );
+        return;
+      }
+
+      if (
+        shouldConfirmMechanicChange(
+          job.mechanicId ? String(job.mechanicId) : undefined,
+          String(selectedMechanicId)
+        ) &&
+        onRequestRescheduleConfirmation
+      ) {
+        const originalMechanicId = job.mechanicId
+          ? String(job.mechanicId)
+          : undefined;
+        const originalMechanicName = originalMechanicId
+          ? mechanics.find((m) => String(m._id) === originalMechanicId)?.name
+          : undefined;
+        const newMechanicId = String(selectedMechanicId);
+        const newMechanicName = mechanics.find(
+          (m) => String(m._id) === newMechanicId
+        )?.name;
+
+        onRequestRescheduleConfirmation({
+          eventId: String(job._id),
+          originalDate: job.scheduledDate,
+          originalTime: job.scheduledTime,
+          originalMechanicId,
+          originalMechanicName,
+          newDate: job.scheduledDate,
+          newTime: job.scheduledTime,
+          newMechanicId,
+          newMechanicName,
+          timeChanged: false,
+          mechanicChanged: true,
+        });
+        setAssigningMechanicId(originalMechanicId ?? "");
+        return;
+      }
+
       setIsActioning(true);
       try {
         await updateJob({
@@ -597,6 +697,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           }
                         }}
                         onSelectionChange={(key) => {
+                          setActionError("");
                           setAssigningMechanicId(
                             key === "unassigned" ? "" : String(key),
                           );
@@ -661,6 +762,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                       </span>
                     </button>
                   </div>
+                  {showAssignMechanicError && (
+                    <p className="mt-2 text-xs text-destructive">
+                      {actionError}
+                    </p>
+                  )}
                 </div>
 
                 {/* Pending customer acceptance — awaiting approval info */}
@@ -872,7 +978,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   </div>
                 )}
 
-                {actionError && (
+                {actionError && !showAssignMechanicError && (
                   <p className="text-xs text-destructive">
                     {actionError}
                   </p>

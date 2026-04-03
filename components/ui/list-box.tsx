@@ -53,9 +53,11 @@ const ListBoxItem = <T extends object>({
           /* Disabled */
           "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
           /* Focused */
-          "data-[focused]:bg-accent data-[focused]:text-accent-foreground",
+          "data-[focused]:bg-black/8 data-[focused]:text-foreground",
           /* Hovered */
-          "data-[hovered]:bg-accent data-[hovered]:text-accent-foreground",
+          "data-[hovered]:bg-black/8 data-[hovered]:text-foreground",
+          /* Selected */
+          "data-[selected]:bg-primary data-[selected]:text-primary-foreground",
           /* Selection */
           "data-[selection-mode]:pl-8",
           className

@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import {
+  addMinutesToHHMM,
+  overlapsBlockedSlot,
+  overlapsMechanicBooking,
+} from "../lib/schedule-overlap";
 
 /** Format "HH:MM" -> "10:00 AM" */
 function formatTime(hhmm: string): string {
@@ -799,6 +804,66 @@ export const update = mutation({
           : args.mechanicId === null
             ? undefined
             : args.mechanicId;
+      const durationMinutes =
+        args.estimatedLaborMinutes ?? booking.estimated_labor_minutes ?? 60;
+
+      if (newMechanic) {
+        const allBookings = await ctx.db
+          .query("bookings")
+          .withIndex("by_shop_id", (q: any) => q.eq("shop_id", booking.shop_id))
+          .collect();
+
+        const hasBookingConflict = overlapsMechanicBooking(
+          String(newMechanic),
+          newDate,
+          newTime,
+          addMinutesToHHMM(newTime, durationMinutes),
+          allBookings.map((b: any) => ({
+            _id: String(b._id),
+            scheduledDate: b.scheduled_date,
+            scheduledTime: b.scheduled_time,
+            estimatedMinutes: b.estimated_labor_minutes ?? 60,
+            status: b.status,
+            mechanicId: b.mechanic_id ?? null,
+          })),
+          String(args.bookingId)
+        );
+
+        if (hasBookingConflict) {
+          throw new Error(
+            "Cannot assign this mechanic because that time is already booked."
+          );
+        }
+
+        const allSlots = await ctx.db
+          .query("time_slots")
+          .withIndex("by_shop_id", (q: any) => q.eq("shop_id", booking.shop_id))
+          .collect();
+        const bookingSlotIds = new Set(allBookings.map((b: any) => String(b.time_slot_id)));
+        const blockedSlots = allSlots
+          .filter((slot: any) => !slot.is_available && !bookingSlotIds.has(String(slot._id)))
+          .map((slot: any) => ({
+            _id: String(slot._id),
+            date: slot.date,
+            startTime: slot.start_time,
+            endTime: slot.end_time,
+            mechanicId: slot.mechanic_id ?? null,
+          }));
+
+        const hasBlockedConflict = overlapsBlockedSlot(
+          String(newMechanic),
+          newDate,
+          newTime,
+          addMinutesToHHMM(newTime, durationMinutes),
+          blockedSlots
+        );
+
+        if (hasBlockedConflict) {
+          throw new Error(
+            "Cannot assign this mechanic because that time is blocked."
+          );
+        }
+      }
 
       const slotId = await getOrCreateSlot(
         ctx,
@@ -806,7 +871,7 @@ export const update = mutation({
         newMechanic,
         newDate,
         newTime,
-        args.estimatedLaborMinutes ?? booking.estimated_labor_minutes ?? 60
+        durationMinutes
       );
       patch.time_slot_id = slotId;
       patch.scheduled_date = newDate;

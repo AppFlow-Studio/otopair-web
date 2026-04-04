@@ -27,6 +27,8 @@ function addMinutes(hhmm: string, minutesToAdd: number): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+const RESERVED_PENDING_CUSTOMER_TITLE = "Reserved pending customer approval";
+
 async function getCurrentUser(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new Error("Not authenticated");
@@ -175,8 +177,12 @@ async function getOrCreateSlot(
   );
 
   if (existing) {
-    if (existing.is_available) {
-      await ctx.db.patch(existing._id, { is_available: false });
+    if (existing.is_available || existing.title !== undefined || existing.note !== undefined) {
+      await ctx.db.patch(existing._id, {
+        is_available: false,
+        note: undefined,
+        title: undefined,
+      });
     }
     return existing._id;
   }
@@ -188,6 +194,76 @@ async function getOrCreateSlot(
     mechanic_id: mechanicId,
     shop_id: shopId,
     start_time: startTime,
+  });
+}
+
+async function findExactSlot(
+  ctx: any,
+  shopId: any,
+  mechanicId: any,
+  date: string,
+  startTime: string,
+  durationMinutes: number
+) {
+  const endTime = addMinutes(startTime, durationMinutes);
+  const slots = await ctx.db
+    .query("time_slots")
+    .withIndex("by_shop_and_date", (q: any) => q.eq("shop_id", shopId).eq("date", date))
+    .collect();
+
+  return (
+    slots.find(
+      (slot: any) =>
+        slot.start_time === startTime &&
+        slot.end_time === endTime &&
+        (slot.mechanic_id ?? null) === (mechanicId ?? null)
+    ) ?? null
+  );
+}
+
+async function reservePendingCustomerSlot(
+  ctx: any,
+  shopId: any,
+  mechanicId: any,
+  date: string,
+  startTime: string,
+  durationMinutes: number,
+  preferredSlotId?: any
+) {
+  const endTime = addMinutes(startTime, durationMinutes);
+  const slot =
+    (preferredSlotId ? await ctx.db.get(preferredSlotId) : null) ??
+    (await findExactSlot(ctx, shopId, mechanicId, date, startTime, durationMinutes));
+
+  if (slot) {
+    await ctx.db.patch(slot._id, {
+      is_available: false,
+      note: undefined,
+      title: RESERVED_PENDING_CUSTOMER_TITLE,
+    });
+    return slot._id;
+  }
+
+  return await ctx.db.insert("time_slots", {
+    date,
+    end_time: endTime,
+    is_available: false,
+    mechanic_id: mechanicId,
+    note: undefined,
+    shop_id: shopId,
+    start_time: startTime,
+    title: RESERVED_PENDING_CUSTOMER_TITLE,
+  });
+}
+
+async function releaseBookingSlot(ctx: any, slotId: any) {
+  const slot = await ctx.db.get(slotId);
+  if (!slot) return;
+
+  await ctx.db.patch(slotId, {
+    is_available: true,
+    note: undefined,
+    title: undefined,
   });
 }
 
@@ -876,6 +952,10 @@ export const update = mutation({
       patch.time_slot_id = slotId;
       patch.scheduled_date = newDate;
       patch.scheduled_time = newTime;
+
+      if (String(slotId) !== String(booking.time_slot_id)) {
+        await releaseBookingSlot(ctx, booking.time_slot_id);
+      }
     }
 
     await ctx.db.patch(args.bookingId, patch);
@@ -1048,9 +1128,33 @@ export const proposeReschedule = mutation({
       throw new Error("Cannot reschedule: the new time overlaps an existing booking");
     }
 
+    const durationMinutes = booking.estimated_labor_minutes ?? 60;
+    const originalDate =
+      booking.status === "pending_customer_acceptance"
+        ? (booking.previous_scheduled_date ?? booking.scheduled_date)
+        : booking.scheduled_date;
+    const originalTime =
+      booking.status === "pending_customer_acceptance"
+        ? (booking.previous_scheduled_time ?? booking.scheduled_time)
+        : booking.scheduled_time;
+    const originalMechanicId =
+      booking.status === "pending_customer_acceptance"
+        ? (booking.previous_mechanic_id ?? booking.mechanic_id)
+        : booking.mechanic_id;
+
+    const targetSlotId = await getOrCreateSlot(
+      ctx,
+      booking.shop_id,
+      targetMechanicId ?? undefined,
+      args.newScheduledDate,
+      args.newScheduledTime,
+      durationMinutes
+    );
+
     const patch: any = {
       scheduled_date: args.newScheduledDate,
       scheduled_time: args.newScheduledTime,
+      time_slot_id: targetSlotId,
       reschedule_proposed_at: Date.now(),
       status: "pending_customer_acceptance",
       updated_at: Date.now(),
@@ -1070,6 +1174,30 @@ export const proposeReschedule = mutation({
     }
 
     await ctx.db.patch(booking._id, patch);
+
+    if (booking.status === "pending_customer_acceptance") {
+      if (String(booking.time_slot_id) !== String(targetSlotId)) {
+        await releaseBookingSlot(ctx, booking.time_slot_id);
+      }
+      await reservePendingCustomerSlot(
+        ctx,
+        booking.shop_id,
+        originalMechanicId ?? undefined,
+        originalDate,
+        originalTime,
+        durationMinutes
+      );
+    } else {
+      await reservePendingCustomerSlot(
+        ctx,
+        booking.shop_id,
+        booking.mechanic_id ?? undefined,
+        booking.scheduled_date,
+        booking.scheduled_time,
+        durationMinutes,
+        booking.time_slot_id
+      );
+    }
 
     await logBookingStatusChange(
       ctx,
@@ -1097,6 +1225,11 @@ export const customerApproveReschedule = mutation({
       throw new Error("Booking is not pending customer acceptance");
     }
 
+    const durationMinutes = booking.estimated_labor_minutes ?? 60;
+    const originalDate = booking.previous_scheduled_date ?? booking.scheduled_date;
+    const originalTime = booking.previous_scheduled_time ?? booking.scheduled_time;
+    const originalMechanicId = booking.previous_mechanic_id ?? booking.mechanic_id;
+
     await ctx.db.patch(booking._id, {
       status: "confirmed",
       previous_scheduled_date: undefined,
@@ -1105,6 +1238,18 @@ export const customerApproveReschedule = mutation({
       reschedule_proposed_at: undefined,
       updated_at: Date.now(),
     });
+
+    const reservedOriginalSlot = await findExactSlot(
+      ctx,
+      booking.shop_id,
+      originalMechanicId ?? undefined,
+      originalDate,
+      originalTime,
+      durationMinutes
+    );
+    if (reservedOriginalSlot) {
+      await releaseBookingSlot(ctx, reservedOriginalSlot._id);
+    }
 
     await logBookingStatusChange(
       ctx,
@@ -1132,17 +1277,35 @@ export const customerDeclineReschedule = mutation({
       throw new Error("Booking is not pending customer acceptance");
     }
 
+    const durationMinutes = booking.estimated_labor_minutes ?? 60;
+    const originalDate = booking.previous_scheduled_date ?? booking.scheduled_date;
+    const originalTime = booking.previous_scheduled_time ?? booking.scheduled_time;
+    const originalMechanicId = booking.previous_mechanic_id ?? booking.mechanic_id;
+    const originalSlotId = await getOrCreateSlot(
+      ctx,
+      booking.shop_id,
+      originalMechanicId ?? undefined,
+      originalDate,
+      originalTime,
+      durationMinutes
+    );
+
     await ctx.db.patch(booking._id, {
       status: "confirmed",
-      scheduled_date: booking.previous_scheduled_date ?? booking.scheduled_date,
-      scheduled_time: booking.previous_scheduled_time ?? booking.scheduled_time,
-      mechanic_id: booking.previous_mechanic_id,
+      scheduled_date: originalDate,
+      scheduled_time: originalTime,
+      mechanic_id: originalMechanicId,
+      time_slot_id: originalSlotId,
       previous_scheduled_date: undefined,
       previous_scheduled_time: undefined,
       previous_mechanic_id: undefined,
       reschedule_proposed_at: undefined,
       updated_at: Date.now(),
     });
+
+    if (String(booking.time_slot_id) !== String(originalSlotId)) {
+      await releaseBookingSlot(ctx, booking.time_slot_id);
+    }
 
     await logBookingStatusChange(
       ctx,
@@ -1180,17 +1343,35 @@ export const revertExpiredReschedules = internalMutation({
       .collect();
 
     for (const booking of expired) {
+      const durationMinutes = booking.estimated_labor_minutes ?? 60;
+      const originalDate = booking.previous_scheduled_date ?? booking.scheduled_date;
+      const originalTime = booking.previous_scheduled_time ?? booking.scheduled_time;
+      const originalMechanicId = booking.previous_mechanic_id ?? booking.mechanic_id;
+      const originalSlotId = await getOrCreateSlot(
+        ctx,
+        booking.shop_id,
+        originalMechanicId ?? undefined,
+        originalDate,
+        originalTime,
+        durationMinutes
+      );
+
       await ctx.db.patch(booking._id, {
         status: "confirmed",
-        scheduled_date: booking.previous_scheduled_date ?? booking.scheduled_date,
-        scheduled_time: booking.previous_scheduled_time ?? booking.scheduled_time,
-        mechanic_id: booking.previous_mechanic_id,
+        scheduled_date: originalDate,
+        scheduled_time: originalTime,
+        mechanic_id: originalMechanicId,
+        time_slot_id: originalSlotId,
         previous_scheduled_date: undefined,
         previous_scheduled_time: undefined,
         previous_mechanic_id: undefined,
         reschedule_proposed_at: undefined,
         updated_at: Date.now(),
       });
+
+      if (String(booking.time_slot_id) !== String(originalSlotId)) {
+        await releaseBookingSlot(ctx, booking.time_slot_id);
+      }
 
       await logBookingStatusChange(
         ctx,

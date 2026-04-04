@@ -329,16 +329,21 @@ export const seedDashboardBookings = mutation({
       return bookingId;
     };
 
-    // Fixed booking times — always the same regardless of when the seed runs
+    // Fixed booking times — laid out sequentially so no two bookings
+    // assigned to the same mechanic ever overlap, regardless of shop size.
+    // Sequential chain (n=1 worst case):
+    //   08:00+45m=08:45 | 09:00+30m=09:30 | 09:30+90m=11:00 | 11:00+60m=12:00
+    //   12:00+45m=12:45 | 13:00+90m=14:30 | 14:30+30m=15:00
+    //   15:00+90m=16:30 | 16:30+120m=18:30
     const timeCompleted1 = "08:00";
-    const timeCompleted2 = "09:30";
-    const timeActive1    = "10:00";
+    const timeCompleted2 = "09:00";
+    const timeActive1    = "09:30";
     const timeActive2    = "11:00";
     const timeLater1     = "12:00";
-    const timeLater2     = "13:30";
-    const timeLater3     = "15:00";
-    const timePending1   = "14:00";
-    const timePending2   = "16:00";
+    const timeLater2     = "13:00";
+    const timeLater3     = "14:30";
+    const timePending1   = "15:00";
+    const timePending2   = "16:30";
 
     // ── Completed earlier today ───────────────────────────────────────────────
     await createBooking({

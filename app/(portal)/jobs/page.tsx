@@ -2,13 +2,16 @@
 
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
 import { createPortal } from "react-dom";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Calendar, ChevronDown, ClipboardList, Search, X } from "lucide-react";
 import { usePortalSidebar } from "../portal-context";
 import JobDetailPanel from "@/components/job-detail-panel";
 import type { JobDetailPanelHandle } from "@/components/job-detail-panel";
+import RescheduleConfirmationDialog, {
+  type RescheduleConfirmationProposal,
+} from "@/components/reschedule-confirmation-dialog";
 import { StatusPill } from "@/components/status-pill";
 
 /* ------------------------------------------------------------------ */
@@ -88,6 +91,9 @@ export default function JobsPage() {
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
   const [successMessage, setSuccessMessage] = useState("");
+  const [rescheduleProposal, setRescheduleProposal] = useState<RescheduleConfirmationProposal | null>(null);
+  const [rescheduleError, setRescheduleError] = useState("");
+  const [isRescheduling, setIsRescheduling] = useState(false);
 
   const customerFilterRef = useRef<{ open: () => void }>(null);
   const vehicleFilterRef = useRef<{ open: () => void }>(null);
@@ -101,6 +107,15 @@ export default function JobsPage() {
     api.bookings.getJobDetail,
     selectedJobId ? { bookingId: selectedJobId } : "skip"
   );
+  const selectedJobDayBookings = useQuery(
+    api.schedule.getBookingsForRange,
+    selectedJob ? { dateFrom: selectedJob.scheduledDate, dateTo: selectedJob.scheduledDate } : "skip"
+  );
+  const selectedJobDayBlockedSlots = useQuery(
+    api.schedule.getBlockedSlots,
+    selectedJob ? { dateFrom: selectedJob.scheduledDate, dateTo: selectedJob.scheduledDate } : "skip"
+  );
+  const proposeReschedule = useMutation(api.bookings.proposeReschedule);
 
   const hasContext = !!context?.shopId;
   const mechanics = useMemo(() => context?.mechanics ?? [], [context?.mechanics]);
@@ -173,6 +188,35 @@ export default function JobsPage() {
     const t = setTimeout(() => setSuccessMessage(""), 3000);
     return () => clearTimeout(t);
   }, [successMessage]);
+
+  const handleProposeReschedule = useCallback((proposal: RescheduleConfirmationProposal) => {
+    setRescheduleProposal(proposal);
+    setRescheduleError("");
+  }, []);
+
+  async function handleConfirmReschedule() {
+    if (!rescheduleProposal) return;
+    setIsRescheduling(true);
+    setRescheduleError("");
+    try {
+      await proposeReschedule({
+        bookingId: rescheduleProposal.eventId as Id<"bookings">,
+        newScheduledDate: rescheduleProposal.newDate,
+        newScheduledTime: rescheduleProposal.newTime,
+        newMechanicId: rescheduleProposal.newMechanicId
+          ? (rescheduleProposal.newMechanicId as Id<"mechanics">)
+          : undefined,
+      });
+      setRescheduleProposal(null);
+      setSuccessMessage("Reschedule proposed — awaiting customer approval");
+    } catch (err: unknown) {
+      setRescheduleError(
+        err instanceof Error ? err.message : "Could not propose reschedule.",
+      );
+    } finally {
+      setIsRescheduling(false);
+    }
+  }
 
   // Keyboard navigation
   useEffect(() => {
@@ -515,6 +559,11 @@ export default function JobsPage() {
               ref={jobDetailRef}
               job={selectedJob}
               mechanics={mechanics}
+              scheduleConflicts={{
+                bookings: selectedJobDayBookings ?? [],
+                blockedSlots: selectedJobDayBlockedSlots ?? [],
+              }}
+              onRequestRescheduleConfirmation={handleProposeReschedule}
               onClose={() => setSelectedJobId(null)}
               onSuccess={setSuccessMessage}
             />
@@ -523,8 +572,17 @@ export default function JobsPage() {
       </div>
       )}
 
+      <RescheduleConfirmationDialog
+        proposal={rescheduleProposal}
+        error={rescheduleError}
+        isSubmitting={isRescheduling}
+        onCancel={() => setRescheduleProposal(null)}
+        onConfirm={() => void handleConfirmReschedule()}
+        reserveOriginalSlotMessage="The original time will be reserved until the customer responds. If they don't respond within 24 hours, the original booking slot will be restored automatically."
+      />
+
       {/* Success toast */}
-      {successMessage && (
+      {successMessage && !rescheduleProposal && (
         <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground">
           {successMessage}
         </div>

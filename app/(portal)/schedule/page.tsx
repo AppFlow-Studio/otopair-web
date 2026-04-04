@@ -53,6 +53,8 @@ import type { RescheduleProposal, ContextMenuCellInfo, ContextMenuBlockedInfo } 
 import WeekSwimLanes from "./week-swim-lanes";
 import WeekSingleMechanicLanes from "./week-single-mechanic-lanes";
 import JobDetailPanel, { type JobDetailPanelHandle } from "@/components/job-detail-panel";
+import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
+import RescheduleConfirmationDialog from "@/components/reschedule-confirmation-dialog";
 import CreateBookingDrawer from "./create-booking-drawer";
 
 /* ------------------------------------------------------------------ */
@@ -1268,129 +1270,14 @@ export default function SchedulePage() {
 
       </div>{/* end flex row */}
 
-      {/* Reschedule confirmation dialog */}
-      {rescheduleProposal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/20 backdrop-blur-sm"
-            onClick={() => setRescheduleProposal(null)}
-          />
-          <div className="relative bg-card rounded-xl border border-border shadow-xl p-5 w-full max-w-sm">
-            <h3 className="text-base font-semibold text-foreground mb-2">
-              Reschedule this booking?
-            </h3>
-            <div className="text-sm text-muted-foreground mb-4 space-y-1">
-              {rescheduleProposal.timeChanged && rescheduleProposal.mechanicChanged ? (
-                <p>
-                  Move from{" "}
-                  <span className="font-medium text-foreground">
-                    {rescheduleProposal.originalMechanicName ?? "Unassigned"}
-                  </span>{" "}
-                  at{" "}
-                  <span className="font-medium text-foreground">
-                    {formatTimeLabel(rescheduleProposal.originalTime)}
-                  </span>{" "}
-                  to{" "}
-                  <span className="font-medium text-foreground">
-                    {rescheduleProposal.newMechanicName ?? "Unassigned"}
-                  </span>{" "}
-                  at{" "}
-                  <span className="font-medium text-foreground">
-                    {formatTimeLabel(rescheduleProposal.newTime)}
-                  </span>
-                  ?
-                </p>
-              ) : rescheduleProposal.dateChanged && rescheduleProposal.timeChanged ? (
-                <p>
-                  Move from{" "}
-                  <span className="font-medium text-foreground">
-                    {format(new Date(rescheduleProposal.originalDate + "T00:00:00"), "EEE MMM d")}
-                  </span>{" "}
-                  at{" "}
-                  <span className="font-medium text-foreground">
-                    {formatTimeLabel(rescheduleProposal.originalTime)}
-                  </span>{" "}
-                  to{" "}
-                  <span className="font-medium text-foreground">
-                    {format(new Date(rescheduleProposal.newDate + "T00:00:00"), "EEE MMM d")}
-                  </span>{" "}
-                  at{" "}
-                  <span className="font-medium text-foreground">
-                    {formatTimeLabel(rescheduleProposal.newTime)}
-                  </span>
-                  ? The customer will be asked to approve the new time.
-                </p>
-              ) : rescheduleProposal.dateChanged ? (
-                <p>
-                  Move from{" "}
-                  <span className="font-medium text-foreground">
-                    {format(new Date(rescheduleProposal.originalDate + "T00:00:00"), "EEE MMM d")}
-                  </span>{" "}
-                  to{" "}
-                  <span className="font-medium text-foreground">
-                    {format(new Date(rescheduleProposal.newDate + "T00:00:00"), "EEE MMM d")}
-                  </span>{" "}
-                  at{" "}
-                  <span className="font-medium text-foreground">
-                    {formatTimeLabel(rescheduleProposal.newTime)}
-                  </span>
-                  ? The customer will be asked to approve the new date.
-                </p>
-              ) : rescheduleProposal.timeChanged ? (
-                <p>
-                  Move from{" "}
-                  <span className="font-medium text-foreground">
-                    {formatTimeLabel(rescheduleProposal.originalTime)}
-                  </span>{" "}
-                  to{" "}
-                  <span className="font-medium text-foreground">
-                    {formatTimeLabel(rescheduleProposal.newTime)}
-                  </span>
-                  ? The customer will be asked to approve the new time.
-                </p>
-              ) : (
-                <p>
-                  Reassign from{" "}
-                  <span className="font-medium text-foreground">
-                    {rescheduleProposal.originalMechanicName ?? "Unassigned"}
-                  </span>{" "}
-                  to{" "}
-                  <span className="font-medium text-foreground">
-                    {rescheduleProposal.newMechanicName ?? "Unassigned"}
-                  </span>
-                  ? The customer will be asked to approve the change.
-                </p>
-              )}
-              <p className="text-xs text-muted-foreground mt-2">
-                The booking will be set to Pending Customer until the customer responds. If they
-                don&apos;t respond within 24 hours, the original time will be restored automatically.
-              </p>
-            </div>
-            {rescheduleError && (
-              <p className="text-xs text-destructive mb-3">{rescheduleError}</p>
-            )}
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setRescheduleProposal(null)}
-                disabled={isRescheduling}
-                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmReschedule}
-                disabled={isRescheduling}
-                className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
-              >
-                {isRescheduling && (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                )}
-                {isRescheduling ? "Confirming…" : "Confirm reschedule"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <RescheduleConfirmationDialog
+        proposal={rescheduleProposal}
+        error={rescheduleError}
+        isSubmitting={isRescheduling}
+        onCancel={() => setRescheduleProposal(null)}
+        onConfirm={() => void handleConfirmReschedule()}
+        reserveOriginalSlotMessage="The booking will be set to Pending Customer until the customer responds. If they don't respond within 24 hours, the original time will be restored automatically."
+      />
 
       {/* Right-click context menu */}
       {contextMenu && (
@@ -1508,43 +1395,47 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {/* Success toast — shown outside modals when neither is open */}
-      {toast && (
+      {/* Success toast — shown only when blur-overlay confirmations are not open */}
+      {toast && !rescheduleProposal && !blockDayConfirm && (
         <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
           {toast.msg}
         </div>
       )}
 
-      {/* Block-full-day confirmation dialog */}
-      {blockDayConfirm && (
-        <div
-          className="fixed inset-0 z-[80] flex items-center justify-center"
-        >
-          <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={() => setBlockDayConfirm(null)} />
-          <div className="relative bg-card border border-border rounded-xl shadow-xl p-6 w-full max-w-sm mx-4">
-            <h3 className="text-base font-semibold text-foreground mb-2">Block remaining time?</h3>
-            <p className="text-sm text-muted-foreground mb-5">
+      <ConfirmationDialog
+        open={!!blockDayConfirm}
+        title="Block remaining time?"
+        description={
+          blockDayConfirm ? (
+            <>
               <span className="font-medium text-foreground">{blockDayConfirm.mechanicName}</span> has{" "}
               {blockDayConfirm.bookingCount} existing booking{blockDayConfirm.bookingCount !== 1 ? "s" : ""} on this day.
               Confirming will block all open time around those bookings and clear any existing manual blocks.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setBlockDayConfirm(null)}
-                className="flex-1 px-4 py-2 text-sm font-medium border border-border rounded-lg hover:bg-muted transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleBlockFullDay(blockDayConfirm.mechanicId, blockDayConfirm.mechanicName, blockDayConfirm.date, true)}
-                className="flex-1 px-4 py-2 text-sm font-semibold bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition-opacity"
-              >
-                Block remaining time
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            </>
+          ) : undefined
+        }
+        onClose={() => setBlockDayConfirm(null)}
+        zIndexClassName="z-[80]"
+        secondaryAction={{
+          label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
+          onAction: () => setBlockDayConfirm(null),
+          shortcutKey: "c",
+        }}
+        primaryAction={{
+          label: <ShortcutLabel text="Block remaining time" shortcutKey="b" />,
+          onAction: () => {
+            if (!blockDayConfirm) return;
+            void handleBlockFullDay(
+              blockDayConfirm.mechanicId,
+              blockDayConfirm.mechanicName,
+              blockDayConfirm.date,
+              true
+            );
+          },
+          shortcutKey: "b",
+          variant: "primary",
+        }}
+      />
     </div>
   );
 }

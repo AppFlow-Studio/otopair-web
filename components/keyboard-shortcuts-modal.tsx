@@ -5,29 +5,46 @@ import { X } from "lucide-react";
 
 const SECTIONS = [
   {
-    title: "Jobs table",
+    title: "Schedule page",
     rows: [
-      { label: "Navigate up", keys: ["↑"] },
-      { label: "Navigate down", keys: ["↓"] },
-      { label: "Open / close job details", keys: ["Enter"] },
-      { label: "Close job details", keys: ["Esc"] },
+      { label: "Close selected job / drawer / context menu", keys: ["Esc"] },
+      { label: "Cancel drag while rescheduling", keys: ["Esc"] },
     ],
   },
   {
     title: "Job details",
     rows: [
-      { label: "Accept  /  Mark completed", keys: ["A"] },
+      { label: "Accept pending job", keys: ["A"] },
       { label: "Decline", keys: ["D"] },
+      { label: "Open assign / reassign dropdown", keys: ["A"] },
+      { label: "Assign / reassign mechanic", keys: ["S"] },
+      { label: "Start job", keys: ["T"] },
+      { label: "Mark completed", keys: ["R"] },
       { label: "Cancel job", keys: ["C"] },
     ],
   },
   {
     title: "Decline dialog",
     rows: [
-      { label: "Navigate reasons", keys: ["↑", "↓"] },
+      { label: "Navigate reasons", keys: ["Up", "Down"] },
       { label: "Confirm decline", keys: ["D", "Enter"] },
       { label: "Cancel", keys: ["C"] },
       { label: "Unfocus text box", keys: ["Enter", "Esc"] },
+    ],
+  },
+  {
+    title: "Confirmation dialogs",
+    rows: [
+      { label: "Confirm reschedule", keys: ["F"] },
+      { label: "Cancel reschedule dialog", keys: ["C"] },
+      { label: "Confirm mark completed", keys: ["R"] },
+      { label: "Cancel mark completed dialog", keys: ["C"] },
+      { label: "Confirm cancel job", keys: ["C"] },
+      { label: "Keep job", keys: ["E"] },
+      { label: "Revert proposed reschedule", keys: ["R"] },
+      { label: "Cancel revert dialog", keys: ["C"] },
+      { label: "Block remaining time", keys: ["B"] },
+      { label: "Cancel block-day dialog", keys: ["C"] },
     ],
   },
 ];
@@ -79,7 +96,7 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
       />
       <div
         ref={containerRef}
-        className="relative bg-card border border-border rounded-xl shadow-xl w-full max-w-sm overflow-hidden"
+        className="relative bg-card border border-border rounded-xl shadow-xl w-full max-w-sm max-h-[min(85vh,720px)] overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
@@ -93,9 +110,12 @@ export function KeyboardShortcutsModal({ open, onClose }: Props) {
         </div>
 
         {/* Sections */}
-        <div className="py-2">
-          {SECTIONS.map((section) => (
+        <div className="py-2 overflow-y-auto max-h-[calc(min(85vh,720px)-57px)]">
+          {SECTIONS.map((section, index) => (
             <div key={section.title}>
+              {index > 0 && (
+                <div className="mx-5 my-2 border-t border-border/60" />
+              )}
               <p className="px-5 pt-3 pb-1 text-xs font-medium text-muted-foreground">
                 {section.title}
               </p>

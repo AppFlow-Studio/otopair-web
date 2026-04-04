@@ -145,7 +145,7 @@ const BUILT_IN_TYPES = [
 
 export default function SchedulePage() {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [currentView, setCurrentView] = useState<"month" | "week" | "day">("week");
+  const [currentView, setCurrentView] = useState<"month" | "week" | "day">("day");
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
   const [selectedBookingId, setSelectedBookingId] = useState<Id<"bookings"> | null>(null);
   const [toast, setToast] = useState<{ msg: string; key: number } | null>(null);
@@ -803,7 +803,7 @@ export default function SchedulePage() {
       {/* Calendar */}
       <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar relative">
         {bookings === undefined ? (
-          <div className="flex items-center justify-center h-[600px]">
+          <div className="flex items-center justify-center" style={{ height: "calc(100vh - 320px)", minHeight: 500 }}>
             <Loader2 className="w-6 h-6 text-primary animate-spin" />
           </div>
         ) : null}

@@ -1,4 +1,6 @@
 declare module "*.css";
+declare module "react-big-calendar/lib/css/react-big-calendar.css";
+declare module "./schedule.css";
 
 export {};
 

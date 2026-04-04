@@ -151,6 +151,7 @@ interface RescheduleRequest {
   newTime: string;
   newMechanicId: string | undefined;
   newMechanicName: string | undefined;
+  dateChanged: boolean;
   timeChanged: boolean;
   mechanicChanged: boolean;
 }
@@ -211,6 +212,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         mechanics.find((m) => String(m._id) === assigningMechanicId)?._id,
       [assigningMechanicId, mechanics],
     );
+    const canAssignMechanic =
+      !!job &&
+      (job.status === "pending" ||
+        job.status === "pending_shop_acceptance" ||
+        job.status === "confirmed");
     const showAssignMechanicError = actionError.startsWith(
       "Cannot assign this mechanic"
     );
@@ -324,6 +330,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     }
 
     async function handleAssignMechanic() {
+      if (!canAssignMechanic) return;
       if (!job?._id || !selectedMechanicId) return;
       setActionError("");
       const assignmentConflict =
@@ -382,6 +389,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           newTime: job.scheduledTime,
           newMechanicId,
           newMechanicName,
+          dateChanged: false,
           timeChanged: false,
           mechanicChanged: true,
         });
@@ -438,11 +446,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       showCancelJob: () => setShowCancelConfirm(true),
       showCancelReschedule: () => setShowCancelRescheduleConfirm(true),
       openAssignDropdown: () => {
+        if (!canAssignMechanic) return;
         assignTriggerRef.current
           ?.querySelector<HTMLButtonElement>("button")
           ?.click();
       },
       assignMechanic: () => {
+        if (!canAssignMechanic) return;
         handleAssignMechanic();
       },
       hasOpenModal: () =>
@@ -680,6 +690,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   <div className="flex flex-wrap gap-2">
                     <div ref={assignTriggerRef}>
                       <Select
+                        isDisabled={!canAssignMechanic || isActioning}
                         selectedKey={
                           assigningMechanicId || "unassigned"
                         }
@@ -744,7 +755,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     </div>
                     <button
                       onClick={handleAssignMechanic}
-                      disabled={!assigningMechanicId || isActioning}
+                      disabled={!canAssignMechanic || !assigningMechanicId || isActioning}
                       className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
                     >
                       {isActioning && (

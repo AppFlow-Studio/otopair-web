@@ -23,9 +23,9 @@ export interface RescheduleProposal {
   newTime: string;
   newMechanicId: string | undefined;
   newMechanicName: string | undefined;
+  dateChanged: boolean;
   timeChanged: boolean;
   mechanicChanged: boolean;
-  dateChanged?: boolean;
 }
 
 export interface ContextMenuCellInfo {
@@ -511,6 +511,7 @@ export default function DaySwimLanes({
               newTime,
               newMechanicId,
               newMechanicName: newMech?.name,
+              dateChanged: false,
               timeChanged,
               mechanicChanged,
             });
@@ -716,7 +717,7 @@ export default function DaySwimLanes({
                   return (
                     <div
                       key={bl.id}
-                      className="absolute left-0 right-0 z-[5] blocked-slot-pattern group cursor-pointer"
+                      className="absolute left-0 right-0 z-[5] blocked-slot-pattern group cursor-pointer overflow-hidden"
                       style={{
                         top: Math.max(0, blTop),
                         height: Math.max(ROW_HEIGHT * 0.5, blHeight),
@@ -740,8 +741,17 @@ export default function DaySwimLanes({
                         onContextMenuBlocked({ slotId: bl.slotId, clientX: e.clientX, clientY: e.clientY });
                       }}
                     >
-                      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-medium text-red-400 select-none pointer-events-none px-1 truncate">
-                        {bl.blockTitle ?? "Blocked"}
+                      <span className="absolute inset-0 flex items-center justify-center overflow-hidden px-1 pointer-events-none select-none">
+                        <span
+                          className="overflow-hidden text-center text-[11px] font-medium leading-tight text-red-400 whitespace-normal break-words"
+                          style={{
+                            display: "-webkit-box",
+                            WebkitBoxOrient: "vertical",
+                            WebkitLineClamp: Math.max(1, Math.floor(blHeight / 14)),
+                          }}
+                        >
+                          {bl.blockTitle ?? "Blocked"}
+                        </span>
                       </span>
                     </div>
                   );

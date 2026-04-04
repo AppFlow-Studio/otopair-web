@@ -197,9 +197,9 @@ export default function WeekSwimLanes({
                   <td
                     key={day.dateStr}
                     className={`px-1 py-2 cursor-pointer transition-colors relative border-r border-border ${hasBlock ? "blocked-slot-pattern" : ""}`}
-                    style={!hasBlock ? { backgroundColor: "#fbfbfb" } : undefined}
-                    onMouseEnter={(e) => { if (!hasBlock) (e.currentTarget as HTMLElement).style.backgroundColor = "#f0f0f0"; }}
-                    onMouseLeave={(e) => { if (!hasBlock) (e.currentTarget as HTMLElement).style.backgroundColor = "#fbfbfb"; }}
+                    style={!hasBlock ? { backgroundColor: "var(--card)" } : undefined}
+                    onMouseEnter={(e) => { if (!hasBlock) (e.currentTarget as HTMLElement).style.backgroundColor = "color-mix(in srgb, var(--muted-foreground) 8%, var(--card))"; }}
+                    onMouseLeave={(e) => { if (!hasBlock) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--card)"; }}
                     onClick={() => onNavigateToDay(day.date, mech._id)}
                     onContextMenu={(e) => {
                       if (!onContextMenuBlockDay) return;

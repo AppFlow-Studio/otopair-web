@@ -21,13 +21,9 @@
   border-color: var(--border);
 }
 
-.schedule-calendar .rbc-today {
-  background-color: transparent;
-}
-
 .schedule-calendar .rbc-date-cell.rbc-now > a,
 .schedule-calendar .rbc-date-cell.rbc-now > button {
-  background-color: rgb(82 153 254);
+  background-color: var(--primary);
   color: #fff;
   border-radius: 9999px;
   width: 1.5rem;
@@ -68,10 +64,6 @@
   background-color: var(--muted);
 }
 
-.schedule-calendar .rbc-current-time-indicator {
-  background-color: var(--destructive);
-  height: 2px;
-}
 
 /* Blocked slot diagonal stripe pattern */
 .blocked-slot-pattern {

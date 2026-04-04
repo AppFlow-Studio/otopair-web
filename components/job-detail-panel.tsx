@@ -721,10 +721,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 {/* Assign mechanic */}
                 <div className="border-t border-border pt-4">
                   <p className="text-xs font-medium text-foreground mb-2">
-                    <span style={{ textDecorationLine: "underline" }}>
-                      A
-                    </span>
-                    ssign mechanic
+                    {job.mechanicId ? (
+                      <>Re<span style={{ textDecorationLine: "underline" }}>a</span>ssign mechanic</>
+                    ) : (
+                      <><span style={{ textDecorationLine: "underline" }}>A</span>ssign mechanic</>
+                    )}
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <div ref={assignTriggerRef}>

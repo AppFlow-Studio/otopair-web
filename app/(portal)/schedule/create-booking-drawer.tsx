@@ -89,14 +89,14 @@ function SectionHeader({ icon: Icon, label }: { icon: React.ElementType<{ classN
   return (
     <div className="flex items-center gap-2 mb-4">
       <Icon className="w-4 h-4 text-primary" />
-      <h3 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{label}</h3>
+      <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground">{label}</h3>
     </div>
   );
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
-    <label className="block text-[10px] uppercase tracking-widest font-bold text-muted-foreground mb-1.5">
+    <label className="block text-[10px] tracking-widest font-bold text-muted-foreground mb-1.5">
       {children}
     </label>
   );
@@ -318,7 +318,7 @@ export default function CreateBookingDrawer({
                       onClick={() => toggleCat(cat.id)}
                       className="flex justify-between items-center w-full mb-2 group"
                     >
-                      <span className="text-[11px] font-bold text-muted-foreground uppercase tracking-widest group-hover:text-primary transition-colors">
+                      <span className="text-[11px] font-bold text-muted-foreground tracking-widest group-hover:text-primary transition-colors">
                         {cat.name}
                       </span>
                       <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`} />

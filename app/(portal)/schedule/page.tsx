@@ -1222,7 +1222,7 @@ export default function SchedulePage() {
                   className="w-full py-2.5 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 inline-flex items-center justify-center gap-2"
                 >
                   {btSaving && <Loader2 className="w-4 h-4 animate-spin" />}
-                  {blockTimeDrawer.editingSlotId ? "Update" : "Save"}
+                  {blockTimeDrawer.editingSlotId ? "Save changes" : "Save"}
                 </button>
               </div>
             </div>
@@ -1283,7 +1283,7 @@ export default function SchedulePage() {
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="fixed z-[80] bg-card border border-border rounded-xl shadow-2xl overflow-hidden min-w-[220px]"
+          className="fixed z-[80] bg-card border border-border rounded-xl shadow-lg overflow-hidden min-w-[220px]"
           style={
             contextMenu.type === "deleteBlockType"
               ? { right: window.innerWidth - contextMenu.clientX - 6, top: contextMenu.clientY }

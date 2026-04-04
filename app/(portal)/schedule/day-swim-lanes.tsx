@@ -684,6 +684,11 @@ export default function DaySwimLanes({
                   });
                 }}
               >
+                {colBookings.length === 0 && colBlocked.length === 0 && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <span className="text-xs text-muted-foreground/50">No bookings</span>
+                  </div>
+                )}
                 {/* Drop zone highlight — spans the full booking duration */}
                 {dropTarget?.colId === col.id && (
                   <div
@@ -819,7 +824,7 @@ export default function DaySwimLanes({
                     <div
                       key={ev.id}
                       data-event-block
-                      className={`absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10 select-none ${
+                      className={`absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10 select-none transition-shadow duration-150 ${
                         isDraggable
                           ? "cursor-grab active:cursor-grabbing"
                           : "cursor-pointer"
@@ -833,6 +838,8 @@ export default function DaySwimLanes({
                           ? `3px dashed ${colors.border}`
                           : `3px solid ${colors.border}`,
                       }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = "0 1px 3px rgba(0,0,0,0.08)"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = ""; }}
                       onPointerDown={
                         isDraggable
                           ? (e) => handlePointerDown(e, ev, col.id)

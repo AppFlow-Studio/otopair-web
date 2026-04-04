@@ -12,6 +12,18 @@ const SECTIONS = [
     ],
   },
   {
+    title: "Jobs page",
+    rows: [
+      { label: "Move focused row", keys: ["Up", "Down"] },
+      { label: "Open focused row", keys: ["Enter"] },
+      { label: "Clear all filters", keys: ["X"] },
+      { label: "Open customer filter", keys: ["C"] },
+      { label: "Open vehicle filter", keys: ["V"] },
+      { label: "Open service filter", keys: ["S"] },
+      { label: "Open mechanic filter", keys: ["M"] },
+    ],
+  },
+  {
     title: "Job details",
     rows: [
       { label: "Accept pending job", keys: ["A"] },
@@ -36,12 +48,13 @@ const SECTIONS = [
     title: "Confirmation dialogs",
     rows: [
       { label: "Confirm reschedule", keys: ["F"] },
+      { label: "Open cancel reschedule dialog", keys: ["C"] },
       { label: "Cancel reschedule dialog", keys: ["C"] },
       { label: "Confirm mark completed", keys: ["R"] },
       { label: "Cancel mark completed dialog", keys: ["C"] },
       { label: "Confirm cancel job", keys: ["C"] },
       { label: "Keep job", keys: ["E"] },
-      { label: "Revert proposed reschedule", keys: ["R"] },
+      { label: "Confirm revert proposed reschedule", keys: ["R"] },
       { label: "Cancel revert dialog", keys: ["C"] },
       { label: "Block remaining time", keys: ["B"] },
       { label: "Cancel block-day dialog", keys: ["C"] },

@@ -6,6 +6,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Calendar, ChevronDown, ClipboardList, Search, X } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { usePortalSidebar } from "../portal-context";
 import JobDetailPanel from "@/components/job-detail-panel";
 import type { JobDetailPanelHandle } from "@/components/job-detail-panel";
@@ -78,6 +79,7 @@ function pendingCountdown(creationTime: number): string | null {
 /* ------------------------------------------------------------------ */
 
 export default function JobsPage() {
+  const searchParams = useSearchParams();
   const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("all");
   const [customerFilter, setCustomerFilter] = useState("");
   const [vehicleFilter, setVehicleFilter] = useState("");
@@ -103,9 +105,12 @@ export default function JobsPage() {
 
   const context = useQuery(api.bookings.getMyShopJobContext);
   const allJobs = useQuery(api.bookings.listForMyShop, {});
+  const hasContext = !!context?.shopId;
   const selectedJob = useQuery(
     api.bookings.getJobDetail,
-    selectedJobId ? { bookingId: selectedJobId } : "skip"
+    context !== undefined && hasContext && selectedJobId
+      ? { bookingId: selectedJobId }
+      : "skip"
   );
   const selectedJobDayBookings = useQuery(
     api.schedule.getBookingsForRange,
@@ -117,7 +122,6 @@ export default function JobsPage() {
   );
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
 
-  const hasContext = !!context?.shopId;
   const mechanics = useMemo(() => context?.mechanics ?? [], [context?.mechanics]);
 
   const uniqueServices = useMemo(() => {
@@ -169,6 +173,7 @@ export default function JobsPage() {
   const today = todayString();
   const isDefaultDateRange = dateFrom === today && dateTo === today && !timeFrom && !timeTo;
   const hasAnyFilter = statusFilter !== "all" || customerFilter || vehicleFilter || serviceFilter.length > 0 || mechanicFilter.length > 0 || !isDefaultDateRange;
+  const highlightedJobId = searchParams.get("highlight");
 
   function clearAllFilters() {
     setStatusFilter("all");
@@ -188,6 +193,21 @@ export default function JobsPage() {
     const t = setTimeout(() => setSuccessMessage(""), 3000);
     return () => clearTimeout(t);
   }, [successMessage]);
+
+  useEffect(() => {
+    if (!highlightedJobId) return;
+    setSelectedJobId(highlightedJobId as Id<"bookings">);
+  }, [highlightedJobId]);
+
+  useEffect(() => {
+    if (!highlightedJobId || !filteredJobs) return;
+    const highlightedIndex = filteredJobs.findIndex(
+      (job) => String(job._id) === highlightedJobId,
+    );
+    if (highlightedIndex >= 0) {
+      setFocusedRowIndex(highlightedIndex);
+    }
+  }, [filteredJobs, highlightedJobId]);
 
   const handleProposeReschedule = useCallback((proposal: RescheduleConfirmationProposal) => {
     setRescheduleProposal(proposal);

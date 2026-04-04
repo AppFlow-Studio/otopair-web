@@ -88,6 +88,7 @@ export default defineSchema({
     previous_scheduled_date: v.optional(v.string()),
     previous_scheduled_time: v.optional(v.string()),
     previous_mechanic_id: v.optional(v.id("mechanics")),
+    previous_status: v.optional(v.string()),
     reschedule_proposed_at: v.optional(v.float64()),
   })
     .index("by_user_id", ["user_id"])

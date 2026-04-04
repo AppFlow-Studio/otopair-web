@@ -1171,6 +1171,7 @@ export const proposeReschedule = mutation({
       patch.previous_scheduled_date = booking.scheduled_date;
       patch.previous_scheduled_time = booking.scheduled_time;
       patch.previous_mechanic_id = booking.mechanic_id;
+      patch.previous_status = booking.status;
     }
 
     await ctx.db.patch(booking._id, patch);
@@ -1235,6 +1236,7 @@ export const customerApproveReschedule = mutation({
       previous_scheduled_date: undefined,
       previous_scheduled_time: undefined,
       previous_mechanic_id: undefined,
+      previous_status: undefined,
       reschedule_proposed_at: undefined,
       updated_at: Date.now(),
     });
@@ -1266,6 +1268,62 @@ export const customerApproveReschedule = mutation({
   },
 });
 
+/** Shop cancels a proposed reschedule — reverts to original values. */
+export const shopCancelReschedule = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    if (booking.status !== "pending_customer_acceptance") {
+      throw new Error("Booking is not pending customer acceptance");
+    }
+
+    const durationMinutes = booking.estimated_labor_minutes ?? 60;
+    const originalDate = booking.previous_scheduled_date ?? booking.scheduled_date;
+    const originalTime = booking.previous_scheduled_time ?? booking.scheduled_time;
+    const originalMechanicId = booking.previous_mechanic_id ?? booking.mechanic_id;
+    const originalStatus = booking.previous_status ?? "confirmed";
+    const originalSlotId = await getOrCreateSlot(
+      ctx,
+      booking.shop_id,
+      originalMechanicId ?? undefined,
+      originalDate,
+      originalTime,
+      durationMinutes
+    );
+
+    await ctx.db.patch(booking._id, {
+      status: originalStatus,
+      scheduled_date: originalDate,
+      scheduled_time: originalTime,
+      mechanic_id: originalMechanicId,
+      time_slot_id: originalSlotId,
+      previous_scheduled_date: undefined,
+      previous_scheduled_time: undefined,
+      previous_mechanic_id: undefined,
+      previous_status: undefined,
+      reschedule_proposed_at: undefined,
+      updated_at: Date.now(),
+    });
+
+    if (String(booking.time_slot_id) !== String(originalSlotId)) {
+      await releaseBookingSlot(ctx, booking.time_slot_id);
+    }
+
+    await logBookingStatusChange(
+      ctx,
+      booking._id,
+      "pending_customer_acceptance",
+      originalStatus,
+      booking.user_id,
+      "shop_cancelled_reschedule"
+    );
+
+    return booking._id;
+  },
+});
+
 /** Customer declines a proposed reschedule — reverts to original values. */
 export const customerDeclineReschedule = mutation({
   args: { bookingId: v.id("bookings") },
@@ -1281,6 +1339,7 @@ export const customerDeclineReschedule = mutation({
     const originalDate = booking.previous_scheduled_date ?? booking.scheduled_date;
     const originalTime = booking.previous_scheduled_time ?? booking.scheduled_time;
     const originalMechanicId = booking.previous_mechanic_id ?? booking.mechanic_id;
+    const originalStatus = booking.previous_status ?? "confirmed";
     const originalSlotId = await getOrCreateSlot(
       ctx,
       booking.shop_id,
@@ -1291,7 +1350,7 @@ export const customerDeclineReschedule = mutation({
     );
 
     await ctx.db.patch(booking._id, {
-      status: "confirmed",
+      status: originalStatus,
       scheduled_date: originalDate,
       scheduled_time: originalTime,
       mechanic_id: originalMechanicId,
@@ -1299,6 +1358,7 @@ export const customerDeclineReschedule = mutation({
       previous_scheduled_date: undefined,
       previous_scheduled_time: undefined,
       previous_mechanic_id: undefined,
+      previous_status: undefined,
       reschedule_proposed_at: undefined,
       updated_at: Date.now(),
     });
@@ -1311,7 +1371,7 @@ export const customerDeclineReschedule = mutation({
       ctx,
       booking._id,
       "pending_customer_acceptance",
-      "confirmed",
+      originalStatus,
       booking.user_id,
       "customer_declined_reschedule"
     );
@@ -1347,6 +1407,7 @@ export const revertExpiredReschedules = internalMutation({
       const originalDate = booking.previous_scheduled_date ?? booking.scheduled_date;
       const originalTime = booking.previous_scheduled_time ?? booking.scheduled_time;
       const originalMechanicId = booking.previous_mechanic_id ?? booking.mechanic_id;
+      const originalStatus = booking.previous_status ?? "confirmed";
       const originalSlotId = await getOrCreateSlot(
         ctx,
         booking.shop_id,
@@ -1357,7 +1418,7 @@ export const revertExpiredReschedules = internalMutation({
       );
 
       await ctx.db.patch(booking._id, {
-        status: "confirmed",
+        status: originalStatus,
         scheduled_date: originalDate,
         scheduled_time: originalTime,
         mechanic_id: originalMechanicId,
@@ -1365,6 +1426,7 @@ export const revertExpiredReschedules = internalMutation({
         previous_scheduled_date: undefined,
         previous_scheduled_time: undefined,
         previous_mechanic_id: undefined,
+        previous_status: undefined,
         reschedule_proposed_at: undefined,
         updated_at: Date.now(),
       });
@@ -1377,7 +1439,7 @@ export const revertExpiredReschedules = internalMutation({
         ctx,
         booking._id,
         "pending_customer_acceptance",
-        "confirmed",
+        originalStatus,
         booking.user_id,
         "reschedule_auto_reverted_24h"
       );

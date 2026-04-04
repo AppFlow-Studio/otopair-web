@@ -11,7 +11,7 @@ import {
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Loader2, X } from "lucide-react";
+import { Check, Clock, History, Loader2, RotateCcw, X } from "lucide-react";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import {
   getMechanicAssignmentConflict,
@@ -88,8 +88,40 @@ function pendingCountdown(creationTime: number): string | null {
   return `${minutes}m left`;
 }
 
+function humanizeStatus(status: string, reason?: string | null): string {
+  if (status === "confirmed" && reason === "shop_cancelled_reschedule") return "Reschedule Withdrawn";
+  if (status === "confirmed" && reason === "customer_declined_reschedule") return "Reschedule Declined";
+  if (status === "confirmed" && reason === "reschedule_auto_reverted_24h") return "Reschedule Expired";
+  const map: Record<string, string> = {
+    pending: "Pending",
+    pending_shop_acceptance: "Pending Shop Acceptance",
+    pending_customer_acceptance: "Pending Customer Acceptance",
+    confirmed: "Confirmed",
+    in_progress: "In Progress",
+    completed: "Completed",
+    cancelled: reason && reason !== "cancelled_by_shop" ? "Declined" : "Cancelled",
+  };
+  return map[status] ?? status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+const SYSTEM_REASONS = new Set([
+  "cancelled_by_shop",
+  "shop_cancelled_reschedule",
+  "customer_declined_reschedule",
+  "reschedule_auto_reverted_24h",
+  "customer_approved_reschedule",
+]);
+
 function isSystemReason(reason: string): boolean {
-  return /_/.test(reason) || /^[a-z][a-z0-9]*$/.test(reason);
+  return SYSTEM_REASONS.has(reason) || reason.startsWith("seed_");
+}
+
+function getStatusDescription(status: string, reason?: string | null): string | null {
+  if (status === "pending" || status === "pending_shop_acceptance") return "Awaiting shop review";
+  if (status === "pending_customer_acceptance") return "Shop proposed reschedule";
+  if (status === "cancelled" && reason === "cancelled_by_shop") return "Shop cancelled job";
+  if (status === "cancelled" && reason && !isSystemReason(reason)) return reason;
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -205,7 +237,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const completeJob = useMutation(api.bookings.complete);
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
-    const declineReschedule = useMutation(api.bookings.customerDeclineReschedule);
+    const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
 
     const selectedMechanicId = useMemo(
       () =>
@@ -317,7 +349,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setActionError("");
       setIsActioning(true);
       try {
-        await declineReschedule({ bookingId: job._id });
+        await shopCancelReschedule({ bookingId: job._id });
         setShowCancelRescheduleConfirm(false);
         onSuccess?.("Reschedule cancelled — original time restored");
       } catch (err: unknown) {
@@ -537,6 +569,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             setShowCancelRescheduleConfirm(false);
             return true;
           }
+          return true;
+        }
+        if (
+          job?.status === "pending_customer_acceptance" &&
+          (e.key === "c" || e.key === "C")
+        ) {
+          setShowCancelRescheduleConfirm(true);
           return true;
         }
         return false;
@@ -793,7 +832,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                       disabled={isActioning}
                       className="px-3 py-2 text-sm rounded-lg border border-border text-foreground hover:bg-muted transition-colors disabled:opacity-50"
                     >
-                      Cancel reschedule
+                      <span>
+                        <span style={{ textDecorationLine: "underline" }}>
+                          C
+                        </span>
+                        ancel reschedule
+                      </span>
                     </button>
                   </div>
                 )}
@@ -945,33 +989,91 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
                 {/* Status history */}
                 <div className="border-t border-border pt-4">
-                  <p className="text-xs font-medium text-foreground mb-2">
-                    Status history
-                  </p>
-                  <div className="space-y-1 max-h-28 overflow-y-auto">
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <History className="w-3.5 h-3.5 text-muted-foreground" />
+                    <p className="text-xs font-medium text-foreground">Status history</p>
+                  </div>
+                  <div className="max-h-56 overflow-y-auto">
                     {job.history.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        No history entries yet.
-                      </p>
+                      <p className="text-xs text-muted-foreground">No history entries yet.</p>
                     ) : (
-                      job.history.map((h) => (
-                        <p
-                          key={String(h._id)}
-                          className="text-xs text-muted-foreground"
-                        >
-                          {new Date(h.changed_at).toLocaleString()}:{" "}
-                          <span className="font-medium text-foreground">
-                            {h.old_status ?? "none"}
-                          </span>
-                          {" → "}
-                          <span className="font-medium text-foreground">
-                            {h.new_status}
-                          </span>
-                          {h.reason && !isSystemReason(h.reason)
-                            ? ` (${h.reason})`
-                            : ""}
-                        </p>
-                      ))
+                      <div>
+                        {job.history.map((h, index) => {
+                          const isLast = index === job.history.length - 1;
+                          const label = humanizeStatus(h.new_status, h.reason);
+                          const formattedDate = new Date(h.changed_at).toLocaleString("en-US", {
+                            month: "short", day: "numeric", hour: "numeric",
+                            minute: "2-digit", hour12: true,
+                          });
+                          const isPending = h.new_status.startsWith("pending");
+                          const isCancelled = h.new_status === "cancelled";
+                          const isCompleted = h.new_status === "completed";
+                          const isInProgress = h.new_status === "in_progress";
+                          const isRescheduleRevert = h.new_status === "confirmed" && (
+                            h.reason === "shop_cancelled_reschedule" ||
+                            h.reason === "customer_declined_reschedule" ||
+                            h.reason === "reschedule_auto_reverted_24h"
+                          );
+                          const isConfirmed = h.new_status === "confirmed" && !isRescheduleRevert;
+                          return (
+                            <div key={String(h._id)} className="relative flex gap-3 pb-5 last:pb-0">
+                              {!isLast && (
+                                <div className="absolute left-[11px] top-6 bottom-0 w-px bg-border" />
+                              )}
+                              <div className="relative z-10 shrink-0">
+                                {isCompleted && (
+                                  <div className="w-6 h-6 rounded-full bg-success flex items-center justify-center">
+                                    <Check className="w-3 h-3 text-success-foreground" strokeWidth={3} />
+                                  </div>
+                                )}
+                                {isInProgress && (
+                                  <div className="w-6 h-6 rounded-full border-2 border-primary bg-card flex items-center justify-center">
+                                    <div className="w-2 h-2 rounded-full bg-primary" />
+                                  </div>
+                                )}
+                                {isPending && (
+                                  <div className="w-6 h-6 rounded-full border-2 border-amber-400 bg-card flex items-center justify-center">
+                                    <Clock className="w-3 h-3 text-amber-400" strokeWidth={3} />
+                                  </div>
+                                )}
+                                {isCancelled && (
+                                  <div className="w-6 h-6 rounded-full bg-destructive/10 flex items-center justify-center">
+                                    <X className="w-3 h-3 text-destructive" />
+                                  </div>
+                                )}
+                                {isRescheduleRevert && (
+                                  <div className="w-6 h-6 rounded-full border-2 border-muted-foreground bg-card flex items-center justify-center">
+                                    <RotateCcw className="w-3 h-3 text-muted-foreground" strokeWidth={2.5} />
+                                  </div>
+                                )}
+                                {isConfirmed && (
+                                  <div className="w-6 h-6 rounded-full border-2 border-primary bg-card flex items-center justify-center">
+                                    <Check className="w-3 h-3 text-primary" strokeWidth={3} />
+                                  </div>
+                                )}
+                                {!isCompleted && !isInProgress && !isPending && !isCancelled && !isConfirmed && !isRescheduleRevert && (
+                                  <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
+                                    <div className="w-2 h-2 rounded-full bg-muted-foreground/60" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className={`text-xs font-semibold leading-6 ${
+                                    isCancelled ? "text-destructive" :
+                                    isPending ? "text-amber-600" :
+                                    isCompleted ? "text-success" :
+                                    (isConfirmed || isInProgress) ? "text-primary" :
+                                    "text-foreground"
+                                  }`}>{label}</span>
+                                  <span className="text-[10px] text-muted-foreground shrink-0 leading-6">{formattedDate}</span>
+                                </div>
+                                {(() => { const desc = getStatusDescription(h.new_status, h.reason); return desc ? <p className="text-xs text-muted-foreground -mt-1">{desc}</p> : null; })()}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
                 </div>

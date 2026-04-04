@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StatusPill } from "@/components/status-pill";
+import { BOOKING_STATUS_VISUALS } from "@/lib/booking-status";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                           */
@@ -249,6 +250,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       (job.status === "pending" ||
         job.status === "pending_shop_acceptance" ||
         job.status === "confirmed");
+    const completedColors = BOOKING_STATUS_VISUALS.completed.calendarColors;
     const showAssignMechanicError = actionError.startsWith(
       "Cannot assign this mechanic"
     );
@@ -923,12 +925,22 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           </button>
                         )}
                         {canComplete && (
+                          // TODO: Fix --success usage
                           <button
                             onClick={() =>
                               setShowCompleteConfirm(true)
                             }
                             disabled={isActioning}
-                            className={`px-3 py-2 text-sm rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 ${job.status === "in_progress" ? "bg-primary text-primary-foreground" : "bg-success text-success-foreground"}`}
+                            className={`px-3 py-2 text-sm rounded-lg transition-opacity disabled:opacity-50 ${job.status === "in_progress" ? "bg-primary text-primary-foreground hover:opacity-90" : "border hover:opacity-90"}`}
+                            style={
+                              job.status === "in_progress"
+                                ? undefined
+                                : {
+                                    backgroundColor: completedColors.text,
+                                    color: '#fff',
+                                    borderColor: completedColors.text,
+                                  }
+                            }
                           >
                             <span>
                               Ma
@@ -1021,10 +1033,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               {!isLast && (
                                 <div className="absolute left-[11px] top-6 bottom-0 w-px bg-border" />
                               )}
-                              <div className="relative z-10 shrink-0">
+                                <div className="relative z-10 shrink-0">
                                 {isCompleted && (
-                                  <div className="w-6 h-6 rounded-full bg-success flex items-center justify-center">
-                                    <Check className="w-3 h-3 text-success-foreground" strokeWidth={3} />
+                                  // TODO: Fix --success usage
+                                  <div
+                                    className="w-6 h-6 rounded-full flex items-center justify-center"
+                                    style={{ backgroundColor: completedColors.text }}
+                                  >
+                                    <Check className="w-3 h-3 text-white" strokeWidth={3} />
                                   </div>
                                 )}
                                 {isInProgress && (
@@ -1063,10 +1079,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                                   <span className={`text-xs font-semibold leading-6 ${
                                     isCancelled ? "text-destructive" :
                                     isPending ? "text-amber-600" :
-                                    isCompleted ? "text-success" :
+                                    isCompleted ? "" :
                                     (isConfirmed || isInProgress) ? "text-primary" :
                                     "text-foreground"
-                                  }`}>{label}</span>
+                                  }`}
+                                  // TODO: Fix --success usage
+                                  style={isCompleted ? { color: completedColors.text } : undefined}
+                                  >{label}</span>
                                   <span className="text-[10px] text-muted-foreground shrink-0 leading-6">{formattedDate}</span>
                                 </div>
                                 {(() => { const desc = getStatusDescription(h.new_status, h.reason); return desc ? <p className="text-xs text-muted-foreground -mt-1">{desc}</p> : null; })()}

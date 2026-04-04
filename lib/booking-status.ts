@@ -66,11 +66,12 @@ export const BOOKING_STATUS_VISUALS: Record<BookingStatus, BookingStatusVisuals>
   },
   completed: {
     label: "Completed",
-    pillClass: "bg-muted text-muted-foreground",
+    pillClass:
+      "bg-[color-mix(in_srgb,var(--success)_12%,transparent)] text-[var(--success)]",
     calendarColors: {
-      bg: "rgb(245 245 247)",
-      text: "rgb(104 112 118)",
-      border: "rgb(214 218 222)",
+      bg: "rgb(220 252 231)",
+      text: "rgb(22 163 74)",
+      border: "rgb(134 239 172)",
     },
   },
   cancelled: {

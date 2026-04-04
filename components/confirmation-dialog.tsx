@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 type DialogAction = {
@@ -8,8 +8,10 @@ type DialogAction = {
   onAction: () => void;
   disabled?: boolean;
   shortcutKey?: string;
-  variant?: "primary" | "destructive" | "outline";
+  variant?: "primary" | "success" | "destructive" | "outline";
   leading?: ReactNode;
+  className?: string;
+  style?: CSSProperties;
 };
 
 type ConfirmationDialogProps = {
@@ -31,6 +33,9 @@ function actionClassName(variant: DialogAction["variant"]) {
   }
   if (variant === "primary") {
     return "bg-primary text-primary-foreground hover:opacity-90";
+  }
+  if (variant === "success") {
+    return "bg-[var(--success)] text-[var(--success-foreground)] hover:opacity-90";
   }
   return "border border-border hover:bg-muted";
 }
@@ -132,7 +137,8 @@ export default function ConfirmationDialog({
               <button
                 onClick={secondaryAction.onAction}
                 disabled={secondaryAction.disabled}
-                className={`inline-flex items-center px-3 py-2 text-sm rounded-lg transition-colors disabled:opacity-50 ${actionClassName(secondaryAction.variant ?? "outline")}`}
+                className={`inline-flex items-center px-3 py-2 text-sm rounded-lg transition-colors disabled:opacity-50 ${actionClassName(secondaryAction.variant ?? "outline")} ${secondaryAction.className ?? ""}`}
+                style={secondaryAction.style}
               >
                 {secondaryAction.leading}
                 <span>{secondaryAction.label}</span>
@@ -142,7 +148,8 @@ export default function ConfirmationDialog({
               <button
                 onClick={primaryAction.onAction}
                 disabled={primaryAction.disabled}
-                className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg transition-opacity disabled:opacity-50 ${actionClassName(primaryAction.variant ?? "primary")}`}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg transition-opacity disabled:opacity-50 ${actionClassName(primaryAction.variant ?? "primary")} ${primaryAction.className ?? ""}`}
+                style={primaryAction.style}
               >
                 {primaryAction.leading}
                 <span>{primaryAction.label}</span>

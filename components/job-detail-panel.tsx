@@ -250,6 +250,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       (job.status === "pending" ||
         job.status === "pending_shop_acceptance" ||
         job.status === "confirmed");
+    const currentMechanicId = job?.mechanicId ? String(job.mechanicId) : "";
+    const hasMechanicSelectionChange =
+      assigningMechanicId !== currentMechanicId;
+    const canSubmitMechanicChange =
+      canAssignMechanic &&
+      !!selectedMechanicId &&
+      hasMechanicSelectionChange;
+    const jobId = job?._id;
     const completedColors = BOOKING_STATUS_VISUALS.completed.calendarColors;
     const showAssignMechanicError = actionError.startsWith(
       "Cannot assign this mechanic"
@@ -257,12 +265,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     // Sync assign dropdown with job's current mechanic
     useEffect(() => {
-      if (!job) return;
+      if (!jobId) return;
       setActionError("");
-      setAssigningMechanicId(
-        job.mechanicId ? String(job.mechanicId) : "",
-      );
-    }, [job?._id, job?.mechanicId]);
+      setAssigningMechanicId(currentMechanicId);
+    }, [jobId, currentMechanicId]);
 
     // Reset decline modal state when it closes
     useEffect(() => {
@@ -364,7 +370,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     }
 
     async function handleAssignMechanic() {
-      if (!canAssignMechanic) return;
+      if (!canSubmitMechanicChange) return;
       if (!job?._id || !selectedMechanicId) return;
       setActionError("");
       const assignmentConflict =
@@ -437,8 +443,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingId: job._id,
           mechanicId: selectedMechanicId as Id<"mechanics">,
         });
-        setAssigningMechanicId("");
-        onSuccess?.("Mechanic assigned");
+        setAssigningMechanicId(String(selectedMechanicId));
+        onSuccess?.(job.mechanicId ? "Mechanic reassigned" : "Mechanic assigned");
       } catch (err: unknown) {
         setActionError(
           err instanceof Error
@@ -466,6 +472,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
     }
 
+    function handleResetMechanicSelection() {
+      setActionError("");
+      setAssigningMechanicId(currentMechanicId);
+      requestAnimationFrame(() => {
+        wrapperRef.current?.focus();
+      });
+    }
+
     /* ---- Imperative handle ---- */
 
     useImperativeHandle(ref, () => ({
@@ -486,7 +500,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           ?.click();
       },
       assignMechanic: () => {
-        if (!canAssignMechanic) return;
+        if (!canSubmitMechanicChange) return;
         handleAssignMechanic();
       },
       hasOpenModal: () =>
@@ -578,6 +592,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           (e.key === "c" || e.key === "C")
         ) {
           setShowCancelRescheduleConfirm(true);
+          return true;
+        }
+        if (e.key === "r" && canSubmitMechanicChange) {
+          handleAssignMechanic();
+          return true;
+        }
+        if (e.key === "e" && hasMechanicSelectionChange) {
+          handleResetMechanicSelection();
           return true;
         }
         return false;
@@ -723,11 +745,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 {/* Assign mechanic */}
                 <div className="border-t border-border pt-4">
                   <p className="text-xs font-medium text-foreground mb-2">
-                    {job.mechanicId ? (
-                      <>Re<span style={{ textDecorationLine: "underline" }}>a</span>ssign mechanic</>
-                    ) : (
-                      <><span style={{ textDecorationLine: "underline" }}>A</span>ssign mechanic</>
-                    )}
+                    Assigned Mechanic
                   </p>
                   <div className="flex flex-wrap gap-2">
                     <div ref={assignTriggerRef}>
@@ -797,21 +815,20 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     </div>
                     <button
                       onClick={handleAssignMechanic}
-                      disabled={!canAssignMechanic || !assigningMechanicId || isActioning}
-                      className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50 inline-flex items-center gap-1.5"
+                      disabled={!canSubmitMechanicChange || isActioning}
+                      className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50 disabled:text-muted-foreground disabled:hover:bg-transparent inline-flex items-center gap-1.5"
                     >
                       {isActioning && (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       )}
-                      <span>
-                        A
-                        <span
-                          style={{ textDecorationLine: "underline" }}
-                        >
-                          s
-                        </span>
-                        sign
-                      </span>
+                      <ShortcutLabel text="Reassign" shortcutKey="r" />
+                    </button>
+                    <button
+                      onClick={handleResetMechanicSelection}
+                      disabled={!hasMechanicSelectionChange || isActioning}
+                      className="px-3 py-2 text-sm rounded-lg border border-border text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:text-muted-foreground disabled:hover:bg-transparent"
+                    >
+                      <ShortcutLabel text="Cancel" shortcutKey="e" />
                     </button>
                   </div>
                   {showAssignMechanicError && (
@@ -1004,7 +1021,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 <div className="border-t border-border pt-4">
                   <div className="flex items-center gap-1.5 mb-3">
                     <History className="w-3.5 h-3.5 text-muted-foreground" />
-                    <p className="text-xs font-medium text-foreground">Status history</p>
+                    <p className="text-xs font-medium text-foreground">Status History</p>
                   </div>
                   <div className="max-h-56 overflow-y-auto">
                     {job.history.length === 0 ? (

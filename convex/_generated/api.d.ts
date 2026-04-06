@@ -10,7 +10,9 @@
 
 import type * as bookings from "../bookings.js";
 import type * as crons from "../crons.js";
+import type * as http from "../http.js";
 import type * as invitations from "../invitations.js";
+import type * as mcp_api from "../mcp_api.js";
 import type * as mechanics from "../mechanics.js";
 import type * as schedule from "../schedule.js";
 import type * as seed from "../seed.js";
@@ -26,7 +28,9 @@ import type {
 declare const fullApi: ApiFromModules<{
   bookings: typeof bookings;
   crons: typeof crons;
+  http: typeof http;
   invitations: typeof invitations;
+  mcp_api: typeof mcp_api;
   mechanics: typeof mechanics;
   schedule: typeof schedule;
   seed: typeof seed;

@@ -14,65 +14,17 @@ import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
 } from "@/components/reschedule-confirmation-dialog";
 import { StatusPill } from "@/components/status-pill";
-
-/* ------------------------------------------------------------------ */
-/*  Types & constants                                                   */
-/* ------------------------------------------------------------------ */
-
-type JobStatusFilter =
-  | "all"
-  | "pending_shop_acceptance"
-  | "pending_customer_acceptance"
-  | "confirmed"
-  | "in_progress"
-  | "completed"
-  | "cancelled";
-
-const STATUS_TABS: { key: JobStatusFilter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "pending_shop_acceptance", label: "Pending Shop" },
-  { key: "pending_customer_acceptance", label: "Pending Customer" },
-  { key: "confirmed", label: "Confirmed" },
-  { key: "in_progress", label: "In Progress" },
-  { key: "completed", label: "Completed" },
-  { key: "cancelled", label: "Cancelled" },
-];
+import {
+  STATUS_TABS,
+  formatJobDate,
+  pendingCountdown,
+  todayString,
+  type JobStatusFilter,
+} from "./job-list-shared";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
-
-function todayString() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function formatTime(time: string): string {
-  if (!time) return "";
-  const [hours, minutes] = time.split(":").map(Number);
-  const d = new Date();
-  d.setHours(hours, minutes, 0, 0);
-  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
-}
-
-function formatJobDate(scheduledDate: string, scheduledTime: string): string {
-  const today = todayString();
-  const timeLabel = formatTime(scheduledTime);
-  if (scheduledDate === today) return `Today, ${timeLabel}`;
-  const d = new Date(scheduledDate + "T00:00:00");
-  const dateLabel = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  return `${dateLabel}, ${timeLabel}`;
-}
-
-function pendingCountdown(creationTime: number): string | null {
-  if (!creationTime || isNaN(creationTime)) return null;
-  const deadline = creationTime + 24 * 60 * 60 * 1000;
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) return null;
-  const hours = Math.floor(remaining / (1000 * 60 * 60));
-  const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
-  if (hours > 0) return `${hours}h ${minutes}m left`;
-  return `${minutes}m left`;
-}
 
 /* ------------------------------------------------------------------ */
 /*  Main page component                                                 */

@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
         public_metadata: {
           ...existingMeta,
           role: assignedRole,
+          is_active: true,
         },
       }),
     });

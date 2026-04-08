@@ -33,6 +33,10 @@ const ownerManagerLinks = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+const mechanicLinks = [
+  { href: "/my-jobs", label: "My Jobs", icon: Briefcase },
+];
+
 const jobsSubLinks = [
   { href: "/jobs/create", label: "Create Job", icon: PlusCircle },
   { href: "/jobs", label: "All Jobs", icon: List },
@@ -95,7 +99,11 @@ export default function PortalLayout({
     );
   }
 
-  const sidebarLinks = isOwnerManager ? ownerManagerLinks : [];
+  const sidebarLinks = isAcceptInvite
+    ? []
+    : isOwnerManager
+      ? ownerManagerLinks
+      : mechanicLinks;
 
   // Text that fades out and collapses when compact.
   // max-width transition animates the collapse; opacity fades the text.

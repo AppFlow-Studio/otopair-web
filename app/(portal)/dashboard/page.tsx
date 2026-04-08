@@ -11,6 +11,7 @@ import {
   MoreVertical,
   ArrowRight,
   Bell,
+  Loader2,
   Search,
   HelpCircle,
   CheckCircle,
@@ -19,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import JeepWranglerImage from "@/components/images/2022-Jeep-Wrangler-front_50724_032_1959x1052_PDN_cropped.png";
+import MechanicDashboard from "./mechanic-dashboard";
 
 function getStatusBadgeClass(color: string) {
   switch (color) {
@@ -90,7 +92,27 @@ function matchesSearch(q: string, ...fields: (string | null | undefined)[]): boo
   return fields.some((f) => f?.toLowerCase().includes(q));
 }
 
+const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
+
 export default function DashboardPage() {
+  const context = useQuery(api.bookings.getMyShopJobContext);
+
+  if (context === undefined) {
+    return (
+      <div className="min-h-[40vh] flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+      </div>
+    );
+  }
+
+  if (context && MECHANIC_ROLES.includes(context.userRole)) {
+    return <MechanicDashboard />;
+  }
+
+  return <OwnerDashboardPage />;
+}
+
+function OwnerDashboardPage() {
   const { user, isLoaded: isUserLoaded, isSignedIn } = useUser();
   const router = useRouter();
   const searchRef = useRef<HTMLInputElement>(null);

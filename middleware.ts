@@ -19,6 +19,7 @@ const isPortalRoute = createRouteMatcher([
   "/schedule(.*)",
   "/team(.*)",
   "/settings(.*)",
+  "/my-jobs(.*)",
 ]);
 
 // Routes only accessible to owner/manager roles (mechanics cannot access)
@@ -54,10 +55,19 @@ export default clerkMiddleware(async (auth, request) => {
     return NextResponse.redirect(signInUrl);
   }
 
-  const role = (sessionClaims?.metadata as { role?: string })?.role;
+  const metadata = (sessionClaims?.metadata as {
+    role?: string;
+    is_active?: boolean;
+  }) ?? { role: undefined, is_active: undefined };
+  const role = metadata.role;
+  const isActive = metadata.is_active;
 
   // Portal routes require a shop role or admin
   if (isPortalRoute(request)) {
+    if (isActive === false) {
+      return NextResponse.redirect(new URL("/account-deactivated", request.url));
+    }
+
     if (!role || !SHOP_ROLES.includes(role)) {
       return NextResponse.redirect(new URL("/shop-only", request.url));
     }

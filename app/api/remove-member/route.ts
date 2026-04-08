@@ -33,8 +33,16 @@ export async function POST(req: NextRequest) {
     if (clerkRes.ok) {
       const clerkUser = await clerkRes.json();
       const meta = (clerkUser.public_metadata ?? {}) as Record<string, unknown>;
-      const { invitation_token, mechanic_id, shop_id, role: _role, ...remainingMeta } = meta;
+      const {
+        invitation_token,
+        mechanic_id,
+        shop_id,
+        role: _role,
+        is_active: _isActive,
+        ...remainingMeta
+      } = meta;
       void invitation_token; void mechanic_id; void shop_id; void _role;
+      void _isActive;
 
       await fetch(`https://api.clerk.com/v1/users/${clerkUserId}`, {
         method: "PATCH",
@@ -43,7 +51,7 @@ export async function POST(req: NextRequest) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          public_metadata: { ...remainingMeta, role: "user" },
+          public_metadata: { ...remainingMeta, role: "user", is_active: false },
         }),
       });
     }

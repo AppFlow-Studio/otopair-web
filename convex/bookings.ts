@@ -155,6 +155,111 @@ async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
   return names;
 }
 
+function getTodayString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getDateOffsetString(offsetDays: number) {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().slice(0, 10);
+}
+
+function compareBookingsBySchedule(a: any, b: any) {
+  const dateCompare = a.scheduled_date.localeCompare(b.scheduled_date);
+  if (dateCompare !== 0) return dateCompare;
+  return a.scheduled_time.localeCompare(b.scheduled_time);
+}
+
+function formatCustomerName(customer: any) {
+  return (
+    `${customer?.first_name ?? ""} ${customer?.last_name ?? ""}`.trim() ||
+    customer?.email ||
+    "Unknown"
+  );
+}
+
+async function getMechanicMembershipForUser(ctx: any, userId: any, shopId: any) {
+  const membership = await ctx.db
+    .query("shop_users")
+    .withIndex("by_user_and_shop", (q: any) =>
+      q.eq("user_id", userId).eq("shop_id", shopId)
+    )
+    .first();
+
+  if (!membership || !membership.is_active || !membership.mechanic_id) {
+    return null;
+  }
+
+  const mechanic = await ctx.db.get(membership.mechanic_id);
+  if (!mechanic || !mechanic.is_active) {
+    return null;
+  }
+
+  return { membership, mechanic };
+}
+
+async function mapBookingListItem(ctx: any, booking: any) {
+  const customer = await ctx.db.get(booking.user_id);
+  const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
+  const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+  const mechanic = booking.mechanic_id
+    ? await ctx.db.get(booking.mechanic_id)
+    : null;
+
+  return {
+    _id: booking._id,
+    _creationTime: booking._creationTime,
+    status: booking.status,
+    scheduledDate: booking.scheduled_date,
+    scheduledTime: booking.scheduled_time,
+    customerName: formatCustomerName(customer),
+    customerEmail: customer?.email ?? "",
+    vehicle: vehicleLabels.full,
+    vehicleShort: vehicleLabels.short,
+    serviceNames,
+    laborCost: booking.labor_cost,
+    partsCost: booking.parts_cost,
+    totalCost: booking.total_cost,
+    estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
+    mechanicId: booking.mechanic_id ?? null,
+    mechanicName: mechanic
+      ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
+      : null,
+  };
+}
+
+async function mapMechanicDashboardJob(ctx: any, booking: any) {
+  const customer = await ctx.db.get(booking.user_id);
+  const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
+  const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+
+  const customerFirstName =
+    customer?.first_name?.trim() ||
+    customer?.email?.split("@")[0] ||
+    "Customer";
+  const customerLastInitial = customer?.last_name?.trim()
+    ? `${customer.last_name.trim()[0]}.`
+    : "";
+
+  return {
+    _id: booking._id,
+    status: booking.status,
+    liveStage: booking.live_stage ?? null,
+    scheduledDate: booking.scheduled_date,
+    scheduledTime: booking.scheduled_time,
+    customerName: formatCustomerName(customer),
+    customerDisplayName: [customerFirstName, customerLastInitial]
+      .filter(Boolean)
+      .join(" "),
+    vehicle: vehicleLabels.full,
+    vehicleShort: vehicleLabels.short,
+    serviceNames,
+    estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
+    totalCost: booking.total_cost,
+  };
+}
+
 async function getOrCreateSlot(
   ctx: any,
   shopId: any,
@@ -597,47 +702,165 @@ export const listForMyShop = query({
       bookings = bookings.filter((b) => b.status === args.status);
     }
 
-    bookings.sort((a, b) => {
-      const dateCompare = a.scheduled_date.localeCompare(b.scheduled_date);
-      if (dateCompare !== 0) return dateCompare;
-      return a.scheduled_time.localeCompare(b.scheduled_time);
-    });
+    bookings.sort(compareBookingsBySchedule);
 
-    return await Promise.all(
-      bookings.map(async (booking) => {
-        const customer = await ctx.db.get(booking.user_id);
-        const customerName =
-          `${customer?.first_name ?? ""} ${customer?.last_name ?? ""}`.trim() ||
-          customer?.email ||
-          "Unknown";
+    return await Promise.all(bookings.map((booking) => mapBookingListItem(ctx, booking)));
+  },
+});
 
-        const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
-        const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
-        const mechanic = booking.mechanic_id
-          ? await ctx.db.get(booking.mechanic_id)
-          : null;
+/** List only the signed-in mechanic's jobs/bookings for their primary shop. */
+export const listForMyMechanic = query({
+  args: { status: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
 
-        return {
-          _id: booking._id,
-          _creationTime: booking._creationTime,
-          status: booking.status,
-          scheduledDate: booking.scheduled_date,
-          scheduledTime: booking.scheduled_time,
-          customerName,
-          customerEmail: customer?.email ?? "",
-          vehicle: vehicleLabels.full,
-          vehicleShort: vehicleLabels.short,
-          serviceNames,
-          laborCost: booking.labor_cost,
-          partsCost: booking.parts_cost,
-          totalCost: booking.total_cost,
-          estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
-          mechanicName: mechanic
-            ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
-            : null,
-        };
-      })
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return [];
+
+    const mechanicContext = await getMechanicMembershipForUser(
+      ctx,
+      user._id,
+      primary.shopId
     );
+    if (!mechanicContext) return [];
+
+    let bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", primary.shopId))
+      .collect();
+
+    bookings = bookings.filter(
+      (booking) => String(booking.mechanic_id ?? "") === String(mechanicContext.mechanic._id)
+    );
+
+    if (args.status) {
+      bookings = bookings.filter((booking) => booking.status === args.status);
+    }
+
+    bookings.sort(compareBookingsBySchedule);
+
+    return await Promise.all(bookings.map((booking) => mapBookingListItem(ctx, booking)));
+  },
+});
+
+/** Mechanic-focused dashboard data for the signed-in mechanic's primary shop. */
+export const getMyMechanicDashboard = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return null;
+
+    const mechanicContext = await getMechanicMembershipForUser(
+      ctx,
+      user._id,
+      primary.shopId
+    );
+    if (!mechanicContext) return null;
+
+    const shop = await ctx.db.get(primary.shopId);
+    if (!shop) return null;
+
+    const mechanicId = mechanicContext.mechanic._id;
+    const today = getTodayString();
+    const weekStart = getDateOffsetString(-6);
+    const upcomingDates = Array.from({ length: 7 }, (_, index) =>
+      getDateOffsetString(index + 1)
+    );
+
+    const todaysJobsRaw = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_date", (q: any) =>
+        q.eq("shop_id", primary.shopId).eq("scheduled_date", today)
+      )
+      .collect();
+
+    const todaysJobs = todaysJobsRaw
+      .filter(
+        (booking: any) =>
+          String(booking.mechanic_id ?? "") === String(mechanicId) &&
+          booking.status !== "cancelled"
+      )
+      .sort(compareBookingsBySchedule);
+
+    const upcomingJobsRaw = (
+      await Promise.all(
+        upcomingDates.map((date) =>
+          ctx.db
+            .query("bookings")
+            .withIndex("by_shop_and_date", (q: any) =>
+              q.eq("shop_id", primary.shopId).eq("scheduled_date", date)
+            )
+            .collect()
+        )
+      )
+    ).flat();
+
+    const upcomingJobs = upcomingJobsRaw
+      .filter(
+        (booking: any) =>
+          booking.status === "confirmed" &&
+          String(booking.mechanic_id ?? "") === String(mechanicId)
+      )
+      .sort(compareBookingsBySchedule);
+
+    const completedJobs = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_status", (q: any) =>
+        q.eq("shop_id", primary.shopId).eq("status", "completed")
+      )
+      .collect();
+
+    const myCompletedJobs = completedJobs
+      .filter(
+        (booking: any) => String(booking.mechanic_id ?? "") === String(mechanicId)
+      )
+      .sort(compareBookingsBySchedule);
+
+    const actuals = await ctx.db
+      .query("job_actuals")
+      .withIndex("by_mechanic_id", (q: any) => q.eq("mechanic_id", mechanicId))
+      .collect();
+    const actualBookingIds = new Set(actuals.map((actual: any) => String(actual.booking_id)));
+
+    const needsActuals = myCompletedJobs.filter(
+      (booking: any) => !actualBookingIds.has(String(booking._id))
+    );
+
+    const weekCompletedCount = myCompletedJobs.filter(
+      (booking: any) =>
+        booking.scheduled_date >= weekStart && booking.scheduled_date <= today
+    ).length;
+
+    return {
+      shopId: primary.shopId,
+      shopName: shop.name,
+      role: primary.role,
+      mechanicId,
+      mechanicName: `${mechanicContext.mechanic.first_name} ${mechanicContext.mechanic.last_name}`.trim(),
+      firstName:
+        user.first_name ??
+        mechanicContext.mechanic.first_name ??
+        mechanicContext.mechanic.last_name,
+      todaysJobs: await Promise.all(
+        todaysJobs.map((booking: any) => mapMechanicDashboardJob(ctx, booking))
+      ),
+      upcomingJobs: await Promise.all(
+        upcomingJobs.map((booking: any) => mapMechanicDashboardJob(ctx, booking))
+      ),
+      needsActuals: await Promise.all(
+        needsActuals.map((booking: any) => mapMechanicDashboardJob(ctx, booking))
+      ),
+      stats: {
+        todayCount: todaysJobs.length,
+        weekCompletedCount,
+        rating: mechanicContext.mechanic.rating ?? 0,
+        reviewCount: mechanicContext.mechanic.review_count ?? 0,
+      },
+    };
   },
 });
 

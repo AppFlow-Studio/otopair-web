@@ -55,14 +55,16 @@ export function ShortcutLabel({
     return <>{text}</>;
   }
 
+  const before = text.slice(0, shortcutIndex);
+  const shortcut = text.slice(shortcutIndex, shortcutIndex + 1);
+  const after = text.slice(shortcutIndex + 1);
+
   return (
-    <>
-      {text.slice(0, shortcutIndex)}
-      <span style={{ textDecorationLine: "underline" }}>
-        {text.slice(shortcutIndex, shortcutIndex + 1)}
-      </span>
-      {text.slice(shortcutIndex + 1)}
-    </>
+    <span>
+      {before}
+      <span style={{ textDecorationLine: "underline" }}>{shortcut}</span>
+      {after}
+    </span>
   );
 }
 

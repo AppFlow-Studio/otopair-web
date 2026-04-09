@@ -1,3 +1,5 @@
+//Codex version
+
 "use client";
 
 import {
@@ -11,7 +13,7 @@ import {
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Check, Clock, History, Loader2, RotateCcw, X } from "lucide-react";
+import { Check, Clock, Ellipsis, History, Loader2, RotateCcw, X } from "lucide-react";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import {
   getMechanicAssignmentConflict,
@@ -19,6 +21,12 @@ import {
   type ScheduleBooking,
   shouldConfirmMechanicChange,
 } from "@/lib/schedule-overlap";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectItem,
@@ -40,6 +48,26 @@ const DECLINE_REASONS = [
   "Scheduling conflict",
   "Other",
 ];
+
+const CANCEL_REASONS = [
+  "Customer requested cancellation",
+  "Not enough time",
+  "Parts unavailable",
+  "Other",
+];
+
+function getCancelReasons(status?: string | null) {
+  return status === "confirmed"
+    ? [
+        CANCEL_REASONS[0],
+        "Customer no-show",
+        CANCEL_REASONS[2],
+        "Shop capacity issue",
+        CANCEL_REASONS[1],
+        CANCEL_REASONS[3],
+      ]
+    : CANCEL_REASONS;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
@@ -89,7 +117,11 @@ function pendingCountdown(creationTime: number): string | null {
   return `${minutes}m left`;
 }
 
-function humanizeStatus(status: string, reason?: string | null): string {
+function humanizeStatus(
+  status: string,
+  reason?: string | null,
+  oldStatus?: string | null,
+): string {
   if (status === "confirmed" && reason === "shop_cancelled_reschedule") return "Reschedule Withdrawn";
   if (status === "confirmed" && reason === "customer_declined_reschedule") return "Reschedule Declined";
   if (status === "confirmed" && reason === "reschedule_auto_reverted_24h") return "Reschedule Expired";
@@ -100,7 +132,10 @@ function humanizeStatus(status: string, reason?: string | null): string {
     confirmed: "Confirmed",
     in_progress: "In Progress",
     completed: "Completed",
-    cancelled: reason && reason !== "cancelled_by_shop" ? "Declined" : "Cancelled",
+    cancelled:
+      oldStatus === "pending" || oldStatus === "pending_shop_acceptance"
+        ? "Declined"
+        : "Cancelled",
   };
   return map[status] ?? status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -227,11 +262,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [declineOtherText, setDeclineOtherText] = useState("");
     const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+    const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
+    const [cancelOtherText, setCancelOtherText] = useState("");
     const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
 
     const wrapperRef = useRef<HTMLDivElement>(null);
     const assignTriggerRef = useRef<HTMLDivElement>(null);
     const declineTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const cancelTextareaRef = useRef<HTMLTextAreaElement>(null);
 
     const acceptJob = useMutation(api.bookings.accept);
     const startJobMut = useMutation(api.bookings.start);
@@ -259,6 +297,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       hasMechanicSelectionChange;
     const jobId = job?._id;
     const completedColors = BOOKING_STATUS_VISUALS.completed.calendarColors;
+    const cancelReasonOptions = getCancelReasons(job?.status);
     const showAssignMechanicError = actionError.startsWith(
       "Cannot assign this mechanic"
     );
@@ -278,12 +317,25 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
     }, [showDeclineModal]);
 
+    useEffect(() => {
+      if (!showCancelConfirm) {
+        setCancelReason(CANCEL_REASONS[0]);
+        setCancelOtherText("");
+      }
+    }, [showCancelConfirm]);
+
     // Auto-focus the "Other" textarea
     useEffect(() => {
       if (showDeclineModal && declineReason === "Other") {
         declineTextareaRef.current?.focus();
       }
     }, [showDeclineModal, declineReason]);
+
+    useEffect(() => {
+      if (showCancelConfirm && cancelReason === "Other") {
+        cancelTextareaRef.current?.focus();
+      }
+    }, [showCancelConfirm, cancelReason]);
 
     /* ---- Handlers ---- */
 
@@ -335,11 +387,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     async function handleCancelJob() {
       if (!job?._id) return;
       setActionError("");
+      const reason =
+        cancelReason === "Other"
+          ? cancelOtherText.trim() || "Other"
+          : cancelReason;
       setIsActioning(true);
       try {
         await cancelJob({
           bookingId: job._id,
-          reason: "cancelled_by_shop",
+          reason,
         });
         setShowCancelConfirm(false);
         onSuccess?.("Job cancelled");
@@ -566,7 +622,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           return true;
         }
         if (showCancelConfirm) {
-          if (e.key === "c") {
+          if (e.key === "ArrowDown") {
+            setCancelReason((prev) => {
+              const idx = cancelReasonOptions.indexOf(prev);
+              return cancelReasonOptions[
+                Math.min(idx + 1, cancelReasonOptions.length - 1)
+              ];
+            });
+            return true;
+          }
+          if (e.key === "ArrowUp") {
+            setCancelReason((prev) => {
+              const idx = cancelReasonOptions.indexOf(prev);
+              return cancelReasonOptions[Math.max(idx - 1, 0)];
+            });
+            return true;
+          }
+          if (e.key === "c" || e.key === "Enter") {
             handleCancelJob();
             return true;
           }
@@ -884,9 +956,37 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     return null;
                   return (
                     <div className="border-t border-border pt-4">
-                      <p className="text-xs font-medium text-foreground mb-2">
-                        Actions
-                      </p>
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="text-xs font-medium text-foreground">
+                          Actions
+                        </p>
+                        {canComplete && job.status === "confirmed" && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                disabled={isActioning}
+                                aria-label="More job actions"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                              >
+                                <Ellipsis
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onSelect={() =>
+                                  setShowCompleteConfirm(true)
+                                }
+                              >
+                                Mark completed
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
+                      </div>
                       <div className="flex flex-wrap gap-2">
                         {canAccept && (
                           <button
@@ -941,7 +1041,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             </span>
                           </button>
                         )}
-                        {canComplete && (
+                        {canComplete && job.status === "in_progress" && (
                           // TODO: Fix --success usage
                           <button
                             onClick={() =>
@@ -1030,7 +1130,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                       <div>
                         {job.history.map((h, index) => {
                           const isLast = index === job.history.length - 1;
-                          const label = humanizeStatus(h.new_status, h.reason);
+                          const label = humanizeStatus(
+                            h.new_status,
+                            h.reason,
+                            h.old_status,
+                          );
                           const formattedDate = new Date(h.changed_at).toLocaleString("en-US", {
                             month: "short", day: "numeric", hour: "numeric",
                             minute: "2-digit", hour12: true,
@@ -1149,7 +1253,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             disabled: isActioning,
           }}
           primaryAction={{
-            label: isActioning ? "Declining..." : <ShortcutLabel text="Confirm Decline" shortcutKey="d" />,
+            label: isActioning ? "Declining..." : <ShortcutLabel text="Confirm decline" shortcutKey="d" />,
             onAction: handleDecline,
             disabled: isActioning,
             variant: "destructive",
@@ -1218,7 +1322,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         <ConfirmationDialog
           open={showCancelConfirm}
           title="Cancel this job?"
-          description="The customer has already been confirmed and will be notified of the cancellation."
+          description="Select a reason for cancelling. The customer will be notified of the cancellation."
           onClose={() => setShowCancelConfirm(false)}
           enableShortcuts={false}
           secondaryAction={{
@@ -1233,7 +1337,43 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             variant: "destructive",
             leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
           }}
-        />
+        >
+          <div className="space-y-2.5 mb-4">
+            {cancelReasonOptions.map((r) => (
+              <label
+                key={r}
+                className="flex items-center gap-2.5 cursor-pointer"
+              >
+                <input
+                  type="radio"
+                  name="cancelReason"
+                  value={r}
+                  checked={cancelReason === r}
+                  onChange={() => setCancelReason(r)}
+                  className="accent-primary"
+                />
+                <span className="text-sm text-foreground">{r}</span>
+              </label>
+            ))}
+          </div>
+          {cancelReason === "Other" && (
+            <textarea
+              ref={cancelTextareaRef}
+              value={cancelOtherText}
+              onChange={(e) => setCancelOtherText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
+                }
+              }}
+              placeholder="Please describe the reason..."
+              rows={2}
+              className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+            />
+          )}
+        </ConfirmationDialog>
 
         <ConfirmationDialog
           open={showCancelRescheduleConfirm}

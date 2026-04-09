@@ -718,41 +718,6 @@ export default function SchedulePage() {
 
           {/* Right: filters + view switcher */}
           <div className="flex items-center gap-3">
-            {/* Legend popover */}
-            <div className="relative" ref={legendRef}>
-              <button
-                onClick={() => setLegendOpen((o) => !o)}
-                className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                title="Status legend"
-              >
-                <Info className="w-5 h-5" />
-              </button>
-              {legendOpen && (
-                <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 min-w-[200px]">
-                  <p className="text-xs font-medium text-muted-foreground mb-2">Status Legend</p>
-                  <div className="flex flex-col gap-1.5">
-                    {BOOKING_STATUS_LEGEND_KEYS.map((key) => {
-                        const colors = statusColors[key];
-                        if (!colors) return null;
-                        return (
-                          <div key={key} className="flex items-center gap-1.5">
-                            <div
-                              className="w-3 h-3 rounded-sm shrink-0"
-                              style={{ backgroundColor: colors.border }}
-                            />
-                            <span className="text-xs text-foreground">{getBookingStatusLabel(key)}</span>
-                          </div>
-                        );
-                      })}
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-3 rounded-sm blocked-slot-pattern shrink-0" />
-                      <span className="text-xs text-foreground">Blocked</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
             {/* Mechanic filter */}
             {context.mechanics.length > 0 && (
               <Select
@@ -790,6 +755,41 @@ export default function SchedulePage() {
                   {view.charAt(0).toUpperCase() + view.slice(1)}
                 </button>
               ))}
+            </div>
+
+            {/* Legend popover */}
+            <div className="relative" ref={legendRef}>
+              <button
+                onClick={() => setLegendOpen((o) => !o)}
+                className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                title="Status legend"
+              >
+                <Info className="w-5 h-5" />
+              </button>
+              {legendOpen && (
+                <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 min-w-[200px]">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Status Legend</p>
+                  <div className="flex flex-col gap-1.5">
+                    {BOOKING_STATUS_LEGEND_KEYS.map((key) => {
+                        const colors = statusColors[key];
+                        if (!colors) return null;
+                        return (
+                          <div key={key} className="flex items-center gap-1.5">
+                            <div
+                              className="w-3 h-3 rounded-sm shrink-0"
+                              style={{ backgroundColor: colors.border }}
+                            />
+                            <span className="text-xs text-foreground">{getBookingStatusLabel(key)}</span>
+                          </div>
+                        );
+                      })}
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-3 h-3 rounded-sm blocked-slot-pattern shrink-0" />
+                      <span className="text-xs text-foreground">Blocked</span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

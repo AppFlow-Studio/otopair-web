@@ -1,0 +1,959 @@
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title>Mechanic Side CRM / Shop Portal</title><style>
+/* cspell:disable-file */
+/* webkit printing magic: print all background colors */
+html {
+	-webkit-print-color-adjust: exact;
+}
+* {
+	box-sizing: border-box;
+	-webkit-print-color-adjust: exact;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+}
+@media only screen {
+	body {
+		margin: 2em auto;
+		max-width: 900px;
+		color: rgb(55, 53, 47);
+	}
+}
+
+body {
+	line-height: 1.5;
+	white-space: pre-wrap;
+}
+
+a,
+a.visited {
+	color: inherit;
+	text-decoration: underline;
+}
+
+.pdf-relative-link-path {
+	font-size: 80%;
+	color: #444;
+}
+
+h1,
+h2,
+h3 {
+	letter-spacing: -0.01em;
+	line-height: 1.2;
+	font-weight: 600;
+	margin-bottom: 0;
+}
+
+/* Override strong tags inside headings to maintain consistent weight */
+h1 strong,
+h2 strong,
+h3 strong {
+	font-weight: 600;
+}
+
+.page-title {
+	font-size: 2.5rem;
+	font-weight: 700;
+	margin-top: 0;
+	margin-bottom: 0.75em;
+}
+
+h1 {
+	font-size: 1.875rem;
+	margin-top: 1.875rem;
+}
+
+h2 {
+	font-size: 1.5rem;
+	margin-top: 1.5rem;
+}
+
+h3 {
+	font-size: 1.25rem;
+	margin-top: 1.25rem;
+}
+
+.source {
+	border: 1px solid #ddd;
+	border-radius: 3px;
+	padding: 1.5em;
+	word-break: break-all;
+}
+
+.callout {
+	border-radius: 10px;
+	padding: 1rem;
+}
+
+figure {
+	margin: 1.25em 0;
+	page-break-inside: avoid;
+}
+
+figcaption {
+	opacity: 0.5;
+	font-size: 85%;
+	margin-top: 0.5em;
+}
+
+mark {
+	background-color: transparent;
+}
+
+.indented {
+	padding-left: 1.5em;
+}
+
+hr {
+	background: transparent;
+	display: block;
+	width: 100%;
+	height: 1px;
+	visibility: visible;
+	border: none;
+	border-bottom: 1px solid rgba(55, 53, 47, 0.09);
+}
+
+img {
+	max-width: 100%;
+}
+
+@media only print {
+	img {
+		max-height: 100vh;
+		object-fit: contain;
+	}
+}
+
+@page {
+	margin: 1in;
+}
+
+.collection-content {
+	font-size: 0.875rem;
+}
+
+.collection-content td {
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.column-list {
+	display: flex;
+	gap: 46px;
+}
+
+.column {
+	min-width: 0;
+	overflow: hidden;
+}
+
+.column > *:first-child {
+	margin-top: 0;
+}
+
+.table_of_contents-item {
+	display: block;
+	font-size: 0.875rem;
+	line-height: 1.3;
+	padding: 0.125rem;
+}
+
+.table_of_contents-indent-1 {
+	margin-left: 1.5rem;
+}
+
+.table_of_contents-indent-2 {
+	margin-left: 3rem;
+}
+
+.table_of_contents-indent-3 {
+	margin-left: 4.5rem;
+}
+
+.table_of_contents-link {
+	text-decoration: none;
+	opacity: 0.7;
+	border-bottom: 1px solid rgba(55, 53, 47, 0.18);
+}
+
+table,
+th,
+td {
+	border: 1px solid rgba(55, 53, 47, 0.09);
+	border-collapse: collapse;
+}
+
+table {
+	border-left: none;
+	border-right: none;
+}
+
+th,
+td {
+	font-weight: normal;
+	padding: 0.25em 0.5em;
+	line-height: 1.5;
+	min-height: 1.5em;
+	text-align: left;
+}
+
+th {
+	color: rgba(55, 53, 47, 0.6);
+}
+
+ol,
+ul {
+	margin: 0;
+	margin-block-start: 0.6em;
+	margin-block-end: 0.6em;
+}
+
+li > ol:first-child,
+li > ul:first-child {
+	margin-block-start: 0.6em;
+}
+
+ul > li {
+	list-style: disc;
+}
+
+ul.to-do-list {
+	padding-inline-start: 0;
+}
+
+ul.to-do-list > li {
+	list-style: none;
+}
+
+.to-do-children-checked {
+	text-decoration: line-through;
+	opacity: 0.375;
+}
+
+ul.toggle > li {
+	list-style: none;
+}
+
+ul {
+	padding-inline-start: 1.7em;
+}
+
+ul > li {
+	padding-left: 0.1em;
+}
+
+ol {
+	padding-inline-start: 1.6em;
+}
+
+ol > li {
+	padding-left: 0.2em;
+}
+
+.mono ol {
+	padding-inline-start: 2em;
+}
+
+.mono ol > li {
+	text-indent: -0.4em;
+}
+
+.toggle {
+	padding-inline-start: 0em;
+	list-style-type: none;
+}
+
+/* Indent toggle children */
+.toggle > li > details {
+	padding-left: 1.7em;
+}
+
+.toggle > li > details > summary {
+	margin-left: -1.1em;
+}
+
+.selected-value {
+	display: inline-block;
+	padding: 0 0.5em;
+	background: rgba(206, 205, 202, 0.5);
+	border-radius: 3px;
+	margin-right: 0.5em;
+	margin-top: 0.3em;
+	margin-bottom: 0.3em;
+	white-space: nowrap;
+}
+
+.collection-title {
+	display: inline-block;
+	margin-right: 1em;
+}
+
+.page-description {
+	margin-bottom: 2em;
+}
+
+.simple-table {
+	margin-top: 1em;
+	font-size: 0.875rem;
+	empty-cells: show;
+}
+.simple-table td {
+	height: 29px;
+	min-width: 120px;
+}
+
+.simple-table th {
+	height: 29px;
+	min-width: 120px;
+}
+
+.simple-table-header-color {
+	background: rgb(247, 246, 243);
+	color: black;
+}
+.simple-table-header {
+	font-weight: 500;
+}
+
+time {
+	opacity: 0.5;
+}
+
+.icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	max-width: 1.2em;
+	max-height: 1.2em;
+	text-decoration: none;
+	vertical-align: text-bottom;
+	margin-right: 0.5em;
+}
+
+img.icon {
+	border-radius: 3px;
+}
+
+.callout img.notion-static-icon {
+	width: 1em;
+	height: 1em;
+}
+
+.callout p {
+	margin: 0;
+}
+
+.callout h1,
+.callout h2,
+.callout h3 {
+	margin: 0 0 0.6rem;
+}
+
+.user-icon {
+	width: 1.5em;
+	height: 1.5em;
+	border-radius: 100%;
+	margin-right: 0.5rem;
+}
+
+.user-icon-inner {
+	font-size: 0.8em;
+}
+
+.text-icon {
+	border: 1px solid #000;
+	text-align: center;
+}
+
+.page-cover-image {
+	display: block;
+	object-fit: cover;
+	width: 100%;
+	max-height: 30vh;
+}
+
+.page-header-icon {
+	font-size: 3rem;
+	margin-bottom: 1rem;
+}
+
+.page-header-icon-with-cover {
+	margin-top: -0.72em;
+	margin-left: 0.07em;
+}
+
+.page-header-icon img {
+	border-radius: 3px;
+}
+
+.link-to-page {
+	margin: 1em 0;
+	padding: 0;
+	border: none;
+	font-weight: 500;
+}
+
+p > .user {
+	opacity: 0.5;
+}
+
+td > .user,
+td > time {
+	white-space: nowrap;
+}
+
+input[type="checkbox"] {
+	transform: scale(1.5);
+	margin-right: 0.6em;
+	vertical-align: middle;
+}
+
+p {
+	margin-top: 0.5em;
+	margin-bottom: 0.5em;
+}
+
+.image {
+	border: none;
+	margin: 1.5em 0;
+	padding: 0;
+	border-radius: 0;
+	text-align: center;
+}
+
+.code,
+code {
+	background: rgba(135, 131, 120, 0.15);
+	border-radius: 3px;
+	padding: 0.2em 0.4em;
+	border-radius: 3px;
+	font-size: 85%;
+	tab-size: 2;
+}
+
+code {
+	color: #eb5757;
+}
+
+.code {
+	padding: 1.5em 1em;
+}
+
+.code-wrap {
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+
+.code > code {
+	background: none;
+	padding: 0;
+	font-size: 100%;
+	color: inherit;
+}
+
+blockquote {
+	font-size: 1em;
+	margin: 1em 0;
+	padding-left: 1em;
+	border-left: 3px solid rgb(55, 53, 47);
+}
+
+blockquote.quote-large {
+	font-size: 1.25em;
+}
+
+.bookmark {
+	text-decoration: none;
+	max-height: 8em;
+	padding: 0;
+	display: flex;
+	width: 100%;
+	align-items: stretch;
+}
+
+.bookmark-title {
+	font-size: 0.85em;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	height: 1.75em;
+	white-space: nowrap;
+}
+
+.bookmark-text {
+	display: flex;
+	flex-direction: column;
+}
+
+.bookmark-info {
+	flex: 4 1 180px;
+	padding: 12px 14px 14px;
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+}
+
+.bookmark-image {
+	width: 33%;
+	flex: 1 1 180px;
+	display: block;
+	position: relative;
+	object-fit: cover;
+	border-radius: 1px;
+}
+
+.bookmark-description {
+	color: rgba(55, 53, 47, 0.6);
+	font-size: 0.75em;
+	overflow: hidden;
+	max-height: 4.5em;
+	word-break: break-word;
+}
+
+.bookmark-href {
+	font-size: 0.75em;
+	margin-top: 0.25em;
+}
+
+.sans { font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", "Noto Sans Arabic", "Noto Sans Hebrew", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol"; }
+.code { font-family: "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace; }
+.serif { font-family: Lyon-Text, Georgia, ui-serif, serif; }
+.mono { font-family: iawriter-mono, Nitti, Menlo, Courier, monospace; }
+.pdf .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", "Noto Sans Arabic", "Noto Sans Hebrew", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK JP'; }
+.pdf:lang(zh-CN) .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", "Noto Sans Arabic", "Noto Sans Hebrew", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK SC'; }
+.pdf:lang(zh-TW) .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", "Noto Sans Arabic", "Noto Sans Hebrew", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK TC'; }
+.pdf:lang(ko-KR) .sans { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "Apple Color Emoji", "Noto Sans Arabic", "Noto Sans Hebrew", Arial, sans-serif, "Segoe UI Emoji", "Segoe UI Symbol", 'Twemoji', 'Noto Color Emoji', 'Noto Sans CJK KR'; }
+.pdf .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK JP'; }
+.pdf:lang(zh-CN) .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK SC'; }
+.pdf:lang(zh-TW) .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK TC'; }
+.pdf:lang(ko-KR) .code { font-family: Source Code Pro, "SFMono-Regular", Menlo, Consolas, "PT Mono", "Liberation Mono", Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK KR'; }
+.pdf .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK JP'; }
+.pdf:lang(zh-CN) .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK SC'; }
+.pdf:lang(zh-TW) .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK TC'; }
+.pdf:lang(ko-KR) .serif { font-family: PT Serif, Lyon-Text, Georgia, ui-serif, serif, 'Twemoji', 'Noto Color Emoji', 'Noto Serif CJK KR'; }
+.pdf .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK JP'; }
+.pdf:lang(zh-CN) .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK SC'; }
+.pdf:lang(zh-TW) .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK TC'; }
+.pdf:lang(ko-KR) .mono { font-family: PT Mono, iawriter-mono, Nitti, Menlo, Courier, monospace, 'Twemoji', 'Noto Color Emoji', 'Noto Sans Mono CJK KR'; }
+.highlight-default {
+	color: rgba(44, 44, 43, 1);
+}
+.highlight-gray {
+	color: rgba(125, 122, 117, 1);
+	fill: rgba(125, 122, 117, 1);
+}
+.highlight-brown {
+	color: rgba(159, 118, 90, 1);
+	fill: rgba(159, 118, 90, 1);
+}
+.highlight-orange {
+	color: rgba(210, 123, 45, 1);
+	fill: rgba(210, 123, 45, 1);
+}
+.highlight-yellow {
+	color: rgba(203, 148, 52, 1);
+	fill: rgba(203, 148, 52, 1);
+}
+.highlight-teal {
+	color: rgba(80, 148, 110, 1);
+	fill: rgba(80, 148, 110, 1);
+}
+.highlight-blue {
+	color: rgba(56, 125, 201, 1);
+	fill: rgba(56, 125, 201, 1);
+}
+.highlight-purple {
+	color: rgba(154, 107, 180, 1);
+	fill: rgba(154, 107, 180, 1);
+}
+.highlight-pink {
+	color: rgba(193, 76, 138, 1);
+	fill: rgba(193, 76, 138, 1);
+}
+.highlight-red {
+	color: rgba(207, 81, 72, 1);
+	fill: rgba(207, 81, 72, 1);
+}
+.highlight-default_background {
+	color: rgba(44, 44, 43, 1);
+}
+.highlight-gray_background {
+	background: rgba(42, 28, 0, 0.07);
+}
+.highlight-brown_background {
+	background: rgba(139, 46, 0, 0.086);
+}
+.highlight-orange_background {
+	background: rgba(224, 101, 1, 0.129);
+}
+.highlight-yellow_background {
+	background: rgba(211, 168, 0, 0.137);
+}
+.highlight-teal_background {
+	background: rgba(0, 100, 45, 0.09);
+}
+.highlight-blue_background {
+	background: rgba(0, 124, 215, 0.094);
+}
+.highlight-purple_background {
+	background: rgba(102, 0, 178, 0.078);
+}
+.highlight-pink_background {
+	background: rgba(197, 0, 93, 0.086);
+}
+.highlight-red_background {
+	background: rgba(223, 22, 0, 0.094);
+}
+.block-color-default {
+	color: inherit;
+	fill: inherit;
+}
+.block-color-gray {
+	color: rgba(125, 122, 117, 1);
+	fill: rgba(125, 122, 117, 1);
+}
+.block-color-brown {
+	color: rgba(159, 118, 90, 1);
+	fill: rgba(159, 118, 90, 1);
+}
+.block-color-orange {
+	color: rgba(210, 123, 45, 1);
+	fill: rgba(210, 123, 45, 1);
+}
+.block-color-yellow {
+	color: rgba(203, 148, 52, 1);
+	fill: rgba(203, 148, 52, 1);
+}
+.block-color-teal {
+	color: rgba(80, 148, 110, 1);
+	fill: rgba(80, 148, 110, 1);
+}
+.block-color-blue {
+	color: rgba(56, 125, 201, 1);
+	fill: rgba(56, 125, 201, 1);
+}
+.block-color-purple {
+	color: rgba(154, 107, 180, 1);
+	fill: rgba(154, 107, 180, 1);
+}
+.block-color-pink {
+	color: rgba(193, 76, 138, 1);
+	fill: rgba(193, 76, 138, 1);
+}
+.block-color-red {
+	color: rgba(207, 81, 72, 1);
+	fill: rgba(207, 81, 72, 1);
+}
+.block-color-default_background {
+	color: inherit;
+	fill: inherit;
+}
+.block-color-gray_background {
+	background: rgba(240, 239, 237, 1);
+}
+.block-color-brown_background {
+	background: rgba(245, 237, 233, 1);
+}
+.block-color-orange_background {
+	background: rgba(251, 235, 222, 1);
+}
+.block-color-yellow_background {
+	background: rgba(249, 243, 220, 1);
+}
+.block-color-teal_background {
+	background: rgba(232, 241, 236, 1);
+}
+.block-color-blue_background {
+	background: rgba(229, 242, 252, 1);
+}
+.block-color-purple_background {
+	background: rgba(243, 235, 249, 1);
+}
+.block-color-pink_background {
+	background: rgba(250, 233, 241, 1);
+}
+.block-color-red_background {
+	background: rgba(252, 233, 231, 1);
+}
+.select-value-color-default { background-color: rgba(42, 28, 0, 0.07); }
+.select-value-color-gray { background-color: rgba(28, 19, 1, 0.11); }
+.select-value-color-brown { background-color: rgba(127, 51, 0, 0.156); }
+.select-value-color-orange { background-color: rgba(196, 88, 0, 0.203); }
+.select-value-color-yellow { background-color: rgba(209, 156, 0, 0.282); }
+.select-value-color-green { background-color: rgba(0, 96, 38, 0.156); }
+.select-value-color-blue { background-color: rgba(0, 118, 217, 0.203); }
+.select-value-color-purple { background-color: rgba(92, 0, 163, 0.141); }
+.select-value-color-pink { background-color: rgba(183, 0, 78, 0.152); }
+.select-value-color-red { background-color: rgba(206, 24, 0, 0.164); }
+
+.checkbox {
+	display: inline-flex;
+	vertical-align: text-bottom;
+	width: 16;
+	height: 16;
+	background-size: 16px;
+	margin-left: 2px;
+	margin-right: 5px;
+}
+
+.checkbox-on {
+	background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%3Crect%20width%3D%2216%22%20height%3D%2216%22%20fill%3D%22%2358A9D7%22%2F%3E%0A%3Cpath%20d%3D%22M6.71429%2012.2852L14%204.9995L12.7143%203.71436L6.71429%209.71378L3.28571%206.2831L2%207.57092L6.71429%2012.2852Z%22%20fill%3D%22white%22%2F%3E%0A%3C%2Fsvg%3E");
+}
+
+.checkbox-off {
+	background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2016%2016%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%3Crect%20x%3D%220.75%22%20y%3D%220.75%22%20width%3D%2214.5%22%20height%3D%2214.5%22%20fill%3D%22white%22%20stroke%3D%22%2336352F%22%20stroke-width%3D%221.5%22%2F%3E%0A%3C%2Fsvg%3E");
+}
+	
+</style></head><body><article id="3088280c-1b1d-809f-bbfe-e72620389717" class="page sans"><header><div class="page-header-icon undefined"><span class="icon">🧰</span></div><h1 class="page-title" dir="auto">Mechanic Side CRM / Shop Portal</h1><p class="page-description" dir="auto"></p><table class="properties"><tbody><tr class="property-row property-row-formula"><th><span class="icon property-icon"><img src="https://www.notion.so/icons/activity_gray.svg" style="width:14px;height:14px;display:block"/></span>Progress</th><td>0%</td></tr><tr class="property-row property-row-multi_select"><th><span class="icon property-icon"><img src="https://www.notion.so/icons/list_gray.svg" style="width:14px;height:14px;display:block"/></span>Team</th><td></td></tr><tr class="property-row property-row-person"><th><span class="icon property-icon"><img src="https://www.notion.so/icons/friends_gray.svg" style="width:14px;height:14px;display:block"/></span>Assignee</th><td><span class="user"><span class="icon text-icon user-icon"><span class="user-icon-inner">D</span></span>Daniel Chelala</span></td></tr><tr class="property-row property-row-status"><th><span class="icon property-icon"><img src="https://www.notion.so/icons/burst_gray.svg" style="width:14px;height:14px;display:block"/></span>Status</th><td><span class="status-value select-value-color-blue"><div class="status-dot status-dot-color-blue"></div>In progress</span></td></tr></tbody></table></header><div class="page-body"><div style="display:contents" dir="auto"><h3 id="3148280c-1b1d-8007-bd6f-f2a0804002f4" class="">UI UX Inspiration</h3></div><div style="display:contents" dir="auto"><p id="3148280c-1b1d-8049-8d09-c0eaca417450" class=""><span class="user">@Daniel Chelala</span> UI</p></div><div style="display:contents" dir="auto"><p id="3148280c-1b1d-80d1-bacf-fccd53c197f1" class="">Onboarding </p></div><div style="display:contents" dir="ltr"><figure id="3148280c-1b1d-80d0-b9fd-d8ed167e808f" class="image"><a href="Mechanic%20Side%20CRM%20Shop%20Portal/image.png"><img style="width:815.12158203125px" src="Mechanic%20Side%20CRM%20Shop%20Portal/image.png"/></a></figure></div><div style="display:contents" dir="auto"><p id="3148280c-1b1d-8010-8164-fe7c4a0f439e" class="">Dashboard</p></div><div style="display:contents" dir="ltr"><figure id="3148280c-1b1d-80bd-82ce-f59d06df665f" class="image"><a href="Mechanic%20Side%20CRM%20Shop%20Portal/image%201.png"><img style="width:815.12158203125px" src="Mechanic%20Side%20CRM%20Shop%20Portal/image%201.png"/></a></figure></div><div style="display:contents" dir="auto"><p id="3148280c-1b1d-804c-9d6e-c3881e1c0623" class="">See Jobs, Team status, bookings, Money made balance, </p></div><div style="display:contents" dir="auto"><p id="3148280c-1b1d-803a-92d9-cc9dcc277c99" class="">
+</p></div><div style="display:contents" dir="auto"><p id="3148280c-1b1d-8067-848b-f4e0e7c775fc" class="">Schedule / Calendar</p></div><div style="display:contents" dir="ltr"><figure id="3148280c-1b1d-80ec-8410-eedcf036dd65" class="image"><a href="Mechanic%20Side%20CRM%20Shop%20Portal/Screenshot_2026-02-26_at_9.49.14_PM.png"><img style="width:2560px" src="Mechanic%20Side%20CRM%20Shop%20Portal/Screenshot_2026-02-26_at_9.49.14_PM.png"/></a></figure></div><div style="display:contents" dir="auto"><p id="3148280c-1b1d-8024-a766-de443c50cc17" class="">
+</p></div><div style="display:contents" dir="auto"><h2 id="3088280c-1b1d-8044-a0b8-c71f02c59e36" class="">Overview</h2></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8014-8b69-d1bb69dc661e" class="">Shop owners and mechanics each get their own role-based dashboard on a separate web portal. Shop owners manage everything: shop setup, mechanics, schedules, accept/decline jobs, payouts, job actuals. Mechanics get a focused view: my jobs, my customers, my ratings, complete job actuals for jobs assigned to me.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80a5-89f9-ed7835a0352e" class="">The portal uses Clerk auth — same system as the user app — but with strict route-level isolation. Regular users (role: &quot;user&quot;) who somehow hit the portal URL get redirected to a &quot;This is for shops&quot; page. No crossover.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ab-bde2-f80c8f1f9aa6" class="">Shop owners invite mechanics via email. Clerk handles the invitation → account creation flow. A webhook wires it all together so the mechanic&#x27;s Clerk account, Convex user record, and shop_users junction are created atomically.</p></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-80fc-9eb8-f007a4e28f89"/></div><div style="display:contents" dir="auto"><h2 id="3088280c-1b1d-8079-96fa-d3903730ec3c" class="">Architecture Decisions</h2></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-801f-b83f-eb20e57cfb6a" class=""><strong>Separate Next.js app or route group?</strong> Separate Next.js app on a subdomain (e.g., <code>shop.otopair.com</code>). This keeps the consumer React Native app and the shop web portal completely decoupled. They share the same Convex backend and Clerk application but have independent frontends.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8005-9e02-d27a0594fab1" class=""><strong>Why not one Clerk org per shop?</strong> Clerk Organizations add billing complexity and aren&#x27;t necessary at MVP scale. Instead, we use a <code>shop_users</code> junction table with role-based access checks in Convex. Clerk just handles identity — our backend handles authorization.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8074-90b9-c33b4de521f4" class=""><strong>Mechanic accounts:</strong> Mechanics get real Clerk accounts (not sub-accounts). They log in with email + password or Google OAuth. Their user record has <code>role: &quot;shop_mechanic&quot;</code>. A mechanic can be associated with one shop at MVP (multi-shop post-MVP via multiple shop_users rows).</p></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-8038-b12d-ccd348f4e772"/></div><div style="display:contents" dir="auto"><h2 id="3088280c-1b1d-800c-be7d-dcef7b176388" class="">Ticket Summary</h2></div><div style="display:contents" dir="ltr"><table id="3088280c-1b1d-80c2-bdbb-f208bf87c1fd" class="simple-table"><thead class="simple-table-header"><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-8027-aec2-c0da293d7f2f"><th id="Obnj" class="simple-table-header-color simple-table-header">#</th><th id="n=][" class="simple-table-header-color simple-table-header">Ticket</th><th id="|XiB" class="simple-table-header-color simple-table-header">Type</th><th id="Sy=_" class="simple-table-header-color simple-table-header">Pts</th><th id="`diU" class="simple-table-header-color simple-table-header">Priority</th><th id="BG`@" class="simple-table-header-color simple-table-header">Blocks</th></tr></div></thead><tbody><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-8055-94ba-de8ffc530af4"><td id="Obnj" class="">2.1</td><td id="n=][" class="">Schema: Shop Users &amp; Role Model</td><td id="|XiB" class="">Backend</td><td id="Sy=_" class="">3</td><td id="`diU" class="">P0</td><td id="BG`@" class="">All</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-8072-a117-d724db38ffdb"><td id="Obnj" class="">2.2</td><td id="n=][" class="">Clerk Invite-to-Account Flow + Webhook</td><td id="|XiB" class="">Backend</td><td id="Sy=_" class="">5</td><td id="`diU" class="">P0</td><td id="BG`@" class="">2.4, 2.12</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-80db-9963-f77240539c58"><td id="Obnj" class="">2.3</td><td id="n=][" class="">Portal Auth Isolation &amp; Route Guards</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">3</td><td id="`diU" class="">P0</td><td id="BG`@" class="">All portal tickets</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-807f-9945-e63f5a9b75d4"><td id="Obnj" class="">2.4</td><td id="n=][" class="">Shop Registration &amp; Onboarding Wizard</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">8</td><td id="`diU" class="">P0</td><td id="BG`@" class="">2.6, 2.7</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-8012-9bd1-e83b7fcdb5a2"><td id="Obnj" class="">2.5</td><td id="n=][" class="">Shop Owner Dashboard</td><td id="|XiB" class="">Frontend</td><td id="Sy=_" class="">5</td><td id="`diU" class="">P0</td><td id="BG`@" class="">—</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-8085-b857-f20e4e9242db"><td id="Obnj" class="">2.6</td><td id="n=][" class="">Mechanic Profile Management + Invite UI</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">5</td><td id="`diU" class="">P0</td><td id="BG`@" class="">2.2</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-8065-9f9a-faf54559f725"><td id="Obnj" class="">2.7</td><td id="n=][" class="">Schedule Management (Time Slots)</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">5</td><td id="`diU" class="">P0</td><td id="BG`@" class="">—</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-80f3-99bc-c4e32ad5d8f6"><td id="Obnj" class="">2.8</td><td id="n=][" class="">Accept/Decline Jobs Queue</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">5</td><td id="`diU" class="">P0</td><td id="BG`@" class="">—</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-80bd-b628-f88b8f3133a2"><td id="Obnj" class="">2.9</td><td id="n=][" class="">Job Actuals Input Form</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">5</td><td id="`diU" class="">P0</td><td id="BG`@" class="">—</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-80d6-894b-cdfc37139f0e"><td id="Obnj" class="">2.10</td><td id="n=][" class="">Payout &amp; Revenue View</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">3</td><td id="`diU" class="">P1</td><td id="BG`@" class="">—</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-80d7-a302-e6742247383b"><td id="Obnj" class="">2.11</td><td id="n=][" class="">Booking History &amp; Service Records</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">3</td><td id="`diU" class="">P1</td><td id="BG`@" class="">—</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-8052-bf5a-f2d340539343"><td id="Obnj" class="">2.12</td><td id="n=][" class="">Mechanic Dashboard (Role-Specific)</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">5</td><td id="`diU" class="">P0</td><td id="BG`@" class="">2.2</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-8056-9bbf-effd876b7dea"><td id="Obnj" class="">2.13</td><td id="n=][" class="">Mechanic: My Customers View</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">3</td><td id="`diU" class="">P1</td><td id="BG`@" class="">2.12</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-800d-8345-c50e68f767d7"><td id="Obnj" class="">2.14</td><td id="n=][" class="">Mechanic: My Ratings &amp; Reviews</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">2</td><td id="`diU" class="">P1</td><td id="BG`@" class="">2.12</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-80a8-8f59-c68823da8fba"><td id="Obnj" class="">2.15</td><td id="n=][" class="">Mechanic: Complete Job Actuals (Mechanic View)</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">3</td><td id="`diU" class="">P0</td><td id="BG`@" class="">2.12</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-804c-ba8d-d26b8d45b091"><td id="Obnj" class="">2.16</td><td id="n=][" class="">Shop Settings &amp; Profile Edit</td><td id="|XiB" class="">Full-stack</td><td id="Sy=_" class="">3</td><td id="`diU" class="">P1</td><td id="BG`@" class="">—</td></tr></div><div style="display:contents" dir="ltr"><tr id="3088280c-1b1d-8084-a9ad-e6007573e3a8"><td id="Obnj" class=""><strong>Total</strong></td><td id="n=][" class=""></td><td id="|XiB" class=""></td><td id="Sy=_" class=""></td><td id="`diU" class=""></td><td id="BG`@" class=""></td></tr></div></tbody></table></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80b2-a071-d1fce5d458f4" class="">
+</p></div><div style="display:contents" dir="auto"><h3 id="3088280c-1b1d-808c-9d18-d02ad1044cea" class="">Action items</h3></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0"><del>2.1 — Schema: Shop Users &amp; Role Model</del></summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8068-a119-e1b05ec83e65" class=""><strong>Type:</strong> Backend<br/><strong>Points:</strong> 3<br/><strong>Owner:</strong> Adam<br/><strong>Priority:</strong> P0 (blocks everything)</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80d0-a2fe-e0ec04436c32" class=""><strong>Description:</strong><br/>Add a <code>shop_users</code> junction table linking Clerk-authenticated users to shops with roles. Same Clerk auth as regular users — a <code>role</code> field on the users table distinguishes shop staff. One user can be associated with multiple shops (multi-location owners). Also add an <code>invitations</code> table to track pending invites before the mechanic creates their account.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-804a-9800-db51e3c49baa" class=""><strong>New table: </strong><code><strong>shop_users</strong></code></p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-806b-8050-e56d578e62fb" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">shop_users
+├── user_id: id(&quot;users&quot;)                          // Clerk-authenticated user
+├── shop_id: id(&quot;shops&quot;)                          // Which shop they belong to
+├── role: string                                   // &quot;owner&quot; | &quot;manager&quot; | &quot;mechanic&quot;
+├── mechanic_id: optional(id(&quot;mechanics&quot;))         // If role is &quot;mechanic&quot;, link to mechanic profile
+├── permissions: optional(array(string))           // Granular permissions for future use
+├── is_active: boolean
+├── invited_at: float64
+├── accepted_at: optional(float64)
+├── created_at: float64
+├── updated_at: float64
+Indexes:
+├── by_user_id: [user_id]
+├── by_shop_id: [shop_id]
+├── by_user_and_shop: [user_id, shop_id]
+└── by_shop_and_role: [shop_id, role]</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c3-84f9-e83c71254713" class=""><strong>New table: </strong><code><strong>shop_invitations</strong></code></p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-80d1-92c4-eff8e1e98a26" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">shop_invitations
+├── shop_id: id(&quot;shops&quot;)
+├── invited_by: id(&quot;users&quot;)                       // Shop owner who sent invite
+├── email: string                                  // Invitee&#x27;s email
+├── role: string                                   // &quot;manager&quot; | &quot;mechanic&quot;
+├── mechanic_id: optional(id(&quot;mechanics&quot;))         // Pre-created mechanic profile to link on accept
+├── clerk_invitation_id: optional(string)          // Clerk&#x27;s invitation ID for tracking
+├── status: string                                 // &quot;pending&quot; | &quot;accepted&quot; | &quot;expired&quot; | &quot;revoked&quot;
+├── token: string                                  // Unique invite token for verification
+├── expires_at: float64                            // 7-day expiry
+├── accepted_at: optional(float64)
+├── created_at: float64
+Indexes:
+├── by_shop_id: [shop_id]
+├── by_email: [email]
+├── by_token: [token]
+├── by_status: [status]
+└── by_clerk_invitation_id: [clerk_invitation_id]</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8057-981d-cae094ee4de2" class=""><strong>Users table additions:</strong></p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-805a-8700-f620e69a5946" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">users.role: optional(string)           // &quot;user&quot; | &quot;shop_owner&quot; | &quot;shop_manager&quot; | &quot;shop_mechanic&quot; | &quot;admin&quot;
+users.stripe_customer_id: optional(string)  // (from Epic 3)
+users.push_token: optional(string)          // (from Epic 1)</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80af-a536-e7c35ba0d82d" class=""><strong>Shops table additions:</strong></p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-802d-bdcc-da780ea5b5d6" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">shops.stripe_connect_account_id: optional(string)
+shops.onboarding_complete: optional(boolean)
+shops.owner_user_id: optional(id(&quot;users&quot;))
+shops.logo: optional(id(&quot;cdn_assets&quot;))
+shops.description: optional(string)</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-801f-b33f-d80ac9b8799e" class=""><strong>Convex queries:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8018-a328-f98e6e740a5e" class="bulleted-list"><li style="list-style-type:disc"><code>getShopsByUserId(user_id)</code> — returns all shops this user is associated with via shop_users</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a4-8b37-f3d26cce2507" class="bulleted-list"><li style="list-style-type:disc"><code>getShopUsersByShopId(shop_id)</code> — returns all staff at this shop</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-806a-b4ff-d34991fbe2a8" class="bulleted-list"><li style="list-style-type:disc"><code>getShopUserRole(user_id, shop_id)</code> — returns role for access control</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-800c-b6d2-e09469ed795b" class="bulleted-list"><li style="list-style-type:disc"><code>isUserShopStaff(user_id)</code> — boolean check used by route guards</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80af-8700-e780eb7e140f" class="bulleted-list"><li style="list-style-type:disc"><code>getInvitationsByShop(shop_id)</code> — pending invitations</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-802c-b02b-fe52475ab19c" class="bulleted-list"><li style="list-style-type:disc"><code>getInvitationByToken(token)</code> — for invite acceptance flow</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8033-a31c-d09b79d8717f" class=""><strong>Convex mutations:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ee-b49e-edfc5d6e70d1" class="bulleted-list"><li style="list-style-type:disc"><code>createShopUser(user_id, shop_id, role, mechanic_id?)</code> — links user to shop</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8052-b735-f56d3812e024" class="bulleted-list"><li style="list-style-type:disc"><code>updateShopUserRole(shop_user_id, new_role)</code> — role change</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8013-aa08-e7b7fd52d560" class="bulleted-list"><li style="list-style-type:disc"><code>deactivateShopUser(shop_user_id)</code> — soft deactivate</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8016-b8ab-d6b219f1aaa5" class="bulleted-list"><li style="list-style-type:disc"><code>createInvitation(shop_id, email, role, mechanic_id?)</code> — creates invite record</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d7-a86c-db0a524dbc85" class="bulleted-list"><li style="list-style-type:disc"><code>revokeInvitation(invitation_id)</code> — sets status to &quot;revoked&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8091-a2f4-c710fa81c05d" class="bulleted-list"><li style="list-style-type:disc"><code>acceptInvitation(token, user_id)</code> — marks accepted, creates shop_users record</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80d3-9812-e88cecd5a0a4" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ad-b381-c3bb4f4cb103" class="bulleted-list"><li style="list-style-type:disc">Both tables created with all fields and indexes</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8008-afd7-fc42862f7779" class="bulleted-list"><li style="list-style-type:disc">Users table extended with role field</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8050-ae17-ea36717aeca9" class="bulleted-list"><li style="list-style-type:disc">Shops table extended with new fields</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-807c-a852-da403e938916" class="bulleted-list"><li style="list-style-type:disc">All queries and mutations functional</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-801a-8601-f0fd745639ff" class="bulleted-list"><li style="list-style-type:disc">Role validation: only &quot;owner&quot; | &quot;manager&quot; | &quot;mechanic&quot; accepted</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e1-85b4-f09050efdce7" class="bulleted-list"><li style="list-style-type:disc">Invitation expiry enforced (7 days)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d4-8d26-f2cfb3227e8b" class="bulleted-list"><li style="list-style-type:disc">Cannot create duplicate shop_users for same user+shop combo</li></ul></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-80bc-870d-d6b16a141efd"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0"><del>2.2 — Clerk Invite-to-Account Flow + Webhook</del></summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-801b-904e-e8630ddf6354" class=""><strong>Type:</strong> Backend<br/><strong>Points:</strong> 5<br/><strong>Owner:</strong> Adam<br/><strong>Priority:</strong> P0 (blocks mechanic onboarding)</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c3-ae6f-ff2e0a636729" class=""><strong>Description:</strong><br/>The full lifecycle of inviting a mechanic to the shop portal: shop owner sends invite from the CRM → Clerk invitation email sent → mechanic clicks link → creates Clerk account → webhook fires → Convex user record created with correct role → shop_users record created → mechanic lands on their dashboard.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80a7-99c0-f97a87305dbf" class=""><strong>Invite Flow (Step by Step):</strong></p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-802d-ab42-ec9ad250de42" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">STEP 1: Shop owner clicks &quot;Invite Mechanic&quot; in CRM
+    │
+    ├── Frontend collects: mechanic&#x27;s email, role (&quot;mechanic&quot;)
+    ├── If mechanic profile doesn&#x27;t exist yet, create it first (name, title)
+    │   This gives us a mechanic_id to link later
+    │
+    ▼
+STEP 2: Backend mutation: sendMechanicInvite
+    │
+    ├── Create shop_invitations record:
+    │   { shop_id, email, role: &quot;mechanic&quot;, mechanic_id, status: &quot;pending&quot;, token: uuid }
+    │
+    ├── Call Clerk Backend API: POST /invitations
+    │   {
+    │     email_address: &quot;mechanic@email.com&quot;,
+    │     public_metadata: {
+    │       otopair_role: &quot;shop_mechanic&quot;,
+    │       shop_id: &quot;conv_shop_id_here&quot;,
+    │       invitation_token: &quot;our_token_here&quot;,
+    │       mechanic_id: &quot;conv_mechanic_id_here&quot;
+    │     },
+    │     redirect_url: &quot;https://shop.otopair.com/accept-invite?token=xxx&quot;
+    │   }
+    │
+    ├── Save clerk_invitation_id on our shop_invitations record
+    │
+    ▼
+STEP 3: Clerk sends invitation email
+    │
+    ├── Email contains: &quot;You&#x27;ve been invited to join [Shop Name] on Otopair&quot;
+    ├── CTA button: &quot;Accept Invitation&quot; → redirect_url
+    │
+    ▼
+STEP 4: Mechanic clicks link, lands on shop.otopair.com/accept-invite?token=xxx
+    │
+    ├── If mechanic has no Clerk account → Clerk sign-up form
+    ├── If mechanic already has a Clerk account → Clerk sign-in
+    ├── After auth completes, Clerk sets public_metadata from the invitation
+    │
+    ▼
+STEP 5: Clerk webhook fires → Convex HTTP action: handleClerkWebhook
+    │
+    ├── Event: &quot;user.created&quot; (new mechanic) OR &quot;invitation.accepted&quot;
+    │
+    ├── Extract from webhook payload:
+    │   - clerkUserId
+    │   - email
+    │   - first_name, last_name
+    │   - public_metadata.otopair_role
+    │   - public_metadata.shop_id
+    │   - public_metadata.invitation_token
+    │   - public_metadata.mechanic_id
+    │
+    ├── If otopair_role exists in metadata (this is a shop invite, not a regular user):
+    │   │
+    │   ├── Create/update users record:
+    │   │   { clerkUserId, email, first_name, last_name, role: &quot;shop_mechanic&quot; }
+    │   │
+    │   ├── Create shop_users record:
+    │   │   { user_id, shop_id, role: &quot;mechanic&quot;, mechanic_id, is_active: true }
+    │   │
+    │   ├── Update shop_invitations: status → &quot;accepted&quot;, accepted_at = now
+    │   │
+    │   ├── Update mechanics record: link any missing data from Clerk profile
+    │   │
+    │   └── Done. Mechanic can now log in and see their dashboard.
+    │
+    ├── If NO otopair_role in metadata (regular user signup):
+    │   │
+    │   └── Standard user creation: { clerkUserId, role: &quot;user&quot;, ... }
+    │
+    ▼
+STEP 6: Mechanic is redirected to shop.otopair.com
+    │
+    ├── Route guard checks: user has shop_users record → allow
+    ├── Role check: role === &quot;mechanic&quot; → show mechanic dashboard
+    └── Done.</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-804f-bc67-e6c7e92de639" class=""><strong>Existing user edge case:</strong><br/>If the invited email belongs to someone who already has an Otopair user account (they&#x27;re a car owner too), the webhook handles this by:</p></div><div style="display:contents" dir="auto"><ol type="1" id="3088280c-1b1d-8069-8262-ff32ab9a0c77" class="numbered-list" start="1"><li>Finding the existing user by email</li></ol></div><div style="display:contents" dir="auto"><ol type="1" id="3088280c-1b1d-80cd-9753-eecd8094b34e" class="numbered-list" start="2"><li>Updating their role to &quot;shop_mechanic&quot; (or keeping it if they&#x27;re already shop staff)</li></ol></div><div style="display:contents" dir="auto"><ol type="1" id="3088280c-1b1d-8091-946f-dc675ee041c8" class="numbered-list" start="3"><li>Creating the shop_users junction record</li></ol></div><div style="display:contents" dir="auto"><ol type="1" id="3088280c-1b1d-8063-a962-f67ac3d78e49" class="numbered-list" start="4"><li>The user now has access to both the consumer app AND the shop portal</li></ol></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-802b-ab12-cbc28bb93f95" class=""><strong>Convex HTTP action: </strong><code><strong>handleClerkWebhook</strong></code></p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-805c-a73d-de077366202c" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">POST /clerk-webhook
+
+Handles events:
+- &quot;user.created&quot; → create user record, check metadata for shop invite
+- &quot;invitation.accepted&quot; → find invitation by clerk_invitation_id, link user
+- &quot;user.updated&quot; → sync profile changes (name, email, photo)
+
+Security:
+- Verify Clerk webhook signature using svix
+- Reject unsigned or invalid payloads
+- Idempotent: re-processing same event doesn&#x27;t create duplicates</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-807f-8305-f00d18f3c25e" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-800d-82cd-d290cd39c02f" class="bulleted-list"><li style="list-style-type:disc">Shop owner can send invite by entering mechanic&#x27;s email</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e0-8393-e52983a6ede1" class="bulleted-list"><li style="list-style-type:disc">Clerk invitation API called with correct metadata</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80fe-bbce-ef340b34c399" class="bulleted-list"><li style="list-style-type:disc">Invitation email sent by Clerk with branded template</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80aa-a15c-fbcb0e320a6a" class="bulleted-list"><li style="list-style-type:disc">Mechanic can sign up via invite link</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e3-acdc-ec3866e299ef" class="bulleted-list"><li style="list-style-type:disc">Webhook correctly processes &quot;user.created&quot; with shop metadata</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d0-878d-c9d9892fc365" class="bulleted-list"><li style="list-style-type:disc">Webhook correctly processes regular &quot;user.created&quot; without shop metadata (no regression)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8077-b6e1-dd412957477f" class="bulleted-list"><li style="list-style-type:disc">shop_users record created automatically on invite acceptance</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8025-a0c1-c85af4e2729d" class="bulleted-list"><li style="list-style-type:disc">shop_invitations status updated to &quot;accepted&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80cb-833f-feedb8f11b4a" class="bulleted-list"><li style="list-style-type:disc">Mechanic profile linked to user account</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-808e-a3f1-d427cd140c95" class="bulleted-list"><li style="list-style-type:disc">Existing user invited to shop gets shop_users record without duplicate user creation</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f5-a37f-e0559cdd3684" class="bulleted-list"><li style="list-style-type:disc">Webhook signature verification works (rejects tampered payloads)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80b3-bfd5-e035b7b6af7f" class="bulleted-list"><li style="list-style-type:disc">Expired invitations (&gt;7 days) rejected at acceptance</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8089-a897-c20a5c9850e3" class="bulleted-list"><li style="list-style-type:disc">Idempotent: webhook replay doesn&#x27;t create duplicate records</li></ul></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-80fb-8b43-ea3ae6294f13"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.3 — Portal Auth Isolation &amp; Route Guards</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80dc-b3c4-dad31c290cd5" class=""><strong>Type:</strong> Full-stack (Web)<br/><strong>Points:</strong> 3<br/><strong>Owner:</strong> Dev team<br/><strong>Priority:</strong> P0 (blocks all portal UI)</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8003-ab2c-ef698e98ac5e" class=""><strong>Description:</strong><br/>The shop portal (<code>shop.otopair.com</code>) is a separate Next.js web app. It shares the same Clerk application and Convex backend as the consumer app, but has strict route-level protection ensuring only shop staff can access it. Regular users who stumble onto the URL get a clean rejection, not a broken UI.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8024-a0aa-eef09855faea" class=""><strong>Auth Architecture:</strong></p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-80d2-be83-fae55ef69c4f" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">shop.otopair.com
+    │
+    ├── Clerk &lt;SignIn /&gt; component (same Clerk app, different redirect)
+    │
+    ├── After Clerk auth → middleware checks:
+    │   │
+    │   ├── 1. Is user authenticated? (Clerk session exists)
+    │   │   └── No → redirect to /sign-in
+    │   │
+    │   ├── 2. Does user have a shop_users record? (Convex query)
+    │   │   └── No → redirect to /not-authorized
+    │   │
+    │   ├── 3. What is their role? (from shop_users)
+    │   │   ├── &quot;owner&quot; or &quot;manager&quot; → full dashboard access
+    │   │   ├── &quot;mechanic&quot; → mechanic dashboard only
+    │   │   └── anything else → /not-authorized
+    │   │
+    │   └── 4. Is shop_users.is_active === true?
+    │       └── No → /account-deactivated
+    │
+    └── Role-based routing:
+        ├── /dashboard → shop owner/manager dashboard (2.5)
+        ├── /mechanic → mechanic dashboard (2.12)
+        ├── /bookings → booking list (owner/manager only)
+        ├── /mechanics → mechanic management (owner/manager only)
+        ├── /schedule → schedule management (owner/manager only)
+        ├── /payouts → payout view (owner only)
+        ├── /settings → shop settings (owner/manager only)
+        └── /my-jobs → mechanic&#x27;s job view (mechanic only)</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-803d-8cbf-f8e767fa7123" class=""><strong>Middleware implementation (Next.js):</strong></p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8013-91be-e7728cb89a05" class="">typescript</p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-80f9-bef9-e7eb0fe81ac4" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">// middleware.ts — runs on every request to shop.otopair.com
+
+export default clerkMiddleware(async (auth, req) =&gt; {
+  const { userId } = auth();
+  
+  // Public routes (no auth needed)
+  if (isPublicRoute(req)) return;
+  
+  // Not signed in → redirect to sign-in
+  if (!userId) return redirectToSignIn(req);
+  
+  // Check shop access via Convex
+  const shopAccess = await convex.query(&quot;shopUsers:getShopAccessForUser&quot;, { clerkUserId: userId });
+  
+  if (!shopAccess) {
+    return NextResponse.redirect(new URL(&quot;/not-authorized&quot;, req.url));
+  }
+  
+  if (!shopAccess.is_active) {
+    return NextResponse.redirect(new URL(&quot;/account-deactivated&quot;, req.url));
+  }
+  
+  // Role-based route protection
+  const role = shopAccess.role;
+  const pathname = req.nextUrl.pathname;
+  
+  if (MECHANIC_ONLY_ROUTES.includes(pathname) &amp;&amp; role !== &quot;mechanic&quot;) {
+    return NextResponse.redirect(new URL(&quot;/dashboard&quot;, req.url));
+  }
+  
+  if (OWNER_MANAGER_ROUTES.includes(pathname) &amp;&amp; ![&quot;owner&quot;, &quot;manager&quot;].includes(role)) {
+    return NextResponse.redirect(new URL(&quot;/mechanic&quot;, req.url));
+  }
+});</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80d1-a1a8-e5147468d713" class=""><del><strong>Not-Authorized Page (</strong></del><del><code><strong>/not-authorized</strong></code></del><del><strong>):</strong></del></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8033-ae4d-d79e43840749" class="bulleted-list"><li style="list-style-type:disc"><del>Clean branded page (Otopair logo, Primary Blue)</del></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8022-b5dd-fae9d3ca31cd" class="bulleted-list"><li style="list-style-type:disc"><del>&quot;This portal is for Otopair partner shops&quot;</del></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8044-89fc-e6171e368eaf" class="bulleted-list"><li style="list-style-type:disc"><del>&quot;If you&#x27;re a shop owner, contact us to get started&quot; → link to shop application form</del></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8054-a09e-d5772854ca75" class="bulleted-list"><li style="list-style-type:disc"><del>&quot;If you&#x27;re looking for car service, download the Otopair app&quot; → App Store link</del></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8063-89aa-fea81500af8c" class="bulleted-list"><li style="list-style-type:disc"><del>No broken UI, no error codes, no confusion</del></li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ec-b56a-f626e435877a" class=""><strong>Account-Deactivated Page (</strong><code><strong>/account-deactivated</strong></code><strong>):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8026-a4b9-c919f92d5142" class="bulleted-list"><li style="list-style-type:disc">&quot;Your account has been deactivated&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80be-9433-eece9b8964dd" class="bulleted-list"><li style="list-style-type:disc">&quot;Contact your shop owner or Otopair support for assistance&quot;</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8045-9ff3-c0bb685a2c67" class=""><del><strong>New shop owner (no shop yet) → Onboarding redirect:</strong></del></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-801b-9624-c485d3589b38" class="bulleted-list"><li style="list-style-type:disc"><del>If user has </del><del><code>role: &quot;shop_owner&quot;</code></del><del> but no </del><del><code>shop_users</code></del><del> record with </del><del><code>is_active: true</code></del><del>, redirect to </del><del><code>/onboarding</code></del><del> (shop setup wizard, ticket 2.4)</del></li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80d3-a340-ea3438c82996" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8002-b226-dc8a8faa2990" class="bulleted-list"><li style="list-style-type:disc"><del>Unauthenticated users → /sign-in</del></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8079-803c-cb00d77666f0" class="bulleted-list"><li style="list-style-type:disc"><del>Authenticated regular users (role: &quot;user&quot;) → /not-authorized</del></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8023-9a63-d0b5195dfac1" class="bulleted-list"><li style="list-style-type:disc"><del>Authenticated shop owners → /dashboard</del></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d0-8b74-e71737b8e735" class="bulleted-list"><li style="list-style-type:disc">Authenticated mechanics → /mechanic</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f8-ab5a-dcc955a9e872" class="bulleted-list"><li style="list-style-type:disc">Deactivated shop_users → /account-deactivated</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-803a-8cf2-ef410708b803" class="bulleted-list"><li style="list-style-type:disc">Role-based route protection enforced (mechanic can&#x27;t access /payouts, owner can&#x27;t access /my-jobs)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80cf-b138-dc32d3f4287b" class="bulleted-list"><li style="list-style-type:disc">Middleware runs fast (Convex query cached or uses Clerk metadata for role check)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8089-9842-ebb07e57294b" class="bulleted-list"><li style="list-style-type:disc">/not-authorized page is branded and helpful, not a generic 403</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80b0-9f68-ef0e7f1d8c9d" class="bulleted-list"><li style="list-style-type:disc">Works with both fresh sign-up and existing Clerk sessions</li></ul></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-8003-b203-c261708c17f8"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.4 — Shop Registration &amp; Onboarding Wizard</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-808f-b70a-e490668a5ba0" class=""><strong>Points:</strong> 8 | <strong>Priority:</strong> P0</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8039-ae8f-df065322e7aa" class=""><strong>Description:</strong><br/>A web-based onboarding flow for new shop owners. They sign up via Clerk (same auth), then complete a shop setup wizard. This creates their shop record, links them as owner via shop_users, and walks them through essential setup.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c1-a282-da2fa9b3f5be" class=""><strong>Flow:</strong></p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-8031-af37-d1f6730824a9" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">Shop owner visits portal URL → Clerk sign-up/sign-in
+    ↓
+Role check: if no shop_users record → redirect to onboarding wizard
+    ↓
+Step 1: Shop Details
+- Shop name, phone, address (with autocomplete), city, state, zip
+- Generates slug from name
+- Sets lat/lng from address geocoding
+    ↓
+Step 2: Operating Hours
+- 7-day grid (Mon–Sun)
+- Open time / close time pickers per day
+- &quot;Closed&quot; toggle per day
+- Creates 7 shops_hours records
+    ↓
+Step 3: Labor Rate &amp; Services
+- Labor rate input ($XXX/hr) — pre-filled with $150 Otopair standard
+- Service checklist from service_categories + services tables
+- Toggle on/off per service → creates shop_services records
+    ↓
+Step 4: Add Mechanics
+- Add at least 1 mechanic (first_name, last_name, optional title, optional photo)
+- Creates mechanics record linked to shop
+    ↓
+Step 5: Stripe Connect Onboarding
+- &quot;Connect your bank account&quot; CTA
+- Redirects to Stripe Connect Express onboarding
+- Returns to portal with stripe_connect_account_id saved
+    ↓
+Onboarding complete → redirect to dashboard</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-800d-9106-f544247c33f9" class="">
+</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80f3-b68b-d82df1443d03" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80cb-80b9-e761d7cdbdd9" class="">Full wizard flow with progress indicator</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ea-a849-eb538e329183" class="">Shop record created in Convex on Step 1 completion</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ae-b3b0-cb0f9306dcfd" class="">shops_hours records created for all 7 days</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80f6-8423-c7b4fae7ff15" class="">shop_services junction records created for selected services</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8097-b1ad-f89529767adf" class="">At least 1 mechanic added</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8002-9b17-e4b6e3048b59" class="">Stripe Connect Express account created and linked</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8014-a4f2-e7a9cb1ecaff" class="">shop_users record created with role: &quot;owner&quot;</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80d7-a0ec-efcd57cca36c" class="">users.role updated to &quot;shop_owner&quot;</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8095-8819-ee1d2e0c63df" class="">shops.onboarding_complete set to true on wizard finish</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-809b-a380-e282e355e198" class="">One addition to acceptance criteria:</p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80dc-9301-fbc0ad6b4bc4" class="bulleted-list"><li style="list-style-type:disc">After wizard completion, user&#x27;s role is set to &quot;shop_owner&quot; and they are redirected from /onboarding to /dashboard</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-807a-90ce-cd7d52cdd0af" class="bulleted-list"><li style="list-style-type:disc">Clerk public_metadata updated with <code>otopair_role: &quot;shop_owner&quot;</code> and <code>shop_id</code> for middleware fast-path</li></ul></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-80ed-b4d3-e9bb53cb6d4c"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.5 — Shop Owner Dashboard</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8078-b318-f53b3b307be4" class=""><strong>Type:</strong> Frontend (Web)<br/><strong>Points:</strong> 5<br/><strong>Owner:</strong> Dev team<br/><strong>Priority:</strong> P0</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80b1-b9bc-cf56dca51c6f" class=""><strong>Description:</strong><br/>The landing page after shop owner/manager login. Shows today&#x27;s jobs, pending actions, team status, and key metrics. This is the OWNER view — mechanics see a different dashboard (ticket 2.12).</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8032-b89f-c21419b518d1" class=""><strong>Layout:</strong></p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ea-bd00-c8ef1d2c6227" class=""><strong>Top bar:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-800f-927b-c2e18848932e" class="bulleted-list"><li style="list-style-type:disc">Shop name + logo</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80b6-b8af-e739d6349643" class="bulleted-list"><li style="list-style-type:disc">Owner name + avatar (from Clerk)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8019-80e4-df02af2f2f3c" class="bulleted-list"><li style="list-style-type:disc">Notification bell (pending acceptances count)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8069-8330-c0e9bf6f522a" class="bulleted-list"><li style="list-style-type:disc">&quot;Today: [formatted date]&quot;</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-804e-a385-dab36292458d" class=""><strong>Stats row (4 cards):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8002-a250-d29294302fd9" class="bulleted-list"><li style="list-style-type:disc">Today&#x27;s bookings (count) — query bookings by_shop_and_date</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-800a-9c0f-cded60d89be7" class="bulleted-list"><li style="list-style-type:disc">Pending acceptance (count, red badge if &gt; 0) — query by_shop_and_status &quot;pending_shop_acceptance&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d6-b152-d87d831e2f51" class="bulleted-list"><li style="list-style-type:disc">This week&#x27;s revenue ($) — sum of captured payments this week</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80bb-8e43-daf58f6d4a9b" class="bulleted-list"><li style="list-style-type:disc">Shop rating (stars + count) — from shops.rating + shops.review_count</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80f9-9b94-d1d6c4fadfdf" class=""><strong>Today&#x27;s Schedule (main content area):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-808c-80fa-e8d26f072256" class="bulleted-list"><li style="list-style-type:disc">Columns: one per active mechanic (like a Kanban board rotated)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-809d-bb7d-c2c45766ce8b" class="bulleted-list"><li style="list-style-type:disc">Each column header: mechanic name + photo + &quot;X jobs today&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f6-a8ca-ee54b2e6267d" class="bulleted-list"><li style="list-style-type:disc">Booking cards in each column, sorted by time:<div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ca-961d-eef77cb6342a" class="bulleted-list"><li style="list-style-type:circle">Time (e.g., &quot;10:00 AM&quot;)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80da-a485-e4d4b74b5368" class="bulleted-list"><li style="list-style-type:circle">Customer first name + last initial</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-805b-b5ca-d5b2abf4e75b" class="bulleted-list"><li style="list-style-type:circle">Vehicle: &quot;2019 Toyota Camry&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8065-abfe-caf798b328fd" class="bulleted-list"><li style="list-style-type:circle">Services: &quot;Oil Change, Tire Rotation&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e8-876f-c7de0a86158b" class="bulleted-list"><li style="list-style-type:circle">Status badge (color-coded): pending (yellow), confirmed (blue), in_progress (green), completed (gray)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-800c-bc3a-e4908be02c5a" class="bulleted-list"><li style="list-style-type:circle">Tap → expands to full booking detail</li></ul></div></li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8002-8c3e-e62dd2405811" class=""><strong>Pending Actions Section:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8097-8d7d-f60276944efc" class="bulleted-list"><li style="list-style-type:disc">&quot;Jobs to accept&quot; cards (links to accept/decline queue, ticket 2.8)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8041-920e-fdd36302bdfe" class="bulleted-list"><li style="list-style-type:disc">&quot;Job actuals needed&quot; cards — completed bookings missing job_actuals (links to 2.9)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8094-b16a-e70a50e85de3" class="bulleted-list"><li style="list-style-type:disc">&quot;Invites pending&quot; — sent invitations not yet accepted</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8064-aa09-f895c5696b60" class=""><strong>Quick Actions Sidebar:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-804a-91f1-f2281054b105" class="bulleted-list"><li style="list-style-type:disc">Manage Mechanics → /mechanics</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8089-9d13-feef6fd56b1d" class="bulleted-list"><li style="list-style-type:disc">Edit Schedule → /schedule</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-805d-8b86-f74f5aa83b10" class="bulleted-list"><li style="list-style-type:disc">View Payouts → /payouts</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8022-b542-d48c4d62bd21" class="bulleted-list"><li style="list-style-type:disc">Edit Shop Settings → /settings</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8028-b8e8-da406265444f" class="bulleted-list"><li style="list-style-type:disc">View All Bookings → /bookings</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-801b-96e3-f3ef54177907" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8078-8ad9-e8fb2106be53" class="bulleted-list"><li style="list-style-type:disc">Dashboard loads with real Convex data</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ce-b6b1-ca026a01a012" class="bulleted-list"><li style="list-style-type:disc">Stats compute correctly</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e2-b2b4-ca56e00e232b" class="bulleted-list"><li style="list-style-type:disc">Today&#x27;s schedule grouped by mechanic with correct bookings</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d6-9a79-eb7425330f9e" class="bulleted-list"><li style="list-style-type:disc">Pending actions count is real-time (Convex subscription)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f8-a1db-ca27fe1d5a13" class="bulleted-list"><li style="list-style-type:disc">Empty states for new shops</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8005-ad5b-e022844211b1" class="bulleted-list"><li style="list-style-type:disc">Responsive: works on desktop (primary), tablet (secondary)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8093-88e0-c6749c4005ba" class="bulleted-list"><li style="list-style-type:disc">Booking cards are interactive (tap to expand/navigate)</li></ul></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-807a-ba32-fa76d4504167"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.6 — Mechanic Profile Management + Invite UI</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8023-b7ef-fef46db216c6" class=""><strong>Type:</strong> Full-stack (Web)<br/><strong>Points:</strong> 5<br/><strong>Owner:</strong> Dev team<br/><strong>Priority:</strong> P0</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c6-9408-db7f000d10b0" class=""><strong>Description:</strong><br/>CRUD for mechanic profiles PLUS the invite-to-portal flow. Shop owners manage their team here: create mechanic profiles, invite them to the portal, view their status, and deactivate when needed.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c4-b301-f6143e9aadbf" class=""><strong>Interface sections:</strong></p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8029-9bdf-d261c9d69ff3" class=""><strong>Team List:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80bc-8d3f-c210e4d10837" class="bulleted-list"><li style="list-style-type:disc">All mechanics at this shop</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ca-828d-c78dd7078eff" class="bulleted-list"><li style="list-style-type:disc">Each row: photo, name, title, status (active/inactive), portal status, rating, review count</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8046-8621-f00dccd457a5" class="bulleted-list"><li style="list-style-type:disc">Portal status badges:<div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8066-bed3-e457db427aa0" class="bulleted-list"><li style="list-style-type:circle">&quot;Not invited&quot; (gray) — mechanic profile exists, no portal account</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8009-b280-f78b9635aa6e" class="bulleted-list"><li style="list-style-type:circle">&quot;Invite sent&quot; (yellow) — shop_invitations.status === &quot;pending&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8052-8545-e044ba570fe8" class="bulleted-list"><li style="list-style-type:circle">&quot;Active on portal&quot; (green) — shop_users record exists and is_active</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f8-936d-f8b288b142cf" class="bulleted-list"><li style="list-style-type:circle">&quot;Invite expired&quot; (red) — shop_invitations.status === &quot;expired&quot;</li></ul></div></li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-806b-b298-c4a360f4ea1b" class=""><strong>Add Mechanic Flow:</strong></p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-80d4-a708-c1cfcdac34e5" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">Shop owner clicks &quot;Add Mechanic&quot;
+    ↓
+Modal form:
+  - First name (required)
+  - Last name (required)
+  - Title (optional, e.g., &quot;Master Mechanic&quot;, &quot;ASE Certified&quot;)
+  - Photo upload (optional → cdn_assets)
+  - Email (optional — needed if inviting to portal)
+    ↓
+Save → creates mechanics record
+    ↓
+If email provided, show: &quot;Invite [Name] to the shop portal?&quot;
+  - Yes → triggers Clerk invite flow (ticket 2.2)
+  - Not now → mechanic exists but has no portal access</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8008-b66f-db209ff279a6" class=""><strong>Invite Mechanic (for existing profiles without portal access):</strong></p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-80fa-9655-d846f6a165fc" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">Shop owner clicks &quot;Invite to Portal&quot; on mechanic row
+    ↓
+Email input (pre-filled if already on file)
+    ↓
+Confirm → calls sendMechanicInvite mutation
+    ↓
+Clerk invitation API called
+    ↓
+shop_invitations record created
+    ↓
+Status badge updates to &quot;Invite sent&quot;</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80b6-9338-dc94ed2dfe5d" class=""><strong>Resend / Revoke Invite:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8033-8a4a-e3333aa16a13" class="bulleted-list"><li style="list-style-type:disc">If invite is pending: show &quot;Resend&quot; and &quot;Revoke&quot; buttons</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8054-8660-e836a6743b85" class="bulleted-list"><li style="list-style-type:disc">Resend: create new Clerk invitation, update shop_invitations record</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8033-a84f-cb4309a635ff" class="bulleted-list"><li style="list-style-type:disc">Revoke: sets shop_invitations.status to &quot;revoked&quot;</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8026-84f9-fd244abce244" class=""><strong>Edit Mechanic:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ad-91d4-e98724ae196b" class="bulleted-list"><li style="list-style-type:disc">Update name, title, photo</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8047-8351-d037fb45109c" class="bulleted-list"><li style="list-style-type:disc">Toggle is_active (with warning if they have upcoming bookings)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80bf-acbf-d4d0eb57a9d1" class=""><strong>Deactivate Mechanic:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f3-b274-eb442338686a" class="bulleted-list"><li style="list-style-type:disc">Sets mechanics.is_active = false</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8069-8027-df870f1a38d5" class="bulleted-list"><li style="list-style-type:disc">Sets shop_users.is_active = false (if portal account exists)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8027-a9e4-f75911b0fc19" class="bulleted-list"><li style="list-style-type:disc">Mechanic can no longer accept jobs or access portal</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-807e-83f8-e1b1926d1780" class="bulleted-list"><li style="list-style-type:disc">Existing confirmed bookings remain (with a warning before deactivation)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80e3-9a3b-f8e50786bfbe" class=""><strong>Data sources:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d3-8d7b-dfda98ce9e35" class="bulleted-list"><li style="list-style-type:disc">Mechanics: query mechanics.by_shop_id</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-807e-9eb7-ef28dccebc56" class="bulleted-list"><li style="list-style-type:disc">Invitations: query shop_invitations.by_shop_id</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f9-ab30-dfbb26fb3a2e" class="bulleted-list"><li style="list-style-type:disc">Portal status: join shop_users on mechanic_id</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8056-89c1-ccf43700582f" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a2-84bf-cb018060d64a" class="bulleted-list"><li style="list-style-type:disc">Full CRUD on mechanic profiles</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80cf-85ca-fde75bb86d95" class="bulleted-list"><li style="list-style-type:disc">Photo upload works via Convex file storage → cdn_assets</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8029-9b27-f32c3e89ebc8" class="bulleted-list"><li style="list-style-type:disc">Invite flow sends Clerk invitation with correct metadata</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e4-98b2-e5d3d9c3faa1" class="bulleted-list"><li style="list-style-type:disc">Portal status badges reflect real state</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-805a-812b-cf4768872c41" class="bulleted-list"><li style="list-style-type:disc">Resend invite creates new Clerk invitation</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a9-b347-fadd29397270" class="bulleted-list"><li style="list-style-type:disc">Revoke invite updates status and Clerk invitation is revoked via API</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8046-b42b-c01e15a8e244" class="bulleted-list"><li style="list-style-type:disc">Cannot deactivate mechanic with confirmed (non-completed) bookings without explicit confirmation</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-805e-aba7-fe30160c0324" class="bulleted-list"><li style="list-style-type:disc">Deactivation cascades to shop_users.is_active</li></ul></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-8077-a141-e84627ae50b1"/></div><div style="display:contents" dir="auto"><h2 id="3088280c-1b1d-80ea-8b30-cd02a49f3280" class="">2.7 — Schedule Management (Time Slots)</h2></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ef-901a-c8a25eb00f2d" class=""><strong>Description:</strong><br/>Visual calendar interface for managing mechanic availability. Each mechanic is a &quot;bay&quot; with their own schedule. Shop owners set recurring weekly patterns and can override specific dates.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8029-952d-f1e9f0f4d813" class=""><strong>Interface:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a2-9b65-e3e053c8239a" class="bulleted-list"><li style="list-style-type:disc"><strong>Weekly view:</strong> 7-day grid with rows per mechanic</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8022-b871-e9bfb81d4d6b" class="bulleted-list"><li style="list-style-type:disc"><strong>Slot generation:</strong> Based on shop hours, auto-generate 1-hour slots per mechanic per open day</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8041-bdf6-fc322626f305" class="bulleted-list"><li style="list-style-type:disc"><strong>Manual override:</strong> Block specific slots (mechanic out sick, lunch break, etc.)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8033-8823-c5271dd74a55" class="bulleted-list"><li style="list-style-type:disc"><strong>Bulk actions:</strong> &quot;Copy this week to next week&quot;, &quot;Block full day for [mechanic]&quot;</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8062-a0a7-c1cf6df0ac22" class=""><strong>Backend:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ea-983b-d6e91f0e64da" class="bulleted-list"><li style="list-style-type:disc">Convex action: <code>generateTimeSlotsForWeek(shop_id, week_start_date)</code> — creates time_slots records for each active mechanic during shop open hours</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80b6-86a3-ce3a960aa7a2" class="bulleted-list"><li style="list-style-type:disc">Mutation: <code>toggleSlotAvailability(time_slot_id)</code> — sets is_available to false/true</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f5-98ae-fc1f14816b55" class="bulleted-list"><li style="list-style-type:disc">Mutation: <code>blockMechanicDay(mechanic_id, date)</code> — marks all slots unavailable for that mechanic/date</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8010-9bcb-fcb9080b6774" class=""><strong>Slot structure (existing schema):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-807e-8626-d4e0b2754b0e" class="bulleted-list"><li style="list-style-type:disc">One time_slot per mechanic per hour per open day</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8012-8a26-c78e569bf7ed" class="bulleted-list"><li style="list-style-type:disc">Example: Shop open 9–5 with 2 mechanics = 16 slots per day</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80cd-9073-d494a1a48b9e" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e8-b34d-e0748533e685" class="bulleted-list"><li style="list-style-type:disc">Weekly calendar view renders correctly</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-805c-8b1e-db16959fabf4" class="bulleted-list"><li style="list-style-type:disc">Auto-generation creates correct number of slots per shop hours</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-802d-b7e3-e22d06b39ae8" class="bulleted-list"><li style="list-style-type:disc">Manual blocking works per slot and per day</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ca-a9a6-da5e8744ceea" class="bulleted-list"><li style="list-style-type:disc">Blocked slots don&#x27;t appear as available in user booking flow</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80df-8c29-f0f6b636d219" class="bulleted-list"><li style="list-style-type:disc">Already-booked slots show booking info (customer name, service)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8066-a71a-cbea614d02ab" class="bulleted-list"><li style="list-style-type:disc">Existing bookings cannot be overwritten by blocking</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8096-967b-d76c7d39f84b" class=""><strong>Points:</strong> 5 | <strong>Priority:</strong> P0</p></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-807a-9075-f9f4e15677a8"/></div><div style="display:contents" dir="auto"><h2 id="3088280c-1b1d-80aa-8f4f-ed69abc9012c" class="">2.8 — Accept/Decline Jobs Queue</h2></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ba-897a-d97593d6b319" class=""><strong>Points:</strong> 5 | <strong>Priority:</strong> P0</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80d5-8d2b-d694fc453c8c" class=""><strong>Description:</strong><br/>When a user books a service, the booking starts with status &quot;pending_shop_acceptance&quot;. Shop owners see these in a queue and can accept or decline.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c3-a30e-f98329dc0eda" class=""><strong>New booking status value:</strong> Add &quot;pending_shop_acceptance&quot; to the booking status flow:</p></div><div style="display:contents" dir="auto"><script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js" integrity="sha512-7Z9J3l1+EYfeaPKcGXu3MS/7T+w19WtKQY/n+xzmw4hZhJ9tyYmcUS+4QqAlzhicE5LAfMQSF3iFTK9bQdTxXg==" crossorigin="anonymous" referrerPolicy="no-referrer"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" integrity="sha512-tN7Ec6zAFaVSG3TpNAKtk4DOHNpSwKHxxrsiw4GHKESGPs5njn/0sMCUMl2svV4wo4BK/rCP7juYz+zx+l6oeQ==" crossorigin="anonymous" referrerPolicy="no-referrer"/><pre id="3088280c-1b1d-80af-9171-df792b2477fb" class="code code-wrap"><code class="language-TypeScript" style="white-space:pre-wrap;word-break:break-all">User books → &quot;pending_shop_acceptance&quot;
+    → Shop accepts → &quot;confirmed&quot;
+    → Shop declines → &quot;declined&quot; (user notified, refund hold)
+    → 24hr timeout → &quot;auto_cancelled&quot; (user notified, hold released)</code></pre></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8085-8844-d0fa8860ee3d" class="">
+</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c4-a0fe-f5a352bbd305" class=""><strong>Queue interface:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-808a-8a86-ea804d350a4c" class="bulleted-list"><li style="list-style-type:disc">Cards sorted by scheduled_date (soonest first)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80c1-8777-d6e1b9c4d40c" class="bulleted-list"><li style="list-style-type:disc">Each card shows: customer first name, vehicle (year/make/model), requested services, requested date/time, estimated labor + parts cost, requested mechanic (if any)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8055-8f15-d0f86af9ba3c" class="bulleted-list"><li style="list-style-type:disc"><strong>Accept button:</strong> Changes status to &quot;confirmed&quot;, sends push notification to user</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e9-8717-f2096a9f693a" class="bulleted-list"><li style="list-style-type:disc"><strong>Decline button:</strong> Opens reason modal (mechanic unavailable / can&#x27;t service this vehicle / scheduling conflict / other), changes status to &quot;declined&quot;, releases payment hold, notifies user</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f2-a620-d63d6a955732" class="bulleted-list"><li style="list-style-type:disc"><strong>Counter-offer (post-MVP):</strong> Suggest alternative time/mechanic</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-806a-a65b-cd5ec776c469" class="bulleted-list"><li style="list-style-type:disc"><strong>Backend:</strong></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8086-a5f8-e2b883d06436" class="bulleted-list"><li style="list-style-type:disc">Mutation: <strong>acceptBooking(booking_id) </strong>— status → &quot;confirmed&quot;, log in booking_status_history</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8084-b602-da4a79858622" class="bulleted-list"><li style="list-style-type:disc">Mutation:<strong> declineBooking(booking_id, reason)</strong> — status → &quot;declined&quot;, release Stripe hold, log history</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ca-b181-fb8eff009ecf" class="bulleted-list"><li style="list-style-type:disc">Scheduled function: auto-cancel after 15 Minutes of pending (status → &quot;auto_cancelled&quot;)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-805f-b7e0-d5bb89a00e8c" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-808c-829b-ce1a921068d3" class="bulleted-list"><li style="list-style-type:disc">Queue shows all pending_shop_acceptance bookings for this shop</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8030-8a75-ce6e4bfd4ece" class="bulleted-list"><li style="list-style-type:disc">Accept updates status and notifies user</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-806d-9d8c-fd44a6891893" class="bulleted-list"><li style="list-style-type:disc">Decline releases payment hold and notifies user with reason</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80fd-b57e-fa02ada21dfe" class="bulleted-list"><li style="list-style-type:disc">Auto-cancel fires after 24 hours</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d3-a364-c5681053455c" class="bulleted-list"><li style="list-style-type:disc">booking_status_history records created for every transition</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-800d-b1c8-d96bc07c878d" class="bulleted-list"><li style="list-style-type:disc">Real-time updates via Convex subscriptions (new booking appears without refresh)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80fe-b78c-df4f1bee6504" class="">
+</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-808b-a3dc-fb9b2d59b319" class="">One addition: If a booking is assigned to a specific mechanic AND that mechanic has portal access, the mechanic also sees the job in their &quot;Incoming Jobs&quot; on the mechanic dashboard (ticket 2.12). However, only the shop owner/manager can officially accept/decline at MVP. Mechanics can flag &quot;I can&#x27;t do this&quot; which notifies the owner.</p></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.9 — Job Actuals Input Form</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8023-9d18-ff867952bd90" class=""><strong>Points:</strong> 5 | <strong>Priority:</strong> P0</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80dc-8065-f47f9343bf4a" class=""><strong>Description:</strong><br/>After a job is completed, the mechanic or shop owner inputs actual job data. This closes the feedback loop for the AI pipeline and enables variance tracking.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-805f-a3f1-ef7f2c354bc1" class=""><strong>Trigger:</strong> When shop changes booking status to &quot;completed&quot;, the job actuals form appears.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80dd-a9f4-d077c3eb31bd" class=""><strong>Form fields (maps to existing job_actuals table):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d7-a1fd-c1f328c26a4c" class="bulleted-list"><li style="list-style-type:disc">Actual labor minutes (numeric input, pre-filled with estimated_labor_minutes from booking)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a3-9c21-e3988cd28718" class="bulleted-list"><li style="list-style-type:disc">Parts used (repeatable section):<div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a4-b7ff-f200ccabdebd" class="bulleted-list"><li style="list-style-type:circle">Part name (text)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-808a-8475-ed94bc634c4d" class="bulleted-list"><li style="list-style-type:circle">OEM part number (text)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8049-a61a-d5c87a762c2d" class="bulleted-list"><li style="list-style-type:circle">Cost (currency input)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-800f-8bf9-d4b33be1dec9" class="bulleted-list"><li style="list-style-type:circle">&quot;Add another part&quot; button</li></ul></div></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8035-8c3a-e798ff53c6c0" class="bulleted-list"><li style="list-style-type:disc">Difficulty rating (1–5 star selector)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e4-a505-eeb244542062" class="bulleted-list"><li style="list-style-type:disc">Technician notes (multi-line text)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8070-b69a-fa215f984694" class="bulleted-list"><li style="list-style-type:disc">Started at / completed at (time pickers, pre-filled if live_stage tracking was used)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8025-8e18-e4e5253f21e3" class=""><strong>Backend:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d7-b941-dbdc0f8aecd1" class="bulleted-list"><li style="list-style-type:disc">Mutation: <code>createJobActual(booking_id, data)</code> — creates job_actuals record</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e5-afbf-da97a5b28c8f" class="bulleted-list"><li style="list-style-type:disc">Action: <code>processJobActual(job_actual_id)</code> — triggers variance calculation:<div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ac-bf50-de4710d17ba0" class="bulleted-list"><li style="list-style-type:circle">Compare actual vs estimated labor/parts</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8003-9de2-de4c398f05f9" class="bulleted-list"><li style="list-style-type:circle">Create spec_variances record if variance &gt; 15%</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8029-bcd8-c8ea551046bc" class="bulleted-list"><li style="list-style-type:circle">Update service_insights running averages</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8029-bd71-c9ec7ea24b06" class="bulleted-list"><li style="list-style-type:circle">If parts used differ from vehicle_specs predictions, flag for review</li></ul></div></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a1-b427-d6aaea1ede10" class="bulleted-list"><li style="list-style-type:disc">Mutation: <code>capturePayment(booking_id)</code> — triggers Stripe capture of the held payment (see Epic 3)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ba-8011-d8171870ece8" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-802e-9630-c53229a2a546" class="bulleted-list"><li style="list-style-type:disc">Form renders with pre-filled estimates</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d1-a098-e34466c17f5d" class="bulleted-list"><li style="list-style-type:disc">Parts section supports adding multiple parts</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8061-9a8f-f2b26dc159b7" class="bulleted-list"><li style="list-style-type:disc">Saving creates job_actuals record and links to booking</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80cb-a41e-f93594c5428c" class="bulleted-list"><li style="list-style-type:disc">Variance calculation runs automatically on save</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8076-b461-f4e0dd1ae89a" class="bulleted-list"><li style="list-style-type:disc">Payment capture triggered on job completion</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8074-9af7-cb46e702784b" class="bulleted-list"><li style="list-style-type:disc">Cannot submit without required fields (labor minutes, at least 1 part for non-labor-only services)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80b7-a11a-d6106349842f" class="">One addition: Mechanics can also access this form from their dashboard (ticket 2.15) for jobs assigned to them. The form is identical — it just lives in two places.</p></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-80c2-8096-f22c47853d94"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.10 — Payout &amp; Revenue View</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8010-abfe-ca4f82508351" class=""><strong>Points:</strong> 3 | <strong>Priority:</strong> P1</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ad-8031-d4b8c2c746e8" class=""><strong>Description:</strong><br/>Shop owners see their earnings, pending payouts, and payout history. Data comes from Stripe Connect + internal payments table.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-802a-b6a8-c29845dfc699" class=""><strong>Sections:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8034-890f-f293a684ad97" class="bulleted-list"><li style="list-style-type:disc"><strong>Summary cards:</strong> This month&#x27;s revenue, pending payout, total all-time earnings</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e4-8464-e17c52f43ece" class="bulleted-list"><li style="list-style-type:disc"><strong>Payout history:</strong> Table of past Stripe payouts with date, amount, status, bank account last 4</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-802f-818f-d81305a7025b" class="bulleted-list"><li style="list-style-type:disc"><strong>Booking revenue breakdown:</strong> List of completed bookings with payment amount, platform fee deducted, net to shop</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f8-a1ad-cbcee5753be4" class="bulleted-list"><li style="list-style-type:disc"><strong>Export:</strong> CSV download of payout history</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8044-9989-f695e57aee19" class=""><strong>Calculation:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d4-a078-fd0c6e2c3a50" class="bulleted-list"><li style="list-style-type:disc">User pays: total_cost (labor + parts + platform_fee)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80b8-8b54-c720cefc7b9c" class="bulleted-list"><li style="list-style-type:disc">Platform keeps: platform_fee (5% of labor + parts)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-802b-8120-f78dc727610b" class="bulleted-list"><li style="list-style-type:disc">Shop receives: total_cost - platform_fee</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d2-ae3b-f816cb220247" class="bulleted-list"><li style="list-style-type:disc">Stripe takes: standard processing fee (~2.9% + $0.30 per transaction)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8069-97a8-ed814765837a" class="bulleted-list"><li style="list-style-type:disc">Net to shop: total_cost - platform_fee - Stripe processing</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-805c-939c-d1d3d6b89a66" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a1-9379-cce482ae2073" class="bulleted-list"><li style="list-style-type:disc">Revenue figures calculate correctly from payments table</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-802c-97e2-f80011823423" class="bulleted-list"><li style="list-style-type:disc">Payout history pulls from Stripe Connect API</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80de-b4e7-f363ca5e45be" class="bulleted-list"><li style="list-style-type:disc">Platform fee is clearly shown (transparency principle)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a5-a2cb-d773a89cb0c3" class="bulleted-list"><li style="list-style-type:disc">Empty state for shops with no completed bookings</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f4-882d-fee8d9559ae7" class="bulleted-list"><li style="list-style-type:disc">CSV export works with correct data</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80a6-9ce3-f996a3cf7bb0" class=""><strong>Access:</strong> Owner only. Managers can view revenue but not payout details (post-MVP permission granularity).</p></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-803b-b90d-ce70f67120ac"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.11 — Booking History &amp; Service Records</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8092-80a5-d206f9fd064d" class=""><strong>Points:</strong> 3 | <strong>Priority:</strong> P1</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8041-8a3b-f28524a9b017" class=""><strong>Description:</strong><br/>Full list of all bookings at this shop with filtering and search. Each booking expands to show full details including job actuals if completed.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8034-811f-e4ca0142287d" class=""><strong>List view:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-803c-9dd1-d2b2d86a566b" class="bulleted-list"><li style="list-style-type:disc">Filters: status (all, confirmed, in_progress, completed, cancelled), date range, mechanic</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8080-9ae1-c51f8808240d" class="bulleted-list"><li style="list-style-type:disc">Search: by customer name or vehicle</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8044-8481-ff24998ae85f" class="bulleted-list"><li style="list-style-type:disc">Columns: date, time, customer, vehicle, services, mechanic, status, total</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8030-9d50-d2cbe18ddede" class="bulleted-list"><li style="list-style-type:disc">Sort: by date (default newest first)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80fe-8a0a-d132663cd0aa" class=""><strong>Detail view (click to expand or navigate):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a7-8d2a-cc29ad64bbc1" class="bulleted-list"><li style="list-style-type:disc">Full booking info: customer, vehicle, services with pricing breakdown</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-806d-8cbb-eafae51c9a8c" class="bulleted-list"><li style="list-style-type:disc">Job actuals (if completed): actual labor, parts used, mechanic notes, difficulty</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8058-a07d-e2053c39c112" class="bulleted-list"><li style="list-style-type:disc">Payment status: hold/captured/refunded</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8045-879c-e7347222e370" class="bulleted-list"><li style="list-style-type:disc">Timeline: booking_status_history entries in chronological order</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-800b-9053-db931b3bfa37" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8043-8075-d8592fd4c6e4" class="bulleted-list"><li style="list-style-type:disc">All bookings for shop load with correct data</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8024-bd40-fd122409c300" class="bulleted-list"><li style="list-style-type:disc">Filters work independently and in combination</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80cb-8b26-f76bb5bf83a4" class="bulleted-list"><li style="list-style-type:disc">Detail view shows complete booking lifecycle</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8021-be69-c93676003b97" class="bulleted-list"><li style="list-style-type:disc">Handles 100+ bookings without performance issues (pagination or infinite scroll)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8006-a2df-d18706253ced" class=""><strong>Access:</strong> Owner and manager see all bookings. Mechanics see only their own bookings (filtered by mechanic_id).</p></div></div></details></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8089-8f7a-d667668eb16f" class="">
+</p></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.12 — Mechanic Dashboard (Role-Specific)</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8024-acfe-df45fee6b375" class=""><strong>Type:</strong> Full-stack (Web)<br/><strong>Points:</strong> 5<br/><strong>Owner:</strong> Dev team<br/><strong>Priority:</strong> P0</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8040-9efa-cff65ba3ecdc" class=""><strong>Description:</strong><br/>The landing page when a mechanic logs into the portal. Completely different from the shop owner dashboard. Focused on their personal workload: what&#x27;s coming, what&#x27;s in progress, what needs completion. Think &quot;my day at a glance.&quot;</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80a8-b190-c934c7a7bbf7" class="">A mechanic sees ONLY data related to them — their jobs, their customers, their reviews. They cannot see other mechanics&#x27; data, shop financials, or manage other team members.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c3-b6cb-d4ccec4494f8" class=""><strong>Layout:</strong></p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8071-b0a5-d5b938e405ff" class=""><strong>Top bar:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8034-af03-ff50251be71a" class="bulleted-list"><li style="list-style-type:disc">&quot;Good morning, [First Name]&quot; (time-of-day greeting)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80db-b119-d20a269dcc19" class="bulleted-list"><li style="list-style-type:disc">Shop name (where they work) — not editable by mechanic</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8036-aa83-c8ed9cfb5e2c" class="bulleted-list"><li style="list-style-type:disc">Profile photo (from Clerk/mechanics record)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ac-9ef7-fd0a5ea16538" class="bulleted-list"><li style="list-style-type:disc">Notification bell (new jobs assigned to me)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8080-80c7-d9241cfef715" class=""><strong>My Stats Row (3 cards):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8072-abbb-f71a134948af" class="bulleted-list"><li style="list-style-type:disc">Today&#x27;s jobs (count of bookings where mechanic_id = me, scheduled_date = today)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80cc-8634-ed919651e7f7" class="bulleted-list"><li style="list-style-type:disc">This week&#x27;s completed (count of completed bookings this week)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a6-9fbf-c1ebd6a53781" class="bulleted-list"><li style="list-style-type:disc">My rating (from mechanics.rating + mechanics.review_count)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80cc-84b2-e65ef6893ff0" class=""><strong>Today&#x27;s Schedule (main section):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ed-8397-f3bbd63b7587" class="bulleted-list"><li style="list-style-type:disc">Timeline view of today&#x27;s bookings assigned to this mechanic</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f9-80cd-e07a57289bc8" class="bulleted-list"><li style="list-style-type:disc">Each booking card:<div style="display:contents" dir="auto"><ul id="3088280c-1b1d-806a-9036-eaea0836112d" class="bulleted-list"><li style="list-style-type:circle">Time slot: &quot;10:00 AM – 11:00 AM&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80c7-a4e9-e7c216ae6e61" class="bulleted-list"><li style="list-style-type:circle">Customer: first name + last initial</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8060-935c-e6a4fd9ebdd8" class="bulleted-list"><li style="list-style-type:circle">Vehicle: &quot;2019 Toyota Camry SE&quot; + mileage</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-809a-b694-d73103690970" class="bulleted-list"><li style="list-style-type:circle">Services: &quot;Oil Change (Synthetic), Tire Rotation&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d0-a664-ec93aa73e084" class="bulleted-list"><li style="list-style-type:circle">Status badge</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-809f-a016-f89d6a62d803" class="bulleted-list"><li style="list-style-type:circle">Estimated labor: &quot;1.0 hr&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f0-8c41-c0a81aeac1c4" class="bulleted-list"><li style="list-style-type:circle">Estimated parts cost: &quot;$48.50&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8060-829a-d32563f80fcb" class="bulleted-list"><li style="list-style-type:circle">Tap → expand to full detail with vehicle specs (oil viscosity, filter part number, etc.)</li></ul></div></li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-808d-830c-fd0c684a1537" class=""><strong>Action Cards:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-809a-8058-c36680793c6d" class="bulleted-list"><li style="list-style-type:disc"><strong>&quot;Start Job&quot; button</strong> — on confirmed bookings when it&#x27;s time. Changes live_stage to &quot;service_in_progress&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-806d-928b-d1086ccb680b" class="bulleted-list"><li style="list-style-type:disc"><strong>&quot;Complete Job&quot; button</strong> — on in-progress bookings. Opens job actuals form (ticket 2.15)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-803f-9ab6-f613b08fc7b2" class="bulleted-list"><li style="list-style-type:disc"><strong>&quot;Flag Issue&quot; button</strong> — notify shop owner of a problem (wrong parts, need help, running late)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-803b-9542-cd74ba35b9b3" class=""><strong>Upcoming Section:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8047-b29c-f9b4a0017d57" class="bulleted-list"><li style="list-style-type:disc">Next 7 days of confirmed bookings assigned to this mechanic</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8069-9fb0-fff29a8b753b" class="bulleted-list"><li style="list-style-type:disc">Grouped by date</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8057-8c71-d6b867a8022f" class="bulleted-list"><li style="list-style-type:disc">Tap → same booking detail card</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c3-b581-f764b1bd5dc3" class=""><strong>Needs Attention Section:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-805d-9e8e-f29943662bca" class="bulleted-list"><li style="list-style-type:disc">Completed bookings missing job actuals (mechanic didn&#x27;t fill out the form yet)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8018-ada6-e6d6a12859f5" class="bulleted-list"><li style="list-style-type:disc">Each card: &quot;Complete job report for [Customer] — [Service]&quot; → links to job actuals form</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-803e-9573-ca5f87602b18" class=""><strong>Data queries:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e7-a4b2-f463f6b9abe9" class="bulleted-list"><li style="list-style-type:disc"><code>getBookingsByMechanic(mechanic_id, date_range)</code> — all bookings assigned to this mechanic</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d7-b95a-cddd5eda33f5" class="bulleted-list"><li style="list-style-type:disc"><code>getBookingsMissingActuals(mechanic_id)</code> — completed bookings without job_actuals records</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8098-9254-cebf5d291335" class="bulleted-list"><li style="list-style-type:disc"><code>getMechanicStats(mechanic_id)</code> — today count, week count, rating</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8037-8532-c48d91b056e9" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80b3-8c6e-fa6528f6399e" class="bulleted-list"><li style="list-style-type:disc">Dashboard shows ONLY this mechanic&#x27;s data (never other mechanics&#x27;)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80de-9b5c-ecff7e8a9291" class="bulleted-list"><li style="list-style-type:disc">Today&#x27;s schedule is correct and sorted by time</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80bf-8205-e2039e2f43f7" class="bulleted-list"><li style="list-style-type:disc">&quot;Start Job&quot; transitions booking to in_progress + updates live_stage</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f2-a6f6-d73843231cb8" class="bulleted-list"><li style="list-style-type:disc">&quot;Complete Job&quot; opens job actuals form</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8080-aff0-fe3f6b7dff44" class="bulleted-list"><li style="list-style-type:disc">&quot;Flag Issue&quot; creates a notification for shop owner (simple: creates a Convex record that shop dashboard polls)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8079-88e0-f47a161ec1b2" class="bulleted-list"><li style="list-style-type:disc">Upcoming section shows next 7 days</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8000-927a-e84cbac05710" class="bulleted-list"><li style="list-style-type:disc">&quot;Needs Attention&quot; correctly identifies bookings missing actuals</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-800e-b1a5-f0fd694e951d" class="bulleted-list"><li style="list-style-type:disc">Real-time updates via Convex subscriptions (new booking assigned → appears immediately)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8070-b9a0-f8a644a07629" class="bulleted-list"><li style="list-style-type:disc">Empty state for days with no jobs: &quot;No jobs scheduled for today. Enjoy the downtime.&quot;</li></ul></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-8008-a3c1-d048c4a45c1c"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.13 — Mechanic: My Customers View</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c9-845a-e1b30eb8c53c" class=""><strong>Type:</strong> Full-stack (Web)<br/><strong>Points:</strong> 3<br/><strong>Owner:</strong> Dev team<br/><strong>Priority:</strong> P1</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-809f-96ce-d4c1c837af58" class=""><strong>Description:</strong><br/>A mechanic&#x27;s customer list — every unique user they&#x27;ve serviced. This enables the &quot;barber shop model&quot;: mechanics build relationships with repeat customers. A mechanic can see customer history but NOT their personal details beyond first name and vehicle.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80fa-860d-db90f619e87c" class=""><strong>Interface:</strong></p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80dd-a3b0-f27e06a76c6b" class=""><strong>Customer List (de-duplicated by user_id):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8047-8227-df66dcb9d4bb" class="bulleted-list"><li style="list-style-type:disc">Customer first name + last initial (privacy: no full last name, no phone, no email)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-807c-b15b-d82e55a44a5d" class="bulleted-list"><li style="list-style-type:disc">Vehicle(s): &quot;2019 Toyota Camry SE&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8000-bceb-cadd430678ad" class="bulleted-list"><li style="list-style-type:disc">Total visits with this mechanic (count of completed bookings)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80c1-a6a2-cf0599a03d2b" class="bulleted-list"><li style="list-style-type:disc">Last service date</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8026-88e2-fa211d2a4496" class="bulleted-list"><li style="list-style-type:disc">Last service performed</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8018-aa2b-d066bf363aa7" class="bulleted-list"><li style="list-style-type:disc">Sort by: most recent visit (default), most visits, alphabetical</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80cc-8a13-da074c2dd2dd" class=""><strong>Customer Detail (tap to expand):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8026-8ead-c77042685612" class="bulleted-list"><li style="list-style-type:disc">Service history with this mechanic only:<div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80bb-b113-f7292792455e" class="bulleted-list"><li style="list-style-type:circle">Date, services performed, vehicle, job notes from mechanic</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8066-bcfd-db9d2a02eddf" class="bulleted-list"><li style="list-style-type:circle">Rating the customer gave for that specific booking (if any)</li></ul></div></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-803b-beac-e61858416d81" class="bulleted-list"><li style="list-style-type:disc">Vehicle specs summary (read-only): oil type, tire size — helps mechanic prepare for repeat visits</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80a3-a740-edcf8d190b3d" class=""><strong>Data sources:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80c1-8337-d3749d411b24" class="bulleted-list"><li style="list-style-type:disc">Distinct user_ids from bookings where mechanic_id = me AND status = &quot;completed&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8038-a8a3-c931c1ba0ecf" class="bulleted-list"><li style="list-style-type:disc">Join with users (first_name only), vehicles, booking history</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d1-8c7c-e2639b3ff3b0" class="bulleted-list"><li style="list-style-type:disc">Reviews where mechanic_id = me</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8045-89e7-df02fe82986b" class=""><strong>Privacy rules (enforced in Convex query):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d2-ab48-cd590b567ee2" class="bulleted-list"><li style="list-style-type:disc">Mechanic sees: first name, last initial, vehicle info, service history</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8014-a2f7-d0c3675b9f57" class="bulleted-list"><li style="list-style-type:disc">Mechanic does NOT see: full last name, email, phone, address, payment info</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-809e-9d8a-daaa20547c62" class="bulleted-list"><li style="list-style-type:disc">Query filters at the backend level — no client-side filtering</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8042-a8e7-dc2a0a55ff85" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-807e-81a2-d74c3b3297e8" class="bulleted-list"><li style="list-style-type:disc">Customer list shows unique customers with correct visit counts</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8039-9dd8-d406c69c8c7d" class="bulleted-list"><li style="list-style-type:disc">Service history is accurate and scoped to this mechanic only</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-806c-85c1-e5dce68538d7" class="bulleted-list"><li style="list-style-type:disc">Privacy rules enforced in backend (not just UI)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ab-be77-e906d82116cb" class="bulleted-list"><li style="list-style-type:disc">Vehicle specs displayed for preparation context</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ec-b4c3-e04d731e42d0" class="bulleted-list"><li style="list-style-type:disc">Sorting works</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80c6-abf4-cd09e8fc1333" class="bulleted-list"><li style="list-style-type:disc">Handles mechanics with 0 customers (empty state)</li></ul></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-80ef-bada-ef4288e9fbae"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.14 — Mechanic: My Ratings &amp; Reviews</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8022-bcb1-de3bcf1a67fd" class=""><strong>Type:</strong> Full-stack (Web)<br/><strong>Points:</strong> 2<br/><strong>Owner:</strong> Dev team<br/><strong>Priority:</strong> P1</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8005-b591-c50dd25229eb" class=""><strong>Description:</strong><br/>Mechanic sees their rating breakdown and individual reviews. This gives them feedback and motivation — and ties into Otopair&#x27;s transparency value.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80bd-ae6e-e515608d1c88" class=""><strong>Interface:</strong></p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-807f-a175-cf3982ab284e" class=""><strong>Rating Summary:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80cb-ab6e-f41c90a9e265" class="bulleted-list"><li style="list-style-type:disc">Overall rating: large number + star visualization (e.g., &quot;4.8 ★&quot;)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-807c-a136-cc0221e05b9c" class="bulleted-list"><li style="list-style-type:disc">Total reviews: &quot;[X] reviews from [Y] customers&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-808f-a5a7-edfb85ae4a88" class="bulleted-list"><li style="list-style-type:disc">Rating distribution bar chart:<div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8031-86ea-cea76788d1ae" class="bulleted-list"><li style="list-style-type:circle">5 stars: ████████ 72%</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8020-bd52-c1be73a820a3" class="bulleted-list"><li style="list-style-type:circle">4 stars: ████ 20%</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8052-a9da-cf638977221e" class="bulleted-list"><li style="list-style-type:circle">3 stars: █ 5%</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80cc-af66-d581c56be573" class="bulleted-list"><li style="list-style-type:circle">2 stars: ░ 2%</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8068-8221-f2361f82d045" class="bulleted-list"><li style="list-style-type:circle">1 star: ░ 1%</li></ul></div></li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80e7-a6e9-eb37ac2551b4" class=""><strong>Reviews List (chronological, newest first):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-801b-8c42-d7dc5f8eceac" class="bulleted-list"><li style="list-style-type:disc">Each review:<div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d1-8042-ffc7de156b3b" class="bulleted-list"><li style="list-style-type:circle">Customer first name + last initial</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8075-9b72-fa7ed41fad4c" class="bulleted-list"><li style="list-style-type:circle">Rating (stars)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8045-ae8e-ee43e2b9eb3b" class="bulleted-list"><li style="list-style-type:circle">Comment text</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8068-ad14-ff847e23e997" class="bulleted-list"><li style="list-style-type:circle">Service performed</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e3-98e2-f8bf7b059fec" class="bulleted-list"><li style="list-style-type:circle">Date</li></ul></div></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a6-ab73-dd1843d0933e" class="bulleted-list"><li style="list-style-type:disc">Filter: by rating (all, 5, 4, 3, 2, 1)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8010-8c74-e93add6fa660" class=""><strong>Data sources:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8007-a8ec-c0b0b415e0a3" class="bulleted-list"><li style="list-style-type:disc">reviews table where mechanic_id = me</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8080-8cc9-d889d6d49f5d" class="bulleted-list"><li style="list-style-type:disc">Aggregate stats from mechanics.rating and mechanics.review_count</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8080-862d-dd51a7512f7c" class="bulleted-list"><li style="list-style-type:disc">Join with bookings for service context</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80d0-840e-e475bc70195d" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a1-8e0c-dcb2b9f004e4" class="bulleted-list"><li style="list-style-type:disc">Rating summary calculates correctly from reviews table</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80c0-945b-eb89a2facdf8" class="bulleted-list"><li style="list-style-type:disc">Distribution breakdown matches actual review counts</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80dd-8af8-c369b9862651" class="bulleted-list"><li style="list-style-type:disc">Reviews display in chronological order</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e3-b30c-ed28c121d1f5" class="bulleted-list"><li style="list-style-type:disc">Filter by rating works</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8094-8b91-ead36913958e" class="bulleted-list"><li style="list-style-type:disc">Empty state for mechanics with no reviews yet: &quot;No reviews yet. They&#x27;ll start coming in after your first few jobs.&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-801f-a91b-e02fce5f2e00" class="bulleted-list"><li style="list-style-type:disc">Mechanic cannot edit or delete reviews (read-only)</li></ul></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-806f-9ab9-db9a9789e59d"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.15 — Mechanic: Complete Job Actuals (Mechanic View)</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-805a-b680-d9916d3a74bf" class=""><strong>Type:</strong> Full-stack (Web)<br/><strong>Points:</strong> 3<br/><strong>Owner:</strong> Dev team<br/><strong>Priority:</strong> P0</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8024-b87d-d234012270c7" class=""><strong>Description:</strong><br/>Same job actuals form as ticket 2.9, but accessed from the mechanic dashboard. When a mechanic taps &quot;Complete Job&quot; on their dashboard, this form opens pre-filled with booking estimates and vehicle specs for reference.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8047-a3c2-e058bd682695" class=""><strong>Differences from the owner-side form (2.9):</strong></p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8078-9d97-c8b1fce40149" class=""><strong>Vehicle specs reference panel (right sidebar or collapsible section):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8066-a722-fc11fed1f434" class="bulleted-list"><li style="list-style-type:disc">Shows relevant vehicle_specs for this booking&#x27;s vehicle:<div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80cb-931d-f6aaae581a86" class="bulleted-list"><li style="list-style-type:circle">Oil viscosity + capacity (for oil change)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80c3-b64c-fabe2cb22242" class="bulleted-list"><li style="list-style-type:circle">OEM filter part number</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-802f-b6b7-f4540ad49588" class="bulleted-list"><li style="list-style-type:circle">Brake pad part numbers (for brake jobs)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-805b-9004-d07e572e95d8" class="bulleted-list"><li style="list-style-type:circle">Tire size + pressure</li></ul></div></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ae-a688-dfcbb103b9fa" class="bulleted-list"><li style="list-style-type:disc">This is read-only reference — helps mechanic confirm they used the right parts</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8046-9e0c-fdf26b2719d7" class="bulleted-list"><li style="list-style-type:disc">Only shows specs relevant to the services in this booking</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80e8-9bdc-c65b826734a8" class=""><strong>Pre-filled parts:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a0-8a4f-eb719b6ff3ec" class="bulleted-list"><li style="list-style-type:disc">If vehicle_specs exist for this engine, pre-populate the parts_used section:<div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8014-92d3-fd6e13786655" class="bulleted-list"><li style="list-style-type:circle">Oil filter: [OEM part number from vehicle_specs]</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80c9-b1ac-d0015e8f21bb" class="bulleted-list"><li style="list-style-type:circle">Pre-filled cost from service_vehicle_specs if available</li></ul></div></li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f6-866b-d7ba02e84547" class="bulleted-list"><li style="list-style-type:disc">Mechanic confirms or overrides with what they actually used</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ac-8564-cab319324e0b" class=""><strong>Form fields (same as 2.9):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-808a-a552-d8e15e136f7b" class="bulleted-list"><li style="list-style-type:disc">Actual labor minutes</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8023-9572-f91179a323da" class="bulleted-list"><li style="list-style-type:disc">Parts used (repeatable: part name, OEM number, cost)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8027-bf47-fdf0e22b5666" class="bulleted-list"><li style="list-style-type:disc">Difficulty rating (1–5)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-804f-a2af-cfcecaf8b2cc" class="bulleted-list"><li style="list-style-type:disc">Technician notes</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-804c-af6a-e14c8e37b907" class="bulleted-list"><li style="list-style-type:disc">Started at / completed at</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c4-a2d5-ef438dcabfd3" class=""><strong>Submission triggers (same as 2.9):</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8060-8344-c157c9786c68" class="bulleted-list"><li style="list-style-type:disc">Creates job_actuals record</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-805d-bce8-f3f037fbc3d4" class="bulleted-list"><li style="list-style-type:disc">Runs variance calculation</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8099-9f6f-ccf682f55f1d" class="bulleted-list"><li style="list-style-type:disc">Triggers payment capture</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8069-9ce4-d4fd61faa124" class="bulleted-list"><li style="list-style-type:disc">Updates booking status to &quot;completed&quot; if not already</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8035-9788-f189ff264e49" class=""><strong>Mechanic-specific additions:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8072-a9f0-e129e13af6c4" class="bulleted-list"><li style="list-style-type:disc">&quot;Flag for review&quot; checkbox — if mechanic suspects the vehicle specs are wrong (e.g., manual says 0W-20 but car actually needs 5W-30), this flags the vehicle_specs record for admin review via manual_review_queue</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80fe-a24f-dabab306818d" class="bulleted-list"><li style="list-style-type:disc">&quot;Tip for next mechanic&quot; field — optional note that gets attached to vehicle record for future reference (e.g., &quot;Drain plug stripped, use oversized gasket&quot;)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c5-aa47-d52b63068f1d" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8011-857b-eec3b95ac058" class="bulleted-list"><li style="list-style-type:disc">Vehicle specs reference panel shows correct data for this booking&#x27;s vehicle</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8092-86ec-fb7415670d14" class="bulleted-list"><li style="list-style-type:disc">Pre-populated parts match vehicle_specs predictions</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8050-8aed-c5d58b0fa6c1" class="bulleted-list"><li style="list-style-type:disc">Mechanic can override pre-filled values</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ed-b4b7-cfa9ad5ccc03" class="bulleted-list"><li style="list-style-type:disc">&quot;Flag for review&quot; creates manual_review_queue record</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8052-96fe-d34ee30e6f0f" class="bulleted-list"><li style="list-style-type:disc">&quot;Tip for next mechanic&quot; saved (extend job_actuals or create vehicle_notes table)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8078-9c48-fb0d77ab33a5" class="bulleted-list"><li style="list-style-type:disc">All other acceptance criteria from 2.9 apply</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-807e-a788-e32865d2def7" class="bulleted-list"><li style="list-style-type:disc">Form accessible from mechanic dashboard &quot;Complete Job&quot; button</li></ul></div></div></details></div><div style="display:contents" dir="auto"><hr id="3088280c-1b1d-8036-90e1-e64dff5bec15"/></div><div style="display:contents" dir="auto"><details open=""><summary style="font-weight:600;font-size:1.25em;line-height:1.3;margin:0">2.16 — Shop Settings &amp; Profile Edit</summary><div class="indented"><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ff-9475-d30fe0a582b2" class=""><strong>Type:</strong> Full-stack (Web)<br/><strong>Points:</strong> 3<br/><strong>Owner:</strong> Dev team<br/><strong>Priority:</strong> P1</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80d3-8625-e642d807eb73" class=""><strong>Description:</strong><br/>Shop owner can edit shop details, hours, services, and connected accounts after initial onboarding.</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80ab-9a72-ecebbf53883c" class=""><strong>Sections:</strong></p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80e6-b1be-c6008747e196" class=""><strong>Shop Profile:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80e5-8d47-ea77a763a4b8" class="bulleted-list"><li style="list-style-type:disc">Edit: name, phone, address, description, logo</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ec-afca-ec1dc8421deb" class="bulleted-list"><li style="list-style-type:disc">Slug auto-regenerates if name changes (with confirmation)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8018-9c04-c40ddd6dfaa5" class="bulleted-list"><li style="list-style-type:disc">Preview: how the shop appears to users in the app</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80d7-9d55-f6d6756c1593" class=""><strong>Operating Hours:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-807c-b406-d125867926c3" class="bulleted-list"><li style="list-style-type:disc">Same 7-day grid from onboarding (ticket 2.4, step 2)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8014-b831-fc0078488d4a" class="bulleted-list"><li style="list-style-type:disc">Edit open/close times, toggle closed days</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8079-b7c7-e11436dc915d" class="bulleted-list"><li style="list-style-type:disc">Changes take effect immediately (no &quot;save draft&quot;)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80e4-b58e-c36f246b65b6" class=""><strong>Services Offered:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-806c-a4a0-c67770361dd6" class="bulleted-list"><li style="list-style-type:disc">Same service checklist from onboarding (ticket 2.4, step 3)</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80df-801b-cb3f1f748672" class="bulleted-list"><li style="list-style-type:disc">Toggle services on/off</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80f6-becc-eb6695d0e40f" class="bulleted-list"><li style="list-style-type:disc">Changes affect future bookings only (existing bookings unaffected)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8069-b609-dc73ee9b569e" class=""><strong>Labor Rate:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80eb-b8f8-e202e8eba67c" class="bulleted-list"><li style="list-style-type:disc">Edit hourly rate</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-801c-b52b-cab166c43270" class="bulleted-list"><li style="list-style-type:disc">Warning: &quot;Changing your rate will affect pricing for all future bookings&quot;</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8018-a219-e36690f8af77" class="bulleted-list"><li style="list-style-type:disc">Existing bookings keep their original rate</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8019-9995-e3097a48771d" class=""><strong>Stripe Connect:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80a6-90ce-e3563fd40222" class="bulleted-list"><li style="list-style-type:disc">Status: connected/pending/action needed</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80bb-8018-e972074f0940" class="bulleted-list"><li style="list-style-type:disc">Link to Stripe Express dashboard for bank account management</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-8052-9265-d915face2335" class="bulleted-list"><li style="list-style-type:disc">&quot;Disconnect&quot; option (with warnings about pending payouts)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8097-812b-d9e070f5b3f9" class=""><strong>Team Management Link:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-809d-bdd6-d5aebf3a3473" class="bulleted-list"><li style="list-style-type:disc">Shortcut to /mechanics page</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80b8-8013-e49c4592ddfa" class=""><strong>Danger Zone:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-808e-876b-c9e057a0e394" class="bulleted-list"><li style="list-style-type:disc">&quot;Deactivate shop&quot; — sets shops.is_active = false, prevents new bookings</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-801c-a627-c5389360c8ee" class="bulleted-list"><li style="list-style-type:disc">&quot;Delete shop&quot; — only if no pending/confirmed bookings (hard requirement)</li></ul></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-8080-b451-da1ae7e5e111" class=""><strong>Acceptance criteria:</strong></p></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80ab-9a7f-e4f17e3ad4d6" class="bulleted-list"><li style="list-style-type:disc">All fields editable and save correctly</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80d6-838b-e70474d5729f" class="bulleted-list"><li style="list-style-type:disc">Hours changes reflect immediately in user-facing time slot availability</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80db-97db-e6114b8172fa" class="bulleted-list"><li style="list-style-type:disc">Labor rate changes don&#x27;t affect existing bookings</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80fb-8e3c-e6a366b9537a" class="bulleted-list"><li style="list-style-type:disc">Stripe status displays correctly</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80fb-a53a-c3eca01bc38d" class="bulleted-list"><li style="list-style-type:disc">Deactivate prevents new bookings but preserves existing ones</li></ul></div><div style="display:contents" dir="auto"><ul id="3088280c-1b1d-80fa-88a4-dea3099bfd06" class="bulleted-list"><li style="list-style-type:disc">Delete blocked if active bookings exist</li></ul></div></div></details></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80c9-b953-fba251eaa2f9" class="">
+</p></div><div style="display:contents" dir="auto"><p id="3088280c-1b1d-80bc-861e-fb2c577492b1" class="">
+</p></div><div style="display:contents" dir="auto"><h3 id="3088280c-1b1d-800d-ad18-d32e9b631bd7" class="">Documents</h3></div><div style="display:contents" dir="ltr"><figure id="3088280c-1b1d-80ae-9c0d-c99544ec6f2f"><div class="source"><a href="https://www.notion.soundefined"></a></div></figure></div></div></article><span class="sans" style="font-size:14px;padding-top:2em"></span></body></html>

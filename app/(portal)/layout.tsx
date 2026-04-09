@@ -63,7 +63,7 @@ export default function PortalLayout({
 
   const portalAccess = useQuery(api.shops.getMyPortalAccess);
   const seedBookings = useMutation(api.seed.seedDashboardBookings);
-  const [seeding, setSeeding] = useState(false);
+  const [, setSeeding] = useState(false);
   const hasRedirected = useRef(false);
   const isAcceptInvite = pathname.startsWith("/accept-invite");
 
@@ -78,12 +78,22 @@ export default function PortalLayout({
     }
     if (
       portalAccess.status === "no_shop" &&
-      portalAccess.userRole === "shop_owner"
+      OWNER_MANAGER_ROLES.includes(portalAccess.userRole)
     ) {
       if (!pathname.startsWith("/shop/setup")) {
         hasRedirected.current = true;
         router.replace("/shop/setup");
       }
+      return;
+    }
+    if (
+      portalAccess.status === "active" &&
+      OWNER_MANAGER_ROLES.includes(portalAccess.role) &&
+      portalAccess.onboardingComplete === false &&
+      !pathname.startsWith("/shop/setup")
+    ) {
+      hasRedirected.current = true;
+      router.replace("/shop/setup");
     }
   }, [portalAccess, router, pathname, isAcceptInvite]);
 

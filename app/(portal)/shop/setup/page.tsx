@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -135,49 +136,22 @@ function formatPhone(value: string): string {
   return "";
 }
 
-function isStepOneComplete(details: ShopDetailsForm) {
-  return (
-    Boolean(details.name.trim()) &&
-    Boolean(details.slug.trim()) &&
-    Boolean(details.address.trim()) &&
-    Boolean(details.city.trim()) &&
-    Boolean(details.state.trim()) &&
-    details.zipCode.length === 5 &&
-    details.phone.replace(/\D/g, "").length === 10 &&
-    SLUG_REGEX.test(details.slug)
-  );
-}
-
-function isStepTwoComplete(hours: HoursFormRow[]) {
-  return (
-    hours.length === 7 &&
-    hours.every((row) => row.isClosed || row.openTime < row.closeTime)
-  );
-}
-
-function isStepThreeComplete(
-  laborRate: string,
-  selectedServiceIds: Set<string>
-) {
-  return Number(laborRate) > 0 && selectedServiceIds.size > 0;
-}
-
-function getFirstIncompleteStep(params: {
-  details: ShopDetailsForm;
-  hours: HoursFormRow[];
-  laborRate: string;
-  selectedServiceIds: Set<string>;
+function getFirstIncompleteSavedStep(params: {
+  hasSavedShop: boolean;
+  savedHoursCount: number;
+  savedServiceCount: number;
   mechanicCount: number;
 }) {
-  if (!isStepOneComplete(params.details)) return 0;
-  if (!isStepTwoComplete(params.hours)) return 1;
-  if (!isStepThreeComplete(params.laborRate, params.selectedServiceIds)) return 2;
+  if (!params.hasSavedShop) return 0;
+  if (params.savedHoursCount < 7) return 1;
+  if (params.savedServiceCount === 0) return 2;
   if (params.mechanicCount === 0) return 3;
   return 4;
 }
 
 export default function ShopSetupPage() {
   const router = useRouter();
+  const { user } = useUser();
   const onboardingData = useQuery(api.shops.getMyOnboardingData);
   const upsertShopDetails = useMutation(api.shops.upsertOnboardingShopDetails);
   const saveHours = useMutation(api.shops.saveOnboardingHours);
@@ -211,12 +185,34 @@ export default function ShopSetupPage() {
   });
   const [addingMechanic, setAddingMechanic] = useState(false);
   const [hydratedShopId, setHydratedShopId] = useState<string | null>(null);
+  const clerkRole =
+    typeof user?.publicMetadata?.role === "string"
+      ? user.publicMetadata.role
+      : null;
+  const isOwnerLike = clerkRole === "owner" || clerkRole === "shop_owner" || clerkRole === "admin";
 
   const slugCheckResult = useQuery(
     api.shops.getBySlug,
     details.slug.length >= 2 && SLUG_REGEX.test(details.slug)
       ? { slug: details.slug }
       : "skip"
+  );
+  const persistedServiceCount = useMemo(
+    () =>
+      onboardingData?.serviceCategories.flatMap((category) =>
+        category.services.filter((service) => service.isOffered)
+      ).length ?? 0,
+    [onboardingData]
+  );
+  const firstIncompleteSavedStep = useMemo(
+    () =>
+      getFirstIncompleteSavedStep({
+        hasSavedShop: Boolean(onboardingData?.shop),
+        savedHoursCount: onboardingData?.hours.length ?? 0,
+        savedServiceCount: persistedServiceCount,
+        mechanicCount: onboardingData?.mechanics.length ?? 0,
+      }),
+    [onboardingData, persistedServiceCount]
   );
 
   useEffect(() => {
@@ -255,17 +251,9 @@ export default function ShopSetupPage() {
     setSlugManual(
       Boolean(nextDetails.slug) && nextDetails.slug !== toSlug(nextDetails.name)
     );
-    setCurrentStep(
-      getFirstIncompleteStep({
-        details: nextDetails,
-        hours: nextHours,
-        laborRate: nextLaborRate,
-        selectedServiceIds: nextSelectedServiceIds,
-        mechanicCount: onboardingData.mechanics.length,
-      })
-    );
+    setCurrentStep(firstIncompleteSavedStep);
     setHydratedShopId(shopId);
-  }, [hydratedShopId, onboardingData, router]);
+  }, [firstIncompleteSavedStep, hydratedShopId, onboardingData, router]);
 
   const inputClass =
     "w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent";
@@ -305,18 +293,6 @@ export default function ShopSetupPage() {
     };
   })();
 
-  const availableStep = useMemo(
-    () =>
-      getFirstIncompleteStep({
-        details,
-        hours,
-        laborRate,
-        selectedServiceIds,
-        mechanicCount: onboardingData?.mechanics.length ?? 0,
-      }),
-    [details, hours, laborRate, onboardingData?.mechanics.length, selectedServiceIds]
-  );
-
   function clearBanners() {
     setStepError(null);
     setStepSuccess(null);
@@ -332,7 +308,7 @@ export default function ShopSetupPage() {
 
   function handleStepChange(nextStep: number) {
     clearBanners();
-    if (nextStep <= Math.max(currentStep, availableStep)) {
+    if (nextStep <= Math.max(currentStep, firstIncompleteSavedStep)) {
       setCurrentStep(nextStep);
     }
   }
@@ -490,7 +466,7 @@ export default function ShopSetupPage() {
     );
   }
 
-  if (onboardingData === null) {
+  if (onboardingData === null && !isOwnerLike) {
     return (
       <div className="mx-auto max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-8 text-amber-900">
         <h1 className="text-2xl font-bold">Shop setup unavailable</h1>
@@ -542,10 +518,12 @@ export default function ShopSetupPage() {
             {STEP_META.map((step, index) => {
               const Icon = step.icon;
               const completed =
-                index < availableStep ||
-                (availableStep === 4 && index === 4 && onboardingData.shop?.onboardingComplete);
+                index < firstIncompleteSavedStep ||
+                (firstIncompleteSavedStep === 4 &&
+                  index === 4 &&
+                  onboardingData.shop?.onboardingComplete);
               const active = currentStep === index;
-              const clickable = index <= Math.max(currentStep, availableStep);
+              const clickable = index <= Math.max(currentStep, firstIncompleteSavedStep);
               return (
                 <button
                   key={step.title}

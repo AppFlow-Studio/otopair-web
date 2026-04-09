@@ -55,6 +55,10 @@ export default function PortalLayout({
   const displayName = user
     ? [user.firstName, user.lastName].filter(Boolean).join(" ")
     : "";
+  const clerkRole =
+    typeof user?.publicMetadata?.role === "string"
+      ? user.publicMetadata.role
+      : null;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCompact, setSidebarCompact] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -70,7 +74,17 @@ export default function PortalLayout({
   useEffect(() => {
     if (portalAccess === undefined || hasRedirected.current || isAcceptInvite)
       return;
-    if (portalAccess === null) return;
+    if (portalAccess === null) {
+      if (
+        clerkRole &&
+        OWNER_MANAGER_ROLES.includes(clerkRole) &&
+        !pathname.startsWith("/shop/setup")
+      ) {
+        hasRedirected.current = true;
+        router.replace("/shop/setup");
+      }
+      return;
+    }
     if (portalAccess.status === "deactivated") {
       hasRedirected.current = true;
       router.replace("/account-deactivated");
@@ -78,7 +92,7 @@ export default function PortalLayout({
     }
     if (
       portalAccess.status === "no_shop" &&
-      OWNER_MANAGER_ROLES.includes(portalAccess.userRole)
+      OWNER_MANAGER_ROLES.includes(portalAccess.userRole ?? clerkRole ?? "")
     ) {
       if (!pathname.startsWith("/shop/setup")) {
         hasRedirected.current = true;
@@ -95,7 +109,7 @@ export default function PortalLayout({
       hasRedirected.current = true;
       router.replace("/shop/setup");
     }
-  }, [portalAccess, router, pathname, isAcceptInvite]);
+  }, [portalAccess, clerkRole, router, pathname, isAcceptInvite]);
 
   const isOwnerManager =
     portalAccess?.status === "active" &&

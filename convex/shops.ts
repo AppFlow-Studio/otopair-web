@@ -263,10 +263,10 @@ export const getMyPortalAccess = query({
 export const getMyOnboardingData = query({
   args: {},
   handler: async (ctx) => {
-    const { user } = await getCurrentUser(ctx);
-    if (!user) return null;
+    const { identity, user } = await getCurrentUser(ctx);
+    if (!identity) return null;
 
-    const primary = await getPrimaryShopForUser(ctx, user._id);
+    const primary = user ? await getPrimaryShopForUser(ctx, user._id) : null;
     const shop = primary?.shop ?? null;
 
     const allServices = await ctx.db.query("services").collect();
@@ -339,7 +339,7 @@ export const getMyOnboardingData = query({
       : [];
 
     return {
-      userRole: user.role ?? null,
+      userRole: user?.role ?? null,
       shop: shop
         ? {
             _id: shop._id,

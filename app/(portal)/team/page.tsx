@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { UserPlus, Mail, Clock, X, Users, Crown, Wrench, Ellipsis } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -97,26 +98,20 @@ export default function TeamPage() {
     setSending(true);
 
     try {
-      const res = await fetch("/api/invite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email,
-          role,
-          shopId,
-          firstName: firstName.trim() || undefined,
-          lastName: lastName.trim() || undefined,
-          title: title.trim() || undefined,
-        }),
+      // TODO: Remove temporary invite-link console logging from sendTeamInvite after invite flow verification is complete.
+      const result = await sendTeamInvite({
+        email,
+        role,
+        shopId,
+        firstName: firstName.trim() || undefined,
+        lastName: lastName.trim() || undefined,
+        title: title.trim() || undefined,
+        origin: window.location.origin,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setInviteError(data.error || "Failed to send invitation.");
+
+      if (!result.ok) {
+        setInviteError(result.error);
       } else {
-        if (data.token) {
-          const inviteLink = `${window.location.origin}/accept-invite?token=${data.token}`;
-          console.log("Invite link:", inviteLink);
-        }
         setInviteSuccess(true);
         setEmail("");
         setFirstName("");

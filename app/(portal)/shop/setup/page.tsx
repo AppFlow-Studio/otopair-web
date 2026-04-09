@@ -6,6 +6,7 @@ import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
   BadgeDollarSign,
   Building2,
@@ -14,7 +15,6 @@ import {
   Clock3,
   CreditCard,
   Loader2,
-  Plus,
   Trash2,
   UserRoundCog,
   Wrench,
@@ -156,7 +156,6 @@ export default function ShopSetupPage() {
   const upsertShopDetails = useMutation(api.shops.upsertOnboardingShopDetails);
   const saveHours = useMutation(api.shops.saveOnboardingHours);
   const saveLaborAndServices = useMutation(api.shops.saveOnboardingLaborAndServices);
-  const addMechanic = useMutation(api.shops.addOnboardingMechanic);
   const removeMechanic = useMutation(api.shops.removeOnboardingMechanic);
   const completeOnboarding = useMutation(api.shops.completeOnboarding);
 
@@ -182,8 +181,11 @@ export default function ShopSetupPage() {
     firstName: "",
     lastName: "",
     title: "",
+    email: "",
   });
-  const [addingMechanic, setAddingMechanic] = useState(false);
+  const [sendingInvite, setSendingInvite] = useState(false);
+  const [mechanicInviteError, setMechanicInviteError] = useState<string | null>(null);
+  const [mechanicInviteSuccess, setMechanicInviteSuccess] = useState(false);
   const [hydratedShopId, setHydratedShopId] = useState<string | null>(null);
   const clerkRole =
     typeof user?.publicMetadata?.role === "string"
@@ -408,26 +410,48 @@ export default function ShopSetupPage() {
     }
   }
 
-  async function handleAddMechanic() {
+  async function handleInviteMechanic() {
     clearBanners();
+    setMechanicInviteError(null);
+    setMechanicInviteSuccess(false);
+
+    if (!onboardingData?.shop?._id) {
+      setMechanicInviteError("Save your shop details before inviting mechanics.");
+      return;
+    }
     if (!mechanicForm.firstName.trim() || !mechanicForm.lastName.trim()) {
-      setStepError("Enter both a first and last name for the mechanic.");
+      setMechanicInviteError("Enter both a first and last name for the mechanic.");
+      return;
+    }
+    if (!mechanicForm.email.trim()) {
+      setMechanicInviteError("Enter an email address for the mechanic.");
       return;
     }
 
-    setAddingMechanic(true);
+    setSendingInvite(true);
     try {
-      await addMechanic({
-        firstName: mechanicForm.firstName,
-        lastName: mechanicForm.lastName,
+      // TODO: Remove temporary invite-link console logging from sendTeamInvite after invite flow verification is complete.
+      const result = await sendTeamInvite({
+        email: mechanicForm.email.trim(),
+        role: "shop_mechanic",
+        shopId: onboardingData.shop._id,
+        firstName: mechanicForm.firstName.trim(),
+        lastName: mechanicForm.lastName.trim(),
         title: mechanicForm.title.trim() || undefined,
+        origin: window.location.origin,
       });
-      setMechanicForm({ firstName: "", lastName: "", title: "" });
-      setStepSuccess("Mechanic added.");
-    } catch (error) {
-      setStepError(error instanceof Error ? error.message : "Failed to add mechanic.");
+
+      if (!result.ok) {
+        setMechanicInviteError(result.error);
+      } else {
+        setMechanicForm({ firstName: "", lastName: "", title: "", email: "" });
+        setMechanicInviteSuccess(true);
+        setTimeout(() => setMechanicInviteSuccess(false), 4000);
+      }
+    } catch {
+      setMechanicInviteError("Failed to send invitation. Please try again.");
     } finally {
-      setAddingMechanic(false);
+      setSendingInvite(false);
     }
   }
 
@@ -1008,26 +1032,55 @@ export default function ShopSetupPage() {
                   />
                 </div>
                 <div className="md:col-span-3">
+                  <label className={labelClass}>
+                    Email Address <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={mechanicForm.email}
+                    onChange={(event) =>
+                      setMechanicForm((prev) => ({
+                        ...prev,
+                        email: event.target.value,
+                      }))
+                    }
+                    placeholder="mechanic@example.com"
+                    className={inputClass}
+                  />
+                </div>
+                <div className="md:col-span-3">
                   <button
                     type="button"
-                    onClick={handleAddMechanic}
-                    disabled={addingMechanic}
+                    onClick={handleInviteMechanic}
+                    disabled={sendingInvite}
                     className={`${stepButtonClass} border-gray-300 bg-white text-gray-700 hover:bg-gray-50`}
                   >
-                    {addingMechanic ? (
+                    {sendingInvite ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     ) : (
-                      <Plus className="mr-2 h-4 w-4" />
+                      <Wrench className="mr-2 h-4 w-4" />
                     )}
-                    Add mechanic
+                    Send mechanic invitation
                   </button>
                 </div>
               </div>
 
+              {mechanicInviteError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {mechanicInviteError}
+                </div>
+              )}
+
+              {mechanicInviteSuccess && (
+                <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+                  Invitation sent successfully.
+                </div>
+              )}
+
               <div className="space-y-3">
                 {mechanics.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-500">
-                    No mechanics added yet. Add at least one before you finish setup.
+                    No mechanics added yet. Invite at least one before you finish setup.
                   </div>
                 ) : (
                   mechanics.map((mechanic) => (

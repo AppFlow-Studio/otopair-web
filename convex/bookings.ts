@@ -3,6 +3,7 @@ import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import {
   addMinutesToHHMM,
+  getBookingEndTime,
   overlapsBlockedSlot,
   overlapsMechanicBooking,
 } from "../lib/schedule-overlap";
@@ -1116,7 +1117,7 @@ export const update = mutation({
           String(newMechanic),
           newDate,
           newTime,
-          addMinutesToHHMM(newTime, durationMinutes),
+          getBookingEndTime(newTime, durationMinutes),
           allBookings.map((b: any) => ({
             _id: String(b._id),
             scheduledDate: b.scheduled_date,
@@ -1153,7 +1154,7 @@ export const update = mutation({
           String(newMechanic),
           newDate,
           newTime,
-          addMinutesToHHMM(newTime, durationMinutes),
+          getBookingEndTime(newTime, durationMinutes),
           blockedSlots
         );
 
@@ -1334,7 +1335,10 @@ export const proposeReschedule = mutation({
 
     // Check for overlap with other bookings at the target time/mechanic
     const targetMechanicId = args.newMechanicId !== undefined ? args.newMechanicId : booking.mechanic_id;
-    const newEnd = addMinutes(args.newScheduledTime, booking.estimated_labor_minutes ?? 60);
+    const newEnd = getBookingEndTime(
+      args.newScheduledTime,
+      booking.estimated_labor_minutes
+    );
     const allBookings = await ctx.db
       .query("bookings")
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", booking.shop_id))
@@ -1344,7 +1348,10 @@ export const proposeReschedule = mutation({
       if (b.scheduled_date !== args.newScheduledDate) return false;
       if (b.status === "cancelled" || b.status === "declined") return false;
       if (targetMechanicId && String(b.mechanic_id) !== String(targetMechanicId)) return false;
-      const bEnd = addMinutes(b.scheduled_time, b.estimated_labor_minutes ?? 60);
+      const bEnd = getBookingEndTime(
+        b.scheduled_time,
+        b.estimated_labor_minutes
+      );
       return b.scheduled_time < newEnd && bEnd > args.newScheduledTime;
     });
     if (conflicting.length > 0) {

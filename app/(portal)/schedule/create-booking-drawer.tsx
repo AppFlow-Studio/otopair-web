@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { getBookingEndTime } from "@/lib/schedule-overlap";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -64,11 +65,6 @@ const TIME_OPTIONS = buildTimeOptions();
 function toMins(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
   return h * 60 + m;
-}
-
-function addMinsToHHMM(hhmm: string, delta: number): string {
-  const total = Math.min(1439, toMins(hhmm) + delta);
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -149,7 +145,7 @@ export default function CreateBookingDrawer({
     const allServices = categories.flatMap((c) => c.services);
     const selected = allServices.filter((s) => selectedIds.has(s._id));
     const estMins = selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) || 60;
-    const endTime = addMinsToHHMM(time, estMins);
+    const endTime = getBookingEndTime(time, estMins);
     const startMins = toMins(time);
     const endMins = toMins(endTime);
     const conflict = bookings.find((b) => {
@@ -157,7 +153,9 @@ export default function CreateBookingDrawer({
       if (b.status === "cancelled" || b.status === "declined") return false;
       if (b.mechanicId !== mechanicId) return false;
       const bStart = toMins(b.scheduledTime);
-      const bEnd = bStart + (b.estimatedMinutes ?? 60);
+      const bEnd = toMins(
+        getBookingEndTime(b.scheduledTime, b.estimatedMinutes)
+      );
       return bStart < endMins && bEnd > startMins;
     });
     return conflict ? "This time slot overlaps an existing booking for this mechanic." : null;

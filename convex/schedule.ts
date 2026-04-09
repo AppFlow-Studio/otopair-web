@@ -1,19 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { getBookingEndTime } from "../lib/schedule-overlap";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
-
-/** Add minutes to "HH:MM" and return "HH:MM" (clamped to same day). */
-function addMinutesToHHMM(hhmm: string, deltaMinutes: number): string {
-  const [h, m] = hhmm.split(":").map(Number);
-  const total = Math.max(0, Math.min(1439, h * 60 + m + deltaMinutes));
-  const rh = Math.floor(total / 60);
-  const rm = total % 60;
-  return `${String(rh).padStart(2, "0")}:${String(rm).padStart(2, "0")}`;
-}
 
 async function getCurrentUserOrNull(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
@@ -375,7 +367,10 @@ export const blockSlot = mutation({
       // When blocking for a specific mechanic, only check that mechanic's bookings
       if (args.mechanicId && String(b.mechanic_id ?? "") !== String(args.mechanicId)) return false;
       // Check time overlap
-      const bEnd = addMinutesToHHMM(b.scheduled_time, b.estimated_labor_minutes ?? 60);
+      const bEnd = getBookingEndTime(
+        b.scheduled_time,
+        b.estimated_labor_minutes
+      );
       return b.scheduled_time < args.endTime && bEnd > args.startTime;
     });
     if (overlapping.length > 0) {
@@ -445,7 +440,10 @@ export const updateBlockedSlot = mutation({
       if (b.scheduled_date !== args.date) return false;
       if (b.status === "cancelled" || b.status === "declined") return false;
       if (args.mechanicId && String(b.mechanic_id ?? "") !== String(args.mechanicId)) return false;
-      const bEnd = addMinutesToHHMM(b.scheduled_time, b.estimated_labor_minutes ?? 60);
+      const bEnd = getBookingEndTime(
+        b.scheduled_time,
+        b.estimated_labor_minutes
+      );
       return b.scheduled_time < args.endTime && bEnd > args.startTime;
     });
     if (overlapping.length > 0) {
@@ -588,7 +586,10 @@ export const blockMechanicDay = mutation({
       // Build list of booked intervals
       const booked: Array<{ start: string; end: string }> = sorted.map((b: any) => ({
         start: b.scheduled_time,
-        end: addMinutesToHHMM(b.scheduled_time, b.estimated_labor_minutes ?? 60),
+        end: getBookingEndTime(
+          b.scheduled_time,
+          b.estimated_labor_minutes
+        ),
       }));
 
       // Collect gaps: [openTime, first booking), (between bookings), (last booking, closeTime]

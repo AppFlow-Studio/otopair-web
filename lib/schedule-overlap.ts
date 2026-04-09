@@ -41,6 +41,13 @@ export function addMinutesToHHMM(hhmm: string, deltaMinutes: number): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+export function getBookingEndTime(
+  scheduledTime: string,
+  estimatedMinutes?: number | null
+): string {
+  return addMinutesToHHMM(scheduledTime, estimatedMinutes ?? 60);
+}
+
 export function overlapsBlockedSlot(
   mechanicId: string,
   date: string,
@@ -75,7 +82,9 @@ export function overlapsMechanicBooking(
     if (booking.status === "cancelled" || booking.status === "declined") return false;
     if (booking.mechanicId !== mechanicId) return false;
     const bookingStart = toMinutes(booking.scheduledTime);
-    const bookingEnd = bookingStart + (booking.estimatedMinutes ?? 60);
+    const bookingEnd = toMinutes(
+      getBookingEndTime(booking.scheduledTime, booking.estimatedMinutes)
+    );
     return bookingStart < windowEnd && bookingEnd > windowStart;
   });
 }
@@ -86,9 +95,9 @@ export function getMechanicAssignmentConflict(
   bookings: ScheduleBooking[],
   blockedSlots: ScheduleBlockedSlot[]
 ): "booking" | "blocked" | null {
-  const endTime = addMinutesToHHMM(
+  const endTime = getBookingEndTime(
     booking.scheduledTime,
-    booking.estimatedMinutes ?? 60
+    booking.estimatedMinutes
   );
 
   if (

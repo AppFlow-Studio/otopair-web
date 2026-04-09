@@ -32,6 +32,7 @@ import { usePortalSidebar } from "../portal-context";
 import { statusColors, dateToString } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 import {
+  getBookingEndTime,
   overlapsBlockedSlot,
   overlapsMechanicBooking,
 } from "@/lib/schedule-overlap";
@@ -457,9 +458,15 @@ export default function SchedulePage() {
       .filter((b) => mechanicFilter === "all" || b.mechanicId === mechanicFilter)
       .map((b) => {
         const [h, m] = b.scheduledTime.split(":").map(Number);
+        const endTime = getBookingEndTime(
+          b.scheduledTime,
+          b.estimatedMinutes
+        );
+        const [eh, em] = endTime.split(":").map(Number);
         const start = new Date(b.scheduledDate + "T00:00:00");
         start.setHours(h, m, 0, 0);
-        const end = new Date(start.getTime() + (b.estimatedMinutes ?? 60) * 60 * 1000);
+        const end = new Date(b.scheduledDate + "T00:00:00");
+        end.setHours(eh, em, 0, 0);
 
         return {
           id: b._id,

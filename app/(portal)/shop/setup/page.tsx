@@ -6,6 +6,7 @@ import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { removeTeamMember } from "@/lib/remove-team-member";
 import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
   BadgeDollarSign,
@@ -69,6 +70,8 @@ const STEP_META = [
     icon: CreditCard,
   },
 ] as const;
+
+const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"] as const;
 
 type ShopDetailsForm = {
   name: string;
@@ -152,6 +155,7 @@ function getFirstIncompleteSavedStep(params: {
 export default function ShopSetupPage() {
   const router = useRouter();
   const { user } = useUser();
+  const portalAccess = useQuery(api.shops.getMyPortalAccess);
   const onboardingData = useQuery(api.shops.getMyOnboardingData);
   const upsertShopDetails = useMutation(api.shops.upsertOnboardingShopDetails);
   const saveHours = useMutation(api.shops.saveOnboardingHours);
@@ -192,6 +196,20 @@ export default function ShopSetupPage() {
       ? user.publicMetadata.role
       : null;
   const isOwnerLike = clerkRole === "owner" || clerkRole === "shop_owner" || clerkRole === "admin";
+  const effectivePortalRole =
+    portalAccess?.status === "active"
+      ? portalAccess.role
+      : portalAccess?.status === "no_shop"
+      ? (portalAccess.userRole ?? clerkRole ?? "")
+      : (clerkRole ?? "");
+  const canAccessSetup =
+    portalAccess === null
+      ? isOwnerLike
+      : portalAccess?.status === "active"
+      ? OWNER_MANAGER_ROLES.includes(portalAccess.role as (typeof OWNER_MANAGER_ROLES)[number])
+      : portalAccess?.status === "no_shop"
+      ? OWNER_MANAGER_ROLES.includes(effectivePortalRole as (typeof OWNER_MANAGER_ROLES)[number])
+      : false;
 
   const slugCheckResult = useQuery(
     api.shops.getBySlug,
@@ -256,6 +274,31 @@ export default function ShopSetupPage() {
     setCurrentStep(firstIncompleteSavedStep);
     setHydratedShopId(shopId);
   }, [firstIncompleteSavedStep, hydratedShopId, onboardingData, router]);
+
+  useEffect(() => {
+    if (portalAccess === undefined) return;
+
+    if (portalAccess === null) {
+      if (!isOwnerLike) {
+        router.replace("/dashboard");
+      }
+      return;
+    }
+
+    if (portalAccess.status === "active") {
+      if (!OWNER_MANAGER_ROLES.includes(portalAccess.role as (typeof OWNER_MANAGER_ROLES)[number])) {
+        router.replace("/dashboard");
+      }
+      return;
+    }
+
+    if (portalAccess.status === "no_shop") {
+      const role = portalAccess.userRole ?? clerkRole ?? "";
+      if (!OWNER_MANAGER_ROLES.includes(role as (typeof OWNER_MANAGER_ROLES)[number])) {
+        router.replace("/dashboard");
+      }
+    }
+  }, [portalAccess, clerkRole, isOwnerLike, router]);
 
   const inputClass =
     "w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent";
@@ -455,10 +498,19 @@ export default function ShopSetupPage() {
     }
   }
 
-  async function handleRemoveMechanic(mechanicId: string) {
+  async function handleRemoveMechanic(args: {
+    mechanicId: string;
+    shopUserId: string | null;
+    pendingInvitationId: string | null;
+  }) {
     clearBanners();
     try {
-      await removeMechanic({ mechanicId: mechanicId as Id<"mechanics"> });
+      await removeTeamMember({
+        shopUserId: args.shopUserId,
+        invitationId: args.pendingInvitationId,
+      });
+
+      await removeMechanic({ mechanicId: args.mechanicId as Id<"mechanics"> });
       setStepSuccess("Mechanic removed.");
     } catch (error) {
       setStepError(
@@ -480,6 +532,14 @@ export default function ShopSetupPage() {
     } finally {
       setFinishing(false);
     }
+  }
+
+  if (portalAccess === undefined) {
+    return null;
+  }
+
+  if (!canAccessSetup) {
+    return null;
   }
 
   if (onboardingData === undefined) {
@@ -1093,12 +1153,20 @@ export default function ShopSetupPage() {
                           {mechanic.firstName} {mechanic.lastName}
                         </p>
                         <p className="mt-1 text-sm text-gray-500">
-                          {mechanic.title || "Mechanic"}
+                          {mechanic.pendingInvitationId
+                            ? "Invitation pending"
+                            : mechanic.title || "Mechanic"}
                         </p>
                       </div>
                       <button
                         type="button"
-                        onClick={() => handleRemoveMechanic(mechanic._id)}
+                        onClick={() =>
+                          handleRemoveMechanic({
+                            mechanicId: mechanic._id,
+                            shopUserId: mechanic.shopUserId,
+                            pendingInvitationId: mechanic.pendingInvitationId,
+                          })
+                        }
                         className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
                       >
                         <Trash2 className="h-4 w-4" />

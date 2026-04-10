@@ -337,6 +337,30 @@ export const getMyOnboardingData = query({
           .filter((q: any) => q.eq(q.field("is_active"), true))
           .collect()
       : [];
+    const shopUsers = shop
+      ? await ctx.db
+          .query("shop_users")
+          .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
+          .filter((q: any) => q.eq(q.field("is_active"), true))
+          .collect()
+      : [];
+    const pendingInvitations = shop
+      ? await ctx.db
+          .query("shop_invitations")
+          .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
+          .filter((q: any) => q.eq(q.field("status"), "pending"))
+          .collect()
+      : [];
+    const shopUserByMechanicId = new Map(
+      shopUsers
+        .filter((row: any) => row.mechanic_id)
+        .map((row: any) => [String(row.mechanic_id), String(row._id)])
+    );
+    const pendingInvitationByMechanicId = new Map(
+      pendingInvitations
+        .filter((row: any) => row.mechanic_id)
+        .map((row: any) => [String(row.mechanic_id), String(row._id)])
+    );
 
     return {
       userRole: user?.role ?? null,
@@ -368,12 +392,21 @@ export const getMyOnboardingData = query({
           closeTime: (row.close_time ?? "17:00") as string,
         })),
       serviceCategories,
-      mechanics: mechanics.map((mechanic: any) => ({
-        _id: String(mechanic._id),
-        firstName: mechanic.first_name as string,
-        lastName: mechanic.last_name as string,
-        title: (mechanic.title ?? "") as string,
-      })),
+      mechanics: mechanics
+        .filter(
+          (mechanic: any) =>
+            shopUserByMechanicId.has(String(mechanic._id)) ||
+            pendingInvitationByMechanicId.has(String(mechanic._id))
+        )
+        .map((mechanic: any) => ({
+          _id: String(mechanic._id),
+          firstName: mechanic.first_name as string,
+          lastName: mechanic.last_name as string,
+          title: (mechanic.title ?? "") as string,
+          shopUserId: shopUserByMechanicId.get(String(mechanic._id)) ?? null,
+          pendingInvitationId:
+            pendingInvitationByMechanicId.get(String(mechanic._id)) ?? null,
+        })),
     };
   },
 });

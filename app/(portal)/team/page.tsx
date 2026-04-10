@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { UserPlus, Mail, Clock, X, Users, Crown, Wrench, Ellipsis } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { removeTeamMember } from "@/lib/remove-team-member";
 import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
   DropdownMenu,
@@ -129,22 +130,14 @@ export default function TeamPage() {
   async function handleRevoke(invitationId: Id<"shop_invitations">) {
     setRevoking(invitationId);
     try {
-      await fetch("/api/revoke-invite", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ invitationId }),
-      });
+      await removeTeamMember({ invitationId });
     } finally {
       setRevoking(null);
     }
   }
 
   async function handleRemoveMember(shopUserId: Id<"shop_users">) {
-    await fetch("/api/remove-member", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ shopUserId }),
-    });
+    await removeTeamMember({ shopUserId });
   }
 
   async function handleChangeRole(shopUserId: Id<"shop_users">, role: string) {

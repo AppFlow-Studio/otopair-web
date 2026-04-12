@@ -1,11 +1,15 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { getBookingEndTime } from "../lib/schedule-overlap";
-
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                             */
-/* ------------------------------------------------------------------ */
+import {
+  getBookingEndTime,
+  overlapsBlockedSlot,
+  overlapsMechanicBooking,
+} from "./lib/schedule_overlap";
+import {
+  getActiveMechanicsForShop,
+  syncMechanicDayAvailability,
+  syncShopAvailabilityWindow,
+} from "./lib/timeSlotAvailability";
 
 async function getCurrentUserOrNull(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
@@ -40,11 +44,105 @@ async function getPrimaryAuthorizedShop(ctx: any, userId: any) {
   return null;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Queries                                                             */
-/* ------------------------------------------------------------------ */
+async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
+  if (!serviceIds || serviceIds.length === 0) return [] as string[];
+  const names = await Promise.all(
+    serviceIds.map(async (serviceId: any) => {
+      const service = await ctx.db.get(serviceId);
+      return service?.name ?? "Unknown Service";
+    })
+  );
+  return names;
+}
 
-/** Returns shop hours, active mechanics, and shop info for the schedule page. */
+async function getShopBookings(ctx: any, shopId: any) {
+  return await ctx.db
+    .query("bookings")
+    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
+    .collect();
+}
+
+async function getManualBlockedSlotsForShop(ctx: any, shopId: any) {
+  const slots = await ctx.db
+    .query("time_slots")
+    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
+    .collect();
+  const bookings = await getShopBookings(ctx, shopId);
+  const bookingSlotIds = new Set(
+    bookings.filter((booking: any) => booking.time_slot_id).map((booking: any) => String(booking.time_slot_id))
+  );
+  return slots.filter(
+    (slot: any) => !slot.is_available && !bookingSlotIds.has(String(slot._id))
+  );
+}
+
+async function getMechanicIdsForBlock(ctx: any, shopId: any, mechanicId?: any) {
+  if (mechanicId) return [mechanicId];
+  const activeMechanics = await getActiveMechanicsForShop(ctx, shopId);
+  return activeMechanics.map((mechanic: any) => mechanic._id);
+}
+
+async function assertNoWindowConflicts(
+  ctx: any,
+  {
+    shopId,
+    mechanicId,
+    date,
+    startTime,
+    endTime,
+    excludeSlotId,
+    excludeBookingId,
+  }: {
+    shopId: any;
+    mechanicId: any;
+    date: string;
+    startTime: string;
+    endTime: string;
+    excludeSlotId?: string;
+    excludeBookingId?: string;
+  }
+) {
+  const bookings = await getShopBookings(ctx, shopId);
+  const manualBlockedSlots = await getManualBlockedSlotsForShop(ctx, shopId);
+
+  const bookingConflict = overlapsMechanicBooking(
+    String(mechanicId),
+    date,
+    startTime,
+    endTime,
+    bookings.map((booking: any) => ({
+      _id: String(booking._id),
+      scheduledDate: booking.scheduled_date,
+      scheduledTime: booking.scheduled_time,
+      estimatedMinutes: booking.estimated_labor_minutes ?? 60,
+      status: booking.status,
+      mechanicId: booking.mechanic_id ? String(booking.mechanic_id) : null,
+    })),
+    excludeBookingId
+  );
+  if (bookingConflict) {
+    throw new Error("Cannot block a slot that overlaps an existing booking");
+  }
+
+  const blockedConflict = overlapsBlockedSlot(
+    String(mechanicId),
+    date,
+    startTime,
+    endTime,
+    manualBlockedSlots.map((slot: any) => ({
+      _id: String(slot._id),
+      date: slot.date,
+      startTime: slot.start_time,
+      endTime: slot.end_time,
+      mechanicId: slot.mechanic_id ? String(slot.mechanic_id) : null,
+    })),
+    excludeSlotId
+  );
+  if (blockedConflict) {
+    throw new Error("Cannot add blocked time onto a time already blocked");
+  }
+}
+
 export const getScheduleContext = query({
   args: {},
   handler: async (ctx) => {
@@ -61,8 +159,6 @@ export const getScheduleContext = query({
       .query("shops_hours")
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
       .collect();
-
-    // Sort by day_of_week
     hours.sort((a: any, b: any) => a.day_of_week - b.day_of_week);
 
     const allMechanics = await ctx.db
@@ -78,6 +174,7 @@ export const getScheduleContext = query({
         q.and(
           q.neq(q.field("mechanic_id"), undefined),
           q.neq(q.field("accepted_at"), undefined),
+          q.eq(q.field("is_active"), true),
           q.or(
             q.eq(q.field("role"), "shop_mechanic"),
             q.eq(q.field("role"), "mechanic")
@@ -87,35 +184,37 @@ export const getScheduleContext = query({
       .collect();
 
     const acceptedMechanicIds = new Set(
-      mechanicShopUsers.map((su: any) => su.mechanic_id as string)
+      mechanicShopUsers.map((shopUser: any) => String(shopUser.mechanic_id))
     );
 
-    const mechanics = allMechanics.filter((m: any) => acceptedMechanicIds.has(m._id));
+    const mechanics = allMechanics.filter((mechanic: any) =>
+      acceptedMechanicIds.has(String(mechanic._id))
+    );
 
     return {
       shopId: shop._id,
       shopName: shop.name,
-      hours: hours.map((h: any) => ({
-        _id: h._id,
-        dayOfWeek: h.day_of_week,
-        dayName: h.day_name,
-        openTime: h.open_time ?? "09:00",
-        closeTime: h.close_time ?? "17:00",
-        isClosed: h.is_closed,
+      hours: hours.map((hour: any) => ({
+        _id: hour._id,
+        dayOfWeek: hour.day_of_week,
+        dayName: hour.day_name,
+        openTime: hour.open_time ?? "09:00",
+        closeTime: hour.close_time ?? "17:00",
+        isClosed: hour.is_closed ?? false,
       })),
       mechanics: await Promise.all(
-        mechanics.map(async (m: any) => {
+        mechanics.map(async (mechanic: any) => {
           let imageUrl: string | null = null;
-          if (m.photo) {
-            const asset: any = await ctx.db.get(m.photo);
+          if (mechanic.photo) {
+            const asset: any = await ctx.db.get(mechanic.photo);
             if (asset?.url) imageUrl = asset.url;
           }
           return {
-            _id: m._id,
-            name: `${m.first_name} ${m.last_name}`.trim(),
-            firstName: m.first_name,
-            lastName: m.last_name,
-            title: m.title ?? null,
+            _id: mechanic._id,
+            name: `${mechanic.first_name} ${mechanic.last_name}`.trim(),
+            firstName: mechanic.first_name,
+            lastName: mechanic.last_name,
+            title: mechanic.title ?? null,
             imageUrl,
           };
         })
@@ -124,7 +223,6 @@ export const getScheduleContext = query({
   },
 });
 
-/** Returns bookings within a date range for the calendar view. */
 export const getBookingsForRange = query({
   args: {
     dateFrom: v.string(),
@@ -137,65 +235,44 @@ export const getBookingsForRange = query({
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
 
-    const bookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-
-    // Filter to date range and exclude cancelled/declined
+    const bookings = await getShopBookings(ctx, primary.shopId);
     const filtered = bookings.filter(
-      (b: any) =>
-        b.scheduled_date >= args.dateFrom &&
-        b.scheduled_date <= args.dateTo &&
-        b.status !== "cancelled" &&
-        b.status !== "declined"
+      (booking: any) =>
+        booking.scheduled_date >= args.dateFrom &&
+        booking.scheduled_date <= args.dateTo &&
+        booking.status !== "cancelled" &&
+        booking.status !== "declined"
     );
 
     return await Promise.all(
-      filtered.map(async (b: any) => {
-        const customer: any = await ctx.db.get(b.user_id);
-        const customerName =
-          `${customer?.first_name ?? ""} ${customer?.last_name ?? ""}`.trim() ||
-          customer?.email ||
-          "Unknown";
-
-        const mechanic: any = b.mechanic_id
-          ? await ctx.db.get(b.mechanic_id)
+      filtered.map(async (booking: any) => {
+        const customer: any = await ctx.db.get(booking.user_id);
+        const mechanic: any = booking.mechanic_id
+          ? await ctx.db.get(booking.mechanic_id)
           : null;
 
-        const serviceNames = await resolveServiceNames(ctx, b.service_ids);
-
         return {
-          _id: b._id,
-          scheduledDate: b.scheduled_date,
-          scheduledTime: b.scheduled_time,
-          estimatedMinutes: b.estimated_labor_minutes ?? 60,
-          status: b.status,
-          customerName,
-          mechanicId: b.mechanic_id ?? null,
+          _id: booking._id,
+          scheduledDate: booking.scheduled_date,
+          scheduledTime: booking.scheduled_time,
+          estimatedMinutes: booking.estimated_labor_minutes ?? 60,
+          status: booking.status,
+          customerName:
+            `${customer?.first_name ?? ""} ${customer?.last_name ?? ""}`.trim() ||
+            customer?.email ||
+            "Unknown",
+          mechanicId: booking.mechanic_id ?? null,
           mechanicName: mechanic
             ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
             : null,
-          serviceNames,
-          totalCost: b.total_cost,
+          serviceNames: await resolveServiceNames(ctx, booking.service_ids),
+          totalCost: booking.total_cost,
         };
       })
     );
   },
 });
 
-async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
-  if (!serviceIds || serviceIds.length === 0) return [] as string[];
-  const names = await Promise.all(
-    serviceIds.map(async (serviceId: any) => {
-      const service = await ctx.db.get(serviceId);
-      return service?.name ?? "Unknown Service";
-    })
-  );
-  return names;
-}
-
-/** Returns custom block time types for the shop. */
 export const getBlockTimeTypes = query({
   args: {},
   handler: async (ctx) => {
@@ -210,11 +287,10 @@ export const getBlockTimeTypes = query({
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
       .collect();
 
-    return types.map((t: any) => ({ _id: t._id, title: t.title }));
+    return types.map((type: any) => ({ _id: type._id, title: type.title }));
   },
 });
 
-/** Delete a custom block time type. */
 export const deleteBlockTimeType = mutation({
   args: { typeId: v.id("block_time_types") },
   handler: async (ctx, args) => {
@@ -233,7 +309,6 @@ export const deleteBlockTimeType = mutation({
   },
 });
 
-/** Save a custom block time type for the shop. */
 export const saveBlockTimeType = mutation({
   args: { title: v.string() },
   handler: async (ctx, args) => {
@@ -243,13 +318,12 @@ export const saveBlockTimeType = mutation({
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) throw new Error("Not authorized");
 
-    // Avoid duplicates
     const existing = await ctx.db
       .query("block_time_types")
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
       .collect();
     const duplicate = existing.find(
-      (t: any) => t.title.toLowerCase() === args.title.toLowerCase()
+      (type: any) => type.title.toLowerCase() === args.title.toLowerCase()
     );
     if (duplicate) return duplicate._id;
 
@@ -260,7 +334,6 @@ export const saveBlockTimeType = mutation({
   },
 });
 
-/** Returns blocked (unavailable) time slots for a date range. */
 export const getBlockedSlots = query({
   args: {
     dateFrom: v.string(),
@@ -273,44 +346,22 @@ export const getBlockedSlots = query({
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
 
-    const slots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
+    const slots = await getManualBlockedSlotsForShop(ctx, primary.shopId);
 
-    // Collect all time_slot_ids referenced by bookings — these are booking-created slots
-    const bookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-    const bookingSlotIds = new Set(bookings.map((b: any) => String(b.time_slot_id)));
-
-    // Return only manually blocked slots (not booking-created ones)
     return slots
-      .filter(
-        (s: any) =>
-          s.date >= args.dateFrom &&
-          s.date <= args.dateTo &&
-          !s.is_available &&
-          !bookingSlotIds.has(String(s._id))
-      )
-      .map((s: any) => ({
-        _id: s._id,
-        date: s.date,
-        startTime: s.start_time,
-        endTime: s.end_time,
-        mechanicId: s.mechanic_id ?? null,
-        title: s.title ?? null,
-        note: s.note ?? null,
+      .filter((slot: any) => slot.date >= args.dateFrom && slot.date <= args.dateTo)
+      .map((slot: any) => ({
+        _id: slot._id,
+        date: slot.date,
+        startTime: slot.start_time,
+        endTime: slot.end_time,
+        mechanicId: slot.mechanic_id,
+        title: slot.title ?? null,
+        note: slot.note ?? null,
       }));
   },
 });
 
-/* ------------------------------------------------------------------ */
-/*  Mutations                                                           */
-/* ------------------------------------------------------------------ */
-
-/** Update shop operating hours for a specific day. */
 export const updateShopHours = mutation({
   args: {
     hoursId: v.id("shops_hours"),
@@ -336,10 +387,10 @@ export const updateShopHours = mutation({
     if (args.isClosed !== undefined) patch.is_closed = args.isClosed;
 
     await ctx.db.patch(args.hoursId, patch);
+    await syncShopAvailabilityWindow(ctx, { shopId: primary.shopId });
   },
 });
 
-/** Block a specific time slot for a mechanic (manual override). */
 export const blockSlot = mutation({
   args: {
     mechanicId: v.optional(v.id("mechanics")),
@@ -356,59 +407,40 @@ export const blockSlot = mutation({
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) throw new Error("Not authorized");
 
-    // Check for overlapping bookings on this date/mechanic
-    const bookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-    const overlapping = bookings.filter((b: any) => {
-      if (b.scheduled_date !== args.date) return false;
-      if (b.status === "cancelled" || b.status === "declined") return false;
-      // When blocking for a specific mechanic, only check that mechanic's bookings
-      if (args.mechanicId && String(b.mechanic_id ?? "") !== String(args.mechanicId)) return false;
-      // Check time overlap
-      const bEnd = getBookingEndTime(
-        b.scheduled_time,
-        b.estimated_labor_minutes
-      );
-      return b.scheduled_time < args.endTime && bEnd > args.startTime;
-    });
-    if (overlapping.length > 0) {
-      throw new Error("Cannot block a slot that overlaps an existing booking");
+    const mechanicIds = await getMechanicIdsForBlock(ctx, primary.shopId, args.mechanicId);
+    if (mechanicIds.length === 0) {
+      throw new Error("No active mechanics available for this shop");
     }
 
-    // Reject if any existing manually-blocked slot overlaps the new range
-    const bookingSlotIds = new Set(bookings.map((b: any) => String(b.time_slot_id)));
-    const existingSlots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-    const overlappingBlock = existingSlots.find((s: any) => {
-      if (s.date !== args.date) return false;
-      if (s.is_available) return false;
-      if (bookingSlotIds.has(String(s._id))) return false;
-      if (args.mechanicId && (!s.mechanic_id || String(s.mechanic_id) !== String(args.mechanicId))) return false;
-      if (!args.mechanicId && s.mechanic_id) return false;
-      return s.start_time < args.endTime && s.end_time > args.startTime;
-    });
-    if (overlappingBlock) {
-      throw new Error("Cannot add blocked time onto a time already blocked");
-    }
+    for (const mechanicId of mechanicIds) {
+      await assertNoWindowConflicts(ctx, {
+        shopId: primary.shopId,
+        mechanicId,
+        date: args.date,
+        startTime: args.startTime,
+        endTime: args.endTime,
+      });
 
-    await ctx.db.insert("time_slots", {
-      shop_id: primary.shopId,
-      mechanic_id: args.mechanicId,
-      date: args.date,
-      start_time: args.startTime,
-      end_time: args.endTime,
-      is_available: false,
-      ...(args.title ? { title: args.title } : {}),
-      ...(args.note ? { note: args.note } : {}),
-    });
+      await ctx.db.insert("time_slots", {
+        shop_id: primary.shopId,
+        mechanic_id: mechanicId,
+        date: args.date,
+        start_time: args.startTime,
+        end_time: args.endTime,
+        is_available: false,
+        ...(args.title ? { title: args.title } : {}),
+        ...(args.note ? { note: args.note } : {}),
+      });
+
+      await syncMechanicDayAvailability(ctx, {
+        shopId: primary.shopId,
+        mechanicId,
+        date: args.date,
+      });
+    }
   },
 });
 
-/** Update an existing manually-blocked time slot. */
 export const updateBlockedSlot = mutation({
   args: {
     slotId: v.id("time_slots"),
@@ -431,56 +463,47 @@ export const updateBlockedSlot = mutation({
       throw new Error("Not authorized");
     }
 
-    // Check for overlapping bookings (excluding the slot itself)
-    const bookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-    const overlapping = bookings.filter((b: any) => {
-      if (b.scheduled_date !== args.date) return false;
-      if (b.status === "cancelled" || b.status === "declined") return false;
-      if (args.mechanicId && String(b.mechanic_id ?? "") !== String(args.mechanicId)) return false;
-      const bEnd = getBookingEndTime(
-        b.scheduled_time,
-        b.estimated_labor_minutes
-      );
-      return b.scheduled_time < args.endTime && bEnd > args.startTime;
+    const nextMechanicId = args.mechanicId ?? slot.mechanic_id;
+    await assertNoWindowConflicts(ctx, {
+      shopId: primary.shopId,
+      mechanicId: nextMechanicId,
+      date: args.date,
+      startTime: args.startTime,
+      endTime: args.endTime,
+      excludeSlotId: String(args.slotId),
     });
-    if (overlapping.length > 0) {
-      throw new Error("Cannot block a slot that overlaps an existing booking");
-    }
 
-    // Check for overlapping blocked slots (excluding self)
-    const bookingSlotIds = new Set(bookings.map((b: any) => String(b.time_slot_id)));
-    const existingSlots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-    const overlappingBlock = existingSlots.find((s: any) => {
-      if (String(s._id) === String(args.slotId)) return false; // exclude self
-      if (s.date !== args.date) return false;
-      if (s.is_available) return false;
-      if (bookingSlotIds.has(String(s._id))) return false;
-      if (args.mechanicId && (!s.mechanic_id || String(s.mechanic_id) !== String(args.mechanicId))) return false;
-      if (!args.mechanicId && s.mechanic_id) return false;
-      return s.start_time < args.endTime && s.end_time > args.startTime;
-    });
-    if (overlappingBlock) {
-      throw new Error("Cannot add blocked time onto a time already blocked");
-    }
+    const previousMechanicId = slot.mechanic_id;
+    const previousDate = slot.date;
 
     await ctx.db.patch(args.slotId, {
-      mechanic_id: args.mechanicId,
+      mechanic_id: nextMechanicId,
       date: args.date,
       start_time: args.startTime,
       end_time: args.endTime,
       title: args.title ?? undefined,
       note: args.note ?? undefined,
     });
+
+    await syncMechanicDayAvailability(ctx, {
+      shopId: primary.shopId,
+      mechanicId: nextMechanicId,
+      date: args.date,
+    });
+
+    if (
+      String(previousMechanicId) !== String(nextMechanicId) ||
+      previousDate !== args.date
+    ) {
+      await syncMechanicDayAvailability(ctx, {
+        shopId: primary.shopId,
+        mechanicId: previousMechanicId,
+        date: previousDate,
+      });
+    }
   },
 });
 
-/** Unblock a previously blocked time slot. */
 export const unblockSlot = mutation({
   args: {
     slotId: v.id("time_slots"),
@@ -497,13 +520,17 @@ export const unblockSlot = mutation({
       throw new Error("Not authorized");
     }
 
+    const mechanicId = slot.mechanic_id;
+    const date = slot.date;
     await ctx.db.delete(args.slotId);
+    await syncMechanicDayAvailability(ctx, {
+      shopId: primary.shopId,
+      mechanicId,
+      date,
+    });
   },
 });
 
-/** Block all slots for a mechanic on a given date (full day off).
- *  When `force` is true and the mechanic has bookings, blocks all gaps
- *  around those bookings rather than throwing. */
 export const blockMechanicDay = mutation({
   args: {
     mechanicId: v.id("mechanics"),
@@ -517,57 +544,48 @@ export const blockMechanicDay = mutation({
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) throw new Error("Not authorized");
 
-    // Get shop hours for this day of week
-    const dayDate = new Date(args.date + "T00:00:00");
-    const dayOfWeek = dayDate.getDay(); // 0=Sun
+    const dayDate = new Date(`${args.date}T00:00:00`);
+    const dayOfWeek = dayDate.getDay();
 
     const hours = await ctx.db
       .query("shops_hours")
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
       .collect();
-
-    const dayHours = hours.find((h: any) => h.day_of_week === dayOfWeek);
+    const dayHours = hours.find((hour: any) => hour.day_of_week === dayOfWeek);
     if (dayHours?.is_closed) throw new Error("Shop is closed on this day");
 
-    // Fall back to full day when no hours are configured (matches the schedule grid fallback)
     const openTime = dayHours?.open_time ?? "00:00";
     const closeTime = dayHours?.close_time ?? "24:00";
 
-    // Fetch bookings for this mechanic on this date
-    const allBookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-    const mechanicBookings = allBookings.filter(
-      (b: any) =>
-        b.scheduled_date === args.date &&
-        b.mechanic_id &&
-        String(b.mechanic_id) === String(args.mechanicId) &&
-        b.status !== "cancelled" &&
-        b.status !== "declined"
-    );
+    const allBookings = await getShopBookings(ctx, primary.shopId);
+    const mechanicBookings = allBookings
+      .filter(
+        (booking: any) =>
+          booking.scheduled_date === args.date &&
+          booking.mechanic_id &&
+          String(booking.mechanic_id) === String(args.mechanicId) &&
+          booking.status !== "cancelled" &&
+          booking.status !== "declined"
+      )
+      .sort((a: any, b: any) =>
+        a.scheduled_time.localeCompare(b.scheduled_time)
+      );
 
-    // force=true means the frontend already confirmed with the user; proceed around bookings
+    if (mechanicBookings.length > 0 && !args.force) {
+      throw new Error("This mechanic already has bookings on that day");
+    }
 
-    // Remove any existing manually-blocked slots for this mechanic on this date
-    const bookingSlotIds = new Set(allBookings.map((b: any) => String(b.time_slot_id)));
-    const existingSlots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-    const toDelete = existingSlots.filter((s: any) =>
-      s.date === args.date &&
-      !s.is_available &&
-      !bookingSlotIds.has(String(s._id)) &&
-      s.mechanic_id &&
-      String(s.mechanic_id) === String(args.mechanicId)
-    );
-    for (const slot of toDelete) {
-      await ctx.db.delete(slot._id);
+    const existingManualBlocks = await getManualBlockedSlotsForShop(ctx, primary.shopId);
+    for (const slot of existingManualBlocks) {
+      if (
+        slot.date === args.date &&
+        String(slot.mechanic_id) === String(args.mechanicId)
+      ) {
+        await ctx.db.delete(slot._id);
+      }
     }
 
     if (mechanicBookings.length === 0) {
-      // No bookings — block the entire day as a single slot
       await ctx.db.insert("time_slots", {
         shop_id: primary.shopId,
         mechanic_id: args.mechanicId,
@@ -577,36 +595,30 @@ export const blockMechanicDay = mutation({
         is_available: false,
       });
     } else {
-      // Block gaps around existing bookings
-      // Sort bookings by start time
-      const sorted = mechanicBookings.sort((a: any, b: any) =>
-        a.scheduled_time < b.scheduled_time ? -1 : 1
-      );
-
-      // Build list of booked intervals
-      const booked: Array<{ start: string; end: string }> = sorted.map((b: any) => ({
-        start: b.scheduled_time,
+      const bookedIntervals = mechanicBookings.map((booking: any) => ({
+        start: booking.scheduled_time,
         end: getBookingEndTime(
-          b.scheduled_time,
-          b.estimated_labor_minutes
+          booking.scheduled_time,
+          booking.estimated_labor_minutes
         ),
       }));
 
-      // Collect gaps: [openTime, first booking), (between bookings), (last booking, closeTime]
       const gaps: Array<{ start: string; end: string }> = [];
       let cursor = openTime;
-      for (const interval of booked) {
+      for (const interval of bookedIntervals) {
         if (cursor < interval.start) {
           gaps.push({ start: cursor, end: interval.start });
         }
-        // Advance cursor past this booking (take the later of cursor and booking end)
-        if (interval.end > cursor) cursor = interval.end;
+        if (interval.end > cursor) {
+          cursor = interval.end;
+        }
       }
       if (cursor < closeTime) {
         gaps.push({ start: cursor, end: closeTime });
       }
 
       for (const gap of gaps) {
+        if (gap.start >= gap.end) continue;
         await ctx.db.insert("time_slots", {
           shop_id: primary.shopId,
           mechanic_id: args.mechanicId,
@@ -617,13 +629,18 @@ export const blockMechanicDay = mutation({
         });
       }
     }
+
+    await syncMechanicDayAvailability(ctx, {
+      shopId: primary.shopId,
+      mechanicId: args.mechanicId,
+      date: args.date,
+    });
   },
 });
 
-/** Copy all blocked slots from the given week to the following week. */
 export const copyBlockedSlotsToNextWeek = mutation({
   args: {
-    weekStartDate: v.string(), // YYYY-MM-DD of current week's Sunday
+    weekStartDate: v.string(),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
@@ -632,35 +649,16 @@ export const copyBlockedSlotsToNextWeek = mutation({
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) throw new Error("Not authorized");
 
-    // Compute date range for the current week (Sun–Sat)
-    const start = new Date(args.weekStartDate + "T00:00:00");
+    const start = new Date(`${args.weekStartDate}T00:00:00`);
     const endDate = new Date(start);
     endDate.setDate(endDate.getDate() + 6);
     const dateFrom = args.weekStartDate;
     const dateTo = endDate.toISOString().split("T")[0];
 
-    // Get all time slots in this week
-    const slots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-
-    // Collect booking slot IDs to exclude them
-    const bookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-    const bookingSlotIds = new Set(bookings.map((b: any) => String(b.time_slot_id)));
-
-    const blockedSlots = slots.filter(
-      (s: any) =>
-        s.date >= dateFrom &&
-        s.date <= dateTo &&
-        !s.is_available &&
-        !bookingSlotIds.has(String(s._id))
+    const blockedSlots = (await getManualBlockedSlotsForShop(ctx, primary.shopId)).filter(
+      (slot: any) => slot.date >= dateFrom && slot.date <= dateTo
     );
 
-    // Get existing blocked slots for next week to avoid duplicates
     const nextStart = new Date(start);
     nextStart.setDate(nextStart.getDate() + 7);
     const nextEnd = new Date(nextStart);
@@ -668,48 +666,53 @@ export const copyBlockedSlotsToNextWeek = mutation({
     const nextDateFrom = nextStart.toISOString().split("T")[0];
     const nextDateTo = nextEnd.toISOString().split("T")[0];
 
-    const nextWeekSlots = slots.filter(
-      (s: any) =>
-        s.date >= nextDateFrom &&
-        s.date <= nextDateTo &&
-        !s.is_available &&
-        !bookingSlotIds.has(String(s._id))
+    const nextWeekSlots = (await getManualBlockedSlotsForShop(ctx, primary.shopId)).filter(
+      (slot: any) => slot.date >= nextDateFrom && slot.date <= nextDateTo
     );
 
     let copied = 0;
+    const affected = new Set<string>();
     for (const slot of blockedSlots) {
-      // Shift date by 7 days
-      const slotDate = new Date(slot.date + "T00:00:00");
+      const slotDate = new Date(`${slot.date}T00:00:00`);
       slotDate.setDate(slotDate.getDate() + 7);
       const newDate = slotDate.toISOString().split("T")[0];
 
-      // Check for duplicate (same mechanic, date, start_time, end_time)
       const isDuplicate = nextWeekSlots.some(
-        (ns: any) =>
-          ns.date === newDate &&
-          ns.start_time === slot.start_time &&
-          ns.end_time === slot.end_time &&
-          String(ns.mechanic_id ?? "") === String(slot.mechanic_id ?? "")
+        (nextSlot: any) =>
+          nextSlot.date === newDate &&
+          nextSlot.start_time === slot.start_time &&
+          nextSlot.end_time === slot.end_time &&
+          String(nextSlot.mechanic_id) === String(slot.mechanic_id)
       );
       if (isDuplicate) continue;
 
       await ctx.db.insert("time_slots", {
         shop_id: primary.shopId,
-        ...(slot.mechanic_id ? { mechanic_id: slot.mechanic_id } : {}),
+        mechanic_id: slot.mechanic_id,
         date: newDate,
         start_time: slot.start_time,
         end_time: slot.end_time,
         is_available: false,
+        title: slot.title ?? undefined,
+        note: slot.note ?? undefined,
       });
-      copied++;
+      copied += 1;
+      affected.add(`${String(slot.mechanic_id)}:${newDate}`);
+    }
+
+    for (const item of affected) {
+      const [mechanicId, date] = item.split(":");
+      await syncMechanicDayAvailability(ctx, {
+        shopId: primary.shopId,
+        mechanicId,
+        date,
+      });
     }
 
     return { copied };
   },
 });
 
-/** Returns service categories with their services for the shop.
- *  Uses shop_services (is_offered) when rows exist; falls back to all platform services otherwise. */
 export const getShopServicesWithCategories = query({
   args: {},
   handler: async (ctx) => {
@@ -724,19 +727,18 @@ export const getShopServicesWithCategories = query({
       .filter((q: any) => q.eq(q.field("is_offered"), true))
       .collect();
 
-    // Fall back to all platform services if this shop has no shop_services rows yet
     let serviceIds: string[];
     if (offered.length > 0) {
-      serviceIds = offered.map((e: any) => e.service_id as string);
+      serviceIds = offered.map((entry: any) => entry.service_id as string);
     } else {
-      const all = await ctx.db.query("services").collect();
-      serviceIds = all.map((s: any) => s._id as string);
+      const allServices = await ctx.db.query("services").collect();
+      serviceIds = allServices.map((service: any) => service._id as string);
     }
 
     const rows = (
       await Promise.all(
-        serviceIds.map(async (sid) => {
-          const service: any = await ctx.db.get(sid as any);
+        serviceIds.map(async (serviceId) => {
+          const service: any = await ctx.db.get(serviceId as any);
           if (!service) return null;
           const category: any = await ctx.db.get(service.service_category_id);
           return {
@@ -751,21 +753,43 @@ export const getShopServicesWithCategories = query({
         })
       )
     ).filter(Boolean) as Array<{
-      _id: string; name: string; defaultLaborHours: number; displayOrder: number;
-      categoryId: string; categoryName: string; categoryDisplayOrder: number;
+      _id: string;
+      name: string;
+      defaultLaborHours: number;
+      displayOrder: number;
+      categoryId: string;
+      categoryName: string;
+      categoryDisplayOrder: number;
     }>;
 
-    const catMap = new Map<string, { id: string; name: string; displayOrder: number; services: typeof rows }>();
-    for (const s of rows) {
-      if (!catMap.has(s.categoryId)) {
-        catMap.set(s.categoryId, { id: s.categoryId, name: s.categoryName, displayOrder: s.categoryDisplayOrder, services: [] });
+    const categoryMap = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        displayOrder: number;
+        services: typeof rows;
       }
-      catMap.get(s.categoryId)!.services.push(s);
+    >();
+
+    for (const service of rows) {
+      if (!categoryMap.has(service.categoryId)) {
+        categoryMap.set(service.categoryId, {
+          id: service.categoryId,
+          name: service.categoryName,
+          displayOrder: service.categoryDisplayOrder,
+          services: [],
+        });
+      }
+      categoryMap.get(service.categoryId)!.services.push(service);
     }
 
-    const categories = Array.from(catMap.values())
+    const categories = Array.from(categoryMap.values())
       .sort((a, b) => a.displayOrder - b.displayOrder)
-      .map((c) => ({ ...c, services: c.services.sort((a, b) => a.displayOrder - b.displayOrder) }));
+      .map((category) => ({
+        ...category,
+        services: category.services.sort((a, b) => a.displayOrder - b.displayOrder),
+      }));
 
     return { shopId: primary.shopId as string, categories };
   },

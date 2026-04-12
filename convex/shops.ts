@@ -1,10 +1,13 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { v } from "convex/values";
+import {
+  syncMechanicAvailabilityWindow,
+  syncShopAvailabilityWindow,
+} from "./lib/timeSlotAvailability";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 
-async function getCurrentUser(ctx: { auth: { getUserIdentity: () => Promise<{ subject: string; email?: string; givenName?: string; familyName?: string; pictureUrl?: string } | null> }; db: any }) {
+async function getCurrentUser(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) return { identity: null, user: null };
 
@@ -16,7 +19,7 @@ async function getCurrentUser(ctx: { auth: { getUserIdentity: () => Promise<{ su
   return { identity, user };
 }
 
-async function getPrimaryShopForUser(ctx: { db: any }, userId: any) {
+async function getPrimaryShopForUser(ctx: any, userId: any) {
   const activeMembership = await ctx.db
     .query("shop_users")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
@@ -39,7 +42,7 @@ async function getPrimaryShopForUser(ctx: { db: any }, userId: any) {
   return { shop: ownedShop, membershipRole: "shop_owner", membership: null };
 }
 
-async function getOrCreateCurrentShopOwner(ctx: { auth: { getUserIdentity: () => Promise<{ subject: string; email?: string; givenName?: string; familyName?: string; pictureUrl?: string } | null> }; db: any }) {
+async function getOrCreateCurrentShopOwner(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new Error("Not authenticated");
 
@@ -61,7 +64,7 @@ async function getOrCreateCurrentShopOwner(ctx: { auth: { getUserIdentity: () =>
       createdAt: now,
     });
     user = await ctx.db.get(userId);
-  } else if (user.role !== "shop_owner") {
+  } else if (user.role !== "shop_owner" && user.role !== "owner") {
     await ctx.db.patch(user._id, { role: "shop_owner", lastUpdated: Date.now() });
     user = { ...user, role: "shop_owner" };
   }
@@ -69,6 +72,13 @@ async function getOrCreateCurrentShopOwner(ctx: { auth: { getUserIdentity: () =>
   if (!user) throw new Error("User not found");
   return user;
 }
+
+export const list = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("shops").collect();
+  },
+});
 
 export const create = mutation({
   args: {
@@ -84,39 +94,17 @@ export const create = mutation({
     website: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-
-    let user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-
-    if (!user) {
-      const now = Date.now();
-      const userId = await ctx.db.insert("users", {
-        clerkUserId: identity.subject,
-        email: identity.email ?? "",
-        first_name: identity.givenName ?? undefined,
-        last_name: identity.familyName ?? undefined,
-        profile_photo_url: identity.pictureUrl ?? undefined,
-        role: "shop_owner",
-        onboardingCompleted: false,
-        createdAt: now,
-      });
-      user = await ctx.db.get(userId);
-    }
-
-    if (!user) throw new Error("User not found");
+    const user = await getOrCreateCurrentShopOwner(ctx);
 
     const existing = await ctx.db
       .query("shops")
-      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .withIndex("by_slug", (q: any) => q.eq("slug", args.slug))
       .first();
-    if (existing) throw new Error("This slug is already taken. Please choose another.");
+    if (existing) {
+      throw new Error("This slug is already taken. Please choose another.");
+    }
 
     const now = Date.now();
-
     const shopId = await ctx.db.insert("shops", {
       name: args.name,
       slug: args.slug,
@@ -151,27 +139,20 @@ export const create = mutation({
 export const getByOwner = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-
+    const { user } = await getCurrentUser(ctx);
     if (!user) return [];
 
     return await ctx.db
       .query("shops")
-      .withIndex("by_owner_user_id", (q) => q.eq("owner_user_id", user._id))
+      .withIndex("by_owner_user_id", (q: any) => q.eq("owner_user_id", user._id))
       .collect();
   },
 });
 
 export const getById = query({
-  args: { shopId: v.id("shops") },
+  args: { id: v.id("shops") },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.shopId);
+    return await ctx.db.get(args.id);
   },
 });
 
@@ -180,7 +161,7 @@ export const getBySlug = query({
   handler: async (ctx, args) => {
     return await ctx.db
       .query("shops")
-      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .withIndex("by_slug", (q: any) => q.eq("slug", args.slug))
       .first();
   },
 });
@@ -188,24 +169,17 @@ export const getBySlug = query({
 export const getMyShops = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-
+    const { user } = await getCurrentUser(ctx);
     if (!user) return [];
 
     const shopUsers = await ctx.db
       .query("shop_users")
-      .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
-      .filter((q) => q.eq(q.field("is_active"), true))
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .filter((q: any) => q.eq(q.field("is_active"), true))
       .collect();
 
     const shops = await Promise.all(
-      shopUsers.map(async (su) => {
+      shopUsers.map(async (su: any) => {
         const shop = await ctx.db.get(su.shop_id);
         return shop ? { ...shop, memberRole: su.role } : null;
       })
@@ -215,31 +189,19 @@ export const getMyShops = query({
   },
 });
 
-/**
- * Returns the current user's portal access status.
- * Used by the portal layout to handle onboarding/deactivation redirects.
- */
 export const getMyPortalAccess = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return null;
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-
+    const { user } = await getCurrentUser(ctx);
     if (!user) return null;
 
-    // Check for any shop_users record (active or inactive)
     const allMemberships = await ctx.db
       .query("shop_users")
-      .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
       .collect();
 
-    const activeMembership = allMemberships.find((m) => m.is_active);
-    const inactiveMembership = allMemberships.find((m) => !m.is_active);
+    const activeMembership = allMemberships.find((membership: any) => membership.is_active);
+    const inactiveMembership = allMemberships.find((membership: any) => !membership.is_active);
 
     if (activeMembership) {
       const shop = await ctx.db.get(activeMembership.shop_id);
@@ -255,7 +217,6 @@ export const getMyPortalAccess = query({
       return { status: "deactivated" as const };
     }
 
-    // User has a shop role but no shop_users record — needs onboarding
     return { status: "no_shop" as const, userRole: user.role };
   },
 });
@@ -263,10 +224,10 @@ export const getMyPortalAccess = query({
 export const getMyOnboardingData = query({
   args: {},
   handler: async (ctx) => {
-    const { identity, user } = await getCurrentUser(ctx);
-    if (!identity) return null;
+    const { user } = await getCurrentUser(ctx);
+    if (!user) return null;
 
-    const primary = user ? await getPrimaryShopForUser(ctx, user._id) : null;
+    const primary = await getPrimaryShopForUser(ctx, user._id);
     const shop = primary?.shop ?? null;
 
     const allServices = await ctx.db.query("services").collect();
@@ -293,7 +254,7 @@ export const getMyOnboardingData = query({
           services: [] as Array<{
             _id: string;
             name: string;
-            description: string;
+            description?: string;
             defaultLaborHours: number;
             displayOrder: number;
             isOffered: boolean;
@@ -308,7 +269,7 @@ export const getMyOnboardingData = query({
       categoryMap.get(categoryId)!.services.push({
         _id: String(service._id),
         name: service.name as string,
-        description: service.description as string,
+        description: service.description as string | undefined,
         defaultLaborHours: (service.default_labor_hours ?? 1) as number,
         displayOrder: (service.display_order ?? 0) as number,
         isOffered: offeredIds.has(String(service._id)),
@@ -337,6 +298,7 @@ export const getMyOnboardingData = query({
           .filter((q: any) => q.eq(q.field("is_active"), true))
           .collect()
       : [];
+
     const shopUsers = shop
       ? await ctx.db
           .query("shop_users")
@@ -344,6 +306,7 @@ export const getMyOnboardingData = query({
           .filter((q: any) => q.eq(q.field("is_active"), true))
           .collect()
       : [];
+
     const pendingInvitations = shop
       ? await ctx.db
           .query("shop_invitations")
@@ -351,6 +314,7 @@ export const getMyOnboardingData = query({
           .filter((q: any) => q.eq(q.field("status"), "pending"))
           .collect()
       : [];
+
     const shopUserByMechanicId = new Map(
       shopUsers
         .filter((row: any) => row.mechanic_id)
@@ -363,7 +327,7 @@ export const getMyOnboardingData = query({
     );
 
     return {
-      userRole: user?.role ?? null,
+      userRole: user.role ?? null,
       shop: shop
         ? {
             _id: shop._id,
@@ -387,7 +351,7 @@ export const getMyOnboardingData = query({
           _id: String(row._id),
           dayOfWeek: row.day_of_week as number,
           dayName: row.day_name as string,
-          isClosed: row.is_closed as boolean,
+          isClosed: (row.is_closed ?? false) as boolean,
           openTime: (row.open_time ?? "09:00") as string,
           closeTime: (row.close_time ?? "17:00") as string,
         })),
@@ -507,7 +471,6 @@ export const saveOnboardingHours = mutation({
     const byDay = new Map(existing.map((row: any) => [row.day_of_week as number, row]));
 
     for (const hour of args.hours) {
-      const current = byDay.get(hour.dayOfWeek);
       const patch = {
         day_name: hour.dayName,
         day_of_week: hour.dayOfWeek,
@@ -517,6 +480,7 @@ export const saveOnboardingHours = mutation({
         shop_id: primary.shop._id,
       };
 
+      const current = byDay.get(hour.dayOfWeek);
       if (current) {
         await ctx.db.patch(current._id, patch);
       } else {
@@ -525,6 +489,7 @@ export const saveOnboardingHours = mutation({
     }
 
     await ctx.db.patch(primary.shop._id, { onboarding_complete: false });
+    await syncShopAvailabilityWindow(ctx, { shopId: primary.shop._id });
     return primary.shop._id;
   },
 });
@@ -589,7 +554,7 @@ export const addOnboardingMechanic = mutation({
       throw new Error("Not authorized");
     }
 
-    return await ctx.db.insert("mechanics", {
+    const mechanicId = await ctx.db.insert("mechanics", {
       shop_id: primary.shop._id,
       first_name: args.firstName.trim(),
       last_name: args.lastName.trim(),
@@ -598,6 +563,13 @@ export const addOnboardingMechanic = mutation({
       rating: 0,
       review_count: 0,
     });
+
+    await syncMechanicAvailabilityWindow(ctx, {
+      shopId: primary.shop._id,
+      mechanicId,
+    });
+
+    return mechanicId;
   },
 });
 
@@ -619,6 +591,10 @@ export const removeOnboardingMechanic = mutation({
     }
 
     await ctx.db.patch(args.mechanicId, { is_active: false });
+    await syncMechanicAvailabilityWindow(ctx, {
+      shopId: primary.shop._id,
+      mechanicId: args.mechanicId,
+    });
     return args.mechanicId;
   },
 });
@@ -655,6 +631,7 @@ export const completeOnboarding = mutation({
       onboardingCompleted: true,
       lastUpdated: Date.now(),
     });
+    await syncShopAvailabilityWindow(ctx, { shopId: primary.shop._id });
 
     return primary.shop._id;
   },
@@ -663,20 +640,13 @@ export const completeOnboarding = mutation({
 export const deactivateMyAccount = mutation({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-
-    if (!user) throw new Error("User not found");
+    const { user } = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
 
     const activeMembership = await ctx.db
       .query("shop_users")
-      .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
-      .filter((q) => q.eq(q.field("is_active"), true))
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .filter((q: any) => q.eq(q.field("is_active"), true))
       .first();
 
     if (!activeMembership) throw new Error("No active membership found");

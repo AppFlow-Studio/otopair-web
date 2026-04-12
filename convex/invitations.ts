@@ -7,7 +7,6 @@ export const create = mutation({
     shopId: v.id("shops"),
     email: v.string(),
     role: v.string(),
-    // Token generated in the API route so it can be embedded in Clerk's invitation metadata
     token: v.string(),
     mechanicId: v.optional(v.id("mechanics")),
     clerkInvitationId: v.optional(v.string()),
@@ -27,8 +26,6 @@ export const create = mutation({
       )
       .first();
     if (existing) {
-      // If the invited user's account no longer exists or is pending deletion,
-      // treat the old invitation as stale and revoke it so a fresh one can be sent.
       const existingUser = await ctx.db
         .query("users")
         .withIndex("by_email", (q) => q.eq("email", args.email))
@@ -87,8 +84,6 @@ export const getByToken = query({
 export const revoke = mutation({
   args: { invitationId: v.id("shop_invitations") },
   handler: async (ctx, args) => {
-    // Auth is enforced at the API route level (/api/revoke-invite) when called from the server.
-    // This mutation is no longer called directly from the client.
     await ctx.db.patch(args.invitationId, { status: "revoked" });
   },
 });
@@ -109,12 +104,10 @@ export const getTeamMembers = query({
       })
     );
 
-    return members.filter((m) => m !== null);
+    return members.filter((member) => member !== null);
   },
 });
 
-// Called from user.created webhook to auto-join a shop when invitation metadata is present.
-// Requires an invitation token — email alone is not sufficient to prevent unauthorized acceptance.
 export const acceptIfInvited = mutation({
   args: {
     clerkUserId: v.string(),
@@ -123,7 +116,6 @@ export const acceptIfInvited = mutation({
     mechanicId: v.optional(v.id("mechanics")),
   },
   handler: async (ctx, args) => {
-    // Token is required — users must use the invite link to accept
     if (!args.invitationToken) return null;
 
     const user = await ctx.db
@@ -133,10 +125,9 @@ export const acceptIfInvited = mutation({
     if (!user) return null;
 
     const now = Date.now();
-
     const invitation = await ctx.db
       .query("shop_invitations")
-      .withIndex("by_token", (q) => q.eq("token", args.invitationToken!))
+      .withIndex("by_token", (q) => q.eq("token", args.invitationToken))
       .filter((q) =>
         q.and(q.eq(q.field("status"), "pending"), q.gt(q.field("expires_at"), now))
       )
@@ -144,11 +135,10 @@ export const acceptIfInvited = mutation({
 
     if (!invitation) return null;
 
-    // Create or reactivate shop_users record
     const existingShopUser = await ctx.db
       .query("shop_users")
       .withIndex("by_user_and_shop", (q) =>
-        q.eq("user_id", user._id).eq("shop_id", invitation!.shop_id)
+        q.eq("user_id", user._id).eq("shop_id", invitation.shop_id)
       )
       .first();
 
@@ -165,7 +155,6 @@ export const acceptIfInvited = mutation({
         updated_at: now,
       });
     } else if (!existingShopUser.is_active) {
-      // Previously removed — reactivate with updated role
       await ctx.db.patch(existingShopUser._id, {
         is_active: true,
         role: invitation.role,
@@ -175,10 +164,8 @@ export const acceptIfInvited = mutation({
       });
     }
 
-    // Update Convex user role to match the invitation
     await ctx.db.patch(user._id, { role: invitation.role });
 
-    // Mark invitation as accepted (idempotent)
     if (invitation.status === "pending") {
       await ctx.db.patch(invitation._id, {
         status: "accepted",
@@ -190,8 +177,6 @@ export const acceptIfInvited = mutation({
   },
 });
 
-// Called directly from the /accept-invite page when the user is already logged in
-// (existing Clerk accounts don't go through user.created, so the webhook won't fire).
 export const acceptAsCurrentUser = mutation({
   args: { token: v.string() },
   handler: async (ctx, args) => {
@@ -199,8 +184,6 @@ export const acceptAsCurrentUser = mutation({
     if (!identity) throw new Error("Not authenticated");
 
     const now = Date.now();
-
-    // Look up invitation first so we know the correct role before creating user
     const invitation = await ctx.db
       .query("shop_invitations")
       .withIndex("by_token", (q) => q.eq("token", args.token))
@@ -208,16 +191,18 @@ export const acceptAsCurrentUser = mutation({
 
     if (!invitation) throw new Error("Invitation not found.");
     if (invitation.status === "revoked") throw new Error("This invitation has been revoked.");
-    if (invitation.status === "accepted") return { shopId: invitation.shop_id, role: invitation.role };
-    if (invitation.status === "expired" || Date.now() > invitation.expires_at)
+    if (invitation.status === "accepted") {
+      return { shopId: invitation.shop_id, role: invitation.role };
+    }
+    if (invitation.status === "expired" || Date.now() > (invitation.expires_at ?? 0)) {
       throw new Error("This invitation has expired.");
+    }
 
     let user = await ctx.db
       .query("users")
       .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
       .unique();
 
-    // Existing Clerk user with no Convex record yet — create it on the fly.
     if (!user) {
       const userId = await ctx.db.insert("users", {
         clerkUserId: identity.subject,
@@ -254,7 +239,6 @@ export const acceptAsCurrentUser = mutation({
         updated_at: now,
       });
     } else if (!existingShopUser.is_active) {
-      // Previously removed — reactivate with updated role
       await ctx.db.patch(existingShopUser._id, {
         is_active: true,
         role: invitation.role,
@@ -284,7 +268,6 @@ export const getMemberWithUser = query({
 export const removeMember = mutation({
   args: { shopUserId: v.id("shop_users") },
   handler: async (ctx, args) => {
-    // Auth is enforced at the API route level (/api/remove-member) when called from the server.
     await ctx.db.patch(args.shopUserId, { is_active: false, updated_at: Date.now() });
   },
 });
@@ -298,8 +281,6 @@ export const updateMemberRole = mutation({
   },
 });
 
-// Called from invitation.accepted webhook event as a fallback/supplement to user.created.
-// Looks up the user by email since the invitation.accepted event doesn't include clerkUserId.
 export const acceptByClerkInvitationId = mutation({
   args: {
     clerkInvitationId: v.string(),
@@ -316,7 +297,6 @@ export const acceptByClerkInvitationId = mutation({
     if (!invitation || invitation.status !== "pending") return null;
 
     const now = Date.now();
-    // Look up user by email using the by_email index
     const user = await ctx.db
       .query("users")
       .withIndex("by_email", (q) => q.eq("email", args.email))

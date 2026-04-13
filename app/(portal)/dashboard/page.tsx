@@ -1,60 +1,29 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import Image from "next/image";
-import { useUser } from "@clerk/nextjs";
-import { useQuery, useMutation } from "convex/react";
-import { api } from "@/convex/_generated/api";
+import type { ComponentType } from "react";
 import Link from "next/link";
+import { useUser } from "@clerk/nextjs";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import {
-  MoreVertical,
-  ArrowRight,
+  ArrowUpRight,
+  BadgeDollarSign,
   Bell,
+  CalendarClock,
+  ChevronRight,
+  ClipboardList,
+  CreditCard,
   Loader2,
-  Search,
-  HelpCircle,
-  CheckCircle,
+  Settings2,
+  Star,
   Store,
-  Clock,
-  X,
+  Users,
 } from "lucide-react";
-import JeepWranglerImage from "@/components/images/2022-Jeep-Wrangler-front_50724_032_1959x1052_PDN_cropped.png";
 import MechanicDashboard from "./mechanic-dashboard";
 
-function getStatusBadgeClass(color: string) {
-  switch (color) {
-    case "blue":   return "text-blue-600 bg-blue-50 group-hover:bg-blue-100";
-    case "indigo": return "text-primary bg-accent group-hover:bg-accent/80";
-    case "green":  return "text-green-600 bg-green-50 group-hover:bg-green-100";
-    case "orange": return "text-orange-600 bg-orange-50 group-hover:bg-orange-100";
-    default:       return "text-muted-foreground bg-muted group-hover:bg-muted/80";
-  }
-}
+const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
 
-function liveStageInfo(liveStage: string | null): { label: string; color: string } {
-  switch (liveStage) {
-    case "booking_confirmed":   return { label: "Confirmed",   color: "indigo" };
-    case "service_in_progress": return { label: "In Progress", color: "blue"   };
-    case "vehicle_ready":       return { label: "Ready",       color: "green"  };
-    default:                    return { label: "In Progress", color: "blue"   };
-  }
-}
-
-const avatarColors = [
-  "bg-blue-100 text-blue-600",
-  "bg-purple-100 text-purple-600",
-  "bg-green-100 text-green-600",
-  "bg-orange-100 text-orange-600",
-];
-
-function getTeamInitials(firstName?: string | null, lastName?: string | null): string {
-  if (firstName && lastName) return `${firstName[0]}${lastName[0]}`.toUpperCase();
-  if (firstName) return firstName.slice(0, 2).toUpperCase();
-  return "??";
-}
-
-function formatDate(date: Date): string {
+function formatLongDate(date: Date): string {
   return date.toLocaleDateString("en-US", {
     weekday: "long",
     month: "long",
@@ -62,45 +31,144 @@ function formatDate(date: Date): string {
   });
 }
 
-/** Animates a number from 0 to target over ~600ms on first render (easeOutExpo). */
-function useCountUp(target: number | undefined): number {
-  const [display, setDisplay] = useState(0);
-  const started = useRef(false);
-  useEffect(() => {
-    if (target === undefined || started.current) return;
-    if (target === 0) { setDisplay(0); started.current = true; return; }
-    started.current = true;
-    const duration = 600;
-    const startTime = performance.now();
-    function step(now: number) {
-      const elapsed = now - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      const eased = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
-      setDisplay(Math.round(eased * target));
-      if (progress < 1) requestAnimationFrame(step);
-    }
-    requestAnimationFrame(step);
-  }, [target]);
-  return display;
+function formatCurrency(amount: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(amount);
 }
 
-function Skeleton({ className }: { className?: string }) {
-  return <div className={`animate-pulse bg-muted rounded-lg ${className ?? ""}`} />;
+function getInitials(firstName?: string | null, lastName?: string | null): string {
+  const initials = `${firstName?.trim()[0] ?? ""}${lastName?.trim()[0] ?? ""}`.toUpperCase();
+  return initials || "OP";
 }
 
-function matchesSearch(q: string, ...fields: (string | null | undefined)[]): boolean {
-  return fields.some((f) => f?.toLowerCase().includes(q));
+function formatInviteDate(createdAt: number): string {
+  if (!createdAt) return "Sent recently";
+  return new Date(createdAt).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
 }
 
-const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
+function getScheduleStatusClass(status: string): string {
+  switch (status) {
+    case "pending":
+    case "pending_shop_acceptance":
+      return "bg-amber-50 text-amber-700";
+    case "confirmed":
+      return "bg-blue-50 text-blue-700";
+    case "in_progress":
+      return "bg-emerald-50 text-emerald-700";
+    case "completed":
+      return "bg-slate-100 text-slate-700";
+    default:
+      return "bg-slate-100 text-slate-600";
+  }
+}
+
+function getScheduleStatusLabel(status: string): string {
+  switch (status) {
+    case "pending":
+    case "pending_shop_acceptance":
+      return "Pending";
+    case "in_progress":
+      return "In Progress";
+    case "pending_customer_acceptance":
+      return "Pending Customer";
+    default:
+      return status.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+}
+
+function DashboardStatCard({
+  icon: Icon,
+  label,
+  value,
+  sublabel,
+  accentClassName = "text-blue-700",
+}: {
+  icon: ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  sublabel?: string;
+  accentClassName?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-5">
+      <div className="flex items-center gap-2 text-sm font-medium text-gray-500">
+        <Icon className="h-4 w-4" />
+        {label}
+      </div>
+      <p className={`mt-3 text-3xl font-semibold tracking-tight ${accentClassName}`}>{value}</p>
+      {sublabel ? <p className="mt-1 text-sm text-gray-500">{sublabel}</p> : null}
+    </div>
+  );
+}
+
+function QuickActionLink({
+  href,
+  title,
+  description,
+  icon: Icon,
+}: {
+  href: string;
+  title: string;
+  description: string;
+  icon: ComponentType<{ className?: string }>;
+}) {
+  return (
+    <Link
+      href={href}
+      className="flex items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
+          <Icon className="h-5 w-5" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-900">{title}</p>
+          <p className="text-xs text-gray-500">{description}</p>
+        </div>
+      </div>
+      <ChevronRight className="h-4 w-4 shrink-0 text-gray-400" />
+    </Link>
+  );
+}
+
+function EmptyCard({
+  title,
+  description,
+  href,
+  hrefLabel,
+}: {
+  title: string;
+  description: string;
+  href?: string;
+  hrefLabel?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-dashed border-gray-300 bg-slate-50 px-4 py-6 text-sm text-gray-500">
+      <p className="font-medium text-gray-700">{title}</p>
+      <p className="mt-1 leading-6">{description}</p>
+      {href && hrefLabel ? (
+        <Link href={href} className="mt-3 inline-flex items-center gap-1 font-medium text-blue-600">
+          {hrefLabel}
+          <ArrowUpRight className="h-3.5 w-3.5" />
+        </Link>
+      ) : null}
+    </div>
+  );
+}
 
 export default function DashboardPage() {
   const context = useQuery(api.bookings.getMyShopJobContext);
 
   if (context === undefined) {
     return (
-      <div className="min-h-[40vh] flex items-center justify-center">
-        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
       </div>
     );
   }
@@ -113,568 +181,446 @@ export default function DashboardPage() {
 }
 
 function OwnerDashboardPage() {
-  const { user, isLoaded: isUserLoaded, isSignedIn } = useUser();
-  const router = useRouter();
-  const searchRef = useRef<HTMLInputElement>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [exitingIds, setExitingIds] = useState<Set<string>>(new Set());
-  const [caughtUpVisible, setCaughtUpVisible] = useState(false);
-  const [sectionExiting, setSectionExiting] = useState(false);
-  const [lockedSectionHeight, setLockedSectionHeight] = useState<number | undefined>();
-  const hadPendingRef = useRef(false);
-  const caughtUpActiveRef = useRef(false);
+  const { user } = useUser();
+  const dashboard = useQuery(api.bookings.getMyOwnerDashboard);
 
-  const shouldFetchShops = isUserLoaded && isSignedIn;
-  const myShops = useQuery(api.shops.getMyShops, shouldFetchShops ? {} : "skip");
-  const shopId = myShops?.[0]?._id;
-  const shopName = myShops?.[0]?.name ?? "";
-
-  const teamMembers = useQuery(api.invitations.getTeamMembers, shopId ? { shopId } : "skip");
-  const mechanicStatuses = useQuery(api.bookings.getMechanicStatuses, shopId ? { shopId } : "skip");
-  const activeJobs = useQuery(api.bookings.getActiveJobsByShop, shopId ? { shopId } : "skip");
-  const pendingJobs = useQuery(api.bookings.getPendingJobsByShop, shopId ? { shopId } : "skip");
-  const acceptJob = useMutation(api.bookings.accept);
-  const declineJob = useMutation(api.bookings.cancel);
-  const todaysBookings = useQuery(api.bookings.getTodaysBookingsByShop, shopId ? { shopId } : "skip");
-  const completedToday = useQuery(api.bookings.getCompletedTodayByShop, shopId ? { shopId } : "skip");
-
-  const userInitials = `${user?.firstName?.[0] ?? ""}${user?.lastName?.[0] ?? ""}`.toUpperCase() || "U";
-
-  const bookingCount = useCountUp(todaysBookings?.length);
-  const pendingCount = useCountUp(pendingJobs?.length);
-
-  // Track when we've had pending jobs so we know to show "all caught up" after clearing
-  useEffect(() => {
-    if (pendingJobs && pendingJobs.length > 0) hadPendingRef.current = true;
-  }, [pendingJobs]);
-
-  // When Convex removes items from pendingJobs, clean up exitingIds and trigger "all caught up"
-  useEffect(() => {
-    if (pendingJobs === undefined) return;
-    const convexIds = new Set(pendingJobs.map((j) => j._id as string));
-    let newExitingSize = 0;
-    setExitingIds((prev) => {
-      if (prev.size === 0) { newExitingSize = 0; return prev; }
-      const next = new Set([...prev].filter((id) => convexIds.has(id)));
-      newExitingSize = next.size;
-      return next.size === prev.size ? prev : next;
-    });
-    if (
-      pendingJobs.length === 0 &&
-      newExitingSize === 0 &&
-      hadPendingRef.current &&
-      !caughtUpActiveRef.current
-    ) {
-      hadPendingRef.current = false;
-      caughtUpActiveRef.current = true;
-      setCaughtUpVisible(true);
-      setTimeout(() => {
-        setSectionExiting(true);
-        setTimeout(() => {
-          setCaughtUpVisible(false);
-          setSectionExiting(false);
-          setLockedSectionHeight(undefined);
-          caughtUpActiveRef.current = false;
-        }, 450);
-      }, 2500);
-    }
-  }, [pendingJobs]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ⌘K / Ctrl+K focuses the search input
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        searchRef.current?.focus();
-      }
-      if (e.key === "Escape" && document.activeElement === searchRef.current) {
-        setSearchQuery("");
-        searchRef.current?.blur();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  useEffect(() => {
-    if (!shouldFetchShops || myShops === undefined || myShops.length > 0) return;
-    const redirectTimer = window.setTimeout(() => {
-      router.replace("/shop/setup");
-    }, 1200);
-    return () => window.clearTimeout(redirectTimer);
-  }, [myShops, router, shouldFetchShops]);
-
-  if (!shouldFetchShops || myShops === undefined || myShops.length === 0) return null;
-
-  const today = formatDate(new Date());
-  const q = searchQuery.toLowerCase().trim();
-
-  // Client-side search filtering
-  const filteredPending = q
-    ? pendingJobs?.filter((j) => matchesSearch(q, j.customerName, j.vehicle, j.service))
-    : pendingJobs;
-  const filteredActive = q
-    ? activeJobs?.filter((j) => matchesSearch(q, j.customerName, j.vehicle, j.service))
-    : activeJobs;
-  const filteredToday = q
-    ? todaysBookings?.filter((b) => matchesSearch(q, b.customerName, b.vehicle, b.service))
-    : todaysBookings;
-
-  const todayRevenue = todaysBookings?.reduce((sum, b) => sum + (b.totalCost ?? 0), 0) ?? 0;
-
-  function lockHeightIfLast(jobId: string) {
-    const nonExiting = (pendingJobs ?? []).filter((j) => !exitingIds.has(j._id as string));
-    if (nonExiting.length === 1 && nonExiting[0]._id === jobId) {
-      const el = document.querySelector("[data-pending-section]") as HTMLElement | null;
-      if (el) setLockedSectionHeight(el.offsetHeight);
-    }
+  if (dashboard === undefined) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    );
   }
 
-  async function handleAcceptWithAnimation(jobId: string) {
-    lockHeightIfLast(jobId);
-    setExitingIds((prev) => new Set(prev).add(jobId));
-    await new Promise((resolve) => setTimeout(resolve, 310));
-    await acceptJob({ bookingId: jobId as any });
+  if (!dashboard) {
+    return (
+      <div className="rounded-3xl border border-amber-200 bg-amber-50 p-8 text-amber-900">
+        <h1 className="text-2xl font-semibold">Owner dashboard unavailable</h1>
+        <p className="mt-3 max-w-2xl text-sm leading-6">
+          This account does not have an active shop context yet. Finish shop onboarding to
+          unlock the owner dashboard.
+        </p>
+        <Link
+          href="/shop/setup"
+          className="mt-5 inline-flex items-center gap-2 rounded-full bg-amber-900 px-4 py-2 text-sm font-semibold text-white"
+        >
+          Go to shop setup
+          <ArrowUpRight className="h-4 w-4" />
+        </Link>
+      </div>
+    );
   }
 
-  async function handleDeclineWithAnimation(jobId: string) {
-    lockHeightIfLast(jobId);
-    setExitingIds((prev) => new Set(prev).add(jobId));
-    await new Promise((resolve) => setTimeout(resolve, 310));
-    await declineJob({ bookingId: jobId as any });
-  }
+  const ownerName =
+    [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.primaryEmailAddress?.emailAddress || "Owner";
+  const ownerInitials = `${user?.firstName?.[0] ?? ""}${user?.lastName?.[0] ?? ""}`.toUpperCase() || "OW";
+  const todayLabel = formatLongDate(new Date());
+  const scheduleColumnCount = Math.max(dashboard.todaySchedule.length, 1);
+  const hasPendingActions =
+    dashboard.pendingActions.jobsToAcceptCount > 0 ||
+    dashboard.pendingActions.actualsNeededCount > 0 ||
+    dashboard.pendingActions.invitesPendingCount > 0;
 
   return (
-    <div>
-      {/* Desktop sub-header with functional search */}
-      <div className="-mx-6 -mt-6 hidden lg:flex items-center justify-between px-8 py-[17px] bg-card border-b border-border mb-8">
-        <div className="flex-1 max-w-lg">
-          <div className="relative text-muted-foreground focus-within:text-foreground">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search className="w-4 h-4" />
-            </div>
-            <input
-              ref={searchRef}
-              type="search"
-              placeholder="Search jobs, customers, or vehicles..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="block w-full pl-10 pr-12 py-2 text-sm text-foreground placeholder:text-muted-foreground bg-muted border border-transparent rounded-md hover:bg-muted/80 focus:outline-none focus:ring-2 focus:ring-primary/30 transition-all"
-            />
-            <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
-              {searchQuery ? (
-                <button onClick={() => setSearchQuery("")} className="text-muted-foreground hover:text-foreground transition-colors">
-                  <X className="w-3.5 h-3.5" />
-                </button>
+    <div className="space-y-6">
+      <section className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex min-w-0 items-center gap-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-gray-200 bg-slate-100">
+              {dashboard.shop.logoUrl ? (
+                <img
+                  src={dashboard.shop.logoUrl}
+                  alt={dashboard.shop.name}
+                  className="h-full w-full object-cover"
+                />
               ) : (
-                <span className="text-xs border border-border rounded px-1.5 py-0.5 text-muted-foreground pointer-events-none">⌘ K</span>
+                <Store className="h-7 w-7 text-slate-600" />
               )}
             </div>
-          </div>
-        </div>
-        <div className="ml-4 flex items-center gap-4">
-          <button className="p-2 text-muted-foreground hover:text-foreground rounded-full hover:bg-muted transition-colors">
-            <Bell className="w-5 h-5" />
-          </button>
-          <div className="h-8 w-8 rounded-full bg-accent flex items-center justify-center text-primary font-bold text-sm cursor-pointer border border-primary/20 select-none">
-            {userInitials}
-          </div>
-        </div>
-      </div>
-
-      <div className="max-w-7xl mx-auto space-y-8">
-
-        {/* Executive Summary Bar */}
-        <div>
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-2.5">
-              <Store className="w-6 h-6 text-primary shrink-0 mt-0.5" />
-              <h1 className="text-2xl font-semibold text-foreground tracking-tight leading-tight">
-                {shopName}
+            <div className="min-w-0">
+              <p className="text-sm font-medium uppercase tracking-[0.24em] text-blue-600">
+                Shop Owner Dashboard
+              </p>
+              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-gray-900">
+                {dashboard.shop.name}
               </h1>
+              <p className="mt-2 text-sm text-gray-500">Today: {todayLabel}</p>
             </div>
-            <span className="text-sm text-muted-foreground shrink-0 mt-1">{today}</span>
           </div>
 
-          {/* Stat heroes */}
-          <div className="flex items-end gap-8 pl-8 mt-4">
-            {todaysBookings === undefined ? (
-              <Skeleton className="h-12 w-48" />
-            ) : (
-              <>
-                <div>
-                  <p className="text-3xl font-bold text-foreground tabular-nums leading-none">{bookingCount}</p>
-                  <p className="text-xs text-muted-foreground mt-1">bookings today</p>
-                </div>
-                <div>
-                  <p className="text-3xl font-bold text-green-600 tabular-nums leading-none">
-                    ${todayRevenue.toFixed(0)}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1">today&apos;s revenue</p>
-                </div>
-                {(pendingJobs?.length ?? 0) > 0 && (
-                  <div>
-                    <p className="text-3xl font-bold text-primary tabular-nums leading-none">{pendingCount}</p>
-                    <p className="text-xs text-muted-foreground mt-1">pending approval</p>
-                  </div>
+          <div className="flex items-center gap-4 self-start rounded-2xl border border-gray-200 bg-slate-50 px-4 py-3">
+            <button
+              type="button"
+              className="relative flex h-11 w-11 items-center justify-center rounded-full border border-gray-200 bg-white text-slate-700"
+              aria-label="Pending acceptances"
+            >
+              <Bell className="h-5 w-5" />
+              {dashboard.stats.pendingAcceptanceCount > 0 ? (
+                <span className="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-red-500 px-1 text-[11px] font-semibold text-white">
+                  {dashboard.stats.pendingAcceptanceCount}
+                </span>
+              ) : null}
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full bg-[linear-gradient(135deg,#1D4ED8_0%,#4F46E5_100%)] text-sm font-semibold text-white">
+                {user?.imageUrl ? (
+                  <img src={user.imageUrl} alt={ownerName} className="h-full w-full object-cover" />
+                ) : (
+                  ownerInitials
                 )}
-                <div>
-                  <p className="text-3xl font-bold text-foreground tabular-nums leading-none">{activeJobs?.length ?? 0}</p>
-                  <p className="text-xs text-muted-foreground mt-1">active now</p>
-                </div>
-              </>
-            )}
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">{ownerName}</p>
+                <p className="text-xs text-gray-500">Shop owner</p>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Search results notice */}
-        {q && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Search className="w-4 h-4" />
-            <span>Showing results for <span className="font-medium text-foreground">&ldquo;{searchQuery}&rdquo;</span></span>
-            <button onClick={() => setSearchQuery("")} className="ml-1 text-primary hover:underline text-xs">Clear</button>
-          </div>
-        )}
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <DashboardStatCard
+            icon={CalendarClock}
+            label="Today's bookings"
+            value={String(dashboard.stats.todaysBookingsCount)}
+            sublabel="Scheduled jobs for today"
+          />
+          <DashboardStatCard
+            icon={ClipboardList}
+            label="Pending acceptance"
+            value={String(dashboard.stats.pendingAcceptanceCount)}
+            sublabel={
+              dashboard.stats.pendingAcceptanceCount > 0
+                ? "Jobs waiting for review"
+                : "No bookings waiting"
+            }
+            accentClassName={
+              dashboard.stats.pendingAcceptanceCount > 0 ? "text-red-600" : "text-gray-900"
+            }
+          />
+          <DashboardStatCard
+            icon={BadgeDollarSign}
+            label="This week's revenue"
+            value={formatCurrency(dashboard.stats.weekRevenue)}
+            sublabel="Captured payments this week"
+            accentClassName="text-emerald-600"
+          />
+          <DashboardStatCard
+            icon={Star}
+            label="Shop rating"
+            value={dashboard.stats.rating.toFixed(1)}
+            sublabel={`${dashboard.stats.reviewCount} review${dashboard.stats.reviewCount === 1 ? "" : "s"}`}
+            accentClassName="text-amber-600"
+          />
+        </div>
+      </section>
 
-        {/* Main grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-          {/* Tier 1 — Pending (full-width; shown while loading, items exist, animating, or caught-up) */}
-          {(pendingJobs === undefined || pendingJobs.length > 0 || exitingIds.size > 0 || caughtUpVisible || sectionExiting) && (
-            <div
-              data-pending-section
-              className={`lg:col-span-2 bg-card border border-border rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)] p-6 flex flex-col${sectionExiting ? " animate-[sectionFadeOut_0.45s_ease-in_forwards]" : ""}`}
-              style={lockedSectionHeight ? { minHeight: lockedSectionHeight } : undefined}
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <section className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">Today&apos;s Schedule</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Grouped by active mechanic, with live statuses and direct links into booking detail.
+              </p>
+            </div>
+            <Link
+              href="/bookings"
+              className="inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
             >
-              <div className="flex justify-between items-start mb-5">
-                <div>
-                  <h3 className="text-base font-semibold text-foreground">Pending Approvals</h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">Review and accept incoming job requests</p>
-                </div>
-                {caughtUpVisible ? (
-                  <svg className="-rotate-90 shrink-0" width="22" height="22" viewBox="0 0 22 22">
-                    <circle cx="11" cy="11" r="9" fill="none" stroke="rgb(209,213,219)" strokeWidth="2" />
-                    <circle
-                      cx="11" cy="11" r="9"
-                      fill="none"
-                      stroke="rgb(156,163,175)"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeDasharray="56.55"
-                      style={{ animation: "timerDrain 2.5s linear forwards" }}
-                    />
-                  </svg>
-                ) : filteredPending && filteredPending.length > 0 ? (
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
-                    {filteredPending.length}
-                  </span>
-                ) : null}
-              </div>
-
-              {/* Content area — flex-1 fills the locked space so the footer stays pinned */}
-              <div className={`flex-1 min-h-0${caughtUpVisible ? " flex items-center justify-center" : ""}`}>
-                {pendingJobs === undefined ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <Skeleton className="h-28" />
-                    <Skeleton className="h-28" />
-                  </div>
-                ) : caughtUpVisible ? (
-                  <div className="flex flex-col items-center gap-3 animate-[cardFadeIn_0.3s_ease-out]">
-                    <div className="w-12 h-12 rounded-full bg-green-50 flex items-center justify-center">
-                      <CheckCircle className="w-6 h-6 text-green-500" />
-                    </div>
-                    <div className="text-center">
-                      <p className="text-sm font-medium text-foreground">No pending approvals</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">You&apos;re all caught up!</p>
-                    </div>
-                  </div>
-                ) : filteredPending && filteredPending.length === 0 && q ? (
-                  <p className="text-sm text-muted-foreground py-2">No pending jobs match &ldquo;{searchQuery}&rdquo;.</p>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {(filteredPending ?? []).slice(0, 4).map((job) => {
-                      const isExiting = exitingIds.has(job._id as string);
-                      return (
-                        <div
-                          key={job._id}
-                          className={`bg-muted/40 border border-border rounded-xl p-4 flex flex-col gap-3 ${isExiting ? "animate-[cardZoomOut_0.32s_ease-in_forwards]" : "animate-[cardFadeIn_0.35s_ease-out]"}`}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-foreground truncate">{job.service || job.vehicle}</p>
-                              <p className="text-xs text-muted-foreground truncate mt-0.5">{job.service ? job.vehicle : job.customerName}</p>
-                              <p className="text-xs text-muted-foreground truncate">{job.customerName}</p>
-                            </div>
-                            {job.scheduledTime && (
-                              <div className="flex flex-col items-end gap-1 shrink-0 text-xs text-muted-foreground">
-                                <div className="flex items-center gap-1">
-                                  <Clock className="w-3 h-3" />
-                                  {job.scheduledTime}
-                                </div>
-                                {job.estimatedMinutes && (
-                                  <span>Est. {job.estimatedMinutes < 60 ? `${job.estimatedMinutes}m` : `${(job.estimatedMinutes / 60).toFixed(1).replace(/\.0$/, "")} hrs`}</span>
-                                )}
-                                <Image
-                                  src={JeepWranglerImage}
-                                  alt="Jeep Wrangler"
-                                  width={72}
-                                  height={40}
-                                  className="mt-0.5 py-3 rounded-md object-contain"
-                                />
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex flex-col gap-1.5">
-                            <button
-                              onClick={() => handleAcceptWithAnimation(job._id as string)}
-                              disabled={isExiting}
-                              className="w-full py-2 bg-primary hover:opacity-90 text-primary-foreground text-xs font-semibold rounded-lg transition-opacity disabled:pointer-events-none"
-                            >
-                              Accept
-                            </button>
-                            <button
-                              onClick={() => handleDeclineWithAnimation(job._id as string)}
-                              disabled={isExiting}
-                              className="w-full py-1.5 text-muted-foreground hover:text-foreground text-xs font-medium transition-colors disabled:pointer-events-none"
-                            >
-                              Decline
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Footer — kept visible while locked so the border/link don't jump */}
-              {((filteredPending?.length ?? 0) > 0 || !!lockedSectionHeight) && (
-                <div className="mt-4 pt-4 border-t border-border">
-                  {(filteredPending?.length ?? 0) > 0 && (
-                    <Link href="/jobs" className="flex items-center text-sm font-medium text-primary hover:text-primary/80 transition-colors">
-                      View all pending
-                      <ArrowRight className="w-4 h-4 ml-1" />
-                    </Link>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Tier 2 — Active Jobs */}
-          <div className="bg-card border border-border rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)] p-6 min-h-[16rem] flex flex-col">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-base font-semibold text-foreground">Active Jobs</h3>
-              <button className="text-muted-foreground hover:text-foreground transition-colors">
-                <MoreVertical className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="flex-1 space-y-3">
-              {activeJobs === undefined ? (
-                <div className="space-y-3">
-                  <Skeleton className="h-14" />
-                  <Skeleton className="h-14" />
-                  <Skeleton className="h-14" />
-                </div>
-              ) : (filteredActive?.length ?? 0) === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  {q ? `No active jobs match "${searchQuery}".` : "No active jobs right now."}
-                </p>
-              ) : (
-                (filteredActive ?? []).slice(0, 4).map((job) => {
-                  const { label, color } = liveStageInfo(job.liveStage);
-                  const displayName = job.mechanicName ?? job.customerName;
-                  return (
-                    <div key={job._id} className="group flex items-start justify-between p-2.5 rounded-lg hover:bg-muted transition-colors cursor-pointer">
-                      <div>
-                        <div className="font-medium text-foreground text-sm">
-                          {job.vehicle}{job.service ? ` — ${job.service}` : ""}
-                        </div>
-                        <span className={`inline-block mt-1 text-xs font-semibold px-2 py-0.5 rounded transition-colors ${getStatusBadgeClass(color)}`}>
-                          {label}
-                        </span>
-                      </div>
-                      <div className="text-xs text-muted-foreground shrink-0 ml-2 mt-0.5">{displayName}</div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-            <div className="mt-4 pt-4 border-t border-border">
-              <button className="flex items-center text-sm font-medium text-primary hover:text-primary/80 transition-colors">
-                View all jobs
-                <ArrowRight className="w-4 h-4 ml-1" />
-              </button>
-            </div>
+              View all bookings
+              <ArrowUpRight className="h-4 w-4" />
+            </Link>
           </div>
 
-          {/* Tier 2 — Today's Bookings */}
-          <div className="bg-card border border-border rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)] p-6 min-h-[16rem] flex flex-col">
-            <div className="flex justify-between items-center mb-5">
-              <h3 className="text-base font-semibold text-foreground">Today&apos;s Bookings</h3>
+          {dashboard.todaySchedule.length === 0 ? (
+            <div className="mt-6">
+              <EmptyCard
+                title="No active mechanics yet"
+                description="Invite at least one mechanic so today's schedule can be organized into technician columns."
+                href="/mechanics"
+                hrefLabel="Manage mechanics"
+              />
             </div>
-            <div className="flex-1 space-y-3">
-              {todaysBookings === undefined ? (
-                <div className="space-y-3">
-                  <Skeleton className="h-14" />
-                  <Skeleton className="h-14" />
-                  <Skeleton className="h-14" />
-                </div>
-              ) : (filteredToday?.length ?? 0) === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  {q ? `No bookings match "${searchQuery}".` : "No bookings scheduled for today."}
-                </p>
-              ) : (
-                (filteredToday ?? []).slice(0, 4).map((booking, index) => (
-                  <div key={booking._id} className="flex items-center justify-between cursor-pointer p-2 rounded-lg hover:bg-muted transition-colors">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-9 h-9 rounded-full flex items-center justify-center font-medium text-sm shrink-0 ${avatarColors[index % avatarColors.length]}`}>
-                        {booking.initials}
+          ) : (
+            <div className="mt-6 overflow-x-auto pb-2">
+              <div
+                className="grid min-w-max gap-4"
+                style={{
+                  gridTemplateColumns: `repeat(${scheduleColumnCount}, minmax(280px, 1fr))`,
+                }}
+              >
+                {dashboard.todaySchedule.map((column) => (
+                  <div
+                    key={String(column.mechanicId)}
+                    className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4"
+                  >
+                    <div className="flex items-center gap-3 border-b border-gray-200 pb-4">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[linear-gradient(135deg,#5B4BFF_0%,#8B5CF6_100%)] text-sm font-semibold text-white">
+                        {column.photoUrl ? (
+                          <img
+                            src={column.photoUrl}
+                            alt={column.mechanicName}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          getInitials(column.firstName, column.lastName)
+                        )}
                       </div>
-                      <div>
-                        <div className="font-medium text-foreground text-sm">{booking.customerName}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {booking.vehicle}{booking.service ? ` • ${booking.service}` : ""}
-                        </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-gray-900">
+                          {column.mechanicName}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {column.jobsCount} job{column.jobsCount === 1 ? "" : "s"} today
+                        </p>
                       </div>
                     </div>
-                    <div className="text-right shrink-0 ml-4">
-                      <div className="font-medium text-foreground text-sm">{booking.scheduledTime}</div>
-                      {booking.totalCost > 0 && (
-                        <div className="text-xs text-muted-foreground">${booking.totalCost.toFixed(0)}</div>
+
+                    <div className="mt-4 space-y-3">
+                      {column.bookings.length === 0 ? (
+                        <EmptyCard
+                          title="No jobs scheduled"
+                          description="This mechanic does not have any assigned work for today."
+                        />
+                      ) : (
+                        column.bookings.map((booking) => (
+                          <Link
+                            key={String(booking._id)}
+                            href={`/bookings?highlight=${String(booking._id)}`}
+                            className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
+                                  {booking.scheduledTimeLabel}
+                                </p>
+                                <p className="mt-1 truncate text-sm font-semibold text-gray-900">
+                                  {booking.customerDisplayName}
+                                </p>
+                                <p className="mt-1 text-sm text-gray-600">{booking.vehicle}</p>
+                              </div>
+                              <span
+                                className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${getScheduleStatusClass(
+                                  booking.status
+                                )}`}
+                              >
+                                {getScheduleStatusLabel(booking.status)}
+                              </span>
+                            </div>
+                            <p className="mt-3 line-clamp-2 text-xs leading-5 text-gray-500">
+                              {booking.serviceSummary || "Service details unavailable"}
+                            </p>
+                            <div className="mt-3 flex items-center justify-between text-xs font-semibold text-blue-600">
+                              Open booking detail
+                              <ArrowUpRight className="h-3.5 w-3.5" />
+                            </div>
+                          </Link>
+                        ))
                       )}
                     </div>
                   </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <aside className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
+          <div className="flex items-center gap-2">
+            <Store className="h-5 w-5 text-blue-600" />
+            <h2 className="text-xl font-semibold text-gray-900">Quick Actions</h2>
+          </div>
+          <p className="mt-2 text-sm text-gray-500">
+            Jump straight into the core owner tools for staffing, schedule control, and shop ops.
+          </p>
+
+          <div className="mt-6 space-y-3">
+            <QuickActionLink
+              href="/mechanics"
+              title="Manage Mechanics"
+              description="Invite, remove, and review your shop team"
+              icon={Users}
+            />
+            <QuickActionLink
+              href="/schedule"
+              title="Edit Schedule"
+              description="Adjust time slots and technician availability"
+              icon={CalendarClock}
+            />
+            <QuickActionLink
+              href="/payouts"
+              title="View Payouts"
+              description="Check payout status and revenue destinations"
+              icon={CreditCard}
+            />
+            <QuickActionLink
+              href="/settings"
+              title="Edit Shop Settings"
+              description="Update shop details, hours, and connected services"
+              icon={Settings2}
+            />
+            <QuickActionLink
+              href="/bookings"
+              title="View All Bookings"
+              description="Open the full jobs table and booking detail drawer"
+              icon={ClipboardList}
+            />
+          </div>
+        </aside>
+      </div>
+
+      <section className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900">Pending Actions</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Keep approvals, completed-job follow-up, and team invitations from slipping through.
+            </p>
+          </div>
+          {!hasPendingActions ? (
+            <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
+              All caught up
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-6 grid gap-4 xl:grid-cols-3">
+          <div className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Jobs to accept</p>
+                <p className="mt-1 text-xs text-gray-500">Bookings waiting for owner review</p>
+              </div>
+              <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600">
+                {dashboard.pendingActions.jobsToAcceptCount}
+              </span>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {dashboard.pendingActions.jobsToAccept.length === 0 ? (
+                <EmptyCard
+                  title="No pending approvals"
+                  description="New booking requests will appear here in real time."
+                />
+              ) : (
+                dashboard.pendingActions.jobsToAccept.map((job) => (
+                  <Link
+                    key={String(job._id)}
+                    href={`/bookings?highlight=${String(job._id)}`}
+                    className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
+                    <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
+                    <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
+                    <p className="mt-3 text-xs font-semibold text-blue-600">
+                      {job.scheduledDate} at {job.scheduledTimeLabel}
+                    </p>
+                  </Link>
                 ))
               )}
             </div>
-            <div className="mt-4 pt-4 border-t border-border">
-              <Link href="/jobs" className="flex items-center text-sm font-medium text-primary hover:text-primary/80 transition-colors">
-                View all bookings
-                <ArrowRight className="w-4 h-4 ml-1" />
-              </Link>
-            </div>
+
+            <Link
+              href="/bookings"
+              className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
+            >
+              Open accept queue
+              <ArrowUpRight className="h-4 w-4" />
+            </Link>
           </div>
 
-          {/* Tier 3 — Team Status (half-width, compact list) */}
-          <div className="bg-card border border-border rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)] p-6 flex flex-col">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-base font-semibold text-foreground">Team Status</h3>
-              <Link href="/team" className="text-xs text-primary hover:text-primary/80 font-medium transition-colors">
-                Manage Team
-              </Link>
+          <div className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Job actuals needed</p>
+                <p className="mt-1 text-xs text-gray-500">Completed jobs missing final actuals</p>
+              </div>
+              <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                {dashboard.pendingActions.actualsNeededCount}
+              </span>
             </div>
 
-            {teamMembers === undefined ? (
-              <div className="space-y-2">
-                <Skeleton className="h-11" />
-                <Skeleton className="h-11" />
-                <Skeleton className="h-11" />
-              </div>
-            ) : teamMembers.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-2">
-                No team members yet.{" "}
-                <Link href="/team" className="text-primary hover:underline">Invite someone</Link>
-              </p>
-            ) : (
-              <div className="space-y-1 flex-1">
-                {teamMembers.slice(0, 6).map((member) => {
-                  const initials = getTeamInitials(member.user.first_name, member.user.last_name);
-                  const fullName = [member.user.first_name, member.user.last_name].filter(Boolean).join(" ") || member.user.email;
-                  const photoUrl = typeof member.user.profile_photo_url === "string" ? member.user.profile_photo_url : null;
-                  const mechanicId = member.mechanic_id;
-                  const jobCount = mechanicId && mechanicStatuses ? (mechanicStatuses[mechanicId] ?? 0) : 0;
-                  const isOnJob = jobCount > 0;
-                  return (
-                    <div key={member._id} className="flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-muted transition-colors cursor-default">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="relative shrink-0">
-                          {photoUrl ? (
-                            <img src={photoUrl} alt={fullName ?? ""} className="w-8 h-8 rounded-full border border-border object-cover" />
-                          ) : (
-                            <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-muted-foreground text-xs font-bold border border-border">
-                              {initials}
-                            </div>
-                          )}
-                          <span
-                            className={`absolute bottom-0 right-0 block h-2 w-2 rounded-full ring-2 ring-white ${isOnJob ? "bg-primary" : "bg-green-500"}`}
-                          />
-                        </div>
-                        <p className="text-sm font-medium text-foreground truncate">{fullName}</p>
-                      </div>
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full shrink-0 ml-2 ${isOnJob ? "bg-primary/10 text-primary" : "bg-green-50 text-green-700"}`}>
-                        {isOnJob ? `On a Job${jobCount > 1 ? ` (${jobCount})` : ""}` : "Available"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {teamMembers && teamMembers.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-border">
-                <span className="text-xs text-muted-foreground">
-                  {teamMembers.length} member{teamMembers.length !== 1 ? "s" : ""}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* Tier 3 — Completed Today (half-width, genuinely different from top stats) */}
-          <div className="bg-card border border-border rounded-2xl shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)] p-6 flex flex-col">
-            <div className="flex items-center gap-2 mb-5">
-              <CheckCircle className="w-4 h-4 text-green-600" />
-              <h3 className="text-base font-semibold text-foreground">Completed Today</h3>
+            <div className="mt-4 space-y-3">
+              {dashboard.pendingActions.actualsNeeded.length === 0 ? (
+                <EmptyCard
+                  title="No missing actuals"
+                  description="Completed bookings with unfinished job actuals will surface here."
+                />
+              ) : (
+                dashboard.pendingActions.actualsNeeded.map((job) => (
+                  <Link
+                    key={String(job._id)}
+                    href={`/bookings?highlight=${String(job._id)}`}
+                    className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
+                    <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
+                    <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
+                    <p className="mt-3 text-xs font-semibold text-blue-600">
+                      Completed booking from {job.scheduledDate} at {job.scheduledTimeLabel}
+                    </p>
+                  </Link>
+                ))
+              )}
             </div>
-            {completedToday === undefined ? (
-              <div className="grid grid-cols-3 gap-4">
-                <Skeleton className="h-16" />
-                <Skeleton className="h-16" />
-                <Skeleton className="h-16" />
-              </div>
-            ) : (
-              <div className="grid grid-cols-3 gap-x-4 flex-1">
-                <div>
-                  <p className="text-3xl font-bold tabular-nums text-foreground leading-none">{completedToday.count}</p>
-                  <p className="text-xs text-muted-foreground mt-1.5">Jobs done</p>
-                </div>
-                <div>
-                  <p className="text-3xl font-bold tabular-nums text-green-600 leading-none">
-                    ${completedToday.revenue.toFixed(0)}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1.5">Collected</p>
-                </div>
-                <div>
-                  <p className="text-3xl font-bold tabular-nums text-foreground leading-none">
-                    {(todaysBookings?.length ?? 0) + (activeJobs?.length ?? 0)}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-1.5">Jobs remaining</p>
-                </div>
-              </div>
-            )}
+
+            <Link
+              href="/bookings"
+              className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
+            >
+              Review completed jobs
+              <ArrowUpRight className="h-4 w-4" />
+            </Link>
           </div>
 
+          <div className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Invites pending</p>
+                <p className="mt-1 text-xs text-gray-500">Mechanic invitations not yet accepted</p>
+              </div>
+              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                {dashboard.pendingActions.invitesPendingCount}
+              </span>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {dashboard.pendingActions.invitesPending.length === 0 ? (
+                <EmptyCard
+                  title="No pending invites"
+                  description="Outstanding team invitations will appear here until they are accepted or revoked."
+                />
+              ) : (
+                dashboard.pendingActions.invitesPending.map((invite) => (
+                  <Link
+                    key={String(invite._id)}
+                    href="/mechanics"
+                    className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
+                  >
+                    <p className="text-sm font-semibold text-gray-900">{invite.mechanicName || invite.email}</p>
+                    <p className="mt-1 text-sm text-gray-600">{invite.email}</p>
+                    <p className="mt-2 text-xs text-gray-500">
+                      {invite.role.replace(/_/g, " ")} invitation
+                    </p>
+                    <p className="mt-3 text-xs font-semibold text-blue-600">
+                      Sent {formatInviteDate(invite.createdAt)}
+                    </p>
+                  </Link>
+                ))
+              )}
+            </div>
+
+            <Link
+              href="/mechanics"
+              className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
+            >
+              Manage invitations
+              <ArrowUpRight className="h-4 w-4" />
+            </Link>
+          </div>
         </div>
-      </div>
-
-      {/* Floating "Review Pending" CTA — calm ring-pulse shadow, not opacity pulse */}
-      {pendingJobs && pendingJobs.length > 0 && (
-        <button
-          onClick={() => document.querySelector("[data-pending-section]")?.scrollIntoView({ behavior: "smooth" })}
-          className="fixed bottom-20 left-8 flex items-center gap-2 px-5 py-3 bg-primary text-primary-foreground rounded-full shadow-lg hover:shadow-xl hover:opacity-90 transition-all z-50 text-sm font-semibold"
-          style={{ animation: "ringPulse 2s ease-out infinite" }}
-        >
-          Review Pending
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-white/20 text-xs font-bold">
-            {pendingJobs.length}
-          </span>
-        </button>
-      )}
-
-      {/* Floating help */}
-      <button className="fixed bottom-8 right-8 w-12 h-12 bg-card rounded-full shadow-lg border border-border flex items-center justify-center text-muted-foreground hover:text-foreground hover:shadow-xl transition-all z-50">
-        <HelpCircle className="w-6 h-6" />
-      </button>
+      </section>
     </div>
   );
 }

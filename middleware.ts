@@ -16,17 +16,23 @@ const isPortalRoute = createRouteMatcher([
   "/dashboard",
   "/shop(.*)",
   "/jobs(.*)",
+  "/bookings(.*)",
   "/schedule(.*)",
   "/team(.*)",
+  "/mechanics(.*)",
   "/settings(.*)",
+  "/payouts(.*)",
   "/my-jobs(.*)",
 ]);
 
 // Routes only accessible to owner/manager roles (mechanics cannot access)
 const isOwnerManagerRoute = createRouteMatcher([
   "/team(.*)",
+  "/mechanics(.*)",
   "/settings(.*)",
   "/schedule(.*)",
+  "/payouts(.*)",
+  "/bookings(.*)",
 ]);
 
 // Routes only accessible to mechanics (owners/managers cannot access)

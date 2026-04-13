@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
@@ -73,6 +73,50 @@ const STEP_META = [
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"] as const;
 
+type GoogleMapsWindow = Window & {
+  google?: {
+    maps?: {
+      importLibrary?: (library: string) => Promise<unknown>;
+      places?: {
+        AutocompleteSuggestion?: {
+          fetchAutocompleteSuggestions?: (request: Record<string, unknown>) => Promise<{
+            suggestions?: GoogleAutocompleteSuggestion[];
+          }>;
+        };
+        AutocompleteSessionToken?: new () => unknown;
+      };
+    };
+  };
+  __googleMapsApiPromise?: Promise<void>;
+};
+
+type GoogleAutocompleteSuggestion = {
+  placePrediction?: {
+    text?: { toString(): string };
+    secondaryText?: { toString(): string };
+    toPlace?: () => {
+      fetchFields?: (request: { fields: string[] }) => Promise<void>;
+      formattedAddress?: string;
+      addressComponents?: Array<{
+        longText?: string;
+        shortText?: string;
+        types?: string[];
+      }>;
+      location?: {
+        lat?: () => number;
+        lng?: () => number;
+      };
+    };
+  };
+};
+
+type AddressSuggestion = {
+  id: string;
+  primaryText: string;
+  secondaryText: string;
+  suggestion: GoogleAutocompleteSuggestion;
+};
+
 type ShopDetailsForm = {
   name: string;
   slug: string;
@@ -82,6 +126,53 @@ type ShopDetailsForm = {
   zipCode: string;
   phone: string;
 };
+
+function getAddressComponent(
+  components: Array<{ longText?: string; shortText?: string; types?: string[] }>,
+  type: string,
+  mode: "long" | "short" = "long"
+) {
+  const match = components.find((component) => component.types?.includes(type));
+  if (!match) return "";
+  return mode === "short" ? match.shortText ?? "" : match.longText ?? "";
+}
+
+async function loadGoogleMapsPlacesApi() {
+  const mapsWindow = window as GoogleMapsWindow;
+  if (mapsWindow.google?.maps?.importLibrary) return;
+  if (!mapsWindow.__googleMapsApiPromise) {
+    mapsWindow.__googleMapsApiPromise = new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector(
+        'script[data-google-maps-api="true"]'
+      ) as HTMLScriptElement | null;
+      if (existing) {
+        existing.addEventListener("load", () => resolve(), { once: true });
+        existing.addEventListener("error", () => reject(new Error("Failed to load Google Maps.")), {
+          once: true,
+        });
+        return;
+      }
+
+      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
+      if (!apiKey) {
+        reject(new Error("Missing NEXT_PUBLIC_GOOGLE_MAPS_API_KEY."));
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src =
+        `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&libraries=places&v=weekly`;
+      script.async = true;
+      script.defer = true;
+      script.dataset.googleMapsApi = "true";
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Failed to load Google Maps."));
+      document.head.appendChild(script);
+    });
+  }
+
+  await mapsWindow.__googleMapsApiPromise;
+}
 
 type HoursFormRow = {
   dayOfWeek: number;
@@ -154,9 +245,10 @@ function getFirstIncompleteSavedStep(params: {
 
 export default function ShopSetupPage() {
   const router = useRouter();
-  const { user } = useUser();
+  const { user, isLoaded: isUserLoaded } = useUser();
   const portalAccess = useQuery(api.shops.getMyPortalAccess);
   const onboardingData = useQuery(api.shops.getMyOnboardingData);
+  const ensureUser = useMutation(api.users.getOrCreateMe);
   const upsertShopDetails = useMutation(api.shops.upsertOnboardingShopDetails);
   const saveHours = useMutation(api.shops.saveOnboardingHours);
   const saveLaborAndServices = useMutation(api.shops.saveOnboardingLaborAndServices);
@@ -181,6 +273,12 @@ export default function ShopSetupPage() {
   const [stepSuccess, setStepSuccess] = useState<string | null>(null);
   const [savingStep, setSavingStep] = useState<number | null>(null);
   const [finishing, setFinishing] = useState(false);
+  const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
+  const [addressLookupLoading, setAddressLookupLoading] = useState(false);
+  const [addressSelectedFromAutocomplete, setAddressSelectedFromAutocomplete] = useState(false);
+  const addressLookupSessionRef = useRef<unknown>(null);
+  const addressLookupRequestIdRef = useRef(0);
+  const addressContainerRef = useRef<HTMLDivElement | null>(null);
   const [mechanicForm, setMechanicForm] = useState({
     firstName: "",
     lastName: "",
@@ -191,6 +289,7 @@ export default function ShopSetupPage() {
   const [mechanicInviteError, setMechanicInviteError] = useState<string | null>(null);
   const [mechanicInviteSuccess, setMechanicInviteSuccess] = useState(false);
   const [hydratedShopId, setHydratedShopId] = useState<string | null>(null);
+  const [ensuredConvexUser, setEnsuredConvexUser] = useState(false);
   const clerkRole =
     typeof user?.publicMetadata?.role === "string"
       ? user.publicMetadata.role
@@ -236,6 +335,23 @@ export default function ShopSetupPage() {
   );
 
   useEffect(() => {
+    if (!isUserLoaded || !user || ensuredConvexUser) return;
+    let cancelled = false;
+
+    void ensureUser()
+      .catch(() => {
+        // Keep the UI responsive; the queries will stay null if auth bootstrap fails.
+      })
+      .finally(() => {
+        if (!cancelled) setEnsuredConvexUser(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ensureUser, ensuredConvexUser, isUserLoaded, user]);
+
+  useEffect(() => {
     if (onboardingData === undefined || onboardingData === null) return;
     if (onboardingData.shop?.onboardingComplete) {
       router.replace("/dashboard");
@@ -268,6 +384,8 @@ export default function ShopSetupPage() {
     setHours(nextHours);
     setLaborRate(nextLaborRate);
     setSelectedServiceIds(nextSelectedServiceIds);
+    setAddressSelectedFromAutocomplete(Boolean(nextDetails.address));
+    setAddressSuggestions([]);
     setSlugManual(
       Boolean(nextDetails.slug) && nextDetails.slug !== toSlug(nextDetails.name)
     );
@@ -299,6 +417,77 @@ export default function ShopSetupPage() {
       }
     }
   }, [portalAccess, clerkRole, isOwnerLike, router]);
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!addressContainerRef.current?.contains(event.target as Node)) {
+        setAddressSuggestions([]);
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    const query = details.address.trim();
+    if (!query || addressSelectedFromAutocomplete) {
+      setAddressLookupLoading(false);
+      if (!query) setAddressSuggestions([]);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(async () => {
+      const requestId = ++addressLookupRequestIdRef.current;
+      setAddressLookupLoading(true);
+      try {
+        await loadGoogleMapsPlacesApi();
+        const mapsWindow = window as GoogleMapsWindow;
+        const maps = mapsWindow.google?.maps;
+        if (!maps?.importLibrary) return;
+
+        const placesLibrary = (await maps.importLibrary("places")) as {
+          AutocompleteSuggestion?: {
+            fetchAutocompleteSuggestions?: (request: Record<string, unknown>) => Promise<{
+              suggestions?: GoogleAutocompleteSuggestion[];
+            }>;
+          };
+          AutocompleteSessionToken?: new () => unknown;
+        };
+
+        if (!addressLookupSessionRef.current && placesLibrary.AutocompleteSessionToken) {
+          addressLookupSessionRef.current = new placesLibrary.AutocompleteSessionToken();
+        }
+
+        const response = await placesLibrary.AutocompleteSuggestion?.fetchAutocompleteSuggestions?.({
+          input: query,
+          includedRegionCodes: ["us"],
+          sessionToken: addressLookupSessionRef.current ?? undefined,
+        });
+
+        if (addressLookupRequestIdRef.current !== requestId) return;
+
+        const nextSuggestions =
+          response?.suggestions?.slice(0, 5).map((suggestion, index) => ({
+            id: `${query}-${index}`,
+            primaryText: suggestion.placePrediction?.text?.toString() ?? "",
+            secondaryText: suggestion.placePrediction?.secondaryText?.toString() ?? "",
+            suggestion,
+          })) ?? [];
+        setAddressSuggestions(nextSuggestions.filter((entry) => entry.primaryText));
+      } catch {
+        if (addressLookupRequestIdRef.current === requestId) {
+          setAddressSuggestions([]);
+        }
+      } finally {
+        if (addressLookupRequestIdRef.current === requestId) {
+          setAddressLookupLoading(false);
+        }
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [addressSelectedFromAutocomplete, details.address]);
 
   const inputClass =
     "w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent";
@@ -358,6 +547,52 @@ export default function ShopSetupPage() {
     }
   }
 
+  async function handleSelectAddressSuggestion(entry: AddressSuggestion) {
+    const place = entry.suggestion.placePrediction?.toPlace?.();
+    if (!place?.fetchFields) {
+      setDetails((prev) => ({ ...prev, address: entry.primaryText }));
+      setAddressSelectedFromAutocomplete(true);
+      setAddressSuggestions([]);
+      return;
+    }
+
+    setAddressLookupLoading(true);
+    clearBanners();
+    try {
+      await place.fetchFields({
+        fields: ["formattedAddress", "addressComponents", "location"],
+      });
+      const components = place.addressComponents ?? [];
+      const streetNumber = getAddressComponent(components, "street_number");
+      const route = getAddressComponent(components, "route");
+      const line1 =
+        [streetNumber, route].filter(Boolean).join(" ") ||
+        place.formattedAddress ||
+        entry.primaryText;
+      const city =
+        getAddressComponent(components, "locality") ||
+        getAddressComponent(components, "postal_town") ||
+        getAddressComponent(components, "sublocality_level_1");
+      const state = getAddressComponent(components, "administrative_area_level_1", "short");
+      const zipCode = getAddressComponent(components, "postal_code");
+
+      setDetails((prev) => ({
+        ...prev,
+        address: line1,
+        city: city || prev.city,
+        state: state || prev.state,
+        zipCode: zipCode || prev.zipCode,
+      }));
+      setAddressSelectedFromAutocomplete(true);
+      setAddressSuggestions([]);
+      addressLookupSessionRef.current = null;
+    } catch {
+      setStepError("Failed to load address details. Try selecting the address again.");
+    } finally {
+      setAddressLookupLoading(false);
+    }
+  }
+
   async function handleSaveShopDetails() {
     clearBanners();
 
@@ -370,6 +605,9 @@ export default function ShopSetupPage() {
       errors.push("This slug is already taken. Please choose another.");
     }
     if (!details.address.trim()) errors.push("Please enter a street address.");
+    if (!addressSelectedFromAutocomplete) {
+      errors.push("Select a suggested address so the shop location is validated.");
+    }
     if (!details.city.trim()) errors.push("Please enter a city.");
     if (!details.state.trim()) errors.push("Please enter a state.");
     if (details.zipCode.length !== 5) errors.push("Zip code must be 5 digits.");
@@ -580,7 +818,8 @@ export default function ShopSetupPage() {
         <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-600">
           Step 1 already existed as a single setup form. This flow now continues
           through hours, services, mechanics, and a final payments handoff screen.
-          Address autocomplete and geocoding are still not implemented in this repo.
+          Shop details now include address autocomplete so locations are selected
+          from real address suggestions instead of free-form text.
         </p>
       </div>
 
@@ -720,23 +959,54 @@ export default function ShopSetupPage() {
                 <p className={`mt-1.5 text-xs ${slugStatus.className}`}>{slugStatus.text}</p>
               </div>
 
-              <div>
+              <div ref={addressContainerRef} className="relative">
                 <label className={labelClass}>
                   Street Address <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
                   value={details.address}
-                  onChange={(event) =>
-                    setDetails((prev) => ({ ...prev, address: event.target.value }))
-                  }
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setAddressSelectedFromAutocomplete(false);
+                    setDetails((prev) => ({ ...prev, address: value }));
+                  }}
+                  autoComplete="off"
                   placeholder="1234 Main St"
                   className={inputClass}
                 />
                 <p className="mt-1.5 text-xs text-gray-500">
-                  Address autocomplete and geocoding are not wired yet, so lat/lng are
-                  still not being set from this screen.
+                  Select a suggested address to auto-fill city, state, and ZIP.
                 </p>
+                {(addressLookupLoading || addressSuggestions.length > 0) && (
+                  <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
+                    {addressLookupLoading && addressSuggestions.length === 0 ? (
+                      <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Looking up addresses...
+                      </div>
+                    ) : (
+                      addressSuggestions.map((entry) => (
+                        <button
+                          key={entry.id}
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => void handleSelectAddressSuggestion(entry)}
+                          className="block w-full border-b border-gray-100 px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-gray-50"
+                        >
+                          <div className="text-sm font-medium text-gray-900">
+                            {entry.primaryText}
+                          </div>
+                          {entry.secondaryText && (
+                            <div className="mt-1 text-xs text-gray-500">
+                              {entry.secondaryText}
+                            </div>
+                          )}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="grid gap-4 sm:grid-cols-3">

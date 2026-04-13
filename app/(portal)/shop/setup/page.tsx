@@ -550,7 +550,7 @@ export default function ShopSetupPage() {
     );
   }
 
-  if (onboardingData === null && !isOwnerLike) {
+  if (onboardingData === null) {
     return (
       <div className="mx-auto max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-8 text-amber-900">
         <h1 className="text-2xl font-bold">Shop setup unavailable</h1>

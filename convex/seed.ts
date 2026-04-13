@@ -3735,6 +3735,17 @@ function dashboardAddMinutesToTime(hhmm: string, deltaMinutes: number): string {
   return dashboardMinutesToTime(hours * 60 + mins + deltaMinutes);
 }
 
+function dashboardTimeToMinutes(hhmm: string): number {
+  const [hours, mins] = hhmm.split(":").map(Number);
+  return hours * 60 + mins;
+}
+
+function dashboardIsoDateAtOffset(baseIsoDate: string, offsetDays: number): string {
+  const date = new Date(`${baseIsoDate}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  return date.toISOString().split("T")[0];
+}
+
 export const seedDashboardBookings = mutation({
   args: {
     shopId: v.id("shops"),
@@ -3851,11 +3862,32 @@ export const seedDashboardBookings = mutation({
       "Maintenance"
     );
 
-    let mechanics = await ctx.db
+    const allMechanics = await ctx.db
       .query("mechanics")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
       .filter((q) => q.eq(q.field("is_active"), true))
       .collect();
+    const mechanicShopUsers = await ctx.db
+      .query("shop_users")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("is_active"), true),
+          q.neq(q.field("mechanic_id"), undefined),
+          q.neq(q.field("accepted_at"), undefined),
+          q.or(
+            q.eq(q.field("role"), "shop_mechanic"),
+            q.eq(q.field("role"), "mechanic")
+          )
+        )
+      )
+      .collect();
+    const acceptedMechanicIds = new Set(
+      mechanicShopUsers.map((shopUser) => String(shopUser.mechanic_id))
+    );
+    let mechanics = allMechanics.filter((mechanic) =>
+      acceptedMechanicIds.has(String(mechanic._id))
+    );
 
     if (mechanics.length === 0) {
       const fallbackMechanicId = await ctx.db.insert("mechanics", {
@@ -3867,26 +3899,18 @@ export const seedDashboardBookings = mutation({
         rating: 0,
         review_count: 0,
       });
-      mechanics = (await ctx.db
-        .query("mechanics")
-        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
-        .collect()).filter((mechanic) => mechanic.is_active);
-
-      const ownerMembership = shop.owner_user_id
-        ? await ctx.db
-            .query("shop_users")
-            .withIndex("by_user_and_shop", (q) =>
-              q.eq("user_id", shop.owner_user_id!).eq("shop_id", args.shopId)
-            )
-            .first()
-        : null;
-      if (ownerMembership && !ownerMembership.mechanic_id) {
-        await ctx.db.patch(ownerMembership._id, {
-          mechanic_id: fallbackMechanicId,
-          role: ownerMembership.role ?? "shop_owner",
-          updated_at: now,
-        });
-      }
+      mechanics = [
+        {
+          _id: fallbackMechanicId,
+          shop_id: args.shopId,
+          first_name: "Demo",
+          last_name: "Technician",
+          title: "Lead Tech",
+          is_active: true,
+          rating: 0,
+          review_count: 0,
+        },
+      ];
     }
 
     const demoVehicles = [
@@ -4009,29 +4033,33 @@ export const seedDashboardBookings = mutation({
       vinIdx,
       serviceId,
       mechanicId,
+      scheduledDate,
       scheduledTime,
       status,
       laborCost,
       partsCost,
       estimatedMinutes,
+      liveStage,
       key,
     }: {
       userIdx: number;
       vinIdx: number;
       serviceId: any;
       mechanicId: any;
+      scheduledDate: string;
       scheduledTime: string;
       status: string;
       laborCost: number;
       partsCost: number;
       estimatedMinutes?: number;
+      liveStage?: string;
       key: string;
     }) => {
       const endTime = dashboardAddMinutesToTime(scheduledTime, estimatedMinutes ?? 60);
       const timeSlotId = await ctx.db.insert("time_slots", {
         shop_id: args.shopId,
         mechanic_id: mechanicId,
-        date: today,
+        date: scheduledDate,
         start_time: scheduledTime,
         end_time: endTime,
         is_available: false,
@@ -4044,20 +4072,21 @@ export const seedDashboardBookings = mutation({
         mechanic_id: mechanicId,
         service_ids: [serviceId],
         time_slot_id: timeSlotId,
-        scheduled_date: today,
+        scheduled_date: scheduledDate,
         scheduled_time: scheduledTime,
         labor_cost: laborCost,
         parts_cost: partsCost,
         total_cost: laborCost + partsCost,
         estimated_labor_minutes: estimatedMinutes,
         status,
+        ...(liveStage ? { live_stage: liveStage } : {}),
         created_at: now,
         updated_at: now,
       });
 
       await ctx.db.insert("booking_status_history", {
         booking_id: bookingId,
-        old_status: "confirmed",
+        old_status: undefined,
         new_status: status,
         reason: `seed_dashboard_${key}`,
         changed_at: now,
@@ -4066,95 +4095,170 @@ export const seedDashboardBookings = mutation({
       return bookingId;
     };
 
-    const slotData = [
+    const shopHours = await ctx.db
+      .query("shops_hours")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .collect();
+    const hoursByDay = new Map(
+      shopHours.map((hours) => [hours.day_of_week, hours] as const)
+    );
+
+    const openDates: { date: string; hours: (typeof shopHours)[number] }[] = [];
+    for (let offset = 0; offset <= 21 && openDates.length < 5; offset++) {
+      const date = dashboardIsoDateAtOffset(today, offset);
+      const dayOfWeek = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+      const hours = hoursByDay.get(dayOfWeek);
+      if (!hours || hours.is_closed || !hours.open_time || !hours.close_time) continue;
+      openDates.push({ date, hours });
+    }
+
+    if (openDates.length === 0) {
+      throw new Error(`Shop ${args.shopId} has no operating hours to seed bookings against.`);
+    }
+
+    const serviceOptions = [
       {
-        userIdx: 0,
-        vinIdx: 0,
-        serviceId: oilChangeId,
-        mechanicId: mechanics[0 % mechanics.length]._id,
-        scheduledTime: "08:00",
-        status: "completed",
+        id: oilChangeId,
         laborCost: 47.5,
         partsCost: 45,
         estimatedMinutes: 45,
-        key: "completed_1",
       },
       {
-        userIdx: 1,
-        vinIdx: 1,
-        serviceId: tireRotationId,
-        mechanicId: mechanics[1 % mechanics.length]._id,
-        scheduledTime: "09:00",
-        status: "completed",
-        laborCost: 30,
-        partsCost: 0,
-        estimatedMinutes: 30,
-        key: "completed_2",
-      },
-      {
-        userIdx: 2,
-        vinIdx: 2,
-        serviceId: brakePadsId,
-        mechanicId: mechanics[0 % mechanics.length]._id,
-        scheduledTime: "11:00",
-        status: "confirmed",
+        id: brakePadsId,
         laborCost: 95,
         partsCost: 70,
         estimatedMinutes: 90,
-        key: "confirmed_1",
       },
       {
-        userIdx: 3,
-        vinIdx: 3,
-        serviceId: alignmentId,
-        mechanicId: mechanics[1 % mechanics.length]._id,
-        scheduledTime: "13:00",
-        status: "confirmed",
+        id: tireRotationId,
+        laborCost: 30,
+        partsCost: 0,
+        estimatedMinutes: 30,
+      },
+      {
+        id: alignmentId,
         laborCost: 89,
         partsCost: 0,
         estimatedMinutes: 60,
-        key: "confirmed_2",
       },
       {
-        userIdx: 4,
-        vinIdx: 4,
-        serviceId: oilChangeId,
-        mechanicId: mechanics[0 % mechanics.length]._id,
-        scheduledTime: "14:30",
-        status: "confirmed",
-        laborCost: 47.5,
-        partsCost: 45,
-        estimatedMinutes: 45,
-        key: "confirmed_3",
-      },
-      {
-        userIdx: 5,
-        vinIdx: 5,
-        serviceId: brakePadsId,
-        mechanicId: mechanics[1 % mechanics.length]._id,
-        scheduledTime: "15:30",
-        status: "pending",
-        laborCost: 95,
-        partsCost: 60,
-        estimatedMinutes: 90,
-        key: "pending_1",
-      },
-      {
-        userIdx: 6,
-        vinIdx: 6,
-        serviceId: acServiceId,
-        mechanicId: mechanics[0 % mechanics.length]._id,
-        scheduledTime: "17:00",
-        status: "pending",
+        id: acServiceId,
         laborCost: 95,
         partsCost: 35,
         estimatedMinutes: 120,
-        key: "pending_2",
       },
     ];
 
-    for (const booking of slotData) {
-      await createBooking(booking);
+    const bookingsPerMechanicTarget = 5;
+    const minimumBookingsPerOpenDay = 5;
+    const totalBookingTarget = Math.max(
+      openDates.length * minimumBookingsPerOpenDay,
+      mechanics.length * bookingsPerMechanicTarget
+    );
+    const dayTargets = openDates.map(() => minimumBookingsPerOpenDay);
+    for (
+      let extra = totalBookingTarget - openDates.length * minimumBookingsPerOpenDay, idx = 0;
+      extra > 0;
+      extra--, idx++
+    ) {
+      dayTargets[idx % dayTargets.length] += 1;
+    }
+
+    const remainingBookingsByMechanic = new Map(
+      mechanics.map((mechanic) => [String(mechanic._id), bookingsPerMechanicTarget])
+    );
+    const bookingStatusCounts: Record<string, number> = {};
+    const mechanicDayBookingCounts = new Map<string, number>();
+    let bookingSequence = 0;
+
+    for (let dayIdx = 0; dayIdx < openDates.length; dayIdx++) {
+      const { date, hours } = openDates[dayIdx];
+      const openMinutes = dashboardTimeToMinutes(hours.open_time!);
+      const closeMinutes = dashboardTimeToMinutes(hours.close_time!);
+      const openWindowMinutes = Math.max(0, closeMinutes - openMinutes);
+      const dailyTarget = dayTargets[dayIdx];
+
+      for (let dayBookingIdx = 0; dayBookingIdx < dailyTarget; dayBookingIdx++) {
+        const mechanicOrder = [...mechanics].sort((a, b) => {
+          const remainingA = remainingBookingsByMechanic.get(String(a._id)) ?? 0;
+          const remainingB = remainingBookingsByMechanic.get(String(b._id)) ?? 0;
+          if (remainingA !== remainingB) return remainingB - remainingA;
+          return String(a._id).localeCompare(String(b._id));
+        });
+        const mechanic = mechanicOrder[(dayBookingIdx + dayIdx) % mechanicOrder.length];
+        const mechanicKey = String(mechanic._id);
+        const fittingServices = serviceOptions.filter(
+          (serviceOption) => serviceOption.estimatedMinutes <= openWindowMinutes
+        );
+        const availableServices = fittingServices.length > 0 ? fittingServices : [serviceOptions[0]];
+        const service = availableServices[(bookingSequence + dayIdx) % availableServices.length];
+
+        const mechanicDayKey = `${date}:${mechanicKey}`;
+        const mechanicBookingIndexForDay = mechanicDayBookingCounts.get(mechanicDayKey) ?? 0;
+        mechanicDayBookingCounts.set(mechanicDayKey, mechanicBookingIndexForDay + 1);
+
+        const relativeDayOffset = Math.round(
+          (new Date(`${date}T00:00:00.000Z`).getTime() -
+            new Date(`${today}T00:00:00.000Z`).getTime()) /
+            86400000
+        );
+
+        const statusCycle =
+          relativeDayOffset === 0
+            ? ["in_progress", "confirmed", "pending", "confirmed", "completed"]
+            : relativeDayOffset === 1
+              ? ["confirmed", "pending", "confirmed", "pending"]
+              : ["pending", "confirmed", "pending", "confirmed"];
+        const status = statusCycle[(bookingSequence + mechanicBookingIndexForDay) % statusCycle.length];
+
+        const latestStartMinutes = closeMinutes - service.estimatedMinutes;
+        const validStartMinutes: number[] = [];
+        for (let minute = openMinutes; minute <= latestStartMinutes; minute += 30) {
+          validStartMinutes.push(minute);
+        }
+        if (validStartMinutes.length === 0) {
+          continue;
+        }
+        const startMinutes =
+          validStartMinutes[
+            (mechanicBookingIndexForDay + dayBookingIdx + bookingSequence) % validStartMinutes.length
+          ];
+        const adjustedEstimatedMinutes = Math.min(service.estimatedMinutes, closeMinutes - startMinutes);
+        if (adjustedEstimatedMinutes <= 0) {
+          continue;
+        }
+        if (startMinutes < openMinutes || startMinutes + adjustedEstimatedMinutes > closeMinutes) {
+          throw new Error(
+            `Seeded booking fell outside operating hours for ${date}: ${dashboardMinutesToTime(
+              startMinutes
+            )}-${dashboardMinutesToTime(startMinutes + adjustedEstimatedMinutes)} vs ${
+              hours.open_time
+            }-${hours.close_time}`
+          );
+        }
+
+        await createBooking({
+          userIdx: bookingSequence % userIds.length,
+          vinIdx: (bookingSequence + dayIdx) % demoVehicles.length,
+          serviceId: service.id,
+          mechanicId: mechanic._id,
+          scheduledDate: date,
+          scheduledTime: dashboardMinutesToTime(startMinutes),
+          status,
+          laborCost: service.laborCost,
+          partsCost: service.partsCost,
+          estimatedMinutes: adjustedEstimatedMinutes,
+          liveStage: status === "in_progress" ? "service_in_progress" : undefined,
+          key: `${date}_${mechanicKey}_${bookingSequence}`,
+        });
+
+        bookingStatusCounts[status] = (bookingStatusCounts[status] ?? 0) + 1;
+        remainingBookingsByMechanic.set(
+          mechanicKey,
+          Math.max(0, (remainingBookingsByMechanic.get(mechanicKey) ?? 0) - 1)
+        );
+        bookingSequence += 1;
+      }
     }
 
     await syncShopAvailabilityWindow(ctx, { shopId: args.shopId });
@@ -4162,12 +4266,8 @@ export const seedDashboardBookings = mutation({
     return {
       success: true,
       shopId: args.shopId,
-      date: today,
-      created: {
-        completed: 2,
-        confirmed: 3,
-        pending: 2,
-      },
+      dates: openDates.map(({ date }) => date),
+      created: bookingStatusCounts,
     };
   },
 });

@@ -315,15 +315,25 @@ export const getMyOnboardingData = query({
           .collect()
       : [];
 
+    const mechanicRoleShopUsers = shopUsers.filter(
+      (row: any) =>
+        row.mechanic_id &&
+        (row.role === "shop_mechanic" || row.role === "mechanic")
+    );
+    const mechanicRolePendingInvitations = pendingInvitations.filter(
+      (row: any) =>
+        row.mechanic_id &&
+        (row.role === "shop_mechanic" || row.role === "mechanic")
+    );
+
     const shopUserByMechanicId = new Map(
-      shopUsers
-        .filter((row: any) => row.mechanic_id)
-        .map((row: any) => [String(row.mechanic_id), String(row._id)])
+      mechanicRoleShopUsers.map((row: any) => [String(row.mechanic_id), String(row._id)])
     );
     const pendingInvitationByMechanicId = new Map(
-      pendingInvitations
-        .filter((row: any) => row.mechanic_id)
-        .map((row: any) => [String(row.mechanic_id), String(row._id)])
+      mechanicRolePendingInvitations.map((row: any) => [
+        String(row.mechanic_id),
+        String(row._id),
+      ])
     );
 
     return {

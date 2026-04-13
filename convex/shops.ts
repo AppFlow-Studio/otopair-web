@@ -329,6 +329,9 @@ export const getMyOnboardingData = query({
     const shopUserByMechanicId = new Map(
       mechanicRoleShopUsers.map((row: any) => [String(row.mechanic_id), String(row._id)])
     );
+    const shopUserRecordByMechanicId = new Map(
+      mechanicRoleShopUsers.map((row: any) => [String(row.mechanic_id), row])
+    );
     const pendingInvitationByMechanicId = new Map(
       mechanicRolePendingInvitations.map((row: any) => [
         String(row.mechanic_id),
@@ -366,21 +369,33 @@ export const getMyOnboardingData = query({
           closeTime: (row.close_time ?? "17:00") as string,
         })),
       serviceCategories,
-      mechanics: mechanics
-        .filter(
-          (mechanic: any) =>
-            shopUserByMechanicId.has(String(mechanic._id)) ||
-            pendingInvitationByMechanicId.has(String(mechanic._id))
-        )
-        .map((mechanic: any) => ({
-          _id: String(mechanic._id),
-          firstName: mechanic.first_name as string,
-          lastName: mechanic.last_name as string,
-          title: (mechanic.title ?? "") as string,
-          shopUserId: shopUserByMechanicId.get(String(mechanic._id)) ?? null,
-          pendingInvitationId:
-            pendingInvitationByMechanicId.get(String(mechanic._id)) ?? null,
-        })),
+      mechanics: await Promise.all(
+        mechanics
+          .filter(
+            (mechanic: any) =>
+              shopUserByMechanicId.has(String(mechanic._id)) ||
+              pendingInvitationByMechanicId.has(String(mechanic._id))
+          )
+          .map(async (mechanic: any) => {
+            const shopUser = shopUserRecordByMechanicId.get(String(mechanic._id));
+            const linkedUser = shopUser?.user_id ? await ctx.db.get(shopUser.user_id) : null;
+            const photoUrl =
+              linkedUser?.profile_photo_storage_id
+                ? await ctx.storage.getUrl(linkedUser.profile_photo_storage_id)
+                : (linkedUser?.profile_photo_url ?? null);
+
+            return {
+              _id: String(mechanic._id),
+              firstName: mechanic.first_name as string,
+              lastName: mechanic.last_name as string,
+              title: (mechanic.title ?? "") as string,
+              shopUserId: shopUserByMechanicId.get(String(mechanic._id)) ?? null,
+              pendingInvitationId:
+                pendingInvitationByMechanicId.get(String(mechanic._id)) ?? null,
+              photoUrl,
+            };
+          })
+      ),
     };
   },
 });
@@ -606,6 +621,56 @@ export const removeOnboardingMechanic = mutation({
       mechanicId: args.mechanicId,
     });
     return args.mechanicId;
+  },
+});
+
+export const updateOnboardingMechanicProfilePhoto = mutation({
+  args: {
+    mechanicId: v.id("mechanics"),
+    profilePhotoStorageId: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getOrCreateCurrentShopOwner(ctx);
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Not authorized");
+    }
+
+    const mechanic = await ctx.db.get(args.mechanicId);
+    if (!mechanic || String(mechanic.shop_id) !== String(primary.shop._id)) {
+      throw new Error("Mechanic not found.");
+    }
+
+    const shopUser = await ctx.db
+      .query("shop_users")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
+      .filter((q: any) =>
+        q.and(
+          q.eq(q.field("is_active"), true),
+          q.eq(q.field("mechanic_id"), args.mechanicId),
+          q.or(
+            q.eq(q.field("role"), "shop_mechanic"),
+            q.eq(q.field("role"), "mechanic")
+          )
+        )
+      )
+      .first();
+
+    if (!shopUser?.user_id) {
+      throw new Error("Profile photo can be added after the mechanic accepts the invitation.");
+    }
+
+    await ctx.db.patch(shopUser.user_id, {
+      profile_photo_storage_id: args.profilePhotoStorageId ?? undefined,
+      profile_photo_url: undefined,
+      lastUpdated: Date.now(),
+    });
+
+    const photoUrl = args.profilePhotoStorageId
+      ? await ctx.storage.getUrl(args.profilePhotoStorageId)
+      : null;
+    return { userId: shopUser.user_id, photoUrl };
   },
 });
 

@@ -6,6 +6,7 @@ import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import ConfirmationDialog from "@/components/confirmation-dialog";
 import { removeTeamMember } from "@/lib/remove-team-member";
 import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
@@ -16,6 +17,7 @@ import {
   Clock3,
   CreditCard,
   Loader2,
+  Plus,
   Trash2,
   UserRoundCog,
   Wrench,
@@ -230,6 +232,11 @@ function formatPhone(value: string): string {
   return "";
 }
 
+function getInitials(firstName: string, lastName: string): string {
+  const initials = `${firstName.trim()[0] ?? ""}${lastName.trim()[0] ?? ""}`.toUpperCase();
+  return initials || "ME";
+}
+
 function getFirstIncompleteSavedStep(params: {
   hasSavedShop: boolean;
   savedHoursCount: number;
@@ -249,6 +256,10 @@ export default function ShopSetupPage() {
   const portalAccess = useQuery(api.shops.getMyPortalAccess);
   const onboardingData = useQuery(api.shops.getMyOnboardingData);
   const ensureUser = useMutation(api.users.getOrCreateMe);
+  const generateUploadUrl = useMutation(api.users.generateUploadUrl);
+  const updateMechanicProfilePhoto = useMutation(
+    api.shops.updateOnboardingMechanicProfilePhoto
+  );
   const upsertShopDetails = useMutation(api.shops.upsertOnboardingShopDetails);
   const saveHours = useMutation(api.shops.saveOnboardingHours);
   const saveLaborAndServices = useMutation(api.shops.saveOnboardingLaborAndServices);
@@ -279,6 +290,8 @@ export default function ShopSetupPage() {
   const addressLookupSessionRef = useRef<unknown>(null);
   const addressLookupRequestIdRef = useRef(0);
   const addressContainerRef = useRef<HTMLDivElement | null>(null);
+  const mechanicPhotoInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingMechanicPhotoIdRef = useRef<string | null>(null);
   const [mechanicForm, setMechanicForm] = useState({
     firstName: "",
     lastName: "",
@@ -290,6 +303,8 @@ export default function ShopSetupPage() {
   const [mechanicInviteSuccess, setMechanicInviteSuccess] = useState(false);
   const [hydratedShopId, setHydratedShopId] = useState<string | null>(null);
   const [ensuredConvexUser, setEnsuredConvexUser] = useState(false);
+  const [uploadingMechanicId, setUploadingMechanicId] = useState<string | null>(null);
+  const [photoDialogMechanicId, setPhotoDialogMechanicId] = useState<string | null>(null);
   const clerkRole =
     typeof user?.publicMetadata?.role === "string"
       ? user.publicMetadata.role
@@ -736,6 +751,93 @@ export default function ShopSetupPage() {
     }
   }
 
+  function handleMechanicPhotoClick(mechanic: {
+    _id: string;
+    shopUserId: string | null;
+    pendingInvitationId: string | null;
+  }) {
+    clearBanners();
+    setPhotoDialogMechanicId(mechanic._id);
+  }
+
+  function closeMechanicPhotoDialog() {
+    setPhotoDialogMechanicId(null);
+  }
+
+  function handleChooseMechanicPhoto() {
+    const mechanicId = photoDialogMechanicId;
+    if (!mechanicId) return;
+    pendingMechanicPhotoIdRef.current = mechanicId;
+    setPhotoDialogMechanicId(null);
+    mechanicPhotoInputRef.current?.click();
+  }
+
+  async function handleMechanicPhotoSelected(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const file = event.target.files?.[0];
+    const mechanicId = pendingMechanicPhotoIdRef.current;
+    event.target.value = "";
+    if (!file || !mechanicId) return;
+
+    clearBanners();
+    setUploadingMechanicId(mechanicId);
+    try {
+      const uploadUrl = await generateUploadUrl();
+      const uploadResult = await fetch(uploadUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+        },
+        body: file,
+      });
+      if (!uploadResult.ok) {
+        throw new Error("Failed to upload the image file.");
+      }
+
+      const { storageId } = (await uploadResult.json()) as { storageId?: string };
+      if (!storageId) {
+        throw new Error("Upload did not return a storage id.");
+      }
+
+      await updateMechanicProfilePhoto({
+        mechanicId: mechanicId as Id<"mechanics">,
+        profilePhotoStorageId: storageId,
+      });
+      setStepSuccess("Mechanic profile photo updated.");
+    } catch (error) {
+      setStepError(
+        error instanceof Error ? error.message : "Failed to update mechanic profile photo."
+      );
+    } finally {
+      pendingMechanicPhotoIdRef.current = null;
+      setUploadingMechanicId(null);
+    }
+  }
+
+  async function handleRemoveMechanicPhoto() {
+    const mechanicId = photoDialogMechanicId;
+    if (!mechanicId) return;
+
+    clearBanners();
+    setUploadingMechanicId(mechanicId);
+    setPhotoDialogMechanicId(null);
+    try {
+      await updateMechanicProfilePhoto({
+        mechanicId: mechanicId as Id<"mechanics">,
+        profilePhotoStorageId: null as never,
+      });
+      setStepSuccess("Mechanic profile photo removed.");
+    } catch (error) {
+      setStepError(
+        error instanceof Error ? error.message : "Failed to remove mechanic profile photo."
+      );
+    } finally {
+      pendingMechanicPhotoIdRef.current = null;
+      setUploadingMechanicId(null);
+    }
+  }
+
   async function handleRemoveMechanic(args: {
     mechanicId: string;
     shopUserId: string | null;
@@ -801,7 +903,19 @@ export default function ShopSetupPage() {
     );
   }
 
-  const mechanics = onboardingData.mechanics;
+  const mechanics = onboardingData.mechanics as Array<{
+    _id: string;
+    firstName: string;
+    lastName: string;
+    title: string;
+    shopUserId: string | null;
+    pendingInvitationId: string | null;
+    photoUrl?: string | null;
+  }>;
+  const selectedMechanicForPhotoDialog =
+    photoDialogMechanicId === null
+      ? null
+      : mechanics.find((mechanic) => mechanic._id === photoDialogMechanicId) ?? null;
   const offeredCount = selectedServiceIds.size;
   const stepButtonClass =
     "inline-flex items-center rounded-lg border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
@@ -1407,6 +1521,14 @@ export default function ShopSetupPage() {
                 </div>
               )}
 
+              <input
+                ref={mechanicPhotoInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleMechanicPhotoSelected}
+              />
+
               <div className="space-y-3">
                 {mechanics.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-500">
@@ -1418,15 +1540,52 @@ export default function ShopSetupPage() {
                       key={mechanic._id}
                       className="flex items-center justify-between gap-4 rounded-xl border border-gray-200 px-4 py-4"
                     >
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">
-                          {mechanic.firstName} {mechanic.lastName}
-                        </p>
-                        <p className="mt-1 text-sm text-gray-500">
-                          {mechanic.pendingInvitationId
-                            ? "Invitation pending"
-                            : mechanic.title || "Mechanic"}
-                        </p>
+                      <div className="flex min-w-0 items-center gap-4">
+                        <button
+                          type="button"
+                          onClick={() => handleMechanicPhotoClick(mechanic)}
+                          disabled={uploadingMechanicId === mechanic._id}
+                          className="group relative h-14 w-14 shrink-0 disabled:cursor-wait disabled:opacity-80"
+                          aria-label={`Add a profile photo for ${mechanic.firstName} ${mechanic.lastName}`}
+                        >
+                          <div className="h-14 w-14 overflow-hidden rounded-full border border-gray-300 bg-slate-700 text-white transition-colors group-hover:border-blue-300 group-hover:bg-slate-800">
+                            {mechanic.photoUrl ? (
+                              <img
+                                src={mechanic.photoUrl}
+                                alt={`${mechanic.firstName} ${mechanic.lastName}`}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center bg-[linear-gradient(135deg,#5B4BFF_0%,#8B5CF6_100%)] text-lg font-semibold tracking-tight text-white">
+                                {getInitials(mechanic.firstName, mechanic.lastName)}
+                              </div>
+                            )}
+                            <span className="absolute inset-0 rounded-full bg-black/0 transition-colors group-hover:bg-black/10" />
+                          </div>
+                          <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-white ring-2 ring-white">
+                            {uploadingMechanicId === mechanic._id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Plus className="h-3.5 w-3.5" />
+                            )}
+                          </span>
+                        </button>
+
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900">
+                            {mechanic.firstName} {mechanic.lastName}
+                          </p>
+                          <p className="mt-1 text-sm text-gray-500">
+                            {mechanic.pendingInvitationId
+                              ? "Invitation pending"
+                              : mechanic.title || "Mechanic"}
+                          </p>
+                          <p className="mt-1 text-xs font-medium text-blue-600">
+                            {mechanic.shopUserId
+                              ? "Click the photo to manage it."
+                              : "Click the photo to view options. Upload is available after acceptance."}
+                          </p>
+                        </div>
                       </div>
                       <button
                         type="button"
@@ -1446,6 +1605,63 @@ export default function ShopSetupPage() {
                   ))
                 )}
               </div>
+
+              <ConfirmationDialog
+                open={selectedMechanicForPhotoDialog !== null}
+                title={
+                  <span className="block text-center text-xl font-semibold text-gray-900">
+                    Profile Photo
+                  </span>
+                }
+                description={
+                  <span className="block text-center text-sm text-gray-500">
+                    {selectedMechanicForPhotoDialog
+                      ? `Select an option to update ${selectedMechanicForPhotoDialog.firstName} ${selectedMechanicForPhotoDialog.lastName}'s profile picture.`
+                      : ""}
+                  </span>
+                }
+                onClose={closeMechanicPhotoDialog}
+                enableShortcuts={false}
+                maxWidthClassName="max-w-md"
+              >
+                <div className="space-y-3">
+                  {!selectedMechanicForPhotoDialog?.shopUserId && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                      This mechanic needs to accept the invitation before a photo can be added or removed.
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleChooseMechanicPhoto}
+                    disabled={
+                      !selectedMechanicForPhotoDialog?.shopUserId ||
+                      uploadingMechanicId === selectedMechanicForPhotoDialog?._id
+                    }
+                    className="inline-flex h-12 w-full items-center justify-center rounded-full bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Add photo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRemoveMechanicPhoto}
+                    disabled={
+                      !selectedMechanicForPhotoDialog?.shopUserId ||
+                      !selectedMechanicForPhotoDialog?.photoUrl ||
+                      uploadingMechanicId === selectedMechanicForPhotoDialog?._id
+                    }
+                    className="inline-flex h-12 w-full items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Remove photo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closeMechanicPhotoDialog}
+                    className="inline-flex h-12 w-full items-center justify-center rounded-full border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </ConfirmationDialog>
 
               <div className="flex justify-between pt-2">
                 <button

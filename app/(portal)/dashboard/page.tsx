@@ -319,111 +319,153 @@ function OwnerDashboardPage() {
         <section className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-gray-900">Today&apos;s Schedule</h2>
+              <h2 className="text-xl font-semibold text-gray-900">Pending Actions</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Grouped by active mechanic, with live statuses and direct links into booking detail.
+                Keep approvals, completed-job follow-up, and team invitations from slipping through.
               </p>
             </div>
-            <Link
-              href="/bookings"
-              className="inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
-            >
-              View all bookings
-              <ArrowUpRight className="h-4 w-4" />
-            </Link>
+            {!hasPendingActions ? (
+              <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
+                All caught up
+              </div>
+            ) : null}
           </div>
 
-          {dashboard.todaySchedule.length === 0 ? (
-            <div className="mt-6">
-              <EmptyCard
-                title="No active mechanics yet"
-                description="Invite at least one mechanic so today's schedule can be organized into technician columns."
-                href="/mechanics"
-                hrefLabel="Manage mechanics"
-              />
-            </div>
-          ) : (
-            <div className="mt-6 overflow-x-auto pb-2">
-              <div
-                className="grid min-w-max gap-4"
-                style={{
-                  gridTemplateColumns: `repeat(${scheduleColumnCount}, minmax(280px, 1fr))`,
-                }}
-              >
-                {dashboard.todaySchedule.map((column) => (
-                  <div
-                    key={String(column.mechanicId)}
-                    className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4"
-                  >
-                    <div className="flex items-center gap-3 border-b border-gray-200 pb-4">
-                      <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[linear-gradient(135deg,#5B4BFF_0%,#8B5CF6_100%)] text-sm font-semibold text-white">
-                        {column.photoUrl ? (
-                          <img
-                            src={column.photoUrl}
-                            alt={column.mechanicName}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          getInitials(column.firstName, column.lastName)
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-gray-900">
-                          {column.mechanicName}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {column.jobsCount} job{column.jobsCount === 1 ? "" : "s"} today
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 space-y-3">
-                      {column.bookings.length === 0 ? (
-                        <EmptyCard
-                          title="No jobs scheduled"
-                          description="This mechanic does not have any assigned work for today."
-                        />
-                      ) : (
-                        column.bookings.map((booking) => (
-                          <Link
-                            key={String(booking._id)}
-                            href={`/bookings?highlight=${String(booking._id)}`}
-                            className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
-                                  {booking.scheduledTimeLabel}
-                                </p>
-                                <p className="mt-1 truncate text-sm font-semibold text-gray-900">
-                                  {booking.customerDisplayName}
-                                </p>
-                                <p className="mt-1 text-sm text-gray-600">{booking.vehicle}</p>
-                              </div>
-                              <span
-                                className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${getScheduleStatusClass(
-                                  booking.status
-                                )}`}
-                              >
-                                {getScheduleStatusLabel(booking.status)}
-                              </span>
-                            </div>
-                            <p className="mt-3 line-clamp-2 text-xs leading-5 text-gray-500">
-                              {booking.serviceSummary || "Service details unavailable"}
-                            </p>
-                            <div className="mt-3 flex items-center justify-between text-xs font-semibold text-blue-600">
-                              Open booking detail
-                              <ArrowUpRight className="h-3.5 w-3.5" />
-                            </div>
-                          </Link>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                ))}
+          <div className="mt-6 grid gap-4 xl:grid-cols-3">
+            <div className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Jobs to accept</p>
+                  <p className="mt-1 text-xs text-gray-500">Bookings waiting for owner review</p>
+                </div>
+                <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600">
+                  {dashboard.pendingActions.jobsToAcceptCount}
+                </span>
               </div>
+
+              <div className="mt-4 space-y-3">
+                {dashboard.pendingActions.jobsToAccept.length === 0 ? (
+                  <EmptyCard
+                    title="No pending approvals"
+                    description="New booking requests will appear here in real time."
+                  />
+                ) : (
+                  dashboard.pendingActions.jobsToAccept.map((job) => (
+                    <Link
+                      key={String(job._id)}
+                      href={`/bookings?highlight=${String(job._id)}`}
+                      className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
+                    >
+                      <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
+                      <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
+                      <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
+                      <p className="mt-3 text-xs font-semibold text-blue-600">
+                        {job.scheduledDate} at {job.scheduledTimeLabel}
+                      </p>
+                    </Link>
+                  ))
+                )}
+              </div>
+
+              <Link
+                href="/bookings"
+                className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
+              >
+                Open accept queue
+                <ArrowUpRight className="h-4 w-4" />
+              </Link>
             </div>
-          )}
+
+            <div className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Job actuals needed</p>
+                  <p className="mt-1 text-xs text-gray-500">Completed jobs missing final actuals</p>
+                </div>
+                <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                  {dashboard.pendingActions.actualsNeededCount}
+                </span>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {dashboard.pendingActions.actualsNeeded.length === 0 ? (
+                  <EmptyCard
+                    title="No missing actuals"
+                    description="Completed bookings with unfinished job actuals will surface here."
+                  />
+                ) : (
+                  dashboard.pendingActions.actualsNeeded.map((job) => (
+                    <Link
+                      key={String(job._id)}
+                      href={`/bookings?highlight=${String(job._id)}`}
+                      className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
+                    >
+                      <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
+                      <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
+                      <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
+                      <p className="mt-3 text-xs font-semibold text-blue-600">
+                        Completed booking from {job.scheduledDate} at {job.scheduledTimeLabel}
+                      </p>
+                    </Link>
+                  ))
+                )}
+              </div>
+
+              <Link
+                href="/bookings"
+                className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
+              >
+                Review completed jobs
+                <ArrowUpRight className="h-4 w-4" />
+              </Link>
+            </div>
+
+            <div className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Invites pending</p>
+                  <p className="mt-1 text-xs text-gray-500">Mechanic invitations not yet accepted</p>
+                </div>
+                <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                  {dashboard.pendingActions.invitesPendingCount}
+                </span>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {dashboard.pendingActions.invitesPending.length === 0 ? (
+                  <EmptyCard
+                    title="No pending invites"
+                    description="Outstanding team invitations will appear here until they are accepted or revoked."
+                  />
+                ) : (
+                  dashboard.pendingActions.invitesPending.map((invite) => (
+                    <Link
+                      key={String(invite._id)}
+                      href="/mechanics"
+                      className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
+                    >
+                      <p className="text-sm font-semibold text-gray-900">{invite.mechanicName || invite.email}</p>
+                      <p className="mt-1 text-sm text-gray-600">{invite.email}</p>
+                      <p className="mt-2 text-xs text-gray-500">
+                        {invite.role.replace(/_/g, " ")} invitation
+                      </p>
+                      <p className="mt-3 text-xs font-semibold text-blue-600">
+                        Sent {formatInviteDate(invite.createdAt)}
+                      </p>
+                    </Link>
+                  ))
+                )}
+              </div>
+
+              <Link
+                href="/mechanics"
+                className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
+              >
+                Manage invitations
+                <ArrowUpRight className="h-4 w-4" />
+              </Link>
+            </div>
+          </div>
         </section>
 
         <aside className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
@@ -473,153 +515,111 @@ function OwnerDashboardPage() {
       <section className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">Pending Actions</h2>
+            <h2 className="text-xl font-semibold text-gray-900">Today&apos;s Schedule</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Keep approvals, completed-job follow-up, and team invitations from slipping through.
+              Grouped by active mechanic, with live statuses and direct links into booking detail.
             </p>
           </div>
-          {!hasPendingActions ? (
-            <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">
-              All caught up
-            </div>
-          ) : null}
+          <Link
+            href="/bookings"
+            className="inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
+          >
+            View all bookings
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
         </div>
 
-        <div className="mt-6 grid gap-4 xl:grid-cols-3">
-          <div className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Jobs to accept</p>
-                <p className="mt-1 text-xs text-gray-500">Bookings waiting for owner review</p>
-              </div>
-              <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600">
-                {dashboard.pendingActions.jobsToAcceptCount}
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {dashboard.pendingActions.jobsToAccept.length === 0 ? (
-                <EmptyCard
-                  title="No pending approvals"
-                  description="New booking requests will appear here in real time."
-                />
-              ) : (
-                dashboard.pendingActions.jobsToAccept.map((job) => (
-                  <Link
-                    key={String(job._id)}
-                    href={`/bookings?highlight=${String(job._id)}`}
-                    className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
-                  >
-                    <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
-                    <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
-                    <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
-                    <p className="mt-3 text-xs font-semibold text-blue-600">
-                      {job.scheduledDate} at {job.scheduledTimeLabel}
-                    </p>
-                  </Link>
-                ))
-              )}
-            </div>
-
-            <Link
-              href="/bookings"
-              className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
-            >
-              Open accept queue
-              <ArrowUpRight className="h-4 w-4" />
-            </Link>
-          </div>
-
-          <div className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Job actuals needed</p>
-                <p className="mt-1 text-xs text-gray-500">Completed jobs missing final actuals</p>
-              </div>
-              <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                {dashboard.pendingActions.actualsNeededCount}
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {dashboard.pendingActions.actualsNeeded.length === 0 ? (
-                <EmptyCard
-                  title="No missing actuals"
-                  description="Completed bookings with unfinished job actuals will surface here."
-                />
-              ) : (
-                dashboard.pendingActions.actualsNeeded.map((job) => (
-                  <Link
-                    key={String(job._id)}
-                    href={`/bookings?highlight=${String(job._id)}`}
-                    className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
-                  >
-                    <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
-                    <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
-                    <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
-                    <p className="mt-3 text-xs font-semibold text-blue-600">
-                      Completed booking from {job.scheduledDate} at {job.scheduledTimeLabel}
-                    </p>
-                  </Link>
-                ))
-              )}
-            </div>
-
-            <Link
-              href="/bookings"
-              className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
-            >
-              Review completed jobs
-              <ArrowUpRight className="h-4 w-4" />
-            </Link>
-          </div>
-
-          <div className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-gray-900">Invites pending</p>
-                <p className="mt-1 text-xs text-gray-500">Mechanic invitations not yet accepted</p>
-              </div>
-              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                {dashboard.pendingActions.invitesPendingCount}
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {dashboard.pendingActions.invitesPending.length === 0 ? (
-                <EmptyCard
-                  title="No pending invites"
-                  description="Outstanding team invitations will appear here until they are accepted or revoked."
-                />
-              ) : (
-                dashboard.pendingActions.invitesPending.map((invite) => (
-                  <Link
-                    key={String(invite._id)}
-                    href="/mechanics"
-                    className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
-                  >
-                    <p className="text-sm font-semibold text-gray-900">{invite.mechanicName || invite.email}</p>
-                    <p className="mt-1 text-sm text-gray-600">{invite.email}</p>
-                    <p className="mt-2 text-xs text-gray-500">
-                      {invite.role.replace(/_/g, " ")} invitation
-                    </p>
-                    <p className="mt-3 text-xs font-semibold text-blue-600">
-                      Sent {formatInviteDate(invite.createdAt)}
-                    </p>
-                  </Link>
-                ))
-              )}
-            </div>
-
-            <Link
+        {dashboard.todaySchedule.length === 0 ? (
+          <div className="mt-6">
+            <EmptyCard
+              title="No active mechanics yet"
+              description="Invite at least one mechanic so today's schedule can be organized into technician columns."
               href="/mechanics"
-              className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
-            >
-              Manage invitations
-              <ArrowUpRight className="h-4 w-4" />
-            </Link>
+              hrefLabel="Manage mechanics"
+            />
           </div>
-        </div>
+        ) : (
+          <div className="mt-6 overflow-x-auto pb-2">
+            <div
+              className="grid min-w-max gap-4"
+              style={{
+                gridTemplateColumns: `repeat(${scheduleColumnCount}, minmax(280px, 1fr))`,
+              }}
+            >
+              {dashboard.todaySchedule.map((column) => (
+                <div
+                  key={String(column.mechanicId)}
+                  className="rounded-2xl border border-gray-200 bg-slate-50/70 p-4"
+                >
+                  <div className="flex items-center gap-3 border-b border-gray-200 pb-4">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[linear-gradient(135deg,#5B4BFF_0%,#8B5CF6_100%)] text-sm font-semibold text-white">
+                      {column.photoUrl ? (
+                        <img
+                          src={column.photoUrl}
+                          alt={column.mechanicName}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        getInitials(column.firstName, column.lastName)
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-gray-900">
+                        {column.mechanicName}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {column.jobsCount} job{column.jobsCount === 1 ? "" : "s"} today
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    {column.bookings.length === 0 ? (
+                      <EmptyCard
+                        title="No jobs scheduled"
+                        description="This mechanic does not have any assigned work for today."
+                      />
+                    ) : (
+                      column.bookings.map((booking) => (
+                        <Link
+                          key={String(booking._id)}
+                          href={`/bookings?highlight=${String(booking._id)}`}
+                          className="block rounded-2xl border border-gray-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-blue-50"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
+                                {booking.scheduledTimeLabel}
+                              </p>
+                              <p className="mt-1 truncate text-sm font-semibold text-gray-900">
+                                {booking.customerDisplayName}
+                              </p>
+                              <p className="mt-1 text-sm text-gray-600">{booking.vehicle}</p>
+                            </div>
+                            <span
+                              className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${getScheduleStatusClass(
+                                booking.status
+                              )}`}
+                            >
+                              {getScheduleStatusLabel(booking.status)}
+                            </span>
+                          </div>
+                          <p className="mt-3 line-clamp-2 text-xs leading-5 text-gray-500">
+                            {booking.serviceSummary || "Service details unavailable"}
+                          </p>
+                          <div className="mt-3 flex items-center justify-between text-xs font-semibold text-blue-600">
+                            Open booking detail
+                            <ArrowUpRight className="h-3.5 w-3.5" />
+                          </div>
+                        </Link>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );

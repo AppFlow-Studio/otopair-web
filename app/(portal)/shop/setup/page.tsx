@@ -1,3 +1,5 @@
+//TODO: Forbid navigating away from this page until onboarding is fully complete
+
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -129,6 +131,13 @@ type ShopDetailsForm = {
   phone: string;
 };
 
+type NormalizedShopAddress = {
+  address: string;
+  city: string;
+  state: string;
+  zipCode: string;
+};
+
 function getAddressComponent(
   components: Array<{ longText?: string; shortText?: string; types?: string[] }>,
   type: string,
@@ -137,6 +146,89 @@ function getAddressComponent(
   const match = components.find((component) => component.types?.includes(type));
   if (!match) return "";
   return mode === "short" ? match.shortText ?? "" : match.longText ?? "";
+}
+
+function normalizeAddressToken(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+async function validateShopAddressWithGoogle(
+  details: Pick<ShopDetailsForm, "address" | "city" | "state" | "zipCode">
+): Promise<NormalizedShopAddress> {
+  await loadGoogleMapsPlacesApi();
+
+  const mapsWindow = window as GoogleMapsWindow;
+  const maps = mapsWindow.google?.maps as
+    | {
+        Geocoder?: new () => {
+          geocode: (request: Record<string, unknown>) => Promise<{
+            results?: Array<{
+              formatted_address?: string;
+              address_components?: Array<{
+                long_name?: string;
+                short_name?: string;
+                types?: string[];
+              }>;
+            }>;
+          }>;
+        };
+      }
+    | undefined;
+
+  if (!maps?.Geocoder) {
+    throw new Error("Google address validation is not available right now.");
+  }
+
+  const geocoder = new maps.Geocoder();
+  const query = `${details.address}, ${details.city}, ${details.state} ${details.zipCode}`;
+  const response = await geocoder.geocode({
+    address: query,
+    componentRestrictions: { country: "US" },
+  });
+
+  const result = response.results?.[0];
+  if (!result) {
+    throw new Error("Google could not validate this address. Select a valid suggested address.");
+  }
+
+  const components =
+    result.address_components?.map((component) => ({
+      longText: component.long_name ?? "",
+      shortText: component.short_name ?? "",
+      types: component.types ?? [],
+    })) ?? [];
+
+  const streetNumber = getAddressComponent(components, "street_number");
+  const route = getAddressComponent(components, "route");
+  const city =
+    getAddressComponent(components, "locality") ||
+    getAddressComponent(components, "postal_town") ||
+    getAddressComponent(components, "sublocality_level_1");
+  const state = getAddressComponent(components, "administrative_area_level_1", "short");
+  const zipCode = getAddressComponent(components, "postal_code");
+  const address =
+    [streetNumber, route].filter(Boolean).join(" ") || result.formatted_address || details.address;
+
+  if (!address || !city || !state || !zipCode) {
+    throw new Error("This address is missing required location details. Choose a different suggestion.");
+  }
+
+  if (
+    normalizeAddressToken(city) !== normalizeAddressToken(details.city) ||
+    normalizeAddressToken(state) !== normalizeAddressToken(details.state) ||
+    normalizeAddressToken(zipCode) !== normalizeAddressToken(details.zipCode)
+  ) {
+    throw new Error(
+      "Please select a valid address to continue."
+    );
+  }
+
+  return {
+    address,
+    city,
+    state,
+    zipCode,
+  };
 }
 
 async function loadGoogleMapsPlacesApi() {
@@ -621,7 +713,7 @@ export default function ShopSetupPage() {
     }
     if (!details.address.trim()) errors.push("Please enter a street address.");
     if (!addressSelectedFromAutocomplete) {
-      errors.push("Select a suggested address so the shop location is validated.");
+      errors.push("Please select a valid address to continue.");
     }
     if (!details.city.trim()) errors.push("Please enter a city.");
     if (!details.state.trim()) errors.push("Please enter a state.");
@@ -637,7 +729,14 @@ export default function ShopSetupPage() {
 
     setSavingStep(0);
     try {
-      await upsertShopDetails(details);
+      const normalizedAddress = await validateShopAddressWithGoogle(details);
+      const nextDetails = {
+        ...details,
+        ...normalizedAddress,
+      };
+
+      setDetails(nextDetails);
+      await upsertShopDetails(nextDetails);
       setStepSuccess("Shop details saved.");
       setCurrentStep(1);
     } catch (error) {
@@ -1090,7 +1189,8 @@ export default function ShopSetupPage() {
                   className={inputClass}
                 />
                 <p className="mt-1.5 text-xs text-gray-500">
-                  Select a suggested address to auto-fill city, state, and ZIP.
+                  Select a suggested address to auto-fill city, state, and ZIP. The full address
+                  is validated with Google again before save.
                 </p>
                 {(addressLookupLoading || addressSuggestions.length > 0) && (
                   <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">

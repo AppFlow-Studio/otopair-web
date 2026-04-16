@@ -362,22 +362,17 @@ function OwnerDashboardPage() {
         </div>
       </section>
 
-      <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-900">Pending Actions</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Keep approvals, completed-job follow-up, and team invitations from slipping through.
-            </p>
-          </div>
-          {!hasPendingActions ? (
-            <div className="inline-flex items-center gap-2 rounded-full bg-success/10 px-3 py-1 text-sm font-semibold text-success">
-              All caught up
+      {hasPendingActions ? (
+        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">Pending Actions</h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Keep approvals, completed-job follow-up, and team invitations from slipping through.
+              </p>
             </div>
-          ) : null}
-        </div>
+          </div>
 
-        {hasPendingActions ? (
           <div className="mt-6 grid gap-4 xl:grid-cols-3">
             <div className="rounded-2xl border border-border bg-muted/70 p-4">
               <div className="flex items-center justify-between gap-3">
@@ -511,10 +506,8 @@ function OwnerDashboardPage() {
               </Link>
             </div>
           </div>
-        ) : (
-          <p className="mt-6 text-sm text-gray-500">No pending approvals, actuals, or invitations.</p>
-        )}
-      </section>
+        </section>
+      ) : null}
 
       <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

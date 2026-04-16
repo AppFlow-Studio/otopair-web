@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Calendar, ChevronDown, ClipboardList, Search, X } from "lucide-react";
+import { Calendar, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Search, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { usePortalSidebar } from "../portal-context";
 import JobDetailPanel from "@/components/job-detail-panel";
@@ -25,6 +25,17 @@ import {
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
+
+function shiftIsoDate(isoDate: string, offsetDays: number): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + offsetDays);
+
+  const nextYear = date.getFullYear();
+  const nextMonth = String(date.getMonth() + 1).padStart(2, "0");
+  const nextDay = String(date.getDate()).padStart(2, "0");
+  return `${nextYear}-${nextMonth}-${nextDay}`;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Main page component                                                 */
@@ -136,6 +147,15 @@ export default function JobsPage() {
     setDateFrom(today);
     setTimeFrom("");
     setDateTo(today);
+    setTimeTo("");
+  }
+
+  function shiftDay(offsetDays: number) {
+    const baseDate = dateFrom || dateTo || today;
+    const nextDate = shiftIsoDate(baseDate, offsetDays);
+    setDateFrom(nextDate);
+    setTimeFrom("");
+    setDateTo(nextDate);
     setTimeTo("");
   }
 
@@ -369,6 +389,27 @@ export default function JobsPage() {
                       onDateToChange={setDateTo}
                       onTimeToChange={setTimeTo}
                     />
+                    <div className="inline-flex items-center rounded-full border border-border bg-card">
+                      <button
+                        type="button"
+                        onClick={() => shiftDay(-1)}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-l-full text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                        aria-label="View previous day"
+                        title="Previous day"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </button>
+                      <div className="h-4 w-px bg-border" />
+                      <button
+                        type="button"
+                        onClick={() => shiftDay(1)}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-r-full text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                        aria-label="View next day"
+                        title="Next day"
+                      >
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
 
                     {hasAnyFilter && (
                       <button
@@ -813,11 +854,16 @@ function DateTimeFilterPill({
   const hasValue = !isDefault;
 
   function formatSummary() {
-    if (dateFrom === dateTo && dateFrom)
-      return dateFrom === defaultDate ? "Today" : dateFrom;
-    if (dateFrom && dateTo) return `${dateFrom} – ${dateTo}`;
-    if (dateFrom) return `From ${dateFrom}`;
-    if (dateTo) return `Until ${dateTo}`;
+    const formatDate = (value: string) => {
+      if (!value) return "";
+      if (value === defaultDate) return "Today";
+      const [year, month, day] = value.split("-").map(Number);
+      return new Date(year, month - 1, day).toLocaleDateString("en-US", { month: "long", day: "numeric" });
+    };
+    if (dateFrom === dateTo && dateFrom) return formatDate(dateFrom);
+    if (dateFrom && dateTo) return `${formatDate(dateFrom)} - ${formatDate(dateTo)}`;
+    if (dateFrom) return `From ${formatDate(dateFrom)}`;
+    if (dateTo) return `Until ${formatDate(dateTo)}`;
     return "Today";
   }
 

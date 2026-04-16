@@ -9,7 +9,6 @@ import { api } from "@/convex/_generated/api";
 import {
   LayoutDashboard,
   Briefcase,
-  ClipboardList,
   Calendar,
   CreditCard,
   Users,
@@ -31,9 +30,8 @@ import { useEffect, useRef, useState } from "react";
 import { PortalSidebarContext } from "./portal-context";
 
 const ownerManagerLinks = [
-  { href: "/bookings", label: "Bookings", icon: ClipboardList },
   { href: "/schedule", label: "Schedule", icon: Calendar },
-  { href: "/mechanics", label: "Mechanics", icon: Users },
+  { href: "/team", label: "Team", icon: Users },
   { href: "/payouts", label: "Payouts", icon: CreditCard },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

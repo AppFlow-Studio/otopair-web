@@ -486,7 +486,7 @@ function OwnerDashboardPage() {
                   dashboard.pendingActions.invitesPending.map((invite) => (
                     <Link
                       key={String(invite._id)}
-                      href="/mechanics"
+                      href="/team"
                       className="block cursor-pointer rounded-2xl border border-border bg-card p-4 transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
                     >
                       <p className="text-sm font-semibold text-gray-900">{invite.mechanicName || invite.email}</p>
@@ -503,7 +503,7 @@ function OwnerDashboardPage() {
               </div>
 
               <Link
-                href="/mechanics"
+                href="/team"
                 className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
               >
                 Manage invitations

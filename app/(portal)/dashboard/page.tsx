@@ -11,14 +11,10 @@ import {
   BadgeDollarSign,
   Bell,
   CalendarClock,
-  ChevronRight,
   ClipboardList,
-  CreditCard,
   Loader2,
-  Settings2,
   Star,
   Store,
-  Users,
 } from "lucide-react";
 import MechanicDashboard from "./mechanic-dashboard";
 
@@ -98,7 +94,7 @@ function DashboardStatCard({
   value,
   sublabel,
   accentClassName = "text-primary",
-  valueClassName = "text-3xl",
+  valueClassName = "text-3xl font-bold",
 }: {
   icon: ComponentType<{ className?: string }>;
   label: string;
@@ -108,44 +104,16 @@ function DashboardStatCard({
   valueClassName?: string;
 }) {
   return (
-    <div className="cursor-default rounded-2xl border border-border bg-card p-5">
+    <div className="cursor-pointer rounded-2xl border border-border bg-card p-5 transition-shadow hover:shadow-md">
       <div className="flex items-center gap-2 text-sm font-medium text-gray-500">
         <Icon className="h-4 w-4" />
         {label}
       </div>
-      <p className={`mt-3 font-semibold tracking-tight ${valueClassName} ${accentClassName}`}>{value}</p>
+      <p className={`mt-3 tracking-tight ${valueClassName ?? "text-3xl font-bold"} ${accentClassName}`}>
+        {value}
+      </p>
       {sublabel ? <p className="mt-1 text-sm text-gray-500">{sublabel}</p> : null}
     </div>
-  );
-}
-
-function QuickActionLink({
-  href,
-  title,
-  description,
-  icon: Icon,
-}: {
-  href: string;
-  title: string;
-  description: string;
-  icon: ComponentType<{ className?: string }>;
-}) {
-  return (
-    <Link
-      href={href}
-      className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-4 transition-colors hover:border-primary/30 hover:bg-primary/5"
-    >
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
-          <Icon className="h-5 w-5" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-gray-900">{title}</p>
-          <p className="text-xs text-gray-500">{description}</p>
-        </div>
-      </div>
-      <ChevronRight className="h-4 w-4 shrink-0 text-gray-400" />
-    </Link>
   );
 }
 
@@ -161,15 +129,54 @@ function EmptyCard({
   hrefLabel?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-dashed border-border bg-muted px-4 py-6 text-sm text-gray-500">
+    <div className="rounded-2xl border border-border bg-muted/40 px-4 py-6 text-sm text-gray-500">
       <p className="font-medium text-gray-700">{title}</p>
-      <p className="mt-1 leading-6">{description}</p>
+      {description ? <p className="mt-1 leading-6">{description}</p> : null}
       {href && hrefLabel ? (
-        <Link href={href} className="mt-3 inline-flex items-center gap-1 font-medium text-primary">
+        <Link
+          href={href}
+          className="mt-3 inline-flex cursor-pointer items-center gap-1 font-medium text-primary hover:underline"
+        >
           {hrefLabel}
           <ArrowUpRight className="h-3.5 w-3.5" />
         </Link>
       ) : null}
+    </div>
+  );
+}
+
+function DashboardStatCardSkeleton() {
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      <div className="animate-pulse">
+        <div className="h-4 w-28 rounded bg-muted" />
+        <div className="mt-3 h-9 w-16 rounded bg-muted" />
+        <div className="mt-2 h-4 w-32 rounded bg-muted" />
+      </div>
+    </div>
+  );
+}
+
+function PendingActionSkeletonCard() {
+  return (
+    <div className="rounded-2xl border border-border bg-muted/70 p-4">
+      <div className="animate-pulse">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-2">
+            <div className="h-4 w-28 rounded bg-muted" />
+            <div className="h-3 w-36 rounded bg-muted" />
+          </div>
+          <div className="h-6 w-8 rounded-full bg-muted" />
+        </div>
+        <div className="mt-4 space-y-3">
+          <div className="rounded-2xl border border-border bg-card p-4">
+            <div className="h-4 w-32 rounded bg-muted" />
+            <div className="mt-2 h-3 w-24 rounded bg-muted" />
+            <div className="mt-3 h-3 w-40 rounded bg-muted" />
+          </div>
+        </div>
+        <div className="mt-4 h-4 w-28 rounded bg-muted" />
+      </div>
     </div>
   );
 }
@@ -198,8 +205,31 @@ function OwnerDashboardPage() {
 
   if (dashboard === undefined) {
     return (
-      <div className="flex min-h-[40vh] items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <div className="space-y-6">
+        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <div className="animate-pulse">
+            <div className="h-8 w-56 rounded bg-muted" />
+            <div className="mt-3 h-4 w-32 rounded bg-muted" />
+          </div>
+          <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <DashboardStatCardSkeleton />
+            <DashboardStatCardSkeleton />
+            <DashboardStatCardSkeleton />
+            <DashboardStatCardSkeleton />
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <div className="animate-pulse">
+            <div className="h-6 w-40 rounded bg-muted" />
+            <div className="mt-2 h-4 w-72 rounded bg-muted" />
+          </div>
+          <div className="mt-6 grid gap-4 xl:grid-cols-3">
+            <PendingActionSkeletonCard />
+            <PendingActionSkeletonCard />
+            <PendingActionSkeletonCard />
+          </div>
+        </section>
       </div>
     );
   }
@@ -228,6 +258,7 @@ function OwnerDashboardPage() {
   const ownerInitials = `${user?.firstName?.[0] ?? ""}${user?.lastName?.[0] ?? ""}`.toUpperCase() || "OW";
   const todayLabel = formatLongDate(new Date());
   const scheduleColumnCount = Math.max(dashboard.todaySchedule.length, 1);
+  const hasScheduledBookings = dashboard.todaySchedule.some((column) => column.bookings.length > 0);
   const hasPendingActions =
     dashboard.pendingActions.jobsToAcceptCount > 0 ||
     dashboard.pendingActions.actualsNeededCount > 0 ||
@@ -250,10 +281,7 @@ function OwnerDashboardPage() {
               )}
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-medium tracking-[0.06em] text-primary">
-                Shop owner dashboard
-              </p>
-              <h1 className="mt-2 text-3xl font-semibold tracking-tight text-gray-900">
+              <h1 className="text-3xl font-semibold tracking-tight text-gray-900">
                 {dashboard.shop.name}
               </h1>
               <p className="mt-2 text-sm text-gray-500">Today: {todayLabel}</p>
@@ -326,238 +354,185 @@ function OwnerDashboardPage() {
                 ? undefined
                 : `${dashboard.stats.reviewCount} review${dashboard.stats.reviewCount === 1 ? "" : "s"}`
             }
-            accentClassName="text-amber-600"
-            valueClassName={dashboard.stats.reviewCount === 0 ? "text-2xl" : "text-3xl"}
+            accentClassName={
+              dashboard.stats.reviewCount === 0 ? "text-muted-foreground" : "text-foreground"
+            }
+            valueClassName={dashboard.stats.reviewCount === 0 ? "text-base font-medium" : undefined}
           />
         </div>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_300px]">
-        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h2 className="text-xl font-semibold text-gray-900">Pending Actions</h2>
-              <p className="mt-1 text-sm text-gray-500">
-                Keep approvals, completed-job follow-up, and team invitations from slipping through.
-              </p>
-            </div>
-            {!hasPendingActions ? (
-              <div className="inline-flex items-center gap-2 rounded-full bg-success/10 px-3 py-1 text-sm font-semibold text-success">
-                All caught up
-              </div>
-            ) : null}
+      <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900">Pending Actions</h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Keep approvals, completed-job follow-up, and team invitations from slipping through.
+            </p>
           </div>
+          {!hasPendingActions ? (
+            <div className="inline-flex items-center gap-2 rounded-full bg-success/10 px-3 py-1 text-sm font-semibold text-success">
+              All caught up
+            </div>
+          ) : null}
+        </div>
 
-          {hasPendingActions ? (
-            <div className="mt-6 grid gap-4 xl:grid-cols-3">
-              <div className="rounded-2xl border border-border bg-muted/70 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-gray-900">Jobs to accept</p>
-                    <p className="mt-1 text-xs text-gray-500">Bookings waiting for owner review</p>
-                  </div>
+        {hasPendingActions ? (
+          <div className="mt-6 grid gap-4 xl:grid-cols-3">
+            <div className="rounded-2xl border border-border bg-muted/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Jobs to accept</p>
+                  <p className="mt-1 text-xs text-gray-500">Bookings waiting for owner review</p>
+                </div>
+                {dashboard.pendingActions.jobsToAcceptCount > 0 ? (
                   <span className="rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-semibold text-destructive">
                     {dashboard.pendingActions.jobsToAcceptCount}
                   </span>
-                </div>
-
-                <div className="mt-4 space-y-3">
-                  {dashboard.pendingActions.jobsToAccept.length === 0 ? (
-                    <EmptyCard
-                      title="No pending approvals"
-                      description="New booking requests will appear here in real time."
-                    />
-                  ) : (
-                    dashboard.pendingActions.jobsToAccept.map((job) => (
-                      <Link
-                        key={String(job._id)}
-                        href={`/bookings?highlight=${String(job._id)}`}
-                        className="block rounded-2xl border border-border bg-card p-4 transition-colors hover:border-primary/30 hover:bg-primary/5"
-                      >
-                        <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
-                        <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
-                        <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
-                        <p className="mt-3 text-xs font-semibold text-primary">
-                          {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
-                        </p>
-                      </Link>
-                    ))
-                  )}
-                </div>
-
-                <Link
-                  href="/bookings"
-                  className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-primary"
-                >
-                  Open accept queue
-                  <ArrowUpRight className="h-4 w-4" />
-                </Link>
+                ) : null}
               </div>
 
-              <div className="rounded-2xl border border-border bg-muted/70 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-gray-900">Job actuals needed</p>
-                    <p className="mt-1 text-xs text-gray-500">Completed jobs missing final actuals</p>
-                  </div>
-                  <span className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent">
-                    {dashboard.pendingActions.actualsNeededCount}
-                  </span>
-                </div>
-
-                <div className="mt-4 space-y-3">
-                  {dashboard.pendingActions.actualsNeeded.length === 0 ? (
-                    <EmptyCard
-                      title="No missing actuals"
-                      description="Completed bookings with unfinished job actuals will surface here."
-                    />
-                  ) : (
-                    dashboard.pendingActions.actualsNeeded.map((job) => (
-                      <Link
-                        key={String(job._id)}
-                        href={`/bookings?highlight=${String(job._id)}`}
-                        className="block rounded-2xl border border-border bg-card p-4 transition-colors hover:border-primary/30 hover:bg-primary/5"
-                      >
-                        <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
-                        <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
-                        <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
-                        <p className="mt-3 text-xs font-semibold text-primary">
-                          Completed booking from {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
-                        </p>
-                      </Link>
-                    ))
-                  )}
-                </div>
-
-                <Link
-                  href="/bookings"
-                  className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-primary"
-                >
-                  Review completed jobs
-                  <ArrowUpRight className="h-4 w-4" />
-                </Link>
+              <div className="mt-4 space-y-3">
+                {dashboard.pendingActions.jobsToAccept.length === 0 ? (
+                  <EmptyCard title="No pending approvals" description="" />
+                ) : (
+                  dashboard.pendingActions.jobsToAccept.map((job) => (
+                    <Link
+                      key={String(job._id)}
+                      href={`/bookings?highlight=${String(job._id)}`}
+                      className="block cursor-pointer rounded-2xl border border-border bg-card p-4 transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
+                    >
+                      <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
+                      <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
+                      <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
+                      <p className="mt-3 text-xs font-semibold text-primary">
+                        {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
+                      </p>
+                    </Link>
+                  ))
+                )}
               </div>
 
-              <div className="rounded-2xl border border-border bg-muted/70 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-gray-900">Invites pending</p>
-                    <p className="mt-1 text-xs text-gray-500">Mechanic invitations not yet accepted</p>
-                  </div>
+              <Link
+                href="/bookings"
+                className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
+              >
+                Open accept queue
+                <ArrowUpRight className="h-4 w-4" />
+              </Link>
+            </div>
+
+            <div className="rounded-2xl border border-border bg-muted/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Job actuals needed</p>
+                  <p className="mt-1 text-xs text-gray-500">Completed jobs missing final actuals</p>
+                </div>
+                <span className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent">
+                  {dashboard.pendingActions.actualsNeededCount}
+                </span>
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {dashboard.pendingActions.actualsNeeded.length === 0 ? (
+                  <EmptyCard
+                    title="No missing actuals"
+                    description="Completed bookings with unfinished job actuals will surface here."
+                  />
+                ) : (
+                  dashboard.pendingActions.actualsNeeded.map((job) => (
+                    <Link
+                      key={String(job._id)}
+                      href={`/bookings?highlight=${String(job._id)}`}
+                      className="block cursor-pointer rounded-2xl border border-border bg-card p-4 transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
+                    >
+                      <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
+                      <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
+                      <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
+                      <p className="mt-3 text-xs font-semibold text-primary">
+                        Completed booking from {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
+                      </p>
+                    </Link>
+                  ))
+                )}
+              </div>
+
+              <Link
+                href="/bookings"
+                className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
+              >
+                Review completed jobs
+                <ArrowUpRight className="h-4 w-4" />
+              </Link>
+            </div>
+
+            <div className="rounded-2xl border border-border bg-muted/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Invites pending</p>
+                  <p className="mt-1 text-xs text-gray-500">Mechanic invitations not yet accepted</p>
+                </div>
+                {dashboard.pendingActions.invitesPendingCount > 0 ? (
                   <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
                     {dashboard.pendingActions.invitesPendingCount}
                   </span>
-                </div>
-
-                <div className="mt-4 space-y-3">
-                  {dashboard.pendingActions.invitesPending.length === 0 ? (
-                    <EmptyCard
-                      title="No pending invites"
-                      description="Outstanding team invitations will appear here until they are accepted or revoked."
-                    />
-                  ) : (
-                    dashboard.pendingActions.invitesPending.map((invite) => (
-                      <Link
-                        key={String(invite._id)}
-                        href="/mechanics"
-                        className="block rounded-2xl border border-border bg-card p-4 transition-colors hover:border-primary/30 hover:bg-primary/5"
-                      >
-                        <p className="text-sm font-semibold text-gray-900">{invite.mechanicName || invite.email}</p>
-                        <p className="mt-1 text-sm text-gray-600">{invite.email}</p>
-                        <p className="mt-2 text-xs text-gray-500">
-                          {invite.role.replace(/_/g, " ")} invitation
-                        </p>
-                        <p className="mt-3 text-xs font-semibold text-primary">
-                          Sent {formatInviteDate(invite.createdAt)}
-                        </p>
-                      </Link>
-                    ))
-                  )}
-                </div>
-
-                <Link
-                  href="/mechanics"
-                  className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-primary"
-                >
-                  Manage invitations
-                  <ArrowUpRight className="h-4 w-4" />
-                </Link>
+                ) : null}
               </div>
+
+              <div className="mt-4 space-y-3">
+                {dashboard.pendingActions.invitesPending.length === 0 ? (
+                  <EmptyCard title="No pending invites" description="" />
+                ) : (
+                  dashboard.pendingActions.invitesPending.map((invite) => (
+                    <Link
+                      key={String(invite._id)}
+                      href="/mechanics"
+                      className="block cursor-pointer rounded-2xl border border-border bg-card p-4 transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
+                    >
+                      <p className="text-sm font-semibold text-gray-900">{invite.mechanicName || invite.email}</p>
+                      <p className="mt-1 text-sm text-gray-600">{invite.email}</p>
+                      <p className="mt-2 text-xs text-gray-500">
+                        {invite.role.replace(/_/g, " ")} invitation
+                      </p>
+                      <p className="mt-3 text-xs font-semibold text-primary">
+                        Sent {formatInviteDate(invite.createdAt)}
+                      </p>
+                    </Link>
+                  ))
+                )}
+              </div>
+
+              <Link
+                href="/mechanics"
+                className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
+              >
+                Manage invitations
+                <ArrowUpRight className="h-4 w-4" />
+              </Link>
             </div>
-          ) : (
-            <p className="mt-6 text-sm text-gray-500">No pending approvals, actuals, or invitations.</p>
-          )}
-        </section>
-
-        <aside className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-          <div className="flex items-center gap-2">
-            <Store className="h-5 w-5 text-primary" />
-            <h2 className="text-xl font-semibold text-gray-900">Quick Actions</h2>
           </div>
-          <p className="mt-2 text-sm text-gray-500">
-            Shortcuts to common tools.
-          </p>
-
-          <div className="mt-6 space-y-3">
-            <QuickActionLink
-              href="/mechanics"
-              title="Manage Mechanics"
-              description="Invite, remove, and review your shop team"
-              icon={Users}
-            />
-            <QuickActionLink
-              href="/schedule"
-              title="Edit Schedule"
-              description="Adjust time slots and technician availability"
-              icon={CalendarClock}
-            />
-            <QuickActionLink
-              href="/payouts"
-              title="View Payouts"
-              description="Check payout status and revenue destinations"
-              icon={CreditCard}
-            />
-            <QuickActionLink
-              href="/settings"
-              title="Edit Shop Settings"
-              description="Update shop details, hours, and connected services"
-              icon={Settings2}
-            />
-            <QuickActionLink
-              href="/bookings"
-              title="View All Bookings"
-              description="See all past and upcoming bookings"
-              icon={ClipboardList}
-            />
-          </div>
-        </aside>
-      </div>
+        ) : (
+          <p className="mt-6 text-sm text-gray-500">No pending approvals, actuals, or invitations.</p>
+        )}
+      </section>
 
       <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-xl font-semibold text-gray-900">Today&apos;s Schedule</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Grouped by active mechanic, with live statuses and direct links into booking detail.
-            </p>
           </div>
           <Link
             href="/bookings"
-            className="inline-flex items-center gap-2 text-sm font-semibold text-primary"
+            className="inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
           >
             View all bookings
             <ArrowUpRight className="h-4 w-4" />
           </Link>
         </div>
 
-        {dashboard.todaySchedule.length === 0 ? (
-          <div className="mt-6">
-            <EmptyCard
-              title="No active mechanics yet"
-              description="Invite at least one mechanic so today's schedule can be organized into technician columns."
-              href="/mechanics"
-              hrefLabel="Manage mechanics"
-            />
+        {!hasScheduledBookings ? (
+          <div className="mt-6 flex items-center justify-center rounded-2xl border border-border bg-muted/40 px-4 py-10 text-center text-sm text-muted-foreground">
+            No jobs scheduled for today
           </div>
         ) : (
           <div className="mt-6 overflow-x-auto pb-2">
@@ -605,11 +580,11 @@ function OwnerDashboardPage() {
                         <Link
                           key={String(booking._id)}
                           href={`/bookings?highlight=${String(booking._id)}`}
-                          className="block rounded-2xl border border-border bg-card p-4 transition-colors hover:border-primary/30 hover:bg-primary/5"
+                          className="block cursor-pointer rounded-2xl border border-border bg-card p-4 font-sans transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
+                              <p className="font-sans text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
                                 {booking.scheduledTimeLabel}
                               </p>
                               <p className="mt-1 truncate text-sm font-semibold text-gray-900">

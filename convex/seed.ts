@@ -3750,6 +3750,7 @@ export const seedDashboardBookings = mutation({
   args: {
     shopId: v.id("shops"),
     clearExisting: v.optional(v.boolean()),
+    seedDemo: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const shop = await ctx.db.get(args.shopId);
@@ -3791,6 +3792,10 @@ export const seedDashboardBookings = mutation({
       for (const type of blockTypes) {
         await ctx.db.delete(type._id);
       }
+    }
+
+    if ((args.seedDemo ?? true) === false) {
+      return { clearedOnly: true };
     }
 
     const ensureService = async (slug: string, name: string, categoryName: string) => {

@@ -9,7 +9,9 @@ import { api } from "@/convex/_generated/api";
 import {
   LayoutDashboard,
   Briefcase,
+  ClipboardList,
   Calendar,
+  CreditCard,
   Users,
   Settings,
   Menu,
@@ -21,6 +23,7 @@ import {
   LifeBuoy,
   Keyboard,
   Sprout,
+  Trash2,
 } from "lucide-react";
 import { UserSupportPage } from "./user-support-page";
 import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
@@ -28,8 +31,10 @@ import { useEffect, useRef, useState } from "react";
 import { PortalSidebarContext } from "./portal-context";
 
 const ownerManagerLinks = [
+  { href: "/bookings", label: "Bookings", icon: ClipboardList },
   { href: "/schedule", label: "Schedule", icon: Calendar },
-  { href: "/team", label: "Team", icon: Users },
+  { href: "/mechanics", label: "Mechanics", icon: Users },
+  { href: "/payouts", label: "Payouts", icon: CreditCard },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -128,6 +133,23 @@ export default function PortalLayout({
     : isOwnerManager
       ? ownerManagerLinks
       : mechanicLinks;
+  const showDemoBookingActions =
+    process.env.NODE_ENV === "development" &&
+    isOwnerManager &&
+    !!portalAccess?.shopId;
+  const runDashboardSeedAction = async (seedDemo: boolean) => {
+    if (!portalAccess?.shopId) return;
+    setSeeding(true);
+    try {
+      await seedBookings({
+        shopId: portalAccess.shopId,
+        clearExisting: true,
+        seedDemo,
+      });
+    } finally {
+      setSeeding(false);
+    }
+  };
 
   // Text that fades out and collapses when compact.
   // max-width transition animates the collapse; opacity fades the text.
@@ -299,20 +321,20 @@ export default function PortalLayout({
                     labelIcon={<Keyboard className="w-4 h-4" />}
                     onClick={() => setShowShortcuts(true)}
                   />
-                  {process.env.NODE_ENV === "development" && portalAccess?.shopId && (
+                  {showDemoBookingActions ? (
                     <UserButton.Action
                       label="Seed demo bookings"
                       labelIcon={<Sprout className="w-4 h-4" />}
-                      onClick={async () => {
-                        setSeeding(true);
-                        try {
-                          await seedBookings({ shopId: portalAccess.shopId!, clearExisting: true });
-                        } finally {
-                          setSeeding(false);
-                        }
-                      }}
+                      onClick={() => runDashboardSeedAction(true)}
                     />
-                  )}
+                  ) : null}
+                  {showDemoBookingActions ? (
+                    <UserButton.Action
+                      label="Clear demo bookings"
+                      labelIcon={<Trash2 className="w-4 h-4" />}
+                      onClick={() => runDashboardSeedAction(false)}
+                    />
+                  ) : null}
                 </UserButton.MenuItems>
                 <UserButton.UserProfilePage
                   label="Support"
@@ -353,20 +375,20 @@ export default function PortalLayout({
                     labelIcon={<Keyboard className="w-4 h-4" />}
                     onClick={() => setShowShortcuts(true)}
                   />
-                  {process.env.NODE_ENV === "development" && portalAccess?.shopId && (
+                  {showDemoBookingActions ? (
                     <UserButton.Action
                       label="Seed demo bookings"
                       labelIcon={<Sprout className="w-4 h-4" />}
-                      onClick={async () => {
-                        setSeeding(true);
-                        try {
-                          await seedBookings({ shopId: portalAccess.shopId!, clearExisting: true });
-                        } finally {
-                          setSeeding(false);
-                        }
-                      }}
+                      onClick={() => runDashboardSeedAction(true)}
                     />
-                  )}
+                  ) : null}
+                  {showDemoBookingActions ? (
+                    <UserButton.Action
+                      label="Clear demo bookings"
+                      labelIcon={<Trash2 className="w-4 h-4" />}
+                      onClick={() => runDashboardSeedAction(false)}
+                    />
+                  ) : null}
                 </UserButton.MenuItems>
                 <UserButton.UserProfilePage
                   label="Support"

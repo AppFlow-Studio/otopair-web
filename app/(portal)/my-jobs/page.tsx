@@ -352,7 +352,13 @@ export default function MyJobsPage() {
               drawerOpen ? "w-[504px]" : "w-0"
             }`}
           >
-            <div className="ml-6 flex w-[480px] flex-col overflow-hidden rounded-xl border border-border bg-card">
+            <div
+              className={`fixed right-6 top-6 z-20 flex h-[calc(100vh-3rem)] max-h-[calc(100vh-3rem)] w-[480px] flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 ease-out ${
+                drawerOpen
+                  ? "translate-x-0 opacity-100"
+                  : "pointer-events-none translate-x-6 opacity-0"
+              }`}
+            >
               <JobDetailPanel
                 ref={jobDetailRef}
                 job={selectedJob}

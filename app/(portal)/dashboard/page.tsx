@@ -1,11 +1,18 @@
 "use client";
 
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ComponentType } from "react";
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "@/lib/booking-status";
+import { usePortalSidebar } from "../portal-context";
+import JobDetailPanel from "@/components/job-detail-panel";
+import RescheduleConfirmationDialog, {
+  type RescheduleConfirmationProposal,
+} from "@/components/reschedule-confirmation-dialog";
 import {
   ArrowUpRight,
   BadgeDollarSign,
@@ -196,12 +203,85 @@ export default function DashboardPage() {
     return <MechanicDashboard />;
   }
 
-  return <OwnerDashboardPage />;
+  return <OwnerDashboardPage context={context ?? null} />;
 }
 
-function OwnerDashboardPage() {
+function OwnerDashboardPage({
+  context,
+}: {
+  context: {
+    shopId?: string;
+    userRole?: string;
+    mechanics?: Array<{ _id: string; name: string }>;
+  } | null;
+}) {
   const { user } = useUser();
   const dashboard = useQuery(api.bookings.getMyOwnerDashboard);
+  const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [rescheduleProposal, setRescheduleProposal] =
+    useState<RescheduleConfirmationProposal | null>(null);
+  const [rescheduleError, setRescheduleError] = useState("");
+  const [isRescheduling, setIsRescheduling] = useState(false);
+  const selectedJob = useQuery(
+    api.bookings.getJobDetail,
+    selectedJobId ? { bookingId: selectedJobId } : "skip",
+  );
+  const selectedJobDayBookings = useQuery(
+    api.schedule.getBookingsForRange,
+    selectedJob ? { dateFrom: selectedJob.scheduledDate, dateTo: selectedJob.scheduledDate } : "skip",
+  );
+  const selectedJobDayBlockedSlots = useQuery(
+    api.schedule.getBlockedSlots,
+    selectedJob ? { dateFrom: selectedJob.scheduledDate, dateTo: selectedJob.scheduledDate } : "skip",
+  );
+  const proposeReschedule = useMutation(api.bookings.proposeReschedule);
+  const mechanics = useMemo(() => context?.mechanics ?? [], [context?.mechanics]);
+  const drawerOpen = !!selectedJobId;
+  const { setSidebarCompact } = usePortalSidebar();
+
+  useEffect(() => {
+    setSidebarCompact(drawerOpen);
+    return () => setSidebarCompact(false);
+  }, [drawerOpen, setSidebarCompact]);
+
+  useEffect(() => {
+    if (!successMessage) return;
+    const timeout = setTimeout(() => setSuccessMessage(""), 3000);
+    return () => clearTimeout(timeout);
+  }, [successMessage]);
+
+  const handleProposeReschedule = useCallback(
+    (proposal: RescheduleConfirmationProposal) => {
+      setRescheduleProposal(proposal);
+      setRescheduleError("");
+    },
+    [],
+  );
+
+  async function handleConfirmReschedule() {
+    if (!rescheduleProposal) return;
+    setIsRescheduling(true);
+    setRescheduleError("");
+    try {
+      await proposeReschedule({
+        bookingId: rescheduleProposal.eventId as Id<"bookings">,
+        newScheduledDate: rescheduleProposal.newDate,
+        newScheduledTime: rescheduleProposal.newTime,
+        newMechanicId: rescheduleProposal.newMechanicId
+          ? (rescheduleProposal.newMechanicId as Id<"mechanics">)
+          : undefined,
+      });
+      setRescheduleProposal(null);
+      setSuccessMessage("Reschedule proposed - awaiting customer approval");
+    } catch (error: unknown) {
+      setRescheduleError(
+        error instanceof Error ? error.message : "Could not propose reschedule.",
+      );
+    } finally {
+      setIsRescheduling(false);
+    }
+  }
 
   if (dashboard === undefined) {
     return (
@@ -265,7 +345,9 @@ function OwnerDashboardPage() {
     dashboard.pendingActions.invitesPendingCount > 0;
 
   return (
-    <div className="space-y-6">
+    <>
+      <div className="flex items-start">
+        <div className="min-w-0 flex-1 space-y-6">
       <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex min-w-0 items-center gap-4">
@@ -391,20 +473,27 @@ function OwnerDashboardPage() {
                 {dashboard.pendingActions.jobsToAccept.length === 0 ? (
                   <EmptyCard title="No pending approvals" description="" />
                 ) : (
-                  dashboard.pendingActions.jobsToAccept.map((job) => (
-                    <Link
-                      key={String(job._id)}
-                      href={`/bookings?highlight=${String(job._id)}`}
-                      className="block cursor-pointer rounded-2xl border border-border bg-card p-4 transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
-                    >
-                      <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
-                      <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
-                      <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
-                      <p className="mt-3 text-xs font-semibold text-primary">
-                        {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
-                      </p>
-                    </Link>
-                  ))
+                  dashboard.pendingActions.jobsToAccept.map((job) => {
+                    const isSelected = selectedJobId === job._id;
+                    return (
+                      <button
+                        key={String(job._id)}
+                        type="button"
+                        onClick={() => setSelectedJobId(isSelected ? null : job._id)}
+                        aria-expanded={isSelected}
+                        className={`block w-full rounded-2xl border border-border bg-card p-4 text-left transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:shadow-sm ${
+                          isSelected ? "border-primary/40 bg-primary/5" : "hover:bg-primary/5"
+                        }`}
+                      >
+                        <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
+                        <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
+                        <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
+                        <p className="mt-3 text-xs font-semibold text-primary">
+                          {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
+                        </p>
+                      </button>
+                    );
+                  })
                 )}
               </div>
 
@@ -606,6 +695,49 @@ function OwnerDashboardPage() {
           </div>
         )}
       </section>
-    </div>
+        </div>
+
+        <div
+          className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
+            drawerOpen ? "w-[504px]" : "w-0"
+          }`}
+        >
+          <div
+            className={`fixed right-6 top-6 z-20 flex h-[calc(100vh-3rem)] max-h-[calc(100vh-3rem)] w-[480px] flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 ease-out ${
+              drawerOpen
+                ? "translate-x-0 opacity-100"
+                : "pointer-events-none translate-x-6 opacity-0"
+            }`}
+          >
+            <JobDetailPanel
+              job={selectedJob}
+              mechanics={mechanics}
+              scheduleConflicts={{
+                bookings: selectedJobDayBookings ?? [],
+                blockedSlots: selectedJobDayBlockedSlots ?? [],
+              }}
+              onRequestRescheduleConfirmation={handleProposeReschedule}
+              onClose={() => setSelectedJobId(null)}
+              onSuccess={setSuccessMessage}
+            />
+          </div>
+        </div>
+      </div>
+
+      <RescheduleConfirmationDialog
+        proposal={rescheduleProposal}
+        error={rescheduleError}
+        isSubmitting={isRescheduling}
+        onCancel={() => setRescheduleProposal(null)}
+        onConfirm={() => void handleConfirmReschedule()}
+        reserveOriginalSlotMessage="The original time will be reserved until the customer responds. If they don't respond within 24 hours, the original booking slot will be restored automatically."
+      />
+
+      {successMessage && !rescheduleProposal ? (
+        <div className="fixed bottom-6 right-6 z-[70] rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground shadow-lg">
+          {successMessage}
+        </div>
+      ) : null}
+    </>
   );
 }

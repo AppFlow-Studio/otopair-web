@@ -692,7 +692,11 @@ export default function SchedulePage() {
       </div>
 
       {/* Toolbar: nav + view switcher + mechanic filter */}
-      <div className="bg-card border border-border rounded-xl p-4">
+      <div
+        className={`bg-card border border-border rounded-xl p-4 transition-[margin-right] duration-200 ease-out ${
+          selectedBookingId ? "mr-[504px]" : "mr-0"
+        }`}
+      >
         <div className="flex items-center justify-between flex-wrap gap-3">
           {/* Left: navigation */}
           <div className="flex items-center gap-2">
@@ -1239,7 +1243,13 @@ export default function SchedulePage() {
 
       {/* Job detail drawer */}
       <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[504px]" : "w-0"}`}>
-        <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden h-[calc(100vh-320px)] min-h-[500px]">
+        <div
+          className={`fixed right-6 top-6 z-20 flex h-[calc(100vh-3rem)] min-h-[500px] max-h-[calc(100vh-3rem)] w-[480px] flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 ease-out ${
+            selectedBookingId
+              ? "translate-x-0 opacity-100"
+              : "pointer-events-none translate-x-6 opacity-0"
+          }`}
+        >
           {selectedBookingId && (
             <JobDetailPanel
               ref={jobDetailRef}

@@ -314,7 +314,7 @@ export default function BookingsPage() {
         /* Flex row: tabs + table alongside drawer — starts here so drawer aligns with status tabs */
         <div className="flex items-start">
           {/* Main content */}
-          <div className="flex-1 min-w-0 flex h-[calc(100vh-230px)] min-h-[590px] flex-col gap-6">
+          <div className="flex-1 min-w-0 flex flex-col gap-6">
             {/* Status summary tabs */}
               <div className="flex h-[88px] gap-0 border border-border rounded-xl overflow-hidden bg-card shrink-0">
                 {STATUS_TABS.map((tab, i) => {
@@ -343,7 +343,7 @@ export default function BookingsPage() {
               </div>
 
               {/* Table card */}
-              <div className="bg-card rounded-xl border border-border overflow-hidden flex-1 min-h-0 flex flex-col">
+              <div className="bg-card rounded-xl border border-border overflow-hidden flex flex-col max-h-[max(calc(100vh-342px),478px)]">
                 {/* Filter row */}
                 <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -426,7 +426,7 @@ export default function BookingsPage() {
                 </div>
 
                 {/* Table */}
-                <div className="flex-1 overflow-auto">
+                <div className="flex-1 min-h-0 overflow-y-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-border text-left text-xs text-muted-foreground font-medium">

@@ -314,9 +314,9 @@ export default function BookingsPage() {
         /* Flex row: tabs + table alongside drawer — starts here so drawer aligns with status tabs */
         <div className="flex items-start">
           {/* Main content */}
-          <div className="flex-1 min-w-0 space-y-6">
+          <div className="flex-1 min-w-0 flex h-[calc(100vh-230px)] min-h-[590px] flex-col gap-6">
             {/* Status summary tabs */}
-              <div className="flex gap-0 border border-border rounded-xl overflow-hidden bg-card">
+              <div className="flex h-[88px] gap-0 border border-border rounded-xl overflow-hidden bg-card shrink-0">
                 {STATUS_TABS.map((tab, i) => {
                   const count = statusCounts[tab.key] ?? 0;
                   const isActive = statusFilter === tab.key;
@@ -324,14 +324,14 @@ export default function BookingsPage() {
                     <button
                       key={tab.key}
                       onClick={() => setStatusFilter(tab.key)}
-                      className={`flex-1 py-3 px-4 text-left transition-colors relative ${
+                      className={`relative flex h-full flex-1 flex-col justify-center px-4 text-left transition-colors ${
                         i > 0 ? "border-l border-border" : ""
                       } ${isActive ? "bg-primary/5" : "hover:bg-muted/50"}`}
                     >
                       {isActive && (
                         <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary" />
                       )}
-                      <p className={`text-xs font-medium ${isActive ? "text-primary" : "text-muted-foreground"}`}>
+                      <p className={`truncate whitespace-nowrap text-xs font-medium ${isActive ? "text-primary" : "text-muted-foreground"}`}>
                         {tab.label}
                       </p>
                       <p className={`text-lg font-semibold mt-0.5 ${isActive ? "text-primary" : "text-foreground"}`}>
@@ -343,9 +343,9 @@ export default function BookingsPage() {
               </div>
 
               {/* Table card */}
-              <div className="bg-card rounded-xl border border-border overflow-hidden">
+              <div className="bg-card rounded-xl border border-border overflow-hidden flex-1 min-h-0 flex flex-col">
                 {/* Filter row */}
-                <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+                <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <TextFilterPill
                       ref={customerFilterRef}
@@ -426,7 +426,7 @@ export default function BookingsPage() {
                 </div>
 
                 {/* Table */}
-                <div className="overflow-x-auto">
+                <div className="flex-1 overflow-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-border text-left text-xs text-muted-foreground font-medium">
@@ -567,13 +567,7 @@ export default function BookingsPage() {
             drawerOpen ? "w-[504px]" : "w-0"
           }`}
         >
-          <div
-            className={`fixed right-6 top-6 z-20 flex h-[calc(100vh-3rem)] max-h-[calc(100vh-3rem)] w-[480px] flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 ease-out ${
-              drawerOpen
-                ? "translate-x-0 opacity-100"
-                : "pointer-events-none translate-x-6 opacity-0"
-            }`}
-          >
+          <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden h-[calc(100vh-230px)] min-h-[590px]">
             <BookingDetailPanel
               ref={jobDetailRef}
               job={selectedJob}

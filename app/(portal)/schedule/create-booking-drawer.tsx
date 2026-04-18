@@ -135,7 +135,7 @@ export default function CreateBookingDrawer({
   const [isSaving, setIsSaving] = useState(false);
 
   const shopData = useQuery(api.schedule.getShopServicesWithCategories);
-  const createBooking = useMutation(api.bookings.create);
+  const createBooking = useMutation(api.bookings.createByShop);
 
   const categories = shopData?.categories ?? [];
 

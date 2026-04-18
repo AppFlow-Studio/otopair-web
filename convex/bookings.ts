@@ -948,28 +948,6 @@ async function getBlockingBookingsForShopDate(ctx: any, shopId: any, date: strin
   return bookings.filter((booking: any) => !TERMINAL_BOOKING_STATUSES.has(booking.status));
 }
 
-async function findAvailableSlot(
-  ctx: any,
-  shopId: any,
-  date: string,
-  startTime: string,
-  mechanicId?: any
-) {
-  const slots = await ctx.db
-    .query("time_slots")
-    .withIndex("by_shop_and_date", (q: any) => q.eq("shop_id", shopId).eq("date", date))
-    .collect();
-
-  return (
-    slots.find(
-      (slot: any) =>
-        slot.is_available &&
-        slot.start_time === startTime &&
-        (mechanicId ? String(slot.mechanic_id) === String(mechanicId) : true)
-    ) ?? null
-  );
-}
-
 async function findExactSlot(
   ctx: any,
   shopId: any,
@@ -1164,7 +1142,6 @@ async function resolveMechanicForWindow(
     startTime,
     durationMinutes,
     preferredMechanicId,
-    currentSlotId,
     excludeBookingId,
   }: {
     shopId: any;
@@ -1172,14 +1149,20 @@ async function resolveMechanicForWindow(
     startTime: string;
     durationMinutes: number;
     preferredMechanicId?: any;
-    currentSlotId?: any;
     excludeBookingId?: string;
   }
 ) {
   await syncShopDateAvailability(ctx, { shopId, date });
-  const currentSlot = currentSlotId ? await ctx.db.get(currentSlotId) : null;
+  const activeMechanics = await getActiveMechanicsForShop(ctx, shopId);
 
   if (preferredMechanicId) {
+    const preferredMechanic = activeMechanics.find(
+      (mechanic: any) => String(mechanic._id) === String(preferredMechanicId)
+    );
+    if (!preferredMechanic) {
+      throw new Error("Requested mechanic is unavailable.");
+    }
+
     await assertMechanicWindowIsFree(ctx, {
       shopId,
       mechanicId: preferredMechanicId,
@@ -1189,37 +1172,10 @@ async function resolveMechanicForWindow(
       excludeBookingId,
     });
 
-    const availableSlot = await findAvailableSlot(
-      ctx,
-      shopId,
-      date,
-      startTime,
-      preferredMechanicId
-    );
-    const isCurrentSlotMatch =
-      currentSlot &&
-      String(currentSlot.mechanic_id) === String(preferredMechanicId) &&
-      currentSlot.date === date &&
-      currentSlot.start_time === startTime;
-
-    if (!availableSlot && !isCurrentSlotMatch) {
-      throw new Error("Requested time is unavailable for that mechanic.");
-    }
-
     return preferredMechanicId;
   }
 
-  const activeMechanics = await getActiveMechanicsForShop(ctx, shopId);
   for (const mechanic of activeMechanics) {
-    const availableSlot = await findAvailableSlot(
-      ctx,
-      shopId,
-      date,
-      startTime,
-      mechanic._id
-    );
-    if (!availableSlot) continue;
-
     try {
       await assertMechanicWindowIsFree(ctx, {
         shopId,
@@ -2406,7 +2362,6 @@ export const update = mutation({
         startTime: nextTime,
         durationMinutes,
         preferredMechanicId: requestedMechanicId,
-        currentSlotId: booking.time_slot_id,
         excludeBookingId: String(args.bookingId),
       });
 
@@ -2547,6 +2502,7 @@ export const proposeReschedule = mutation({
       throw new Error(`Cannot reschedule a booking with status: ${booking.status}`);
     }
 
+    const currentMechanicId = await getBookingMechanicId(ctx, booking);
     const durationMinutes = booking.estimated_labor_minutes ?? 60;
     const targetMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: booking.shop_id,
@@ -2554,7 +2510,6 @@ export const proposeReschedule = mutation({
       startTime: args.newScheduledTime,
       durationMinutes,
       preferredMechanicId: args.newMechanicId ?? currentMechanicId ?? undefined,
-      currentSlotId: booking.time_slot_id,
       excludeBookingId: String(args.bookingId),
     });
 

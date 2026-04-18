@@ -121,13 +121,13 @@ export default function MechanicDashboard() {
     try {
       if (action === "start") {
         await startJob({ bookingId: bookingId as Id<"bookings"> });
-        setToast("Job started");
+        setToast("Booking started");
       } else {
         await completeJob({ bookingId: bookingId as Id<"bookings"> });
-        setToast("Job completed");
+        setToast("Booking completed");
       }
     } catch (error: unknown) {
-      setToast(error instanceof Error ? error.message : "Could not update job");
+      setToast(error instanceof Error ? error.message : "Could not update booking");
     } finally {
       setBusyAction(null);
     }
@@ -160,31 +160,31 @@ export default function MechanicDashboard() {
             {getGreeting()}, {dashboard.firstName}
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Today has {dashboard.stats.todayCount} assigned job
+            Today has {dashboard.stats.todayCount} assigned booking
             {dashboard.stats.todayCount === 1 ? "" : "s"} and{" "}
-            {dashboard.needsActuals.length} completed job
+            {dashboard.needsActuals.length} completed booking
             {dashboard.needsActuals.length === 1 ? "" : "s"} still need follow-up.
           </p>
         </div>
         <Link
-          href="/my-jobs"
+          href="/my-bookings"
           className="inline-flex items-center gap-2 self-start rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
         >
-          My Jobs
+          My Bookings
           <ArrowRight className="w-4 h-4" />
         </Link>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
         <DashboardCard
-          label="Today's Jobs"
+          label="Today's Bookings"
           value={String(dashboard.stats.todayCount)}
           sublabel="Assigned to you"
         />
         <DashboardCard
           label="This Week"
           value={String(dashboard.stats.weekCompletedCount)}
-          sublabel="Completed jobs"
+          sublabel="Completed bookings"
         />
         <DashboardCard
           label="My Rating"
@@ -210,10 +210,10 @@ export default function MechanicDashboard() {
         {dashboard.todaysJobs.length === 0 ? (
           <div className="mt-6 rounded-2xl border border-dashed border-border bg-muted/30 px-6 py-10 text-center">
             <p className="text-base font-medium text-foreground">
-              No jobs scheduled for today.
+              No bookings scheduled for today.
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Check your upcoming queue or return to My Jobs later.
+              Check your upcoming queue or return to My Bookings later.
             </p>
           </div>
         ) : (
@@ -269,7 +269,7 @@ export default function MechanicDashboard() {
                         ) : (
                           <PlayCircle className="w-4 h-4" />
                         )}
-                        Start Job
+                        Start Booking
                       </button>
                     ) : null}
 
@@ -284,12 +284,12 @@ export default function MechanicDashboard() {
                         ) : (
                           <Wrench className="w-4 h-4" />
                         )}
-                        Complete Job
+                        Complete Booking
                       </button>
                     ) : null}
 
                     <Link
-                      href={`/my-jobs?highlight=${job._id}`}
+                      href={`/my-bookings?highlight=${job._id}`}
                       className="inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
                     >
                       View Details
@@ -308,7 +308,7 @@ export default function MechanicDashboard() {
             <div>
               <h2 className="text-lg font-semibold text-foreground">Upcoming</h2>
               <p className="text-sm text-muted-foreground">
-                Confirmed jobs over the next seven days.
+                Confirmed bookings over the next seven days.
               </p>
             </div>
             <Star className="w-4 h-4 text-amber-500" />
@@ -316,7 +316,7 @@ export default function MechanicDashboard() {
 
           {groupedUpcoming.length === 0 ? (
             <p className="mt-6 text-sm text-muted-foreground">
-              No confirmed upcoming jobs right now.
+              No confirmed upcoming bookings right now.
             </p>
           ) : (
             <div className="mt-6 space-y-5">
@@ -329,7 +329,7 @@ export default function MechanicDashboard() {
                     {jobs.map((job) => (
                       <Link
                         key={String(job._id)}
-                        href={`/my-jobs?highlight=${job._id}`}
+                        href={`/my-bookings?highlight=${job._id}`}
                         className="flex items-center justify-between gap-4 rounded-xl border border-border px-4 py-3 transition-colors hover:bg-muted/40"
                       >
                         <div className="min-w-0">
@@ -356,7 +356,7 @@ export default function MechanicDashboard() {
             <div>
               <h2 className="text-lg font-semibold text-foreground">Needs Attention</h2>
               <p className="text-sm text-muted-foreground">
-                Completed jobs without logged actuals yet.
+                Completed bookings without logged actuals yet.
               </p>
             </div>
           </div>
@@ -370,7 +370,7 @@ export default function MechanicDashboard() {
               {dashboard.needsActuals.map((job) => (
                 <Link
                   key={String(job._id)}
-                  href={`/my-jobs?highlight=${job._id}`}
+                  href={`/my-bookings?highlight=${job._id}`}
                   className="block rounded-xl border border-border bg-amber-50/50 px-4 py-3 transition-colors hover:bg-amber-50"
                 >
                   <div className="flex items-start justify-between gap-3">

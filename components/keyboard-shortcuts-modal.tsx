@@ -7,12 +7,12 @@ const SECTIONS = [
   {
     title: "Schedule page",
     rows: [
-      { label: "Close selected job / drawer / context menu", keys: ["Esc"] },
+      { label: "Close selected booking / drawer / context menu", keys: ["Esc"] },
       { label: "Cancel drag while rescheduling", keys: ["Esc"] },
     ],
   },
   {
-    title: "Jobs page",
+    title: "Bookings page",
     rows: [
       { label: "Move focused row", keys: ["Up", "Down"] },
       { label: "Open focused row", keys: ["Enter"] },
@@ -24,16 +24,16 @@ const SECTIONS = [
     ],
   },
   {
-    title: "Job details",
+    title: "Booking details",
     rows: [
-      { label: "Accept pending job", keys: ["A"] },
+      { label: "Accept pending booking", keys: ["A"] },
       { label: "Decline", keys: ["D"] },
       { label: "Open assign / reassign dropdown", keys: ["A"] },
       { label: "Assign mechanic", keys: ["S"] },
       { label: "Reassign selected mechanic", keys: ["R"] },
-      { label: "Start job", keys: ["T"] },
+      { label: "Start booking", keys: ["T"] },
       { label: "Mark completed", keys: ["R"] },
-      { label: "Cancel job", keys: ["C"] },
+      { label: "Cancel booking", keys: ["C"] },
     ],
   },
   {
@@ -53,8 +53,8 @@ const SECTIONS = [
       { label: "Cancel reschedule dialog", keys: ["C"] },
       { label: "Confirm mark completed", keys: ["R"] },
       { label: "Cancel mark completed dialog", keys: ["C"] },
-      { label: "Confirm cancel job", keys: ["C"] },
-      { label: "Keep job", keys: ["E"] },
+      { label: "Confirm cancel booking", keys: ["C"] },
+      { label: "Keep booking", keys: ["E"] },
       { label: "Confirm revert proposed reschedule", keys: ["R"] },
       { label: "Cancel revert dialog", keys: ["C"] },
       { label: "Block remaining time", keys: ["B"] },

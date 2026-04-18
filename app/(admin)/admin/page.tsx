@@ -16,7 +16,7 @@ export default function AdminDashboardPage() {
           <p className="text-3xl font-bold text-gray-900">0</p>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h3 className="text-sm font-medium text-gray-500 mb-1">Total Jobs</h3>
+          <h3 className="text-sm font-medium text-gray-500 mb-1">Total Bookings</h3>
           <p className="text-3xl font-bold text-gray-900">0</p>
         </div>
       </div>

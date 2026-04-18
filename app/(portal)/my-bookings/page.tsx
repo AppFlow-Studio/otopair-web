@@ -8,8 +8,8 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Briefcase, Calendar, Loader2 } from "lucide-react";
 import { usePortalSidebar } from "../portal-context";
-import JobDetailPanel from "@/components/job-detail-panel";
-import type { JobDetailPanelHandle } from "@/components/job-detail-panel";
+import BookingDetailPanel from "@/components/booking-detail-panel";
+import type { JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
 } from "@/components/reschedule-confirmation-dialog";
@@ -20,9 +20,9 @@ import {
   pendingCountdown,
   todayString,
   type JobStatusFilter,
-} from "../jobs/job-list-shared";
+} from "../bookings/booking-list-shared";
 
-export default function MyJobsPage() {
+export default function MyBookingsPage() {
   const searchParams = useSearchParams();
   const highlightedJobId = searchParams.get("highlight");
   const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("all");
@@ -161,7 +161,7 @@ export default function MyJobsPage() {
     return (
       <div className="rounded-xl border border-border bg-card p-8 text-center text-muted-foreground">
         <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin text-blue-600" />
-        Loading your jobs…
+        Loading your bookings…
       </div>
     );
   }
@@ -178,9 +178,9 @@ export default function MyJobsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">My Jobs</h1>
+          <h1 className="text-2xl font-bold text-foreground">My Bookings</h1>
           <p className="text-sm text-muted-foreground">
-            Jobs assigned to you at {context.shopName}.
+            Bookings assigned to you at {context.shopName}.
           </p>
         </div>
         <Link
@@ -297,7 +297,7 @@ export default function MyJobsPage() {
                     <td colSpan={6} className="px-5 py-14">
                       <div className="flex flex-col items-center gap-2">
                         <Briefcase className="h-9 w-9 text-muted-foreground opacity-40" />
-                        <p className="text-sm font-medium text-muted-foreground">No jobs found</p>
+                        <p className="text-sm font-medium text-muted-foreground">No bookings found</p>
                         <p className="text-xs text-muted-foreground">
                           Try adjusting the date range or status filter.
                         </p>
@@ -359,7 +359,7 @@ export default function MyJobsPage() {
                   : "pointer-events-none translate-x-6 opacity-0"
               }`}
             >
-              <JobDetailPanel
+              <BookingDetailPanel
                 ref={jobDetailRef}
                 job={selectedJob}
                 mechanics={mechanics}

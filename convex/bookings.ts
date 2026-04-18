@@ -1913,7 +1913,7 @@ export const getMyOwnerDashboard = query({
       pendingActions: {
         jobsToAcceptCount: pendingApprovals.length,
         jobsToAccept: await Promise.all(
-          pendingApprovals.slice(0, 4).map(async (booking: any) => {
+          pendingApprovals.map(async (booking: any) => {
             const item = await mapBookingListItem(ctx, booking);
             return {
               _id: item._id,
@@ -1929,7 +1929,7 @@ export const getMyOwnerDashboard = query({
         ),
         actualsNeededCount: actualsNeededBookings.length,
         actualsNeeded: await Promise.all(
-          actualsNeededBookings.slice(0, 4).map(async (booking: any) => {
+          actualsNeededBookings.map(async (booking: any) => {
             const item = await mapBookingListItem(ctx, booking);
             return {
               _id: item._id,
@@ -1945,7 +1945,7 @@ export const getMyOwnerDashboard = query({
         ),
         invitesPendingCount: pendingInvitations.length,
         invitesPending: await Promise.all(
-          pendingInvitations.slice(0, 4).map(async (invite: any) => {
+          pendingInvitations.map(async (invite: any) => {
             const mechanic = invite.mechanic_id ? await ctx.db.get(invite.mechanic_id) : null;
             return {
               _id: invite._id,
@@ -2454,7 +2454,7 @@ export const accept = mutation({
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
     if (!["pending", "pending_shop_acceptance"].includes(booking.status)) {
-      throw new Error("Only pending jobs can be accepted");
+      throw new Error("Only pending bookings can be accepted");
     }
 
     return await applyBookingStatusTransition(ctx, {

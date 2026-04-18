@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
@@ -9,7 +9,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "@/lib/booking-status";
 import { usePortalSidebar } from "../portal-context";
-import JobDetailPanel from "@/components/job-detail-panel";
+import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
 } from "@/components/reschedule-confirmation-dialog";
@@ -223,6 +223,7 @@ function OwnerDashboardPage({
     useState<RescheduleConfirmationProposal | null>(null);
   const [rescheduleError, setRescheduleError] = useState("");
   const [isRescheduling, setIsRescheduling] = useState(false);
+  const jobDetailRef = useRef<JobDetailPanelHandle>(null);
   const selectedJob = useQuery(
     api.bookings.getJobDetail,
     selectedJobId ? { bookingId: selectedJobId } : "skip",
@@ -250,6 +251,44 @@ function OwnerDashboardPage({
     const timeout = setTimeout(() => setSuccessMessage(""), 3000);
     return () => clearTimeout(timeout);
   }, [successMessage]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!selectedJobId) return;
+
+      if (e.key === "Escape") {
+        if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
+        if (jobDetailRef.current?.handleEscape()) return;
+        setSelectedJobId(null);
+        return;
+      }
+
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
+
+      if (jobDetailRef.current?.handleKeyDown(e)) {
+        e.preventDefault();
+        return;
+      }
+
+      if (selectedJob && !jobDetailRef.current?.hasOpenModal()) {
+        const s = selectedJob.status;
+        const isPending = s === "pending" || s === "pending_shop_acceptance";
+        const isActive = s === "confirmed" || s === "in_progress";
+        if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
+        if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
+        if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
+        if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
+        if (e.key === "a" && !isPending) { e.preventDefault(); jobDetailRef.current?.openAssignDropdown(); return; }
+        if (e.key === "t" && s === "confirmed" && selectedJob.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
+        if (e.key === "s" && !isPending) { e.preventDefault(); jobDetailRef.current?.assignMechanic(); return; }
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [selectedJobId, selectedJob]);
 
   const handleProposeReschedule = useCallback(
     (proposal: RescheduleConfirmationProposal) => {
@@ -405,7 +444,7 @@ function OwnerDashboardPage({
             icon={CalendarClock}
             label="Today's bookings"
             value={String(dashboard.stats.todaysBookingsCount)}
-            sublabel="Scheduled jobs for today"
+            sublabel="Scheduled bookings for today"
           />
           <DashboardStatCard
             icon={ClipboardList}
@@ -413,7 +452,7 @@ function OwnerDashboardPage({
             value={String(dashboard.stats.pendingAcceptanceCount)}
             sublabel={
               dashboard.stats.pendingAcceptanceCount > 0
-                ? "Jobs waiting for review"
+                ? "Bookings waiting for review"
                 : "No bookings waiting"
             }
             accentClassName={
@@ -450,26 +489,28 @@ function OwnerDashboardPage({
             <div>
               <h2 className="text-xl font-semibold text-gray-900">Pending Actions</h2>
               <p className="mt-1 text-sm text-gray-500">
-                Keep approvals, completed-job follow-up, and team invitations from slipping through.
+                Keep approvals, completed booking follow-up, and team invitations from slipping through.
               </p>
             </div>
           </div>
 
           <div className="mt-6 grid gap-4 xl:grid-cols-3">
-            <div className="rounded-2xl border border-border bg-muted/70 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-gray-900">Jobs to accept</p>
+            <div className="flex max-h-[32rem] flex-col rounded-2xl border border-border bg-muted/70 p-4">
+              <div className="grid grid-cols-[minmax(0,1fr)_2.5rem] items-start gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-gray-900">Bookings to accept</p>
                   <p className="mt-1 text-xs text-gray-500">Bookings waiting for owner review</p>
                 </div>
                 {dashboard.pendingActions.jobsToAcceptCount > 0 ? (
-                  <span className="rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-semibold text-destructive">
+                  <span className="inline-flex w-10 justify-center rounded-full bg-destructive/10 px-2.5 py-1 text-center text-xs font-semibold text-destructive">
                     {dashboard.pendingActions.jobsToAcceptCount}
                   </span>
-                ) : null}
+                ) : (
+                  <span aria-hidden="true" className="w-10" />
+                )}
               </div>
 
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
                 {dashboard.pendingActions.jobsToAccept.length === 0 ? (
                   <EmptyCard title="No pending approvals" description="" />
                 ) : (
@@ -501,27 +542,27 @@ function OwnerDashboardPage({
                 href="/bookings"
                 className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
               >
-                Open accept queue
+                View all bookings
                 <ArrowUpRight className="h-4 w-4" />
               </Link>
             </div>
 
-            <div className="rounded-2xl border border-border bg-muted/70 p-4">
+            <div className="flex max-h-[32rem] flex-col rounded-2xl border border-border bg-muted/70 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-gray-900">Job actuals needed</p>
-                  <p className="mt-1 text-xs text-gray-500">Completed jobs missing final actuals</p>
+                  <p className="text-sm font-semibold text-gray-900">Booking actuals needed</p>
+                  <p className="mt-1 text-xs text-gray-500">Completed bookings missing final actuals</p>
                 </div>
                 <span className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent">
                   {dashboard.pendingActions.actualsNeededCount}
                 </span>
               </div>
 
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
                 {dashboard.pendingActions.actualsNeeded.length === 0 ? (
                   <EmptyCard
                     title="No missing actuals"
-                    description="Completed bookings with unfinished job actuals will surface here."
+                    description="Completed bookings with unfinished booking actuals will surface here."
                   />
                 ) : (
                   dashboard.pendingActions.actualsNeeded.map((job) => (
@@ -545,12 +586,12 @@ function OwnerDashboardPage({
                 href="/bookings"
                 className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
               >
-                Review completed jobs
+                View all bookings
                 <ArrowUpRight className="h-4 w-4" />
               </Link>
             </div>
 
-            <div className="rounded-2xl border border-border bg-muted/70 p-4">
+            <div className="flex max-h-[32rem] flex-col rounded-2xl border border-border bg-muted/70 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-gray-900">Invites pending</p>
@@ -563,7 +604,7 @@ function OwnerDashboardPage({
                 ) : null}
               </div>
 
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
                 {dashboard.pendingActions.invitesPending.length === 0 ? (
                   <EmptyCard title="No pending invites" description="" />
                 ) : (
@@ -614,7 +655,7 @@ function OwnerDashboardPage({
 
         {!hasScheduledBookings ? (
           <div className="mt-6 flex items-center justify-center rounded-2xl border border-border bg-muted/40 px-4 py-10 text-center text-sm text-muted-foreground">
-            No jobs scheduled for today
+            No bookings scheduled for today
           </div>
         ) : (
           <div className="mt-6 overflow-x-auto pb-2">
@@ -646,7 +687,7 @@ function OwnerDashboardPage({
                         {column.mechanicName}
                       </p>
                       <p className="text-xs text-gray-500">
-                        {column.jobsCount} job{column.jobsCount === 1 ? "" : "s"} today
+                        {column.jobsCount} booking{column.jobsCount === 1 ? "" : "s"} today
                       </p>
                     </div>
                   </div>
@@ -654,8 +695,8 @@ function OwnerDashboardPage({
                   <div className="mt-4 space-y-3">
                     {column.bookings.length === 0 ? (
                       <EmptyCard
-                        title="No jobs scheduled"
-                        description="This mechanic does not have any assigned work for today."
+                            title="No bookings scheduled"
+                            description="This mechanic does not have any assigned work for today."
                       />
                     ) : (
                       column.bookings.map((booking) => (
@@ -709,7 +750,8 @@ function OwnerDashboardPage({
                 : "pointer-events-none translate-x-6 opacity-0"
             }`}
           >
-            <JobDetailPanel
+            <BookingDetailPanel
+              ref={jobDetailRef}
               job={selectedJob}
               mechanics={mechanics}
               scheduleConflicts={{

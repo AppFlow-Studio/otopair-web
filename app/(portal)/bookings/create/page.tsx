@@ -21,10 +21,10 @@ function toNumber(value: string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-export default function CreateJobPage() {
+export default function CreateBookingPage() {
   const router = useRouter();
   const context = useQuery(api.bookings.getMyShopJobContext);
-  const createJob = useMutation(api.bookings.create);
+  const createBooking = useMutation(api.bookings.create);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -83,7 +83,7 @@ export default function CreateJobPage() {
 
     try {
       setIsSubmitting(true);
-      await createJob({
+      await createBooking({
         shopId: context.shopId,
         customerEmail: formState.customerEmail.trim(),
         customerFirstName: formState.customerFirstName.trim() || undefined,
@@ -103,9 +103,9 @@ export default function CreateJobPage() {
           : undefined,
         status: "confirmed",
       });
-      router.push("/jobs");
+      router.push("/bookings");
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to create job.";
+      const message = err instanceof Error ? err.message : "Failed to create booking.";
       setActionError(message);
       setIsSubmitting(false);
     }
@@ -117,12 +117,12 @@ export default function CreateJobPage() {
       {/* ── Top bar ─────────────────────────────────────────────────── */}
       <div className="sticky top-0 z-20 flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200">
         <Link
-          href="/jobs"
+          href="/bookings"
           className="flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 transition-colors"
         >
           <X className="w-5 h-5 text-gray-600" />
         </Link>
-        <h1 className="text-base font-semibold text-gray-900">New Job</h1>
+        <h1 className="text-base font-semibold text-gray-900">New Booking</h1>
         <button
           form="create-job-form"
           type="submit"
@@ -306,9 +306,9 @@ export default function CreateJobPage() {
             )}
           </div>
 
-          {/* ── Right panel — "Job at a glance" ─────────────────────── */}
+          {/* ── Right panel — "Booking at a glance" ─────────────────────── */}
           <div className="w-72 shrink-0 border-l border-gray-200 bg-white px-6 py-6 space-y-6">
-            <h3 className="text-base font-semibold text-gray-900">Job at a glance</h3>
+            <h3 className="text-base font-semibold text-gray-900">Booking at a glance</h3>
 
             {/* Mechanic */}
             <div className="space-y-2">

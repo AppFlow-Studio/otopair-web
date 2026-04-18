@@ -89,7 +89,7 @@ function formatTime(time: string): string {
   });
 }
 
-function formatJobDate(
+function formatBookingDate(
   scheduledDate: string,
   scheduledTime: string,
 ): string {
@@ -155,7 +155,7 @@ function isSystemReason(reason: string): boolean {
 function getStatusDescription(status: string, reason?: string | null): string | null {
   if (status === "pending" || status === "pending_shop_acceptance") return "Awaiting shop review";
   if (status === "pending_customer_acceptance") return "Shop proposed reschedule";
-  if (status === "cancelled" && reason === "cancelled_by_shop") return "Shop cancelled job";
+  if (status === "cancelled" && reason === "cancelled_by_shop") return "Shop cancelled booking";
   if (status === "cancelled" && reason && !isSystemReason(reason)) return reason;
   return null;
 }
@@ -234,7 +234,7 @@ interface JobDetailPanelProps {
   onRequestRescheduleConfirmation?: (proposal: RescheduleRequest) => void;
   onClose: () => void;
   onSuccess?: (message: string) => void;
-  showJobsLink?: boolean;
+  showBookingsLink?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -250,7 +250,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       onRequestRescheduleConfirmation,
       onClose,
       onSuccess,
-      showJobsLink,
+      showBookingsLink,
     },
     ref,
   ) {
@@ -346,11 +346,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       try {
         if (action === "accept") {
           await acceptJob({ bookingId: job._id });
-          onSuccess?.("Job accepted");
+          onSuccess?.("Booking accepted");
         }
         if (action === "complete") {
           await completeJob({ bookingId: job._id });
-          onSuccess?.("Job completed");
+          onSuccess?.("Booking completed");
         }
       } catch (err: unknown) {
         setActionError(
@@ -374,10 +374,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         setShowDeclineModal(false);
         setDeclineReason(DECLINE_REASONS[0]);
         setDeclineOtherText("");
-        onSuccess?.("Job declined");
+        onSuccess?.("Booking declined");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not decline job.",
+          err instanceof Error ? err.message : "Could not decline booking.",
         );
       } finally {
         setIsActioning(false);
@@ -398,10 +398,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           reason,
         });
         setShowCancelConfirm(false);
-        onSuccess?.("Job cancelled");
+        onSuccess?.("Booking cancelled");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not cancel job.",
+          err instanceof Error ? err.message : "Could not cancel booking.",
         );
       } finally {
         setIsActioning(false);
@@ -518,10 +518,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setIsActioning(true);
       try {
         await startJobMut({ bookingId: job._id });
-        onSuccess?.("Job started");
+        onSuccess?.("Booking started");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not start job.",
+          err instanceof Error ? err.message : "Could not start booking.",
         );
       } finally {
         setIsActioning(false);
@@ -682,7 +682,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     const title = job
       ? `${job.serviceNames.join(", ")} — ${job.customerName}`
-      : "Job Detail";
+      : "Booking Detail";
 
     return (
       <>
@@ -718,11 +718,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               </div>
             ) : !job ? (
               <p className="text-sm text-muted-foreground">
-                Job not found.
+                Booking not found.
               </p>
             ) : (
               <div className="space-y-5">
-                {/* Job info grid */}
+                {/* Booking info grid */}
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
                     <p className="text-muted-foreground text-xs mb-1">
@@ -751,7 +751,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                       Schedule
                     </p>
                     <p className="font-medium text-foreground">
-                      {formatJobDate(
+                      {formatBookingDate(
                         job.scheduledDate,
                         job.scheduledTime,
                       )}
@@ -966,7 +966,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               <button
                                 type="button"
                                 disabled={isActioning}
-                                aria-label="More job actions"
+                                aria-label="More booking actions"
                                 className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
                               >
                                 <Ellipsis
@@ -1037,7 +1037,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               >
                                 t
                               </span>
-                              art job
+                              art booking
                             </span>
                           </button>
                         )}
@@ -1108,7 +1108,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               >
                                 C
                               </span>
-                              ancel job
+                              ancel booking
                             </span>
                           </button>
                         )}
@@ -1219,14 +1219,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   </div>
                 </div>
 
-                {/* View in Jobs link (schedule page only) */}
-                {showJobsLink && (
+                {/* View in Bookings link (schedule page only) */}
+                {showBookingsLink && (
                   <div className="border-t border-border pt-4">
                     <a
-                      href={`/jobs?highlight=${job._id}`}
+                      href={`/bookings?highlight=${job._id}`}
                       className="text-xs text-primary hover:underline"
                     >
-                      View full details in Jobs &rarr;
+                      View full details in Bookings &rarr;
                     </a>
                   </div>
                 )}
@@ -1243,7 +1243,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
         <ConfirmationDialog
           open={showDeclineModal}
-          title="Decline this job?"
+          title="Decline this booking?"
           description="Select a reason for declining:"
           onClose={() => setShowDeclineModal(false)}
           enableShortcuts={false}
@@ -1300,7 +1300,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         <ConfirmationDialog
           open={showCompleteConfirm}
           title="Mark as completed?"
-          description="Mark this job as completed? The customer will be notified."
+          description="Mark this booking as completed? The customer will be notified."
           onClose={() => setShowCompleteConfirm(false)}
           enableShortcuts={false}
           secondaryAction={{
@@ -1321,17 +1321,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
         <ConfirmationDialog
           open={showCancelConfirm}
-          title="Cancel this job?"
+          title="Cancel this booking?"
           description="Select a reason for cancelling. The customer will be notified of the cancellation."
           onClose={() => setShowCancelConfirm(false)}
           enableShortcuts={false}
           secondaryAction={{
-            label: <ShortcutLabel text="Keep job" shortcutKey="e" />,
+            label: <ShortcutLabel text="Keep booking" shortcutKey="e" />,
             onAction: () => setShowCancelConfirm(false),
             disabled: isActioning,
           }}
           primaryAction={{
-            label: isActioning ? "Cancelling..." : <ShortcutLabel text="Cancel job" shortcutKey="c" />,
+            label: isActioning ? "Cancelling..." : <ShortcutLabel text="Cancel booking" shortcutKey="c" />,
             onAction: handleCancelJob,
             disabled: isActioning,
             variant: "destructive",

@@ -9,7 +9,7 @@ import { v } from "convex/values";
  * pending_shop_acceptance -> confirmed | cancelled | pending_customer_acceptance
  * confirmed -> in_progress | cancelled | no_show | pending_customer_acceptance
  * pending_customer_acceptance -> pending | pending_shop_acceptance | confirmed | cancelled
- * in_progress -> completed
+ * in_progress -> completed | cancelled
  * completed, cancelled, no_show, declined -> (terminal)
  */
 
@@ -27,7 +27,7 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
     "confirmed",
     "cancelled",
   ],
-  in_progress: ["completed"],
+  in_progress: ["completed", "cancelled"],
   completed: [],
   cancelled: [],
   no_show: [],

@@ -37,12 +37,12 @@ const ownerManagerLinks = [
 ];
 
 const mechanicLinks = [
-  { href: "/my-jobs", label: "My Jobs", icon: Briefcase },
+  { href: "/my-bookings", label: "My Bookings", icon: Briefcase },
 ];
 
-const jobsSubLinks = [
-  { href: "/jobs/create", label: "Create Job", icon: PlusCircle },
-  { href: "/jobs", label: "All Jobs", icon: List },
+const bookingSubLinks = [
+  { href: "/bookings/create", label: "Create Booking", icon: PlusCircle },
+  { href: "/bookings", label: "All Bookings", icon: List },
 ];
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"];
@@ -65,8 +65,12 @@ export default function PortalLayout({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCompact, setSidebarCompact] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
-  const isJobsActive = pathname === "/jobs" || pathname.startsWith("/jobs/");
-  const [jobsOpen, setJobsOpen] = useState(isJobsActive);
+  const isBookingsActive =
+    pathname === "/bookings" ||
+    pathname.startsWith("/bookings/") ||
+    pathname === "/my-bookings" ||
+    pathname.startsWith("/my-bookings/");
+  const [bookingsOpen, setBookingsOpen] = useState(isBookingsActive);
 
   const portalAccess = useQuery(api.shops.getMyPortalAccess);
   const seedBookings = useMutation(api.seed.seedDashboardBookings);
@@ -227,37 +231,37 @@ export default function PortalLayout({
               <NavText>Dashboard</NavText>
             </Link>
 
-            {/* Jobs accordion — always the same DOM structure; chevron fades with text */}
+            {/* Bookings accordion — always the same DOM structure; chevron fades with text */}
             <div>
               <button
                 onClick={() => {
-                  if (!sidebarCompact) setJobsOpen((o) => !o);
+                  if (!sidebarCompact) setBookingsOpen((o) => !o);
                 }}
-                title={sidebarCompact ? "Jobs" : undefined}
+                title={sidebarCompact ? "Bookings" : undefined}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors w-full ${
-                  isJobsActive
+                  isBookingsActive
                     ? "bg-blue-50 text-blue-700"
                     : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
                 }`}
               >
                 <Briefcase className="w-5 h-5 shrink-0" />
-                <NavText flex1>Jobs</NavText>
+                <NavText flex1>Bookings</NavText>
                 {/* Chevron fades with text so it doesn't float awkwardly */}
                 <ChevronDown
                   className={`w-4 h-4 shrink-0 transition-all duration-300 ${
-                    jobsOpen ? "rotate-180" : ""
+                    bookingsOpen ? "rotate-180" : ""
                   } ${sidebarCompact ? "opacity-0 max-w-0 overflow-hidden" : "opacity-100 max-w-[16px]"}`}
                 />
               </button>
               <div
                 className="overflow-hidden transition-all duration-300"
-                style={{ maxHeight: !sidebarCompact && jobsOpen ? "120px" : "0px" }}
+                style={{ maxHeight: !sidebarCompact && bookingsOpen ? "120px" : "0px" }}
               >
                 <div className="mt-1 ml-4 space-y-1 border-l border-gray-200 pl-3">
-                  {jobsSubLinks.map((link) => {
+                  {bookingSubLinks.map((link) => {
                     const isActive =
-                      link.href === "/jobs"
-                        ? pathname === "/jobs"
+                      link.href === "/bookings"
+                        ? pathname === "/bookings"
                         : pathname === link.href ||
                           pathname.startsWith(link.href + "/");
                     return (

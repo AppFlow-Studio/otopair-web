@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Fetch shop name for the invite email
-    const shop = await fetchQuery(api.shops.getById, { shopId: shopId as Id<"shops"> });
+    const shop = await fetchQuery(api.shops.getById, { id: shopId as Id<"shops"> });
     const shopName = shop?.name;
 
     // Block invites to users who are already an active member of any shop

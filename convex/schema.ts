@@ -1246,6 +1246,8 @@ export default defineSchema({
     difficulty_rating: v.optional(v.number()),
     parts_used: v.optional(v.any()),
     technician_notes: v.optional(v.string()),
+    finalized_at_ms: v.optional(v.number()),
+    finalized_by_user_id: v.optional(v.id("users")),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_mechanic_id", ["mechanic_id"])

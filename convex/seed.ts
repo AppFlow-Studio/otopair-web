@@ -1937,6 +1937,7 @@ export const seed = mutation({
       difficulty_rating: 2,
       parts_used: [{ part_name: "Oil Filter", oem_number: "90915-YZZD4", cost: 12 }],
       technician_notes: "Standard oil change completed.",
+      finalized_at_ms: completedHistoryPrimary.createdAt + 30 * 60 * 1000,
     });
 
     // --- Review ---
@@ -2877,6 +2878,7 @@ export const seedAllDataForUser39FwQkrjp = mutation({
         difficulty_rating: 2,
         parts_used: [{ part_name: "Service parts", oem_number: "N/A", cost: parts }],
         technician_notes: "Completed as requested.",
+        finalized_at_ms: completedAt,
       });
 
       await ctx.db.insert("reviews", {
@@ -3098,6 +3100,7 @@ export const seedServicesShopsMilesSafeForUser39FwQkrjp = mutation({
         difficulty_rating: 2,
         parts_used: [{ part_name: "Service parts", oem_number: "N/A", cost: parts }],
         technician_notes: "Completed as requested.",
+        finalized_at_ms: completedAt,
       });
 
       await ctx.db.insert("reviews", {
@@ -3432,6 +3435,7 @@ export const seedPastBookingsForJohnDoe = mutation({
         difficulty_rating: 2,
         parts_used: [{ part_name: "Service parts", oem_number: "N/A", cost: parts }],
         technician_notes: "Completed as requested.",
+        finalized_at_ms: completedAt,
       });
 
       await ctx.db.insert("reviews", {
@@ -3506,7 +3510,7 @@ export const seedLiveBookingForJohnDoe = mutation({
     const parts = 45;
     const totalCost = labor + parts;
     const estimatedMinutes = 45;
-    const startedAtSeconds = Math.floor(now / 1000) - 600;
+    const startedAtMs = now - 10 * 60 * 1000;
 
     const timeSlotId = await ctx.db.insert("time_slots", {
       shop_id: shop._id,
@@ -3550,7 +3554,7 @@ export const seedLiveBookingForJohnDoe = mutation({
       mechanic_id: mechanic._id,
       actual_labor_minutes: estimatedMinutes,
       actual_parts_cost: parts,
-      started_at: startedAtSeconds,
+      started_at: startedAtMs,
       completed_at_ms: undefined,
       logged_at_ms: undefined,
       created_at: now,
@@ -4242,7 +4246,7 @@ export const seedDashboardBookings = mutation({
           );
         }
 
-        await createBooking({
+        const bookingId = await createBooking({
           userIdx: bookingSequence % userIds.length,
           vinIdx: (bookingSequence + dayIdx) % demoVehicles.length,
           serviceId: service.id,
@@ -4256,6 +4260,46 @@ export const seedDashboardBookings = mutation({
           liveStage: status === "in_progress" ? "service_in_progress" : undefined,
           key: `${date}_${mechanicKey}_${bookingSequence}`,
         });
+
+        if (status === "in_progress") {
+          const startedAt = now - Math.min(adjustedEstimatedMinutes, 45) * 60 * 1000;
+          await ctx.db.insert("job_actuals", {
+            booking_id: bookingId,
+            mechanic_id: mechanic._id,
+            started_at: startedAt,
+            created_at: now,
+            updated_at: now,
+            technician_notes: "Service in progress.",
+            parts_used: [],
+          });
+        } else if (status === "completed") {
+          const completedAt = now - 5 * 60 * 1000;
+          const finalizedAt = bookingSequence % 2 === 0 ? completedAt : undefined;
+          await ctx.db.insert("job_actuals", {
+            booking_id: bookingId,
+            mechanic_id: mechanic._id,
+            actual_labor_minutes: adjustedEstimatedMinutes,
+            actual_parts_cost: service.partsCost,
+            started_at: completedAt - adjustedEstimatedMinutes * 60 * 1000,
+            completed_at_ms: completedAt,
+            logged_at_ms: completedAt,
+            created_at: completedAt,
+            updated_at: completedAt,
+            difficulty_rating: 2,
+            parts_used: [
+              {
+                part_name: "Seeded service parts",
+                oem_number: "N/A",
+                cost: service.partsCost,
+              },
+            ],
+            technician_notes:
+              finalizedAt != null
+                ? "Seeded finalized actuals."
+                : "Completed booking awaiting finalized actuals.",
+            finalized_at_ms: finalizedAt,
+          });
+        }
 
         bookingStatusCounts[status] = (bookingStatusCounts[status] ?? 0) + 1;
         remainingBookingsByMechanic.set(

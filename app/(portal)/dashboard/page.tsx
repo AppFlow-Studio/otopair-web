@@ -551,7 +551,7 @@ function OwnerDashboardPage({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-gray-900">Booking actuals needed</p>
-                  <p className="mt-1 text-xs text-gray-500">Completed bookings missing final actuals</p>
+                  <p className="mt-1 text-xs text-gray-500">Completed bookings missing finalized actuals</p>
                 </div>
                 <span className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent">
                   {dashboard.pendingActions.actualsNeededCount}
@@ -562,7 +562,7 @@ function OwnerDashboardPage({
                 {dashboard.pendingActions.actualsNeeded.length === 0 ? (
                   <EmptyCard
                     title="No missing actuals"
-                    description="Completed bookings with unfinished booking actuals will surface here."
+                    description="Completed bookings without finalized actuals will surface here."
                   />
                 ) : (
                   dashboard.pendingActions.actualsNeeded.map((job) => (

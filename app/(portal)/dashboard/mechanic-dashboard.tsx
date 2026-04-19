@@ -14,6 +14,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { StatusPill } from "@/components/status-pill";
+import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 
 const avatarColors = [
   "bg-blue-100 text-blue-600",
@@ -90,8 +91,20 @@ export default function MechanicDashboard() {
   const dashboard = useQuery(api.bookings.getMyMechanicDashboard);
   const startJob = useMutation(api.bookings.start);
   const completeJob = useMutation(api.bookings.complete);
+  const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
+  const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [toast, setToast] = useState<string>("");
+  const [actualsBookingId, setActualsBookingId] = useState<Id<"bookings"> | null>(null);
+  const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
+  const selectedBooking = useQuery(
+    api.bookings.getJobDetail,
+    actualsBookingId ? { bookingId: actualsBookingId } : "skip"
+  );
+  const actualsPrefill = useQuery(
+    api.job_actuals.getPrefillData,
+    actualsBookingId ? { bookingId: actualsBookingId } : "skip"
+  );
 
   useEffect(() => {
     if (!toast) return;
@@ -113,21 +126,100 @@ export default function MechanicDashboard() {
     return Array.from(groups.entries());
   }, [dashboard]);
 
-  async function handleAction(
-    action: "start" | "complete",
-    bookingId: string,
-  ) {
-    setBusyAction(`${action}:${bookingId}`);
+  async function handleStartAction(bookingId: string) {
+    setBusyAction(`start:${bookingId}`);
     try {
-      if (action === "start") {
-        await startJob({ bookingId: bookingId as Id<"bookings"> });
-        setToast("Booking started");
-      } else {
-        await completeJob({ bookingId: bookingId as Id<"bookings"> });
-        setToast("Booking completed");
-      }
+      await startJob({ bookingId: bookingId as Id<"bookings"> });
+      setToast("Booking started");
     } catch (error: unknown) {
       setToast(error instanceof Error ? error.message : "Could not update booking");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function openActualsDialog(bookingId: string, mode: "complete" | "edit") {
+    setActualsBookingId(bookingId as Id<"bookings">);
+    setActualsDialogMode(mode);
+  }
+
+  function closeActualsDialog() {
+    setActualsBookingId(null);
+    setActualsDialogMode("complete");
+  }
+
+  async function handleCompleteOnly(payload: JobActualsPayload) {
+    if (!actualsBookingId) return;
+
+    setBusyAction(`complete:${String(actualsBookingId)}`);
+    try {
+      await completeJob({
+        bookingId: actualsBookingId,
+        actuals: payload,
+      });
+      setToast("Booking completed. Actuals saved as draft.");
+      closeActualsDialog();
+    } catch (error: unknown) {
+      setToast(error instanceof Error ? error.message : "Could not update booking");
+      throw error;
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleCompleteAndFinalize(payload: JobActualsPayload) {
+    if (!actualsBookingId) return;
+
+    setBusyAction(`complete:${String(actualsBookingId)}`);
+    try {
+      await completeJob({
+        bookingId: actualsBookingId,
+        finalizeActuals: true,
+        actuals: payload,
+      });
+      setToast("Booking completed and actuals finalized.");
+      closeActualsDialog();
+    } catch (error: unknown) {
+      setToast(error instanceof Error ? error.message : "Could not finalize booking");
+      throw error;
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleSaveActualsDraft(payload: JobActualsPayload) {
+    if (!actualsBookingId) return;
+
+    setBusyAction(`draft:${String(actualsBookingId)}`);
+    try {
+      await saveActualsDraft({
+        bookingId: actualsBookingId,
+        actuals: payload,
+      });
+      setToast("Actuals draft saved.");
+      closeActualsDialog();
+    } catch (error: unknown) {
+      setToast(error instanceof Error ? error.message : "Could not save actuals");
+      throw error;
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleFinalizeActuals(payload: JobActualsPayload) {
+    if (!actualsBookingId) return;
+
+    setBusyAction(`finalize:${String(actualsBookingId)}`);
+    try {
+      await finalizeActuals({
+        bookingId: actualsBookingId,
+        actuals: payload,
+      });
+      setToast("Actuals finalized.");
+      closeActualsDialog();
+    } catch (error: unknown) {
+      setToast(error instanceof Error ? error.message : "Could not finalize actuals");
+      throw error;
     } finally {
       setBusyAction(null);
     }
@@ -163,7 +255,7 @@ export default function MechanicDashboard() {
             Today has {dashboard.stats.todayCount} assigned booking
             {dashboard.stats.todayCount === 1 ? "" : "s"} and{" "}
             {dashboard.needsActuals.length} completed booking
-            {dashboard.needsActuals.length === 1 ? "" : "s"} still need follow-up.
+            {dashboard.needsActuals.length === 1 ? "" : "s"} still need finalized actuals.
           </p>
         </div>
         <Link
@@ -260,7 +352,7 @@ export default function MechanicDashboard() {
                   <div className="mt-5 flex flex-wrap gap-2">
                     {job.status === "confirmed" ? (
                       <button
-                        onClick={() => void handleAction("start", String(job._id))}
+                        onClick={() => void handleStartAction(String(job._id))}
                         disabled={busyAction === actionKeyStart}
                         className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
                       >
@@ -275,7 +367,7 @@ export default function MechanicDashboard() {
 
                     {job.status === "in_progress" ? (
                       <button
-                        onClick={() => void handleAction("complete", String(job._id))}
+                        onClick={() => openActualsDialog(String(job._id), "complete")}
                         disabled={busyAction === actionKeyComplete}
                         className="inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
                       >
@@ -356,7 +448,7 @@ export default function MechanicDashboard() {
             <div>
               <h2 className="text-lg font-semibold text-foreground">Needs Attention</h2>
               <p className="text-sm text-muted-foreground">
-                Completed bookings without logged actuals yet.
+                Completed bookings missing finalized actuals.
               </p>
             </div>
           </div>
@@ -368,10 +460,9 @@ export default function MechanicDashboard() {
           ) : (
             <div className="mt-6 space-y-3">
               {dashboard.needsActuals.map((job) => (
-                <Link
+                <div
                   key={String(job._id)}
-                  href={`/my-bookings?highlight=${job._id}`}
-                  className="block rounded-xl border border-border bg-amber-50/50 px-4 py-3 transition-colors hover:bg-amber-50"
+                  className="rounded-xl border border-border bg-amber-50/50 px-4 py-3"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -385,14 +476,44 @@ export default function MechanicDashboard() {
                         Completed {formatDate(job.scheduledDate)} at {formatTime(job.scheduledTime)}
                       </p>
                     </div>
-                    <ArrowRight className="mt-0.5 w-4 h-4 shrink-0 text-amber-700" />
+                    <div className="flex shrink-0 items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openActualsDialog(String(job._id), "edit")}
+                        className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"
+                      >
+                        Finalize actuals
+                      </button>
+                      <Link
+                        href={`/my-bookings?highlight=${job._id}`}
+                        className="inline-flex items-center text-amber-700 transition-colors hover:text-amber-900"
+                      >
+                        <ArrowRight className="mt-0.5 w-4 h-4" />
+                      </Link>
+                    </div>
                   </div>
-                </Link>
+                </div>
               ))}
             </div>
           )}
         </section>
       </div>
+
+      <JobActualsDialog
+        open={actualsBookingId !== null}
+        mode={actualsDialogMode}
+        estimatedLaborMinutes={selectedBooking?.estimatedLaborMinutes ?? null}
+        jobActuals={selectedBooking?.jobActuals ?? null}
+        prefillData={actualsPrefill ?? null}
+        onClose={closeActualsDialog}
+        onCompleteOnly={actualsDialogMode === "complete" ? handleCompleteOnly : undefined}
+        onSaveDraft={actualsDialogMode === "edit" ? handleSaveActualsDraft : undefined}
+        onFinalize={
+          actualsDialogMode === "complete"
+            ? handleCompleteAndFinalize
+            : handleFinalizeActuals
+        }
+      />
 
       {toast ? (
         <div className="fixed bottom-6 right-6 z-[70] rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground shadow-lg">

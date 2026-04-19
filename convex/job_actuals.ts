@@ -1,11 +1,62 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
+import { applyBookingStatusTransition } from "./bookings";
+import {
+  ensureJobActualRecord,
+  finalizeJobActuals,
+  getLatestJobActualForBooking,
+  jobActualInputValidator,
+  jobActualPartValidator,
+  reopenJobActuals,
+  saveJobActualDraft,
+} from "./lib/job_actuals";
 
-/** Primary service ID for a booking: first entry in service_ids */
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
+}
+
+async function getCurrentUser(ctx: any) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Not authenticated");
+
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", identity.subject))
+    .unique();
+
+  if (!user) throw new Error("User not found");
+  return user;
+}
+
+async function requireShopStaff(ctx: any, userId: any, shopId: any) {
+  const shopUser = await ctx.db
+    .query("shop_users")
+    .withIndex("by_user_and_shop", (q: any) =>
+      q.eq("user_id", userId).eq("shop_id", shopId)
+    )
+    .first();
+
+  if (shopUser && shopUser.is_active) {
+    return shopUser;
+  }
+
+  const ownedShop = await ctx.db
+    .query("shops")
+    .withIndex("by_owner_user_id", (q: any) => q.eq("owner_user_id", userId))
+    .filter((q: any) => q.eq(q.field("_id"), shopId))
+    .first();
+
+  if (ownedShop) {
+    return {
+      user_id: userId,
+      shop_id: shopId,
+      role: "owner",
+      is_active: true,
+    };
+  }
+
+  throw new Error("Not authorized for this shop");
 }
 
 export const list = query({
@@ -25,23 +76,28 @@ export const getById = query({
 export const getByBookingId = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
-    return await ctx.db
-      .query("job_actuals")
-      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
-      .unique();
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    return await getLatestJobActualForBooking(ctx, args.bookingId);
   },
 });
 
 export const getPrefillData = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return null;
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
 
     const serviceId = primaryServiceId(booking);
     const service = serviceId ? await ctx.db.get(serviceId) : null;
 
-    // Vehicle → engine → trim → model → make
     const vehicle = await ctx.db
       .query("vehicles")
       .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
@@ -55,21 +111,23 @@ export const getPrefillData = query({
     const model = trim ? await ctx.db.get(trim.model_id) : null;
     const make = model ? await ctx.db.get(model.make_id) : null;
 
-    const vehicleLabel = [make?.name, model?.name, trim?.name, vehicle.year].filter(Boolean).join(" ");
+    const vehicleLabel = [make?.name, model?.name, trim?.name, vehicle.year]
+      .filter(Boolean)
+      .join(" ");
 
-    // Mechanic
     const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
-    const mechanicName = mechanic ? `${mechanic.first_name} ${mechanic.last_name}` : "Unassigned";
+    const mechanicName = mechanic
+      ? `${mechanic.first_name} ${mechanic.last_name}`
+      : "Unassigned";
 
-    // Vehicle specs for suggested parts (from service_vehicle_specs)
     const allSpecs = await ctx.db.query("service_vehicle_specs").collect();
-    const specs = allSpecs.find((s: any) => s.engine_id === engine._id);
+    const specs = allSpecs.find((row: any) => row.engine_id === engine._id);
 
-    const suggestedParts: {
+    const suggestedParts: Array<{
       part_name: string;
       oem_number: string;
       cost: number;
-    }[] = [];
+    }> = [];
 
     if (specs && service) {
       const slug = service.slug;
@@ -80,7 +138,7 @@ export const getPrefillData = query({
           cost: 12,
         });
         suggestedParts.push({
-          part_name: `Synthetic Oil ${specs.oil_capacity_qts ?? "—"}qt`,
+          part_name: `Synthetic Oil ${specs.oil_capacity_qts ?? "-"}qt`,
           oem_number: specs.oil_viscocity ?? "",
           cost: 35,
         });
@@ -117,7 +175,7 @@ export const getPrefillData = query({
       } else if (slug === "spark-plugs" && specs.spark_plug_oem) {
         const qty = specs.spark_plug_quantity ?? 4;
         suggestedParts.push({
-          part_name: `Spark Plugs (×${qty})`,
+          part_name: `Spark Plugs (x${qty})`,
           oem_number: specs.spark_plug_oem,
           cost: 12 * qty,
         });
@@ -149,7 +207,7 @@ export const getPrefillData = query({
       serviceSlug: service?.slug ?? "",
       engineCode: engine.engine_code,
       engineId: engine._id,
-      serviceId: serviceId,
+      serviceId,
       mechanicName,
       suggestedParts,
     };
@@ -162,227 +220,202 @@ export const startJob = mutation({
     mechanicId: v.id("mechanics"),
   },
   handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("Booking not found");
-    if (booking.status !== "confirmed") {
-      throw new Error(`Booking status is "${booking.status}", expected "confirmed"`);
-    }
 
-    // Invariant: Ensure only one job_actuals per booking
-    const existing = await ctx.db
-      .query("job_actuals")
-      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
-      .unique();
-    if (existing) {
-      throw new Error("Job actuals already exist for this booking");
-    }
+    await requireShopStaff(ctx, user._id, booking.shop_id);
 
-    // Update booking status
     const now = Date.now();
-    await ctx.db.patch(args.bookingId, { status: "in_progress", updated_at: now });
-
-    // Create job_actuals row
-    const jobActualId = await ctx.db.insert("job_actuals", {
-      booking_id: args.bookingId,
-      mechanic_id: args.mechanicId,
-      actual_labor_minutes: 0,
-      parts_used: [],
-      actual_parts_cost: 0,
-      difficulty_rating: 3,
-      technician_notes: "",
-      started_at: now,
-      created_at: now,
-      updated_at: now,
+    await ensureJobActualRecord(ctx, {
+      booking,
+      mechanicId: args.mechanicId,
+      now,
+      startedAtMs: now,
     });
 
-    return jobActualId;
+    if (booking.status === "confirmed") {
+      await applyBookingStatusTransition(ctx, {
+        booking,
+        newStatus: "in_progress",
+        changedBy: user._id,
+        reason: "started_by_shop",
+      });
+    }
+
+    return await getLatestJobActualForBooking(ctx, args.bookingId);
   },
 });
 
 export const completeJob = mutation({
   args: {
     bookingId: v.id("bookings"),
+    finalizeActuals: v.optional(v.boolean()),
+    actuals: v.optional(jobActualInputValidator),
   },
   handler: async (ctx, args) => {
-    const allActuals = await ctx.db.query("job_actuals").collect();
-    const jobActual = allActuals.find((r) => r.booking_id === args.bookingId);
-    if (!jobActual) throw new Error("No job_actuals found for this booking");
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
 
     const now = Date.now();
-    const startedAt = jobActual.started_at;
-    const elapsedMinutes = Math.round((now - startedAt) / 60000);
-
-    await ctx.db.patch(jobActual._id, {
-      completed_at_ms: now,
-      actual_labor_minutes: elapsedMinutes,
-      updated_at: now,
+    await saveJobActualDraft(ctx, {
+      booking,
+      actuals: args.actuals,
+      now,
+      completedAtMs: now,
+      preferAutoLaborMinutes: true,
     });
 
-    return { elapsedMinutes };
+    if (booking.status !== "completed") {
+      await applyBookingStatusTransition(ctx, {
+        booking,
+        newStatus: "completed",
+        changedBy: user._id,
+        reason: "completed_by_shop",
+      });
+    }
+
+    const completedBooking = await ctx.db.get(args.bookingId);
+    if (!completedBooking) throw new Error("Booking not found");
+
+    if (args.finalizeActuals) {
+      await finalizeJobActuals(ctx, {
+        booking: completedBooking,
+        userId: user._id,
+        actuals: args.actuals,
+        now,
+      });
+    }
+
+    return await getLatestJobActualForBooking(ctx, args.bookingId);
+  },
+});
+
+export const saveDraft = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    actuals: jobActualInputValidator,
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    return await saveJobActualDraft(ctx, {
+      booking,
+      actuals: args.actuals,
+      now: Date.now(),
+      preferAutoLaborMinutes: booking.status === "completed",
+    });
+  },
+});
+
+export const finalizeByBooking = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    actuals: v.optional(jobActualInputValidator),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    if (booking.status !== "completed") {
+      throw new Error("Booking must be completed before finalizing actuals.");
+    }
+
+    return await finalizeJobActuals(ctx, {
+      booking,
+      userId: user._id,
+      actuals: args.actuals,
+      now: Date.now(),
+    });
+  },
+});
+
+export const reopenByBooking = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    if (booking.status !== "completed") {
+      throw new Error("Only completed bookings can reopen actuals.");
+    }
+
+    return await reopenJobActuals(ctx, {
+      booking,
+      now: Date.now(),
+    });
   },
 });
 
 export const submitJobActuals = mutation({
   args: {
     bookingId: v.id("bookings"),
-    parts_used: v.array(
-      v.object({
-        part_name: v.string(),
-        oem_number: v.string(),
-        cost: v.float64(),
-      })
-    ),
+    parts_used: v.array(jobActualPartValidator),
     actual_parts_cost: v.float64(),
     difficulty_rating: v.float64(),
     technician_notes: v.string(),
+    actual_labor_minutes: v.optional(v.union(v.float64(), v.null())),
   },
   handler: async (ctx, args) => {
-    // Find the job_actuals row
-    const allActuals = await ctx.db.query("job_actuals").collect();
-    const jobActual = allActuals.find((r) => r.booking_id === args.bookingId);
-    if (!jobActual) throw new Error("No job_actuals found for this booking");
-
-    const now = Date.now();
-
-    // Update job_actuals with questionnaire data
-    await ctx.db.patch(jobActual._id, {
-      parts_used: args.parts_used,
-      actual_parts_cost: args.actual_parts_cost,
-      difficulty_rating: args.difficulty_rating,
-      technician_notes: args.technician_notes,
-      logged_at_ms: now,
-      completed_at_ms: now,
-      updated_at: now,
-    });
-
-    // Set booking to completed
-    await ctx.db.patch(args.bookingId, { status: "completed", updated_at: now });
-
-    // Award ownership credit (OTOPAIR Rewards)
-    await ctx.scheduler.runAfter(0, internal.rewards.addCreditForCompletedBooking, {
-      bookingId: args.bookingId,
-    });
-
-    // --- Learning aggregation ---
+    const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("Booking not found");
 
-    const sid = primaryServiceId(booking);
-    if (!sid) throw new Error("Booking has no service");
-    const service = await ctx.db.get(sid);
-    if (!service) throw new Error("Service not found");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
 
-    const vehicle = await ctx.db
-      .query("vehicles")
-      .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
-      .unique();
-    if (!vehicle) throw new Error("Vehicle not found");
-
-    const engineId = vehicle.engine_id;
-    const actualLaborHours = jobActual.actual_labor_minutes / 60;
-
-    // Best available labor estimate: labor_times (VDB/empirical) → service_vehicle_specs → service default
-    let estimatedLaborHours = service.default_labor_hours;
-    if (vehicle.vehicle_config_id) {
-      const labor = await ctx.db
-        .query("labor_times")
-        .withIndex("by_vehicle_config", (q) =>
-          q.eq("vehicle_config_id", vehicle.vehicle_config_id!).eq("service_id", sid)
-        )
-        .first();
-      if (labor) {
-        const MIN_SAMPLES = 3;
-        const useEmpirical =
-          labor.empirical_hours != null &&
-          labor.empirical_sample_size >= MIN_SAMPLES;
-        estimatedLaborHours = useEmpirical ? labor.empirical_hours! : labor.book_hours;
-      }
-    }
-    if (estimatedLaborHours === service.default_labor_hours && engineId) {
-      // Try legacy service_vehicle_specs as secondary fallback
-      const svs = await ctx.db.query("service_vehicle_specs").collect();
-      const svsMatch = svs.find((r) => r.service_id === sid && r.engine_id === engineId);
-      if (svsMatch) {
-        estimatedLaborHours = svsMatch.labor_hours;
-      }
-    }
-
-    // Track analytics event for job completion
-    await ctx.db.insert("analytics_events", {
-      user_id: booking.user_id,
-      event_type: "job_completed",
-      event_category: "booking",
-      event_data: {
-        booking_id: args.bookingId,
-        shop_id: booking.shop_id,
-        service_id: sid,
+    const now = Date.now();
+    await saveJobActualDraft(ctx, {
+      booking,
+      actuals: {
+        actual_labor_minutes: args.actual_labor_minutes,
+        actual_parts_cost: args.actual_parts_cost,
+        difficulty_rating: args.difficulty_rating,
+        technician_notes: args.technician_notes,
+        parts_used: args.parts_used,
       },
-      timestamp: Date.now(),
+      now,
+      completedAtMs: booking.status === "completed" ? undefined : now,
+      preferAutoLaborMinutes: true,
     });
 
-    // --- Empirical labor feedback into labor_times ---
-    // Updates running average so getQuotableLaborTime automatically switches
-    // to empirical data once sample_size ≥ 3.
-    if (vehicle.vehicle_config_id) {
-      const laborRecord = await ctx.db
-        .query("labor_times")
-        .withIndex("by_vehicle_config", (q) =>
-          q.eq("vehicle_config_id", vehicle.vehicle_config_id!).eq("service_id", sid)
-        )
-        .first();
-      if (laborRecord) {
-        const oldCount = laborRecord.empirical_sample_size ?? 0;
-        const oldAvg = laborRecord.empirical_hours ?? 0;
-        const newCount = oldCount + 1;
-        const newAvg = oldCount > 0
-          ? (oldAvg * oldCount + actualLaborHours) / newCount
-          : actualLaborHours;
-
-        await ctx.db.patch(laborRecord._id, {
-          empirical_hours: newAvg,
-          empirical_sample_size: newCount,
-        });
-      }
-    }
-
-    // Bump service_vehicle_specs confidence_score
-    const allSVS = await ctx.db.query("service_vehicle_specs").collect();
-    const svs = allSVS.find((r) => r.service_id === sid && r.engine_id === engineId);
-    if (svs) {
-      const newConfidence = Math.min(1.0, svs.confidence_score + 0.02);
-      await ctx.db.patch(svs._id, { confidence_score: newConfidence });
-
-      // Track spec variance if there's a significant difference
-      const predictedLabor = svs.labor_hours;
-      const predictedParts = (svs.parts_cost_low + svs.parts_cost_high) / 2;
-
-      await ctx.scheduler.runAfter(0, internal.spec_variances.flagSpecVariance, {
-        engine_id: engineId,
-        service_id: sid,
-        job_actual_id: jobActual._id,
-        predicted_labor_hours: predictedLabor,
-        actual_labor_hours: actualLaborHours,
-        predicted_parts_cost: predictedParts,
-        actual_parts_cost: args.actual_parts_cost,
+    if (booking.status !== "completed") {
+      await applyBookingStatusTransition(ctx, {
+        booking,
+        newStatus: "completed",
+        changedBy: user._id,
+        reason: "completed_by_shop",
       });
     }
 
-    // Create follow-up reminder for maintenance (7 days later for oil change, 30 days for others)
-    const followUpDays = service.slug === "oil-change" ? 90 : 180; // 3 months or 6 months
-    const scheduledFor = Date.now() + followUpDays * 24 * 60 * 60 * 1000;
+    const completedBooking = await ctx.db.get(args.bookingId);
+    if (!completedBooking) throw new Error("Booking not found");
 
-    await ctx.db.insert("follow_ups", {
-      user_id: booking.user_id,
-      vin: booking.vin,
-      booking_id: args.bookingId,
-      service_id: sid,
-      follow_up_type: "maintenance_due",
-      scheduled_for: scheduledFor,
-      status: "pending",
-      message: `Time to schedule your next ${service.name}`,
-      created_at: Date.now(),
+    return await finalizeJobActuals(ctx, {
+      booking: completedBooking,
+      userId: user._id,
+      actuals: {
+        actual_labor_minutes: args.actual_labor_minutes,
+        actual_parts_cost: args.actual_parts_cost,
+        difficulty_rating: args.difficulty_rating,
+        technician_notes: args.technician_notes,
+        parts_used: args.parts_used,
+      },
+      now,
     });
-
-    return { success: true };
   },
 });

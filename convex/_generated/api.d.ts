@@ -30,6 +30,7 @@ import type * as job_actuals from "../job_actuals.js";
 import type * as lib_checkin_questions from "../lib/checkin_questions.js";
 import type * as lib_classifier from "../lib/classifier.js";
 import type * as lib_intervals from "../lib/intervals.js";
+import type * as lib_job_actuals from "../lib/job_actuals.js";
 import type * as lib_modifiers from "../lib/modifiers.js";
 import type * as lib_schedule_overlap from "../lib/schedule_overlap.js";
 import type * as lib_timeSlotAvailability from "../lib/timeSlotAvailability.js";
@@ -171,6 +172,7 @@ declare const fullApi: ApiFromModules<{
   "lib/checkin_questions": typeof lib_checkin_questions;
   "lib/classifier": typeof lib_classifier;
   "lib/intervals": typeof lib_intervals;
+  "lib/job_actuals": typeof lib_job_actuals;
   "lib/modifiers": typeof lib_modifiers;
   "lib/schedule_overlap": typeof lib_schedule_overlap;
   "lib/timeSlotAvailability": typeof lib_timeSlotAvailability;

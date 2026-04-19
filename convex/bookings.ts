@@ -46,6 +46,13 @@ import {
   syncMechanicDayAvailability,
   syncShopDateAvailability,
 } from "./lib/timeSlotAvailability";
+import {
+  ensureJobActualRecord,
+  finalizeJobActuals,
+  getLatestJobActualForBooking,
+  jobActualInputValidator,
+  saveJobActualDraft,
+} from "./lib/job_actuals";
 
 /** Live Tracker stage slugs stored on bookings when status is in_progress */
 export const LIVE_STAGE_SLUGS = ["booking_confirmed", "service_in_progress", "vehicle_ready"] as const;
@@ -188,10 +195,7 @@ export const getByUserIdWithDetails = query({
         let delayMinutes: number | undefined;
         const liveStage = booking.live_stage;
         if (booking.status === "in_progress") {
-          const jobActual = await ctx.db
-            .query("job_actuals")
-            .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
-            .unique();
+          const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
           const estimatedMinutes = booking.estimated_labor_minutes ?? 60;
           // Use stored live_stage for currentStage when set; else infer from job_actual
           if (liveStage && LIVE_STAGE_TITLES[liveStage]) {
@@ -202,8 +206,8 @@ export const getByUserIdWithDetails = query({
             currentStage = "Car checked in";
           }
           // Progress: from job_actuals elapsed when available, else from live_stage
-          if (jobActual) {
-            const elapsedMs = Date.now() - jobActual.started_at * 1000;
+          if (jobActual?.started_at != null) {
+            const elapsedMs = Date.now() - jobActual.started_at;
             const totalMs = estimatedMinutes * 60 * 1000;
             progressPercent = Math.min(100, Math.round((elapsedMs / totalMs) * 100));
             const scheduledStartMs = new Date(`${booking.scheduled_date}T${booking.scheduled_time}`).getTime();
@@ -1307,7 +1311,7 @@ async function runCompletionSideEffects(ctx: any, booking: any) {
   });
 }
 
-async function applyBookingStatusTransition(
+export async function applyBookingStatusTransition(
   ctx: any,
   {
     booking,
@@ -1824,10 +1828,20 @@ export const getMyOwnerDashboard = query({
       .collect();
 
     const jobActuals = await ctx.db.query("job_actuals").collect();
-    const actualBookingIds = new Set(jobActuals.map((actual: any) => String(actual.booking_id)));
+    const actualsByBookingId = new Map<string, any[]>();
+    for (const actual of jobActuals) {
+      const key = String(actual.booking_id);
+      const existing = actualsByBookingId.get(key) ?? [];
+      existing.push(actual);
+      actualsByBookingId.set(key, existing);
+    }
 
     const actualsNeededBookings = completedBookings
-      .filter((booking: any) => !actualBookingIds.has(String(booking._id)))
+      .filter((booking: any) => {
+        const rows = actualsByBookingId.get(String(booking._id)) ?? [];
+        if (rows.length === 0) return true;
+        return !rows.some((row: any) => row.finalized_at_ms != null);
+      })
       .sort((a: any, b: any) => compareBookingsBySchedule(b, a));
 
     const pendingInvitations = (
@@ -2056,10 +2070,20 @@ export const getMyMechanicDashboard = query({
       .query("job_actuals")
       .withIndex("by_mechanic_id", (q: any) => q.eq("mechanic_id", mechanicId))
       .collect();
-    const actualBookingIds = new Set(actuals.map((actual: any) => String(actual.booking_id)));
+    const actualsByBookingId = new Map<string, any[]>();
+    for (const actual of actuals) {
+      const key = String(actual.booking_id);
+      const existing = actualsByBookingId.get(key) ?? [];
+      existing.push(actual);
+      actualsByBookingId.set(key, existing);
+    }
 
     const needsActuals = myCompletedJobs.filter(
-      (booking: any) => !actualBookingIds.has(String(booking._id))
+      (booking: any) => {
+        const rows = actualsByBookingId.get(String(booking._id)) ?? [];
+        if (rows.length === 0) return true;
+        return !rows.some((row: any) => row.finalized_at_ms != null);
+      }
     );
 
     const weekCompletedCount = myCompletedJobs.filter(
@@ -2111,6 +2135,7 @@ export const getJobDetail = query({
     const mechanic = booking.mechanic_id
       ? await ctx.db.get(booking.mechanic_id)
       : null;
+    const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
 
     const history = await ctx.db
       .query("booking_status_history")
@@ -2148,6 +2173,21 @@ export const getJobDetail = query({
       serviceNames,
       mechanicName: mechanic
         ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
+        : null,
+      jobActuals: jobActual
+        ? {
+            _id: jobActual._id,
+            status: jobActual.finalized_at_ms ? "finalized" : "draft",
+            startedAt: jobActual.started_at ?? null,
+            completedAtMs: jobActual.completed_at_ms ?? null,
+            loggedAtMs: jobActual.logged_at_ms ?? null,
+            finalizedAtMs: jobActual.finalized_at_ms ?? null,
+            actualLaborMinutes: jobActual.actual_labor_minutes ?? null,
+            actualPartsCost: jobActual.actual_parts_cost ?? null,
+            difficultyRating: jobActual.difficulty_rating ?? null,
+            technicianNotes: jobActual.technician_notes ?? "",
+            partsUsed: jobActual.parts_used ?? [],
+          }
         : null,
       history,
       previousScheduledDate: booking.previous_scheduled_date ?? null,
@@ -2430,6 +2470,13 @@ export const start = mutation({
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
+    const now = Date.now();
+    await ensureJobActualRecord(ctx, {
+      booking,
+      now,
+      startedAtMs: now,
+    });
+
     return await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "in_progress",
@@ -2440,7 +2487,11 @@ export const start = mutation({
 });
 
 export const complete = mutation({
-  args: { bookingId: v.id("bookings") },
+  args: {
+    bookingId: v.id("bookings"),
+    finalizeActuals: v.optional(v.boolean()),
+    actuals: v.optional(jobActualInputValidator),
+  },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
@@ -2448,12 +2499,36 @@ export const complete = mutation({
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
-    return await applyBookingStatusTransition(ctx, {
+    const now = Date.now();
+
+    await saveJobActualDraft(ctx, {
+      booking,
+      actuals: args.actuals,
+      now,
+      completedAtMs: now,
+      preferAutoLaborMinutes: true,
+    });
+
+    const result = await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "completed",
       changedBy: user._id,
       reason: "completed_by_shop",
     });
+
+    if (args.finalizeActuals) {
+      const completedBooking = await ctx.db.get(args.bookingId);
+      if (completedBooking) {
+        await finalizeJobActuals(ctx, {
+          booking: completedBooking,
+          userId: user._id,
+          actuals: args.actuals,
+          now,
+        });
+      }
+    }
+
+    return result;
   },
 });
 

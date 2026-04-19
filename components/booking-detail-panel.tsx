@@ -10,11 +10,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Check, Clock, Ellipsis, History, Loader2, RotateCcw, X } from "lucide-react";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
+import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 import {
   getMechanicAssignmentConflict,
   type ScheduleBlockedSlot,
@@ -193,6 +194,23 @@ export interface JobDetailData {
   previousMechanicName?: string | null;
   rescheduleProposedAt?: number | null;
   estimatedLaborMinutes?: number | null;
+  jobActuals?: {
+    _id: Id<"job_actuals">;
+    status: "draft" | "finalized";
+    startedAt?: number | null;
+    completedAtMs?: number | null;
+    loggedAtMs?: number | null;
+    finalizedAtMs?: number | null;
+    actualLaborMinutes?: number | null;
+    actualPartsCost?: number | null;
+    difficultyRating?: number | null;
+    technicianNotes?: string;
+    partsUsed?: Array<{
+      part_name: string;
+      oem_number: string;
+      cost: number;
+    }>;
+  } | null;
 }
 
 export interface JobDetailPanelHandle {
@@ -260,7 +278,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showDeclineModal, setShowDeclineModal] = useState(false);
     const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
     const [declineOtherText, setDeclineOtherText] = useState("");
-    const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
+    const [showActualsDialog, setShowActualsDialog] = useState(false);
+    const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
     const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
     const [cancelOtherText, setCancelOtherText] = useState("");
@@ -277,6 +296,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
+    const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
+    const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
+    const reopenActuals = useMutation(api.job_actuals.reopenByBooking);
+    const actualsPrefill = useQuery(
+      api.job_actuals.getPrefillData,
+      job ? { bookingId: job._id } : "skip"
+    );
 
     const selectedMechanicId = useMemo(
       () =>
@@ -307,6 +333,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       if (!jobId) return;
       setActionError("");
       setAssigningMechanicId(currentMechanicId);
+      setShowActualsDialog(false);
+      setActualsDialogMode("complete");
     }, [jobId, currentMechanicId]);
 
     // Reset decline modal state when it closes
@@ -339,7 +367,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     /* ---- Handlers ---- */
 
-    async function handleStatusAction(action: "accept" | "complete") {
+    async function handleStatusAction(action: "accept") {
       if (!job?._id) return;
       setActionError("");
       setIsActioning(true);
@@ -347,10 +375,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         if (action === "accept") {
           await acceptJob({ bookingId: job._id });
           onSuccess?.("Booking accepted");
-        }
-        if (action === "complete") {
-          await completeJob({ bookingId: job._id });
-          onSuccess?.("Booking completed");
         }
       } catch (err: unknown) {
         setActionError(
@@ -528,6 +552,111 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
     }
 
+    function openActualsDialog(mode: "complete" | "edit") {
+      setActionError("");
+      setActualsDialogMode(mode);
+      setShowActualsDialog(true);
+    }
+
+    async function handleCompleteOnly(payload: JobActualsPayload) {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await completeJob({
+          bookingId: job._id,
+          actuals: payload,
+        });
+        onSuccess?.("Booking completed. Actuals saved as draft.");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not complete booking.",
+        );
+        throw err;
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleCompleteAndFinalize(payload: JobActualsPayload) {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await completeJob({
+          bookingId: job._id,
+          finalizeActuals: true,
+          actuals: payload,
+        });
+        onSuccess?.("Booking completed and actuals finalized");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not finalize booking actuals.",
+        );
+        throw err;
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleSaveActualsDraft(payload: JobActualsPayload) {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await saveActualsDraft({
+          bookingId: job._id,
+          actuals: payload,
+        });
+        onSuccess?.("Actuals draft saved");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not save actuals draft.",
+        );
+        throw err;
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleFinalizeActuals(payload: JobActualsPayload) {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await finalizeActuals({
+          bookingId: job._id,
+          actuals: payload,
+        });
+        onSuccess?.("Actuals finalized");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not finalize actuals.",
+        );
+        throw err;
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleReopenActuals() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await reopenActuals({ bookingId: job._id });
+        setActualsDialogMode("edit");
+        setShowActualsDialog(true);
+        onSuccess?.("Actuals reopened for editing");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not reopen actuals.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
     function handleResetMechanicSelection() {
       setActionError("");
       setAssigningMechanicId(currentMechanicId);
@@ -546,7 +675,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       startJob: () => {
         handleStartJob();
       },
-      showMarkCompleted: () => setShowCompleteConfirm(true),
+      showMarkCompleted: () => openActualsDialog("complete"),
       showCancelJob: () => setShowCancelConfirm(true),
       showCancelReschedule: () => setShowCancelRescheduleConfirm(true),
       openAssignDropdown: () => {
@@ -560,14 +689,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         handleAssignMechanic();
       },
       hasOpenModal: () =>
-        showDeclineModal || showCompleteConfirm || showCancelConfirm || showCancelRescheduleConfirm,
+        showDeclineModal || showActualsDialog || showCancelConfirm || showCancelRescheduleConfirm,
       handleEscape: (): boolean => {
         if (showDeclineModal) {
           setShowDeclineModal(false);
           return true;
         }
-        if (showCompleteConfirm) {
-          setShowCompleteConfirm(false);
+        if (showActualsDialog) {
+          setShowActualsDialog(false);
           return true;
         }
         if (showCancelConfirm) {
@@ -608,17 +737,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           }
           return true;
         }
-        if (showCompleteConfirm) {
-          if (e.key === "r") {
-            handleStatusAction("complete").then(() =>
-              setShowCompleteConfirm(false),
-            );
-            return true;
-          }
-          if (e.key === "c") {
-            setShowCompleteConfirm(false);
-            return true;
-          }
+        if (showActualsDialog) {
           return true;
         }
         if (showCancelConfirm) {
@@ -977,9 +1096,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem
-                                onSelect={() =>
-                                  setShowCompleteConfirm(true)
-                                }
+                                onSelect={() => openActualsDialog("complete")}
                               >
                                 Mark completed
                               </DropdownMenuItem>
@@ -1044,9 +1161,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         {canComplete && job.status === "in_progress" && (
                           // TODO: Fix --success usage
                           <button
-                            onClick={() =>
-                              setShowCompleteConfirm(true)
-                            }
+                            onClick={() => openActualsDialog("complete")}
                             disabled={isActioning}
                             className={`px-3 py-2 text-sm rounded-lg transition-opacity disabled:opacity-50 ${job.status === "in_progress" ? "bg-primary text-primary-foreground hover:opacity-90" : "border hover:opacity-90"}`}
                             style={
@@ -1116,6 +1231,57 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     </div>
                   );
                 })()}
+
+                {(job.status === "completed" || job.jobActuals) && (
+                  <div className="border-t border-border pt-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-medium text-foreground">Booking actuals</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {job.jobActuals?.status === "finalized"
+                            ? "Finalized actuals saved for this booking."
+                            : job.status === "completed"
+                              ? "This booking can still be finalized with actual outcome data."
+                              : job.jobActuals
+                                ? "Draft actuals are tracking this booking and can be finalized after completion."
+                                : "Draft actuals will be created automatically when the booking starts."}
+                        </p>
+                        {job.jobActuals ? (
+                          <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                            <p>
+                              Labor: {job.jobActuals.actualLaborMinutes ?? "TBD"} min
+                            </p>
+                            <p>
+                              Parts cost: {job.jobActuals.actualPartsCost ?? "TBD"}
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {job.status === "completed" ? (
+                        job.jobActuals?.status === "finalized" ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleReopenActuals()}
+                            disabled={isActioning}
+                            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                          >
+                            Reopen actuals
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openActualsDialog("edit")}
+                            disabled={isActioning}
+                            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                          >
+                            {job.jobActuals ? "Edit draft actuals" : "Finalize actuals"}
+                          </button>
+                        )
+                      ) : null}
+                    </div>
+                  </div>
+                )}
 
                 {/* Status history */}
                 <div className="border-t border-border pt-4">
@@ -1241,6 +1407,22 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           </div>
         </div>
 
+        <JobActualsDialog
+          open={showActualsDialog}
+          mode={actualsDialogMode}
+          estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          jobActuals={job?.jobActuals ?? null}
+          prefillData={actualsPrefill ?? null}
+          onClose={() => setShowActualsDialog(false)}
+          onCompleteOnly={actualsDialogMode === "complete" ? handleCompleteOnly : undefined}
+          onSaveDraft={actualsDialogMode === "edit" ? handleSaveActualsDraft : undefined}
+          onFinalize={
+            actualsDialogMode === "complete"
+              ? handleCompleteAndFinalize
+              : handleFinalizeActuals
+          }
+        />
+
         <ConfirmationDialog
           open={showDeclineModal}
           title="Decline this booking?"
@@ -1296,28 +1478,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             />
           )}
         </ConfirmationDialog>
-
-        <ConfirmationDialog
-          open={showCompleteConfirm}
-          title="Mark as completed?"
-          description="Mark this booking as completed? The customer will be notified."
-          onClose={() => setShowCompleteConfirm(false)}
-          enableShortcuts={false}
-          secondaryAction={{
-            label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
-            onAction: () => setShowCompleteConfirm(false),
-            disabled: isActioning,
-          }}
-          primaryAction={{
-            label: isActioning ? "Completing..." : <ShortcutLabel text="Mark completed" shortcutKey="r" />,
-            onAction: () => {
-              void handleStatusAction("complete").then(() => setShowCompleteConfirm(false));
-            },
-            disabled: isActioning,
-            variant: "primary",
-            leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
-          }}
-        />
 
         <ConfirmationDialog
           open={showCancelConfirm}

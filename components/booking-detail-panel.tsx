@@ -1232,7 +1232,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   );
                 })()}
 
-                {(job.status === "completed" || job.jobActuals) && (
+                {job.status === "completed" && (
                   <div className="border-t border-border pt-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>

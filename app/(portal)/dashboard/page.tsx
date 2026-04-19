@@ -10,6 +10,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "@/lib/booking-status";
 import { usePortalSidebar } from "../portal-context";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
+import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
 } from "@/components/reschedule-confirmation-dialog";
@@ -218,6 +219,7 @@ function OwnerDashboardPage({
   const { user } = useUser();
   const dashboard = useQuery(api.bookings.getMyOwnerDashboard);
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
+  const [actualsBookingId, setActualsBookingId] = useState<Id<"bookings"> | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
   const [rescheduleProposal, setRescheduleProposal] =
     useState<RescheduleConfirmationProposal | null>(null);
@@ -237,6 +239,16 @@ function OwnerDashboardPage({
     selectedJob ? { dateFrom: selectedJob.scheduledDate, dateTo: selectedJob.scheduledDate } : "skip",
   );
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
+  const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
+  const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
+  const actualsJob = useQuery(
+    api.bookings.getJobDetail,
+    actualsBookingId ? { bookingId: actualsBookingId } : "skip",
+  );
+  const actualsPrefill = useQuery(
+    api.job_actuals.getPrefillData,
+    actualsBookingId ? { bookingId: actualsBookingId } : "skip",
+  );
   const mechanics = useMemo(() => context?.mechanics ?? [], [context?.mechanics]);
   const drawerOpen = !!selectedJobId;
   const { setSidebarCompact } = usePortalSidebar();
@@ -319,6 +331,46 @@ function OwnerDashboardPage({
       );
     } finally {
       setIsRescheduling(false);
+    }
+  }
+
+  function handleOpenActualsDetails(bookingId: Id<"bookings">) {
+    setActualsBookingId(bookingId);
+  }
+
+  function handleCloseActualsDialog() {
+    setActualsBookingId(null);
+  }
+
+  async function handleSaveActualsDraft(payload: JobActualsPayload) {
+    if (!actualsBookingId) return;
+
+    try {
+      await saveActualsDraft({
+        bookingId: actualsBookingId,
+        actuals: payload,
+      });
+      setSuccessMessage("Details draft saved");
+      handleCloseActualsDialog();
+    } catch (error: unknown) {
+      setSuccessMessage(error instanceof Error ? error.message : "Could not save details.");
+      throw error;
+    }
+  }
+
+  async function handleFinalizeActuals(payload: JobActualsPayload) {
+    if (!actualsBookingId) return;
+
+    try {
+      await finalizeActuals({
+        bookingId: actualsBookingId,
+        actuals: payload,
+      });
+      setSuccessMessage("Details finalized");
+      handleCloseActualsDialog();
+    } catch (error: unknown) {
+      setSuccessMessage(error instanceof Error ? error.message : "Could not finalize details.");
+      throw error;
     }
   }
 
@@ -566,10 +618,11 @@ function OwnerDashboardPage({
                   />
                 ) : (
                   dashboard.pendingActions.actualsNeeded.map((job) => (
-                    <Link
+                    <button
                       key={String(job._id)}
-                      href={`/bookings?highlight=${String(job._id)}`}
-                      className="block cursor-pointer rounded-2xl border border-border bg-card p-4 transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
+                      type="button"
+                      onClick={() => handleOpenActualsDetails(job._id)}
+                      className="block w-full cursor-pointer rounded-2xl border border-border bg-card p-4 text-left transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
                     >
                       <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
                       <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
@@ -577,7 +630,7 @@ function OwnerDashboardPage({
                       <p className="mt-3 text-xs font-semibold text-primary">
                         Completed booking from {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
                       </p>
-                    </Link>
+                    </button>
                   ))
                 )}
               </div>
@@ -737,6 +790,17 @@ function OwnerDashboardPage({
         )}
       </section>
         </div>
+
+        <JobActualsDialog
+          open={actualsBookingId !== null}
+          mode="edit"
+          estimatedLaborMinutes={actualsJob?.estimatedLaborMinutes ?? null}
+          jobActuals={actualsJob?.jobActuals ?? null}
+          prefillData={actualsPrefill ?? null}
+          onClose={handleCloseActualsDialog}
+          onSaveDraft={handleSaveActualsDraft}
+          onFinalize={handleFinalizeActuals}
+        />
 
         <div
           className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${

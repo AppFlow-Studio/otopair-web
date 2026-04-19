@@ -153,11 +153,11 @@ export default function JobActualsDialog({
 
   const suggestedParts = prefillData?.suggestedParts ?? [];
   const title =
-    mode === "complete" ? "Complete booking and capture actuals" : "Finalize booking actuals";
+    mode === "complete" ? "Complete booking and capture details" : "Finalize booking details";
   const description =
     mode === "complete"
-      ? "You can complete now and keep actuals as a draft, or finalize them immediately."
-      : "Update or finalize the actual outcome recorded for this booking.";
+      ? "You can complete now and keep details as a draft, or finalize them immediately."
+      : "Update or finalize the booking details recorded for this booking.";
 
   const actionDisabled = activeAction !== null;
 
@@ -228,7 +228,7 @@ export default function JobActualsDialog({
 
         <div className="mt-5 grid gap-4 md:grid-cols-2">
           <label className="space-y-1.5">
-            <span className="text-sm font-medium text-foreground">Actual labor minutes</span>
+            <span className="text-sm font-medium text-foreground">Labor minutes</span>
             <input
               type="number"
               min="0"
@@ -241,7 +241,7 @@ export default function JobActualsDialog({
           </label>
 
           <label className="space-y-1.5">
-            <span className="text-sm font-medium text-foreground">Actual parts cost</span>
+            <span className="text-sm font-medium text-foreground">Parts cost</span>
             <input
               type="number"
               min="0"
@@ -400,7 +400,7 @@ export default function JobActualsDialog({
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {activeAction === "finalize" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {mode === "complete" ? "Complete & save actuals" : "Finalize actuals"}
+            {mode === "complete" ? "Complete & save details" : "Finalize details"}
           </button>
         </div>
       </div>

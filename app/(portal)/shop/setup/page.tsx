@@ -3,7 +3,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -70,7 +70,7 @@ const STEP_META = [
   },
   {
     title: "Payments",
-    description: "Stripe Connect belongs here once the payment onboarding is wired.",
+    description: "Connect the bank account where Otopair will send shop payouts.",
     icon: CreditCard,
   },
 ] as const;
@@ -344,6 +344,7 @@ function getFirstIncompleteSavedStep(params: {
 
 export default function ShopSetupPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, isLoaded: isUserLoaded } = useUser();
   const portalAccess = useQuery(api.shops.getMyPortalAccess);
   const onboardingData = useQuery(api.shops.getMyOnboardingData);
@@ -356,7 +357,6 @@ export default function ShopSetupPage() {
   const saveHours = useMutation(api.shops.saveOnboardingHours);
   const saveLaborAndServices = useMutation(api.shops.saveOnboardingLaborAndServices);
   const removeMechanic = useMutation(api.shops.removeOnboardingMechanic);
-  const completeOnboarding = useMutation(api.shops.completeOnboarding);
 
   const [details, setDetails] = useState<ShopDetailsForm>({
     name: "",
@@ -376,6 +376,7 @@ export default function ShopSetupPage() {
   const [stepSuccess, setStepSuccess] = useState<string | null>(null);
   const [savingStep, setSavingStep] = useState<number | null>(null);
   const [finishing, setFinishing] = useState(false);
+  const [launchingStripe, setLaunchingStripe] = useState(false);
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
   const [addressLookupLoading, setAddressLookupLoading] = useState(false);
   const [addressSelectedFromAutocomplete, setAddressSelectedFromAutocomplete] = useState(false);
@@ -499,6 +500,36 @@ export default function ShopSetupPage() {
     setCurrentStep(firstIncompleteSavedStep);
     setHydratedShopId(shopId);
   }, [firstIncompleteSavedStep, hydratedShopId, onboardingData, router]);
+
+  useEffect(() => {
+    const stripeStatus = searchParams.get("stripe");
+    if (!stripeStatus) return;
+
+    if (stripeStatus === "connected") {
+      setStepSuccess("Stripe Connect onboarding is complete. You can finish setup now.");
+    } else if (stripeStatus === "pending") {
+      setStepSuccess(
+        "Stripe account linked. Stripe is still finalizing the account before payouts are fully enabled."
+      );
+    } else if (stripeStatus === "action_needed") {
+      setStepError(
+        "Stripe still needs more information before payouts can be enabled. Reopen onboarding to continue."
+      );
+    } else if (stripeStatus === "missing") {
+      setStepError("Start Stripe onboarding before finishing setup.");
+    } else if (stripeStatus === "refresh_error") {
+      setStepError("Stripe could not reopen onboarding. Try again.");
+    } else if (stripeStatus === "return_error") {
+      setStepError("Stripe returned an unexpected result. Try reopening onboarding.");
+    }
+
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete("stripe");
+    const nextUrl = nextParams.toString()
+      ? `/shop/setup?${nextParams.toString()}`
+      : "/shop/setup";
+    router.replace(nextUrl, { scroll: false });
+  }, [router, searchParams]);
 
   useEffect(() => {
     if (portalAccess === undefined) return;
@@ -958,12 +989,48 @@ export default function ShopSetupPage() {
     }
   }
 
+  async function handleLaunchStripeOnboarding() {
+    clearBanners();
+    setLaunchingStripe(true);
+    try {
+      const response = await fetch("/api/stripe/connect/start", {
+        method: "POST",
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        url?: string;
+      };
+
+      if (!response.ok || !data.url) {
+        throw new Error(data.error ?? "Failed to launch Stripe onboarding.");
+      }
+
+      window.location.assign(data.url);
+    } catch (error) {
+      setStepError(
+        error instanceof Error ? error.message : "Failed to launch Stripe onboarding."
+      );
+      setLaunchingStripe(false);
+    }
+  }
+
   async function handleFinish() {
     clearBanners();
     setFinishing(true);
     try {
-      await completeOnboarding();
-      router.replace("/dashboard");
+      const response = await fetch("/api/shop/onboarding/complete", {
+        method: "POST",
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        redirectTo?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to complete onboarding.");
+      }
+
+      router.replace(data.redirectTo ?? "/dashboard");
     } catch (error) {
       setStepError(
         error instanceof Error ? error.message : "Failed to complete onboarding."
@@ -1803,26 +1870,48 @@ export default function ShopSetupPage() {
                         Stripe Connect onboarding
                       </h3>
                       <p className="mt-1 text-sm text-gray-500">
-                        The screen is in place, but the actual Stripe redirect flow is
-                        not implemented in this repo yet.
+                        Connect the payout account for this shop through Stripe Express.
                       </p>
                     </div>
                   </div>
                   <div className="mt-5 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-sm leading-6 text-gray-600">
                     {onboardingData.shop?.stripeConnectAccountId ? (
                       <>
-                        Stripe account connected:
+                        Stripe has created a connected account for this shop. If Stripe
+                        still needs more information, reopen onboarding below and finish
+                        the hosted steps.
                         <div className="mt-2 font-mono text-xs text-gray-900">
                           {onboardingData.shop.stripeConnectAccountId}
                         </div>
                       </>
                     ) : (
                       <>
-                        When you wire Stripe Connect later, this step should launch the
-                        Express onboarding flow and return the user here with a connected
-                        account ID.
+                        Launch Stripe Express onboarding to connect the bank account where
+                        Otopair should send payouts for this shop.
                       </>
                     )}
+                  </div>
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={handleLaunchStripeOnboarding}
+                      disabled={launchingStripe}
+                      className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {launchingStripe ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <CreditCard className="h-4 w-4" />
+                      )}
+                      {onboardingData.shop?.stripeConnectAccountId
+                        ? "Open Stripe onboarding"
+                        : "Connect your bank account"}
+                    </button>
+                    {onboardingData.shop?.stripeConnectAccountId ? (
+                      <p className="max-w-sm text-sm text-gray-500">
+                        Use this again any time Stripe asks for more information.
+                      </p>
+                    ) : null}
                   </div>
                 </div>
 
@@ -1858,8 +1947,8 @@ export default function ShopSetupPage() {
               </div>
 
               <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm leading-6 text-amber-900">
-                You can finish onboarding now and add the real Stripe Connect handoff
-                later. Nothing here fakes a payment connection.
+                Finish setup stays locked behind Stripe Connect. Complete the hosted
+                onboarding flow so payouts can be enabled for this shop.
               </div>
 
               <div className="flex justify-between pt-2">
@@ -1873,7 +1962,7 @@ export default function ShopSetupPage() {
                 <button
                   type="button"
                   onClick={handleFinish}
-                  disabled={finishing}
+                  disabled={finishing || !onboardingData.shop?.stripeConnectAccountId}
                   className={`${stepButtonClass} border-blue-600 bg-blue-600 text-white hover:bg-blue-700`}
                 >
                   {finishing ? (

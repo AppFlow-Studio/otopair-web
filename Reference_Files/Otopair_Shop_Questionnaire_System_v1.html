@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Otopair — Shop Questionnaire System v1</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #FAFAFA; color: #1A1A1A; line-height: 1.6;
+    padding: 40px 20px; max-width: 1100px; margin: 0 auto;
+  }
+
+  .doc-header { margin-bottom: 48px; }
+  .doc-header .brand { font-size: 11px; font-weight: 600; letter-spacing: 3px; color: #C8972E; margin-bottom: 4px; text-transform: uppercase; }
+  .doc-header h1 { font-size: 22px; font-weight: 700; color: #1A1A1A; margin-bottom: 6px; }
+  .doc-header .subtitle { font-size: 13px; color: #888; margin-bottom: 16px; max-width: 720px; }
+  .doc-header .meta { font-size: 11px; color: #AAA; letter-spacing: 0.5px; }
+  .doc-header .meta strong { color: #C8972E; }
+
+  .section-label { font-size: 10px; font-weight: 600; letter-spacing: 2.5px; text-transform: uppercase; color: #C8972E; margin-bottom: 6px; }
+  .section-title { font-size: 18px; font-weight: 700; color: #1A1A1A; margin-bottom: 8px; }
+  .section-desc { font-size: 13px; color: #666; margin-bottom: 24px; max-width: 720px; }
+  .divider { border: none; border-top: 1px solid #E8E8E8; margin: 40px 0; }
+
+  .card { background: #FFF; border: 1px solid #E8E8E8; border-radius: 12px; padding: 28px; margin-bottom: 16px; }
+  .card.dark { background: #1A1A1A; border-color: #333; color: #E0E0E0; }
+  .card.dark .card-label { color: #C8972E; }
+  .card.dark .card-title { color: #FFF; }
+  .card.dark p { color: #BBB; }
+  .card.gold { background: #FFF8ED; border-color: #E8D5A8; }
+  .card.red { background: #FFF5F5; border: 1px solid #FFD5D5; }
+  .card-label { font-size: 10px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: #C8972E; margin-bottom: 6px; }
+  .card-title { font-size: 15px; font-weight: 700; color: #1A1A1A; margin-bottom: 10px; }
+  .card p { font-size: 13px; color: #666; margin-bottom: 8px; }
+  .card p:last-child { margin-bottom: 0; }
+
+  .note {
+    background: #FFF8ED; border-left: 3px solid #C8972E; padding: 14px 20px;
+    margin: 16px 0; font-size: 12px; color: #8B6914; font-style: italic; border-radius: 0 8px 8px 0;
+  }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* Question cards */
+  .q-card {
+    background: #FFF; border: 1px solid #E8E8E8; border-radius: 12px;
+    margin-bottom: 12px; overflow: hidden;
+  }
+  .q-header {
+    padding: 14px 20px; display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid #F0F0F0;
+  }
+  .q-number {
+    width: 28px; height: 28px; border-radius: 50%; background: #1A1A1A; color: #FFF;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; flex-shrink: 0;
+  }
+  .q-number.gold { background: #C8972E; }
+  .q-number.outline { background: transparent; border: 2px solid #C8972E; color: #C8972E; }
+  .q-number.gray { background: #999; }
+  .q-title { flex: 1; margin-left: 12px; font-size: 14px; font-weight: 700; color: #1A1A1A; }
+  .q-tags { display: flex; gap: 6px; }
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.3px;
+  }
+  .tag.required { background: #FFEBEE; color: #C62828; }
+  .tag.optional { background: #F0F0F0; color: #888; }
+  .tag.conditional { background: #E6F1FB; color: #185FA5; }
+  .tag.every-visit { background: #E8F5E9; color: #2E7D32; }
+  .tag.first-only { background: #FFF8ED; color: #C8972E; }
+  .q-body { padding: 14px 20px; }
+  .q-body p { font-size: 12.5px; color: #666; margin-bottom: 6px; }
+  .q-body p:last-child { margin-bottom: 0; }
+  .q-label { font-size: 11px; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; margin-top: 10px; }
+  .q-options {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;
+  }
+  .q-option {
+    padding: 4px 12px; border-radius: 6px; font-size: 11px;
+    background: #F5F5F5; color: #444; border: 1px solid #E8E8E8;
+  }
+  .q-option.selected { background: #1A1A1A; color: #FFF; border-color: #1A1A1A; }
+  .q-input-example {
+    margin-top: 6px; padding: 8px 12px; background: #F8F8F8; border-radius: 6px;
+    font-size: 12px; color: #888; border: 1px dashed #DDD;
+  }
+  .q-feeds {
+    margin-top: 10px; padding: 8px 12px; background: #F0F4FF; border-radius: 6px;
+    font-size: 11px; color: #185FA5;
+  }
+
+  /* Service context tags */
+  .service-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .service-tag {
+    padding: 2px 8px; border-radius: 4px; font-size: 10px;
+    background: #FFF8ED; color: #C8972E; border: 1px solid #E8D5A8;
+  }
+
+  /* Flow diagram */
+  .flow-strip {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 16px; background: #FFF; border: 1px solid #E8E8E8; border-radius: 12px;
+    margin-bottom: 24px;
+  }
+  .flow-box {
+    padding: 8px 14px; border-radius: 8px; font-size: 11px; font-weight: 500;
+    background: #F5F5F5; color: #444; border: 1px solid #E8E8E8;
+  }
+  .flow-box.active { background: #1A1A1A; color: #FFF; border-color: #1A1A1A; }
+  .flow-box.gold { background: #FFF8ED; color: #C8972E; border-color: #E8D5A8; font-weight: 600; }
+  .flow-arrow { color: #CCC; font-size: 14px; flex-shrink: 0; }
+
+  .doc-footer { margin-top: 48px; font-size: 11px; color: #BBB; }
+</style>
+</head>
+<body>
+
+<!-- ==================== HEADER ==================== -->
+<div class="doc-header">
+  <div class="brand">Otopair</div>
+  <h1>Shop Questionnaire System — v1</h1>
+  <div class="subtitle">The concrete question lists for pre-job vehicle confirmation and post-job data collection. Every question, its input type, when it appears, whether it's required, and what system it feeds. Ready for Daniel and Ahmed to build.</div>
+  <div class="meta"><strong>Status:</strong> Spec draft &nbsp;·&nbsp; <strong>Version:</strong> 1.0 &nbsp;·&nbsp; <strong>Date:</strong> April 2026 &nbsp;·&nbsp; <strong>Related:</strong> Vehicle ID & Shop Data System v1</div>
+</div>
+
+<!-- ==================== SECTION 1: OVERVIEW ==================== -->
+<div class="section-label">Section 1</div>
+<div class="section-title">System Overview</div>
+<div class="section-desc">Two forms, two triggers, two purposes. Both feed the Vehicle ID. One happens before the work, one after.</div>
+
+<div class="two-col">
+  <div class="card dark">
+    <div class="card-label">Pre-Job Form</div>
+    <div class="card-title">What's on the car right now?</div>
+    <p><strong>Trigger:</strong> Shop taps "Accept" or "Start Job"</p>
+    <p><strong>Purpose:</strong> Confirm or update the vehicle's current specs before work begins</p>
+    <p><strong>Time target:</strong> Under 60 seconds (returning vehicle) · Under 2 minutes (first-time vehicle)</p>
+    <p><strong>Required:</strong> Yes — cannot start job without completing</p>
+  </div>
+  <div class="card dark">
+    <div class="card-label">Post-Job Form</div>
+    <div class="card-title">What changed on the car?</div>
+    <p><strong>Trigger:</strong> Shop taps "Complete Job"</p>
+    <p><strong>Purpose:</strong> Report what was done, what parts were used, update the Vehicle ID with any changes</p>
+    <p><strong>Time target:</strong> Under 2 minutes for Part A (mandatory) · Under 1 minute for Part B (optional)</p>
+    <p><strong>Required:</strong> Part A mandatory · Part B optional</p>
+  </div>
+</div>
+
+<div class="flow-strip">
+  <div class="flow-box">Booking accepted</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-box gold">Pre-job form</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-box active">Work begins</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-box active">Work completed</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-box gold">Post-job form (Part A)</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-box">Post-job form (Part B)</div>
+  <span class="flow-arrow">→</span>
+  <div class="flow-box">Job closed</div>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 2: PRE-JOB QUESTIONS ==================== -->
+<div class="section-label">Section 2</div>
+<div class="section-title">Pre-Job Form — Complete Question List</div>
+<div class="section-desc">These questions appear when the shop accepts a job or taps "Start Job." Designed to be a confirmation screen, not a data entry form. Return vehicles should be one tap. First-time vehicles should take under 90 seconds.</div>
+
+<div class="note">Core principle: The pre-job form collects CONDITION assessments, not specifications. Brand names, part numbers, and detailed specs are collected in the POST-job form when parts are actually being installed. The pre-job just needs to know: what's the mileage, and what condition are the key components in? The system infers the rest.</div>
+
+<!-- Q1 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number">1</div>
+      <div class="q-title">Current mileage</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag required">Required</span>
+      <span class="tag every-visit">Every visit</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Current odometer reading"</p>
+    <div class="q-label">Input type</div>
+    <div class="q-input-example">Numeric input — e.g. "47,230" · Pre-filled with last reported mileage if available</div>
+    <div class="q-label">Validation</div>
+    <p>Must be higher than last reported mileage (flag if lower — possible error). Cannot be empty.</p>
+    <div class="q-feeds">Feeds → Vehicle ID (mileage) · Mileage velocity calculation · Service interval timing · Vehicle Health score</div>
+  </div>
+</div>
+
+<!-- Q2 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number">2</div>
+      <div class="q-title">Tire condition</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag required">Required</span>
+      <span class="tag every-visit">Every visit</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Tire condition"</p>
+    <div class="q-label">Sub-fields</div>
+    <div class="q-input-example">
+      Front tires — tap selector: Good / Fair / Replace soon<br>
+      Rear tires — tap selector: Good / Fair / Replace soon
+    </div>
+    <div class="q-label">First visit only — additional fields appear</div>
+    <div class="q-input-example">
+      Tire brand — text input (e.g. "Goodyear")<br>
+      Tire model — text input (e.g. "Wrangler AT")<br>
+      These only appear if the Vehicle ID has no tire brand data. Once reported, they auto-verify and disappear from future pre-job forms.
+    </div>
+    <div class="q-label">Behavior</div>
+    <p>Tire size is pre-filled from OEM data and shown as read-only context (not an editable field). Run-flat status is a one-time flag from the vehicle data table. The mechanic's job here is a quick visual assessment — two taps — not a spec sheet. Brand/model are collected once and then locked.</p>
+    <div class="q-feeds">Feeds → Vehicle ID (tire condition) · Vehicle Health (tire component) · Tire replacement recommendations</div>
+  </div>
+</div>
+
+<!-- Q3 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number">3</div>
+      <div class="q-title">Brake condition</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag optional">Optional</span>
+      <span class="tag every-visit">Every visit (if on lift)</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Brake condition (if visible)"</p>
+    <div class="q-label">Sub-fields</div>
+    <div class="q-input-example">
+      Front pad thickness — numeric input in mm (e.g. "7") · System auto-classifies: 7+ mm = Good, 4-6 mm = Fair, 3 mm or below = Replace soon<br>
+      Rear pad thickness — numeric input in mm (e.g. "5") · Same auto-classification<br>
+      Rotor condition — single dropdown for overall: Good / Scored / Needs attention
+    </div>
+    <div class="q-label">Why thickness instead of condition dropdown</div>
+    <p>A mechanic who can see the brakes can estimate thickness in one glance. The system does the interpretation — the mechanic doesn't need to decide what "Fair" means. This is faster AND more accurate. If they can't see the brakes (car not on lift), they skip this entire section.</p>
+    <div class="q-label">First visit only — additional field</div>
+    <div class="q-input-example">
+      Brake pad brand — text input (e.g. "Akebono") · Only appears on first visit if no brake data exists. Collected once, then locked.
+    </div>
+    <div class="q-feeds">Feeds → Vehicle ID (brakes) · Vehicle Health (brake component) · Brake service recommendations · Proactive safety alerts</div>
+  </div>
+</div>
+
+<!-- Q4 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number">4</div>
+      <div class="q-title">Fluids confirmation</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag required">Required</span>
+      <span class="tag first-only">First visit — then confirm only</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Confirm vehicle fluid specs"</p>
+    <div class="q-label">First visit</div>
+    <div class="q-input-example">
+      Oil viscosity — shown pre-filled from OEM (e.g. "0W-20") · Shop confirms or edits<br>
+      Oil type — shown pre-filled from OEM (e.g. "Full Synthetic") · Shop confirms or edits<br>
+      Coolant type — shown pre-filled from OEM (e.g. "Toyota SLLC") · Shop confirms or edits<br>
+      Brake fluid — shown pre-filled from OEM (e.g. "DOT 3") · Shop confirms or edits
+    </div>
+    <div class="q-label">Return visits (verified data)</div>
+    <div class="q-input-example">
+      Single toggle: "Fluid specs unchanged" — one tap confirms all. Expands to individual fields only if the shop taps "Something changed."
+    </div>
+    <div class="q-label">Why this works</div>
+    <p>Fluid specs rarely change between visits unless a service was performed. For 90% of return visits, this is a one-tap confirmation. The detailed spec editing only surfaces when something is new or different.</p>
+    <div class="q-feeds">Feeds → Vehicle ID (fluids) · Oil change recommendations · Parts pre-population for future jobs</div>
+  </div>
+</div>
+
+<!-- Q5 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number">5</div>
+      <div class="q-title">State inspection</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag optional">Optional</span>
+      <span class="tag first-only">First visit + when due</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Inspection sticker"</p>
+    <div class="q-label">Sub-fields</div>
+    <div class="q-input-example">
+      Sticker looks current — Yes / No toggle (mechanic can see the sticker on the windshield in seconds)<br>
+      If Yes: approximate expiry month — month/year picker (e.g. "Sep 2026") · The mechanic reads it off the sticker<br>
+      If No or expired: "Inspection may be due" flag auto-sets on the Vehicle ID
+    </div>
+    <div class="q-label">Behavior</div>
+    <p>This is NOT asking the mechanic to do a formal check. It's a 5-second glance at the windshield. Once the expiry date is captured, the system handles the reminder cadence (60/30/7 days). On return visits, if the date is already stored and not expiring, this question doesn't appear at all.</p>
+    <div class="q-feeds">Feeds → Vehicle ID (inspection) · Vehicle Health (compliance) · Proactive reminder engine</div>
+  </div>
+</div>
+
+<!-- Q6 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number">6</div>
+      <div class="q-title">Modifications observed</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag optional">Optional</span>
+      <span class="tag first-only">First visit only</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Any aftermarket modifications?"</p>
+    <div class="q-label">Input type</div>
+    <div class="q-input-example">
+      Single dropdown: None observed / Yes<br>
+      If Yes → expandable tag selector: Aftermarket exhaust / Lowering springs / Cold air intake / Aftermarket wheels / Tint / Other (free text)
+    </div>
+    <div class="q-label">Behavior</div>
+    <p>Only appears on first visit. If "None observed" is selected, this question never appears again unless a future mechanic flags a modification in their post-job notes. Keeps the form lean for return visits.</p>
+    <div class="q-feeds">Feeds → Vehicle ID (modifications) · Mechanic notes · Future service recommendations</div>
+  </div>
+</div>
+
+<!-- Q7 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number">7</div>
+      <div class="q-title">Confirm and start</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag required">Required</span>
+      <span class="tag every-visit">Every visit</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Vehicle specs confirmed" — single button to finalize</p>
+    <div class="q-label">Behavior</div>
+    <p>Logs confirmation timestamp. Marks all confirmed fields as shop-verified. Transitions booking to "In Progress." On return visits where all fields are verified, the entire pre-job form collapses to: mileage input + tire condition taps + this confirm button. Three interactions total.</p>
+    <div class="q-feeds">Feeds → Vehicle ID (verification timestamps) · Booking status → "In Progress"</div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 3: POST-JOB PART A ==================== -->
+<div class="section-label">Section 3</div>
+<div class="section-title">Post-Job Form — Part A (Mandatory)</div>
+<div class="section-desc">These questions appear when the shop taps "Complete Job." They MUST be answered before the job can be closed. This is what updates the Vehicle ID with changes made during the service.</div>
+
+<div class="note">Design rule: Part A is context-aware. It only shows questions relevant to the service that was just performed. An oil change job won't ask about brake pads. A tire replacement won't ask about coolant. The system knows what service was booked and tailors the form accordingly.</div>
+
+<!-- PJ1 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number gold">1</div>
+      <div class="q-title">Updated mileage</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag required">Required</span>
+      <span class="tag every-visit">Every job</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Mileage at job completion"</p>
+    <div class="q-input-example">Numeric input · Pre-filled with pre-job mileage · Shop confirms or updates if car was moved</div>
+    <div class="q-feeds">Feeds → Vehicle ID (mileage) · Service history (mileage at service)</div>
+  </div>
+</div>
+
+<!-- PJ2 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number gold">2</div>
+      <div class="q-title">Parts installed</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag required">Required</span>
+      <span class="tag every-visit">Every job</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "What parts were used?"</p>
+    <div class="q-label">Repeatable section — add as many parts as needed</div>
+    <div class="q-input-example">
+      Part name — text input (e.g. "Oil filter") · Pre-filled from vehicle specs if available<br>
+      Brand — text input (e.g. "Bosch")<br>
+      Part number — text input (optional, e.g. "3323")<br>
+      Cost — currency input (e.g. "$12.50")<br>
+      [+ Add another part]
+    </div>
+    <div class="q-label">Validation</div>
+    <p>At least one part entry required for services that involve parts. Labor-only services (e.g. diagnostic scan) can skip this.</p>
+    <div class="q-feeds">Feeds → Vehicle ID (current parts on car) · Job actuals (parts cost) · Parts accuracy tracking</div>
+  </div>
+</div>
+
+<!-- PJ3 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number gold">3</div>
+      <div class="q-title">Vehicle ID updates — what changed?</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag required">Required</span>
+      <span class="tag conditional">Context-aware</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> Context-aware prompts based on the service performed. Only relevant fields appear.</p>
+    <div class="q-label">Service → Vehicle ID field mapping</div>
+
+    <div style="margin-top: 8px;">
+      <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #F0F0F0; font-size: 12px;">
+        <span style="color: #666;"><strong>Oil change</strong></span>
+        <span style="color: #444;">"Update oil type and viscosity on Vehicle ID?"</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #F0F0F0; font-size: 12px;">
+        <span style="color: #666;"><strong>Tire replacement</strong></span>
+        <span style="color: #444;">"Update tire brand, model, and size on Vehicle ID?"</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #F0F0F0; font-size: 12px;">
+        <span style="color: #666;"><strong>Brake pad replacement</strong></span>
+        <span style="color: #444;">"Update pad brand, type, condition, and rotor condition on Vehicle ID?"</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #F0F0F0; font-size: 12px;">
+        <span style="color: #666;"><strong>Brake rotor replacement</strong></span>
+        <span style="color: #444;">"Update rotor condition and brake service date on Vehicle ID?"</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #F0F0F0; font-size: 12px;">
+        <span style="color: #666;"><strong>Brake inspection</strong></span>
+        <span style="color: #444;">"Update pad condition, thickness, and rotor condition on Vehicle ID?"</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #F0F0F0; font-size: 12px;">
+        <span style="color: #666;"><strong>Coolant flush</strong></span>
+        <span style="color: #444;">"Update coolant type on Vehicle ID?"</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #F0F0F0; font-size: 12px;">
+        <span style="color: #666;"><strong>Brake fluid flush</strong></span>
+        <span style="color: #444;">"Update brake fluid type on Vehicle ID?"</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #F0F0F0; font-size: 12px;">
+        <span style="color: #666;"><strong>Transmission service</strong></span>
+        <span style="color: #444;">"Update transmission fluid type on Vehicle ID?"</span>
+      </div>
+      <div style="display: flex; justify-content: space-between; padding: 8px 0; font-size: 12px;">
+        <span style="color: #666;"><strong>State inspection</strong></span>
+        <span style="color: #444;">"Update inspection date, result, and emissions status on Vehicle ID?"</span>
+      </div>
+    </div>
+
+    <div class="q-label">Input type</div>
+    <p>Pre-filled with what was just installed (from Parts Installed section). Shop confirms the Vehicle ID should be updated. If the same part type was used, one tap to confirm. If different from what's on file, the field updates automatically.</p>
+    <div class="q-feeds">Feeds → Vehicle ID (living data layer) · Overrides OEM defaults with real data</div>
+  </div>
+</div>
+
+<!-- PJ4 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number gold">4</div>
+      <div class="q-title">Mechanic notes — tip for next mechanic</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag optional">Optional</span>
+      <span class="tag every-visit">Every job</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Anything the next mechanic should know about this vehicle?"</p>
+    <div class="q-input-example">
+      Free text area — multi-line<br>
+      Example notes:<br>
+      • "Drain plug slightly stripped — use oversized gasket next time"<br>
+      • "Customer mentioned vibration above 60mph — check wheel balance"<br>
+      • "Aftermarket exhaust — needs different hangar setup"<br>
+      • "Customer prefers Castrol Edge oil"
+    </div>
+    <div class="q-label">Behavior</div>
+    <p>Notes are <strong>append-only</strong> — they never overwrite previous mechanic notes. Each note is timestamped with the mechanic's name and the service date. The full history of notes travels with the car forever.</p>
+    <div class="q-feeds">Feeds → Vehicle ID (mechanic notes) · Visible to every future mechanic at any shop</div>
+  </div>
+</div>
+
+<!-- PJ5 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number gold">5</div>
+      <div class="q-title">Flag for review</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag optional">Optional</span>
+      <span class="tag every-visit">Every job</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Our vehicle data may be incorrect for this car"</p>
+    <div class="q-input-example">
+      Checkbox: "Flag this vehicle's specs for review"<br>
+      If checked → optional text: "What's incorrect?" (e.g. "Manual says 0W-20 but car actually needs 5W-30 per owner's manual")
+    </div>
+    <div class="q-label">Behavior</div>
+    <p>Creates an entry in the admin review queue. Waleed investigates and updates the OEM data for this vehicle. Prevents bad data from propagating to other vehicles of the same year/make/model.</p>
+    <div class="q-feeds">Feeds → Admin review queue · Vehicle specs database corrections</div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 4: POST-JOB PART B ==================== -->
+<div class="section-label">Section 4</div>
+<div class="section-title">Post-Job Form — Part B (Optional)</div>
+<div class="section-desc">These questions help Otopair optimize its data accuracy over time. The shop can skip them entirely — they don't block job completion. Presented as a simple survey after Part A is submitted.</div>
+
+<div class="note">From the April 18 meeting: Part B is optional. The shop can skip through with "Not available" on anything they didn't do. Only answer questions relevant to the job performed. Think of this as "helping Otopair get smarter" — not a requirement.</div>
+
+<!-- OPT1 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number gray">1</div>
+      <div class="q-title">Actual labor time</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag optional">Optional</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "How long did this job actually take?"</p>
+    <div class="q-input-example">Numeric input in minutes · Pre-filled with estimated labor time from booking (e.g. "Est. 45 min")</div>
+    <div class="q-feeds">Feeds → Labor time variance tracking · Calibrates future estimates for this service × vehicle combo</div>
+  </div>
+</div>
+
+<!-- OPT2 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number gray">2</div>
+      <div class="q-title">Difficulty rating</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag optional">Optional</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "How was this job compared to typical?"</p>
+    <div class="q-options">
+      <span class="q-option">1 — Much easier</span>
+      <span class="q-option">2 — Easier</span>
+      <span class="q-option selected">3 — Normal</span>
+      <span class="q-option">4 — Harder</span>
+      <span class="q-option">5 — Much harder</span>
+    </div>
+    <div class="q-feeds">Feeds → Difficulty calibration per vehicle make/model · Adjusts labor time estimates</div>
+  </div>
+</div>
+
+<!-- OPT3 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number gray">3</div>
+      <div class="q-title">Parts accuracy</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag optional">Optional</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Were the parts we suggested correct for this vehicle?"</p>
+    <div class="q-options">
+      <span class="q-option selected">Yes — correct</span>
+      <span class="q-option">No — had to use different parts</span>
+    </div>
+    <div class="q-label">If "No" is selected</div>
+    <div class="q-input-example">Free text: "What was different?" (e.g. "Oil filter part # was wrong — correct one is 04152-YZZA1")</div>
+    <div class="q-feeds">Feeds → Vehicle specs accuracy · Corrects parts database for this year/make/model</div>
+  </div>
+</div>
+
+<!-- OPT4 -->
+<div class="q-card">
+  <div class="q-header">
+    <div style="display: flex; align-items: center;">
+      <div class="q-number gray">4</div>
+      <div class="q-title">Additional observations</div>
+    </div>
+    <div class="q-tags">
+      <span class="tag optional">Optional</span>
+    </div>
+  </div>
+  <div class="q-body">
+    <p><strong>What the shop sees:</strong> "Anything else to report about this vehicle or job?"</p>
+    <div class="q-input-example">
+      Free text area<br>
+      Examples: "Customer needs to come back for alignment" · "Noticed exhaust leak — unrelated to today's service" · "Recommend brake inspection at next visit"
+    </div>
+    <div class="q-label">Difference from mechanic notes (Part A, Q4)</div>
+    <p>Mechanic notes travel with the Vehicle ID and are visible to future mechanics. Additional observations here feed Otopair's internal optimization and may generate a follow-up recommendation to the user. They're internal signals, not persistent vehicle notes.</p>
+    <div class="q-feeds">Feeds → Internal service recommendations · May trigger a follow-up notification to the user</div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 5: SMART FORM BEHAVIOR ==================== -->
+<div class="section-label">Section 5</div>
+<div class="section-title">Smart Form Behavior</div>
+<div class="section-desc">Rules that make the forms faster and less annoying over time.</div>
+
+<div class="card">
+  <div class="card-label">Rule 1</div>
+  <div class="card-title">Auto-verification: "Answer didn't change"</div>
+  <p>If a data field has been confirmed by a shop 2-3 times consecutively without changes, it locks as "Verified." On subsequent visits, the field shows as a confirmed badge instead of an editable input. The shop can still tap to override if something changed, but they don't need to re-confirm static data every visit.</p>
+  <p><strong>Exception:</strong> Mileage never auto-verifies — it changes every visit and is always an editable input.</p>
+  <p><strong>Exception:</strong> Tire condition never auto-verifies — it degrades over time and should be re-assessed.</p>
+</div>
+
+<div class="card">
+  <div class="card-label">Rule 2</div>
+  <div class="card-title">Context-aware post-job: Only ask what's relevant</div>
+  <p>The post-job form knows what service was performed. An oil change job shows: mileage, parts used, oil viscosity/type update, mechanic notes. It does NOT show: tire updates, brake fluid updates, coolant updates. This prevents the form from feeling overwhelming on simple jobs.</p>
+  <p><strong>Mapping:</strong> Service category → relevant Vehicle ID fields (defined in Section 3, Question 3).</p>
+</div>
+
+<div class="card">
+  <div class="card-label">Rule 3</div>
+  <div class="card-title">Progressive shortening</div>
+  <p>A vehicle's first visit = longest form (most fields empty). Each subsequent visit = shorter form (more fields verified). After 3-4 visits, the pre-job form is essentially one tap ("Vehicle specs confirmed") and the post-job form only asks about parts used and mechanic notes. The system rewards repeated use by getting out of the shop's way.</p>
+</div>
+
+<div class="card">
+  <div class="card-label">Rule 4</div>
+  <div class="card-title">"Not available" skip option for Part B</div>
+  <p>Every question in Part B (optional) has a "Skip" or "Not available" option. The shop can skip the entire Part B section with one tap: "Skip optimization survey." No guilt, no friction. The data is valuable but never at the cost of shop frustration.</p>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 6: QUESTION COUNT SUMMARY ==================== -->
+<div class="section-label">Section 6</div>
+<div class="section-title">Question Count Summary</div>
+
+<div class="card">
+  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 16px; text-align: center;">
+    <div>
+      <div style="font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Pre-job (first visit)</div>
+      <div style="font-size: 24px; font-weight: 700; color: #C8972E;">7</div>
+      <div style="font-size: 11px; color: #666;">questions</div>
+    </div>
+    <div>
+      <div style="font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Pre-job (return visit)</div>
+      <div style="font-size: 24px; font-weight: 700; color: #2E7D32;">3</div>
+      <div style="font-size: 11px; color: #666;">questions</div>
+    </div>
+    <div>
+      <div style="font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Post-job (mandatory)</div>
+      <div style="font-size: 24px; font-weight: 700; color: #1A1A1A;">5</div>
+      <div style="font-size: 11px; color: #666;">questions</div>
+    </div>
+    <div>
+      <div style="font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Post-job (optional)</div>
+      <div style="font-size: 24px; font-weight: 700; color: #999;">4</div>
+      <div style="font-size: 11px; color: #666;">questions</div>
+    </div>
+  </div>
+</div>
+
+<div class="note">Worst case scenario: A first-time vehicle = 7 pre-job + 5 mandatory post-job + 4 optional post-job. But the pre-job is mostly taps and confirmations, not data entry. Mileage (type), tires (2 taps), brakes (2 numbers + 1 dropdown if on lift), fluids (confirm OEM defaults), inspection (glance at sticker), modifications (one dropdown). Under 90 seconds. Best case scenario: A returning vehicle with verified data = mileage (type) + tire condition (2 taps) + confirm button = 3 interactions, under 15 seconds. The system rewards repeated use by getting out of the shop's way.</div>
+
+<hr class="divider">
+
+<div class="doc-footer">
+  End of document &nbsp;·&nbsp; Otopair Shop Questionnaire System v1 &nbsp;·&nbsp; April 2026
+</div>
+
+</body>
+</html>

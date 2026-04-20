@@ -55,6 +55,14 @@ import WeekSwimLanes from "./week-swim-lanes";
 import WeekSingleMechanicLanes from "./week-single-mechanic-lanes";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
+import {
+  drawerInputClassName,
+  drawerPrimaryButtonClassName,
+  drawerSelectTriggerClassName,
+  drawerTextareaClassName,
+  DrawerFieldLabel,
+  DrawerSectionHeader,
+} from "@/components/drawer-panel-styles";
 import RescheduleConfirmationDialog from "@/components/reschedule-confirmation-dialog";
 import CreateBookingDrawer from "./create-booking-drawer";
 
@@ -972,15 +980,17 @@ export default function SchedulePage() {
               </div>
 
               {/* Body */}
-              <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+              <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
                 {/* Block time type */}
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-2 block">Block time type</label>
-                  <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-none">
+                  <DrawerSectionHeader icon={CalendarOff} label="Block time type" />
+                  <div className="flex gap-2.5 overflow-x-auto pb-1 scrollbar-none">
                     <div
                       onClick={() => setBtType("custom")}
-                      className={`flex flex-col items-center gap-1.5 px-5 py-3 border-2 rounded-xl cursor-pointer transition-colors shrink-0 ${
-                        btType === "custom" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+                      className={`flex min-w-[106px] flex-col items-center gap-2 rounded-2xl border px-4 py-3 cursor-pointer transition-all shrink-0 ${
+                        btType === "custom"
+                          ? "border-primary bg-primary/5 shadow-sm"
+                          : "border-transparent bg-muted/40 hover:border-primary/10 hover:bg-muted/70"
                       }`}
                     >
                       <Pen className="w-5 h-5 text-foreground" />
@@ -990,8 +1000,10 @@ export default function SchedulePage() {
                       <div
                         key={id}
                         onClick={() => { setBtType(id); setBtTitle(label); }}
-                        className={`flex flex-col items-center gap-1.5 px-5 py-3 border-2 rounded-xl cursor-pointer transition-colors shrink-0 ${
-                          btType === id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+                        className={`flex min-w-[106px] flex-col items-center gap-2 rounded-2xl border px-4 py-3 cursor-pointer transition-all shrink-0 ${
+                          btType === id
+                            ? "border-primary bg-primary/5 shadow-sm"
+                            : "border-transparent bg-muted/40 hover:border-primary/10 hover:bg-muted/70"
                         }`}
                       >
                         <Icon className="w-5 h-5 text-foreground" />
@@ -1006,8 +1018,10 @@ export default function SchedulePage() {
                           e.preventDefault();
                           setContextMenu({ type: "deleteBlockType", typeId: t._id, title: t.title, clientX: e.clientX, clientY: e.clientY });
                         }}
-                        className={`flex flex-col items-center gap-1.5 px-5 py-3 border-2 rounded-xl cursor-pointer transition-colors shrink-0 ${
-                          btType === t._id ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+                        className={`flex min-w-[106px] flex-col items-center gap-2 rounded-2xl border px-4 py-3 cursor-pointer transition-all shrink-0 ${
+                          btType === t._id
+                            ? "border-primary bg-primary/5 shadow-sm"
+                            : "border-transparent bg-muted/40 hover:border-primary/10 hover:bg-muted/70"
                         }`}
                       >
                         <Tag className="w-5 h-5 text-foreground" />
@@ -1018,7 +1032,7 @@ export default function SchedulePage() {
 
                   {/* "Save as new block time type?" toggle — only for custom type with a title */}
                   {btType === "custom" && btTitle.trim() && (
-                    <div className="flex items-center justify-between mt-3">
+                    <div className="mt-3 flex items-center justify-between rounded-xl bg-muted/40 px-4 py-3">
                       <span className="text-sm text-muted-foreground">Save as new block time type?</span>
                       <button
                         role="switch"
@@ -1041,37 +1055,37 @@ export default function SchedulePage() {
                 {/* Title — only shown for custom type */}
                 {btType === "custom" && (
                   <div>
-                    <label className="text-sm font-medium text-foreground mb-1.5 block">Title</label>
+                    <DrawerFieldLabel>Title</DrawerFieldLabel>
                     <input
                       type="text"
                       placeholder="e.g. lunch meeting (optional)"
                       value={btTitle}
                       onChange={(e) => setBtTitle(e.target.value)}
-                      className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                      className={drawerInputClassName}
                     />
                   </div>
                 )}
 
                 {/* Date */}
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-1.5 block">Date</label>
+                  <DrawerFieldLabel>Date</DrawerFieldLabel>
                   <input
                     type="date"
                     value={btDate}
                     onChange={(e) => setBtDate(e.target.value)}
-                    className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors"
+                    className={drawerInputClassName}
                   />
                 </div>
 
                 {/* From / To */}
                 <div className="flex gap-3">
                   <div className="flex-1">
-                    <label className="text-sm font-medium text-foreground mb-1.5 block">From</label>
+                    <DrawerFieldLabel>From</DrawerFieldLabel>
                     <Select
                       selectedKey={btFrom}
                       onSelectionChange={(key) => setBtFrom(String(key))}
                     >
-                      <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                      <SelectTrigger className={drawerSelectTriggerClassName}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectPopover placement="bottom start">
@@ -1084,12 +1098,12 @@ export default function SchedulePage() {
                     </Select>
                   </div>
                   <div className="flex-1">
-                    <label className="text-sm font-medium text-foreground mb-1.5 block">To</label>
+                    <DrawerFieldLabel>To</DrawerFieldLabel>
                     <Select
                       selectedKey={btTo}
                       onSelectionChange={(key) => setBtTo(String(key))}
                     >
-                      <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                      <SelectTrigger className={drawerSelectTriggerClassName}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectPopover placement="bottom start">
@@ -1118,12 +1132,12 @@ export default function SchedulePage() {
 
                 {/* Team member */}
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-1.5 block">Team member</label>
+                  <DrawerFieldLabel>Team member</DrawerFieldLabel>
                   <Select
                     selectedKey={btMechanicId || "none"}
                     onSelectionChange={(key) => setBtMechanicId(key === "none" ? "" : String(key))}
                   >
-                    <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                    <SelectTrigger className={drawerSelectTriggerClassName}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectPopover placement="bottom start">
@@ -1141,9 +1155,9 @@ export default function SchedulePage() {
 
                 {/* Frequency */}
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-1.5 block">Frequency</label>
+                  <DrawerFieldLabel>Frequency</DrawerFieldLabel>
                   <Select isDisabled selectedKey="none">
-                    <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                    <SelectTrigger className={drawerSelectTriggerClassName}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectPopover placement="bottom start">
@@ -1156,9 +1170,9 @@ export default function SchedulePage() {
 
                 {/* Description */}
                 <div>
-                  <label className="text-sm font-medium text-foreground mb-1.5 block">
+                  <DrawerFieldLabel>
                     Description <span className="font-normal text-muted-foreground">(Optional)</span>
-                  </label>
+                  </DrawerFieldLabel>
                   <div className="relative">
                     <textarea
                       placeholder="Add description or note"
@@ -1167,7 +1181,7 @@ export default function SchedulePage() {
                         if (e.target.value.length <= 255) setBtDescription(e.target.value);
                       }}
                       rows={3}
-                      className="w-full px-3 py-2.5 text-sm border border-border rounded-lg bg-card text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-colors resize-none"
+                      className={drawerTextareaClassName}
                     />
                     <span className="absolute bottom-2 right-3 text-[10px] text-muted-foreground">
                       {btDescription.length}/255
@@ -1226,7 +1240,7 @@ export default function SchedulePage() {
                       setBtSaving(false);
                     }
                   }}
-                  className="w-full py-2.5 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-40 inline-flex items-center justify-center gap-2"
+                  className={`${drawerPrimaryButtonClassName} w-full py-3`}
                 >
                   {btSaving && <Loader2 className="w-4 h-4 animate-spin" />}
                   {blockTimeDrawer.editingSlotId ? "Save changes" : "Save"}

@@ -13,6 +13,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  drawerInputClassName,
+  drawerSelectTriggerClassName,
+  DrawerFieldLabel,
+  DrawerSectionHeader,
+} from "@/components/drawer-panel-styles";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 
 /* ------------------------------------------------------------------ */
@@ -65,37 +71,6 @@ const TIME_OPTIONS = buildTimeOptions();
 function toMins(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
   return h * 60 + m;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Shared input className                                              */
-/* ------------------------------------------------------------------ */
-
-const inputCls =
-  "w-full bg-muted/70 border-0 border-b-2 border-transparent focus:border-primary rounded-lg px-3 py-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 transition-colors outline-none";
-
-const selectCls =
-  "w-full bg-muted/70 border-0 rounded-lg px-3 py-2.5 text-sm text-foreground outline-none";
-
-/* ------------------------------------------------------------------ */
-/*  Sub-components (stable outside render)                             */
-/* ------------------------------------------------------------------ */
-
-function SectionHeader({ icon: Icon, label }: { icon: React.ElementType<{ className?: string }>; label: string }) {
-  return (
-    <div className="flex items-center gap-2 mb-4">
-      <Icon className="w-4 h-4 text-primary" />
-      <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground">{label}</h3>
-    </div>
-  );
-}
-
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <label className="block text-[10px] tracking-widest font-bold text-muted-foreground mb-1.5">
-      {children}
-    </label>
-  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -243,53 +218,53 @@ export default function CreateBookingDrawer({
 
         {/* ── Customer Info ── */}
         <section>
-          <SectionHeader icon={User} label="Customer Info" />
+          <DrawerSectionHeader icon={User} label="Customer Info" />
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <FieldLabel>First Name</FieldLabel>
-                <input type="text" placeholder="James" value={firstName} onChange={(e) => setFirstName(e.target.value)} className={inputCls} />
+                <DrawerFieldLabel>First Name</DrawerFieldLabel>
+                <input type="text" placeholder="James" value={firstName} onChange={(e) => setFirstName(e.target.value)} className={drawerInputClassName} />
               </div>
               <div>
-                <FieldLabel>Last Name</FieldLabel>
-                <input type="text" placeholder="Wilson" value={lastName} onChange={(e) => setLastName(e.target.value)} className={inputCls} />
+                <DrawerFieldLabel>Last Name</DrawerFieldLabel>
+                <input type="text" placeholder="Wilson" value={lastName} onChange={(e) => setLastName(e.target.value)} className={drawerInputClassName} />
               </div>
             </div>
             <div>
-              <FieldLabel>Email <span className="text-destructive normal-case tracking-normal font-normal">*</span></FieldLabel>
-              <input type="email" placeholder="customer@example.com" value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} />
+              <DrawerFieldLabel>Email <span className="text-destructive normal-case tracking-normal font-normal">*</span></DrawerFieldLabel>
+              <input type="email" placeholder="customer@example.com" value={email} onChange={(e) => setEmail(e.target.value)} className={drawerInputClassName} />
             </div>
           </div>
         </section>
 
         {/* ── Vehicle Info ── */}
         <section>
-          <SectionHeader icon={Car} label="Vehicle Info" />
+          <DrawerSectionHeader icon={Car} label="Vehicle Info" />
           <div className="space-y-3">
             <div>
-              <FieldLabel>VIN <span className="normal-case tracking-normal font-normal text-muted-foreground/60">(Optional)</span></FieldLabel>
-              <input type="text" placeholder="17-digit code" value={vin} onChange={(e) => setVin(e.target.value)} className={inputCls} />
+              <DrawerFieldLabel>VIN <span className="normal-case tracking-normal font-normal text-muted-foreground/60">(Optional)</span></DrawerFieldLabel>
+              <input type="text" placeholder="17-digit code" value={vin} onChange={(e) => setVin(e.target.value)} className={drawerInputClassName} />
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <FieldLabel>Year</FieldLabel>
-                <input type="number" value={year} onChange={(e) => setYear(e.target.value)} className={selectCls} />
+                <DrawerFieldLabel>Year</DrawerFieldLabel>
+                <input type="number" value={year} onChange={(e) => setYear(e.target.value)} className={drawerInputClassName} />
               </div>
               <div className="col-span-2">
-                <FieldLabel>Make</FieldLabel>
-                <input type="text" placeholder="Toyota" value={make} onChange={(e) => setMake(e.target.value)} className={inputCls} />
+                <DrawerFieldLabel>Make</DrawerFieldLabel>
+                <input type="text" placeholder="Toyota" value={make} onChange={(e) => setMake(e.target.value)} className={drawerInputClassName} />
               </div>
             </div>
             <div>
-              <FieldLabel>Model</FieldLabel>
-              <input type="text" placeholder="Camry" value={model} onChange={(e) => setModel(e.target.value)} className={inputCls} />
+              <DrawerFieldLabel>Model</DrawerFieldLabel>
+              <input type="text" placeholder="Camry" value={model} onChange={(e) => setModel(e.target.value)} className={drawerInputClassName} />
             </div>
           </div>
         </section>
 
         {/* ── Service Selection ── */}
         <section>
-          <SectionHeader icon={Wrench} label="Service Selection" />
+          <DrawerSectionHeader icon={Wrench} label="Service Selection" />
           <div className="relative mb-3">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
             <input
@@ -348,17 +323,17 @@ export default function CreateBookingDrawer({
 
         {/* ── Scheduling ── */}
         <section>
-          <SectionHeader icon={Calendar} label="Scheduling" />
+          <DrawerSectionHeader icon={Calendar} label="Scheduling" />
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <FieldLabel>Date</FieldLabel>
-                <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={selectCls} />
+                <DrawerFieldLabel>Date</DrawerFieldLabel>
+                <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={drawerInputClassName} />
               </div>
               <div>
-                <FieldLabel>Time</FieldLabel>
+                <DrawerFieldLabel>Time</DrawerFieldLabel>
                 <Select selectedKey={time} onSelectionChange={(key) => setTime(String(key))}>
-                  <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                  <SelectTrigger className={drawerSelectTriggerClassName}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectPopover placement="bottom start">
@@ -373,12 +348,12 @@ export default function CreateBookingDrawer({
             </div>
             {mechanics.length > 0 && (
               <div>
-                <FieldLabel>Mechanic</FieldLabel>
+                <DrawerFieldLabel>Mechanic</DrawerFieldLabel>
                 <Select
                   selectedKey={mechanicId || "unassigned"}
                   onSelectionChange={(key) => setMechanicId(key === "unassigned" ? "" : String(key))}
                 >
-                  <SelectTrigger className="w-full h-10 rounded-lg border-border bg-card text-sm px-3">
+                  <SelectTrigger className={drawerSelectTriggerClassName}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectPopover placement="bottom start">

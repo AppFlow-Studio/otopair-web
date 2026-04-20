@@ -36,6 +36,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  drawerDestructiveButtonClassName,
+  drawerInfoCardClassName,
+  drawerPrimaryButtonClassName,
+  drawerSecondaryButtonClassName,
+  drawerSelectTriggerClassName,
+  DrawerFieldLabel,
+} from "@/components/drawer-panel-styles";
 import { StatusPill } from "@/components/status-pill";
 import { BOOKING_STATUS_VISUALS } from "@/lib/booking-status";
 
@@ -817,14 +825,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             </h2>
             <button
               onClick={onClose}
-              className="p-2 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
+              className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
             >
-              <X className="w-4 h-4" />
+              <X className="w-5 h-5" />
             </button>
           </div>
 
           {/* Body */}
-          <div className="flex-1 overflow-y-auto p-5">
+          <div className="flex-1 overflow-y-auto px-5 py-5">
             {job === undefined ? (
               <div className="space-y-3">
                 {Array.from({ length: 8 }).map((_, i) => (
@@ -840,43 +848,37 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 Booking not found.
               </p>
             ) : (
-              <div className="space-y-5">
+              <div className="space-y-6">
                 {/* Booking info grid */}
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p className="text-muted-foreground text-xs mb-1">
-                      Customer
-                    </p>
-                    <p className="font-medium text-foreground">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className={drawerInfoCardClassName}>
+                    <DrawerFieldLabel>Customer</DrawerFieldLabel>
+                    <p className="text-[15px] font-medium text-foreground">
                       {job.customerName}
                     </p>
-                    <p className="text-muted-foreground text-xs">
+                    <p className="mt-1 text-sm text-muted-foreground">
                       {job.customerEmail || "No email on file"}
                     </p>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground text-xs mb-1">
-                      Vehicle
-                    </p>
-                    <p className="font-medium text-foreground">
+                  <div className={drawerInfoCardClassName}>
+                    <DrawerFieldLabel>Vehicle</DrawerFieldLabel>
+                    <p className="text-[15px] font-medium text-foreground">
                       {job.vehicle}
                     </p>
-                    <p className="text-muted-foreground text-xs">
+                    <p className="mt-1 text-sm text-muted-foreground">
                       {job.vin}
                     </p>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground text-xs mb-1">
-                      Schedule
-                    </p>
-                    <p className="font-medium text-foreground">
+                  <div className={drawerInfoCardClassName}>
+                    <DrawerFieldLabel>Schedule</DrawerFieldLabel>
+                    <p className="text-[15px] font-medium text-foreground">
                       {formatBookingDate(
                         job.scheduledDate,
                         job.scheduledTime,
                       )}
                     </p>
                     {job.estimatedLaborMinutes != null && job.estimatedLaborMinutes > 0 && (
-                      <p className="text-xs text-muted-foreground mt-0.5">
+                      <p className="mt-1 text-sm text-muted-foreground">
                         Est.{" "}
                         {job.estimatedLaborMinutes < 60
                           ? `${job.estimatedLaborMinutes}m`
@@ -884,29 +886,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                       </p>
                     )}
                   </div>
-                  <div>
-                    <p className="text-muted-foreground text-xs mb-1">
-                      Services
-                    </p>
-                    <p className="font-medium text-foreground">
+                  <div className={drawerInfoCardClassName}>
+                    <DrawerFieldLabel>Services</DrawerFieldLabel>
+                    <p className="text-[15px] font-medium text-foreground">
                       {job.serviceNames.join(", ")}
                     </p>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground text-xs mb-1">
-                      Costs
-                    </p>
-                    <p className="font-medium text-foreground">
+                  <div className={drawerInfoCardClassName}>
+                    <DrawerFieldLabel>Costs</DrawerFieldLabel>
+                    <p className="text-[15px] font-medium text-foreground">
                       ${job.totalCost.toFixed(2)} total
                     </p>
-                    <p className="text-muted-foreground text-xs">
+                    <p className="mt-1 text-sm text-muted-foreground">
                       Labor ${job.laborCost.toFixed(2)} &middot; Parts ${job.partsCost.toFixed(2)}
                     </p>
                   </div>
-                  <div>
-                    <p className="text-muted-foreground text-xs mb-1">
-                      Status
-                    </p>
+                  <div className={drawerInfoCardClassName}>
+                    <DrawerFieldLabel>Status</DrawerFieldLabel>
                     <div className="flex items-center gap-2 flex-wrap">
                       <StatusPill status={job.status} />
                       {(job.status === "pending" ||
@@ -934,10 +930,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 </div>
 
                 {/* Assign mechanic */}
-                <div className="border-t border-border pt-4">
-                  <p className="text-xs font-medium text-foreground mb-2">
+                <div className="rounded-2xl bg-muted/20 p-4">
+                  <DrawerFieldLabel className="mb-3">
                     Assigned Mechanic
-                  </p>
+                  </DrawerFieldLabel>
                   <div className="flex flex-wrap gap-2">
                     <div ref={assignTriggerRef}>
                       <Select
@@ -973,7 +969,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         }}
                       >
                         <SelectTrigger
-                          className="min-w-48 h-9 rounded-lg border-border bg-card text-sm px-3"
+                          className={`min-w-48 ${drawerSelectTriggerClassName}`}
                           data-assign-dropdown
                         >
                           <SelectValue />
@@ -1007,7 +1003,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     <button
                       onClick={handleAssignMechanic}
                       disabled={!canSubmitMechanicChange || isActioning}
-                      className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50 disabled:text-muted-foreground disabled:hover:bg-transparent inline-flex items-center gap-1.5"
+                      className={drawerSecondaryButtonClassName}
                     >
                       {isActioning && (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1017,7 +1013,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     <button
                       onClick={handleResetMechanicSelection}
                       disabled={!hasMechanicSelectionChange || isActioning}
-                      className="px-3 py-2 text-sm rounded-lg border border-border text-foreground hover:bg-muted transition-colors disabled:opacity-50 disabled:text-muted-foreground disabled:hover:bg-transparent"
+                      className={drawerSecondaryButtonClassName}
                     >
                       <ShortcutLabel text="Cancel" shortcutKey="e" />
                     </button>
@@ -1031,17 +1027,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
                 {/* Pending customer acceptance — awaiting approval info */}
                 {job.status === "pending_customer_acceptance" && (
-                  <div className="border-t border-border pt-4">
-                    <p className="text-xs font-medium text-foreground mb-2">
+                  <div className="rounded-2xl bg-muted/20 p-4">
+                    <DrawerFieldLabel className="mb-2">
                       Actions
-                    </p>
-                    <p className="text-xs text-muted-foreground italic mb-2">
+                    </DrawerFieldLabel>
+                    <p className="mb-3 text-sm text-muted-foreground italic">
                       Awaiting customer approval
                     </p>
                     <button
                       onClick={() => setShowCancelRescheduleConfirm(true)}
                       disabled={isActioning}
-                      className="px-3 py-2 text-sm rounded-lg border border-border text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                      className={drawerSecondaryButtonClassName}
                     >
                       <span>
                         <span style={{ textDecorationLine: "underline" }}>
@@ -1074,11 +1070,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   )
                     return null;
                   return (
-                    <div className="border-t border-border pt-4">
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <p className="text-xs font-medium text-foreground">
+                    <div className="rounded-2xl bg-muted/20 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <DrawerFieldLabel className="mb-0">
                           Actions
-                        </p>
+                        </DrawerFieldLabel>
                         {canComplete && job.status === "confirmed" && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -1111,7 +1107,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               handleStatusAction("accept")
                             }
                             disabled={isActioning}
-                            className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 inline-flex items-center gap-1.5"
+                            className={drawerPrimaryButtonClassName}
                           >
                             {isActioning && (
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1143,7 +1139,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                                 ? undefined
                                 : "Assign a mechanic first"
                             }
-                            className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+                            className={drawerPrimaryButtonClassName}
                           >
                             <span>
                               S
@@ -1163,14 +1159,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           <button
                             onClick={() => openActualsDialog("complete")}
                             disabled={isActioning}
-                            className={`px-3 py-2 text-sm rounded-lg transition-opacity disabled:opacity-50 ${job.status === "in_progress" ? "bg-primary text-primary-foreground hover:opacity-90" : "border hover:opacity-90"}`}
+                            className={drawerPrimaryButtonClassName}
                             style={
                               job.status === "in_progress"
                                 ? undefined
                                 : {
                                     backgroundColor: completedColors.text,
-                                    color: '#fff',
-                                    borderColor: completedColors.text,
+                                    color: "#fff",
                                   }
                             }
                           >
@@ -1193,7 +1188,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               setShowDeclineModal(true)
                             }
                             disabled={isActioning}
-                            className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-red-50 transition-colors disabled:opacity-50"
+                            className={drawerDestructiveButtonClassName}
                           >
                             <span>
                               <span
@@ -1213,7 +1208,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               setShowCancelConfirm(true)
                             }
                             disabled={isActioning}
-                            className="px-3 py-2 text-sm rounded-lg border border-destructive text-destructive hover:bg-red-50 transition-colors disabled:opacity-50"
+                            className={drawerDestructiveButtonClassName}
                           >
                             <span>
                               <span
@@ -1233,11 +1228,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 })()}
 
                 {job.status === "completed" && (
-                  <div className="border-t border-border pt-4">
+                  <div className="rounded-2xl bg-muted/20 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-xs font-medium text-foreground">Booking actuals</p>
-                        <p className="mt-1 text-xs text-muted-foreground">
+                        <DrawerFieldLabel className="mb-1">Booking actuals</DrawerFieldLabel>
+                        <p className="text-sm text-muted-foreground">
                           {job.jobActuals?.status === "finalized"
                             ? "Finalized actuals saved for this booking."
                             : job.status === "completed"
@@ -1247,7 +1242,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                                 : "Draft actuals will be created automatically when the booking starts."}
                         </p>
                         {job.jobActuals ? (
-                          <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                          <div className="mt-3 space-y-1 text-sm text-muted-foreground">
                             <p>
                               Labor: {job.jobActuals.actualLaborMinutes ?? "TBD"} min
                             </p>
@@ -1264,7 +1259,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             type="button"
                             onClick={() => void handleReopenActuals()}
                             disabled={isActioning}
-                            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                            className={drawerSecondaryButtonClassName}
                           >
                             Reopen actuals
                           </button>
@@ -1273,7 +1268,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             type="button"
                             onClick={() => openActualsDialog("edit")}
                             disabled={isActioning}
-                            className="rounded-lg border border-border px-3 py-2 text-sm text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                            className={drawerSecondaryButtonClassName}
                           >
                             {job.jobActuals ? "Edit draft actuals" : "Finalize actuals"}
                           </button>
@@ -1284,12 +1279,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 )}
 
                 {/* Status history */}
-                <div className="border-t border-border pt-4">
-                  <div className="flex items-center gap-1.5 mb-3">
+                <div className="rounded-2xl bg-muted/20 p-4">
+                  <div className="mb-3 flex items-center gap-1.5">
                     <History className="w-3.5 h-3.5 text-muted-foreground" />
-                    <p className="text-xs font-medium text-foreground">Status History</p>
+                    <DrawerFieldLabel className="mb-0">Status History</DrawerFieldLabel>
                   </div>
-                  <div className="max-h-56 overflow-y-auto">
+                  <div className="max-h-56 overflow-y-auto rounded-xl bg-background px-3 py-2">
                     {job.history.length === 0 ? (
                       <p className="text-xs text-muted-foreground">No history entries yet.</p>
                     ) : (
@@ -1387,10 +1382,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
                 {/* View in Bookings link (schedule page only) */}
                 {showBookingsLink && (
-                  <div className="border-t border-border pt-4">
+                  <div className="rounded-2xl bg-muted/20 p-4">
                     <a
                       href={`/bookings?highlight=${job._id}`}
-                      className="text-xs text-primary hover:underline"
+                      className="text-sm font-medium text-primary hover:underline"
                     >
                       View full details in Bookings &rarr;
                     </a>

@@ -1,12 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { BadgeInfo, ChevronDown, ChevronUp, CircleAlert, Loader2 } from "lucide-react";
-import {
-  drawerInputClassName,
-  drawerPrimaryButtonClassName,
-  drawerSecondaryButtonClassName,
-} from "@/components/drawer-panel-styles";
+import { ChevronDown, ChevronRight, Info, Loader2 } from "lucide-react";
 import {
   formatDateLabel,
   formatMileage,
@@ -23,30 +18,36 @@ import {
 } from "@/lib/vehicle-passport";
 import { cn } from "@/lib/utils";
 
-const surfaceClassName =
-  "rounded-[28px] border border-primary/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,244,238,0.98))] shadow-[0_12px_34px_rgba(15,23,42,0.06)]";
-const sectionClassName =
-  "rounded-[22px] border border-primary/10 bg-[rgba(255,255,255,0.7)] px-4 py-4 sm:px-5";
-
 function sourceBadgeClassName(source?: PassportSource) {
   if (source === "verified") {
-    return "border-success/20 bg-success/10 text-success";
+    return "border-success/25 bg-success/10 text-success";
   }
   if (source === "oem_default") {
-    return "border-border bg-white/90 text-muted-foreground";
+    return "border-primary/10 bg-muted text-muted-foreground";
   }
   if (source === "user_reported") {
-    return "border-primary/15 bg-primary/10 text-primary";
+    return "border-primary/20 bg-primary/10 text-primary";
   }
-  return "border-destructive/20 bg-destructive/10 text-destructive";
+  return "border-destructive/25 bg-destructive/10 text-destructive";
 }
 
-function inputClassName(isEmpty?: boolean) {
+function baseInput(isError?: boolean) {
   return cn(
-    drawerInputClassName,
-    "h-11 rounded-xl border bg-white/92 shadow-none",
-    isEmpty ? "border-destructive/40" : "border-primary/10"
+    "h-8 rounded-md border bg-background px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground/60 outline-none transition-all focus:border-primary/40 focus:ring-2 focus:ring-primary/15",
+    isError ? "border-destructive/50" : "border-primary/15"
   );
+}
+
+function getInitials(label: string): string {
+  const raw = label.trim();
+  if (!raw) return "VH";
+  const words = raw.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "VH";
+  if (/^\d{4}$/.test(words[0]) && words.length >= 3) {
+    return (words[1][0] + words[2][0]).toUpperCase();
+  }
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
 }
 
 export default function VehiclePassportSection({
@@ -60,10 +61,10 @@ export default function VehiclePassportSection({
 }) {
   if (!data) {
     return (
-      <div className={cn(surfaceClassName, "p-4")}>
+      <div className="rounded-xl border border-primary/10 bg-card p-4">
         <div className="animate-pulse space-y-3">
           <div className="h-4 w-40 rounded bg-muted" />
-          <div className="h-48 rounded-[22px] bg-muted/80" />
+          <div className="h-40 rounded-lg bg-muted/80" />
         </div>
       </div>
     );
@@ -128,83 +129,74 @@ function VehiclePassportSectionBody({
   }
 
   return (
-    <section className={cn(surfaceClassName, "overflow-hidden p-4 sm:p-5")}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <BadgeInfo className="h-4 w-4" />
-            </div>
-            <div>
-              <p className="text-[0.72rem] font-semibold uppercase tracking-[0.24em] text-primary/80">
-                Vehicle Passport
-              </p>
-              <h3 className="mt-1 text-base font-semibold text-foreground">
-                {data.vehicle_label}
-              </h3>
-            </div>
-          </div>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-            {data.is_complete
-              ? "Current verified vehicle details for this VIN across Otopair partner shops."
-              : "This vehicle needs a one-time baseline confirm before future visits can reuse its shared passport."}
+    <section className="overflow-hidden rounded-xl border border-primary/10 bg-card shadow-[0_4px_14px_-6px_rgba(15,23,42,0.08)]">
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className={cn(
+          "flex w-full items-center gap-3 px-4 py-3 text-left transition-colors",
+          isOpen
+            ? "border-b border-primary/10 bg-primary/5"
+            : "bg-primary/[0.035] hover:bg-primary/5"
+        )}
+      >
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-[11px] font-semibold text-primary-foreground">
+          {getInitials(data.vehicle_label)}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">
+            Vehicle ID
+          </p>
+          <p className="mt-0.5 truncate text-[13px] font-semibold text-foreground">
+            {data.vehicle_label}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setIsOpen((current) => !current)}
+        <span
           className={cn(
-            drawerSecondaryButtonClassName,
-            "rounded-full border-primary/10 bg-white/75 px-4"
+            "rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]",
+            data.is_complete
+              ? "border-success/25 bg-success/10 text-success"
+              : "border-primary/25 bg-primary/10 text-primary"
           )}
         >
-          {isOpen ? (
-            <>
-              Collapse
-              <ChevronUp className="h-4 w-4" />
-            </>
-          ) : (
-            <>
-              Expand
-              <ChevronDown className="h-4 w-4" />
-            </>
-          )}
-        </button>
-      </div>
+          {data.is_complete ? "Verified" : "First visit"}
+        </span>
+        {isOpen ? (
+          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        )}
+      </button>
 
       {isOpen ? (
-        <div className="mt-5 space-y-4">
+        <div className="space-y-3 bg-muted/40 p-3 sm:p-4">
           {!data.is_complete ? (
-            <div className="rounded-[22px] border border-primary/15 bg-primary/5 px-4 py-4 sm:px-5">
-              <div className="flex items-start gap-3">
-                <CircleAlert className="mt-0.5 h-5 w-5 text-primary" />
-                <div className="min-w-0">
-                  <p className="font-semibold text-foreground">
-                    First time this vehicle is visiting an Otopair shop.
-                  </p>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                    Confirm or fill in the vehicle specs below. This data will be saved
-                    to the vehicle&apos;s profile and will be available on future visits.
-                  </p>
+            <>
+              <div className="flex gap-2.5 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2.5">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+                <div className="min-w-0 text-[11px] leading-5 text-foreground/80">
+                  <span className="font-semibold text-foreground">
+                    First time this vehicle is visiting a shop on Otopair.
+                  </span>{" "}
+                  Please confirm or fill in the vehicle specs below. This data
+                  will be saved to the vehicle&apos;s profile and will be available
+                  on future visits to any Otopair partner shop.
                 </div>
               </div>
-              <div className="mt-4">
-                <div className="h-2 rounded-full bg-primary/10">
+
+              <div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-primary/10">
                   <div
                     className="h-full rounded-full bg-primary transition-all"
                     style={{ width: `${completionPercent}%` }}
                   />
                 </div>
-                <p className="mt-2 text-xs font-medium text-muted-foreground">
-                  Vehicle ID {completionPercent}% complete - help us fill in the gaps
+                <p className="mt-1.5 text-[10px] font-medium text-muted-foreground">
+                  Vehicle ID {completionPercent}% complete — help us fill in the gaps
                 </p>
               </div>
-            </div>
-          ) : null}
 
-          {!data.is_complete ? (
-            <>
-              <PassportEditableSection title="Mileage">
+              <PanelSection title="Mileage">
                 <EditableRow
                   label="Current mileage"
                   required
@@ -216,12 +208,12 @@ function VehiclePassportSectionBody({
                     onChange={(event) => setMileage(event.target.value)}
                     inputMode="numeric"
                     placeholder="Enter mileage"
-                    className={inputClassName(missingFields.includes("mileage"))}
+                    className={cn(baseInput(missingFields.includes("mileage")), "w-[150px] text-right")}
                   />
                 </EditableRow>
-              </PassportEditableSection>
+              </PanelSection>
 
-              <PassportEditableSection title="Tires">
+              <PanelSection title="Tires">
                 <EditableRow
                   label="Brand"
                   source={data.sources["tires.brand"]}
@@ -231,7 +223,7 @@ function VehiclePassportSectionBody({
                     value={tireBrand}
                     onChange={(event) => setTireBrand(event.target.value)}
                     placeholder="e.g. Michelin"
-                    className={inputClassName(missingFields.includes("tires.brand"))}
+                    className={cn(baseInput(missingFields.includes("tires.brand")), "w-[150px] text-right")}
                   />
                 </EditableRow>
                 <EditableRow
@@ -243,10 +235,10 @@ function VehiclePassportSectionBody({
                     value={tireModel}
                     onChange={(event) => setTireModel(event.target.value)}
                     placeholder="e.g. Pilot Sport"
-                    className={inputClassName(missingFields.includes("tires.model"))}
+                    className={cn(baseInput(missingFields.includes("tires.model")), "w-[150px] text-right")}
                   />
                 </EditableRow>
-                <EditableDisplayRow
+                <DisplayRow
                   label="Size"
                   value={
                     data.passport.tires.size_rear &&
@@ -267,8 +259,8 @@ function VehiclePassportSectionBody({
                       setOverallCondition(event.target.value as TireCondition | "")
                     }
                     className={cn(
-                      inputClassName(missingFields.includes("tires.overall_condition")),
-                      "pr-10"
+                      baseInput(missingFields.includes("tires.overall_condition")),
+                      "w-[150px] pr-7"
                     )}
                   >
                     <option value="">Select...</option>
@@ -283,172 +275,169 @@ function VehiclePassportSectionBody({
                     onChange={(event) =>
                       setRunFlat(event.target.value as "" | "yes" | "no")
                     }
-                    className={cn(inputClassName(), "pr-10")}
+                    className={cn(baseInput(), "w-[120px] pr-7")}
                   >
                     <option value="">Select...</option>
                     <option value="yes">Yes</option>
                     <option value="no">No</option>
                   </select>
                 </EditableRow>
-              </PassportEditableSection>
+              </PanelSection>
             </>
-          ) : null}
-
-          <PassportDisplaySection title="Tires">
-            <PassportRow
-              label="Brand"
-              value={data.passport.tires.brand ?? "Unknown"}
-              source={data.sources["tires.brand"]}
-            />
-            {data.passport.tires.model ? (
-              <PassportRow
-                label="Model"
-                value={data.passport.tires.model}
-                source={data.sources["tires.model"]}
+          ) : (
+            <PanelSection title="Tires">
+              <DisplayRow
+                label="Brand"
+                value={data.passport.tires.brand ?? "Unknown"}
+                source={data.sources["tires.brand"]}
               />
-            ) : null}
-            <PassportRow
-              label="Size"
-              value={
-                data.passport.tires.size_rear &&
-                data.passport.tires.size_rear !== data.passport.tires.size_front
-                  ? `${data.passport.tires.size_front ?? "Unknown"} / ${data.passport.tires.size_rear}`
-                  : data.passport.tires.size_front ?? "Unknown"
-              }
-              source={data.sources["tires.size_front"]}
-            />
-            <PassportRow
-              label="Condition"
-              value={tireConditionLabel(data.passport.tires.overall_condition)}
-              source={data.sources["tires.overall_condition"]}
-            />
-            <PassportRow
-              label="Run-flat"
-              value={
-                data.passport.tires.run_flat == null
-                  ? "Unknown"
-                  : data.passport.tires.run_flat
-                    ? "Yes"
-                    : "No"
-              }
-              source={data.sources["tires.run_flat"]}
-            />
-          </PassportDisplaySection>
+              {data.passport.tires.model ? (
+                <DisplayRow
+                  label="Model"
+                  value={data.passport.tires.model}
+                  source={data.sources["tires.model"]}
+                />
+              ) : null}
+              <DisplayRow
+                label="Size"
+                value={
+                  data.passport.tires.size_rear &&
+                  data.passport.tires.size_rear !== data.passport.tires.size_front
+                    ? `${data.passport.tires.size_front ?? "Unknown"} / ${data.passport.tires.size_rear}`
+                    : data.passport.tires.size_front ?? "Unknown"
+                }
+                source={data.sources["tires.size_front"]}
+              />
+              <DisplayRow
+                label="Condition"
+                value={tireConditionLabel(data.passport.tires.overall_condition)}
+                source={data.sources["tires.overall_condition"]}
+              />
+              <DisplayRow
+                label="Run-flat"
+                value={
+                  data.passport.tires.run_flat == null
+                    ? "Unknown"
+                    : data.passport.tires.run_flat
+                      ? "Yes"
+                      : "No"
+                }
+                source={data.sources["tires.run_flat"]}
+              />
+            </PanelSection>
+          )}
 
-          <PassportDisplaySection title="Fluids">
-            <PassportRow
+          <PanelSection title="Fluids">
+            <DisplayRow
               label="Oil viscosity"
               value={data.passport.fluids.oil_viscosity ?? "Unknown"}
               source={data.sources["fluids.oil_viscosity"]}
             />
-            <PassportRow
+            <DisplayRow
               label="Oil type"
               value={data.passport.fluids.oil_type ?? "Unknown"}
               source={data.sources["fluids.oil_type"]}
             />
-            <PassportRow
+            <DisplayRow
               label="Coolant"
               value={data.passport.fluids.coolant_type ?? "Unknown"}
               source={data.sources["fluids.coolant_type"]}
             />
-            <PassportRow
+            <DisplayRow
               label="Brake fluid"
               value={data.passport.fluids.brake_fluid_type ?? "Unknown"}
               source={data.sources["fluids.brake_fluid_type"]}
             />
             {data.passport.fluids.transmission_fluid_type ? (
-              <PassportRow
+              <DisplayRow
                 label="Transmission fluid"
                 value={data.passport.fluids.transmission_fluid_type}
                 source={data.sources["fluids.transmission_fluid_type"]}
               />
             ) : null}
-          </PassportDisplaySection>
+          </PanelSection>
 
-          <PassportDisplaySection title="Mileage">
-            <PassportRow
+          <PanelSection title="Mileage">
+            <DisplayRow
               label="Current"
               value={formatMileage(data.passport.mileage)}
               source={data.sources.mileage}
             />
-            <PassportRow
+            <DisplayRow
               label="Velocity"
               value={formatMonthMileage(data.passport.mileage_velocity)}
             />
-            <PassportRow
+            <DisplayRow
               label="Last updated"
               value={formatDateLabel(data.passport.last_reported_at)}
             />
-          </PassportDisplaySection>
+          </PanelSection>
 
-          <PassportDisplaySection title="Usage">
-            <PassportRow label="Driving type" value={data.usage.driving_type ?? "Unknown"} />
-            <PassportRow label="Ownership" value={data.usage.ownership ?? "Unknown"} />
+          <PanelSection title="Usage">
+            <DisplayRow label="Driving type" value={data.usage.driving_type ?? "Unknown"} />
+            <DisplayRow label="Ownership" value={data.usage.ownership ?? "Unknown"} />
             {data.passport.modifications.status ? (
-              <PassportRow
+              <DisplayRow
                 label="Modifications"
                 value={modificationStatusLabel(data.passport.modifications.status)}
               />
             ) : null}
-          </PassportDisplaySection>
+          </PanelSection>
 
-          <PassportDisplaySection title="Recent Services">
+          <PanelSection title="Recent services">
             {data.recent_services.length === 0 ? (
-              <p className="py-3 text-center text-sm italic text-muted-foreground">
+              <p className="py-2 text-center text-[11px] italic text-muted-foreground">
                 No previous services on Otopair
               </p>
             ) : (
               data.recent_services.map((entry) => (
                 <div
                   key={`${entry.date_label}-${entry.service_name}`}
-                  className="flex items-center justify-between gap-3 border-b border-primary/10 py-2.5 last:border-b-0 last:pb-0"
+                  className="flex items-center justify-between gap-3 border-b border-primary/10 py-1.5 text-[12px] last:border-b-0"
                 >
-                  <span className="text-sm text-muted-foreground">{entry.date_label}</span>
-                  <span className="text-right text-sm font-semibold text-foreground">
+                  <span className="text-muted-foreground">{entry.date_label}</span>
+                  <span className="font-medium text-foreground">
                     {entry.service_name}
                   </span>
                 </div>
               ))
             )}
-          </PassportDisplaySection>
+          </PanelSection>
 
-          <PassportDisplaySection title="Mechanic Notes">
+          <PanelSection title="Mechanic notes">
             {data.mechanic_notes.length === 0 ? (
-              <p className="py-3 text-center text-sm italic text-muted-foreground">
+              <p className="py-2 text-center text-[11px] italic text-muted-foreground">
                 No mechanic notes recorded yet
               </p>
             ) : (
-              data.mechanic_notes.map((entry) => (
-                <div
-                  key={`${entry.author}-${entry.date_label}-${entry.note}`}
-                  className="rounded-2xl border border-primary/10 bg-[rgba(255,250,240,0.9)] px-4 py-3"
-                >
-                  <p className="text-sm italic leading-6 text-foreground">
-                    &quot;{entry.note}&quot;
-                  </p>
-                  <p className="mt-2 text-xs font-medium text-muted-foreground">
-                    {entry.author}, {entry.date_label}
-                  </p>
-                </div>
-              ))
+              <div className="space-y-2">
+                {data.mechanic_notes.map((entry) => (
+                  <div
+                    key={`${entry.author}-${entry.date_label}-${entry.note}`}
+                    className="rounded-md border-l-2 border-primary bg-primary/5 px-3 py-2"
+                  >
+                    <p className="text-[11px] italic leading-5 text-foreground/85">
+                      &quot;{entry.note}&quot;
+                    </p>
+                    <p className="mt-1 text-[10px] font-medium text-muted-foreground">
+                      — {entry.author}, {entry.date_label}
+                    </p>
+                  </div>
+                ))}
+              </div>
             )}
-          </PassportDisplaySection>
+          </PanelSection>
 
           {!data.is_complete ? (
-            <div className="pt-1">
-              <button
-                type="button"
-                onClick={() => void handleConfirm()}
-                disabled={isSaving}
-                className={cn(
-                  drawerPrimaryButtonClassName,
-                  "h-12 w-full rounded-2xl border border-primary/15 bg-white text-foreground shadow-none hover:bg-primary/5"
-                )}
-              >
-                {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Confirm specs
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => void handleConfirm()}
+              disabled={isSaving}
+              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-foreground text-[12px] font-semibold text-background transition-all hover:opacity-90 active:scale-[0.99] disabled:opacity-40"
+            >
+              {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Confirm vehicle specs &amp; start job
+            </button>
           ) : null}
         </div>
       ) : null}
@@ -456,7 +445,7 @@ function VehiclePassportSectionBody({
   );
 }
 
-function PassportEditableSection({
+function PanelSection({
   title,
   children,
 }: {
@@ -464,30 +453,13 @@ function PassportEditableSection({
   children: ReactNode;
 }) {
   return (
-    <section className={sectionClassName}>
-      <SectionEyebrow>{title}</SectionEyebrow>
-      <div className="mt-2 divide-y divide-primary/10">{children}</div>
+    <section className="rounded-lg border border-primary/10 bg-card px-3 py-2.5 sm:px-3.5">
+      <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">
+        {title}
+      </p>
+      <div className="mt-1 divide-y divide-primary/10">{children}</div>
     </section>
   );
-}
-
-function PassportDisplaySection({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className={sectionClassName}>
-      <SectionEyebrow>{title}</SectionEyebrow>
-      <div className="mt-2 divide-y divide-primary/10">{children}</div>
-    </section>
-  );
-}
-
-function SectionEyebrow({ children }: { children: ReactNode }) {
-  return <p className="text-[0.7rem] font-semibold uppercase tracking-[0.24em] text-primary/80">{children}</p>;
 }
 
 function EditableRow({
@@ -504,27 +476,27 @@ function EditableRow({
   required?: boolean;
 }) {
   return (
-    <div className="grid gap-2 py-3 sm:grid-cols-[minmax(120px,0.8fr)_minmax(0,1.2fr)] sm:items-center">
+    <div className="flex flex-col gap-1.5 py-2 text-[12px] sm:flex-row sm:items-center sm:justify-between sm:gap-3">
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium text-foreground">{label}</span>
+        <span className="text-muted-foreground">{label}</span>
         {required ? (
-          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-destructive">
+          <span className="rounded-full border border-destructive/25 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-destructive">
             Required
           </span>
         ) : null}
         {!required && source ? <SourceBadge source={source} /> : null}
         {!required && missing ? (
-          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-destructive">
+          <span className="rounded-full border border-destructive/25 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-destructive">
             Empty
           </span>
         ) : null}
       </div>
-      <div className="sm:justify-self-end sm:w-full sm:max-w-[240px]">{children}</div>
+      <div className="flex items-center gap-2 sm:justify-end">{children}</div>
     </div>
   );
 }
 
-function EditableDisplayRow({
+function DisplayRow({
   label,
   value,
   source,
@@ -534,31 +506,11 @@ function EditableDisplayRow({
   source?: PassportSource;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 py-3">
-      <span className="text-sm font-medium text-foreground">{label}</span>
-      <div className="flex items-center gap-2 text-right">
-        <span className="text-sm font-semibold text-foreground">{value}</span>
-        {source ? <SourceBadge source={source} /> : null}
-      </div>
-    </div>
-  );
-}
-
-function PassportRow({
-  label,
-  value,
-  source,
-}: {
-  label: string;
-  value: string;
-  source?: PassportSource;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-3">
-      <span className="text-sm text-foreground/80">{label}</span>
-      <span className="text-right text-sm font-semibold text-foreground">
+    <div className="flex items-center justify-between gap-3 py-2 text-[12px]">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="flex items-center gap-2 text-right font-medium text-foreground">
         {value}
-        {source ? <SourceBadge source={source} className="ml-2" /> : null}
+        {source ? <SourceBadge source={source} /> : null}
       </span>
     </div>
   );
@@ -574,7 +526,7 @@ function SourceBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium",
+        "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]",
         sourceBadgeClassName(source),
         className
       )}

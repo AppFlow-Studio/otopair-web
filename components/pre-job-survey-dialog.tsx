@@ -4,10 +4,8 @@ import { useState, type ReactNode } from "react";
 import { Check, Loader2 } from "lucide-react";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import {
-  drawerInputClassName,
   drawerPrimaryButtonClassName,
   drawerSecondaryButtonClassName,
-  drawerTextareaClassName,
 } from "@/components/drawer-panel-styles";
 import {
   passportSourceLabel,
@@ -18,8 +16,35 @@ import {
 } from "@/lib/vehicle-passport";
 import { cn } from "@/lib/utils";
 
-const surveyCardClassName =
-  "rounded-[22px] border border-primary/10 bg-[rgba(255,255,255,0.78)] px-4 py-4 sm:px-5";
+const conditionPalette: Record<
+  TireCondition,
+  { label: string; activeClassName: string }
+> = {
+  good: {
+    label: "Good",
+    activeClassName: "border-success/40 bg-success/10 text-success",
+  },
+  fair: {
+    label: "Fair",
+    activeClassName: "border-primary/40 bg-primary/10 text-primary",
+  },
+  replace_soon: {
+    label: "Replace soon",
+    activeClassName: "border-destructive/40 bg-destructive/10 text-destructive",
+  },
+};
+
+function getInitials(label: string): string {
+  const raw = label.trim();
+  if (!raw) return "VH";
+  const words = raw.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "VH";
+  if (/^\d{4}$/.test(words[0]) && words.length >= 3) {
+    return (words[1][0] + words[2][0]).toUpperCase();
+  }
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
 
 function ConditionButtons({
   value,
@@ -29,23 +54,20 @@ function ConditionButtons({
   onChange: (next: TireCondition) => void;
 }) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {[
-        { value: "good", label: "Good" },
-        { value: "fair", label: "Fair" },
-        { value: "replace_soon", label: "Replace soon" },
-      ].map((option) => {
-        const active = value === option.value;
+    <div className="flex flex-wrap gap-1.5">
+      {(Object.keys(conditionPalette) as TireCondition[]).map((key) => {
+        const option = conditionPalette[key];
+        const active = value === key;
         return (
           <button
-            key={option.value}
+            key={key}
             type="button"
-            onClick={() => onChange(option.value as TireCondition)}
+            onClick={() => onChange(key)}
             className={cn(
-              "rounded-xl border px-3 py-2 text-sm font-medium transition-colors",
+              "rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors",
               active
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-primary/10 bg-white text-foreground hover:bg-primary/5"
+                ? option.activeClassName
+                : "border-primary/10 bg-muted/60 text-muted-foreground hover:bg-muted"
             )}
           >
             {option.label}
@@ -161,9 +183,12 @@ function PreJobSurveyDialogBody({
   );
   const [error, setError] = useState("");
 
+  const mileageError = mileage.trim() === "" && error !== "";
+  const isFirstVisit = !!passportData && !passportData.is_complete;
+
   async function handleSubmit() {
     const parsedMileage = Number(mileage);
-    if (!Number.isFinite(parsedMileage)) {
+    if (!Number.isFinite(parsedMileage) || mileage.trim() === "") {
       setError("Mileage is required.");
       return;
     }
@@ -216,26 +241,35 @@ function PreJobSurveyDialogBody({
     });
   }
 
+  const tireSizeLabel = passportData?.passport.tires.size_front ?? "Unknown size";
+  const tireSizeSource = passportData?.sources["tires.size_front"];
+
   return (
     <SurveyDialogShell
       open={open}
       title="Pre-job vehicle check"
-      description="Confirm what you see on the vehicle before work begins."
-      subtitle={
-        <span>
-          {bookingLabel} · {bookingSubLabel}
-        </span>
+      headerBadge={
+        isFirstVisit ? (
+          <span className="rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-primary">
+            First visit
+          </span>
+        ) : null
       }
       onClose={onClose}
-      maxWidthClassName="max-w-3xl"
+      maxWidthClassName="max-w-lg"
       footer={
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-          {error ? <p className="text-sm text-destructive sm:mr-auto">{error}</p> : null}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+          {error ? (
+            <p className="text-[11px] font-medium text-destructive sm:mr-auto">{error}</p>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
             disabled={isSubmitting}
-            className={cn(drawerSecondaryButtonClassName, "rounded-xl border-primary/10")}
+            className={cn(
+              drawerSecondaryButtonClassName,
+              "h-9 rounded-lg border-primary/10 text-[12px]"
+            )}
           >
             Cancel
           </button>
@@ -243,258 +277,295 @@ function PreJobSurveyDialogBody({
             type="button"
             onClick={() => void handleSubmit()}
             disabled={isSubmitting}
-            className={cn(drawerPrimaryButtonClassName, "rounded-xl")}
+            className={cn(drawerPrimaryButtonClassName, "h-9 rounded-lg text-[12px]")}
           >
-            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
             Confirm vehicle specs and start job
           </button>
         </div>
       }
     >
-      <div className="space-y-3">
-        <div className="rounded-[20px] border border-primary/10 bg-[rgba(17,24,28,0.03)] px-4 py-3">
-          <p className="text-sm font-semibold text-foreground">{bookingLabel}</p>
-          <p className="mt-1 text-sm text-muted-foreground">{bookingSubLabel}</p>
-        </div>
+      <div className="space-y-4">
+        <VehicleSummaryCard label={bookingLabel} subLabel={bookingSubLabel} />
 
-        <QuestionCard
-          eyebrow="Q1 · Mileage"
-          badge="Required"
-          accent="required"
-        >
-          <div className="grid gap-3 sm:grid-cols-[1fr_190px] sm:items-center">
-            <div>
-              <p className="text-sm font-medium text-foreground">Odometer reading</p>
-            </div>
-            <input
-              value={mileage}
-              onChange={(event) => setMileage(event.target.value)}
-              inputMode="numeric"
-              placeholder="Enter mileage"
-              className={fieldClassName()}
-            />
+        {isFirstVisit ? (
+          <div className="rounded-lg border-l-2 border-primary bg-primary/5 px-3 py-2 text-[11px] leading-5 text-foreground/80">
+            First visit — confirm what you see. Takes under 90 seconds.
           </div>
-        </QuestionCard>
+        ) : null}
 
-        <QuestionCard
-          eyebrow="Q2 · Tire condition"
-          badge="Required"
-          accent="required"
-        >
-          <p className="text-xs font-medium text-muted-foreground">
-            {passportData?.passport.tires.size_front ?? "Unknown size"}
-            {passportData?.sources["tires.size_front"] ? (
-              <>
-                {" "}
-                · {passportSourceLabel(passportData.sources["tires.size_front"])}
-              </>
-            ) : null}
-          </p>
-          <div className="mt-4 space-y-4">
-            <TireConditionRow
-              label="Front"
-              value={frontCondition}
-              onChange={setFrontCondition}
-            />
-            <TireConditionRow label="Rear" value={rearCondition} onChange={setRearCondition} />
-          </div>
-          <div className="mt-4 rounded-2xl border border-primary/10 bg-[rgba(17,24,28,0.02)] px-4 py-3">
-            <p className="text-xs font-medium italic text-muted-foreground">
-              First visit - what brand is on the car?
-            </p>
-            <input
-              value={tireBrand}
-              onChange={(event) => setTireBrand(event.target.value)}
-              placeholder="e.g. Goodyear Wrangler"
-              className={cn(fieldClassName(), "mt-3")}
-            />
-          </div>
-        </QuestionCard>
-
-        <QuestionCard eyebrow="Q3 · Brakes" badge="Optional - if on lift">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <InlineField label="Front pad thickness">
+        <div className="divide-y divide-primary/10">
+          <SectionBlock eyebrow="Q1 · Mileage" badge="Required" accent="required">
+            <FieldRow label="Odometer reading">
               <input
-                value={frontPadMm}
-                onChange={(event) => setFrontPadMm(event.target.value)}
-                placeholder="mm"
-                className={fieldClassName()}
+                value={mileage}
+                onChange={(event) => setMileage(event.target.value)}
+                inputMode="numeric"
+                placeholder="Enter mileage"
+                className={narrowField(mileageError)}
               />
-            </InlineField>
-            <InlineField label="Rear pad thickness">
+            </FieldRow>
+          </SectionBlock>
+
+          <SectionBlock eyebrow="Q2 · Tire condition" badge="Required" accent="required">
+            <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+              {tireSizeLabel}
+              {tireSizeSource ? (
+                <>
+                  <span className="mx-1.5 text-muted-foreground/50">·</span>
+                  <span className="normal-case tracking-normal">
+                    {passportSourceLabel(tireSizeSource)}
+                  </span>
+                </>
+              ) : null}
+            </p>
+            <div className="mt-3 space-y-2">
+              <TireConditionRow
+                label="Front"
+                value={frontCondition}
+                onChange={setFrontCondition}
+              />
+              <TireConditionRow
+                label="Rear"
+                value={rearCondition}
+                onChange={setRearCondition}
+              />
+            </div>
+            <div className="mt-3 rounded-lg border border-primary/10 border-l-2 border-l-primary bg-muted/60 px-3 py-2.5">
+              <p className="text-[10px] italic text-muted-foreground">
+                First visit — what brand is on the car?
+              </p>
+              <input
+                value={tireBrand}
+                onChange={(event) => setTireBrand(event.target.value)}
+                placeholder="e.g. Goodyear Wrangler"
+                className={cn(baseField(), "mt-2 w-full text-left")}
+              />
+            </div>
+          </SectionBlock>
+
+          <SectionBlock
+            eyebrow="Q3 · Brakes"
+            badge="Optional — if on lift"
+            accent="muted"
+          >
+            <FieldRow label="Front pad thickness">
+              <div className="flex items-center gap-2">
+                <input
+                  value={frontPadMm}
+                  onChange={(event) => setFrontPadMm(event.target.value)}
+                  placeholder="mm"
+                  inputMode="decimal"
+                  className={cn(baseField(), "w-[90px] text-right")}
+                />
+                <span className="text-[10px] text-muted-foreground">
+                  → system classifies
+                </span>
+              </div>
+            </FieldRow>
+            <FieldRow label="Rear pad thickness">
               <input
                 value={rearPadMm}
                 onChange={(event) => setRearPadMm(event.target.value)}
                 placeholder="mm"
-                className={fieldClassName()}
+                inputMode="decimal"
+                className={cn(baseField(), "w-[90px] text-right")}
               />
-            </InlineField>
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_190px] sm:items-center">
-            <p className="text-sm font-medium text-foreground">Rotors overall</p>
-            <select
-              value={rotorCondition}
-              onChange={(event) => setRotorCondition(event.target.value)}
-              className={cn(fieldClassName(), "pr-10")}
-            >
-              <option value="">Select...</option>
-              <option value="good">Good</option>
-              <option value="scored">Scored</option>
-              <option value="needs_attention">Needs attention</option>
-            </select>
-          </div>
-        </QuestionCard>
+            </FieldRow>
+            <FieldRow label="Rotors overall">
+              <select
+                value={rotorCondition}
+                onChange={(event) => setRotorCondition(event.target.value)}
+                className={cn(narrowField(), "pr-7")}
+              >
+                <option value="">Select...</option>
+                <option value="good">Good</option>
+                <option value="scored">Scored</option>
+                <option value="needs_attention">Needs attention</option>
+              </select>
+            </FieldRow>
+          </SectionBlock>
 
-        <QuestionCard eyebrow="Q4 · Fluids" badge="Confirm OEM" accent="info">
-          <button
-            type="button"
-            onClick={() => setFluidsMatchOem((current) => !current)}
-            className={cn(
-              "flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-medium transition-colors",
-              fluidsMatchOem
-                ? "border-success/20 bg-success/10 text-foreground"
-                : "border-primary/10 bg-white text-foreground hover:bg-primary/5"
-            )}
-          >
-            <span
+          <SectionBlock eyebrow="Q4 · Fluids" badge="Confirm OEM" accent="info">
+            <button
+              type="button"
+              onClick={() => setFluidsMatchOem((current) => !current)}
               className={cn(
-                "flex h-5 w-5 items-center justify-center rounded-md border",
+                "flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-[12px] font-medium transition-colors",
                 fluidsMatchOem
-                  ? "border-success/20 bg-success text-success-foreground"
-                  : "border-primary/10 bg-background"
+                  ? "border-success/30 bg-success/10 text-success"
+                  : "border-primary/10 bg-muted/60 text-muted-foreground hover:bg-muted"
               )}
             >
-              {fluidsMatchOem ? <Check className="h-3.5 w-3.5" /> : null}
-            </span>
-            Fluid specs match OEM defaults - no changes
-          </button>
+              <span
+                className={cn(
+                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
+                  fluidsMatchOem
+                    ? "border-success bg-success text-success-foreground"
+                    : "border-primary/25 bg-background"
+                )}
+              >
+                {fluidsMatchOem ? <Check className="h-3 w-3" strokeWidth={3} /> : null}
+              </span>
+              Fluid specs match OEM defaults — no changes
+            </button>
 
-          <div className="mt-4 space-y-2">
-            <FluidRow
-              label="Oil"
-              value={`${passportData?.passport.fluids.oil_viscosity ?? "Unknown"} · ${passportData?.passport.fluids.oil_type ?? "Unknown"}`}
-              badge={passportData?.sources["fluids.oil_viscosity"]}
-            />
-            <FluidRow
-              label="Coolant"
-              value={passportData?.passport.fluids.coolant_type ?? "Unknown"}
-              badge={passportData?.sources["fluids.coolant_type"]}
-            />
-            <FluidRow
-              label="Brake fluid"
-              value={passportData?.passport.fluids.brake_fluid_type ?? "Unknown"}
-              badge={passportData?.sources["fluids.brake_fluid_type"]}
-            />
-          </div>
-
-          {!fluidsMatchOem ? (
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <input
-                value={oilViscosity}
-                onChange={(event) => setOilViscosity(event.target.value)}
-                placeholder="Oil viscosity"
-                className={fieldClassName()}
+            <div className="mt-3 space-y-1.5">
+              <FluidRow
+                label="Oil"
+                value={`${passportData?.passport.fluids.oil_viscosity ?? "Unknown"} · ${
+                  passportData?.passport.fluids.oil_type ?? "Unknown"
+                }`}
+                source={passportData?.sources["fluids.oil_viscosity"]}
               />
-              <input
-                value={oilType}
-                onChange={(event) => setOilType(event.target.value)}
-                placeholder="Oil type"
-                className={fieldClassName()}
+              <FluidRow
+                label="Coolant"
+                value={passportData?.passport.fluids.coolant_type ?? "Unknown"}
+                source={passportData?.sources["fluids.coolant_type"]}
               />
-              <input
-                value={coolantType}
-                onChange={(event) => setCoolantType(event.target.value)}
-                placeholder="Coolant type"
-                className={fieldClassName()}
-              />
-              <input
-                value={brakeFluidType}
-                onChange={(event) => setBrakeFluidType(event.target.value)}
-                placeholder="Brake fluid"
-                className={fieldClassName()}
-              />
-              <input
-                value={transmissionFluidType}
-                onChange={(event) => setTransmissionFluidType(event.target.value)}
-                placeholder="Transmission fluid"
-                className={cn(fieldClassName(), "sm:col-span-2")}
+              <FluidRow
+                label="Brake fluid"
+                value={passportData?.passport.fluids.brake_fluid_type ?? "Unknown"}
+                source={passportData?.sources["fluids.brake_fluid_type"]}
               />
             </div>
-          ) : null}
-        </QuestionCard>
 
-        <QuestionCard eyebrow="Q5 · Inspection" badge="Optional">
-          <div className="flex flex-wrap gap-2">
-            {[
-              { value: "yes", label: "Looks current" },
-              { value: "no", label: "No / not visible" },
-            ].map((option) => {
-              const active = inspectionLooksCurrent === option.value;
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() =>
-                    setInspectionLooksCurrent(option.value as "yes" | "no")
-                  }
-                  className={cn(
-                    "rounded-xl border px-3 py-2 text-sm font-medium transition-colors",
-                    active
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-primary/10 bg-white text-foreground hover:bg-primary/5"
-                  )}
-                >
-                  {option.label}
-                </button>
-              );
-            })}
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_190px] sm:items-center">
-            <p className="text-sm font-medium text-foreground">Expires approx.</p>
-            <input
-              type="month"
-              value={inspectionExpiresAt}
-              onChange={(event) => setInspectionExpiresAt(event.target.value)}
-              className={fieldClassName()}
-            />
-          </div>
-        </QuestionCard>
+            {!fluidsMatchOem ? (
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <input
+                  value={oilViscosity}
+                  onChange={(event) => setOilViscosity(event.target.value)}
+                  placeholder="Oil viscosity"
+                  className={cn(baseField(), "w-full text-left")}
+                />
+                <input
+                  value={oilType}
+                  onChange={(event) => setOilType(event.target.value)}
+                  placeholder="Oil type"
+                  className={cn(baseField(), "w-full text-left")}
+                />
+                <input
+                  value={coolantType}
+                  onChange={(event) => setCoolantType(event.target.value)}
+                  placeholder="Coolant type"
+                  className={cn(baseField(), "w-full text-left")}
+                />
+                <input
+                  value={brakeFluidType}
+                  onChange={(event) => setBrakeFluidType(event.target.value)}
+                  placeholder="Brake fluid"
+                  className={cn(baseField(), "w-full text-left")}
+                />
+                <input
+                  value={transmissionFluidType}
+                  onChange={(event) => setTransmissionFluidType(event.target.value)}
+                  placeholder="Transmission fluid"
+                  className={cn(baseField(), "w-full text-left sm:col-span-2")}
+                />
+              </div>
+            ) : null}
+          </SectionBlock>
 
-        <QuestionCard eyebrow="Q6 · Modifications" badge="Optional">
-          <div className="grid gap-3 sm:grid-cols-[1fr_220px] sm:items-center">
-            <p className="text-sm font-medium text-foreground">Aftermarket observed?</p>
-            <select
-              value={modificationsStatus}
-              onChange={(event) =>
-                setModificationsStatus(
-                  event.target.value as "" | "none_observed" | "aftermarket_observed"
-                )
-              }
-              className={cn(fieldClassName(), "pr-10")}
-            >
-              <option value="">No selection</option>
-              <option value="none_observed">None observed</option>
-              <option value="aftermarket_observed">Yes - see notes</option>
-            </select>
-          </div>
-          {modificationsStatus === "aftermarket_observed" ? (
-            <textarea
-              value={modificationNotes}
-              onChange={(event) => setModificationNotes(event.target.value)}
-              placeholder="Describe what you observed."
-              className={cn(
-                drawerTextareaClassName,
-                "mt-4 min-h-[112px] rounded-2xl border-primary/10 bg-white/92"
-              )}
-            />
-          ) : null}
-        </QuestionCard>
+          <SectionBlock eyebrow="Q5 · Inspection" badge="Optional" accent="muted">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-[12px] text-muted-foreground">
+                Sticker looks current?
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  {
+                    value: "yes",
+                    label: "Looks current",
+                    active: "border-success/40 bg-success/10 text-success",
+                  },
+                  {
+                    value: "no",
+                    label: "No / not visible",
+                    active: "border-primary/40 bg-primary/10 text-primary",
+                  },
+                ].map((option) => {
+                  const active = inspectionLooksCurrent === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() =>
+                        setInspectionLooksCurrent(option.value as "yes" | "no")
+                      }
+                      className={cn(
+                        "rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                        active
+                          ? option.active
+                          : "border-primary/10 bg-muted/60 text-muted-foreground hover:bg-muted"
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="mt-3">
+              <FieldRow label="Expires approx.">
+                <input
+                  type="month"
+                  value={inspectionExpiresAt}
+                  onChange={(event) => setInspectionExpiresAt(event.target.value)}
+                  className={cn(baseField(), "w-[150px] text-right")}
+                />
+              </FieldRow>
+            </div>
+          </SectionBlock>
+
+          <SectionBlock eyebrow="Q6 · Modifications" badge="Optional" accent="muted">
+            <FieldRow label="Aftermarket observed?">
+              <select
+                value={modificationsStatus}
+                onChange={(event) =>
+                  setModificationsStatus(
+                    event.target.value as "" | "none_observed" | "aftermarket_observed"
+                  )
+                }
+                className={cn(narrowField(), "w-[170px] pr-7")}
+              >
+                <option value="">No selection</option>
+                <option value="none_observed">None observed</option>
+                <option value="aftermarket_observed">Yes — see notes</option>
+              </select>
+            </FieldRow>
+            {modificationsStatus === "aftermarket_observed" ? (
+              <textarea
+                value={modificationNotes}
+                onChange={(event) => setModificationNotes(event.target.value)}
+                placeholder="Describe what you observed."
+                className={cn(
+                  baseField(),
+                  "mt-3 min-h-[80px] w-full resize-y py-2 text-left"
+                )}
+              />
+            ) : null}
+          </SectionBlock>
+        </div>
       </div>
     </SurveyDialogShell>
   );
 }
 
-function QuestionCard({
+function VehicleSummaryCard({ label, subLabel }: { label: string; subLabel: string }) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl bg-muted/60 px-3 py-2.5">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground">
+        {getInitials(label)}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13px] font-semibold text-foreground">{label}</p>
+        <p className="mt-0.5 truncate text-[10px] text-muted-foreground">{subLabel}</p>
+      </div>
+    </div>
+  );
+}
+
+function SectionBlock({
   eyebrow,
   badge,
   accent = "muted",
@@ -507,23 +578,43 @@ function QuestionCard({
 }) {
   const badgeClassName =
     accent === "required"
-      ? "border-destructive/10 bg-destructive/10 text-destructive"
+      ? "border-destructive/25 bg-destructive/10 text-destructive"
       : accent === "info"
-        ? "border-primary/10 bg-primary/10 text-primary"
-        : "border-primary/10 bg-white/85 text-muted-foreground";
+        ? "border-primary/20 bg-primary/10 text-primary"
+        : "border-primary/10 bg-muted text-muted-foreground";
 
   return (
-    <section className={surveyCardClassName}>
+    <section className="py-4 first:pt-0 last:pb-0">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[0.7rem] font-semibold uppercase tracking-[0.24em] text-primary/80">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
           {eyebrow}
         </p>
-        <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", badgeClassName)}>
+        <span
+          className={cn(
+            "rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]",
+            badgeClassName
+          )}
+        >
           {badge}
         </span>
       </div>
-      <div className="mt-4">{children}</div>
+      <div className="mt-3">{children}</div>
     </section>
+  );
+}
+
+function FieldRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5 py-1.5 text-[12px] sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-2 sm:justify-end">{children}</div>
+    </div>
   );
 }
 
@@ -537,24 +628,11 @@ function TireConditionRow({
   onChange: (next: TireCondition) => void;
 }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-[64px_1fr] sm:items-center">
-      <p className="text-sm font-medium text-foreground">{label}</p>
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+      <span className="w-14 shrink-0 text-[12px] font-medium text-muted-foreground">
+        {label}
+      </span>
       <ConditionButtons value={value} onChange={onChange} />
-    </div>
-  );
-}
-
-function InlineField({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div>
-      <p className="mb-2 text-sm font-medium text-foreground">{label}</p>
-      {children}
     </div>
   );
 }
@@ -562,20 +640,20 @@ function InlineField({
 function FluidRow({
   label,
   value,
-  badge,
+  source,
 }: {
   label: string;
   value: string;
-  badge?: PassportSource;
+  source?: PassportSource;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-2xl border border-primary/10 bg-[rgba(17,24,28,0.02)] px-4 py-3">
-      <span className="text-sm text-foreground/80">{label}</span>
-      <span className="text-right text-sm font-semibold text-foreground">
+    <div className="flex items-center justify-between gap-3 rounded-md bg-muted/60 px-3 py-1.5 text-[12px]">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="flex items-center gap-2 text-right font-medium text-foreground">
         {value}
-        {badge ? (
-          <span className="ml-2 rounded-full border border-primary/10 bg-white px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-            {passportSourceLabel(badge)}
+        {source ? (
+          <span className="rounded-full border border-primary/10 bg-background px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+            {passportSourceLabel(source)}
           </span>
         ) : null}
       </span>
@@ -583,9 +661,14 @@ function FluidRow({
   );
 }
 
-function fieldClassName() {
+function baseField() {
+  return "h-8 rounded-md border border-primary/15 bg-background px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground/60 outline-none transition-all focus:border-primary/40 focus:ring-2 focus:ring-primary/15";
+}
+
+function narrowField(isError?: boolean) {
   return cn(
-    drawerInputClassName,
-    "h-11 rounded-xl border border-primary/10 bg-white/92 shadow-none"
+    baseField(),
+    "w-[140px] text-right",
+    isError ? "border-destructive/50 focus:border-destructive/60 focus:ring-destructive/20" : null
   );
 }

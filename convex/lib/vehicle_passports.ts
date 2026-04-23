@@ -7,6 +7,8 @@ export const PASSPORT_REQUIRED_FIELDS = [
   "tires.overall_condition",
 ] as const;
 
+const TIRE_CONDITION_VALUES = ["good", "fair", "replace_soon"] as const;
+
 export const tireConditionValidator = v.union(
   v.literal("good"),
   v.literal("fair"),
@@ -92,11 +94,11 @@ export const prejobReportValidator = v.object({
   tire_brand: v.optional(nullableStringValidator),
   front_tire_condition: v.union(tireConditionValidator, v.null()),
   rear_tire_condition: v.union(tireConditionValidator, v.null()),
-  brakes: v.optional(vehiclePassportBrakesValidator),
+  brakes: v.optional(v.union(vehiclePassportBrakesValidator, v.null())),
   fluids_match_oem: v.optional(v.boolean()),
-  fluid_overrides: v.optional(vehiclePassportFluidsValidator),
-  inspection: v.optional(vehiclePassportInspectionValidator),
-  modifications: v.optional(vehiclePassportModificationsValidator),
+  fluid_overrides: v.optional(v.union(vehiclePassportFluidsValidator, v.null())),
+  inspection: v.optional(v.union(vehiclePassportInspectionValidator, v.null())),
+  modifications: v.optional(v.union(vehiclePassportModificationsValidator, v.null())),
 });
 
 export const vehicleUpdateValuesValidator = v.object({
@@ -125,7 +127,7 @@ export const postjobPartValidator = v.object({
 export const postjobReportValidator = v.object({
   completion_mileage: v.float64(),
   parts_used: v.array(postjobPartValidator),
-  vehicle_updates: v.optional(vehicleUpdateValuesValidator),
+  vehicle_updates: v.optional(v.union(vehicleUpdateValuesValidator, v.null())),
   technician_notes: v.optional(nullableStringValidator),
   flagged_vehicle_specs: v.optional(v.boolean()),
   flagged_vehicle_specs_reason: v.optional(nullableStringValidator),
@@ -140,6 +142,15 @@ export const postjobReportValidator = v.object({
 
 export function hasText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+export function isTireCondition(
+  value: unknown
+): value is (typeof TIRE_CONDITION_VALUES)[number] {
+  return (
+    typeof value === "string" &&
+    (TIRE_CONDITION_VALUES as readonly string[]).includes(value)
+  );
 }
 
 function hasMileage(value: unknown) {
@@ -176,6 +187,9 @@ export function getMissingRequiredPassportFields(record: PassportCompletenessRec
     const value = getValueAtPath(record, field);
     if (field === "mileage") {
       return !hasMileage(value);
+    }
+    if (field === "tires.overall_condition") {
+      return !isTireCondition(value);
     }
     return !hasText(value);
   });

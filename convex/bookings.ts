@@ -57,12 +57,33 @@ import {
   getMissingRequiredPassportFields,
   getPassportCompletionPercent,
   hasText,
+  isTireCondition,
   mergePassportSection,
   postjobReportValidator,
   prejobReportValidator,
   serviceRequiresParts,
   vehiclePassportUpdateValidator,
 } from "./lib/vehicle_passports";
+
+function normalizeNullableText(value: string | null | undefined) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function formatPassportFieldLabel(field: string) {
+  switch (field) {
+    case "mileage":
+      return "mileage";
+    case "tires.brand":
+      return "tire brand";
+    case "tires.model":
+      return "tire model";
+    case "tires.overall_condition":
+      return "tire condition";
+    default:
+      return field;
+  }
+}
 
 /** Live Tracker stage slugs stored on bookings when status is in_progress */
 export const LIVE_STAGE_SLUGS = ["booking_confirmed", "service_in_progress", "vehicle_ready"] as const;
@@ -2870,22 +2891,45 @@ export const confirmVehiclePassport = mutation({
     }
 
     const passportView = await buildVehiclePassportForBooking(ctx, booking);
+    const normalizedPassport = {
+      ...args.passport,
+      mileage:
+        typeof args.passport.mileage === "number" &&
+        Number.isFinite(args.passport.mileage) &&
+        args.passport.mileage >= 0
+          ? args.passport.mileage
+          : null,
+      tires: args.passport.tires
+        ? {
+            ...args.passport.tires,
+            brand: normalizeNullableText(args.passport.tires.brand),
+            model: normalizeNullableText(args.passport.tires.model),
+            overall_condition: isTireCondition(args.passport.tires.overall_condition)
+              ? args.passport.tires.overall_condition
+              : null,
+          }
+        : undefined,
+    };
     const mergedPassport = {
       ...passportView.passport,
-      mileage: args.passport.mileage ?? passportView.passport.mileage,
+      mileage: normalizedPassport.mileage ?? passportView.passport.mileage,
       tires: {
         ...passportView.passport.tires,
-        ...(args.passport.tires ?? {}),
+        ...(normalizedPassport.tires ?? {}),
       },
     };
     const missingFields = getMissingRequiredPassportFields(mergedPassport);
     if (missingFields.length > 0) {
-      throw new Error("Mileage, tire brand, tire model, and tire condition are required.");
+      throw new Error(
+        `Missing required fields: ${missingFields
+          .map(formatPassportFieldLabel)
+          .join(", ")}.`
+      );
     }
 
     await upsertVehiclePassportRecord(ctx, {
       vin: booking.vin,
-      patch: args.passport,
+      patch: normalizedPassport,
       now: Date.now(),
       markConfirmed: true,
     });
@@ -2905,8 +2949,8 @@ export const startWithPrejob = mutation({
     if (!booking) throw new Error("Booking not found");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
-    if (!["in_progress", "completed"].includes(booking.status)) {
-      throw new Error("Only in-progress bookings can be completed.");
+    if (!["confirmed", "in_progress"].includes(booking.status)) {
+      throw new Error("Only confirmed bookings can be started.");
     }
 
     const passportView = await buildVehiclePassportForBooking(ctx, booking);

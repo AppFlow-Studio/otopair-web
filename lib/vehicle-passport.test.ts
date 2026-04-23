@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  getMissingRequiredPassportFields,
   getVehiclePassportCompletionPercent,
   getVehicleUpdatePrompts,
   serviceLikelyUsesParts,
@@ -92,6 +93,18 @@ test("passport completeness drops when required fields are missing", () => {
   });
 
   assert.equal(percent, 0);
+});
+
+test("passport completeness accepts valid tire condition enums", () => {
+  const missing = getMissingRequiredPassportFields({
+    ...basePassport.passport,
+    tires: {
+      ...basePassport.passport.tires,
+      overall_condition: "replace_soon",
+    },
+  });
+
+  assert.deepEqual(missing, []);
 });
 
 test("serviceLikelyUsesParts respects explicit flag", () => {

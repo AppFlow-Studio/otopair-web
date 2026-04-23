@@ -27,6 +27,13 @@ export const PARTS_ACCURACY_STATUSES = [
 ] as const;
 export type PartsAccuracyStatus = (typeof PARTS_ACCURACY_STATUSES)[number];
 
+const REQUIRED_PASSPORT_FIELDS = [
+  "mileage",
+  "tires.brand",
+  "tires.model",
+  "tires.overall_condition",
+] as const;
+
 export type PassportSource =
   | "verified"
   | "oem_default"
@@ -177,15 +184,15 @@ type VehicleUpdatePrompt = {
   source?: PassportSource;
 };
 
-const REQUIRED_PASSPORT_FIELDS = [
-  "mileage",
-  "tires.brand",
-  "tires.model",
-  "tires.overall_condition",
-] as const;
-
 export function hasText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+export function isTireCondition(value: unknown): value is TireCondition {
+  return (
+    typeof value === "string" &&
+    (TIRE_CONDITIONS as readonly string[]).includes(value)
+  );
 }
 
 export function formatMileage(value?: number | null) {
@@ -265,7 +272,7 @@ export function getMissingRequiredPassportFields(
     if (field === "tires.model") {
       return !hasText(passport.tires.model);
     }
-    return !hasText(passport.tires.overall_condition);
+    return !isTireCondition(passport.tires.overall_condition);
   });
 }
 

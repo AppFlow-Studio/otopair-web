@@ -53,6 +53,16 @@ import {
   jobActualInputValidator,
   saveJobActualDraft,
 } from "./lib/job_actuals";
+import {
+  getMissingRequiredPassportFields,
+  getPassportCompletionPercent,
+  hasText,
+  mergePassportSection,
+  postjobReportValidator,
+  prejobReportValidator,
+  serviceRequiresParts,
+  vehiclePassportUpdateValidator,
+} from "./lib/vehicle_passports";
 
 /** Live Tracker stage slugs stored on bookings when status is in_progress */
 export const LIVE_STAGE_SLUGS = ["booking_confirmed", "service_in_progress", "vehicle_ready"] as const;
@@ -881,6 +891,634 @@ async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
   return names;
 }
 
+function firstDefinedNumber(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function firstDefinedString(...values: unknown[]) {
+  for (const value of values) {
+    if (hasText(value)) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function firstDefinedBoolean(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return null;
+}
+
+function formatShortDateLabel(dateString?: string | null, fallbackMs?: number | null) {
+  if (hasText(dateString)) {
+    return new Date(`${dateString}T00:00:00`).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+  }
+  if (typeof fallbackMs === "number" && Number.isFinite(fallbackMs)) {
+    return new Date(fallbackMs).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+  }
+  return "";
+}
+
+function coerceNumberOrNull(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
+function normalizePartsUsed(parts: Array<{
+  part_name: string;
+  brand?: string | null;
+  oem_number: string;
+  cost: number;
+}>) {
+  return parts
+    .map((part) => ({
+      part_name: part.part_name.trim(),
+      brand: hasText(part.brand) ? part.brand.trim() : null,
+      oem_number: part.oem_number.trim(),
+      cost: Number.isFinite(part.cost) ? Number(part.cost) : 0,
+    }))
+    .filter(
+      (part) =>
+        hasText(part.part_name) ||
+        hasText(part.oem_number) ||
+        hasText(part.brand) ||
+        part.cost > 0
+    );
+}
+
+function sumPartsCost(parts: Array<{ cost: number }>) {
+  return parts.reduce((sum, part) => sum + (Number.isFinite(part.cost) ? part.cost : 0), 0);
+}
+
+function pickPreferredOwner(owners: any[]) {
+  return (
+    owners.find((owner) => owner.status === "active" && owner.is_primary) ??
+    owners.find((owner) => owner.status === "active") ??
+    owners[0] ??
+    null
+  );
+}
+
+function determineOwnershipLabel(owner: any) {
+  if (!owner) return null;
+  if (hasText(owner.ownershipType)) return owner.ownershipType.trim();
+  if (owner.ownedSinceNew === true) return "Owned since new";
+  if (owner.status === "active") return "Owned";
+  return null;
+}
+
+function buildSourceTag(
+  verifiedValue: unknown,
+  fallbackValue: unknown,
+  fallbackTag: "oem_default" | "user_reported"
+) {
+  if (
+    typeof verifiedValue === "number" ||
+    typeof verifiedValue === "boolean" ||
+    hasText(verifiedValue)
+  ) {
+    return "verified";
+  }
+  if (
+    typeof fallbackValue === "number" ||
+    typeof fallbackValue === "boolean" ||
+    hasText(fallbackValue)
+  ) {
+    return fallbackTag;
+  }
+  return "empty";
+}
+
+function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
+  const frontCondition = prejob.front_tire_condition ?? undefined;
+  const rearCondition = prejob.rear_tire_condition ?? undefined;
+  const fluidOverrides = prejob.fluid_overrides ?? undefined;
+  const hasFluidOverride =
+    fluidOverrides &&
+    Object.values(fluidOverrides).some(
+      (value) =>
+        typeof value === "number" ||
+        typeof value === "boolean" ||
+        hasText(value)
+    );
+
+  return {
+    mileage: prejob.mileage,
+    tires: {
+      brand: prejob.tire_brand ?? undefined,
+      front_condition: frontCondition,
+      rear_condition: rearCondition,
+      overall_condition:
+        frontCondition && frontCondition === rearCondition
+          ? frontCondition
+          : existingPassport?.tires?.overall_condition ?? frontCondition ?? rearCondition,
+    },
+    brakes: prejob.brakes,
+    fluids:
+      prejob.fluids_match_oem || hasFluidOverride
+        ? {
+            ...(fluidOverrides ?? {}),
+            confirmation_status: hasFluidOverride ? "updated" : "oem_confirmed",
+          }
+        : undefined,
+    inspection: prejob.inspection,
+    modifications: prejob.modifications,
+  };
+}
+
+function buildPassportPatchFromPostjob(postjob: any) {
+  const updates = postjob.vehicle_updates ?? {};
+  const hasFluidUpdate =
+    hasText(updates.oil_viscosity) ||
+    hasText(updates.oil_type) ||
+    hasText(updates.coolant_type) ||
+    hasText(updates.brake_fluid_type) ||
+    hasText(updates.transmission_fluid_type);
+
+  return {
+    mileage: postjob.completion_mileage,
+    tires: {
+      brand: updates.tire_brand ?? undefined,
+      model: updates.tire_model ?? undefined,
+      size_front: updates.tire_size_front ?? undefined,
+      size_rear: updates.tire_size_rear ?? undefined,
+      run_flat: updates.run_flat ?? undefined,
+      overall_condition: updates.tire_overall_condition ?? undefined,
+    },
+    fluids: hasFluidUpdate
+      ? {
+          oil_viscosity: updates.oil_viscosity ?? undefined,
+          oil_type: updates.oil_type ?? undefined,
+          coolant_type: updates.coolant_type ?? undefined,
+          brake_fluid_type: updates.brake_fluid_type ?? undefined,
+          transmission_fluid_type: updates.transmission_fluid_type ?? undefined,
+          confirmation_status: "updated",
+        }
+      : undefined,
+    brakes: {
+      pad_brand: updates.pad_brand ?? undefined,
+    },
+  };
+}
+
+async function updateOwnerMileageForVin(ctx: any, vin: string, mileage: number, now: number) {
+  const owners = await ctx.db
+    .query("vehicle_owners")
+    .withIndex("by_vin", (q: any) => q.eq("vin", vin))
+    .collect();
+
+  for (const owner of owners) {
+    if (owner.status !== "active") continue;
+    await ctx.db.patch(owner._id, {
+      mileage,
+      last_checkin_at: now,
+    });
+  }
+}
+
+async function upsertVehiclePassportRecord(
+  ctx: any,
+  {
+    vin,
+    patch,
+    now,
+    markConfirmed = false,
+  }: {
+    vin: string;
+    patch: any;
+    now: number;
+    markConfirmed?: boolean;
+  }
+) {
+  const canonicalVin = toCanonicalVin(vin);
+  const existing = await ctx.db
+    .query("vehicle_passports")
+    .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+    .unique();
+
+  const currentMileage = existing?.mileage;
+  const currentReportedAt = existing?.last_reported_at;
+  const nextMileage =
+    typeof patch?.mileage === "number" && Number.isFinite(patch.mileage)
+      ? patch.mileage
+      : currentMileage;
+
+  let nextVelocity = existing?.mileage_velocity;
+  if (
+    typeof nextMileage === "number" &&
+    typeof currentMileage === "number" &&
+    typeof currentReportedAt === "number" &&
+    now > currentReportedAt &&
+    nextMileage >= currentMileage
+  ) {
+    const elapsedMonths = (now - currentReportedAt) / (1000 * 60 * 60 * 24 * 30.4375);
+    if (elapsedMonths > 0.05) {
+      nextVelocity = Math.round((nextMileage - currentMileage) / elapsedMonths);
+    }
+  }
+
+  const mergedTires = mergePassportSection(existing?.tires, patch?.tires
+    ? {
+        ...patch.tires,
+        last_verified_at: now,
+      }
+    : undefined);
+  const mergedFluids = mergePassportSection(existing?.fluids, patch?.fluids);
+  const mergedBrakes = mergePassportSection(existing?.brakes, patch?.brakes);
+  const mergedInspection = mergePassportSection(existing?.inspection, patch?.inspection);
+  const mergedModifications = mergePassportSection(
+    existing?.modifications,
+    patch?.modifications
+  );
+
+  const nextRecord = {
+    vin: canonicalVin,
+    mileage: nextMileage ?? undefined,
+    last_reported_at:
+      typeof nextMileage === "number" ? now : existing?.last_reported_at ?? undefined,
+    mileage_velocity: nextVelocity ?? undefined,
+    tires: mergedTires,
+    fluids: mergedFluids,
+    brakes: mergedBrakes,
+    inspection: mergedInspection,
+    modifications: mergedModifications,
+    created_at: existing?.created_at ?? now,
+    updated_at: now,
+    first_shop_confirmed_at:
+      existing?.first_shop_confirmed_at ?? (markConfirmed ? now : undefined),
+    last_shop_confirmed_at:
+      markConfirmed ? now : existing?.last_shop_confirmed_at ?? undefined,
+  };
+
+  if (existing) {
+    await ctx.db.patch(existing._id, nextRecord);
+    const updated = await ctx.db.get(existing._id);
+    if (typeof nextMileage === "number") {
+      await updateOwnerMileageForVin(ctx, canonicalVin, nextMileage, now);
+    }
+    return updated;
+  }
+
+  const insertedId = await ctx.db.insert("vehicle_passports", nextRecord);
+  if (typeof nextMileage === "number") {
+    await updateOwnerMileageForVin(ctx, canonicalVin, nextMileage, now);
+  }
+  return await ctx.db.get(insertedId);
+}
+
+async function buildVehiclePassportForBooking(ctx: any, booking: any) {
+  const canonicalVin = toCanonicalVin(booking.vin);
+  const serviceId = booking.service_ids?.[0];
+
+  const [vehicle, passportRecord, vehicleLabels, owners, allBookings, allActuals, service] =
+    await Promise.all([
+      ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+        .unique(),
+      ctx.db
+        .query("vehicle_passports")
+        .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+        .unique(),
+      resolveVehicleLabel(ctx, canonicalVin),
+      ctx.db
+        .query("vehicle_owners")
+        .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+        .collect(),
+      ctx.db.query("bookings").collect(),
+      ctx.db.query("job_actuals").collect(),
+      serviceId ? ctx.db.get(serviceId) : null,
+    ]);
+
+  const [trimSpec, engine, transmission, vehicleConfig] = await Promise.all([
+    vehicle?.trim_id
+      ? ctx.db
+          .query("trim_specs")
+          .withIndex("by_trim", (q: any) => q.eq("trim_id", vehicle.trim_id))
+          .unique()
+      : null,
+    vehicle?.engine_id ? ctx.db.get(vehicle.engine_id) : null,
+    vehicle?.transmission_id ? ctx.db.get(vehicle.transmission_id) : null,
+    vehicle?.vehicle_config_id ? ctx.db.get(vehicle.vehicle_config_id) : null,
+  ]);
+
+  const preferredOwner = pickPreferredOwner(owners);
+  const ownerDrivingType = firstDefinedString(
+    preferredOwner?.usagePattern,
+    preferredOwner?.usage_pattern,
+    preferredOwner?.avgMonthlyDriving
+  );
+  const ownerOwnership = determineOwnershipLabel(preferredOwner);
+
+  const mileage = firstDefinedNumber(passportRecord?.mileage, preferredOwner?.mileage);
+  const mileageVelocity = firstDefinedNumber(
+    passportRecord?.mileage_velocity,
+    typeof preferredOwner?.annual_mileage_rate === "number"
+      ? Math.round(preferredOwner.annual_mileage_rate / 12)
+      : null
+  );
+
+  const passport = {
+    mileage,
+    last_reported_at: firstDefinedNumber(
+      passportRecord?.last_reported_at,
+      preferredOwner?.last_checkin_at
+    ),
+    mileage_velocity: mileageVelocity,
+    tires: {
+      brand: firstDefinedString(passportRecord?.tires?.brand),
+      model: firstDefinedString(passportRecord?.tires?.model),
+      size_front: firstDefinedString(
+        passportRecord?.tires?.size_front,
+        trimSpec?.tire_size_front
+      ),
+      size_rear: firstDefinedString(
+        passportRecord?.tires?.size_rear,
+        trimSpec?.tire_size_rear,
+        trimSpec?.tire_size_front
+      ),
+      run_flat: firstDefinedBoolean(passportRecord?.tires?.run_flat, trimSpec?.is_run_flat),
+      overall_condition: passportRecord?.tires?.overall_condition ?? null,
+      front_condition: passportRecord?.tires?.front_condition ?? null,
+      rear_condition: passportRecord?.tires?.rear_condition ?? null,
+      last_verified_at: firstDefinedNumber(
+        passportRecord?.tires?.last_verified_at,
+        passportRecord?.last_shop_confirmed_at
+      ),
+    },
+    fluids: {
+      oil_viscosity: firstDefinedString(
+        passportRecord?.fluids?.oil_viscosity,
+        engine?.oil_viscosity
+      ),
+      oil_type: firstDefinedString(
+        passportRecord?.fluids?.oil_type,
+        engine?.oil_spec_standard
+      ),
+      coolant_type: firstDefinedString(
+        passportRecord?.fluids?.coolant_type,
+        engine?.coolant_type
+      ),
+      brake_fluid_type: firstDefinedString(
+        passportRecord?.fluids?.brake_fluid_type,
+        vehicleConfig?.brake_fluid_type
+      ),
+      transmission_fluid_type: firstDefinedString(
+        passportRecord?.fluids?.transmission_fluid_type,
+        transmission?.fluid_type
+      ),
+      confirmation_status: firstDefinedString(passportRecord?.fluids?.confirmation_status),
+    },
+    brakes: {
+      pad_brand: firstDefinedString(passportRecord?.brakes?.pad_brand),
+      front_pad_mm: coerceNumberOrNull(passportRecord?.brakes?.front_pad_mm),
+      rear_pad_mm: coerceNumberOrNull(passportRecord?.brakes?.rear_pad_mm),
+      rotor_condition: passportRecord?.brakes?.rotor_condition ?? null,
+    },
+    inspection: {
+      looks_current: firstDefinedBoolean(passportRecord?.inspection?.looks_current),
+      expires_at: firstDefinedString(passportRecord?.inspection?.expires_at),
+      status: passportRecord?.inspection?.status ?? null,
+    },
+    modifications: {
+      status: passportRecord?.modifications?.status ?? null,
+      notes: firstDefinedString(passportRecord?.modifications?.notes),
+    },
+  };
+
+  const sources = {
+    mileage: buildSourceTag(passportRecord?.mileage, preferredOwner?.mileage, "user_reported"),
+    "tires.brand": buildSourceTag(passportRecord?.tires?.brand, null, "oem_default"),
+    "tires.model": buildSourceTag(passportRecord?.tires?.model, null, "oem_default"),
+    "tires.size_front": buildSourceTag(
+      passportRecord?.tires?.size_front,
+      trimSpec?.tire_size_front,
+      "oem_default"
+    ),
+    "tires.size_rear": buildSourceTag(
+      passportRecord?.tires?.size_rear,
+      trimSpec?.tire_size_rear ?? trimSpec?.tire_size_front,
+      "oem_default"
+    ),
+    "tires.run_flat": buildSourceTag(
+      passportRecord?.tires?.run_flat,
+      trimSpec?.is_run_flat,
+      "oem_default"
+    ),
+    "tires.overall_condition": buildSourceTag(
+      passportRecord?.tires?.overall_condition,
+      null,
+      "oem_default"
+    ),
+    "fluids.oil_viscosity": buildSourceTag(
+      passportRecord?.fluids?.oil_viscosity,
+      engine?.oil_viscosity,
+      "oem_default"
+    ),
+    "fluids.oil_type": buildSourceTag(
+      passportRecord?.fluids?.oil_type,
+      engine?.oil_spec_standard,
+      "oem_default"
+    ),
+    "fluids.coolant_type": buildSourceTag(
+      passportRecord?.fluids?.coolant_type,
+      engine?.coolant_type,
+      "oem_default"
+    ),
+    "fluids.brake_fluid_type": buildSourceTag(
+      passportRecord?.fluids?.brake_fluid_type,
+      vehicleConfig?.brake_fluid_type,
+      "oem_default"
+    ),
+    "fluids.transmission_fluid_type": buildSourceTag(
+      passportRecord?.fluids?.transmission_fluid_type,
+      transmission?.fluid_type,
+      "oem_default"
+    ),
+  };
+
+  const bookingMap = new Map<string, any>();
+  for (const existingBooking of allBookings) {
+    bookingMap.set(String(existingBooking._id), existingBooking);
+  }
+
+  const completedVehicleBookings = allBookings
+    .filter(
+      (row: any) =>
+        toCanonicalVin(row.vin) === canonicalVin && row.status === "completed"
+    )
+    .sort((left: any, right: any) => {
+      const leftTime = left.updated_at ?? left._creationTime ?? 0;
+      const rightTime = right.updated_at ?? right._creationTime ?? 0;
+      return rightTime - leftTime;
+    })
+    .slice(0, 3);
+
+  const recent_services = await Promise.all(
+    completedVehicleBookings.map(async (row: any) => ({
+      date_label: formatShortDateLabel(row.scheduled_date, row.updated_at),
+      service_name: (await resolveServiceNames(ctx, row.service_ids)).join(", "),
+    }))
+  );
+
+  const mechanicNameCache = new Map<string, string>();
+  const mechanic_notes = [];
+  for (const actual of allActuals) {
+    if (!hasText(actual.technician_notes)) continue;
+    const sourceBooking = bookingMap.get(String(actual.booking_id));
+    if (!sourceBooking || toCanonicalVin(sourceBooking.vin) !== canonicalVin) continue;
+
+    const mechanicKey = String(actual.mechanic_id ?? "");
+    let author = mechanicNameCache.get(mechanicKey);
+    if (author === undefined) {
+      const mechanic = actual.mechanic_id ? await ctx.db.get(actual.mechanic_id) : null;
+      author = mechanic
+        ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
+        : "Shop staff";
+      mechanicNameCache.set(mechanicKey, author);
+    }
+
+    mechanic_notes.push({
+      note: actual.technician_notes.trim(),
+      author,
+      date_label: formatShortDateLabel(
+        sourceBooking.scheduled_date,
+        actual.completed_at_ms ?? actual.updated_at ?? actual.logged_at_ms
+      ),
+      sort_ms:
+        actual.completed_at_ms ??
+        actual.updated_at ??
+        actual.logged_at_ms ??
+        sourceBooking.updated_at ??
+        0,
+    });
+  }
+  mechanic_notes.sort((left, right) => right.sort_ms - left.sort_ms);
+
+  const missing_fields = getMissingRequiredPassportFields(passport);
+
+  return {
+    vin: canonicalVin,
+    vehicle_label: vehicleLabels.full,
+    vehicle_short_label: vehicleLabels.short,
+    service_name: service?.name ?? (await resolveServiceNames(ctx, booking.service_ids)).join(", "),
+    service_slug: service?.slug ?? null,
+    requires_parts: serviceRequiresParts(service),
+    is_complete: missing_fields.length === 0,
+    completion_percent: getPassportCompletionPercent(passport),
+    missing_fields,
+    passport,
+    usage: {
+      driving_type: ownerDrivingType,
+      ownership: ownerOwnership,
+    },
+    recent_services,
+    mechanic_notes: mechanic_notes.slice(0, 3).map((entry) => ({
+      note: entry.note,
+      author: entry.author,
+      date_label: entry.date_label,
+    })),
+    sources,
+  };
+}
+
+function validatePrejobReport(prejob: any, baselineMileage: number | null) {
+  if (typeof prejob.mileage !== "number" || !Number.isFinite(prejob.mileage)) {
+    throw new Error("Mileage is required before starting this booking.");
+  }
+  if (!hasText(prejob.front_tire_condition)) {
+    throw new Error("Front tire condition is required before starting this booking.");
+  }
+  if (!hasText(prejob.rear_tire_condition)) {
+    throw new Error("Rear tire condition is required before starting this booking.");
+  }
+  if (
+    typeof baselineMileage === "number" &&
+    prejob.mileage < baselineMileage
+  ) {
+    throw new Error(
+      `Mileage cannot move backward. Stored mileage is ${baselineMileage.toLocaleString()}.`
+    );
+  }
+}
+
+function validatePostjobReport(postjob: any, baselineMileage: number | null, requiresParts: boolean) {
+  if (
+    typeof postjob.completion_mileage !== "number" ||
+    !Number.isFinite(postjob.completion_mileage)
+  ) {
+    throw new Error("Completion mileage is required to close this job.");
+  }
+  if (
+    typeof baselineMileage === "number" &&
+    postjob.completion_mileage < baselineMileage
+  ) {
+    throw new Error(
+      `Completion mileage cannot be lower than the stored mileage of ${baselineMileage.toLocaleString()}.`
+    );
+  }
+
+  const normalizedParts = normalizePartsUsed(postjob.parts_used ?? []);
+  if (requiresParts && normalizedParts.length === 0) {
+    throw new Error("Parts used are required for this service before closing the job.");
+  }
+  if (
+    postjob.flagged_vehicle_specs === true &&
+    !hasText(postjob.flagged_vehicle_specs_reason)
+  ) {
+    throw new Error("Please explain why the vehicle specs should be reviewed.");
+  }
+  if (
+    postjob.parts_accuracy_status === "different_parts" &&
+    !hasText(postjob.parts_accuracy_feedback)
+  ) {
+    throw new Error("Please note which parts were different.");
+  }
+}
+
+async function hasCompleteVehiclePassportForBooking(ctx: any, booking: any) {
+  const canonicalVin = toCanonicalVin(booking.vin);
+  const [passportRecord, owners] = await Promise.all([
+    ctx.db
+      .query("vehicle_passports")
+      .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+      .unique(),
+    ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+      .collect(),
+  ]);
+
+  const preferredOwner = pickPreferredOwner(owners);
+  return (
+    getMissingRequiredPassportFields({
+      mileage: passportRecord?.mileage ?? preferredOwner?.mileage,
+      tires: {
+        brand: passportRecord?.tires?.brand,
+        model: passportRecord?.tires?.model,
+        overall_condition: passportRecord?.tires?.overall_condition,
+      },
+    }).length === 0
+  );
+}
+
 async function resolveUserPhotoUrl(ctx: any, user: any) {
   if (!user) return null;
   if (user.profile_photo_storage_id) {
@@ -1415,6 +2053,10 @@ async function mapMechanicDashboardJob(ctx: any, booking: any) {
   const customer = await ctx.db.get(booking.user_id);
   const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
   const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+  const vehiclePassportComplete = await hasCompleteVehiclePassportForBooking(
+    ctx,
+    booking
+  );
 
   const customerFirstName =
     customer?.first_name?.trim() ||
@@ -1437,6 +2079,7 @@ async function mapMechanicDashboardJob(ctx: any, booking: any) {
     vehicle: vehicleLabels.full,
     vehicleShort: vehicleLabels.short,
     serviceNames,
+    vehiclePassportComplete,
     estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
     totalCost: booking.total_cost,
   };
@@ -2199,6 +2842,201 @@ export const getJobDetail = query({
   },
 });
 
+export const getVehiclePassportForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    return await buildVehiclePassportForBooking(ctx, booking);
+  },
+});
+
+export const confirmVehiclePassport = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    passport: vehiclePassportUpdateValidator,
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (!["confirmed", "in_progress"].includes(booking.status)) {
+      throw new Error("Only confirmed bookings can be started.");
+    }
+
+    const passportView = await buildVehiclePassportForBooking(ctx, booking);
+    const mergedPassport = {
+      ...passportView.passport,
+      mileage: args.passport.mileage ?? passportView.passport.mileage,
+      tires: {
+        ...passportView.passport.tires,
+        ...(args.passport.tires ?? {}),
+      },
+    };
+    const missingFields = getMissingRequiredPassportFields(mergedPassport);
+    if (missingFields.length > 0) {
+      throw new Error("Mileage, tire brand, tire model, and tire condition are required.");
+    }
+
+    await upsertVehiclePassportRecord(ctx, {
+      vin: booking.vin,
+      patch: args.passport,
+      now: Date.now(),
+      markConfirmed: true,
+    });
+
+    return await buildVehiclePassportForBooking(ctx, booking);
+  },
+});
+
+export const startWithPrejob = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    prejob: prejobReportValidator,
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (!["in_progress", "completed"].includes(booking.status)) {
+      throw new Error("Only in-progress bookings can be completed.");
+    }
+
+    const passportView = await buildVehiclePassportForBooking(ctx, booking);
+    if (passportView.missing_fields.length > 0) {
+      throw new Error("Confirm the required vehicle passport fields before starting this booking.");
+    }
+    validatePrejobReport(args.prejob, passportView.passport.mileage ?? null);
+
+    const now = Date.now();
+    const jobActual = await ensureJobActualRecord(ctx, {
+      booking,
+      now,
+      startedAtMs: now,
+    });
+
+    await ctx.db.patch(jobActual._id, {
+      prejob_report: args.prejob,
+      updated_at: now,
+      logged_at_ms: now,
+      started_at: jobActual.started_at ?? now,
+    });
+
+    await upsertVehiclePassportRecord(ctx, {
+      vin: booking.vin,
+      patch: buildPassportPatchFromPrejob(args.prejob, passportView.passport),
+      now,
+      markConfirmed: true,
+    });
+
+    if (booking.status !== "in_progress") {
+      await applyBookingStatusTransition(ctx, {
+        booking,
+        newStatus: "in_progress",
+        changedBy: user._id,
+        reason: "started_by_shop",
+      });
+    }
+
+    return await buildVehiclePassportForBooking(ctx, booking);
+  },
+});
+
+export const completeWithPostjob = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    postjob: postjobReportValidator,
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const passportView = await buildVehiclePassportForBooking(ctx, booking);
+    validatePostjobReport(
+      args.postjob,
+      passportView.passport.mileage ?? null,
+      passportView.requires_parts
+    );
+
+    const normalizedParts = normalizePartsUsed(args.postjob.parts_used ?? []);
+    const now = Date.now();
+
+    const jobActual = await saveJobActualDraft(ctx, {
+      booking,
+      actuals: {
+        actual_labor_minutes:
+          args.postjob.skip_optional_survey === true
+            ? undefined
+            : args.postjob.actual_labor_minutes ?? null,
+        actual_parts_cost:
+          args.postjob.skip_optional_survey === true
+            ? sumPartsCost(normalizedParts)
+            : args.postjob.actual_parts_cost ?? sumPartsCost(normalizedParts),
+        difficulty_rating:
+          args.postjob.skip_optional_survey === true
+            ? undefined
+            : args.postjob.difficulty_rating ?? null,
+        technician_notes: args.postjob.technician_notes ?? "",
+        parts_used: normalizedParts,
+        completion_mileage: args.postjob.completion_mileage,
+        vehicle_updates: args.postjob.vehicle_updates ?? undefined,
+        parts_accuracy_status:
+          args.postjob.skip_optional_survey === true
+            ? undefined
+            : args.postjob.parts_accuracy_status ?? null,
+        parts_accuracy_feedback:
+          args.postjob.skip_optional_survey === true
+            ? undefined
+            : args.postjob.parts_accuracy_feedback ?? null,
+        additional_observations:
+          args.postjob.skip_optional_survey === true
+            ? undefined
+            : args.postjob.additional_observations ?? null,
+        flagged_vehicle_specs: args.postjob.flagged_vehicle_specs ?? false,
+        flagged_vehicle_specs_reason:
+          args.postjob.flagged_vehicle_specs_reason ?? null,
+      },
+      now,
+      completedAtMs: now,
+      preferAutoLaborMinutes: args.postjob.skip_optional_survey === true,
+    });
+
+    await ctx.db.patch(jobActual._id, {
+      postjob_report: args.postjob,
+      updated_at: now,
+      logged_at_ms: now,
+    });
+
+    await upsertVehiclePassportRecord(ctx, {
+      vin: booking.vin,
+      patch: buildPassportPatchFromPostjob(args.postjob),
+      now,
+      markConfirmed: true,
+    });
+
+    if (booking.status !== "completed") {
+      await applyBookingStatusTransition(ctx, {
+        booking,
+        newStatus: "completed",
+        changedBy: user._id,
+        reason: "completed_by_shop",
+      });
+    }
+
+    return await buildVehiclePassportForBooking(ctx, booking);
+  },
+});
+
 export const createByShop = mutation({
   args: {
     shopId: v.id("shops"),
@@ -2461,6 +3299,7 @@ export const accept = mutation({
   },
 });
 
+// TODO: Remove this legacy start mutation once every caller has migrated to startWithPrejob.
 export const start = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -2486,6 +3325,7 @@ export const start = mutation({
   },
 });
 
+// TODO: Remove this legacy complete mutation once every caller has migrated to completeWithPostjob.
 export const complete = mutation({
   args: {
     bookingId: v.id("bookings"),

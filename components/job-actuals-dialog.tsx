@@ -6,6 +6,7 @@ import { Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 
 type JobActualPart = {
   part_name: string;
+  brand?: string | null;
   oem_number: string;
   cost: number;
 };
@@ -37,6 +38,7 @@ export type JobActualsPayload = {
 
 type PartRowState = {
   part_name: string;
+  brand: string;
   oem_number: string;
   cost: string;
 };
@@ -49,6 +51,7 @@ function buildPartRows(parts?: JobActualPart[]) {
   if (!parts || parts.length === 0) return [];
   return parts.map((part) => ({
     part_name: part.part_name,
+    brand: part.brand ?? "",
     oem_number: part.oem_number,
     cost: toNumberString(part.cost),
   }));
@@ -77,9 +80,16 @@ function toPayload(parts: PartRowState[], values: {
   technicianNotes: string;
 }): JobActualsPayload {
   const normalizedParts = parts
-    .filter((part) => part.part_name.trim() || part.oem_number.trim() || part.cost.trim())
+    .filter(
+      (part) =>
+        part.part_name.trim() ||
+        part.brand.trim() ||
+        part.oem_number.trim() ||
+        part.cost.trim()
+    )
     .map((part) => ({
       part_name: part.part_name.trim(),
+      brand: part.brand.trim() || null,
       oem_number: part.oem_number.trim(),
       cost: Number(part.cost || 0),
     }));
@@ -96,6 +106,7 @@ function toPayload(parts: PartRowState[], values: {
   };
 }
 
+// TODO: Remove this legacy actuals dialog once every caller has migrated to the survey flow.
 export default function JobActualsDialog({
   open,
   mode,
@@ -302,12 +313,12 @@ export default function JobActualsDialog({
               ) : null}
               <button
                 type="button"
-                onClick={() =>
-                  setParts((current) => [
-                    ...current,
-                    { part_name: "", oem_number: "", cost: "" },
-                  ])
-                }
+                  onClick={() =>
+                    setParts((current) => [
+                      ...current,
+                      { part_name: "", brand: "", oem_number: "", cost: "" },
+                    ])
+                  }
                 className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-muted"
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -323,7 +334,7 @@ export default function JobActualsDialog({
               {parts.map((part, index) => (
                 <div
                   key={`${index}-${part.part_name}-${part.oem_number}`}
-                  className="grid gap-2 rounded-lg border border-border bg-background p-3 md:grid-cols-[1.5fr_1.2fr_0.8fr_auto]"
+                  className="grid gap-2 rounded-lg border border-border bg-background p-3 md:grid-cols-[1.4fr_1fr_1.1fr_0.8fr_auto]"
                 >
                   <input
                     type="text"
@@ -331,6 +342,13 @@ export default function JobActualsDialog({
                     onChange={(event) => updatePart(index, { part_name: event.target.value })}
                     className="rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary"
                     placeholder="Part name"
+                  />
+                  <input
+                    type="text"
+                    value={part.brand}
+                    onChange={(event) => updatePart(index, { brand: event.target.value })}
+                    className="rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary"
+                    placeholder="Brand"
                   />
                   <input
                     type="text"

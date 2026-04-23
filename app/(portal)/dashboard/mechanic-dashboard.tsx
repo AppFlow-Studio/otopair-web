@@ -15,6 +15,12 @@ import {
 } from "lucide-react";
 import { StatusPill } from "@/components/status-pill";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
+import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
+import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import type {
+  PostJobSurveyPayload,
+  PreJobSurveyPayload,
+} from "@/lib/vehicle-passport";
 
 const avatarColors = [
   "bg-blue-100 text-blue-600",
@@ -89,14 +95,28 @@ function DashboardCard({
 
 export default function MechanicDashboard() {
   const dashboard = useQuery(api.bookings.getMyMechanicDashboard);
-  const startJob = useMutation(api.bookings.start);
-  const completeJob = useMutation(api.bookings.complete);
+  const startWithPrejob = useMutation(api.bookings.startWithPrejob);
+  const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
   const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
   const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [toast, setToast] = useState<string>("");
+  const [workflowBookingId, setWorkflowBookingId] = useState<Id<"bookings"> | null>(null);
+  const [workflowMode, setWorkflowMode] = useState<"prejob" | "postjob" | null>(null);
   const [actualsBookingId, setActualsBookingId] = useState<Id<"bookings"> | null>(null);
   const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
+  const selectedWorkflowBooking = useQuery(
+    api.bookings.getJobDetail,
+    workflowBookingId ? { bookingId: workflowBookingId } : "skip"
+  );
+  const selectedWorkflowPassport = useQuery(
+    api.bookings.getVehiclePassportForBooking,
+    workflowBookingId ? { bookingId: workflowBookingId } : "skip"
+  );
+  const workflowPrefill = useQuery(
+    api.job_actuals.getPrefillData,
+    workflowBookingId ? { bookingId: workflowBookingId } : "skip"
+  );
   const selectedBooking = useQuery(
     api.bookings.getJobDetail,
     actualsBookingId ? { bookingId: actualsBookingId } : "skip"
@@ -126,16 +146,14 @@ export default function MechanicDashboard() {
     return Array.from(groups.entries());
   }, [dashboard]);
 
-  async function handleStartAction(bookingId: string) {
-    setBusyAction(`start:${bookingId}`);
-    try {
-      await startJob({ bookingId: bookingId as Id<"bookings"> });
-      setToast("Booking started");
-    } catch (error: unknown) {
-      setToast(error instanceof Error ? error.message : "Could not update booking");
-    } finally {
-      setBusyAction(null);
-    }
+  function openWorkflowDialog(bookingId: string, mode: "prejob" | "postjob") {
+    setWorkflowBookingId(bookingId as Id<"bookings">);
+    setWorkflowMode(mode);
+  }
+
+  function closeWorkflowDialog() {
+    setWorkflowBookingId(null);
+    setWorkflowMode(null);
   }
 
   function openActualsDialog(bookingId: string, mode: "complete" | "edit") {
@@ -148,39 +166,38 @@ export default function MechanicDashboard() {
     setActualsDialogMode("complete");
   }
 
-  async function handleCompleteOnly(payload: JobActualsPayload) {
-    if (!actualsBookingId) return;
+  async function handleStartAction(payload: PreJobSurveyPayload) {
+    if (!workflowBookingId) return;
 
-    setBusyAction(`complete:${String(actualsBookingId)}`);
+    setBusyAction(`start:${String(workflowBookingId)}`);
     try {
-      await completeJob({
-        bookingId: actualsBookingId,
-        actuals: payload,
+      await startWithPrejob({
+        bookingId: workflowBookingId,
+        prejob: payload,
       });
-      setToast("Booking completed. Actuals saved as draft.");
-      closeActualsDialog();
+      setToast("Booking started");
+      closeWorkflowDialog();
     } catch (error: unknown) {
-      setToast(error instanceof Error ? error.message : "Could not update booking");
+      setToast(error instanceof Error ? error.message : "Could not start booking");
       throw error;
     } finally {
       setBusyAction(null);
     }
   }
 
-  async function handleCompleteAndFinalize(payload: JobActualsPayload) {
-    if (!actualsBookingId) return;
+  async function handleCompleteAction(payload: PostJobSurveyPayload) {
+    if (!workflowBookingId) return;
 
-    setBusyAction(`complete:${String(actualsBookingId)}`);
+    setBusyAction(`complete:${String(workflowBookingId)}`);
     try {
-      await completeJob({
-        bookingId: actualsBookingId,
-        finalizeActuals: true,
-        actuals: payload,
+      await completeWithPostjob({
+        bookingId: workflowBookingId,
+        postjob: payload,
       });
-      setToast("Booking completed and actuals finalized.");
-      closeActualsDialog();
+      setToast("Booking completed");
+      closeWorkflowDialog();
     } catch (error: unknown) {
-      setToast(error instanceof Error ? error.message : "Could not finalize booking");
+      setToast(error instanceof Error ? error.message : "Could not complete booking");
       throw error;
     } finally {
       setBusyAction(null);
@@ -352,8 +369,16 @@ export default function MechanicDashboard() {
                   <div className="mt-5 flex flex-wrap gap-2">
                     {job.status === "confirmed" ? (
                       <button
-                        onClick={() => void handleStartAction(String(job._id))}
-                        disabled={busyAction === actionKeyStart}
+                        onClick={() => openWorkflowDialog(String(job._id), "prejob")}
+                        disabled={
+                          busyAction === actionKeyStart ||
+                          job.vehiclePassportComplete === false
+                        }
+                        title={
+                          job.vehiclePassportComplete === false
+                            ? "Open the booking details panel to confirm the required vehicle passport fields first."
+                            : undefined
+                        }
                         className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
                       >
                         {busyAction === actionKeyStart ? (
@@ -361,13 +386,15 @@ export default function MechanicDashboard() {
                         ) : (
                           <PlayCircle className="w-4 h-4" />
                         )}
-                        Start Booking
+                        {job.vehiclePassportComplete === false
+                          ? "Confirm Specs in Details"
+                          : "Start Booking"}
                       </button>
                     ) : null}
 
                     {job.status === "in_progress" ? (
                       <button
-                        onClick={() => openActualsDialog(String(job._id), "complete")}
+                        onClick={() => openWorkflowDialog(String(job._id), "postjob")}
                         disabled={busyAction === actionKeyComplete}
                         className="inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
                       >
@@ -499,6 +526,46 @@ export default function MechanicDashboard() {
         </section>
       </div>
 
+      <PreJobSurveyDialog
+        open={workflowBookingId !== null && workflowMode === "prejob"}
+        bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
+        bookingSubLabel={
+          selectedWorkflowBooking
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+                selectedWorkflowBooking.scheduledDate,
+              )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
+            : ""
+        }
+        passportData={selectedWorkflowPassport ?? null}
+        isSubmitting={
+          workflowBookingId !== null &&
+          busyAction === `start:${String(workflowBookingId)}`
+        }
+        onClose={closeWorkflowDialog}
+        onSubmit={handleStartAction}
+      />
+
+      <PostJobSurveyDialog
+        open={workflowBookingId !== null && workflowMode === "postjob"}
+        bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
+        bookingSubLabel={
+          selectedWorkflowBooking
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+                selectedWorkflowBooking.scheduledDate,
+              )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
+            : ""
+        }
+        passportData={selectedWorkflowPassport ?? null}
+        estimatedLaborMinutes={selectedWorkflowBooking?.estimatedLaborMinutes ?? null}
+        prefillData={workflowPrefill ?? null}
+        isSubmitting={
+          workflowBookingId !== null &&
+          busyAction === `complete:${String(workflowBookingId)}`
+        }
+        onClose={closeWorkflowDialog}
+        onSubmit={handleCompleteAction}
+      />
+
       <JobActualsDialog
         open={actualsBookingId !== null}
         mode={actualsDialogMode}
@@ -506,13 +573,8 @@ export default function MechanicDashboard() {
         jobActuals={selectedBooking?.jobActuals ?? null}
         prefillData={actualsPrefill ?? null}
         onClose={closeActualsDialog}
-        onCompleteOnly={actualsDialogMode === "complete" ? handleCompleteOnly : undefined}
-        onSaveDraft={actualsDialogMode === "edit" ? handleSaveActualsDraft : undefined}
-        onFinalize={
-          actualsDialogMode === "complete"
-            ? handleCompleteAndFinalize
-            : handleFinalizeActuals
-        }
+        onSaveDraft={handleSaveActualsDraft}
+        onFinalize={handleFinalizeActuals}
       />
 
       {toast ? (

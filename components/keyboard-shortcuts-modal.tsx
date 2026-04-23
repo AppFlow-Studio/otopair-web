@@ -31,9 +31,15 @@ const SECTIONS = [
       { label: "Open assign / reassign dropdown", keys: ["A"] },
       { label: "Assign mechanic", keys: ["S"] },
       { label: "Reassign selected mechanic", keys: ["R"] },
-      { label: "Start booking", keys: ["T"] },
-      { label: "Mark completed", keys: ["R"] },
+      { label: "Open pre-job survey", keys: ["T"] },
+      { label: "Open post-job survey", keys: ["R"] },
       { label: "Cancel booking", keys: ["C"] },
+    ],
+  },
+  {
+    title: "Survey dialogs",
+    rows: [
+      { label: "Close pre-job or post-job survey", keys: ["Esc"] },
     ],
   },
   {
@@ -51,8 +57,6 @@ const SECTIONS = [
       { label: "Confirm reschedule", keys: ["F"] },
       { label: "Open cancel reschedule dialog", keys: ["C"] },
       { label: "Cancel reschedule dialog", keys: ["C"] },
-      { label: "Confirm mark completed", keys: ["R"] },
-      { label: "Cancel mark completed dialog", keys: ["C"] },
       { label: "Confirm cancel booking", keys: ["C"] },
       { label: "Keep booking", keys: ["E"] },
       { label: "Confirm revert proposed reschedule", keys: ["R"] },

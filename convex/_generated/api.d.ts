@@ -36,6 +36,7 @@ import type * as lib_schedule_overlap from "../lib/schedule_overlap.js";
 import type * as lib_timeSlotAvailability from "../lib/timeSlotAvailability.js";
 import type * as lib_vdbCache from "../lib/vdbCache.js";
 import type * as lib_vehicleDatabases from "../lib/vehicleDatabases.js";
+import type * as lib_vehicle_passports from "../lib/vehicle_passports.js";
 import type * as maintenance from "../maintenance.js";
 import type * as maintenance_pipeline from "../maintenance_pipeline.js";
 import type * as makes from "../makes.js";
@@ -179,6 +180,7 @@ declare const fullApi: ApiFromModules<{
   "lib/timeSlotAvailability": typeof lib_timeSlotAvailability;
   "lib/vdbCache": typeof lib_vdbCache;
   "lib/vehicleDatabases": typeof lib_vehicleDatabases;
+  "lib/vehicle_passports": typeof lib_vehicle_passports;
   maintenance: typeof maintenance;
   maintenance_pipeline: typeof maintenance_pipeline;
   makes: typeof makes;

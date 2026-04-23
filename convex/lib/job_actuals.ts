@@ -4,12 +4,14 @@ import {
   deleteSpecVarianceByJobActualId,
   upsertSpecVarianceRecord,
 } from "../spec_variances";
+import {
+  partsAccuracyStatusValidator,
+  postjobPartValidator,
+  prejobReportValidator,
+  vehicleUpdateValuesValidator,
+} from "./vehicle_passports";
 
-export const jobActualPartValidator = v.object({
-  part_name: v.string(),
-  oem_number: v.string(),
-  cost: v.float64(),
-});
+export const jobActualPartValidator = postjobPartValidator;
 
 export const jobActualInputValidator = v.object({
   actual_labor_minutes: v.optional(v.union(v.float64(), v.null())),
@@ -17,10 +19,19 @@ export const jobActualInputValidator = v.object({
   difficulty_rating: v.optional(v.union(v.float64(), v.null())),
   technician_notes: v.optional(v.union(v.string(), v.null())),
   parts_used: v.optional(v.union(v.array(jobActualPartValidator), v.null())),
+  prejob_report: v.optional(v.union(prejobReportValidator, v.null())),
+  completion_mileage: v.optional(v.union(v.float64(), v.null())),
+  vehicle_updates: v.optional(v.union(vehicleUpdateValuesValidator, v.null())),
+  parts_accuracy_status: v.optional(v.union(partsAccuracyStatusValidator, v.null())),
+  parts_accuracy_feedback: v.optional(v.union(v.string(), v.null())),
+  additional_observations: v.optional(v.union(v.string(), v.null())),
+  flagged_vehicle_specs: v.optional(v.union(v.boolean(), v.null())),
+  flagged_vehicle_specs_reason: v.optional(v.union(v.string(), v.null())),
 });
 
 export type JobActualPartInput = {
   part_name: string;
+  brand?: string | null;
   oem_number: string;
   cost: number;
 };
@@ -31,6 +42,14 @@ export type JobActualInput = {
   difficulty_rating?: number | null;
   technician_notes?: string | null;
   parts_used?: JobActualPartInput[] | null;
+  prejob_report?: Record<string, unknown> | null;
+  completion_mileage?: number | null;
+  vehicle_updates?: Record<string, unknown> | null;
+  parts_accuracy_status?: "correct" | "different_parts" | null;
+  parts_accuracy_feedback?: string | null;
+  additional_observations?: string | null;
+  flagged_vehicle_specs?: boolean | null;
+  flagged_vehicle_specs_reason?: string | null;
 };
 
 function hasOwn<T extends object>(value: T | undefined, key: keyof T) {
@@ -180,6 +199,31 @@ function applyActualsInputToPatch(patch: Record<string, any>, actuals?: JobActua
   }
   if (hasOwn(actuals, "parts_used")) {
     patch.parts_used = actuals.parts_used ?? [];
+  }
+  if (hasOwn(actuals, "prejob_report")) {
+    patch.prejob_report = actuals.prejob_report ?? undefined;
+  }
+  if (hasOwn(actuals, "completion_mileage")) {
+    patch.completion_mileage = actuals.completion_mileage ?? undefined;
+  }
+  if (hasOwn(actuals, "vehicle_updates")) {
+    patch.vehicle_updates = actuals.vehicle_updates ?? undefined;
+  }
+  if (hasOwn(actuals, "parts_accuracy_status")) {
+    patch.parts_accuracy_status = actuals.parts_accuracy_status ?? undefined;
+  }
+  if (hasOwn(actuals, "parts_accuracy_feedback")) {
+    patch.parts_accuracy_feedback = actuals.parts_accuracy_feedback ?? undefined;
+  }
+  if (hasOwn(actuals, "additional_observations")) {
+    patch.additional_observations = actuals.additional_observations ?? undefined;
+  }
+  if (hasOwn(actuals, "flagged_vehicle_specs")) {
+    patch.flagged_vehicle_specs = actuals.flagged_vehicle_specs ?? undefined;
+  }
+  if (hasOwn(actuals, "flagged_vehicle_specs_reason")) {
+    patch.flagged_vehicle_specs_reason =
+      actuals.flagged_vehicle_specs_reason ?? undefined;
   }
 }
 

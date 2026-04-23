@@ -16,6 +16,9 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Check, Clock, Ellipsis, History, Loader2, RotateCcw, X } from "lucide-react";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
+import VehiclePassportSection from "@/components/vehicle-passport-section";
+import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
+import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import {
   getMechanicAssignmentConflict,
   type ScheduleBlockedSlot,
@@ -46,6 +49,11 @@ import {
 } from "@/components/drawer-panel-styles";
 import { StatusPill } from "@/components/status-pill";
 import { BOOKING_STATUS_VISUALS } from "@/lib/booking-status";
+import type {
+  PostJobSurveyPayload,
+  PreJobSurveyPayload,
+  VehiclePassportUpdatePayload,
+} from "@/lib/vehicle-passport";
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                           */
@@ -215,6 +223,7 @@ export interface JobDetailData {
     technicianNotes?: string;
     partsUsed?: Array<{
       part_name: string;
+      brand?: string | null;
       oem_number: string;
       cost: number;
     }>;
@@ -286,12 +295,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showDeclineModal, setShowDeclineModal] = useState(false);
     const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
     const [declineOtherText, setDeclineOtherText] = useState("");
+    const [showPrejobDialog, setShowPrejobDialog] = useState(false);
+    const [showPostjobDialog, setShowPostjobDialog] = useState(false);
     const [showActualsDialog, setShowActualsDialog] = useState(false);
     const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
     const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
     const [cancelOtherText, setCancelOtherText] = useState("");
     const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
+    const [isSavingPassport, setIsSavingPassport] = useState(false);
+    const [isSubmittingPrejob, setIsSubmittingPrejob] = useState(false);
+    const [isSubmittingPostjob, setIsSubmittingPostjob] = useState(false);
 
     const wrapperRef = useRef<HTMLDivElement>(null);
     const assignTriggerRef = useRef<HTMLDivElement>(null);
@@ -299,16 +313,21 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const cancelTextareaRef = useRef<HTMLTextAreaElement>(null);
 
     const acceptJob = useMutation(api.bookings.accept);
-    const startJobMut = useMutation(api.bookings.start);
-    const completeJob = useMutation(api.bookings.complete);
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
+    const confirmVehiclePassport = useMutation(api.bookings.confirmVehiclePassport);
+    const startWithPrejob = useMutation(api.bookings.startWithPrejob);
+    const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
     const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
     const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
     const reopenActuals = useMutation(api.job_actuals.reopenByBooking);
     const actualsPrefill = useQuery(
       api.job_actuals.getPrefillData,
+      job ? { bookingId: job._id } : "skip"
+    );
+    const vehiclePassport = useQuery(
+      api.bookings.getVehiclePassportForBooking,
       job ? { bookingId: job._id } : "skip"
     );
 
@@ -340,6 +359,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     useEffect(() => {
       if (!jobId) return;
       setActionError("");
+      setShowPrejobDialog(false);
+      setShowPostjobDialog(false);
       setAssigningMechanicId(currentMechanicId);
       setShowActualsDialog(false);
       setActualsDialogMode("complete");
@@ -547,16 +568,51 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     async function handleStartJob() {
       if (!job?._id || !job.mechanicId) return;
       setActionError("");
-      setIsActioning(true);
+      setShowPrejobDialog(true);
+    }
+
+    async function handleConfirmPassport(
+      payload: VehiclePassportUpdatePayload,
+    ) {
+      if (!job?._id) return;
+      setActionError("");
+      setIsSavingPassport(true);
       try {
-        await startJobMut({ bookingId: job._id });
+        await confirmVehiclePassport({
+          bookingId: job._id,
+          passport: payload,
+        });
+        onSuccess?.("Vehicle passport confirmed");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error
+            ? err.message
+            : "Could not confirm vehicle passport.",
+        );
+        throw err;
+      } finally {
+        setIsSavingPassport(false);
+      }
+    }
+
+    async function handleStartWithPrejob(payload: PreJobSurveyPayload) {
+      if (!job?._id) return;
+      setActionError("");
+      setIsSubmittingPrejob(true);
+      try {
+        await startWithPrejob({
+          bookingId: job._id,
+          prejob: payload,
+        });
+        setShowPrejobDialog(false);
         onSuccess?.("Booking started");
       } catch (err: unknown) {
         setActionError(
           err instanceof Error ? err.message : "Could not start booking.",
         );
+        throw err;
       } finally {
-        setIsActioning(false);
+        setIsSubmittingPrejob(false);
       }
     }
 
@@ -566,44 +622,29 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setShowActualsDialog(true);
     }
 
-    async function handleCompleteOnly(payload: JobActualsPayload) {
+    function openPostjobDialog() {
+      setActionError("");
+      setShowPostjobDialog(true);
+    }
+
+    async function handleCompleteWithPostjob(payload: PostJobSurveyPayload) {
       if (!job?._id) return;
       setActionError("");
-      setIsActioning(true);
+      setIsSubmittingPostjob(true);
       try {
-        await completeJob({
+        await completeWithPostjob({
           bookingId: job._id,
-          actuals: payload,
+          postjob: payload,
         });
-        onSuccess?.("Booking completed. Actuals saved as draft.");
+        setShowPostjobDialog(false);
+        onSuccess?.("Booking completed");
       } catch (err: unknown) {
         setActionError(
           err instanceof Error ? err.message : "Could not complete booking.",
         );
         throw err;
       } finally {
-        setIsActioning(false);
-      }
-    }
-
-    async function handleCompleteAndFinalize(payload: JobActualsPayload) {
-      if (!job?._id) return;
-      setActionError("");
-      setIsActioning(true);
-      try {
-        await completeJob({
-          bookingId: job._id,
-          finalizeActuals: true,
-          actuals: payload,
-        });
-        onSuccess?.("Booking completed and actuals finalized");
-      } catch (err: unknown) {
-        setActionError(
-          err instanceof Error ? err.message : "Could not finalize booking actuals.",
-        );
-        throw err;
-      } finally {
-        setIsActioning(false);
+        setIsSubmittingPostjob(false);
       }
     }
 
@@ -683,7 +724,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       startJob: () => {
         handleStartJob();
       },
-      showMarkCompleted: () => openActualsDialog("complete"),
+      showMarkCompleted: () => openPostjobDialog(),
       showCancelJob: () => setShowCancelConfirm(true),
       showCancelReschedule: () => setShowCancelRescheduleConfirm(true),
       openAssignDropdown: () => {
@@ -697,10 +738,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         handleAssignMechanic();
       },
       hasOpenModal: () =>
-        showDeclineModal || showActualsDialog || showCancelConfirm || showCancelRescheduleConfirm,
+        showDeclineModal ||
+        showPrejobDialog ||
+        showPostjobDialog ||
+        showActualsDialog ||
+        showCancelConfirm ||
+        showCancelRescheduleConfirm,
       handleEscape: (): boolean => {
         if (showDeclineModal) {
           setShowDeclineModal(false);
+          return true;
+        }
+        if (showPrejobDialog) {
+          setShowPrejobDialog(false);
+          return true;
+        }
+        if (showPostjobDialog) {
+          setShowPostjobDialog(false);
           return true;
         }
         if (showActualsDialog) {
@@ -743,6 +797,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             setShowDeclineModal(false);
             return true;
           }
+          return true;
+        }
+        if (showPrejobDialog || showPostjobDialog) {
           return true;
         }
         if (showActualsDialog) {
@@ -791,6 +848,18 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           (e.key === "c" || e.key === "C")
         ) {
           setShowCancelRescheduleConfirm(true);
+          return true;
+        }
+        if ((e.key === "t" || e.key === "T") && job?.status === "confirmed") {
+          handleStartJob();
+          return true;
+        }
+        if (
+          (e.key === "r" || e.key === "R") &&
+          job?.status === "in_progress" &&
+          !hasMechanicSelectionChange
+        ) {
+          openPostjobDialog();
           return true;
         }
         if (e.key === "r" && canSubmitMechanicChange) {
@@ -929,6 +998,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   </div>
                 </div>
 
+                <VehiclePassportSection
+                  data={vehiclePassport}
+                  onConfirm={handleConfirmPassport}
+                  isSaving={isSavingPassport}
+                />
+
                 {/* Assign mechanic */}
                 <div className="rounded-2xl bg-muted/20 p-4">
                   <DrawerFieldLabel className="mb-3">
@@ -1054,8 +1129,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   const s = job.status;
                   const canAccept =
                     s === "pending" || s === "pending_shop_acceptance";
-                  const canComplete =
-                    s === "confirmed" || s === "in_progress";
+                  const canComplete = s === "in_progress";
                   const canStartJob = s === "confirmed";
                   const canDecline =
                     s === "pending" || s === "pending_shop_acceptance";
@@ -1092,7 +1166,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem
-                                onSelect={() => openActualsDialog("complete")}
+                                onSelect={() => openPostjobDialog()}
                               >
                                 Mark completed
                               </DropdownMenuItem>
@@ -1132,12 +1206,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           <button
                             onClick={handleStartJob}
                             disabled={
-                              !job.mechanicId || isActioning
+                              !job.mechanicId ||
+                              isActioning ||
+                              vehiclePassport?.is_complete === false
                             }
                             title={
-                              job.mechanicId
-                                ? undefined
-                                : "Assign a mechanic first"
+                              !job.mechanicId
+                                ? "Assign a mechanic first"
+                                : vehiclePassport?.is_complete === false
+                                  ? "Confirm the required vehicle passport fields first"
+                                  : undefined
                             }
                             className={drawerPrimaryButtonClassName}
                           >
@@ -1157,7 +1235,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         {canComplete && job.status === "in_progress" && (
                           // TODO: Fix --success usage
                           <button
-                            onClick={() => openActualsDialog("complete")}
+                            onClick={() => openPostjobDialog()}
                             disabled={isActioning}
                             className={drawerPrimaryButtonClassName}
                             style={
@@ -1402,6 +1480,42 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           </div>
         </div>
 
+        <PreJobSurveyDialog
+          open={showPrejobDialog}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          passportData={vehiclePassport ?? null}
+          isSubmitting={isSubmittingPrejob}
+          onClose={() => setShowPrejobDialog(false)}
+          onSubmit={handleStartWithPrejob}
+        />
+
+        <PostJobSurveyDialog
+          open={showPostjobDialog}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          passportData={vehiclePassport ?? null}
+          estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          prefillData={actualsPrefill ?? null}
+          isSubmitting={isSubmittingPostjob}
+          onClose={() => setShowPostjobDialog(false)}
+          onSubmit={handleCompleteWithPostjob}
+        />
+
         <JobActualsDialog
           open={showActualsDialog}
           mode={actualsDialogMode}
@@ -1409,13 +1523,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           jobActuals={job?.jobActuals ?? null}
           prefillData={actualsPrefill ?? null}
           onClose={() => setShowActualsDialog(false)}
-          onCompleteOnly={actualsDialogMode === "complete" ? handleCompleteOnly : undefined}
-          onSaveDraft={actualsDialogMode === "edit" ? handleSaveActualsDraft : undefined}
-          onFinalize={
-            actualsDialogMode === "complete"
-              ? handleCompleteAndFinalize
-              : handleFinalizeActuals
-          }
+          onSaveDraft={handleSaveActualsDraft}
+          onFinalize={handleFinalizeActuals}
         />
 
         <ConfirmationDialog

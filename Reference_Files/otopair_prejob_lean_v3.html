@@ -1,0 +1,190 @@
+<h2 class="sr-only">Optimized pre-job form with lean condition-based inputs: mileage, tire condition taps, brake thickness numbers, fluid confirmation toggle, inspection sticker check, and confirm button.</h2>
+
+<style>
+  .w3 { padding: 1rem 0; }
+  .o3 { min-height: 700px; background: rgba(0,0,0,0.35); display: flex; align-items: flex-start; justify-content: center; padding-top: 24px; border-radius: var(--border-radius-lg); }
+  .m3 { width: 440px; background: var(--color-background-primary); border-radius: 16px; overflow: hidden; border: 0.5px solid var(--color-border-tertiary); }
+  .mh3 { padding: 14px 22px; border-bottom: 0.5px solid var(--color-border-tertiary); display: flex; justify-content: space-between; align-items: center; }
+  .mh3 h3 { font-size: 15px; font-weight: 500; color: var(--color-text-primary); }
+  .mh3 .x { font-size: 18px; color: var(--color-text-tertiary); cursor: pointer; }
+  .bg3 { font-size: 9px; padding: 2px 8px; border-radius: 10px; font-weight: 500; margin-left: 6px; background: #FFF8ED; color: #C8972E; }
+  .mb3 { padding: 18px 22px; }
+  .vc3 { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--color-background-secondary); border-radius: 8px; margin-bottom: 14px; }
+  .vc3i { width: 32px; height: 32px; border-radius: 6px; background: #C8972E; display: flex; align-items: center; justify-content: center; color: #FFF; font-size: 12px; font-weight: 500; }
+  .vc3n { font-size: 13px; font-weight: 500; color: var(--color-text-primary); }
+  .vc3s { font-size: 10px; color: var(--color-text-tertiary); }
+  .nt3 { background: #FFF8ED; border-left: 2px solid #C8972E; padding: 7px 11px; border-radius: 0 6px 6px 0; font-size: 10px; color: #8B6914; margin-bottom: 14px; }
+  .s3 { font-size: 9px; font-weight: 500; letter-spacing: 1.5px; text-transform: uppercase; color: #C8972E; margin-bottom: 8px; margin-top: 16px; display: flex; justify-content: space-between; align-items: center; }
+  .s3:first-of-type { margin-top: 0; }
+  .s3 .rt { font-size: 8px; padding: 1px 6px; border-radius: 8px; font-weight: 600; }
+  .rt.r { background: #FFEBEE; color: #C62828; }
+  .rt.o { background: #F0F0F0; color: #888; }
+  .rt.f { background: #E6F1FB; color: #185FA5; }
+  .f3 { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 12px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .f3:last-child { border-bottom: none; }
+  .fl3 { color: var(--color-text-secondary); }
+  .fv3 { color: var(--color-text-primary); font-weight: 500; display: flex; align-items: center; gap: 5px; }
+  .in3 { font-size: 12px; padding: 5px 9px; border: 0.5px solid var(--color-border-secondary); border-radius: 5px; width: 110px; text-align: right; background: var(--color-background-primary); color: var(--color-text-primary); }
+  .in3.er { border-color: #E24B4A; }
+  .in3::placeholder { color: var(--color-text-tertiary); font-size: 10px; }
+  .vb3 { font-size: 8px; padding: 1px 5px; border-radius: 8px; font-weight: 500; }
+  .vb3.rq { background: #FFEBEE; color: #C62828; }
+  .vb3.ai { background: var(--color-background-secondary); color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); }
+  .vb3.em { background: #FFEBEE; color: #C62828; }
+  .sp3 { border: none; border-top: 0.5px solid var(--color-border-tertiary); margin: 8px 0; }
+  .cond-row { display: flex; gap: 6px; align-items: center; padding: 6px 0; }
+  .cond-label { font-size: 12px; color: var(--color-text-secondary); min-width: 50px; }
+  .cond-opts { display: flex; gap: 4px; }
+  .cond-opt { padding: 4px 10px; border-radius: 5px; font-size: 10px; font-weight: 500; background: var(--color-background-secondary); color: var(--color-text-secondary); border: 0.5px solid var(--color-border-tertiary); cursor: pointer; }
+  .cond-opt.g { background: #E8F5E9; color: #2E7D32; border-color: #C8E6C9; }
+  .cond-opt.f { background: #FFF8ED; color: #C8972E; border-color: #E8D5A8; }
+  .cond-opt.rp { background: #FFEBEE; color: #C62828; border-color: #FFCDD2; }
+  .fluid-confirm { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: var(--color-background-secondary); border-radius: 8px; font-size: 12px; margin-bottom: 4px; }
+  .fluid-confirm .fc-label { color: var(--color-text-secondary); }
+  .fluid-confirm .fc-value { color: var(--color-text-primary); font-weight: 500; }
+  .fc-toggle { display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: #E8F5E9; border-radius: 8px; font-size: 11px; color: #2E7D32; font-weight: 500; cursor: pointer; margin-bottom: 4px; }
+  .fc-toggle input { accent-color: #2E7D32; }
+  .insp-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12px; }
+  .insp-toggle { display: flex; gap: 4px; }
+  .insp-opt { padding: 4px 10px; border-radius: 5px; font-size: 10px; font-weight: 500; background: var(--color-background-secondary); color: var(--color-text-secondary); border: 0.5px solid var(--color-border-tertiary); cursor: pointer; }
+  .insp-opt.yes { background: #E8F5E9; color: #2E7D32; border-color: #C8E6C9; }
+  .mod-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 12px; }
+  .mod-select { font-size: 11px; padding: 4px 8px; border: 0.5px solid var(--color-border-secondary); border-radius: 5px; background: var(--color-background-primary); color: var(--color-text-primary); }
+  .btn3 { width: 100%; padding: 11px; border: none; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; margin-top: 14px; background: #1A1A1A; color: #FFF; }
+  .btn3:hover { background: #333; }
+  .first-only { padding: 8px 12px; background: var(--color-background-secondary); border-radius: 8px; margin-top: 6px; border-left: 2px solid #C8972E; }
+  .first-only p { font-size: 10px; color: var(--color-text-tertiary); margin: 0 0 4px; font-style: italic; }
+  .first-only input { font-size: 11px; padding: 4px 8px; border: 0.5px solid var(--color-border-secondary); border-radius: 4px; width: 100%; background: var(--color-background-primary); color: var(--color-text-primary); }
+  .first-only input::placeholder { color: var(--color-text-tertiary); font-size: 10px; }
+  @media (prefers-color-scheme: dark) {
+    .nt3 { background: #2C2510; color: #D4B06A; }
+    .bg3 { background: #2C2510; color: #D4A63A; }
+    .btn3 { background: #C8972E; }
+    .btn3:hover { background: #B8871E; }
+    .fc-toggle { background: #0F2E18; color: #6FCF8E; }
+  }
+</style>
+
+<div class="w3">
+<div class="o3">
+  <div class="m3">
+    <div class="mh3">
+      <h3>Pre-job vehicle check <span class="bg3">First visit</span></h3>
+      <span class="x">&times;</span>
+    </div>
+    <div class="mb3">
+
+      <div class="vc3">
+        <div class="vc3i">TC</div>
+        <div>
+          <div class="vc3n">2022 Toyota Camry SE</div>
+          <div class="vc3s">Sarah Kim · Oil change · Apr 18, 2:00 PM</div>
+        </div>
+      </div>
+
+      <div class="nt3">First visit — confirm what you see. Takes under 90 seconds.</div>
+
+      <!-- Q1: MILEAGE -->
+      <div class="s3">Q1 · Mileage <span class="rt r">Required</span></div>
+      <div class="f3">
+        <span class="fl3">Odometer reading</span>
+        <span class="fv3"><input class="in3 er" placeholder="Enter mileage"> <span class="vb3 rq">Required</span></span>
+      </div>
+
+      <hr class="sp3">
+
+      <!-- Q2: TIRE CONDITION -->
+      <div class="s3">Q2 · Tire condition <span class="rt r">Required</span></div>
+      <div style="font-size: 10px; color: var(--color-text-tertiary); margin-bottom: 6px;">215/55R17 · OEM size</div>
+      <div class="cond-row">
+        <span class="cond-label">Front</span>
+        <div class="cond-opts">
+          <span class="cond-opt g">Good</span>
+          <span class="cond-opt">Fair</span>
+          <span class="cond-opt">Replace soon</span>
+        </div>
+      </div>
+      <div class="cond-row">
+        <span class="cond-label">Rear</span>
+        <div class="cond-opts">
+          <span class="cond-opt">Good</span>
+          <span class="cond-opt f">Fair</span>
+          <span class="cond-opt">Replace soon</span>
+        </div>
+      </div>
+      <div class="first-only">
+        <p>First visit — what brand is on the car?</p>
+        <input placeholder="e.g. Goodyear Wrangler">
+      </div>
+
+      <hr class="sp3">
+
+      <!-- Q3: BRAKE CONDITION -->
+      <div class="s3">Q3 · Brakes <span class="rt o">Optional — if on lift</span></div>
+      <div class="f3">
+        <span class="fl3">Front pad thickness</span>
+        <span class="fv3"><input class="in3" placeholder="mm" style="width:60px;"> <span style="font-size:10px;color:var(--color-text-tertiary);">→ system classifies</span></span>
+      </div>
+      <div class="f3">
+        <span class="fl3">Rear pad thickness</span>
+        <span class="fv3"><input class="in3" placeholder="mm" style="width:60px;"></span>
+      </div>
+      <div class="f3">
+        <span class="fl3">Rotors overall</span>
+        <span class="fv3">
+          <select class="mod-select"><option>Select...</option><option>Good</option><option>Scored</option><option>Needs attention</option></select>
+        </span>
+      </div>
+
+      <hr class="sp3">
+
+      <!-- Q4: FLUIDS -->
+      <div class="s3">Q4 · Fluids <span class="rt f">Confirm OEM</span></div>
+      <div class="fc-toggle">
+        <input type="checkbox" checked> Fluid specs match OEM defaults — no changes
+      </div>
+      <div class="fluid-confirm">
+        <span class="fc-label">Oil</span>
+        <span class="fc-value">0W-20 · Full synthetic <span class="vb3 ai">OEM</span></span>
+      </div>
+      <div class="fluid-confirm">
+        <span class="fc-label">Coolant</span>
+        <span class="fc-value">Toyota SLLC <span class="vb3 ai">OEM</span></span>
+      </div>
+      <div class="fluid-confirm">
+        <span class="fc-label">Brake fluid</span>
+        <span class="fc-value">DOT 3 <span class="vb3 ai">OEM</span></span>
+      </div>
+
+      <hr class="sp3">
+
+      <!-- Q5: INSPECTION -->
+      <div class="s3">Q5 · Inspection sticker <span class="rt o">Optional</span></div>
+      <div class="insp-row">
+        <span class="fl3" style="min-width:100px;">Sticker looks current?</span>
+        <div class="insp-toggle">
+          <span class="insp-opt yes">Yes</span>
+          <span class="insp-opt">No / not visible</span>
+        </div>
+      </div>
+      <div class="f3">
+        <span class="fl3">Expires approx.</span>
+        <span class="fv3"><input class="in3" type="month" style="width:130px;"></span>
+      </div>
+
+      <hr class="sp3">
+
+      <!-- Q6: MODIFICATIONS -->
+      <div class="s3">Q6 · Modifications <span class="rt o">First visit only</span></div>
+      <div class="mod-row">
+        <span class="fl3">Aftermarket observed?</span>
+        <select class="mod-select"><option>None observed</option><option>Yes — see notes</option></select>
+      </div>
+
+      <!-- Q7: CONFIRM -->
+      <button class="btn3">Confirm vehicle specs and start job</button>
+
+    </div>
+  </div>
+</div>
+</div>

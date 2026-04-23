@@ -121,6 +121,16 @@ export default function PortalLayout({
   const isOwnerManager =
     portalAccess?.status === "active" &&
     OWNER_MANAGER_ROLES.includes(portalAccess.role);
+  const isOnboarding =
+    pathname.startsWith("/shop/setup") ||
+    portalAccess?.status === "no_shop" ||
+    (portalAccess?.status === "active" && portalAccess.onboardingComplete === false);
+  const onboardingDisabledClass = isOnboarding
+    ? "opacity-50 pointer-events-none"
+    : "";
+  const onboardingTooltip = isOnboarding
+    ? "Available after setup is complete."
+    : undefined;
 
   if (portalAccess === undefined && !isAcceptInvite) {
     return (
@@ -220,24 +230,26 @@ export default function PortalLayout({
             <Link
               href="/dashboard"
               onClick={() => setSidebarOpen(false)}
-              title={sidebarCompact ? "Dashboard" : undefined}
+              title={onboardingTooltip ?? (sidebarCompact ? "Dashboard" : undefined)}
+              aria-disabled={isOnboarding || undefined}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 pathname === "/dashboard" || pathname.startsWith("/dashboard/")
                   ? "bg-blue-50 text-blue-700"
                   : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-              }`}
+              } ${onboardingDisabledClass}`}
             >
               <LayoutDashboard className="w-5 h-5 shrink-0" />
               <NavText>Dashboard</NavText>
             </Link>
 
             {/* Bookings accordion — always the same DOM structure; chevron fades with text */}
-            <div>
+            <div className={onboardingDisabledClass}>
               <button
                 onClick={() => {
                   if (!sidebarCompact) setBookingsOpen((o) => !o);
                 }}
-                title={sidebarCompact ? "Bookings" : undefined}
+                title={onboardingTooltip ?? (sidebarCompact ? "Bookings" : undefined)}
+                aria-disabled={isOnboarding || undefined}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors w-full ${
                   isBookingsActive
                     ? "bg-blue-50 text-blue-700"
@@ -293,12 +305,13 @@ export default function PortalLayout({
                   key={link.href}
                   href={link.href}
                   onClick={() => setSidebarOpen(false)}
-                  title={sidebarCompact ? link.label : undefined}
+                  title={onboardingTooltip ?? (sidebarCompact ? link.label : undefined)}
+                  aria-disabled={isOnboarding || undefined}
                   className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                     isActive
                       ? "bg-blue-50 text-blue-700"
                       : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                  }`}
+                  } ${onboardingDisabledClass}`}
                 >
                   <link.icon className="w-5 h-5 shrink-0" />
                   <NavText>{link.label}</NavText>

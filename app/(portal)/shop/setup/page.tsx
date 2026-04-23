@@ -22,6 +22,7 @@ import {
   Plus,
   Trash2,
   UserRoundCog,
+  Users,
   Wrench,
 } from "lucide-react";
 
@@ -49,22 +50,22 @@ const WEEK_DAYS = [
 
 const STEP_META = [
   {
-    title: "Shop Details",
+    title: "Shop details",
     description: "Basic information, contact details, and public slug.",
     icon: Building2,
   },
   {
-    title: "Operating Hours",
+    title: "Operating hours",
     description: "Set your weekly schedule from Monday through Sunday.",
     icon: Clock3,
   },
   {
-    title: "Labor & Services",
+    title: "Labor and services",
     description: "Set your labor rate and choose what the shop offers.",
     icon: Wrench,
   },
   {
-    title: "Add Mechanics",
+    title: "Add mechanics",
     description: "Create at least one mechanic profile to receive work.",
     icon: UserRoundCog,
   },
@@ -628,8 +629,8 @@ export default function ShopSetupPage() {
   }, [addressSelectedFromAutocomplete, details.address]);
 
   const inputClass =
-    "w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent";
-  const labelClass = "mb-1.5 block text-sm font-medium text-gray-700";
+    "w-full rounded-lg border border-input bg-white px-3.5 py-2.5 text-sm text-foreground placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent";
+  const labelClass = "mb-1.5 block text-sm font-medium text-foreground";
 
   const currentShopId = onboardingData?.shop ? String(onboardingData.shop._id) : null;
   const isSlugTaken =
@@ -644,24 +645,24 @@ export default function ShopSetupPage() {
     if (!SLUG_REGEX.test(details.slug)) {
       return {
         text: "Use only lowercase letters, numbers, and hyphens.",
-        className: "text-red-600",
+        className: "text-destructive",
       };
     }
     if (details.slug.length < 2) {
       return { text: "Enter at least 2 characters.", className: "text-gray-400" };
     }
     if (slugCheckResult === undefined) {
-      return { text: "Checking availability...", className: "text-gray-500" };
+      return { text: "Checking availability...", className: "text-muted-foreground" };
     }
     if (isSlugTaken) {
       return {
         text: "This slug is already taken. Please choose another.",
-        className: "text-red-600",
+        className: "text-destructive",
       };
     }
     return {
       text: "Available",
-      className: "text-green-600 font-medium",
+      className: "text-success font-medium",
     };
   })();
 
@@ -1051,14 +1052,14 @@ export default function ShopSetupPage() {
   if (onboardingData === undefined) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
   }
 
   if (onboardingData === null) {
     return (
-      <div className="mx-auto max-w-3xl rounded-2xl border border-amber-200 bg-amber-50 p-8 text-amber-900">
+      <div className="mx-auto max-w-3xl rounded-xl border border-amber-200 bg-amber-50 p-8 text-amber-900">
         <h1 className="text-2xl font-bold">Shop setup unavailable</h1>
         <p className="mt-3 text-sm leading-6">
           This onboarding flow is intended for authenticated shop owners. Set your
@@ -1092,30 +1093,28 @@ export default function ShopSetupPage() {
   return (
     <div className="mx-auto max-w-6xl">
       <div className="mb-8">
-        <p className="text-sm font-medium uppercase tracking-[0.24em] text-blue-600">
+        <p className="text-sm font-medium uppercase tracking-[0.12em] text-muted-foreground">
           Partner onboarding
         </p>
-        <h1 className="mt-2 text-3xl font-bold text-gray-900">
-          Shop Registration &amp; Onboarding Wizard
+        <h1 className="mt-2 text-2xl font-semibold text-foreground">
+          Shop registration and onboarding
         </h1>
-        <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-600">
-          Step 1 already existed as a single setup form. This flow now continues
-          through hours, services, mechanics, and a final payments handoff screen.
-          Shop details now include address autocomplete so locations are selected
-          from real address suggestions instead of free-form text.
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
+          Let&apos;s get your shop ready to receive bookings. This takes about 15
+          minutes — your progress is saved at every step.
         </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="rounded-2xl border border-gray-200 bg-white p-4">
-          <div className="mb-4 border-b border-gray-100 pb-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-500">
+        <aside className="rounded-xl border border-border bg-white p-4 shadow-sm">
+          <div className="mb-4 border-b border-border pb-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               Progress
             </p>
-            <div className="mt-3 h-2 rounded-full bg-gray-100">
+            <div className="mt-3 h-2 rounded-lg bg-muted">
               <div
-                className="h-2 rounded-full bg-blue-600 transition-all"
-                style={{ width: `${((currentStep + 1) / STEP_META.length) * 100}%` }}
+                className="h-2 rounded-lg bg-primary transition-all"
+                style={{ width: `${(firstIncompleteSavedStep / STEP_META.length) * 100}%` }}
               />
             </div>
           </div>
@@ -1138,26 +1137,26 @@ export default function ShopSetupPage() {
                   disabled={!clickable}
                   className={`flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition-colors ${
                     active
-                      ? "border-blue-200 bg-blue-50"
-                      : "border-transparent hover:border-gray-200 hover:bg-gray-50"
+                      ? "border-primary/20 bg-primary/5"
+                      : "border-transparent hover:border-border hover:bg-muted"
                   }`}
                 >
                   <div
                     className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
                       completed
-                        ? "bg-green-100 text-green-700"
+                        ? "bg-success/15 text-success"
                         : active
-                        ? "bg-blue-100 text-blue-700"
-                        : "bg-gray-100 text-gray-500"
+                        ? "bg-primary/10 text-primary"
+                        : "bg-muted text-muted-foreground"
                     }`}
                   >
                     {completed ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-gray-900">
+                    <p className="text-sm font-semibold text-foreground">
                       Step {index + 1}: {step.title}
                     </p>
-                    <p className="mt-1 text-xs leading-5 text-gray-500">
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
                       {step.description}
                     </p>
                   </div>
@@ -1167,35 +1166,35 @@ export default function ShopSetupPage() {
           </div>
         </aside>
 
-        <section className="rounded-2xl border border-gray-200 bg-white p-6 sm:p-8">
-          <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-gray-100 pb-6">
+        <section className="rounded-xl border border-border bg-white p-6 sm:p-8 shadow-sm">
+          <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-500">
+              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                 Current step
               </p>
-              <h2 className="mt-2 text-2xl font-bold text-gray-900">
+              <h2 className="mt-2 text-2xl font-bold text-foreground">
                 Step {currentStep + 1}: {STEP_META[currentStep].title}
               </h2>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600">
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
                 {STEP_META[currentStep].description}
               </p>
             </div>
-            {onboardingData.shop?.name && (
-              <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
-                <p className="font-semibold text-gray-900">{onboardingData.shop.name}</p>
+            {currentStep > 0 && onboardingData.shop?.name && (
+              <div className="rounded-xl border border-border bg-muted px-4 py-3 text-sm text-muted-foreground">
+                <p className="font-semibold text-foreground">{onboardingData.shop.name}</p>
                 <p className="mt-1">/{onboardingData.shop.slug}</p>
               </div>
             )}
           </div>
 
           {stepError && (
-            <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="mb-5 rounded-xl border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive">
               {stepError}
             </div>
           )}
 
           {stepSuccess && (
-            <div className="mb-5 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+            <div className="mb-5 rounded-xl border border-success/20 bg-success/10 px-4 py-3 text-sm text-success">
               {stepSuccess}
             </div>
           )}
@@ -1204,7 +1203,7 @@ export default function ShopSetupPage() {
             <div className="space-y-6">
               <div>
                 <label className={labelClass}>
-                  Shop Name <span className="text-red-500">*</span>
+                  Shop Name <span className="text-destructive">*</span>
                 </label>
                 <input
                   type="text"
@@ -1217,10 +1216,10 @@ export default function ShopSetupPage() {
 
               <div>
                 <label className={labelClass}>
-                  Shop URL Slug <span className="text-red-500">*</span>
+                  Shop URL Slug <span className="text-destructive">*</span>
                 </label>
-                <div className="flex items-center overflow-hidden rounded-lg border border-gray-300 focus-within:border-transparent focus-within:ring-2 focus-within:ring-blue-500">
-                  <span className="border-r border-gray-300 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-500">
+                <div className="flex items-center overflow-hidden rounded-lg border border-input focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring">
+                  <span className="border-r border-input bg-muted px-3.5 py-2.5 font-mono text-sm text-muted-foreground">
                     otopair.com/shop/
                   </span>
                   <input
@@ -1236,7 +1235,7 @@ export default function ShopSetupPage() {
                       setDetails((prev) => ({ ...prev, slug: value }));
                     }}
                     placeholder="otopair-service-center"
-                    className="min-w-0 flex-1 bg-white px-3.5 py-2.5 text-sm text-gray-900 outline-none"
+                    className="min-w-0 flex-1 bg-white px-3.5 py-2.5 text-sm text-foreground outline-none"
                   />
                 </div>
                 <p className={`mt-1.5 text-xs ${slugStatus.className}`}>{slugStatus.text}</p>
@@ -1244,7 +1243,7 @@ export default function ShopSetupPage() {
 
               <div ref={addressContainerRef} className="relative">
                 <label className={labelClass}>
-                  Street Address <span className="text-red-500">*</span>
+                  Street Address <span className="text-destructive">*</span>
                 </label>
                 <input
                   type="text"
@@ -1258,14 +1257,13 @@ export default function ShopSetupPage() {
                   placeholder="1234 Main St"
                   className={inputClass}
                 />
-                <p className="mt-1.5 text-xs text-gray-500">
-                  Select a suggested address to auto-fill city, state, and ZIP. The full address
-                  is validated with Google again before save.
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Start typing and pick your address from the suggestions — we&apos;ll fill in the rest.
                 </p>
                 {(addressLookupLoading || addressSuggestions.length > 0) && (
-                  <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
+                  <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-border bg-white shadow-lg">
                     {addressLookupLoading && addressSuggestions.length === 0 ? (
-                      <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-500">
+                      <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
                         <Loader2 className="h-4 w-4 animate-spin" />
                         Looking up addresses...
                       </div>
@@ -1276,13 +1274,13 @@ export default function ShopSetupPage() {
                           type="button"
                           onMouseDown={(event) => event.preventDefault()}
                           onClick={() => void handleSelectAddressSuggestion(entry)}
-                          className="block w-full border-b border-gray-100 px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-gray-50"
+                          className="block w-full border-b border-border px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-muted"
                         >
-                          <div className="text-sm font-medium text-gray-900">
+                          <div className="text-sm font-medium text-foreground">
                             {entry.primaryText}
                           </div>
                           {entry.secondaryText && (
-                            <div className="mt-1 text-xs text-gray-500">
+                            <div className="mt-1 text-xs text-muted-foreground">
                               {entry.secondaryText}
                             </div>
                           )}
@@ -1296,7 +1294,7 @@ export default function ShopSetupPage() {
               <div className="grid gap-4 sm:grid-cols-3">
                 <div>
                   <label className={labelClass}>
-                    City <span className="text-red-500">*</span>
+                    City <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="text"
@@ -1310,7 +1308,7 @@ export default function ShopSetupPage() {
                 </div>
                 <div>
                   <label className={labelClass}>
-                    State <span className="text-red-500">*</span>
+                    State <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="text"
@@ -1328,7 +1326,7 @@ export default function ShopSetupPage() {
                 </div>
                 <div>
                   <label className={labelClass}>
-                    ZIP Code <span className="text-red-500">*</span>
+                    ZIP Code <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="text"
@@ -1348,7 +1346,7 @@ export default function ShopSetupPage() {
 
               <div>
                 <label className={labelClass}>
-                  Phone Number <span className="text-red-500">*</span>
+                  Phone Number <span className="text-destructive">*</span>
                 </label>
                 <input
                   type="tel"
@@ -1369,7 +1367,7 @@ export default function ShopSetupPage() {
                   type="button"
                   onClick={handleSaveShopDetails}
                   disabled={savingStep === 0}
-                  className={`${stepButtonClass} border-blue-600 bg-blue-600 text-white hover:bg-blue-700`}
+                  className={`${stepButtonClass} border-blue-600 bg-primary text-white hover:bg-primary/90`}
                 >
                   {savingStep === 0 ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1387,11 +1385,11 @@ export default function ShopSetupPage() {
               {hours.map((row, index) => (
                 <div
                   key={row.dayOfWeek}
-                  className="grid gap-3 rounded-xl border border-gray-200 p-4 md:grid-cols-[160px_minmax(0,1fr)_minmax(0,1fr)_120px]"
+                  className="grid gap-3 rounded-xl border border-border p-4 md:grid-cols-[160px_minmax(0,1fr)_minmax(0,1fr)_120px]"
                 >
                   <div>
-                    <p className="text-sm font-semibold text-gray-900">{row.dayName}</p>
-                    <p className="mt-1 text-xs text-gray-500">
+                    <p className="text-sm font-semibold text-foreground">{row.dayName}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
                       {row.isClosed ? "Closed all day" : "Open for bookings"}
                     </p>
                   </div>
@@ -1410,7 +1408,7 @@ export default function ShopSetupPage() {
                           )
                         )
                       }
-                      className={`${inputClass} disabled:bg-gray-100 disabled:text-gray-400`}
+                      className={`${inputClass} disabled:bg-muted disabled:text-gray-400`}
                     />
                   </div>
                   <div>
@@ -1428,10 +1426,10 @@ export default function ShopSetupPage() {
                           )
                         )
                       }
-                      className={`${inputClass} disabled:bg-gray-100 disabled:text-gray-400`}
+                      className={`${inputClass} disabled:bg-muted disabled:text-gray-400`}
                     />
                   </div>
-                  <label className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 md:self-end">
+                  <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground md:self-end">
                     Closed
                     <input
                       type="checkbox"
@@ -1445,7 +1443,7 @@ export default function ShopSetupPage() {
                           )
                         )
                       }
-                      className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      className="h-4 w-4 rounded border-input text-primary focus:ring-ring"
                     />
                   </label>
                 </div>
@@ -1455,7 +1453,7 @@ export default function ShopSetupPage() {
                 <button
                   type="button"
                   onClick={() => handleStepChange(0)}
-                  className={`${stepButtonClass} border-gray-300 bg-white text-gray-700 hover:bg-gray-50`}
+                  className={`${stepButtonClass} border-input bg-white text-foreground hover:bg-muted`}
                 >
                   Back
                 </button>
@@ -1463,7 +1461,7 @@ export default function ShopSetupPage() {
                   type="button"
                   onClick={handleSaveHours}
                   disabled={savingStep === 1}
-                  className={`${stepButtonClass} border-blue-600 bg-blue-600 text-white hover:bg-blue-700`}
+                  className={`${stepButtonClass} border-blue-600 bg-primary text-white hover:bg-primary/90`}
                 >
                   {savingStep === 1 ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1478,12 +1476,12 @@ export default function ShopSetupPage() {
 
           {currentStep === 2 && (
             <div className="space-y-6">
-              <div className="rounded-xl border border-gray-200 bg-gray-50 p-5">
+              <div className="rounded-xl border border-border bg-muted p-5">
                 <label className={labelClass}>
-                  Hourly Labor Rate <span className="text-red-500">*</span>
+                  Hourly Labor Rate <span className="text-destructive">*</span>
                 </label>
-                <div className="flex max-w-sm items-center overflow-hidden rounded-lg border border-gray-300 bg-white focus-within:border-transparent focus-within:ring-2 focus-within:ring-blue-500">
-                  <span className="border-r border-gray-300 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-500">
+                <div className="flex max-w-sm items-center overflow-hidden rounded-lg border border-input bg-white focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring">
+                  <span className="border-r border-input bg-muted px-3.5 py-2.5 text-sm text-muted-foreground">
                     $
                   </span>
                   <input
@@ -1492,26 +1490,26 @@ export default function ShopSetupPage() {
                     step="1"
                     value={laborRate}
                     onChange={(event) => setLaborRate(event.target.value)}
-                    className="min-w-0 flex-1 px-3.5 py-2.5 text-sm text-gray-900 outline-none"
+                    className="min-w-0 flex-1 px-3.5 py-2.5 text-sm text-foreground outline-none"
                   />
-                  <span className="border-l border-gray-300 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-500">
+                  <span className="border-l border-input bg-muted px-3.5 py-2.5 text-sm text-muted-foreground">
                     / hr
                   </span>
                 </div>
-                <p className="mt-2 text-xs text-gray-500">
-                  The spec default is $150 per hour. You can change it now or later.
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Otopair shops start at $150/hr. You can adjust this any time.
                 </p>
               </div>
 
               <div>
                 <div className="mb-4 flex items-center justify-between">
                   <div>
-                    <h3 className="text-lg font-semibold text-gray-900">Services offered</h3>
-                    <p className="mt-1 text-sm text-gray-500">
+                    <h3 className="text-lg font-semibold text-foreground">Services offered</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">
                       Select the services this shop should show as available.
                     </p>
                   </div>
-                  <div className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
+                  <div className="rounded-lg bg-primary/5 px-3 py-1 text-sm font-medium text-primary">
                     {offeredCount} selected
                   </div>
                 </div>
@@ -1520,10 +1518,10 @@ export default function ShopSetupPage() {
                   {onboardingData.serviceCategories.map((category) => (
                     <div
                       key={category.id}
-                      className="overflow-hidden rounded-xl border border-gray-200"
+                      className="overflow-hidden rounded-xl border border-border"
                     >
-                      <div className="border-b border-gray-200 bg-gray-50 px-4 py-3">
-                        <h4 className="text-sm font-semibold text-gray-900">{category.name}</h4>
+                      <div className="border-b border-border bg-muted px-4 py-3">
+                        <h4 className="text-sm font-semibold text-foreground">{category.name}</h4>
                       </div>
                       <div className="divide-y divide-gray-100">
                         {category.services.map((service) => {
@@ -1531,7 +1529,7 @@ export default function ShopSetupPage() {
                           return (
                             <label
                               key={service._id}
-                              className="flex cursor-pointer items-start gap-3 px-4 py-4 hover:bg-gray-50"
+                              className="flex cursor-pointer items-start gap-3 px-4 py-4 hover:bg-muted"
                             >
                               <input
                                 type="checkbox"
@@ -1544,18 +1542,18 @@ export default function ShopSetupPage() {
                                     return next;
                                   })
                                 }
-                                className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                className="mt-1 h-4 w-4 rounded border-input text-primary focus:ring-ring"
                               />
                               <div className="min-w-0">
                                 <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-sm font-medium text-gray-900">
+                                  <p className="text-sm font-medium text-foreground">
                                     {service.name}
                                   </p>
-                                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
+                                  <span className="rounded-lg bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                                     {service.defaultLaborHours} hr
                                   </span>
                                 </div>
-                                <p className="mt-1 text-sm leading-6 text-gray-500">
+                                <p className="mt-1 text-sm leading-6 text-muted-foreground">
                                   {service.description}
                                 </p>
                               </div>
@@ -1572,7 +1570,7 @@ export default function ShopSetupPage() {
                 <button
                   type="button"
                   onClick={() => handleStepChange(1)}
-                  className={`${stepButtonClass} border-gray-300 bg-white text-gray-700 hover:bg-gray-50`}
+                  className={`${stepButtonClass} border-input bg-white text-foreground hover:bg-muted`}
                 >
                   Back
                 </button>
@@ -1580,7 +1578,7 @@ export default function ShopSetupPage() {
                   type="button"
                   onClick={handleSaveServices}
                   disabled={savingStep === 2}
-                  className={`${stepButtonClass} border-blue-600 bg-blue-600 text-white hover:bg-blue-700`}
+                  className={`${stepButtonClass} border-blue-600 bg-primary text-white hover:bg-primary/90`}
                 >
                   {savingStep === 2 ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1595,10 +1593,10 @@ export default function ShopSetupPage() {
 
           {currentStep === 3 && (
             <div className="space-y-6">
-              <div className="grid gap-4 rounded-2xl border border-gray-200 bg-gray-50 p-5 md:grid-cols-3">
+              <div className="grid gap-4 rounded-xl border border-border bg-muted p-5 md:grid-cols-3">
                 <div>
                   <label className={labelClass}>
-                    First Name <span className="text-red-500">*</span>
+                    First Name <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="text"
@@ -1615,7 +1613,7 @@ export default function ShopSetupPage() {
                 </div>
                 <div>
                   <label className={labelClass}>
-                    Last Name <span className="text-red-500">*</span>
+                    Last Name <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="text"
@@ -1647,7 +1645,7 @@ export default function ShopSetupPage() {
                 </div>
                 <div className="md:col-span-3">
                   <label className={labelClass}>
-                    Email Address <span className="text-red-500">*</span>
+                    Email Address <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="email"
@@ -1667,7 +1665,7 @@ export default function ShopSetupPage() {
                     type="button"
                     onClick={handleInviteMechanic}
                     disabled={sendingInvite}
-                    className={`${stepButtonClass} border-gray-300 bg-white text-gray-700 hover:bg-gray-50`}
+                    className={`${stepButtonClass} border-input bg-white text-foreground hover:bg-muted`}
                   >
                     {sendingInvite ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1680,13 +1678,13 @@ export default function ShopSetupPage() {
               </div>
 
               {mechanicInviteError && (
-                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                <div className="rounded-xl border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                   {mechanicInviteError}
                 </div>
               )}
 
               {mechanicInviteSuccess && (
-                <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+                <div className="rounded-xl border border-success/20 bg-success/10 px-4 py-3 text-sm text-success">
                   Invitation sent successfully.
                 </div>
               )}
@@ -1701,14 +1699,25 @@ export default function ShopSetupPage() {
 
               <div className="space-y-3">
                 {mechanics.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-sm text-gray-500">
-                    No mechanics added yet. Invite at least one before you finish setup.
-                  </div>
+                  !mechanicForm.firstName.trim() &&
+                  !mechanicForm.lastName.trim() &&
+                  !mechanicForm.email.trim() &&
+                  !mechanicForm.title.trim() ? (
+                    <div className="rounded-xl bg-muted p-6 text-center text-muted-foreground">
+                      <Users className="mx-auto h-6 w-6 text-muted-foreground" />
+                      <p className="mt-2 text-sm font-medium text-foreground">
+                        Your team will appear here
+                      </p>
+                      <p className="mt-1 text-xs">
+                        Invite your first mechanic using the form above.
+                      </p>
+                    </div>
+                  ) : null
                 ) : (
                   mechanics.map((mechanic) => (
                     <div
                       key={mechanic._id}
-                      className="flex items-center justify-between gap-4 rounded-xl border border-gray-200 px-4 py-4"
+                      className="flex items-center justify-between gap-4 rounded-xl border border-border px-4 py-4"
                     >
                       <div className="flex min-w-0 items-center gap-4">
                         <button
@@ -1718,7 +1727,7 @@ export default function ShopSetupPage() {
                           className="group relative h-14 w-14 shrink-0 disabled:cursor-wait disabled:opacity-80"
                           aria-label={`Add a profile photo for ${mechanic.firstName} ${mechanic.lastName}`}
                         >
-                          <div className="h-14 w-14 overflow-hidden rounded-full border border-gray-300 bg-slate-700 text-white transition-colors group-hover:border-blue-300 group-hover:bg-slate-800">
+                          <div className="h-14 w-14 overflow-hidden rounded-lg border border-input bg-slate-700 text-white transition-colors group-hover:border-blue-300 group-hover:bg-slate-800">
                             {mechanic.photoUrl ? (
                               <img
                                 src={mechanic.photoUrl}
@@ -1730,9 +1739,9 @@ export default function ShopSetupPage() {
                                 {getInitials(mechanic.firstName, mechanic.lastName)}
                               </div>
                             )}
-                            <span className="absolute inset-0 rounded-full bg-black/0 transition-colors group-hover:bg-black/10" />
+                            <span className="absolute inset-0 rounded-lg bg-black/0 transition-colors group-hover:bg-black/10" />
                           </div>
-                          <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-white ring-2 ring-white">
+                          <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-lg bg-primary text-white ring-2 ring-white">
                             {uploadingMechanicId === mechanic._id ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             ) : (
@@ -1742,17 +1751,17 @@ export default function ShopSetupPage() {
                         </button>
 
                         <div className="min-w-0">
-                          <p className="text-sm font-semibold text-gray-900">
+                          <p className="text-sm font-semibold text-foreground">
                             {mechanic.firstName} {mechanic.lastName}
                           </p>
-                          <p className="mt-1 text-sm text-gray-500">
+                          <p className="mt-1 text-sm text-muted-foreground">
                             {mechanic.pendingInvitationId
                               ? "Invitation pending"
                               : mechanic.title || "Mechanic"}
                           </p>
-                          <p className="mt-1 text-xs font-medium text-blue-600">
+                          <p className="mt-1 text-xs font-medium text-primary">
                             {mechanic.shopUserId
-                              ? "Click the photo to manage it."
+                              ? "Click to add a photo."
                               : "Click the photo to view options. Upload is available after acceptance."}
                           </p>
                         </div>
@@ -1766,7 +1775,7 @@ export default function ShopSetupPage() {
                             pendingInvitationId: mechanic.pendingInvitationId,
                           })
                         }
-                        className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
+                        className="inline-flex items-center gap-2 rounded-lg border border-destructive/20 px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
                       >
                         <Trash2 className="h-4 w-4" />
                         Remove
@@ -1779,12 +1788,12 @@ export default function ShopSetupPage() {
               <ConfirmationDialog
                 open={selectedMechanicForPhotoDialog !== null}
                 title={
-                  <span className="block text-center text-xl font-semibold text-gray-900">
+                  <span className="block text-center text-xl font-semibold text-foreground">
                     Profile Photo
                   </span>
                 }
                 description={
-                  <span className="block text-center text-sm text-gray-500">
+                  <span className="block text-center text-sm text-muted-foreground">
                     {selectedMechanicForPhotoDialog
                       ? `Select an option to update ${selectedMechanicForPhotoDialog.firstName} ${selectedMechanicForPhotoDialog.lastName}'s profile picture.`
                       : ""}
@@ -1807,7 +1816,7 @@ export default function ShopSetupPage() {
                       !selectedMechanicForPhotoDialog?.shopUserId ||
                       uploadingMechanicId === selectedMechanicForPhotoDialog?._id
                     }
-                    className="inline-flex h-12 w-full items-center justify-center rounded-full bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex h-12 w-full items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Add photo
                   </button>
@@ -1819,14 +1828,14 @@ export default function ShopSetupPage() {
                       !selectedMechanicForPhotoDialog?.photoUrl ||
                       uploadingMechanicId === selectedMechanicForPhotoDialog?._id
                     }
-                    className="inline-flex h-12 w-full items-center justify-center rounded-full border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex h-12 w-full items-center justify-center rounded-lg border border-destructive/20 bg-destructive/10 px-4 text-sm font-semibold text-destructive transition-colors hover:bg-destructive/15 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Remove photo
                   </button>
                   <button
                     type="button"
                     onClick={closeMechanicPhotoDialog}
-                    className="inline-flex h-12 w-full items-center justify-center rounded-full border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+                    className="inline-flex h-12 w-full items-center justify-center rounded-lg border border-input bg-white px-4 text-sm font-semibold text-foreground transition-colors hover:bg-muted"
                   >
                     Cancel
                   </button>
@@ -1837,7 +1846,7 @@ export default function ShopSetupPage() {
                 <button
                   type="button"
                   onClick={() => handleStepChange(2)}
-                  className={`${stepButtonClass} border-gray-300 bg-white text-gray-700 hover:bg-gray-50`}
+                  className={`${stepButtonClass} border-input bg-white text-foreground hover:bg-muted`}
                 >
                   Back
                 </button>
@@ -1851,7 +1860,7 @@ export default function ShopSetupPage() {
                     }
                     setCurrentStep(4);
                   }}
-                  className={`${stepButtonClass} border-blue-600 bg-blue-600 text-white hover:bg-blue-700`}
+                  className={`${stepButtonClass} border-blue-600 bg-primary text-white hover:bg-primary/90`}
                 >
                   <ChevronRight className="mr-2 h-4 w-4" />
                   Continue
@@ -1863,21 +1872,21 @@ export default function ShopSetupPage() {
           {currentStep === 4 && (
             <div className="space-y-6">
               <div className="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
-                <div className="rounded-2xl border border-gray-200 bg-white p-5">
+                <div className="rounded-xl border border-border bg-white p-5 shadow-sm">
                   <div className="flex items-center gap-3">
-                    <div className="rounded-full bg-blue-100 p-2 text-blue-700">
+                    <div className="rounded-lg bg-primary/10 p-2 text-primary">
                       <CreditCard className="h-5 w-5" />
                     </div>
                     <div>
-                      <h3 className="text-lg font-semibold text-gray-900">
+                      <h3 className="text-lg font-semibold text-foreground">
                         Stripe Connect onboarding
                       </h3>
-                      <p className="mt-1 text-sm text-gray-500">
-                        Connect the payout account for this shop through Stripe Express.
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Connect your bank account securely through Stripe.
                       </p>
                     </div>
                   </div>
-                  <div className="mt-5 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-sm leading-6 text-gray-600">
+                  <div className="mt-5 rounded-xl border border-dashed border-input bg-muted p-4 text-sm leading-6 text-muted-foreground">
                     {onboardingData.shop?.stripeConnectAccountId ? (
                       <>
                         {stripeConnectReady
@@ -1885,10 +1894,10 @@ export default function ShopSetupPage() {
                           : stripeRequirements.length > 0
                             ? "Stripe still needs more information. Reopen onboarding below and finish the hosted steps."
                             : "Stripe has created a connected account and is still finalizing verification."}
-                        <div className="mt-2 font-mono text-xs text-gray-900">
+                        <div className="mt-2 font-mono text-xs text-foreground">
                           {onboardingData.shop.stripeConnectAccountId}
                         </div>
-                        <div className="mt-2 text-xs font-semibold text-gray-700">
+                        <div className="mt-2 text-xs font-semibold text-foreground">
                           Status: {stripeConnectReady ? "Ready" : "Not ready"}
                         </div>
                       </>
@@ -1904,7 +1913,7 @@ export default function ShopSetupPage() {
                       type="button"
                       onClick={handleLaunchStripeOnboarding}
                       disabled={launchingStripe}
-                      className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {launchingStripe ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
@@ -1916,61 +1925,64 @@ export default function ShopSetupPage() {
                         : "Connect your bank account"}
                     </button>
                     {onboardingData.shop?.stripeConnectAccountId ? (
-                      <p className="max-w-sm text-sm text-gray-500">
+                      <p className="max-w-sm text-sm text-muted-foreground">
                         Use this again any time Stripe asks for more information.
                       </p>
                     ) : null}
                   </div>
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    Otopair never sees or stores your bank details — Stripe handles everything.
+                  </p>
                 </div>
 
-                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-5">
-                  <h3 className="text-lg font-semibold text-gray-900">Setup summary</h3>
-                  <div className="mt-4 space-y-3 text-sm text-gray-600">
+                <div className="rounded-xl border border-border bg-muted p-5 shadow-sm">
+                  <h3 className="text-lg font-semibold text-foreground">Setup summary</h3>
+                  <div className="mt-4 space-y-3 text-sm text-muted-foreground">
                     <div className="flex items-center justify-between rounded-xl bg-white px-4 py-3">
                       <span>Shop details</span>
-                      <span className="font-medium text-gray-900">
+                      <span className="font-medium text-foreground">
                         {details.name || "Incomplete"}
                       </span>
                     </div>
                     <div className="flex items-center justify-between rounded-xl bg-white px-4 py-3">
                       <span>Weekly hours</span>
-                      <span className="font-medium text-gray-900">
+                      <span className="font-medium text-foreground">
                         {hours.filter((row) => !row.isClosed).length} open days
                       </span>
                     </div>
                     <div className="flex items-center justify-between rounded-xl bg-white px-4 py-3">
                       <span>Services selected</span>
-                      <span className="font-medium text-gray-900">{offeredCount}</span>
+                      <span className="font-medium text-foreground">{offeredCount}</span>
                     </div>
                     <div className="flex items-center justify-between rounded-xl bg-white px-4 py-3">
                       <span>Mechanics added</span>
-                      <span className="font-medium text-gray-900">{mechanics.length}</span>
+                      <span className="font-medium text-foreground">{mechanics.length}</span>
                     </div>
                     <div className="flex items-center justify-between rounded-xl bg-white px-4 py-3">
                       <span>Labor rate</span>
-                      <span className="font-medium text-gray-900">${laborRate}/hr</span>
+                      <span className="font-medium text-foreground">${laborRate}/hr</span>
                     </div>
                   </div>
                 </div>
               </div>
 
               <div
-                className={`rounded-2xl border px-4 py-4 text-sm leading-6 ${
+                className={`rounded-xl border px-4 py-4 text-sm leading-6 ${
                   stripeConnectReady
-                    ? "border-green-200 bg-green-50 text-green-800"
+                    ? "border-success/20 bg-success/10 text-success"
                     : "border-amber-200 bg-amber-50 text-amber-900"
                 }`}
               >
                 {stripeConnectReady
                   ? "Stripe Connect is ready. You can finish setup now."
-                  : "Finish setup stays locked behind Stripe Connect. Complete the hosted onboarding flow so charges and payouts can be enabled for this shop."}
+                  : "To finish setup, connect your bank account through Stripe. That's how we'll send you payments for the jobs you complete."}
               </div>
 
               <div className="flex justify-between pt-2">
                 <button
                   type="button"
                   onClick={() => handleStepChange(3)}
-                  className={`${stepButtonClass} border-gray-300 bg-white text-gray-700 hover:bg-gray-50`}
+                  className={`${stepButtonClass} border-input bg-white text-foreground hover:bg-muted`}
                 >
                   Back
                 </button>
@@ -1978,7 +1990,7 @@ export default function ShopSetupPage() {
                   type="button"
                   onClick={handleFinish}
                   disabled={finishing || !stripeConnectReady}
-                  className={`${stepButtonClass} border-blue-600 bg-blue-600 text-white hover:bg-blue-700`}
+                  className={`${stepButtonClass} border-blue-600 bg-primary text-white hover:bg-primary/90`}
                 >
                   {finishing ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />

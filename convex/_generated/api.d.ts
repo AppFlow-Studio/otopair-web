@@ -88,6 +88,7 @@ import type * as smartcar from "../smartcar.js";
 import type * as spec_confirmations from "../spec_confirmations.js";
 import type * as spec_variances from "../spec_variances.js";
 import type * as specs from "../specs.js";
+import type * as stripe_webhook_events from "../stripe_webhook_events.js";
 import type * as time_slots from "../time_slots.js";
 import type * as transactions from "../transactions.js";
 import type * as transmissions from "../transmissions.js";
@@ -230,6 +231,7 @@ declare const fullApi: ApiFromModules<{
   spec_confirmations: typeof spec_confirmations;
   spec_variances: typeof spec_variances;
   specs: typeof specs;
+  stripe_webhook_events: typeof stripe_webhook_events;
   time_slots: typeof time_slots;
   transactions: typeof transactions;
   transmissions: typeof transmissions;

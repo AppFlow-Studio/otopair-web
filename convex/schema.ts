@@ -918,12 +918,17 @@ export default defineSchema({
     description: v.optional(v.string()),
     logo: v.optional(v.string()),
     stripe_connect_account_id: v.optional(v.string()),
+    stripe_charges_enabled: v.optional(v.boolean()),
+    stripe_payouts_enabled: v.optional(v.boolean()),
+    stripe_requirements_currently_due: v.optional(v.array(v.string())),
+    stripe_onboarding_completed_at: v.optional(v.number()),
     onboarding_complete: v.optional(v.boolean()),
     email: v.optional(v.string()),
     website: v.optional(v.string()),
   })
     .index("by_slug", ["slug"])
-    .index("by_owner_user_id", ["owner_user_id"]),
+    .index("by_owner_user_id", ["owner_user_id"])
+    .index("by_stripe_connect_account_id", ["stripe_connect_account_id"]),
 
   // [I]
   shops_hours: defineTable({
@@ -1111,6 +1116,18 @@ export default defineSchema({
   })
     .index("by_payment_id", ["payment_id"])
     .index("by_changed_at", ["changed_at"]),
+
+  stripe_webhook_events: defineTable({
+    event_id: v.string(),
+    event_type: v.string(),
+    livemode: v.optional(v.boolean()),
+    stripe_account_id: v.optional(v.string()),
+    received_at: v.number(),
+    processed_at: v.optional(v.number()),
+  })
+    .index("by_event_id", ["event_id"])
+    .index("by_event_type", ["event_type"])
+    .index("by_received_at", ["received_at"]),
 
   // [I]
   transactions: defineTable({

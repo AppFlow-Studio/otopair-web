@@ -225,8 +225,161 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { ActionCtx } from "./_generated/server";
+import Stripe from "stripe";
 
 const http = httpRouter();
+const STRIPE_API_VERSION = "2026-03-25.dahlia" as const;
+
+let stripeClient: Stripe | null = null;
+
+function getStripeForWebhook() {
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  if (!secretKey) {
+    throw new Error("Missing STRIPE_SECRET_KEY.");
+  }
+
+  if (!stripeClient) {
+    stripeClient = new Stripe(secretKey, {
+      apiVersion: STRIPE_API_VERSION,
+    });
+  }
+
+  return stripeClient;
+}
+
+function getStripeWebhookSecrets() {
+  const secrets = [
+    process.env.STRIPE_CONNECT_WEBHOOK_SECRET,
+    process.env.STRIPE_WEBHOOK_SECRET,
+  ].filter((secret): secret is string => Boolean(secret));
+
+  return Array.from(new Set(secrets));
+}
+
+async function constructStripeWebhookEvent(rawBody: string, signature: string) {
+  const secrets = getStripeWebhookSecrets();
+  if (secrets.length === 0) {
+    throw new Error("Missing Stripe webhook signing secret.");
+  }
+
+  const stripe = getStripeForWebhook();
+  let lastError: unknown = null;
+
+  for (const secret of secrets) {
+    try {
+      return await stripe.webhooks.constructEventAsync(rawBody, signature, secret);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Invalid Stripe webhook signature.");
+}
+
+function getStripeAccountRequirements(account: Stripe.Account): string[] {
+  return account.requirements?.currently_due ?? [];
+}
+
+async function syncStripeConnectedAccountFromEvent(
+  ctx: ActionCtx,
+  event: Stripe.Event,
+  account: Stripe.Account
+) {
+  return await ctx.runMutation(internal.stripe_webhook_events.syncConnectedAccount, {
+    eventId: event.id,
+    eventType: event.type,
+    livemode: event.livemode,
+    stripeAccountId: account.id,
+    stripeChargesEnabled: account.charges_enabled,
+    stripePayoutsEnabled: account.payouts_enabled,
+    stripeRequirementsCurrentlyDue: getStripeAccountRequirements(account),
+  });
+}
+
+async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
+  const signature = request.headers.get("stripe-signature");
+  if (!signature) {
+    return new Response("Missing Stripe signature", { status: 400 });
+  }
+
+  const rawBody = await request.text();
+  let event: Stripe.Event;
+
+  try {
+    event = await constructStripeWebhookEvent(rawBody, signature);
+  } catch (error) {
+    console.error("[Stripe Webhook] Signature verification failed:", error);
+    return new Response("Invalid signature", { status: 400 });
+  }
+
+  try {
+    if (event.type === "account.updated") {
+      await syncStripeConnectedAccountFromEvent(
+        ctx,
+        event,
+        event.data.object as Stripe.Account
+      );
+      return new Response("ok", { status: 200 });
+    }
+
+    if (
+      event.type === "account.external_account.updated" ||
+      event.type === "capability.updated"
+    ) {
+      const accountId =
+        typeof event.account === "string"
+          ? event.account
+          : typeof (event.data.object as { account?: unknown }).account === "string"
+            ? ((event.data.object as { account: string }).account)
+            : null;
+
+      if (accountId) {
+        const account = await getStripeForWebhook().accounts.retrieve(accountId);
+        await syncStripeConnectedAccountFromEvent(ctx, event, account);
+      } else {
+        await ctx.runMutation(internal.stripe_webhook_events.record, {
+          eventId: event.id,
+          eventType: event.type,
+          livemode: event.livemode,
+        });
+      }
+
+      return new Response("ok", { status: 200 });
+    }
+
+    await ctx.runMutation(internal.stripe_webhook_events.record, {
+      eventId: event.id,
+      eventType: event.type,
+      livemode: event.livemode,
+      stripeAccountId:
+        typeof event.account === "string" ? event.account : undefined,
+    });
+
+    return new Response("ok", { status: 200 });
+  } catch (error) {
+    console.error("[Stripe Webhook] Processing failed:", error);
+    return new Response("Webhook processing failed", { status: 500 });
+  }
+}
+
+// ============================================
+// Stripe Webhook Endpoints
+// ============================================
+
+http.route({
+  path: "/stripe/webhook",
+  method: "POST",
+  handler: httpAction(handleStripeWebhook),
+});
+
+http.route({
+  path: "/stripe/connect-webhook",
+  method: "POST",
+  handler: httpAction(handleStripeWebhook),
+});
 
 // ============================================
 // Smartcar Webhook Endpoint

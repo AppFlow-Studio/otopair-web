@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -7,6 +8,38 @@ import { ArrowUpRight, CreditCard, Loader2 } from "lucide-react";
 
 export default function PayoutsPage() {
   const onboardingData = useQuery(api.shops.getMyOnboardingData);
+  const [openingStripe, setOpeningStripe] = useState(false);
+  const [stripeError, setStripeError] = useState<string | null>(null);
+
+  async function handleOpenStripeDashboard() {
+    setStripeError(null);
+    setOpeningStripe(true);
+    const targetWindow = window.open("", "_blank", "noopener,noreferrer");
+
+    try {
+      const response = await fetch("/api/stripe/connect/login", {
+        method: "POST",
+      });
+      const data = (await response.json()) as { error?: string; url?: string };
+
+      if (!response.ok || !data.url) {
+        throw new Error(data.error ?? "Failed to open Stripe Express dashboard.");
+      }
+
+      if (targetWindow) {
+        targetWindow.location.href = data.url;
+      } else {
+        window.location.assign(data.url);
+      }
+    } catch (error) {
+      targetWindow?.close();
+      setStripeError(
+        error instanceof Error ? error.message : "Failed to open Stripe Express dashboard."
+      );
+    } finally {
+      setOpeningStripe(false);
+    }
+  }
 
   if (onboardingData === undefined) {
     return (
@@ -35,8 +68,10 @@ export default function PayoutsPage() {
           <div>
             <h2 className="text-xl font-semibold text-gray-900">Stripe Connect status</h2>
             <p className="mt-2 text-sm text-gray-500">
-              {onboardingData?.shop?.stripeConnectAccountId
-                ? `Connected account detected: ${onboardingData.shop.stripeConnectAccountId}`
+              {onboardingData?.shop?.stripeConnectReady
+                ? "Stripe Connect is ready for charges and payouts."
+                : onboardingData?.shop?.stripeConnectAccountId
+                  ? `Connected account detected: ${onboardingData.shop.stripeConnectAccountId}`
                 : "Stripe Connect is not wired yet for this shop portal environment."}
             </p>
           </div>
@@ -48,6 +83,19 @@ export default function PayoutsPage() {
         </div>
 
         <div className="mt-6 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={handleOpenStripeDashboard}
+            disabled={openingStripe || !onboardingData?.shop?.stripeConnectAccountId}
+            className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {openingStripe ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <ArrowUpRight className="h-4 w-4" />
+            )}
+            Payouts & Tax Info
+          </button>
           <Link
             href="/dashboard"
             className="inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
@@ -62,6 +110,12 @@ export default function PayoutsPage() {
             <ArrowUpRight className="h-4 w-4" />
           </Link>
         </div>
+
+        {stripeError && (
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {stripeError}
+          </div>
+        )}
       </section>
     </div>
   );

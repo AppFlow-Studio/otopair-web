@@ -7,6 +7,13 @@ import {
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 
+type StripeConnectShopFields = {
+  stripe_charges_enabled?: boolean;
+  stripe_payouts_enabled?: boolean;
+  stripe_requirements_currently_due?: string[];
+  stripe_onboarding_completed_at?: number;
+};
+
 async function getCurrentUser(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) return { identity: null, user: null };
@@ -90,11 +97,55 @@ async function getOwnerShopContextByClerkUserId(ctx: any, clerkUserId: string) {
   return { user, primary };
 }
 
+function getStripeRequirements(
+  shop: StripeConnectShopFields | null | undefined
+): string[] {
+  return Array.isArray(shop?.stripe_requirements_currently_due)
+    ? shop.stripe_requirements_currently_due
+    : [];
+}
+
+function isStripeConnectReadyForShop(
+  shop: StripeConnectShopFields | null | undefined
+): boolean {
+  return (
+    shop?.stripe_charges_enabled === true &&
+    shop?.stripe_payouts_enabled === true &&
+    getStripeRequirements(shop).length === 0
+  );
+}
+
+function getStripeStatusPatch(args: {
+  shop: StripeConnectShopFields;
+  chargesEnabled: boolean;
+  payoutsEnabled: boolean;
+  requirementsCurrentlyDue: string[];
+}) {
+  const isReady =
+    args.chargesEnabled &&
+    args.payoutsEnabled &&
+    args.requirementsCurrentlyDue.length === 0;
+
+  return {
+    stripe_charges_enabled: args.chargesEnabled,
+    stripe_payouts_enabled: args.payoutsEnabled,
+    stripe_requirements_currently_due: args.requirementsCurrentlyDue,
+    stripe_onboarding_completed_at: isReady
+      ? args.shop.stripe_onboarding_completed_at ?? Date.now()
+      : args.shop.stripe_onboarding_completed_at,
+  };
+}
+
 async function assertOnboardingCanBeCompleted(ctx: any, shopId: any) {
   const shop = await ctx.db.get(shopId);
   if (!shop) throw new Error("Shop not found.");
   if (!shop.stripe_connect_account_id) {
     throw new Error("Complete Stripe Connect onboarding before finishing setup.");
+  }
+  if (!isStripeConnectReadyForShop(shop)) {
+    throw new Error(
+      "Stripe still needs more information before payouts can be enabled. Reopen Stripe onboarding and complete every required step."
+    );
   }
 
   const hours = await ctx.db
@@ -311,8 +362,44 @@ export const saveStripeConnectAccountId = mutation({
 
     await ctx.db.patch(primary.shop._id, {
       stripe_connect_account_id: args.stripeConnectAccountId,
+      stripe_charges_enabled: primary.shop.stripe_charges_enabled ?? false,
+      stripe_payouts_enabled: primary.shop.stripe_payouts_enabled ?? false,
+      stripe_requirements_currently_due:
+        primary.shop.stripe_requirements_currently_due ?? [],
       onboarding_complete: false,
     });
+
+    return primary.shop._id;
+  },
+});
+
+export const syncMyStripeConnectStatus = mutation({
+  args: {
+    stripeConnectAccountId: v.string(),
+    stripeChargesEnabled: v.boolean(),
+    stripePayoutsEnabled: v.boolean(),
+    stripeRequirementsCurrentlyDue: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getOrCreateCurrentShopOwner(ctx);
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Not authorized");
+    }
+    if (primary.shop.stripe_connect_account_id !== args.stripeConnectAccountId) {
+      throw new Error("Stripe account does not match this shop.");
+    }
+
+    await ctx.db.patch(
+      primary.shop._id,
+      getStripeStatusPatch({
+        shop: primary.shop,
+        chargesEnabled: args.stripeChargesEnabled,
+        payoutsEnabled: args.stripePayoutsEnabled,
+        requirementsCurrentlyDue: args.stripeRequirementsCurrentlyDue,
+      })
+    );
 
     return primary.shop._id;
   },
@@ -438,6 +525,7 @@ export const getMyOnboardingData = query({
 
     return {
       userRole: user.role ?? null,
+      ownerEmail: user.email ?? null,
       shop: shop
         ? {
             _id: shop._id,
@@ -451,7 +539,14 @@ export const getMyOnboardingData = query({
             laborRate: shop.labor_rate ?? 150,
             lat: shop.lat ?? null,
             lng: shop.lng ?? null,
+            email: shop.email ?? null,
+            website: shop.website ?? null,
             stripeConnectAccountId: shop.stripe_connect_account_id ?? null,
+            stripeChargesEnabled: shop.stripe_charges_enabled === true,
+            stripePayoutsEnabled: shop.stripe_payouts_enabled === true,
+            stripeRequirementsCurrentlyDue: getStripeRequirements(shop),
+            stripeOnboardingCompletedAt: shop.stripe_onboarding_completed_at ?? null,
+            stripeConnectReady: isStripeConnectReadyForShop(shop),
             onboardingComplete: shop.onboarding_complete === true,
           }
         : null,
@@ -787,10 +882,52 @@ export const saveStripeConnectAccountForClerkUser = internalMutation({
 
     await ctx.db.patch(context.primary.shop._id, {
       stripe_connect_account_id: args.stripeConnectAccountId,
+      stripe_charges_enabled: context.primary.shop.stripe_charges_enabled ?? false,
+      stripe_payouts_enabled: context.primary.shop.stripe_payouts_enabled ?? false,
+      stripe_requirements_currently_due:
+        context.primary.shop.stripe_requirements_currently_due ?? [],
       onboarding_complete: false,
     });
 
     return context.primary.shop._id;
+  },
+});
+
+export const syncStripeConnectStatusByAccountId = internalMutation({
+  args: {
+    stripeConnectAccountId: v.string(),
+    stripeChargesEnabled: v.boolean(),
+    stripePayoutsEnabled: v.boolean(),
+    stripeRequirementsCurrentlyDue: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const shop = await ctx.db
+      .query("shops")
+      .withIndex("by_stripe_connect_account_id", (q: any) =>
+        q.eq("stripe_connect_account_id", args.stripeConnectAccountId)
+      )
+      .first();
+
+    if (!shop) {
+      return { shopId: null, ready: false };
+    }
+
+    const ready =
+      args.stripeChargesEnabled &&
+      args.stripePayoutsEnabled &&
+      args.stripeRequirementsCurrentlyDue.length === 0;
+
+    await ctx.db.patch(
+      shop._id,
+      getStripeStatusPatch({
+        shop,
+        chargesEnabled: args.stripeChargesEnabled,
+        payoutsEnabled: args.stripePayoutsEnabled,
+        requirementsCurrentlyDue: args.stripeRequirementsCurrentlyDue,
+      })
+    );
+
+    return { shopId: shop._id, ready };
   },
 });
 

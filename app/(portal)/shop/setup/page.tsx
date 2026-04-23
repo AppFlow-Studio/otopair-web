@@ -1083,6 +1083,9 @@ export default function ShopSetupPage() {
       ? null
       : mechanics.find((mechanic) => mechanic._id === photoDialogMechanicId) ?? null;
   const offeredCount = selectedServiceIds.size;
+  const stripeRequirements =
+    onboardingData.shop?.stripeRequirementsCurrentlyDue ?? [];
+  const stripeConnectReady = onboardingData.shop?.stripeConnectReady === true;
   const stepButtonClass =
     "inline-flex items-center rounded-lg border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
 
@@ -1877,11 +1880,16 @@ export default function ShopSetupPage() {
                   <div className="mt-5 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-4 text-sm leading-6 text-gray-600">
                     {onboardingData.shop?.stripeConnectAccountId ? (
                       <>
-                        Stripe has created a connected account for this shop. If Stripe
-                        still needs more information, reopen onboarding below and finish
-                        the hosted steps.
+                        {stripeConnectReady
+                          ? "Stripe has verified this shop for charges and payouts."
+                          : stripeRequirements.length > 0
+                            ? "Stripe still needs more information. Reopen onboarding below and finish the hosted steps."
+                            : "Stripe has created a connected account and is still finalizing verification."}
                         <div className="mt-2 font-mono text-xs text-gray-900">
                           {onboardingData.shop.stripeConnectAccountId}
+                        </div>
+                        <div className="mt-2 text-xs font-semibold text-gray-700">
+                          Status: {stripeConnectReady ? "Ready" : "Not ready"}
                         </div>
                       </>
                     ) : (
@@ -1946,9 +1954,16 @@ export default function ShopSetupPage() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm leading-6 text-amber-900">
-                Finish setup stays locked behind Stripe Connect. Complete the hosted
-                onboarding flow so payouts can be enabled for this shop.
+              <div
+                className={`rounded-2xl border px-4 py-4 text-sm leading-6 ${
+                  stripeConnectReady
+                    ? "border-green-200 bg-green-50 text-green-800"
+                    : "border-amber-200 bg-amber-50 text-amber-900"
+                }`}
+              >
+                {stripeConnectReady
+                  ? "Stripe Connect is ready. You can finish setup now."
+                  : "Finish setup stays locked behind Stripe Connect. Complete the hosted onboarding flow so charges and payouts can be enabled for this shop."}
               </div>
 
               <div className="flex justify-between pt-2">
@@ -1962,7 +1977,7 @@ export default function ShopSetupPage() {
                 <button
                   type="button"
                   onClick={handleFinish}
-                  disabled={finishing || !onboardingData.shop?.stripeConnectAccountId}
+                  disabled={finishing || !stripeConnectReady}
                   className={`${stepButtonClass} border-blue-600 bg-blue-600 text-white hover:bg-blue-700`}
                 >
                   {finishing ? (

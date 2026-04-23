@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { fetchMutation, fetchQuery } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
-import { getStripe, getStripeConnectStatus } from "@/lib/stripe";
+import {
+  getStripe,
+  getStripeConnectRequirements,
+  getStripeConnectStatus,
+} from "@/lib/stripe";
 
 async function updateClerkMetadata(args: { clerkUserId: string; shopId: string }) {
   const clerkSecretKey = process.env.CLERK_SECRET_KEY;
@@ -64,6 +68,17 @@ export async function POST() {
 
     const stripe = getStripe();
     const account = await stripe.accounts.retrieve(shop.stripeConnectAccountId);
+    await fetchMutation(
+      api.shops.syncMyStripeConnectStatus,
+      {
+        stripeConnectAccountId: account.id,
+        stripeChargesEnabled: account.charges_enabled,
+        stripePayoutsEnabled: account.payouts_enabled,
+        stripeRequirementsCurrentlyDue: getStripeConnectRequirements(account),
+      },
+      { token }
+    );
+
     const stripeStatus = getStripeConnectStatus(account);
     if (stripeStatus !== "connected") {
       return NextResponse.json(

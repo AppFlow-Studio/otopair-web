@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { fetchQuery } from "convex/nextjs";
+import { fetchMutation, fetchQuery } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
-import { getStripe, getStripeConnectStatus } from "@/lib/stripe";
+import {
+  getStripe,
+  getStripeConnectRequirements,
+  getStripeConnectStatus,
+} from "@/lib/stripe";
 
 export async function GET(request: NextRequest) {
   const redirectUrl = request.nextUrl.clone();
@@ -29,6 +33,17 @@ export async function GET(request: NextRequest) {
 
     const stripe = getStripe();
     const account = await stripe.accounts.retrieve(accountId);
+    await fetchMutation(
+      api.shops.syncMyStripeConnectStatus,
+      {
+        stripeConnectAccountId: account.id,
+        stripeChargesEnabled: account.charges_enabled,
+        stripePayoutsEnabled: account.payouts_enabled,
+        stripeRequirementsCurrentlyDue: getStripeConnectRequirements(account),
+      },
+      { token }
+    );
+
     redirectUrl.searchParams.set("stripe", getStripeConnectStatus(account));
     return NextResponse.redirect(redirectUrl);
   } catch {

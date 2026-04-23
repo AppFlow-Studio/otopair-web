@@ -17,7 +17,6 @@ import RescheduleConfirmationDialog, {
 import {
   ArrowUpRight,
   BadgeDollarSign,
-  Bell,
   CalendarClock,
   ClipboardList,
   Loader2,
@@ -102,7 +101,8 @@ function DashboardStatCard({
   value,
   sublabel,
   accentClassName = "text-primary",
-  valueClassName = "text-3xl font-bold",
+  valueClassName = "text-2xl font-semibold",
+  href,
 }: {
   icon: ComponentType<{ className?: string }>;
   label: string;
@@ -110,17 +110,38 @@ function DashboardStatCard({
   sublabel?: string;
   accentClassName?: string;
   valueClassName?: string;
+  href?: string;
 }) {
-  return (
-    <div className="cursor-pointer rounded-2xl border border-border bg-card p-5 transition-shadow hover:shadow-md">
-      <div className="flex items-center gap-2 text-sm font-medium text-gray-500">
+  const interactiveClasses = href
+    ? "cursor-pointer transition-shadow hover:shadow-md"
+    : "";
+  const content = (
+    <>
+      <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
         <Icon className="h-4 w-4" />
         {label}
       </div>
-      <p className={`mt-3 tracking-tight ${valueClassName ?? "text-3xl font-bold"} ${accentClassName}`}>
+      <p className={`mt-3 tracking-tight ${valueClassName ?? "text-2xl font-semibold"} ${accentClassName}`}>
         {value}
       </p>
-      {sublabel ? <p className="mt-1 text-sm text-gray-500">{sublabel}</p> : null}
+      {sublabel ? <p className="mt-1 text-sm text-muted-foreground">{sublabel}</p> : null}
+    </>
+  );
+
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className={`block rounded-2xl border border-border bg-card p-5 ${interactiveClasses}`}
+      >
+        {content}
+      </Link>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-5">
+      {content}
     </div>
   );
 }
@@ -137,8 +158,8 @@ function EmptyCard({
   hrefLabel?: string;
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-muted/40 px-4 py-6 text-sm text-gray-500">
-      <p className="font-medium text-gray-700">{title}</p>
+    <div className="rounded-2xl border border-border bg-muted/40 px-4 py-6 text-sm text-muted-foreground">
+      <p className="font-medium text-foreground">{title}</p>
       {description ? <p className="mt-1 leading-6">{description}</p> : null}
       {href && hrefLabel ? (
         <Link
@@ -428,7 +449,6 @@ function OwnerDashboardPage({
     [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.primaryEmailAddress?.emailAddress || "Owner";
   const ownerInitials = `${user?.firstName?.[0] ?? ""}${user?.lastName?.[0] ?? ""}`.toUpperCase() || "OW";
   const todayLabel = formatLongDate(new Date());
-  const scheduleColumnCount = Math.max(dashboard.todaySchedule.length, 1);
   const hasScheduledBookings = dashboard.todaySchedule.some((column) => column.bookings.length > 0);
   const hasPendingActions =
     dashboard.pendingActions.jobsToAcceptCount > 0 ||
@@ -442,7 +462,7 @@ function OwnerDashboardPage({
       <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex min-w-0 items-center gap-4">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-slate-100">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-muted">
               {dashboard.shop.logoUrl ? (
                 <img
                   src={dashboard.shop.logoUrl}
@@ -450,31 +470,18 @@ function OwnerDashboardPage({
                   className="h-full w-full object-cover"
                 />
               ) : (
-                <Store className="h-7 w-7 text-slate-600" />
+                <Store className="h-7 w-7 text-muted-foreground" />
               )}
             </div>
             <div className="min-w-0">
-              <h1 className="text-3xl font-semibold tracking-tight text-gray-900">
+              <h1 className="text-3xl font-semibold tracking-tight text-foreground">
                 {dashboard.shop.name}
               </h1>
-              <p className="mt-2 text-sm text-gray-500">Today: {todayLabel}</p>
+              <p className="mt-2 text-sm text-muted-foreground">Today: {todayLabel}</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-4 self-start rounded-2xl border border-border bg-muted px-4 py-3">
-            <button
-              type="button"
-              className="relative flex h-11 w-11 items-center justify-center rounded-full border border-border bg-card text-slate-700"
-              aria-label="Pending acceptances"
-            >
-              <Bell className="h-5 w-5" />
-              {dashboard.stats.pendingAcceptanceCount > 0 ? (
-                <span className="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-destructive px-1 text-[11px] font-semibold text-white">
-                  {dashboard.stats.pendingAcceptanceCount}
-                </span>
-              ) : null}
-            </button>
-
+          <div className="flex items-center gap-4 self-start">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full bg-primary text-sm font-semibold text-white">
                 {user?.imageUrl ? (
@@ -484,8 +491,8 @@ function OwnerDashboardPage({
                 )}
               </div>
               <div>
-                <p className="text-sm font-semibold text-gray-900">{ownerName}</p>
-                <p className="text-xs text-gray-500">Shop owner</p>
+                <p className="text-sm font-semibold text-foreground">{ownerName}</p>
+                <p className="text-xs text-muted-foreground">Shop owner</p>
               </div>
             </div>
           </div>
@@ -497,6 +504,7 @@ function OwnerDashboardPage({
             label="Today's bookings"
             value={String(dashboard.stats.todaysBookingsCount)}
             sublabel="Scheduled bookings for today"
+            href="/schedule"
           />
           <DashboardStatCard
             icon={ClipboardList}
@@ -508,8 +516,9 @@ function OwnerDashboardPage({
                 : "No bookings waiting"
             }
             accentClassName={
-              dashboard.stats.pendingAcceptanceCount > 0 ? "text-destructive" : "text-gray-900"
+              dashboard.stats.pendingAcceptanceCount > 0 ? "text-destructive" : "text-foreground"
             }
+            href="/bookings?filter=pending"
           />
           <DashboardStatCard
             icon={BadgeDollarSign}
@@ -531,6 +540,7 @@ function OwnerDashboardPage({
               dashboard.stats.reviewCount === 0 ? "text-muted-foreground" : "text-foreground"
             }
             valueClassName={dashboard.stats.reviewCount === 0 ? "text-base font-medium" : undefined}
+            href="/settings/reviews"
           />
         </div>
       </section>
@@ -539,27 +549,25 @@ function OwnerDashboardPage({
         <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-gray-900">Pending Actions</h2>
-              <p className="mt-1 text-sm text-gray-500">
-                Keep approvals, completed booking follow-up, and team invitations from slipping through.
+              <h2 className="text-xl font-semibold text-foreground">Pending actions</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Items that need your attention
               </p>
             </div>
           </div>
 
           <div className="mt-6 grid gap-4 xl:grid-cols-3">
             <div className="flex max-h-[32rem] flex-col rounded-2xl border border-border bg-muted/70 p-4">
-              <div className="grid grid-cols-[minmax(0,1fr)_2.5rem] items-start gap-3">
+              <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900">Bookings to accept</p>
-                  <p className="mt-1 text-xs text-gray-500">Bookings waiting for owner review</p>
+                  <p className="text-sm font-semibold text-foreground">Bookings to accept</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Bookings waiting for owner review</p>
                 </div>
                 {dashboard.pendingActions.jobsToAcceptCount > 0 ? (
                   <span className="inline-flex w-10 justify-center rounded-full bg-destructive/10 px-2.5 py-1 text-center text-xs font-semibold text-destructive">
                     {dashboard.pendingActions.jobsToAcceptCount}
                   </span>
-                ) : (
-                  <span aria-hidden="true" className="w-10" />
-                )}
+                ) : null}
               </div>
 
               <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
@@ -578,9 +586,9 @@ function OwnerDashboardPage({
                           isSelected ? "border-primary/40 bg-primary/5" : "hover:bg-primary/5"
                         }`}
                       >
-                        <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
-                        <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
-                        <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
+                        <p className="text-sm font-semibold text-foreground">{job.customerName}</p>
+                        <p className="mt-1 text-sm text-muted-foreground">{job.vehicle}</p>
+                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{job.serviceSummary}</p>
                         <p className="mt-3 text-xs font-semibold text-primary">
                           {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
                         </p>
@@ -602,8 +610,8 @@ function OwnerDashboardPage({
             <div className="flex max-h-[32rem] flex-col rounded-2xl border border-border bg-muted/70 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-gray-900">Booking actuals needed</p>
-                  <p className="mt-1 text-xs text-gray-500">Completed bookings missing finalized actuals</p>
+                  <p className="text-sm font-semibold text-foreground">Jobs missing final details</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Finish recording labor, parts, and notes</p>
                 </div>
                 <span className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent">
                   {dashboard.pendingActions.actualsNeededCount}
@@ -624,9 +632,9 @@ function OwnerDashboardPage({
                       onClick={() => handleOpenActualsDetails(job._id)}
                       className="block w-full cursor-pointer rounded-2xl border border-border bg-card p-4 text-left transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
                     >
-                      <p className="text-sm font-semibold text-gray-900">{job.customerName}</p>
-                      <p className="mt-1 text-sm text-gray-600">{job.vehicle}</p>
-                      <p className="mt-2 line-clamp-2 text-xs text-gray-500">{job.serviceSummary}</p>
+                      <p className="text-sm font-semibold text-foreground">{job.customerName}</p>
+                      <p className="mt-1 text-sm text-muted-foreground">{job.vehicle}</p>
+                      <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{job.serviceSummary}</p>
                       <p className="mt-3 text-xs font-semibold text-primary">
                         Completed booking from {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
                       </p>
@@ -634,21 +642,13 @@ function OwnerDashboardPage({
                   ))
                 )}
               </div>
-
-              <Link
-                href="/bookings"
-                className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
-              >
-                View all bookings
-                <ArrowUpRight className="h-4 w-4" />
-              </Link>
             </div>
 
             <div className="flex max-h-[32rem] flex-col rounded-2xl border border-border bg-muted/70 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-gray-900">Invites pending</p>
-                  <p className="mt-1 text-xs text-gray-500">Mechanic invitations not yet accepted</p>
+                  <p className="text-sm font-semibold text-foreground">Invites pending</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Mechanic invitations not yet accepted</p>
                 </div>
                 {dashboard.pendingActions.invitesPendingCount > 0 ? (
                   <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
@@ -659,7 +659,10 @@ function OwnerDashboardPage({
 
               <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
                 {dashboard.pendingActions.invitesPending.length === 0 ? (
-                  <EmptyCard title="No pending invites" description="" />
+                  <EmptyCard
+                    title="No pending invites"
+                    description="Team members you invite will appear here until they accept."
+                  />
                 ) : (
                   dashboard.pendingActions.invitesPending.map((invite) => (
                     <Link
@@ -667,9 +670,9 @@ function OwnerDashboardPage({
                       href="/team"
                       className="block cursor-pointer rounded-2xl border border-border bg-card p-4 transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
                     >
-                      <p className="text-sm font-semibold text-gray-900">{invite.mechanicName || invite.email}</p>
-                      <p className="mt-1 text-sm text-gray-600">{invite.email}</p>
-                      <p className="mt-2 text-xs text-gray-500">
+                      <p className="text-sm font-semibold text-foreground">{invite.mechanicName || invite.email}</p>
+                      <p className="mt-1 text-sm text-muted-foreground">{invite.email}</p>
+                      <p className="mt-2 text-xs text-muted-foreground">
                         {invite.role.replace(/_/g, " ")} invitation
                       </p>
                       <p className="mt-3 text-xs font-semibold text-primary">
@@ -695,7 +698,7 @@ function OwnerDashboardPage({
       <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">Today&apos;s Schedule</h2>
+            <h2 className="text-xl font-semibold text-foreground">Today&apos;s schedule</h2>
           </div>
           <Link
             href="/bookings"
@@ -711,82 +714,71 @@ function OwnerDashboardPage({
             No bookings scheduled for today
           </div>
         ) : (
-          <div className="mt-6 overflow-x-auto pb-2">
-            <div
-              className="grid min-w-max gap-4"
-              style={{
-                gridTemplateColumns: `repeat(${scheduleColumnCount}, minmax(280px, 1fr))`,
-              }}
-            >
-              {dashboard.todaySchedule.map((column) => (
-                <div
-                  key={String(column.mechanicId)}
-                  className="rounded-2xl border border-border bg-muted/70 p-4"
-                >
-                  <div className="flex items-center gap-3 border-b border-border pb-4">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-sm font-semibold text-white">
-                      {column.photoUrl ? (
-                        <img
-                          src={column.photoUrl}
-                          alt={column.mechanicName}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        getInitials(column.firstName, column.lastName)
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-gray-900">
-                        {column.mechanicName}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {column.jobsCount} booking{column.jobsCount === 1 ? "" : "s"} today
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 space-y-3">
-                    {column.bookings.length === 0 ? (
-                      <EmptyCard
-                            title="No bookings scheduled"
-                            description="This mechanic does not have any assigned work for today."
-                      />
-                    ) : (
-                      column.bookings.map((booking) => (
-                        <Link
-                          key={String(booking._id)}
-                          href={`/bookings?highlight=${String(booking._id)}`}
-                          className="block cursor-pointer rounded-2xl border border-border bg-card p-4 font-sans transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="font-sans text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
-                                {booking.scheduledTimeLabel}
-                              </p>
-                              <p className="mt-1 truncate text-sm font-semibold text-gray-900">
-                                {booking.customerDisplayName}
-                              </p>
-                              <p className="mt-1 text-sm text-gray-600">{booking.vehicle}</p>
-                            </div>
-                            <span
-                              className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${getScheduleStatusClass(
-                                booking.status
-                              )}`}
-                            >
-                              {getScheduleStatusLabel(booking.status)}
-                            </span>
-                          </div>
-                          <p className="mt-3 line-clamp-2 text-xs leading-5 text-gray-500">
-                            {booking.serviceSummary || "Service details unavailable"}
-                          </p>
-                        </Link>
-                      ))
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <ul className="mt-6 max-h-[32rem] space-y-2 overflow-y-auto pr-1">
+            {dashboard.todaySchedule
+              .flatMap((column: any) =>
+                column.bookings.map((booking: any) => ({
+                  booking,
+                  mechanicName: column.mechanicName,
+                  mechanicFirstName: column.firstName,
+                  mechanicLastName: column.lastName,
+                  mechanicPhotoUrl: column.photoUrl,
+                }))
+              )
+              .sort((a: any, b: any) => {
+                const aTime = a.booking.scheduledTime ?? "";
+                const bTime = b.booking.scheduledTime ?? "";
+                return String(aTime).localeCompare(String(bTime));
+              })
+              .map(({ booking, mechanicName, mechanicFirstName, mechanicLastName, mechanicPhotoUrl }: any) => {
+                const isSelected = selectedJobId === booking._id;
+                return (
+                  <li key={String(booking._id)}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedJobId(isSelected ? null : booking._id)}
+                      aria-expanded={isSelected}
+                      className={`flex w-full items-center gap-4 rounded-2xl border border-border bg-card px-4 py-3 text-left transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm ${
+                        isSelected ? "border-primary/40 bg-primary/5" : ""
+                      }`}
+                    >
+                      <div className="w-16 shrink-0">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          {booking.scheduledTimeLabel || "—"}
+                        </p>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-foreground">
+                          {booking.customerDisplayName}
+                        </p>
+                        <p className="truncate text-sm text-muted-foreground">{booking.vehicle}</p>
+                      </div>
+                      <div className="hidden min-w-0 items-center gap-2 sm:flex sm:w-48">
+                        <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-semibold text-white">
+                          {mechanicPhotoUrl ? (
+                            <img
+                              src={mechanicPhotoUrl}
+                              alt={mechanicName}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            getInitials(mechanicFirstName, mechanicLastName)
+                          )}
+                        </div>
+                        <span className="truncate text-sm text-foreground">{mechanicName}</span>
+                      </div>
+                      <span
+                        className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${getScheduleStatusClass(
+                          booking.status
+                        )}`}
+                      >
+                        {getScheduleStatusLabel(booking.status)}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+          </ul>
         )}
       </section>
         </div>
@@ -808,7 +800,7 @@ function OwnerDashboardPage({
           }`}
         >
           <div
-            className={`fixed right-6 top-6 z-20 flex h-[calc(100vh-3rem)] max-h-[calc(100vh-3rem)] w-[480px] flex-col overflow-hidden rounded-xl border border-border bg-card transition-all duration-200 ease-out ${
+            className={`fixed right-6 top-6 z-20 flex h-[calc(100vh-3rem)] max-h-[calc(100vh-3rem)] w-[480px] flex-col overflow-hidden rounded-2xl border border-border bg-card transition-all duration-200 ease-out ${
               drawerOpen
                 ? "translate-x-0 opacity-100"
                 : "pointer-events-none translate-x-6 opacity-0"

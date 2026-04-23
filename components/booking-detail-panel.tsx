@@ -856,7 +856,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     <p className="text-[15px] font-medium text-foreground">
                       {job.customerName}
                     </p>
-                    <p className="mt-1 text-sm text-muted-foreground">
+                    <p className="mt-1 min-w-0 overflow-hidden text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere] sm:text-sm">
                       {job.customerEmail || "No email on file"}
                     </p>
                   </div>

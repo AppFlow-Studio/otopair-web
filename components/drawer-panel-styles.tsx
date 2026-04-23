@@ -13,7 +13,7 @@ export const drawerSelectTriggerClassName =
   "w-full h-10 rounded-lg border-border bg-card text-sm px-3";
 
 export const drawerInfoCardClassName =
-  "rounded-xl bg-muted/40 px-4 py-3";
+  "min-w-0 rounded-xl bg-muted/40 px-4 py-3";
 
 export const drawerSecondaryButtonClassName =
   "inline-flex items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50 disabled:text-muted-foreground disabled:hover:bg-background";

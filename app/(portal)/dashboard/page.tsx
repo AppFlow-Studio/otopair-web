@@ -197,7 +197,7 @@ function PendingActionSkeletonCard() {
           </div>
           <div className="h-6 w-8 rounded-full bg-muted" />
         </div>
-        <div className="mt-4 space-y-3">
+        <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
           <div className="rounded-2xl border border-border bg-card p-4">
             <div className="h-4 w-32 rounded bg-muted" />
             <div className="mt-2 h-3 w-24 rounded bg-muted" />
@@ -752,6 +752,11 @@ function OwnerDashboardPage({
                           {booking.customerDisplayName}
                         </p>
                         <p className="truncate text-sm text-muted-foreground">{booking.vehicle}</p>
+                        {booking.serviceSummary ? (
+                          <p className="truncate text-xs text-muted-foreground">
+                            {booking.serviceSummary}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="hidden min-w-0 items-center gap-2 sm:flex sm:w-48">
                         <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-semibold text-white">

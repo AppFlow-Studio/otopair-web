@@ -206,15 +206,42 @@ export default function PortalLayout({
           } ${sidebarCompact ? "w-16" : "w-64"}`}
         >
           {/* Logo — keep layout fixed, only animate the text */}
-          <div className="flex items-center gap-3 px-4 py-5 border-b border-gray-200">
-            <Image
-              src="/logo.png"
-              alt="Otopair"
-              width={32}
-              height={32}
-              className="shrink-0"
-            />
-            <NavText>Otopair</NavText>
+          <div
+            className={`flex items-center gap-3 px-4 py-5 border-b border-gray-200 ${
+              sidebarCompact ? "lg:justify-center lg:gap-0 lg:px-3" : ""
+            }`}
+          >
+            <Link
+              href="/dashboard"
+              onClick={() => setSidebarOpen(false)}
+              className={`flex min-w-0 items-center gap-3 ${
+                sidebarCompact ? "lg:justify-center" : ""
+              }`}
+              aria-label="Go to dashboard"
+            >
+              <Image
+                src="/logo.png"
+                alt="Otopair"
+                width={32}
+                height={32}
+                className={`shrink-0 transition-all duration-300 ${
+                  sidebarCompact ? "lg:hidden" : "lg:block"
+                }`}
+              />
+              <NavText>Otopair</NavText>
+            </Link>
+            <button
+              type="button"
+              onClick={() => setSidebarCompact((compact) => !compact)}
+              className={`ml-auto hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 lg:flex ${
+                sidebarCompact ? "lg:mx-auto" : ""
+              }`}
+              title={sidebarCompact ? "Expand sidebar" : "Collapse sidebar"}
+              aria-label={sidebarCompact ? "Expand sidebar" : "Collapse sidebar"}
+              aria-pressed={sidebarCompact}
+            >
+              <Menu className="h-5 w-5" />
+            </button>
             <button
               className={`ml-auto lg:hidden shrink-0 overflow-hidden transition-all duration-300 ${
                 sidebarCompact ? "max-w-0 opacity-0" : "max-w-[32px] opacity-100"

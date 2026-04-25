@@ -9,6 +9,7 @@ import {
 } from "@/components/drawer-panel-styles";
 import {
   passportSourceLabel,
+  shouldShowPassportSourceBadge,
   type PassportSource,
   type PreJobSurveyPayload,
   type TireCondition,
@@ -310,7 +311,7 @@ function PreJobSurveyDialogBody({
           <SectionBlock eyebrow="Q2 · Tire condition" badge="Required" accent="required">
             <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
               {tireSizeLabel}
-              {tireSizeSource ? (
+              {shouldShowPassportSourceBadge(tireSizeSource) ? (
                 <>
                   <span className="mx-1.5 text-muted-foreground/50">·</span>
                   <span className="normal-case tracking-normal">
@@ -651,7 +652,7 @@ function FluidRow({
       <span className="text-muted-foreground">{label}</span>
       <span className="flex items-center gap-2 text-right font-medium text-foreground">
         {value}
-        {source ? (
+        {shouldShowPassportSourceBadge(source) ? (
           <span className="rounded-full border border-primary/10 bg-background px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
             {passportSourceLabel(source)}
           </span>

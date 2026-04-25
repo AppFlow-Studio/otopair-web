@@ -259,6 +259,10 @@ export function passportSourceLabel(source?: PassportSource) {
   return "Empty";
 }
 
+export function shouldShowPassportSourceBadge(source?: PassportSource) {
+  return source != null && source !== "verified";
+}
+
 export function getMissingRequiredPassportFields(
   passport: VehiclePassportSnapshot
 ) {

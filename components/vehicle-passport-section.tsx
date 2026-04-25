@@ -10,6 +10,7 @@ import {
   getMissingRequiredPassportFields,
   modificationStatusLabel,
   passportSourceLabel,
+  shouldShowPassportSourceBadge,
   tireConditionLabel,
   type PassportSource,
   type TireCondition,
@@ -36,18 +37,6 @@ function baseInput(isError?: boolean) {
     "h-8 rounded-md border bg-background px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground/60 outline-none transition-all focus:border-primary/40 focus:ring-2 focus:ring-primary/15",
     isError ? "border-destructive/50" : "border-primary/15"
   );
-}
-
-function getInitials(label: string): string {
-  const raw = label.trim();
-  if (!raw) return "VH";
-  const words = raw.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return "VH";
-  if (/^\d{4}$/.test(words[0]) && words.length >= 3) {
-    return (words[1][0] + words[2][0]).toUpperCase();
-  }
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-  return (words[0][0] + words[1][0]).toUpperCase();
 }
 
 export default function VehiclePassportSection({
@@ -141,7 +130,7 @@ function VehiclePassportSectionBody({
         )}
       >
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-[11px] font-semibold text-primary-foreground">
-          {getInitials(data.vehicle_label)}
+          ID
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">
@@ -151,16 +140,11 @@ function VehiclePassportSectionBody({
             {data.vehicle_label}
           </p>
         </div>
-        <span
-          className={cn(
-            "rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em]",
-            data.is_complete
-              ? "border-success/25 bg-success/10 text-success"
-              : "border-primary/25 bg-primary/10 text-primary"
-          )}
-        >
-          {data.is_complete ? "Verified" : "First visit"}
-        </span>
+        {!data.is_complete ? (
+          <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-primary">
+            First visit
+          </span>
+        ) : null}
         {isOpen ? (
           <ChevronDown className="h-4 w-4 text-muted-foreground" />
         ) : (
@@ -523,6 +507,10 @@ function SourceBadge({
   source: PassportSource;
   className?: string;
 }) {
+  if (!shouldShowPassportSourceBadge(source)) {
+    return null;
+  }
+
   return (
     <span
       className={cn(

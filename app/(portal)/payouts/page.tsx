@@ -14,7 +14,10 @@ export default function PayoutsPage() {
   async function handleOpenStripeDashboard() {
     setStripeError(null);
     setOpeningStripe(true);
-    const targetWindow = window.open("", "_blank", "noopener,noreferrer");
+    const targetWindow = window.open("", "_blank");
+    if (targetWindow) {
+      targetWindow.opener = null;
+    }
 
     try {
       const response = await fetch("/api/stripe/connect/login", {

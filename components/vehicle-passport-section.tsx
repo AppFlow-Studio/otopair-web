@@ -1,21 +1,17 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Info, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import {
   formatDateLabel,
   formatMileage,
   formatMonthMileage,
-  getVehiclePassportCompletionPercent,
-  getMissingRequiredPassportFields,
   modificationStatusLabel,
   passportSourceLabel,
   shouldShowPassportSourceBadge,
   tireConditionLabel,
   type PassportSource,
-  type TireCondition,
   type VehiclePassportData,
-  type VehiclePassportUpdatePayload,
 } from "@/lib/vehicle-passport";
 import { cn } from "@/lib/utils";
 
@@ -32,21 +28,10 @@ function sourceBadgeClassName(source?: PassportSource) {
   return "border-destructive/25 bg-destructive/10 text-destructive";
 }
 
-function baseInput(isError?: boolean) {
-  return cn(
-    "h-8 rounded-md border bg-background px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground/60 outline-none transition-all focus:border-primary/40 focus:ring-2 focus:ring-primary/15",
-    isError ? "border-destructive/50" : "border-primary/15"
-  );
-}
-
 export default function VehiclePassportSection({
   data,
-  onConfirm,
-  isSaving,
 }: {
   data: VehiclePassportData | null | undefined;
-  onConfirm: (payload: VehiclePassportUpdatePayload) => Promise<void>;
-  isSaving: boolean;
 }) {
   if (!data) {
     return (
@@ -61,61 +46,18 @@ export default function VehiclePassportSection({
 
   return (
     <VehiclePassportSectionBody
-      key={`${data.vin}-${data.completion_percent}-${data.passport.last_reported_at ?? "none"}`}
+      key={`${data.vin}-${data.is_complete}`}
       data={data}
-      onConfirm={onConfirm}
-      isSaving={isSaving}
     />
   );
 }
 
 function VehiclePassportSectionBody({
   data,
-  onConfirm,
-  isSaving,
 }: {
   data: VehiclePassportData;
-  onConfirm: (payload: VehiclePassportUpdatePayload) => Promise<void>;
-  isSaving: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(!data.is_complete);
-  const [mileage, setMileage] = useState(
-    typeof data.passport.mileage === "number"
-      ? String(Math.round(data.passport.mileage))
-      : ""
-  );
-  const [tireBrand, setTireBrand] = useState(data.passport.tires.brand ?? "");
-  const [tireModel, setTireModel] = useState(data.passport.tires.model ?? "");
-  const [overallCondition, setOverallCondition] = useState<TireCondition | "">(
-    data.passport.tires.overall_condition ?? ""
-  );
-  const [runFlat, setRunFlat] = useState<"" | "yes" | "no">(
-    typeof data.passport.tires.run_flat === "boolean"
-      ? data.passport.tires.run_flat
-        ? "yes"
-        : "no"
-      : ""
-  );
-  const missingFields = getMissingRequiredPassportFields(data.passport);
-  const completionPercent = getVehiclePassportCompletionPercent(data.passport);
-
-  async function handleConfirm() {
-    const parsedMileage = Number(mileage);
-    await onConfirm({
-      mileage: Number.isFinite(parsedMileage) ? parsedMileage : null,
-      tires: {
-        brand: tireBrand.trim() || null,
-        model: tireModel.trim() || null,
-        overall_condition: overallCondition || null,
-        run_flat:
-          runFlat === ""
-            ? null
-            : runFlat === "yes"
-              ? true
-              : false,
-      },
-    });
-  }
 
   return (
     <section className="overflow-hidden rounded-xl border border-primary/10 bg-card shadow-[0_4px_14px_-6px_rgba(15,23,42,0.08)]">
@@ -154,162 +96,46 @@ function VehiclePassportSectionBody({
 
       {isOpen ? (
         <div className="space-y-3 bg-muted/40 p-3 sm:p-4">
-          {!data.is_complete ? (
-            <>
-              <div className="flex gap-2.5 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2.5">
-                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
-                <div className="min-w-0 text-[11px] leading-5 text-foreground/80">
-                  <span className="font-semibold text-foreground">
-                    First time this vehicle is visiting a shop on Otopair.
-                  </span>{" "}
-                  Please confirm or fill in the vehicle specs below. This data
-                  will be saved to the vehicle&apos;s profile and will be available
-                  on future visits to any Otopair partner shop.
-                </div>
-              </div>
-
-              <div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-primary/10">
-                  <div
-                    className="h-full rounded-full bg-primary transition-all"
-                    style={{ width: `${completionPercent}%` }}
-                  />
-                </div>
-                <p className="mt-1.5 text-[10px] font-medium text-muted-foreground">
-                  Vehicle ID {completionPercent}% complete — help us fill in the gaps
-                </p>
-              </div>
-
-              <PanelSection title="Mileage">
-                <EditableRow
-                  label="Current mileage"
-                  required
-                  source={data.sources.mileage}
-                  missing={missingFields.includes("mileage")}
-                >
-                  <input
-                    value={mileage}
-                    onChange={(event) => setMileage(event.target.value)}
-                    inputMode="numeric"
-                    placeholder="Enter mileage"
-                    className={cn(baseInput(missingFields.includes("mileage")), "w-[150px] text-right")}
-                  />
-                </EditableRow>
-              </PanelSection>
-
-              <PanelSection title="Tires">
-                <EditableRow
-                  label="Brand"
-                  source={data.sources["tires.brand"]}
-                  missing={missingFields.includes("tires.brand")}
-                >
-                  <input
-                    value={tireBrand}
-                    onChange={(event) => setTireBrand(event.target.value)}
-                    placeholder="e.g. Michelin"
-                    className={cn(baseInput(missingFields.includes("tires.brand")), "w-[150px] text-right")}
-                  />
-                </EditableRow>
-                <EditableRow
-                  label="Model"
-                  source={data.sources["tires.model"]}
-                  missing={missingFields.includes("tires.model")}
-                >
-                  <input
-                    value={tireModel}
-                    onChange={(event) => setTireModel(event.target.value)}
-                    placeholder="e.g. Pilot Sport"
-                    className={cn(baseInput(missingFields.includes("tires.model")), "w-[150px] text-right")}
-                  />
-                </EditableRow>
-                <DisplayRow
-                  label="Size"
-                  value={
-                    data.passport.tires.size_rear &&
-                    data.passport.tires.size_rear !== data.passport.tires.size_front
-                      ? `${data.passport.tires.size_front ?? "Unknown"} / ${data.passport.tires.size_rear}`
-                      : data.passport.tires.size_front ?? "Unknown"
-                  }
-                  source={data.sources["tires.size_front"]}
-                />
-                <EditableRow
-                  label="Condition"
-                  source={data.sources["tires.overall_condition"]}
-                  missing={missingFields.includes("tires.overall_condition")}
-                >
-                  <select
-                    value={overallCondition}
-                    onChange={(event) =>
-                      setOverallCondition(event.target.value as TireCondition | "")
-                    }
-                    className={cn(
-                      baseInput(missingFields.includes("tires.overall_condition")),
-                      "w-[150px] pr-7"
-                    )}
-                  >
-                    <option value="">Select...</option>
-                    <option value="good">Good</option>
-                    <option value="fair">Fair</option>
-                    <option value="replace_soon">Replace soon</option>
-                  </select>
-                </EditableRow>
-                <EditableRow label="Run-flat" source={data.sources["tires.run_flat"]}>
-                  <select
-                    value={runFlat}
-                    onChange={(event) =>
-                      setRunFlat(event.target.value as "" | "yes" | "no")
-                    }
-                    className={cn(baseInput(), "w-[120px] pr-7")}
-                  >
-                    <option value="">Select...</option>
-                    <option value="yes">Yes</option>
-                    <option value="no">No</option>
-                  </select>
-                </EditableRow>
-              </PanelSection>
-            </>
-          ) : (
-            <PanelSection title="Tires">
+          <PanelSection title="Tires">
+            <DisplayRow
+              label="Brand"
+              value={data.passport.tires.brand ?? "Unknown"}
+              source={data.sources["tires.brand"]}
+            />
+            {data.passport.tires.model ? (
               <DisplayRow
-                label="Brand"
-                value={data.passport.tires.brand ?? "Unknown"}
-                source={data.sources["tires.brand"]}
+                label="Model"
+                value={data.passport.tires.model}
+                source={data.sources["tires.model"]}
               />
-              {data.passport.tires.model ? (
-                <DisplayRow
-                  label="Model"
-                  value={data.passport.tires.model}
-                  source={data.sources["tires.model"]}
-                />
-              ) : null}
-              <DisplayRow
-                label="Size"
-                value={
-                  data.passport.tires.size_rear &&
-                  data.passport.tires.size_rear !== data.passport.tires.size_front
-                    ? `${data.passport.tires.size_front ?? "Unknown"} / ${data.passport.tires.size_rear}`
-                    : data.passport.tires.size_front ?? "Unknown"
-                }
-                source={data.sources["tires.size_front"]}
-              />
-              <DisplayRow
-                label="Condition"
-                value={tireConditionLabel(data.passport.tires.overall_condition)}
-                source={data.sources["tires.overall_condition"]}
-              />
-              <DisplayRow
-                label="Run-flat"
-                value={
-                  data.passport.tires.run_flat == null
-                    ? "Unknown"
-                    : data.passport.tires.run_flat
-                      ? "Yes"
-                      : "No"
-                }
-                source={data.sources["tires.run_flat"]}
-              />
-            </PanelSection>
-          )}
+            ) : null}
+            <DisplayRow
+              label="Size"
+              value={
+                data.passport.tires.size_rear &&
+                data.passport.tires.size_rear !== data.passport.tires.size_front
+                  ? `${data.passport.tires.size_front ?? "Unknown"} / ${data.passport.tires.size_rear}`
+                  : data.passport.tires.size_front ?? "Unknown"
+              }
+              source={data.sources["tires.size_front"]}
+            />
+            <DisplayRow
+              label="Condition"
+              value={tireConditionLabel(data.passport.tires.overall_condition)}
+              source={data.sources["tires.overall_condition"]}
+            />
+            <DisplayRow
+              label="Run-flat"
+              value={
+                data.passport.tires.run_flat == null
+                  ? "Unknown"
+                  : data.passport.tires.run_flat
+                    ? "Yes"
+                    : "No"
+              }
+              source={data.sources["tires.run_flat"]}
+            />
+          </PanelSection>
 
           <PanelSection title="Fluids">
             <DisplayRow
@@ -411,18 +237,6 @@ function VehiclePassportSectionBody({
               </div>
             )}
           </PanelSection>
-
-          {!data.is_complete ? (
-            <button
-              type="button"
-              onClick={() => void handleConfirm()}
-              disabled={isSaving}
-              className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-foreground text-[12px] font-semibold text-background transition-all hover:opacity-90 active:scale-[0.99] disabled:opacity-40"
-            >
-              {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              Confirm vehicle specs &amp; start job
-            </button>
-          ) : null}
         </div>
       ) : null}
     </section>
@@ -443,40 +257,6 @@ function PanelSection({
       </p>
       <div className="mt-1 divide-y divide-primary/10">{children}</div>
     </section>
-  );
-}
-
-function EditableRow({
-  label,
-  children,
-  source,
-  missing = false,
-  required = false,
-}: {
-  label: string;
-  children: ReactNode;
-  source?: PassportSource;
-  missing?: boolean;
-  required?: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5 py-2 text-[12px] sm:flex-row sm:items-center sm:justify-between sm:gap-3">
-      <div className="flex items-center gap-2">
-        <span className="text-muted-foreground">{label}</span>
-        {required ? (
-          <span className="rounded-full border border-destructive/25 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-destructive">
-            Required
-          </span>
-        ) : null}
-        {!required && source ? <SourceBadge source={source} /> : null}
-        {!required && missing ? (
-          <span className="rounded-full border border-destructive/25 bg-destructive/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-destructive">
-            Empty
-          </span>
-        ) : null}
-      </div>
-      <div className="flex items-center gap-2 sm:justify-end">{children}</div>
-    </div>
   );
 }
 

@@ -33,7 +33,7 @@ const SECTIONS = [
       { label: "Reassign selected mechanic", keys: ["R"] },
       { label: "Open pre-job survey", keys: ["T"] },
       { label: "Open post-job survey", keys: ["R"] },
-      { label: "Cancel booking", keys: ["C"] },
+      { label: "Cancel job", keys: ["C"] },
     ],
   },
   {
@@ -57,7 +57,7 @@ const SECTIONS = [
       { label: "Confirm reschedule", keys: ["F"] },
       { label: "Open cancel reschedule dialog", keys: ["C"] },
       { label: "Cancel reschedule dialog", keys: ["C"] },
-      { label: "Confirm cancel booking", keys: ["C"] },
+      { label: "Confirm cancel job", keys: ["C"] },
       { label: "Keep booking", keys: ["E"] },
       { label: "Confirm revert proposed reschedule", keys: ["R"] },
       { label: "Cancel revert dialog", keys: ["C"] },

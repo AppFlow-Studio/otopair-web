@@ -52,7 +52,6 @@ import { BOOKING_STATUS_VISUALS } from "@/lib/booking-status";
 import type {
   PostJobSurveyPayload,
   PreJobSurveyPayload,
-  VehiclePassportUpdatePayload,
 } from "@/lib/vehicle-passport";
 
 /* ------------------------------------------------------------------ */
@@ -303,7 +302,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
     const [cancelOtherText, setCancelOtherText] = useState("");
     const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
-    const [isSavingPassport, setIsSavingPassport] = useState(false);
     const [isSubmittingPrejob, setIsSubmittingPrejob] = useState(false);
     const [isSubmittingPostjob, setIsSubmittingPostjob] = useState(false);
 
@@ -316,7 +314,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
-    const confirmVehiclePassport = useMutation(api.bookings.confirmVehiclePassport);
     const startWithPrejob = useMutation(api.bookings.startWithPrejob);
     const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
     const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
@@ -569,30 +566,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       if (!job?._id || !job.mechanicId) return;
       setActionError("");
       setShowPrejobDialog(true);
-    }
-
-    async function handleConfirmPassport(
-      payload: VehiclePassportUpdatePayload,
-    ) {
-      if (!job?._id) return;
-      setActionError("");
-      setIsSavingPassport(true);
-      try {
-        await confirmVehiclePassport({
-          bookingId: job._id,
-          passport: payload,
-        });
-        onSuccess?.("Vehicle passport confirmed");
-      } catch (err: unknown) {
-        setActionError(
-          err instanceof Error
-            ? err.message
-            : "Could not confirm vehicle passport.",
-        );
-        throw err;
-      } finally {
-        setIsSavingPassport(false);
-      }
     }
 
     async function handleStartWithPrejob(payload: PreJobSurveyPayload) {
@@ -998,11 +971,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   </div>
                 </div>
 
-                <VehiclePassportSection
-                  data={vehiclePassport}
-                  onConfirm={handleConfirmPassport}
-                  isSaving={isSavingPassport}
-                />
+                <VehiclePassportSection data={vehiclePassport} />
 
                 {/* Assign mechanic */}
                 <div className="rounded-2xl bg-muted/20 p-4">
@@ -1205,17 +1174,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         {canStartJob && (
                           <button
                             onClick={handleStartJob}
-                            disabled={
-                              !job.mechanicId ||
-                              isActioning ||
-                              vehiclePassport?.is_complete === false
-                            }
+                            disabled={!job.mechanicId || isActioning}
                             title={
                               !job.mechanicId
                                 ? "Assign a mechanic first"
-                                : vehiclePassport?.is_complete === false
-                                  ? "Confirm the required vehicle passport fields first"
-                                  : undefined
+                                : undefined
                             }
                             className={drawerPrimaryButtonClassName}
                           >
@@ -1228,7 +1191,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               >
                                 t
                               </span>
-                              art booking
+                              art job
                             </span>
                           </button>
                         )}
@@ -1595,7 +1558,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             disabled: isActioning,
           }}
           primaryAction={{
-            label: isActioning ? "Cancelling..." : <ShortcutLabel text="Cancel booking" shortcutKey="c" />,
+            label: isActioning ? "Cancelling..." : <ShortcutLabel text="Cancel job" shortcutKey="c" />,
             onAction: handleCancelJob,
             disabled: isActioning,
             variant: "destructive",

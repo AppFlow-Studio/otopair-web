@@ -38,12 +38,20 @@ interface Booking {
   mechanicId: string | null;
 }
 
+interface ShopHour {
+  dayOfWeek: number;
+  openTime: string;
+  closeTime: string;
+  isClosed: boolean;
+}
+
 interface CreateBookingDrawerProps {
   initialDate: string;
   initialTime: string;
   initialMechanicId: string;
   mechanics: Mechanic[];
   bookings: Booking[];
+  shopHours: ShopHour[];
   onClose: () => void;
   onToast: (msg: string) => void;
 }
@@ -73,6 +81,28 @@ function toMins(hhmm: string): number {
   return h * 60 + m;
 }
 
+function getShopHoursForDate(shopHours: ShopHour[], date: string) {
+  const dayOfWeek = new Date(`${date}T00:00:00`).getDay();
+  return shopHours.find((hour) => hour.dayOfWeek === dayOfWeek) ?? null;
+}
+
+function getUserFacingErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) return "Failed to create booking";
+
+  const message = err.message.trim();
+  const uncaughtMatch = message.match(/Uncaught Error:\s*(.+?)(?:\.\s*Called by client)?$/);
+  if (uncaughtMatch?.[1]) {
+    return uncaughtMatch[1].trim();
+  }
+
+  const calledByClientMatch = message.match(/]\s*(.+?)\.\s*Called by client$/);
+  if (calledByClientMatch?.[1]) {
+    return calledByClientMatch[1].trim();
+  }
+
+  return message || "Failed to create booking";
+}
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                           */
 /* ------------------------------------------------------------------ */
@@ -83,6 +113,7 @@ export default function CreateBookingDrawer({
   initialMechanicId,
   mechanics,
   bookings,
+  shopHours,
   onClose,
   onToast,
 }: CreateBookingDrawerProps) {
@@ -136,6 +167,35 @@ export default function CreateBookingDrawer({
     return conflict ? "This time slot overlaps an existing booking for this mechanic." : null;
   }, [mechanicId, date, time, selectedIds, categories, bookings]);
 
+  const shopHoursError = useMemo(() => {
+    if (!date || !time) return null;
+
+    const allServices = categories.flatMap((c) => c.services);
+    const selected = allServices.filter((s) => selectedIds.has(s._id));
+    const estMins = selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) || 60;
+    const endTime = getBookingEndTime(time, estMins);
+    const dayHours = getShopHoursForDate(shopHours, date);
+
+    if (!dayHours || dayHours.isClosed) {
+      return "The shop is closed on the requested day.";
+    }
+
+    const startMins = toMins(time);
+    const endMins = toMins(endTime);
+    const openMins = toMins(dayHours.openTime);
+    const closeMins = toMins(dayHours.closeTime);
+
+    if (startMins < openMins || startMins >= closeMins) {
+      return "The requested start time is outside the shop's operating hours.";
+    }
+
+    if (endMins > closeMins) {
+      return "This booking would end after the shop closes.";
+    }
+
+    return null;
+  }, [date, time, selectedIds, categories, shopHours]);
+
   /* ---- Filter categories/services by search ---- */
   const filteredCats = useMemo(() => {
     if (!search.trim()) return categories;
@@ -163,7 +223,14 @@ export default function CreateBookingDrawer({
 
   /* ---- Submit ---- */
   async function handleSubmit() {
-    if (!email.trim() || !shopData?.shopId || overlapError) return;
+    if (!email.trim() || !shopData?.shopId) return;
+
+    const preflightError = overlapError ?? shopHoursError;
+    if (preflightError) {
+      onToast(preflightError);
+      return;
+    }
+
     setIsSaving(true);
     try {
       const allServices = categories.flatMap((c) => c.services);
@@ -193,7 +260,7 @@ export default function CreateBookingDrawer({
       onToast("Booking created");
       onClose();
     } catch (err: unknown) {
-      onToast(err instanceof Error ? err.message : "Failed to create booking");
+      onToast(getUserFacingErrorMessage(err));
     } finally {
       setIsSaving(false);
     }
@@ -372,6 +439,9 @@ export default function CreateBookingDrawer({
             {overlapError && (
               <p className="text-xs text-destructive">{overlapError}</p>
             )}
+            {shopHoursError && (
+              <p className="text-xs text-destructive">{shopHoursError}</p>
+            )}
           </div>
         </section>
 
@@ -380,8 +450,10 @@ export default function CreateBookingDrawer({
       {/* Footer */}
       <div className="px-5 py-4 border-t border-border shrink-0">
         <button
-          onClick={handleSubmit}
-          disabled={!email.trim() || !!overlapError || isSaving}
+          onClick={() => {
+            void handleSubmit();
+          }}
+          disabled={!email.trim() || isSaving}
           className="w-full py-3 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {isSaving ? (

@@ -70,6 +70,63 @@ function normalizeNullableText(value: string | null | undefined) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function hhmmToMinutes(hhmm: string) {
+  const [hours, minutes] = hhmm.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function getSlotDurationMinutes(slot: {
+  start_time?: string;
+  end_time?: string;
+}) {
+  if (!slot.start_time || !slot.end_time) return 60;
+  return Math.max(0, hhmmToMinutes(slot.end_time) - hhmmToMinutes(slot.start_time));
+}
+
+async function getShopHoursForDate(ctx: any, shopId: any, date: string) {
+  const dayOfWeek = new Date(`${date}T00:00:00`).getDay();
+  const rows = await ctx.db
+    .query("shops_hours")
+    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
+    .collect();
+  return rows.find((row: any) => row.day_of_week === dayOfWeek) ?? null;
+}
+
+async function assertBookingWithinShopHours(
+  ctx: any,
+  {
+    shopId,
+    date,
+    startTime,
+    durationMinutes,
+  }: {
+    shopId: any;
+    date: string;
+    startTime: string;
+    durationMinutes: number;
+  }
+) {
+  const hours = await getShopHoursForDate(ctx, shopId, date);
+  if (!hours || hours.is_closed || !hours.open_time || !hours.close_time) {
+    throw new Error("The shop is closed on the requested day.");
+  }
+
+  const startMinutes = hhmmToMinutes(startTime);
+  const endTime = getBookingEndTime(startTime, durationMinutes);
+  const endMinutes = hhmmToMinutes(endTime);
+  const openMinutes = hhmmToMinutes(hours.open_time);
+  const closeMinutes = hhmmToMinutes(hours.close_time);
+
+  if (startMinutes < openMinutes || startMinutes >= closeMinutes) {
+    throw new Error("The requested start time is outside the shop's operating hours.");
+  }
+  if (endMinutes > closeMinutes) {
+    throw new Error("This booking would end after the shop closes.");
+  }
+
+  return endTime;
+}
+
 function formatPassportFieldLabel(field: string) {
   switch (field) {
     case "mileage":
@@ -450,10 +507,22 @@ export const create = mutation({
       throw new Error("User does not own this vehicle");
     }
 
+    await syncShopDateAvailability(ctx, {
+      shopId: args.shop_id,
+      date: args.scheduled_date,
+    });
+
     const slot = await ctx.db.get(args.time_slot_id);
     if (!slot || !slot.is_available) {
       throw new Error("This time slot is no longer available.");
     }
+
+    await assertBookingWithinShopHours(ctx, {
+      shopId: args.shop_id,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
+      durationMinutes: getSlotDurationMinutes(slot),
+    });
 
     await ctx.db.patch(args.time_slot_id, { is_available: false });
 
@@ -575,12 +644,15 @@ export const createBatch = mutation({
       throw new Error("User does not own this vehicle");
     }
 
+    await syncShopDateAvailability(ctx, {
+      shopId: args.shop_id,
+      date: args.scheduled_date,
+    });
+
     const slot = await ctx.db.get(args.time_slot_id);
     if (!slot || !slot.is_available) {
       throw new Error("This time slot is no longer available.");
     }
-
-    await ctx.db.patch(args.time_slot_id, { is_available: false });
 
     const labor_cost = args.services.reduce((sum, s) => sum + s.labor_cost, 0);
     const parts_cost = args.services.reduce((sum, s) => sum + s.parts_cost, 0);
@@ -588,6 +660,16 @@ export const createBatch = mutation({
     const platform_fee = args.platform_fee ?? 0;
     const total_cost = labor_cost + parts_cost + taxes_and_fees + platform_fee;
     const estimated_labor_minutes = args.services.reduce((sum, s) => sum + (s.labor_hours ?? 0) * 60, 0);
+
+    await assertBookingWithinShopHours(ctx, {
+      shopId: args.shop_id,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
+      durationMinutes:
+        estimated_labor_minutes > 0 ? estimated_labor_minutes : getSlotDurationMinutes(slot),
+    });
+
+    await ctx.db.patch(args.time_slot_id, { is_available: false });
 
     const now = Date.now();
     const firstServiceId = args.services[0].service_id;
@@ -1756,7 +1838,12 @@ async function assertMechanicWindowIsFree(
     excludeBookingId?: string;
   }
 ) {
-  const endTime = getBookingEndTime(startTime, durationMinutes);
+  const endTime = await assertBookingWithinShopHours(ctx, {
+    shopId,
+    date,
+    startTime,
+    durationMinutes,
+  });
   const bookings = await getBlockingBookingsForShopDate(ctx, shopId, date);
   const blockedSlots = await getManualBlockedSlotsForShop(ctx, shopId, date);
 

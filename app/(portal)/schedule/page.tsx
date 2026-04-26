@@ -1282,6 +1282,7 @@ export default function SchedulePage() {
               initialMechanicId={createBookingDrawer.mechanicId}
               mechanics={mechanics}
               bookings={bookings ?? []}
+              shopHours={context?.hours ?? []}
               onClose={() => setCreateBookingDrawer(null)}
               onToast={(msg) => setToast({ msg, key: Date.now() })}
             />

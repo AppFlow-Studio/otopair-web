@@ -99,11 +99,13 @@ async function assertBookingWithinShopHours(
     date,
     startTime,
     durationMinutes,
+    allowAfterClose,
   }: {
     shopId: any;
     date: string;
     startTime: string;
     durationMinutes: number;
+    allowAfterClose?: boolean;
   }
 ) {
   const hours = await getShopHoursForDate(ctx, shopId, date);
@@ -120,7 +122,7 @@ async function assertBookingWithinShopHours(
   if (startMinutes < openMinutes || startMinutes >= closeMinutes) {
     throw new Error("The requested start time is outside the shop's operating hours.");
   }
-  if (endMinutes > closeMinutes) {
+  if (endMinutes > closeMinutes && !allowAfterClose) {
     throw new Error("This booking would end after the shop closes.");
   }
 
@@ -1829,6 +1831,7 @@ async function assertMechanicWindowIsFree(
     startTime,
     durationMinutes,
     excludeBookingId,
+    allowAfterClose,
   }: {
     shopId: any;
     mechanicId: any;
@@ -1836,6 +1839,7 @@ async function assertMechanicWindowIsFree(
     startTime: string;
     durationMinutes: number;
     excludeBookingId?: string;
+    allowAfterClose?: boolean;
   }
 ) {
   const endTime = await assertBookingWithinShopHours(ctx, {
@@ -1843,6 +1847,7 @@ async function assertMechanicWindowIsFree(
     date,
     startTime,
     durationMinutes,
+    allowAfterClose,
   });
   const bookings = await getBlockingBookingsForShopDate(ctx, shopId, date);
   const blockedSlots = await getManualBlockedSlotsForShop(ctx, shopId, date);
@@ -1893,6 +1898,7 @@ async function resolveMechanicForWindow(
     durationMinutes,
     preferredMechanicId,
     excludeBookingId,
+    allowAfterClose,
   }: {
     shopId: any;
     date: string;
@@ -1900,6 +1906,7 @@ async function resolveMechanicForWindow(
     durationMinutes: number;
     preferredMechanicId?: any;
     excludeBookingId?: string;
+    allowAfterClose?: boolean;
   }
 ) {
   await syncShopDateAvailability(ctx, { shopId, date });
@@ -1920,6 +1927,7 @@ async function resolveMechanicForWindow(
       startTime,
       durationMinutes,
       excludeBookingId,
+      allowAfterClose,
     });
 
     return preferredMechanicId;
@@ -1934,6 +1942,7 @@ async function resolveMechanicForWindow(
         startTime,
         durationMinutes,
         excludeBookingId,
+        allowAfterClose,
       });
       return mechanic._id;
     } catch {
@@ -3186,6 +3195,7 @@ export const createByShop = mutation({
     partsCost: v.float64(),
     estimatedLaborMinutes: v.optional(v.float64()),
     status: v.optional(v.string()),
+    allowOutsideShopHours: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -3256,6 +3266,7 @@ export const createByShop = mutation({
       startTime: args.scheduledTime,
       durationMinutes: estimatedMinutes,
       preferredMechanicId: args.mechanicId,
+      allowAfterClose: args.allowOutsideShopHours === true,
     });
 
     const timeSlotId = await getOrCreateSlot(

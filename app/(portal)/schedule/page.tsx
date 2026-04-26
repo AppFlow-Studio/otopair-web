@@ -121,6 +121,24 @@ function formatTimeLabelCompact(hhmm: string): string {
   return `${hour}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
+function hhmmToMinutes(hhmm: string): number {
+  const [hours, minutes] = hhmm.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function roundUpToQuarter(minutes: number): number {
+  return Math.min(24 * 60, Math.ceil(minutes / 15) * 15);
+}
+
+function minutesToCalendarDate(totalMinutes: number): Date {
+  if (totalMinutes >= 24 * 60) {
+    return new Date(0, 0, 1, 0, 0);
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return new Date(0, 0, 0, hours, minutes);
+}
+
 function generateTimeOptions(): Array<{ value: string; label: string }> {
   const options: Array<{ value: string; label: string }> = [];
   for (let h = 0; h < 24; h++) {
@@ -574,26 +592,37 @@ export default function SchedulePage() {
   // Always use swim lanes for the day view
   const useDaySwimLanes = currentView === "day";
 
-  // Constrain time grid to operating hours
+  // Constrain time grid to operating hours, but extend it in the UI if visible events run later.
   const { minTime, maxTime } = useMemo(() => {
-    let earliest = 24;
-    let latest = 0;
+    let earliestMinutes = 24 * 60;
+    let latestMinutes = 0;
     if (context?.hours) {
       for (const h of context.hours) {
         if (h.isClosed) continue;
-        const [oh] = h.openTime.split(":").map(Number);
-        const [ch] = h.closeTime.split(":").map(Number);
-        if (oh < earliest) earliest = oh;
-        if (ch > latest) latest = ch;
+        earliestMinutes = Math.min(earliestMinutes, hhmmToMinutes(h.openTime));
+        latestMinutes = Math.max(latestMinutes, hhmmToMinutes(h.closeTime));
       }
     }
-    if (earliest >= latest) { earliest = 0; latest = 24; }
+
+    for (const event of events) {
+      const startMinutes = event.start.getHours() * 60 + event.start.getMinutes();
+      const endMinutes = event.end.getHours() * 60 + event.end.getMinutes();
+      earliestMinutes = Math.min(earliestMinutes, startMinutes);
+      latestMinutes = Math.max(latestMinutes, endMinutes);
+    }
+
+    if (earliestMinutes >= latestMinutes) {
+      earliestMinutes = 0;
+      latestMinutes = 24 * 60;
+    }
+
+    const roundedLatestMinutes = roundUpToQuarter(latestMinutes);
+
     return {
-      minTime: new Date(0, 0, 0, earliest, 0),
-      // hour=24 rolls over via Date constructor: use next-day midnight (day=1, hour=0) as sentinel
-      maxTime: latest === 24 ? new Date(0, 0, 1, 0, 0) : new Date(0, 0, 0, latest, 0),
+      minTime: minutesToCalendarDate(earliestMinutes),
+      maxTime: minutesToCalendarDate(roundedLatestMinutes),
     };
-  }, [context?.hours]);
+  }, [context?.hours, events]);
 
   // Navigation handlers
   const handleNavigate = useCallback((date: Date) => {

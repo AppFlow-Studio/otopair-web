@@ -19,6 +19,7 @@ import {
   DrawerFieldLabel,
   DrawerSectionHeader,
 } from "@/components/drawer-panel-styles";
+import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 
 /* ------------------------------------------------------------------ */
@@ -139,6 +140,7 @@ export default function CreateBookingDrawer({
   const [mechanicId, setMechanicId] = useState(initialMechanicId);
 
   const [isSaving, setIsSaving] = useState(false);
+  const [outsideHoursConfirmOpen, setOutsideHoursConfirmOpen] = useState(false);
 
   const shopData = useQuery(api.schedule.getShopServicesWithCategories);
   const createBooking = useMutation(api.bookings.createByShop);
@@ -167,7 +169,7 @@ export default function CreateBookingDrawer({
     return conflict ? "This time slot overlaps an existing booking for this mechanic." : null;
   }, [mechanicId, date, time, selectedIds, categories, bookings]);
 
-  const shopHoursError = useMemo(() => {
+  const blockingHoursError = useMemo(() => {
     if (!date || !time) return null;
 
     const allServices = categories.flatMap((c) => c.services);
@@ -189,11 +191,22 @@ export default function CreateBookingDrawer({
       return "The requested start time is outside the shop's operating hours.";
     }
 
-    if (endMins > closeMins) {
-      return "This booking would end after the shop closes.";
-    }
-
     return null;
+  }, [date, time, selectedIds, categories, shopHours]);
+
+  const outsideHoursWarning = useMemo(() => {
+    if (!date || !time) return null;
+
+    const allServices = categories.flatMap((c) => c.services);
+    const selected = allServices.filter((s) => selectedIds.has(s._id));
+    const estMins = selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) || 60;
+    const endTime = getBookingEndTime(time, estMins);
+    const dayHours = getShopHoursForDate(shopHours, date);
+    if (!dayHours || dayHours.isClosed) return null;
+
+    return toMins(endTime) > toMins(dayHours.closeTime)
+      ? "This booking would end after the shop closes."
+      : null;
   }, [date, time, selectedIds, categories, shopHours]);
 
   /* ---- Filter categories/services by search ---- */
@@ -222,15 +235,7 @@ export default function CreateBookingDrawer({
   };
 
   /* ---- Submit ---- */
-  async function handleSubmit() {
-    if (!email.trim() || !shopData?.shopId) return;
-
-    const preflightError = overlapError ?? shopHoursError;
-    if (preflightError) {
-      onToast(preflightError);
-      return;
-    }
-
+  async function submitBooking(allowOutsideShopHours = false) {
     setIsSaving(true);
     try {
       const allServices = categories.flatMap((c) => c.services);
@@ -255,6 +260,7 @@ export default function CreateBookingDrawer({
         partsCost: 0,
         estimatedLaborMinutes: estMinutes,
         status: "confirmed",
+        allowOutsideShopHours: allowOutsideShopHours || undefined,
       });
 
       onToast("Booking created");
@@ -264,6 +270,23 @@ export default function CreateBookingDrawer({
     } finally {
       setIsSaving(false);
     }
+  }
+
+  async function handleSubmit() {
+    if (!email.trim() || !shopData?.shopId) return;
+
+    const preflightError = overlapError ?? blockingHoursError;
+    if (preflightError) {
+      onToast(preflightError);
+      return;
+    }
+
+    if (outsideHoursWarning) {
+      setOutsideHoursConfirmOpen(true);
+      return;
+    }
+
+    await submitBooking(false);
   }
 
   /* ---- Render ---- */
@@ -437,10 +460,15 @@ export default function CreateBookingDrawer({
               </div>
             )}
             {overlapError && (
-              <p className="text-xs text-destructive">{overlapError}</p>
+              <p className="form-error-text text-xs">{overlapError}</p>
             )}
-            {shopHoursError && (
-              <p className="text-xs text-destructive">{shopHoursError}</p>
+            {blockingHoursError && (
+              <p className="form-error-text text-xs">{blockingHoursError}</p>
+            )}
+            {outsideHoursWarning && (
+              <p className="form-error-text text-xs">
+                This booking extends beyond normal shop hours and will require confirmation.
+              </p>
             )}
           </div>
         </section>
@@ -469,6 +497,28 @@ export default function CreateBookingDrawer({
           )}
         </button>
       </div>
+
+      <ConfirmationDialog
+        open={outsideHoursConfirmOpen}
+        title="Book Outside Shop Hours?"
+        description="This booking would end after the shop closes. Would you like to create it anyway?"
+        onClose={() => setOutsideHoursConfirmOpen(false)}
+        secondaryAction={{
+          label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
+          onAction: () => setOutsideHoursConfirmOpen(false),
+          shortcutKey: "c",
+        }}
+        primaryAction={{
+          label: <ShortcutLabel text="Create booking anyway" shortcutKey="b" />,
+          onAction: () => {
+            setOutsideHoursConfirmOpen(false);
+            void submitBooking(true);
+          },
+          shortcutKey: "b",
+          variant: "primary",
+          disabled: isSaving,
+        }}
+      />
     </div>
   );
 }

@@ -8,6 +8,10 @@ body {
   overscroll-behavior: none;
 }
 
+.form-error-text {
+  color: var(--destructive);
+}
+
 :root {
   --background: rgb(245, 245, 247);
   --foreground: rgb(17, 24, 28);

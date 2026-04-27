@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Info } from "lucide-react";
 import {
   formatDateLabel,
   formatMileage,
@@ -96,150 +96,175 @@ function VehiclePassportSectionBody({
 
       {isOpen ? (
         <div className="space-y-3 bg-muted/40 p-3 sm:p-4">
-          <PanelSection title="Tires">
-            <DisplayRow
-              label="Brand"
-              value={data.passport.tires.brand ?? "Unknown"}
-              source={data.sources["tires.brand"]}
-            />
-            {data.passport.tires.model ? (
-              <DisplayRow
-                label="Model"
-                value={data.passport.tires.model}
-                source={data.sources["tires.model"]}
-              />
-            ) : null}
-            <DisplayRow
-              label="Size"
-              value={
-                data.passport.tires.size_rear &&
-                data.passport.tires.size_rear !== data.passport.tires.size_front
-                  ? `${data.passport.tires.size_front ?? "Unknown"} / ${data.passport.tires.size_rear}`
-                  : data.passport.tires.size_front ?? "Unknown"
-              }
-              source={data.sources["tires.size_front"]}
-            />
-            <DisplayRow
-              label="Condition"
-              value={tireConditionLabel(data.passport.tires.overall_condition)}
-              source={data.sources["tires.overall_condition"]}
-            />
-            <DisplayRow
-              label="Run-flat"
-              value={
-                data.passport.tires.run_flat == null
-                  ? "Unknown"
-                  : data.passport.tires.run_flat
-                    ? "Yes"
-                    : "No"
-              }
-              source={data.sources["tires.run_flat"]}
-            />
-          </PanelSection>
+          {!data.is_complete ? (
+            <FirstVisitNotice />
+          ) : (
+            <>
+              <PanelSection title="Tires">
+                <DisplayRow
+                  label="Brand"
+                  value={data.passport.tires.brand ?? "Unknown"}
+                  source={data.sources["tires.brand"]}
+                />
+                {data.passport.tires.model ? (
+                  <DisplayRow
+                    label="Model"
+                    value={data.passport.tires.model}
+                    source={data.sources["tires.model"]}
+                  />
+                ) : null}
+                <DisplayRow
+                  label="Size"
+                  value={
+                    data.passport.tires.size_rear &&
+                    data.passport.tires.size_rear !== data.passport.tires.size_front
+                      ? `${data.passport.tires.size_front ?? "Unknown"} / ${data.passport.tires.size_rear}`
+                      : data.passport.tires.size_front ?? "Unknown"
+                  }
+                  source={data.sources["tires.size_front"]}
+                />
+                <DisplayRow
+                  label="Condition"
+                  value={tireConditionLabel(data.passport.tires.overall_condition)}
+                  source={data.sources["tires.overall_condition"]}
+                />
+                <DisplayRow
+                  label="Run-flat"
+                  value={
+                    data.passport.tires.run_flat == null
+                      ? "Unknown"
+                      : data.passport.tires.run_flat
+                        ? "Yes"
+                        : "No"
+                  }
+                  source={data.sources["tires.run_flat"]}
+                />
+              </PanelSection>
 
-          <PanelSection title="Fluids">
-            <DisplayRow
-              label="Oil viscosity"
-              value={data.passport.fluids.oil_viscosity ?? "Unknown"}
-              source={data.sources["fluids.oil_viscosity"]}
-            />
-            <DisplayRow
-              label="Oil type"
-              value={data.passport.fluids.oil_type ?? "Unknown"}
-              source={data.sources["fluids.oil_type"]}
-            />
-            <DisplayRow
-              label="Coolant"
-              value={data.passport.fluids.coolant_type ?? "Unknown"}
-              source={data.sources["fluids.coolant_type"]}
-            />
-            <DisplayRow
-              label="Brake fluid"
-              value={data.passport.fluids.brake_fluid_type ?? "Unknown"}
-              source={data.sources["fluids.brake_fluid_type"]}
-            />
-            {data.passport.fluids.transmission_fluid_type ? (
-              <DisplayRow
-                label="Transmission fluid"
-                value={data.passport.fluids.transmission_fluid_type}
-                source={data.sources["fluids.transmission_fluid_type"]}
-              />
-            ) : null}
-          </PanelSection>
+              <PanelSection title="Fluids">
+                <DisplayRow
+                  label="Oil viscosity"
+                  value={data.passport.fluids.oil_viscosity ?? "Unknown"}
+                  source={data.sources["fluids.oil_viscosity"]}
+                />
+                <DisplayRow
+                  label="Oil type"
+                  value={data.passport.fluids.oil_type ?? "Unknown"}
+                  source={data.sources["fluids.oil_type"]}
+                />
+                <DisplayRow
+                  label="Coolant"
+                  value={data.passport.fluids.coolant_type ?? "Unknown"}
+                  source={data.sources["fluids.coolant_type"]}
+                />
+                <DisplayRow
+                  label="Brake fluid"
+                  value={data.passport.fluids.brake_fluid_type ?? "Unknown"}
+                  source={data.sources["fluids.brake_fluid_type"]}
+                />
+                {data.passport.fluids.transmission_fluid_type ? (
+                  <DisplayRow
+                    label="Transmission fluid"
+                    value={data.passport.fluids.transmission_fluid_type}
+                    source={data.sources["fluids.transmission_fluid_type"]}
+                  />
+                ) : null}
+              </PanelSection>
 
-          <PanelSection title="Mileage">
-            <DisplayRow
-              label="Current"
-              value={formatMileage(data.passport.mileage)}
-              source={data.sources.mileage}
-            />
-            <DisplayRow
-              label="Velocity"
-              value={formatMonthMileage(data.passport.mileage_velocity)}
-            />
-            <DisplayRow
-              label="Last updated"
-              value={formatDateLabel(data.passport.last_reported_at)}
-            />
-          </PanelSection>
+              <PanelSection title="Mileage">
+                <DisplayRow
+                  label="Current"
+                  value={formatMileage(data.passport.mileage)}
+                  source={data.sources.mileage}
+                />
+                <DisplayRow
+                  label="Velocity"
+                  value={formatMonthMileage(data.passport.mileage_velocity)}
+                />
+                <DisplayRow
+                  label="Last updated"
+                  value={formatDateLabel(data.passport.last_reported_at)}
+                />
+              </PanelSection>
 
-          <PanelSection title="Usage">
-            <DisplayRow label="Driving type" value={data.usage.driving_type ?? "Unknown"} />
-            <DisplayRow label="Ownership" value={data.usage.ownership ?? "Unknown"} />
-            {data.passport.modifications.status ? (
-              <DisplayRow
-                label="Modifications"
-                value={modificationStatusLabel(data.passport.modifications.status)}
-              />
-            ) : null}
-          </PanelSection>
+              <PanelSection title="Usage">
+                <DisplayRow label="Driving type" value={data.usage.driving_type ?? "Unknown"} />
+                <DisplayRow label="Ownership" value={data.usage.ownership ?? "Unknown"} />
+                {data.passport.modifications.status ? (
+                  <DisplayRow
+                    label="Modifications"
+                    value={modificationStatusLabel(data.passport.modifications.status)}
+                  />
+                ) : null}
+              </PanelSection>
 
-          <PanelSection title="Recent services">
-            {data.recent_services.length === 0 ? (
-              <p className="py-2 text-center text-[11px] italic text-muted-foreground">
-                No previous services on Otopair
-              </p>
-            ) : (
-              data.recent_services.map((entry) => (
-                <div
-                  key={`${entry.date_label}-${entry.service_name}`}
-                  className="flex items-center justify-between gap-3 border-b border-primary/10 py-1.5 text-[12px] last:border-b-0"
-                >
-                  <span className="text-muted-foreground">{entry.date_label}</span>
-                  <span className="font-medium text-foreground">
-                    {entry.service_name}
-                  </span>
-                </div>
-              ))
-            )}
-          </PanelSection>
+              <PanelSection title="Recent services">
+                {data.recent_services.length === 0 ? (
+                  <p className="py-2 text-center text-[11px] italic text-muted-foreground">
+                    No previous services on Otopair
+                  </p>
+                ) : (
+                  data.recent_services.map((entry) => (
+                    <div
+                      key={`${entry.date_label}-${entry.service_name}`}
+                      className="flex items-center justify-between gap-3 border-b border-primary/10 py-1.5 text-[12px] last:border-b-0"
+                    >
+                      <span className="text-muted-foreground">{entry.date_label}</span>
+                      <span className="font-medium text-foreground">
+                        {entry.service_name}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </PanelSection>
 
-          <PanelSection title="Mechanic notes">
-            {data.mechanic_notes.length === 0 ? (
-              <p className="py-2 text-center text-[11px] italic text-muted-foreground">
-                No mechanic notes recorded yet
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {data.mechanic_notes.map((entry) => (
-                  <div
-                    key={`${entry.author}-${entry.date_label}-${entry.note}`}
-                    className="rounded-md border-l-2 border-primary bg-primary/5 px-3 py-2"
-                  >
-                    <p className="text-[11px] italic leading-5 text-foreground/85">
-                      &quot;{entry.note}&quot;
-                    </p>
-                    <p className="mt-1 text-[10px] font-medium text-muted-foreground">
-                      — {entry.author}, {entry.date_label}
-                    </p>
+              <PanelSection title="Mechanic notes">
+                {data.mechanic_notes.length === 0 ? (
+                  <p className="py-2 text-center text-[11px] italic text-muted-foreground">
+                    No mechanic notes recorded yet
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {data.mechanic_notes.map((entry) => (
+                      <div
+                        key={`${entry.author}-${entry.date_label}-${entry.note}`}
+                        className="rounded-md border-l-2 border-primary bg-primary/5 px-3 py-2"
+                      >
+                        <p className="text-[11px] italic leading-5 text-foreground/85">
+                          &quot;{entry.note}&quot;
+                        </p>
+                        <p className="mt-1 text-[10px] font-medium text-muted-foreground">
+                          -- {entry.author}, {entry.date_label}
+                        </p>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
-          </PanelSection>
+                )}
+              </PanelSection>
+            </>
+          )}
         </div>
       ) : null}
     </section>
+  );
+}
+
+function FirstVisitNotice() {
+  return (
+    <div className="rounded-lg border border-primary/15 bg-card px-4 py-4">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-primary/20 bg-primary/5 text-primary">
+          <Info className="h-3.5 w-3.5" />
+        </div>
+        <p className="text-[13px] leading-7 text-foreground/85">
+          <span className="font-semibold text-foreground">
+            First time this vehicle is visiting a shop on Otopair.
+          </span>{" "}
+          Please confirm or fill in the vehicle specs below. This data will be saved to the
+          vehicle&apos;s profile and will be available on future visits.
+        </p>
+      </div>
+    </div>
   );
 }
 

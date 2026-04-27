@@ -1128,6 +1128,8 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
     mileage: prejob.mileage,
     tires: {
       brand: prejob.tire_brand ?? undefined,
+      size_front: prejob.tire_size_front ?? undefined,
+      size_rear: prejob.tire_size_rear ?? undefined,
       front_condition: frontCondition,
       rear_condition: rearCondition,
       overall_condition:
@@ -2971,6 +2973,7 @@ export const getVehiclePassportForBooking = query({
   },
 });
 
+// TODO: Remove confirmVehiclePassport — passport editing now happens exclusively via the pre-job survey. This mutation is no longer called from the frontend.
 export const confirmVehiclePassport = mutation({
   args: {
     bookingId: v.id("bookings"),

@@ -1182,17 +1182,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             }
                             className={drawerPrimaryButtonClassName}
                           >
-                            <span>
-                              S
-                              <span
-                                style={{
-                                  textDecorationLine: "underline",
-                                }}
-                              >
-                                t
-                              </span>
-                              art job
-                            </span>
+                            Open vehicle check
                           </button>
                         )}
                         {canComplete && job.status === "in_progress" && (

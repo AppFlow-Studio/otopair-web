@@ -8,9 +8,18 @@ import {
   drawerSecondaryButtonClassName,
 } from "@/components/drawer-panel-styles";
 import {
+  Select,
+  SelectItem,
+  SelectListBox,
+  SelectPopover,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   passportSourceLabel,
   shouldShowPassportSourceBadge,
   type PassportSource,
+  type RotorCondition,
   type PreJobSurveyPayload,
   type TireCondition,
   type VehiclePassportData,
@@ -23,7 +32,7 @@ const conditionPalette: Record<
 > = {
   good: {
     label: "Good",
-    activeClassName: "border-success/40 bg-success/10 text-success",
+    activeClassName: "border-primary/40 bg-primary/10 text-primary",
   },
   fair: {
     label: "Fair",
@@ -31,9 +40,63 @@ const conditionPalette: Record<
   },
   replace_soon: {
     label: "Replace soon",
-    activeClassName: "border-destructive/40 bg-destructive/10 text-destructive",
+    activeClassName: "border-primary/40 bg-primary/10 text-primary",
   },
 };
+
+function keepDigitsOnly(value: string) {
+  return value.replace(/\D+/g, "");
+}
+
+function keepNumericInput(value: string) {
+  const normalized = value.replace(/[^0-9.]+/g, "");
+  const [whole, ...rest] = normalized.split(".");
+  return rest.length > 0 ? `${whole}.${rest.join("")}` : whole;
+}
+
+function parseTireSize(value?: string | null) {
+  const raw = value?.trim() ?? "";
+  if (!raw) {
+    return { width: "", aspect: "", diameter: "" };
+  }
+
+  const match = raw.match(/(\d{3})\D*(\d{2})\D*R?\D*(\d{2})/i);
+  if (!match) {
+    return { width: "", aspect: "", diameter: "" };
+  }
+
+  return {
+    width: match[1] ?? "",
+    aspect: match[2] ?? "",
+    diameter: match[3] ?? "",
+  };
+}
+
+function formatTireSize(width: string, aspect: string, diameter: string) {
+  if (!width.trim() || !aspect.trim() || !diameter.trim()) {
+    return null;
+  }
+  return `${width.trim()}/${aspect.trim()}R${diameter.trim()}`;
+}
+
+const selectTriggerClassName =
+  "bg-white h-8 rounded-md border-primary/15 px-2.5 text-[12px] text-foreground";
+const selectPopoverClassName = "rounded-md";
+const selectListBoxClassName = "p-1 text-[12px]";
+const selectItemClassName = "min-h-0 rounded-sm px-2.5 py-1.5 text-[12px]";
+
+function rotorConditionLabel(value: string) {
+  if (value === "good") return "Good";
+  if (value === "scored") return "Scored";
+  if (value === "needs_attention") return "Needs attention";
+  return "Select...";
+}
+
+function modificationStatusLabel(value: string) {
+  if (value === "none_observed") return "None observed";
+  if (value === "aftermarket_observed") return "Yes - see notes";
+  return "No selection";
+}
 
 function getInitials(label: string): string {
   const raw = label.trim();
@@ -127,12 +190,27 @@ function PreJobSurveyDialogBody({
   onClose: () => void;
   onSubmit: (payload: PreJobSurveyPayload) => Promise<void>;
 }) {
+  const initialFrontSize = parseTireSize(passportData?.passport.tires.size_front);
+  const initialRearSize = parseTireSize(
+    passportData?.passport.tires.size_rear ?? passportData?.passport.tires.size_front
+  );
+  const initialRearMatchesFront =
+    !passportData?.passport.tires.size_rear ||
+    passportData.passport.tires.size_rear === passportData.passport.tires.size_front;
+
   const [mileage, setMileage] = useState(
     typeof passportData?.passport.mileage === "number"
       ? String(Math.round(passportData.passport.mileage))
       : ""
   );
   const [tireBrand, setTireBrand] = useState(passportData?.passport.tires.brand ?? "");
+  const [frontSizeWidth, setFrontSizeWidth] = useState(initialFrontSize.width);
+  const [frontSizeAspect, setFrontSizeAspect] = useState(initialFrontSize.aspect);
+  const [frontSizeDiameter, setFrontSizeDiameter] = useState(initialFrontSize.diameter);
+  const [rearMatchesFront, setRearMatchesFront] = useState(initialRearMatchesFront);
+  const [rearSizeWidth, setRearSizeWidth] = useState(initialRearSize.width);
+  const [rearSizeAspect, setRearSizeAspect] = useState(initialRearSize.aspect);
+  const [rearSizeDiameter, setRearSizeDiameter] = useState(initialRearSize.diameter);
   const [frontCondition, setFrontCondition] = useState<TireCondition | null>(
     passportData?.passport.tires.front_condition ?? null
   );
@@ -149,10 +227,9 @@ function PreJobSurveyDialogBody({
       ? String(passportData.passport.brakes.rear_pad_mm)
       : ""
   );
-  const [rotorCondition, setRotorCondition] = useState(
+  const [rotorCondition, setRotorCondition] = useState<"" | RotorCondition>(
     passportData?.passport.brakes.rotor_condition ?? ""
   );
-  const [fluidsMatchOem, setFluidsMatchOem] = useState(true);
   const [oilViscosity, setOilViscosity] = useState(
     passportData?.passport.fluids.oil_viscosity ?? ""
   );
@@ -189,6 +266,15 @@ function PreJobSurveyDialogBody({
 
   async function handleSubmit() {
     const parsedMileage = Number(mileage);
+    const frontTireSize = formatTireSize(
+      frontSizeWidth,
+      frontSizeAspect,
+      frontSizeDiameter
+    );
+    const rearTireSize = rearMatchesFront
+      ? frontTireSize
+      : formatTireSize(rearSizeWidth, rearSizeAspect, rearSizeDiameter);
+
     if (!Number.isFinite(parsedMileage) || mileage.trim() === "") {
       setError("Mileage is required.");
       return;
@@ -202,6 +288,8 @@ function PreJobSurveyDialogBody({
     await onSubmit({
       mileage: parsedMileage,
       tire_brand: tireBrand.trim() || null,
+      tire_size_front: frontTireSize,
+      tire_size_rear: rearTireSize,
       front_tire_condition: frontCondition,
       rear_tire_condition: rearCondition,
       brakes: {
@@ -212,16 +300,14 @@ function PreJobSurveyDialogBody({
             ? null
             : (rotorCondition as "good" | "scored" | "needs_attention"),
       },
-      fluids_match_oem: fluidsMatchOem,
-      fluid_overrides: fluidsMatchOem
-        ? null
-        : {
-            oil_viscosity: oilViscosity.trim() || null,
-            oil_type: oilType.trim() || null,
-            coolant_type: coolantType.trim() || null,
-            brake_fluid_type: brakeFluidType.trim() || null,
-            transmission_fluid_type: transmissionFluidType.trim() || null,
-          },
+      fluids_match_oem: false,
+      fluid_overrides: {
+        oil_viscosity: oilViscosity.trim() || null,
+        oil_type: oilType.trim() || null,
+        coolant_type: coolantType.trim() || null,
+        brake_fluid_type: brakeFluidType.trim() || null,
+        transmission_fluid_type: transmissionFluidType.trim() || null,
+      },
       inspection: {
         looks_current:
           inspectionLooksCurrent === ""
@@ -242,7 +328,6 @@ function PreJobSurveyDialogBody({
     });
   }
 
-  const tireSizeLabel = passportData?.passport.tires.size_front ?? "Unknown size";
   const tireSizeSource = passportData?.sources["tires.size_front"];
 
   return (
@@ -291,16 +376,16 @@ function PreJobSurveyDialogBody({
 
         {isFirstVisit ? (
           <div className="rounded-lg border-l-2 border-primary bg-primary/5 px-3 py-2 text-[11px] leading-5 text-foreground/80">
-            First visit — confirm what you see. Takes under 90 seconds.
+            First visit - confirm what you see. Takes under 90 seconds.
           </div>
         ) : null}
 
         <div className="divide-y divide-primary/10">
-          <SectionBlock eyebrow="Q1 · Mileage" badge="Required" accent="required">
-            <FieldRow label="Odometer reading">
+          <SectionBlock eyebrow="Mileage">
+            <FieldRow label={<RequiredLabel text="Odometer reading" />}>
               <input
                 value={mileage}
-                onChange={(event) => setMileage(event.target.value)}
+                onChange={(event) => setMileage(keepDigitsOnly(event.target.value))}
                 inputMode="numeric"
                 placeholder="Enter mileage"
                 className={narrowField(mileageError)}
@@ -308,166 +393,174 @@ function PreJobSurveyDialogBody({
             </FieldRow>
           </SectionBlock>
 
-          <SectionBlock eyebrow="Q2 · Tire condition" badge="Required" accent="required">
-            <p className="text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
-              {tireSizeLabel}
-              {shouldShowPassportSourceBadge(tireSizeSource) ? (
-                <>
-                  <span className="mx-1.5 text-muted-foreground/50">·</span>
-                  <span className="normal-case tracking-normal">
-                    {passportSourceLabel(tireSizeSource)}
-                  </span>
-                </>
+          <SectionBlock eyebrow="Tire condition">
+            <div className="space-y-2">
+              <div className="rounded-lg border border-primary/10 bg-muted/40 px-3 py-2.5">
+                <label className="flex items-center gap-2 text-[12px] font-medium text-foreground">
+                  <button
+                    type="button"
+                    aria-pressed={rearMatchesFront}
+                    onClick={() => {
+                      const checked = !rearMatchesFront;
+                      if (!checked) {
+                        setRearSizeWidth(frontSizeWidth);
+                        setRearSizeAspect(frontSizeAspect);
+                        setRearSizeDiameter(frontSizeDiameter);
+                      }
+                      setRearMatchesFront(checked);
+                    }}
+                    className={cn(
+                      "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
+                      rearMatchesFront
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-primary/25 bg-background text-transparent"
+                    )}
+                  >
+                    <Check className="h-3 w-3" strokeWidth={3} />
+                  </button>
+                  <span>Rear size is same as front</span>
+                </label>
+              </div>
+              <FieldRow
+                label={
+                  <RequiredLabel
+                    text={
+                      shouldShowPassportSourceBadge(tireSizeSource) && tireSizeSource !== "empty"
+                        ? `Front size (${passportSourceLabel(tireSizeSource)})`
+                        : "Front size"
+                    }
+                  />
+                }
+              >
+                <TireSizeInputs
+                  width={frontSizeWidth}
+                  aspect={frontSizeAspect}
+                  diameter={frontSizeDiameter}
+                  onWidthChange={setFrontSizeWidth}
+                  onAspectChange={setFrontSizeAspect}
+                  onDiameterChange={setFrontSizeDiameter}
+                />
+              </FieldRow>
+              {!rearMatchesFront ? (
+                <FieldRow label={<RequiredLabel text="Rear size" />}>
+                  <TireSizeInputs
+                    width={rearSizeWidth}
+                    aspect={rearSizeAspect}
+                    diameter={rearSizeDiameter}
+                    onWidthChange={setRearSizeWidth}
+                    onAspectChange={setRearSizeAspect}
+                    onDiameterChange={setRearSizeDiameter}
+                  />
+                </FieldRow>
               ) : null}
-            </p>
-            <div className="mt-3 space-y-2">
               <TireConditionRow
-                label="Front"
+                label={<RequiredLabel text="Front" />}
                 value={frontCondition}
                 onChange={setFrontCondition}
               />
               <TireConditionRow
-                label="Rear"
+                label={<RequiredLabel text="Rear" />}
                 value={rearCondition}
                 onChange={setRearCondition}
               />
-            </div>
-            <div className="mt-3 rounded-lg border border-primary/10 border-l-2 border-l-primary bg-muted/60 px-3 py-2.5">
-              <p className="text-[10px] italic text-muted-foreground">
-                First visit — what brand is on the car?
-              </p>
-              <input
-                value={tireBrand}
-                onChange={(event) => setTireBrand(event.target.value)}
-                placeholder="e.g. Goodyear Wrangler"
-                className={cn(baseField(), "mt-2 w-full text-left")}
-              />
+              <div className="pt-1">
+              <FieldRow label={<RequiredLabel text="Tire brand" />}>
+                <input
+                  value={tireBrand}
+                  onChange={(event) => setTireBrand(event.target.value)}
+                  placeholder="e.g. Goodyear Wrangler"
+                  className={cn(baseField(), "w-full text-right sm:w-[140px]")}
+                />
+              </FieldRow>
+              </div>
             </div>
           </SectionBlock>
 
-          <SectionBlock
-            eyebrow="Q3 · Brakes"
-            badge="Optional — if on lift"
-            accent="muted"
-          >
+          <SectionBlock eyebrow="Brakes" badge="Optional" accent="muted">
             <FieldRow label="Front pad thickness">
-              <div className="flex items-center gap-2">
-                <input
-                  value={frontPadMm}
-                  onChange={(event) => setFrontPadMm(event.target.value)}
-                  placeholder="mm"
-                  inputMode="decimal"
-                  className={cn(baseField(), "w-[90px] text-right")}
-                />
-                <span className="text-[10px] text-muted-foreground">
-                  → system classifies
-                </span>
-              </div>
+              <input
+                value={frontPadMm}
+                onChange={(event) => setFrontPadMm(keepNumericInput(event.target.value))}
+                placeholder="mm"
+                inputMode="decimal"
+                className={cn(baseField(), "w-[90px] text-right")}
+              />
             </FieldRow>
             <FieldRow label="Rear pad thickness">
               <input
                 value={rearPadMm}
-                onChange={(event) => setRearPadMm(event.target.value)}
+                onChange={(event) => setRearPadMm(keepNumericInput(event.target.value))}
                 placeholder="mm"
                 inputMode="decimal"
                 className={cn(baseField(), "w-[90px] text-right")}
               />
             </FieldRow>
             <FieldRow label="Rotors overall">
-              <select
-                value={rotorCondition}
-                onChange={(event) => setRotorCondition(event.target.value)}
-                className={cn(narrowField(), "pr-7")}
+              <Select
+                selectedKey={rotorCondition || "none"}
+                onSelectionChange={(key) =>
+                  setRotorCondition(key === "none" ? "" : (String(key) as RotorCondition))
+                }
               >
-                <option value="">Select...</option>
-                <option value="good">Good</option>
-                <option value="scored">Scored</option>
-                <option value="needs_attention">Needs attention</option>
-              </select>
+                <SelectTrigger className={cn(selectTriggerClassName, "w-[140px] justify-end")}>
+                  <SelectValue>{rotorConditionLabel(rotorCondition)}</SelectValue>
+                </SelectTrigger>
+                <SelectPopover className={selectPopoverClassName}>
+                  <SelectListBox shouldFocusWrap className={selectListBoxClassName}>
+                    <SelectItem id="none" textValue="Select..." className={selectItemClassName}>Select...</SelectItem>
+                    <SelectItem id="good" textValue="Good" className={selectItemClassName}>Good</SelectItem>
+                    <SelectItem id="scored" textValue="Scored" className={selectItemClassName}>Scored</SelectItem>
+                    <SelectItem id="needs_attention" textValue="Needs attention" className={selectItemClassName}>
+                      Needs attention
+                    </SelectItem>
+                  </SelectListBox>
+                </SelectPopover>
+              </Select>
             </FieldRow>
           </SectionBlock>
 
-          <SectionBlock eyebrow="Q4 · Fluids" badge="Confirm OEM" accent="info">
-            <button
-              type="button"
-              onClick={() => setFluidsMatchOem((current) => !current)}
-              className={cn(
-                "flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-[12px] font-medium transition-colors",
-                fluidsMatchOem
-                  ? "border-success/30 bg-success/10 text-success"
-                  : "border-primary/10 bg-muted/60 text-muted-foreground hover:bg-muted"
-              )}
-            >
-              <span
-                className={cn(
-                  "flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors",
-                  fluidsMatchOem
-                    ? "border-success bg-success text-success-foreground"
-                    : "border-primary/25 bg-background"
-                )}
-              >
-                {fluidsMatchOem ? <Check className="h-3 w-3" strokeWidth={3} /> : null}
-              </span>
-              Fluid specs match OEM defaults — no changes
-            </button>
-
-            <div className="mt-3 space-y-1.5">
-              <FluidRow
-                label="Oil"
-                value={`${passportData?.passport.fluids.oil_viscosity ?? "Unknown"} · ${
-                  passportData?.passport.fluids.oil_type ?? "Unknown"
-                }`}
+          <SectionBlock eyebrow="Fluids">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <EditableFluidField
+                label="Oil viscosity"
+                value={oilViscosity}
+                onChange={setOilViscosity}
+                placeholder="Oil viscosity"
                 source={passportData?.sources["fluids.oil_viscosity"]}
               />
-              <FluidRow
-                label="Coolant"
-                value={passportData?.passport.fluids.coolant_type ?? "Unknown"}
+              <EditableFluidField
+                label="Oil type"
+                value={oilType}
+                onChange={setOilType}
+                placeholder="Oil type"
+                source={passportData?.sources["fluids.oil_type"]}
+              />
+              <EditableFluidField
+                label="Coolant type"
+                value={coolantType}
+                onChange={setCoolantType}
+                placeholder="Coolant type"
                 source={passportData?.sources["fluids.coolant_type"]}
               />
-              <FluidRow
+              <EditableFluidField
                 label="Brake fluid"
-                value={passportData?.passport.fluids.brake_fluid_type ?? "Unknown"}
+                value={brakeFluidType}
+                onChange={setBrakeFluidType}
+                placeholder="Brake fluid"
                 source={passportData?.sources["fluids.brake_fluid_type"]}
               />
+              <EditableFluidField
+                label="Transmission fluid"
+                value={transmissionFluidType}
+                onChange={setTransmissionFluidType}
+                placeholder="Transmission fluid"
+                source={passportData?.sources["fluids.transmission_fluid_type"]}
+                className="sm:col-span-2"
+              />
             </div>
-
-            {!fluidsMatchOem ? (
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                <input
-                  value={oilViscosity}
-                  onChange={(event) => setOilViscosity(event.target.value)}
-                  placeholder="Oil viscosity"
-                  className={cn(baseField(), "w-full text-left")}
-                />
-                <input
-                  value={oilType}
-                  onChange={(event) => setOilType(event.target.value)}
-                  placeholder="Oil type"
-                  className={cn(baseField(), "w-full text-left")}
-                />
-                <input
-                  value={coolantType}
-                  onChange={(event) => setCoolantType(event.target.value)}
-                  placeholder="Coolant type"
-                  className={cn(baseField(), "w-full text-left")}
-                />
-                <input
-                  value={brakeFluidType}
-                  onChange={(event) => setBrakeFluidType(event.target.value)}
-                  placeholder="Brake fluid"
-                  className={cn(baseField(), "w-full text-left")}
-                />
-                <input
-                  value={transmissionFluidType}
-                  onChange={(event) => setTransmissionFluidType(event.target.value)}
-                  placeholder="Transmission fluid"
-                  className={cn(baseField(), "w-full text-left sm:col-span-2")}
-                />
-              </div>
-            ) : null}
           </SectionBlock>
 
-          <SectionBlock eyebrow="Q5 · Inspection" badge="Optional" accent="muted">
+          <SectionBlock eyebrow="Inspection" badge="Optional" accent="muted">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-[12px] text-muted-foreground">
                 Sticker looks current?
@@ -518,21 +611,33 @@ function PreJobSurveyDialogBody({
             </div>
           </SectionBlock>
 
-          <SectionBlock eyebrow="Q6 · Modifications" badge="Optional" accent="muted">
+          <SectionBlock eyebrow="Modifications" badge="Optional" accent="muted">
             <FieldRow label="Aftermarket observed?">
-              <select
-                value={modificationsStatus}
-                onChange={(event) =>
+              <Select
+                selectedKey={modificationsStatus || "none"}
+                onSelectionChange={(key) =>
                   setModificationsStatus(
-                    event.target.value as "" | "none_observed" | "aftermarket_observed"
+                    key === "none"
+                      ? ""
+                      : (String(key) as "" | "none_observed" | "aftermarket_observed")
                   )
                 }
-                className={cn(narrowField(), "w-[170px] pr-7")}
               >
-                <option value="">No selection</option>
-                <option value="none_observed">None observed</option>
-                <option value="aftermarket_observed">Yes — see notes</option>
-              </select>
+                <SelectTrigger className={cn(selectTriggerClassName, "w-[140px] justify-end")}>
+                  <SelectValue>{modificationStatusLabel(modificationsStatus)}</SelectValue>
+                </SelectTrigger>
+                <SelectPopover className={selectPopoverClassName}>
+                  <SelectListBox shouldFocusWrap className={selectListBoxClassName}>
+                    <SelectItem id="none" textValue="No selection" className={selectItemClassName}>No selection</SelectItem>
+                    <SelectItem id="none_observed" textValue="None observed" className={selectItemClassName}>
+                      None observed
+                    </SelectItem>
+                    <SelectItem id="aftermarket_observed" textValue="Yes - see notes" className={selectItemClassName}>
+                      Yes - see notes
+                    </SelectItem>
+                  </SelectListBox>
+                </SelectPopover>
+              </Select>
             </FieldRow>
             {modificationsStatus === "aftermarket_observed" ? (
               <textarea
@@ -573,7 +678,7 @@ function SectionBlock({
   children,
 }: {
   eyebrow: string;
-  badge: string;
+  badge?: string;
   accent?: "required" | "info" | "muted";
   children: ReactNode;
 }) {
@@ -590,14 +695,16 @@ function SectionBlock({
         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
           {eyebrow}
         </p>
-        <span
-          className={cn(
-            "rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]",
-            badgeClassName
-          )}
-        >
-          {badge}
-        </span>
+        {badge ? (
+          <span
+            className={cn(
+              "rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em]",
+              badgeClassName
+            )}
+          >
+            {badge}
+          </span>
+        ) : null}
       </div>
       <div className="mt-3">{children}</div>
     </section>
@@ -608,7 +715,7 @@ function FieldRow({
   label,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -624,7 +731,7 @@ function TireConditionRow({
   value,
   onChange,
 }: {
-  label: string;
+  label: ReactNode;
   value: TireCondition | null;
   onChange: (next: TireCondition) => void;
 }) {
@@ -638,26 +745,90 @@ function TireConditionRow({
   );
 }
 
-function FluidRow({
+function TireSizeInputs({
+  width,
+  aspect,
+  diameter,
+  onWidthChange,
+  onAspectChange,
+  onDiameterChange,
+}: {
+  width: string;
+  aspect: string;
+  diameter: string;
+  onWidthChange: (value: string) => void;
+  onAspectChange: (value: string) => void;
+  onDiameterChange: (value: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        value={width}
+        onChange={(event) => onWidthChange(keepDigitsOnly(event.target.value).slice(0, 3))}
+        inputMode="numeric"
+        placeholder="225"
+        className={cn(baseField(), "w-[54px] text-right")}
+      />
+      <span className="text-[12px] text-muted-foreground">/</span>
+      <input
+        value={aspect}
+        onChange={(event) => onAspectChange(keepDigitsOnly(event.target.value).slice(0, 2))}
+        inputMode="numeric"
+        placeholder="65"
+        className={cn(baseField(), "w-[46px] text-right")}
+      />
+      <span className="text-[12px] font-medium text-muted-foreground">R</span>
+      <input
+        value={diameter}
+        onChange={(event) => onDiameterChange(keepDigitsOnly(event.target.value).slice(0, 2))}
+        inputMode="numeric"
+        placeholder="17"
+        className={cn(baseField(), "w-[46px] text-right")}
+      />
+    </div>
+  );
+}
+
+function RequiredLabel({ text }: { text: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="text-destructive">*</span>
+      <span>{text}</span>
+    </span>
+  );
+}
+
+function EditableFluidField({
   label,
   value,
+  onChange,
+  placeholder,
   source,
+  className,
 }: {
   label: string;
   value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
   source?: PassportSource;
+  className?: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md bg-muted/60 px-3 py-1.5 text-[12px]">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="flex items-center gap-2 text-right font-medium text-foreground">
-        {value}
-        {shouldShowPassportSourceBadge(source) ? (
+    <div className={cn("rounded-lg border border-primary/10 bg-muted/40 p-3", className)}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+        {shouldShowPassportSourceBadge(source) && source !== "empty" ? (
           <span className="rounded-full border border-primary/10 bg-background px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
             {passportSourceLabel(source)}
           </span>
         ) : null}
-      </span>
+      </div>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className={cn(baseField(), "w-full text-left")}
+      />
     </div>
   );
 }

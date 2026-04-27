@@ -136,6 +136,8 @@ export type JobActualPartPayload = {
 export type PreJobSurveyPayload = {
   mileage: number;
   tire_brand?: string | null;
+  tire_size_front?: string | null;
+  tire_size_rear?: string | null;
   front_tire_condition: TireCondition | null;
   rear_tire_condition: TireCondition | null;
   brakes?: VehiclePassportBrakes | null;

@@ -92,6 +92,8 @@ export const vehiclePassportUpdateValidator = v.object({
 export const prejobReportValidator = v.object({
   mileage: v.float64(),
   tire_brand: v.optional(nullableStringValidator),
+  tire_size_front: v.optional(nullableStringValidator),
+  tire_size_rear: v.optional(nullableStringValidator),
   front_tire_condition: v.union(tireConditionValidator, v.null()),
   rear_tire_condition: v.union(tireConditionValidator, v.null()),
   brakes: v.optional(v.union(vehiclePassportBrakesValidator, v.null())),

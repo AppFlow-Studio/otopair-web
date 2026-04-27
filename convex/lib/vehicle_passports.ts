@@ -55,6 +55,7 @@ export const vehiclePassportTiresValidator = v.object({
 
 export const vehiclePassportFluidsValidator = v.object({
   oil_viscosity: v.optional(nullableStringValidator),
+  oil_capacity_qts: v.optional(nullableNumberValidator),
   oil_type: v.optional(nullableStringValidator),
   coolant_type: v.optional(nullableStringValidator),
   brake_fluid_type: v.optional(nullableStringValidator),
@@ -90,7 +91,7 @@ export const vehiclePassportUpdateValidator = v.object({
 });
 
 export const prejobReportValidator = v.object({
-  mileage: v.float64(),
+  mileage: v.union(v.float64(), v.null()),
   tire_brand: v.optional(nullableStringValidator),
   tire_size_front: v.optional(nullableStringValidator),
   tire_size_rear: v.optional(nullableStringValidator),
@@ -101,6 +102,8 @@ export const prejobReportValidator = v.object({
   fluid_overrides: v.optional(v.union(vehiclePassportFluidsValidator, v.null())),
   inspection: v.optional(v.union(vehiclePassportInspectionValidator, v.null())),
   modifications: v.optional(v.union(vehiclePassportModificationsValidator, v.null())),
+  flagged_vehicle_specs: v.optional(v.boolean()),
+  next_mechanic_tip: v.optional(nullableStringValidator),
 });
 
 export const vehicleUpdateValuesValidator = v.object({

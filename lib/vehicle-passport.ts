@@ -54,6 +54,7 @@ export type VehiclePassportTires = {
 
 export type VehiclePassportFluids = {
   oil_viscosity?: string | null;
+  oil_capacity_qts?: number | null;
   oil_type?: string | null;
   coolant_type?: string | null;
   brake_fluid_type?: string | null;
@@ -117,6 +118,8 @@ export type VehiclePassportData = {
   recent_services: Array<{
     date_label: string;
     service_name: string;
+    service_names?: string[];
+    sort_ms?: number | null;
   }>;
   mechanic_notes: Array<{
     note: string;
@@ -134,7 +137,7 @@ export type JobActualPartPayload = {
 };
 
 export type PreJobSurveyPayload = {
-  mileage: number;
+  mileage: number | null;
   tire_brand?: string | null;
   tire_size_front?: string | null;
   tire_size_rear?: string | null;
@@ -145,10 +148,13 @@ export type PreJobSurveyPayload = {
   fluid_overrides?: VehiclePassportFluids | null;
   inspection?: VehiclePassportInspection | null;
   modifications?: VehiclePassportModifications | null;
+  flagged_vehicle_specs?: boolean;
+  next_mechanic_tip?: string | null;
 };
 
 export type VehicleUpdateValues = {
   oil_viscosity?: string | null;
+  oil_capacity_qts?: number | null;
   oil_type?: string | null;
   coolant_type?: string | null;
   brake_fluid_type?: string | null;

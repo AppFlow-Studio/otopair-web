@@ -64,6 +64,7 @@ import {
   serviceRequiresParts,
   vehiclePassportUpdateValidator,
 } from "./lib/vehicle_passports";
+import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
 
 function normalizeNullableText(value: string | null | undefined) {
   const trimmed = typeof value === "string" ? value.trim() : "";
@@ -1125,7 +1126,10 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
     );
 
   return {
-    mileage: prejob.mileage,
+    mileage:
+      typeof prejob.mileage === "number" && Number.isFinite(prejob.mileage)
+        ? prejob.mileage
+        : undefined,
     tires: {
       brand: prejob.tire_brand ?? undefined,
       size_front: prejob.tire_size_front ?? undefined,
@@ -1375,6 +1379,10 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
         passportRecord?.fluids?.oil_viscosity,
         engine?.oil_viscosity
       ),
+      oil_capacity_qts: firstDefinedNumber(
+        passportRecord?.fluids?.oil_capacity_qts,
+        engine?.oil_capacity_qts
+      ),
       oil_type: firstDefinedString(
         passportRecord?.fluids?.oil_type,
         engine?.oil_spec_standard
@@ -1439,6 +1447,11 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       engine?.oil_viscosity,
       "oem_default"
     ),
+    "fluids.oil_capacity_qts": buildSourceTag(
+      passportRecord?.fluids?.oil_capacity_qts,
+      engine?.oil_capacity_qts,
+      "oem_default"
+    ),
     "fluids.oil_type": buildSourceTag(
       passportRecord?.fluids?.oil_type,
       engine?.oil_spec_standard,
@@ -1479,10 +1492,15 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
     .slice(0, 3);
 
   const recent_services = await Promise.all(
-    completedVehicleBookings.map(async (row: any) => ({
-      date_label: formatShortDateLabel(row.scheduled_date, row.updated_at),
-      service_name: (await resolveServiceNames(ctx, row.service_ids)).join(", "),
-    }))
+    completedVehicleBookings.map(async (row: any) => {
+      const service_names = await resolveServiceNames(ctx, row.service_ids);
+      return {
+        date_label: formatShortDateLabel(row.scheduled_date, row.updated_at),
+        service_name: service_names.join(", "),
+        service_names,
+        sort_ms: row.updated_at ?? row._creationTime ?? null,
+      };
+    })
   );
 
   const mechanicNameCache = new Map<string, string>();
@@ -1546,9 +1564,22 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
   };
 }
 
-function validatePrejobReport(prejob: any, baselineMileage: number | null) {
+function validatePrejobReport(
+  prejob: any,
+  baselineMileage: number | null,
+  serviceFlags: ReturnType<typeof getBookingServiceFlags>
+) {
   if (typeof prejob.mileage !== "number" || !Number.isFinite(prejob.mileage)) {
     throw new Error("Mileage is required before starting this booking.");
+  }
+  if (!hasText(prejob.tire_brand)) {
+    throw new Error("Tire brand is required before starting this booking.");
+  }
+  if (!hasText(prejob.tire_size_front)) {
+    throw new Error("Front tire size is required before starting this booking.");
+  }
+  if (!hasText(prejob.tire_size_rear)) {
+    throw new Error("Rear tire size is required before starting this booking.");
   }
   if (!hasText(prejob.front_tire_condition)) {
     throw new Error("Front tire condition is required before starting this booking.");
@@ -1564,6 +1595,72 @@ function validatePrejobReport(prejob: any, baselineMileage: number | null) {
       `Mileage cannot move backward. Stored mileage is ${baselineMileage.toLocaleString()}.`
     );
   }
+  if (serviceFlags.hasBrakeWork) {
+    if (
+      typeof prejob.brakes?.front_pad_mm !== "number" ||
+      !Number.isFinite(prejob.brakes.front_pad_mm)
+    ) {
+      throw new Error("Front pad thickness is required for brake-related work.");
+    }
+    if (
+      typeof prejob.brakes?.rear_pad_mm !== "number" ||
+      !Number.isFinite(prejob.brakes.rear_pad_mm)
+    ) {
+      throw new Error("Rear pad thickness is required for brake-related work.");
+    }
+    if (!hasText(prejob.brakes?.rotor_condition)) {
+      throw new Error("Rotor condition is required for brake-related work.");
+    }
+  }
+  if (serviceFlags.hasOilChange) {
+    if (!hasText(prejob.fluid_overrides?.oil_viscosity)) {
+      throw new Error("Oil viscosity is required for an oil change.");
+    }
+    if (!hasText(prejob.fluid_overrides?.oil_type)) {
+      throw new Error("Oil type is required for an oil change.");
+    }
+  }
+}
+
+async function persistPrejobSurvey(
+  ctx: any,
+  {
+    booking,
+    passportView,
+    prejob,
+    now,
+    startedAtMs,
+  }: {
+    booking: any;
+    passportView: any;
+    prejob: any;
+    now: number;
+    startedAtMs?: number;
+  }
+) {
+  const jobActual = await ensureJobActualRecord(ctx, {
+    booking,
+    now,
+    startedAtMs,
+  });
+
+  const jobActualPatch: Record<string, any> = {
+    prejob_report: prejob,
+    updated_at: now,
+    logged_at_ms: now,
+  };
+  if (startedAtMs != null) {
+    jobActualPatch.started_at = jobActual.started_at ?? startedAtMs;
+  }
+
+  await ctx.db.patch(jobActual._id, jobActualPatch);
+
+  await upsertVehiclePassportRecord(ctx, {
+    vin: booking.vin,
+    patch: buildPassportPatchFromPrejob(prejob, passportView.passport),
+    now,
+    markConfirmed: true,
+  });
 }
 
 function validatePostjobReport(postjob: any, baselineMileage: number | null, requiresParts: boolean) {
@@ -2948,6 +3045,7 @@ export const getJobDetail = query({
             actualPartsCost: jobActual.actual_parts_cost ?? null,
             difficultyRating: jobActual.difficulty_rating ?? null,
             technicianNotes: jobActual.technician_notes ?? "",
+            prejobReport: jobActual.prejob_report ?? null,
             partsUsed: jobActual.parts_used ?? [],
           }
         : null,
@@ -3053,30 +3151,22 @@ export const startWithPrejob = mutation({
     }
 
     const passportView = await buildVehiclePassportForBooking(ctx, booking);
-    if (passportView.missing_fields.length > 0) {
-      throw new Error("Confirm the required vehicle passport fields before starting this booking.");
-    }
-    validatePrejobReport(args.prejob, passportView.passport.mileage ?? null);
+    const serviceFlags = getBookingServiceFlags(
+      await resolveServiceNames(ctx, booking.service_ids)
+    );
+    validatePrejobReport(
+      args.prejob,
+      passportView.passport.mileage ?? null,
+      serviceFlags
+    );
 
     const now = Date.now();
-    const jobActual = await ensureJobActualRecord(ctx, {
+    await persistPrejobSurvey(ctx, {
       booking,
+      passportView,
+      prejob: args.prejob,
       now,
       startedAtMs: now,
-    });
-
-    await ctx.db.patch(jobActual._id, {
-      prejob_report: args.prejob,
-      updated_at: now,
-      logged_at_ms: now,
-      started_at: jobActual.started_at ?? now,
-    });
-
-    await upsertVehiclePassportRecord(ctx, {
-      vin: booking.vin,
-      patch: buildPassportPatchFromPrejob(args.prejob, passportView.passport),
-      now,
-      markConfirmed: true,
     });
 
     if (booking.status !== "in_progress") {
@@ -3087,6 +3177,35 @@ export const startWithPrejob = mutation({
         reason: "started_by_shop",
       });
     }
+
+    return await buildVehiclePassportForBooking(ctx, booking);
+  },
+});
+
+export const savePrejob = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    prejob: prejobReportValidator,
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (!["confirmed", "in_progress"].includes(booking.status)) {
+      throw new Error("Only confirmed or active bookings can save pre-job details.");
+    }
+
+    const passportView = await buildVehiclePassportForBooking(ctx, booking);
+    const now = Date.now();
+
+    await persistPrejobSurvey(ctx, {
+      booking,
+      passportView,
+      prejob: args.prejob,
+      now,
+    });
 
     return await buildVehiclePassportForBooking(ctx, booking);
   },

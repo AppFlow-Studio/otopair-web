@@ -220,6 +220,7 @@ export interface JobDetailData {
     actualPartsCost?: number | null;
     difficultyRating?: number | null;
     technicianNotes?: string;
+    prejobReport?: PreJobSurveyPayload | null;
     partsUsed?: Array<{
       part_name: string;
       brand?: string | null;
@@ -314,6 +315,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
+    const savePrejob = useMutation(api.bookings.savePrejob);
     const startWithPrejob = useMutation(api.bookings.startWithPrejob);
     const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
     const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
@@ -568,22 +570,35 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setShowPrejobDialog(true);
     }
 
-    async function handleStartWithPrejob(payload: PreJobSurveyPayload) {
+    async function handleStartWithPrejob(
+      payload: PreJobSurveyPayload,
+      action: "close" | "start"
+    ) {
       if (!job?._id) return;
       setActionError("");
       setIsSubmittingPrejob(true);
       try {
-        await startWithPrejob({
-          bookingId: job._id,
-          prejob: payload,
-        });
+        if (action === "close") {
+          await savePrejob({
+            bookingId: job._id,
+            prejob: payload,
+          });
+        } else {
+          await startWithPrejob({
+            bookingId: job._id,
+            prejob: payload,
+          });
+        }
         setShowPrejobDialog(false);
-        onSuccess?.("Booking started");
+        onSuccess?.(action === "close" ? "Pre-job vehicle check saved" : "Booking started");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not start booking.",
+          err instanceof Error
+            ? err.message
+            : action === "close"
+              ? "Could not save the pre-job vehicle check."
+              : "Could not start booking.",
         );
-        throw err;
       } finally {
         setIsSubmittingPrejob(false);
       }
@@ -971,7 +986,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   </div>
                 </div>
 
-                <VehiclePassportSection data={vehiclePassport} />
+                <VehiclePassportSection
+                  data={vehiclePassport}
+                  bookingServices={job.serviceNames}
+                />
 
                 {/* Assign mechanic */}
                 <div className="rounded-2xl bg-muted/20 p-4">
@@ -1444,7 +1462,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 )}`
               : ""
           }
+          bookingServices={job?.serviceNames ?? []}
           passportData={vehiclePassport ?? null}
+          prefillData={job?.jobActuals?.prejobReport ?? null}
           isSubmitting={isSubmittingPrejob}
           onClose={() => setShowPrejobDialog(false)}
           onSubmit={handleStartWithPrejob}

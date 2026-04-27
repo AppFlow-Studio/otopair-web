@@ -95,6 +95,7 @@ function DashboardCard({
 
 export default function MechanicDashboard() {
   const dashboard = useQuery(api.bookings.getMyMechanicDashboard);
+  const savePrejob = useMutation(api.bookings.savePrejob);
   const startWithPrejob = useMutation(api.bookings.startWithPrejob);
   const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
   const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
@@ -166,20 +167,36 @@ export default function MechanicDashboard() {
     setActualsDialogMode("complete");
   }
 
-  async function handleStartAction(payload: PreJobSurveyPayload) {
+  async function handleStartAction(
+    payload: PreJobSurveyPayload,
+    action: "close" | "start"
+  ) {
     if (!workflowBookingId) return;
 
     setBusyAction(`start:${String(workflowBookingId)}`);
     try {
-      await startWithPrejob({
-        bookingId: workflowBookingId,
-        prejob: payload,
-      });
-      setToast("Booking started");
+      if (action === "close") {
+        await savePrejob({
+          bookingId: workflowBookingId,
+          prejob: payload,
+        });
+        setToast("Pre-job vehicle check saved");
+      } else {
+        await startWithPrejob({
+          bookingId: workflowBookingId,
+          prejob: payload,
+        });
+        setToast("Booking started");
+      }
       closeWorkflowDialog();
     } catch (error: unknown) {
-      setToast(error instanceof Error ? error.message : "Could not start booking");
-      throw error;
+      setToast(
+        error instanceof Error
+          ? error.message
+          : action === "close"
+            ? "Could not save the pre-job vehicle check"
+            : "Could not start booking"
+      );
     } finally {
       setBusyAction(null);
     }
@@ -536,7 +553,9 @@ export default function MechanicDashboard() {
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
         }
+        bookingServices={selectedWorkflowBooking?.serviceNames ?? []}
         passportData={selectedWorkflowPassport ?? null}
+        prefillData={selectedWorkflowBooking?.jobActuals?.prejobReport ?? null}
         isSubmitting={
           workflowBookingId !== null &&
           busyAction === `start:${String(workflowBookingId)}`

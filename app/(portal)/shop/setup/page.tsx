@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
@@ -67,7 +67,7 @@ const STEP_META = [
   },
   {
     title: "Add mechanics",
-    description: "Create at least one mechanic profile to receive work.",
+    description: "Invite mechanics now, or skip this step and add them later.",
     icon: UserRoundCog,
   },
   {
@@ -340,7 +340,6 @@ function getFirstIncompleteSavedStep(params: {
   if (!params.hasSavedShop) return 0;
   if (params.savedHoursCount < 7) return 1;
   if (params.savedServiceCount === 0) return 2;
-  if (params.mechanicCount === 0) return 3;
   return 4;
 }
 
@@ -382,6 +381,7 @@ export default function ShopSetupPage() {
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
   const [addressLookupLoading, setAddressLookupLoading] = useState(false);
   const [addressSelectedFromAutocomplete, setAddressSelectedFromAutocomplete] = useState(false);
+  const [highlightedAddressSuggestionIndex, setHighlightedAddressSuggestionIndex] = useState(-1);
   const addressLookupSessionRef = useRef<unknown>(null);
   const addressLookupRequestIdRef = useRef(0);
   const addressContainerRef = useRef<HTMLDivElement | null>(null);
@@ -570,12 +570,24 @@ export default function ShopSetupPage() {
     function handlePointerDown(event: MouseEvent) {
       if (!addressContainerRef.current?.contains(event.target as Node)) {
         setAddressSuggestions([]);
+        setHighlightedAddressSuggestionIndex(-1);
       }
     }
 
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
+
+  useEffect(() => {
+    if (addressSuggestions.length === 0) {
+      setHighlightedAddressSuggestionIndex(-1);
+      return;
+    }
+
+    setHighlightedAddressSuggestionIndex((currentIndex) =>
+      currentIndex >= 0 && currentIndex < addressSuggestions.length ? currentIndex : 0
+    );
+  }, [addressSuggestions]);
 
   useEffect(() => {
     const query = details.address.trim();
@@ -688,6 +700,46 @@ export default function ShopSetupPage() {
     }));
   }
 
+  function handleAddressInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (addressSuggestions.length === 0) {
+      if (event.key === "Escape") {
+        setHighlightedAddressSuggestionIndex(-1);
+      }
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightedAddressSuggestionIndex((currentIndex) =>
+        currentIndex < 0 ? 0 : (currentIndex + 1) % addressSuggestions.length
+      );
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedAddressSuggestionIndex((currentIndex) =>
+        currentIndex <= 0 ? addressSuggestions.length - 1 : currentIndex - 1
+      );
+      return;
+    }
+
+    if (event.key === "Enter") {
+      if (highlightedAddressSuggestionIndex < 0) return;
+      event.preventDefault();
+      void handleSelectAddressSuggestion(
+        addressSuggestions[highlightedAddressSuggestionIndex]
+      );
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setAddressSuggestions([]);
+      setHighlightedAddressSuggestionIndex(-1);
+    }
+  }
+
   function handleStepChange(nextStep: number) {
     clearBanners();
     if (nextStep <= Math.max(currentStep, firstIncompleteSavedStep)) {
@@ -701,6 +753,7 @@ export default function ShopSetupPage() {
       setDetails((prev) => ({ ...prev, address: entry.primaryText }));
       setAddressSelectedFromAutocomplete(true);
       setAddressSuggestions([]);
+      setHighlightedAddressSuggestionIndex(-1);
       return;
     }
 
@@ -733,6 +786,7 @@ export default function ShopSetupPage() {
       }));
       setAddressSelectedFromAutocomplete(true);
       setAddressSuggestions([]);
+      setHighlightedAddressSuggestionIndex(-1);
       addressLookupSessionRef.current = null;
     } catch {
       setStepError("Failed to load address details. Try selecting the address again.");
@@ -1269,8 +1323,10 @@ export default function ShopSetupPage() {
                   onChange={(event) => {
                     const value = event.target.value;
                     setAddressSelectedFromAutocomplete(false);
+                    setHighlightedAddressSuggestionIndex(-1);
                     setDetails((prev) => ({ ...prev, address: value }));
                   }}
+                  onKeyDown={handleAddressInputKeyDown}
                   autoComplete="off"
                   placeholder="1234 Main St"
                   className={inputClass}
@@ -1286,13 +1342,18 @@ export default function ShopSetupPage() {
                         Looking up addresses...
                       </div>
                     ) : (
-                      addressSuggestions.map((entry) => (
+                      addressSuggestions.map((entry, index) => (
                         <button
                           key={entry.id}
                           type="button"
                           onMouseDown={(event) => event.preventDefault()}
                           onClick={() => void handleSelectAddressSuggestion(entry)}
-                          className="block w-full border-b border-border px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-muted"
+                          onMouseEnter={() => setHighlightedAddressSuggestionIndex(index)}
+                          className={`block w-full border-b border-border px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-muted ${
+                            addressSuggestions[highlightedAddressSuggestionIndex]?.id === entry.id
+                              ? "bg-muted"
+                              : ""
+                          }`}
                         >
                           <div className="text-sm font-medium text-foreground">
                             {entry.primaryText}
@@ -1897,16 +1958,12 @@ export default function ShopSetupPage() {
                   type="button"
                   onClick={() => {
                     clearBanners();
-                    if (mechanics.length === 0) {
-                      setStepError("Add at least one mechanic before continuing.");
-                      return;
-                    }
                     setCurrentStep(4);
                   }}
                   className={`${stepButtonClass} border-blue-600 bg-primary text-white hover:bg-primary/90`}
                 >
                   <ChevronRight className="mr-2 h-4 w-4" />
-                  Continue
+                  {mechanics.length === 0 ? "Skip for now" : "Continue"}
                 </button>
               </div>
             </div>

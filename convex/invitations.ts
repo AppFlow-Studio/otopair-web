@@ -1,6 +1,14 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
+function isClerkDefaultAvatarUrl(url?: string | null) {
+  return (
+    typeof url === "string" &&
+    url.includes("img.clerk.com/") &&
+    url.includes("eyJ0eXBlIjoiZGVmYXVsdCI")
+  );
+}
+
 export const create = mutation({
   args: {
     invitedByClerkUserId: v.string(),
@@ -100,7 +108,24 @@ export const getTeamMembers = query({
     const members = await Promise.all(
       shopUsers.map(async (su) => {
         const user = await ctx.db.get(su.user_id);
-        return user ? { ...su, user } : null;
+        if (!user) return null;
+
+        const uploadedPhotoUrl = user.profile_photo_storage_id
+          ? await ctx.storage.getUrl(user.profile_photo_storage_id)
+          : null;
+        const displayPhotoUrl =
+          uploadedPhotoUrl ??
+          (isClerkDefaultAvatarUrl(user.profile_photo_url)
+            ? user.profile_photo_url
+            : undefined);
+
+        return {
+          ...su,
+          user: {
+            ...user,
+            profile_photo_url: displayPhotoUrl,
+          },
+        };
       })
     );
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -186,6 +186,7 @@ export default function SchedulePage() {
     | { type: "blockDay"; mechanicId: string; mechanicName: string; date: string; isBlocked: boolean; slotId?: string; clientX: number; clientY: number }
     | null
   >(null);
+  const [contextMenuStyle, setContextMenuStyle] = useState<CSSProperties | null>(null);
 
   // Create booking drawer
   const [createBookingDrawer, setCreateBookingDrawer] = useState<{
@@ -369,6 +370,47 @@ export default function SchedulePage() {
       document.removeEventListener("pointerdown", dismiss);
       document.removeEventListener("keydown", onKey);
     };
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      setContextMenuStyle(null);
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const menu = contextMenuRef.current;
+      if (!menu) return;
+
+      const rect = menu.getBoundingClientRect();
+      const margin = 8;
+      const anchor =
+        contextMenu.type === "block"
+          ? {
+              x: contextMenu.info.clientX,
+              y: contextMenu.info.clientY,
+            }
+          : {
+              x: contextMenu.clientX,
+              y: contextMenu.clientY,
+            };
+
+      const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+      const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+      const left = Math.min(Math.max(anchor.x, margin), maxLeft);
+      const top =
+        anchor.y + rect.height + margin > window.innerHeight
+          ? Math.max(margin, anchor.y - rect.height)
+          : Math.min(Math.max(anchor.y, margin), maxTop);
+
+      setContextMenuStyle({
+        left,
+        top,
+        visibility: "visible",
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
   }, [contextMenu]);
 
   // Context menu action handlers
@@ -1335,13 +1377,7 @@ export default function SchedulePage() {
         <div
           ref={contextMenuRef}
           className="fixed z-[80] bg-card border border-border rounded-xl shadow-lg overflow-hidden min-w-[220px]"
-          style={
-            contextMenu.type === "deleteBlockType"
-              ? { right: window.innerWidth - contextMenu.clientX - 6, top: contextMenu.clientY }
-              : contextMenu.type === "block"
-              ? { left: contextMenu.info.clientX, top: contextMenu.info.clientY }
-              : { left: contextMenu.clientX, top: contextMenu.clientY }
-          }
+          style={contextMenuStyle ?? { left: 0, top: 0, visibility: "hidden" }}
           onPointerDown={(e) => e.stopPropagation()}
         >
           {contextMenu.type === "block" && (

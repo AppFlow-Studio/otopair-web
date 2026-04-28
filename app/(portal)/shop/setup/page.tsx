@@ -9,6 +9,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
+import RemoveConfirmationDialog from "@/components/remove-confirmation-dialog";
 import { removeTeamMember } from "@/lib/remove-team-member";
 import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
@@ -399,6 +400,14 @@ export default function ShopSetupPage() {
   const [ensuredConvexUser, setEnsuredConvexUser] = useState(false);
   const [uploadingMechanicId, setUploadingMechanicId] = useState<string | null>(null);
   const [photoDialogMechanicId, setPhotoDialogMechanicId] = useState<string | null>(null);
+  const [removeMechanicConfirm, setRemoveMechanicConfirm] = useState<{
+    mechanicId: string;
+    shopUserId: string | null;
+    pendingInvitationId: string | null;
+    firstName: string;
+    lastName: string;
+  } | null>(null);
+  const [removingMechanicId, setRemovingMechanicId] = useState<string | null>(null);
   const clerkRole =
     typeof user?.publicMetadata?.role === "string"
       ? user.publicMetadata.role
@@ -975,6 +984,7 @@ export default function ShopSetupPage() {
     pendingInvitationId: string | null;
   }) {
     clearBanners();
+    setRemovingMechanicId(args.mechanicId);
     try {
       await removeTeamMember({
         shopUserId: args.shopUserId,
@@ -982,11 +992,14 @@ export default function ShopSetupPage() {
       });
 
       await removeMechanic({ mechanicId: args.mechanicId as Id<"mechanics"> });
+      setRemoveMechanicConfirm(null);
       setStepSuccess("Mechanic removed.");
     } catch (error) {
       setStepError(
         error instanceof Error ? error.message : "Failed to remove mechanic."
       );
+    } finally {
+      setRemovingMechanicId(null);
     }
   }
 
@@ -1083,6 +1096,11 @@ export default function ShopSetupPage() {
     photoDialogMechanicId === null
       ? null
       : mechanics.find((mechanic) => mechanic._id === photoDialogMechanicId) ?? null;
+  const selectedMechanicForRemoveDialog =
+    removeMechanicConfirm === null
+      ? null
+      : mechanics.find((mechanic) => mechanic._id === removeMechanicConfirm.mechanicId) ??
+        removeMechanicConfirm;
   const offeredCount = selectedServiceIds.size;
   const stripeRequirements =
     onboardingData.shop?.stripeRequirementsCurrentlyDue ?? [];
@@ -1727,7 +1745,7 @@ export default function ShopSetupPage() {
                           className="group relative h-14 w-14 shrink-0 disabled:cursor-wait disabled:opacity-80"
                           aria-label={`Add a profile photo for ${mechanic.firstName} ${mechanic.lastName}`}
                         >
-                          <div className="h-14 w-14 overflow-hidden rounded-lg border border-input bg-slate-700 text-white transition-colors group-hover:border-blue-300 group-hover:bg-slate-800">
+                          <div className="h-14 w-14 overflow-hidden rounded-full border border-input bg-slate-700 text-white transition-colors group-hover:border-blue-300 group-hover:bg-slate-800">
                             {mechanic.photoUrl ? (
                               <img
                                 src={mechanic.photoUrl}
@@ -1739,9 +1757,9 @@ export default function ShopSetupPage() {
                                 {getInitials(mechanic.firstName, mechanic.lastName)}
                               </div>
                             )}
-                            <span className="absolute inset-0 rounded-lg bg-black/0 transition-colors group-hover:bg-black/10" />
+                            <span className="absolute inset-0 rounded-full bg-black/0 transition-colors group-hover:bg-black/10" />
                           </div>
-                          <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-lg bg-primary text-white ring-2 ring-white">
+                          <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white ring-2 ring-white">
                             {uploadingMechanicId === mechanic._id ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             ) : (
@@ -1769,16 +1787,23 @@ export default function ShopSetupPage() {
                       <button
                         type="button"
                         onClick={() =>
-                          handleRemoveMechanic({
+                          setRemoveMechanicConfirm({
                             mechanicId: mechanic._id,
                             shopUserId: mechanic.shopUserId,
                             pendingInvitationId: mechanic.pendingInvitationId,
+                            firstName: mechanic.firstName,
+                            lastName: mechanic.lastName,
                           })
                         }
+                        disabled={removingMechanicId === mechanic._id}
                         className="inline-flex items-center gap-2 rounded-lg border border-destructive/20 px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
                       >
-                        <Trash2 className="h-4 w-4" />
-                        Remove
+                        {removingMechanicId === mechanic._id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                        {removingMechanicId === mechanic._id ? "Removing..." : "Remove"}
                       </button>
                     </div>
                   ))
@@ -1841,6 +1866,24 @@ export default function ShopSetupPage() {
                   </button>
                 </div>
               </ConfirmationDialog>
+
+              <RemoveConfirmationDialog
+                open={removeMechanicConfirm !== null}
+                title="Remove mechanic?"
+                subjectName={
+                  selectedMechanicForRemoveDialog
+                    ? `${selectedMechanicForRemoveDialog.firstName} ${selectedMechanicForRemoveDialog.lastName}`
+                    : undefined
+                }
+                confirmLabel="Remove mechanic"
+                isSubmitting={!!removingMechanicId}
+                submittingLabel="Removing..."
+                onClose={() => setRemoveMechanicConfirm(null)}
+                onConfirm={() => {
+                  if (!removeMechanicConfirm) return;
+                  void handleRemoveMechanic(removeMechanicConfirm);
+                }}
+              />
 
               <div className="flex justify-between pt-2">
                 <button

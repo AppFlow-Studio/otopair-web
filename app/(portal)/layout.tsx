@@ -63,7 +63,8 @@ export default function PortalLayout({
       ? user.publicMetadata.role
       : null;
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCompact, setSidebarCompact] = useState(false);
+  const [sidebarUserCompact, setSidebarUserCompact] = useState(false);
+  const [sidebarAutoCompact, setSidebarAutoCompact] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const isBookingsActive =
     pathname === "/bookings" ||
@@ -71,6 +72,7 @@ export default function PortalLayout({
     pathname === "/my-bookings" ||
     pathname.startsWith("/my-bookings/");
   const [bookingsOpen, setBookingsOpen] = useState(isBookingsActive);
+  const sidebarCompact = sidebarUserCompact || sidebarAutoCompact;
 
   const portalAccess = useQuery(api.shops.getMyPortalAccess);
   const seedBookings = useMutation(api.seed.seedDashboardBookings);
@@ -189,7 +191,7 @@ export default function PortalLayout({
   );
 
   return (
-    <PortalSidebarContext.Provider value={{ setSidebarCompact }}>
+    <PortalSidebarContext.Provider value={{ setSidebarCompact: setSidebarAutoCompact }}>
       <div className="min-h-screen flex bg-gray-50">
         {/* Mobile overlay */}
         {sidebarOpen && (
@@ -232,7 +234,7 @@ export default function PortalLayout({
             </Link>
             <button
               type="button"
-              onClick={() => setSidebarCompact((compact) => !compact)}
+              onClick={() => setSidebarUserCompact((compact) => !compact)}
               className={`ml-auto hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 lg:flex ${
                 sidebarCompact ? "lg:mx-auto" : ""
               }`}

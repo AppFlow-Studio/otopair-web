@@ -8,6 +8,7 @@ import { Id } from "@/convex/_generated/dataModel";
 import { UserPlus, Mail, Clock, X, Users, Crown, Wrench, Ellipsis } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { removeTeamMember } from "@/lib/remove-team-member";
+import RemoveConfirmationDialog from "@/components/remove-confirmation-dialog";
 import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
   DropdownMenu,
@@ -69,6 +70,12 @@ export default function TeamPage() {
   const [inviteSuccess, setInviteSuccess] = useState(false);
   const [sending, setSending] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const [removeMemberConfirm, setRemoveMemberConfirm] = useState<{
+    shopUserId: Id<"shop_users">;
+    name: string;
+    email: string;
+  } | null>(null);
+  const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
   const [changingRoleFor, setChangingRoleFor] = useState<{ shopUserId: Id<"shop_users">; currentRole: string } | null>(null);
   const [newRole, setNewRole] = useState<string>("");
   const inviteFormRef = useRef<HTMLFormElement>(null);
@@ -137,7 +144,13 @@ export default function TeamPage() {
   }
 
   async function handleRemoveMember(shopUserId: Id<"shop_users">) {
-    await removeTeamMember({ shopUserId });
+    setRemovingMemberId(shopUserId);
+    try {
+      await removeTeamMember({ shopUserId });
+      setRemoveMemberConfirm(null);
+    } finally {
+      setRemovingMemberId(null);
+    }
   }
 
   async function handleChangeRole(shopUserId: Id<"shop_users">, role: string) {
@@ -420,7 +433,16 @@ export default function TeamPage() {
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
                             className="text-destructive focus:text-destructive focus:bg-destructive/10"
-                            onSelect={() => handleRemoveMember(member._id as Id<"shop_users">)}
+                            onSelect={() =>
+                              setRemoveMemberConfirm({
+                                shopUserId: member._id as Id<"shop_users">,
+                                name:
+                                  member.user.first_name && member.user.last_name
+                                    ? `${member.user.first_name} ${member.user.last_name}`
+                                    : member.user.email,
+                                email: member.user.email,
+                              })
+                            }
                           >
                             Remove Member
                           </DropdownMenuItem>
@@ -482,6 +504,20 @@ export default function TeamPage() {
           </div>
         </div>
       )}
+
+      <RemoveConfirmationDialog
+        open={removeMemberConfirm !== null}
+        title="Remove member?"
+        subjectName={removeMemberConfirm?.name}
+        confirmLabel="Remove member"
+        isSubmitting={!!removingMemberId}
+        submittingLabel="Removing..."
+        onClose={() => setRemoveMemberConfirm(null)}
+        onConfirm={() => {
+          if (!removeMemberConfirm) return;
+          void handleRemoveMember(removeMemberConfirm.shopUserId);
+        }}
+      />
     </div>
   );
 }

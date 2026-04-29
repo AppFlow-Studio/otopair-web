@@ -55,6 +55,23 @@ async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
   return names;
 }
 
+async function resolveMechanicPhotoUrl(ctx: any, photo?: string | null) {
+  if (!photo) return null;
+
+  try {
+    const asset = await ctx.db.get(photo as any);
+    if (asset?.url) return asset.url as string;
+  } catch {
+    // New mechanic uploads store Convex storage ids directly.
+  }
+
+  try {
+    return await ctx.storage.getUrl(photo);
+  } catch {
+    return null;
+  }
+}
+
 async function getShopBookings(ctx: any, shopId: any) {
   return await ctx.db
     .query("bookings")
@@ -204,11 +221,7 @@ export const getScheduleContext = query({
       })),
       mechanics: await Promise.all(
         mechanics.map(async (mechanic: any) => {
-          let imageUrl: string | null = null;
-          if (mechanic.photo) {
-            const asset: any = await ctx.db.get(mechanic.photo);
-            if (asset?.url) imageUrl = asset.url;
-          }
+          const imageUrl = await resolveMechanicPhotoUrl(ctx, mechanic.photo);
           return {
             _id: mechanic._id,
             name: `${mechanic.first_name} ${mechanic.last_name}`.trim(),

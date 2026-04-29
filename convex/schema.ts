@@ -1043,6 +1043,7 @@ export default defineSchema({
     first_name: v.string(),
     last_name: v.string(),
     title: v.optional(v.string()),
+    email: v.optional(v.string()),
     photo: v.optional(v.string()),
     rating: v.optional(v.number()),
     review_count: v.optional(v.number()),

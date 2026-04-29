@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { useRouter, useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
-import { api } from "@/convex/_generated/api";
+import { makeFunctionReference } from "convex/server";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import RemoveConfirmationDialog from "@/components/remove-confirmation-dialog";
@@ -79,6 +79,24 @@ const STEP_META = [
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"] as const;
 
+const getPortalAccessQuery = makeFunctionReference<"query">("shops:getMyPortalAccess");
+const getOnboardingDataQuery = makeFunctionReference<"query">("shops:getMyOnboardingData");
+const getShopBySlugQuery = makeFunctionReference<"query">("shops:getBySlug");
+const ensureUserMutation = makeFunctionReference<"mutation">("users:getOrCreateMe");
+const generateUploadUrlMutation = makeFunctionReference<"mutation">("users:generateUploadUrl");
+const updateMechanicProfilePhotoMutation = makeFunctionReference<"mutation">(
+  "shops:updateOnboardingMechanicProfilePhoto"
+);
+const upsertShopDetailsMutation = makeFunctionReference<"mutation">(
+  "shops:upsertOnboardingShopDetails"
+);
+const saveHoursMutation = makeFunctionReference<"mutation">("shops:saveOnboardingHours");
+const saveLaborAndServicesMutation = makeFunctionReference<"mutation">(
+  "shops:saveOnboardingLaborAndServices"
+);
+const addMechanicMutation = makeFunctionReference<"mutation">("shops:addOnboardingMechanic");
+const removeMechanicMutation = makeFunctionReference<"mutation">("shops:removeOnboardingMechanic");
+
 type GoogleMapsWindow = Window & {
   google?: {
     maps?: {
@@ -131,6 +149,51 @@ type ShopDetailsForm = {
   state: string;
   zipCode: string;
   phone: string;
+};
+
+type OnboardingService = {
+  _id: string;
+  name: string;
+  description?: string;
+  defaultLaborHours: number;
+  isOffered: boolean;
+};
+
+type OnboardingServiceCategory = {
+  id: string;
+  name: string;
+  services: OnboardingService[];
+};
+
+type PortalAccess =
+  | null
+  | {
+      status: string;
+      role?: string | null;
+      userRole?: string | null;
+    };
+
+type OnboardingData = {
+  userRole?: string | null;
+  ownerEmail?: string | null;
+  shop: {
+    _id: Id<"shops">;
+    name: string;
+    slug: string;
+    address: string;
+    city: string;
+    state: string;
+    zipCode: string;
+    phone: string;
+    laborRate?: number;
+    stripeConnectAccountId?: string | null;
+    stripeRequirementsCurrentlyDue?: string[];
+    stripeConnectReady?: boolean;
+    onboardingComplete?: boolean;
+  } | null;
+  hours: HoursFormRow[];
+  serviceCategories: OnboardingServiceCategory[];
+  mechanics: unknown[];
 };
 
 type NormalizedShopAddress = {
@@ -331,6 +394,21 @@ function getInitials(firstName: string, lastName: string): string {
   return initials || "ME";
 }
 
+function getMechanicPortalStatusLabel(status?: string | null): string {
+  if (status === "active") return "Portal active";
+  if (status === "invite_sent") return "Invitation pending";
+  if (status === "invite_expired") return "Invitation expired";
+  if (status === "invite_revoked") return "Invitation revoked";
+  return "Profile saved";
+}
+
+function getMechanicInviteLabel(status?: string | null): string {
+  if (status === "invite_sent") return "Resend invite";
+  if (status === "invite_expired") return "Resend invite";
+  if (status === "invite_revoked") return "Send invite";
+  return "Send invite";
+}
+
 function getFirstIncompleteSavedStep(params: {
   hasSavedShop: boolean;
   savedHoursCount: number;
@@ -347,17 +425,39 @@ export default function ShopSetupPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isLoaded: isUserLoaded } = useUser();
-  const portalAccess = useQuery(api.shops.getMyPortalAccess);
-  const onboardingData = useQuery(api.shops.getMyOnboardingData);
-  const ensureUser = useMutation(api.users.getOrCreateMe);
-  const generateUploadUrl = useMutation(api.users.generateUploadUrl);
-  const updateMechanicProfilePhoto = useMutation(
-    api.shops.updateOnboardingMechanicProfilePhoto
-  );
-  const upsertShopDetails = useMutation(api.shops.upsertOnboardingShopDetails);
-  const saveHours = useMutation(api.shops.saveOnboardingHours);
-  const saveLaborAndServices = useMutation(api.shops.saveOnboardingLaborAndServices);
-  const removeMechanic = useMutation(api.shops.removeOnboardingMechanic);
+  const portalAccess = useQuery(getPortalAccessQuery) as PortalAccess | undefined;
+  const onboardingData = useQuery(getOnboardingDataQuery) as OnboardingData | null | undefined;
+  const ensureUser = useMutation(ensureUserMutation) as () => Promise<unknown>;
+  const generateUploadUrl = useMutation(generateUploadUrlMutation) as () => Promise<string>;
+  const updateMechanicProfilePhoto = useMutation(updateMechanicProfilePhotoMutation) as (args: {
+    mechanicId: Id<"mechanics">;
+    profilePhotoStorageId: string | null;
+  }) => Promise<{ mechanicId: Id<"mechanics">; photoUrl: string | null }>;
+  const upsertShopDetails = useMutation(upsertShopDetailsMutation) as (args: {
+    name: string;
+    slug: string;
+    address: string;
+    city: string;
+    state: string;
+    zipCode: string;
+    phone: string;
+  }) => Promise<Id<"shops">>;
+  const saveHours = useMutation(saveHoursMutation) as (args: {
+    hours: HoursFormRow[];
+  }) => Promise<Id<"shops">>;
+  const saveLaborAndServices = useMutation(saveLaborAndServicesMutation) as (args: {
+    laborRate: number;
+    serviceIds: Id<"services">[];
+  }) => Promise<Id<"shops">>;
+  const addMechanic = useMutation(addMechanicMutation) as (args: {
+    firstName: string;
+    lastName: string;
+    title?: string;
+    email?: string;
+  }) => Promise<Id<"mechanics">>;
+  const removeMechanic = useMutation(removeMechanicMutation) as (args: {
+    mechanicId: Id<"mechanics">;
+  }) => Promise<Id<"mechanics">>;
 
   const [details, setDetails] = useState<ShopDetailsForm>({
     name: "",
@@ -407,6 +507,7 @@ export default function ShopSetupPage() {
     firstName: string;
     lastName: string;
   } | null>(null);
+  const [mechanicInviteActionId, setMechanicInviteActionId] = useState<string | null>(null);
   const [removingMechanicId, setRemovingMechanicId] = useState<string | null>(null);
   const clerkRole =
     typeof user?.publicMetadata?.role === "string"
@@ -429,17 +530,21 @@ export default function ShopSetupPage() {
       : false;
 
   const slugCheckResult = useQuery(
-    api.shops.getBySlug,
+    getShopBySlugQuery,
     details.slug.length >= 2 && SLUG_REGEX.test(details.slug)
       ? { slug: details.slug }
       : "skip"
+  ) as { _id: Id<"shops"> } | null | undefined;
+  const serviceCategories = useMemo(
+    () => (onboardingData?.serviceCategories ?? []) as OnboardingServiceCategory[],
+    [onboardingData]
   );
   const persistedServiceCount = useMemo(
     () =>
-      onboardingData?.serviceCategories.flatMap((category) =>
+      serviceCategories.flatMap((category) =>
         category.services.filter((service) => service.isOffered)
       ).length ?? 0,
-    [onboardingData]
+    [serviceCategories]
   );
   const firstIncompleteSavedStep = useMemo(
     () =>
@@ -490,8 +595,8 @@ export default function ShopSetupPage() {
     };
     const nextHours = normalizeHours(onboardingData.hours);
     const nextLaborRate = String(onboardingData.shop?.laborRate ?? 150);
-    const nextSelectedServiceIds = new Set(
-      onboardingData.serviceCategories.flatMap((category) =>
+    const nextSelectedServiceIds = new Set<string>(
+      serviceCategories.flatMap((category) =>
         category.services
           .filter((service) => service.isOffered)
           .map((service) => service._id)
@@ -509,7 +614,7 @@ export default function ShopSetupPage() {
     );
     setCurrentStep(firstIncompleteSavedStep);
     setHydratedShopId(shopId);
-  }, [firstIncompleteSavedStep, hydratedShopId, onboardingData, router]);
+  }, [firstIncompleteSavedStep, hydratedShopId, onboardingData, router, serviceCategories]);
 
   useEffect(() => {
     const stripeStatus = searchParams.get("stripe");
@@ -906,42 +1011,98 @@ export default function ShopSetupPage() {
     setMechanicInviteSuccess(false);
 
     if (!onboardingData?.shop?._id) {
-      setMechanicInviteError("Save your shop details before inviting mechanics.");
+      setMechanicInviteError("Save your shop details before adding mechanics.");
       return;
     }
     if (!mechanicForm.firstName.trim() || !mechanicForm.lastName.trim()) {
       setMechanicInviteError("Enter both a first and last name for the mechanic.");
       return;
     }
-    if (!mechanicForm.email.trim()) {
-      setMechanicInviteError("Enter an email address for the mechanic.");
-      return;
-    }
 
     setSendingInvite(true);
     try {
-      // TODO: Remove temporary invite-link console logging from sendTeamInvite after invite flow verification is complete.
-      const result = await sendTeamInvite({
-        email: mechanicForm.email.trim(),
-        role: "shop_mechanic",
-        shopId: onboardingData.shop._id,
+      const mechanicId = await addMechanic({
         firstName: mechanicForm.firstName.trim(),
         lastName: mechanicForm.lastName.trim(),
         title: mechanicForm.title.trim() || undefined,
+        email: mechanicForm.email.trim() || undefined,
+      });
+
+      if (mechanicForm.email.trim()) {
+        const result = await sendTeamInvite({
+          email: mechanicForm.email.trim(),
+          role: "shop_mechanic",
+          shopId: onboardingData.shop._id,
+          mechanicId,
+          origin: window.location.origin,
+        });
+
+        if (!result.ok) {
+          setMechanicInviteError(
+            `Mechanic profile saved, but the invitation failed: ${result.error}`
+          );
+          return;
+        }
+      }
+
+      setMechanicForm({ firstName: "", lastName: "", title: "", email: "" });
+      setMechanicInviteSuccess(true);
+      setTimeout(() => setMechanicInviteSuccess(false), 4000);
+    } catch (error) {
+      setMechanicInviteError(
+        error instanceof Error ? error.message : "Failed to save mechanic. Please try again."
+      );
+    } finally {
+      setSendingInvite(false);
+    }
+  }
+
+  async function handleInviteExistingMechanic(mechanic: {
+    _id: string;
+    email?: string | null;
+    pendingInvitationId: string | null;
+    portalStatus?: string | null;
+  }) {
+    clearBanners();
+    setMechanicInviteError(null);
+    setMechanicInviteSuccess(false);
+
+    if (!onboardingData?.shop?._id) return;
+    if (!mechanic.email?.trim()) {
+      setMechanicInviteError("Add an email address before inviting this mechanic.");
+      return;
+    }
+
+    setMechanicInviteActionId(mechanic._id);
+    try {
+      if (
+        mechanic.pendingInvitationId &&
+        (mechanic.portalStatus === "invite_sent" || mechanic.portalStatus === "invite_expired")
+      ) {
+        await removeTeamMember({ invitationId: mechanic.pendingInvitationId });
+      }
+
+      const result = await sendTeamInvite({
+        email: mechanic.email.trim(),
+        role: "shop_mechanic",
+        shopId: onboardingData.shop._id,
+        mechanicId: mechanic._id,
         origin: window.location.origin,
       });
 
       if (!result.ok) {
         setMechanicInviteError(result.error);
-      } else {
-        setMechanicForm({ firstName: "", lastName: "", title: "", email: "" });
-        setMechanicInviteSuccess(true);
-        setTimeout(() => setMechanicInviteSuccess(false), 4000);
+        return;
       }
-    } catch {
-      setMechanicInviteError("Failed to send invitation. Please try again.");
+
+      setMechanicInviteSuccess(true);
+      setTimeout(() => setMechanicInviteSuccess(false), 4000);
+    } catch (error) {
+      setMechanicInviteError(
+        error instanceof Error ? error.message : "Failed to send invitation. Please try again."
+      );
     } finally {
-      setSendingInvite(false);
+      setMechanicInviteActionId(null);
     }
   }
 
@@ -1142,8 +1303,13 @@ export default function ShopSetupPage() {
     firstName: string;
     lastName: string;
     title: string;
+    email?: string | null;
     shopUserId: string | null;
+    invitationId: string | null;
     pendingInvitationId: string | null;
+    invitationStatus?: string | null;
+    portalStatus?: string | null;
+    blockingBookingCount?: number;
     photoUrl?: string | null;
   }>;
   const selectedMechanicForPhotoDialog =
@@ -1173,7 +1339,7 @@ export default function ShopSetupPage() {
         </h1>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
           Let&apos;s get your shop ready to receive bookings. This takes about 15
-          minutes — your progress is saved at every step.
+          minutes - your progress is saved at every step.
         </p>
       </div>
 
@@ -1332,7 +1498,7 @@ export default function ShopSetupPage() {
                   className={inputClass}
                 />
                 <p className="mt-1.5 text-xs text-muted-foreground">
-                  Start typing and pick your address from the suggestions — we&apos;ll fill in the rest.
+                  Start typing and pick your address from the suggestions - we&apos;ll fill in the rest.
                 </p>
                 {(addressLookupLoading || addressSuggestions.length > 0) && (
                   <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-border bg-white shadow-lg">
@@ -1594,7 +1760,7 @@ export default function ShopSetupPage() {
                 </div>
 
                 <div className="space-y-4">
-                  {onboardingData.serviceCategories.map((category) => (
+                  {serviceCategories.map((category) => (
                     <div
                       key={category.id}
                       className="overflow-hidden rounded-xl border border-border"
@@ -1723,9 +1889,7 @@ export default function ShopSetupPage() {
                   />
                 </div>
                 <div className="md:col-span-3">
-                  <label className={labelClass}>
-                    Email Address <span className="text-destructive">*</span>
-                  </label>
+                  <label className={labelClass}>Email Address</label>
                   <input
                     type="email"
                     value={mechanicForm.email}
@@ -1751,7 +1915,7 @@ export default function ShopSetupPage() {
                     ) : (
                       <Wrench className="mr-2 h-4 w-4" />
                     )}
-                    Send mechanic invitation
+                    {mechanicForm.email.trim() ? "Save and invite mechanic" : "Save mechanic"}
                   </button>
                 </div>
               </div>
@@ -1764,7 +1928,7 @@ export default function ShopSetupPage() {
 
               {mechanicInviteSuccess && (
                 <div className="rounded-xl border border-success/20 bg-success/10 px-4 py-3 text-sm text-success">
-                  Invitation sent successfully.
+                  Mechanic saved successfully.
                 </div>
               )}
 
@@ -1788,7 +1952,7 @@ export default function ShopSetupPage() {
                         Your team will appear here
                       </p>
                       <p className="mt-1 text-xs">
-                        Invite your first mechanic using the form above.
+                        Add your first mechanic using the form above.
                       </p>
                     </div>
                   ) : null
@@ -1834,38 +1998,55 @@ export default function ShopSetupPage() {
                             {mechanic.firstName} {mechanic.lastName}
                           </p>
                           <p className="mt-1 text-sm text-muted-foreground">
-                            {mechanic.pendingInvitationId
-                              ? "Invitation pending"
-                              : mechanic.title || "Mechanic"}
+                            {mechanic.title || "Mechanic"}
                           </p>
                           <p className="mt-1 text-xs font-medium text-primary">
-                            {mechanic.shopUserId
-                              ? "Click to add a photo."
-                              : "Click the photo to view options. Upload is available after acceptance."}
+                            {getMechanicPortalStatusLabel(mechanic.portalStatus)}
                           </p>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setRemoveMechanicConfirm({
-                            mechanicId: mechanic._id,
-                            shopUserId: mechanic.shopUserId,
-                            pendingInvitationId: mechanic.pendingInvitationId,
-                            firstName: mechanic.firstName,
-                            lastName: mechanic.lastName,
-                          })
-                        }
-                        disabled={removingMechanicId === mechanic._id}
-                        className="inline-flex items-center gap-2 rounded-lg border border-destructive/20 px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
-                      >
-                        {removingMechanicId === mechanic._id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-4 w-4" />
+                      <div className="flex shrink-0 items-center gap-2">
+                        {mechanic.portalStatus !== "active" && (
+                          <button
+                            type="button"
+                            onClick={() => void handleInviteExistingMechanic(mechanic)}
+                            disabled={mechanicInviteActionId === mechanic._id}
+                            className="inline-flex items-center gap-2 rounded-lg border border-input px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {mechanicInviteActionId === mechanic._id && (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            )}
+                            {getMechanicInviteLabel(mechanic.portalStatus)}
+                          </button>
                         )}
-                        {removingMechanicId === mechanic._id ? "Removing..." : "Remove"}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if ((mechanic.blockingBookingCount ?? 0) > 0) {
+                              setStepError(
+                                "This mechanic has active bookings or jobs that must be completed or reassigned first."
+                              );
+                              return;
+                            }
+                            setRemoveMechanicConfirm({
+                              mechanicId: mechanic._id,
+                              shopUserId: mechanic.shopUserId,
+                              pendingInvitationId: mechanic.pendingInvitationId,
+                              firstName: mechanic.firstName,
+                              lastName: mechanic.lastName,
+                            });
+                          }}
+                          disabled={removingMechanicId === mechanic._id}
+                          className="inline-flex items-center gap-2 rounded-lg border border-destructive/20 px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
+                        >
+                          {removingMechanicId === mechanic._id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                          {removingMechanicId === mechanic._id ? "Removing..." : "Remove"}
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -1890,18 +2071,10 @@ export default function ShopSetupPage() {
                 maxWidthClassName="max-w-md"
               >
                 <div className="space-y-3">
-                  {!selectedMechanicForPhotoDialog?.shopUserId && (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                      This mechanic needs to accept the invitation before a photo can be added or removed.
-                    </div>
-                  )}
                   <button
                     type="button"
                     onClick={handleChooseMechanicPhoto}
-                    disabled={
-                      !selectedMechanicForPhotoDialog?.shopUserId ||
-                      uploadingMechanicId === selectedMechanicForPhotoDialog?._id
-                    }
+                    disabled={uploadingMechanicId === selectedMechanicForPhotoDialog?._id}
                     className="inline-flex h-12 w-full items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Add photo
@@ -1910,7 +2083,6 @@ export default function ShopSetupPage() {
                     type="button"
                     onClick={handleRemoveMechanicPhoto}
                     disabled={
-                      !selectedMechanicForPhotoDialog?.shopUserId ||
                       !selectedMechanicForPhotoDialog?.photoUrl ||
                       uploadingMechanicId === selectedMechanicForPhotoDialog?._id
                     }
@@ -2031,7 +2203,7 @@ export default function ShopSetupPage() {
                     ) : null}
                   </div>
                   <p className="mt-3 text-xs text-muted-foreground">
-                    Otopair never sees or stores your bank details — Stripe handles everything.
+                    Otopair never sees or stores your bank details - Stripe handles everything.
                   </p>
                 </div>
 

@@ -6,6 +6,8 @@ import {
 } from "./lib/timeSlotAvailability";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
+const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
+const TERMINAL_BOOKING_STATUSES = new Set(["completed", "cancelled", "no_show"]);
 
 type StripeConnectShopFields = {
   stripe_charges_enabled?: boolean;
@@ -113,6 +115,53 @@ function isStripeConnectReadyForShop(
     shop?.stripe_payouts_enabled === true &&
     getStripeRequirements(shop).length === 0
   );
+}
+
+async function resolveMechanicPhotoUrl(ctx: any, photo?: string | null) {
+  if (!photo) return null;
+
+  try {
+    const asset = await ctx.db.get(photo as any);
+    if (asset?.url) return asset.url as string;
+  } catch {
+    // New uploads store Convex storage ids directly on mechanics.photo.
+  }
+
+  try {
+    return await ctx.storage.getUrl(photo);
+  } catch {
+    return null;
+  }
+}
+
+async function getBlockingBookingsForMechanic(ctx: any, shopId: any, mechanicId: any) {
+  const bookings = await ctx.db
+    .query("bookings")
+    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
+    .collect();
+
+  return bookings.filter(
+    (booking: any) =>
+      String(booking.mechanic_id ?? "") === String(mechanicId) &&
+      !TERMINAL_BOOKING_STATUSES.has(booking.status)
+  );
+}
+
+function getMechanicPortalStatus(args: { activeShopUser: any; latestInvitation: any; now: number }) {
+  if (args.activeShopUser) return "active";
+  if (!args.latestInvitation) return "not_invited";
+  if (
+    args.latestInvitation.status === "pending" &&
+    args.latestInvitation.expires_at &&
+    args.latestInvitation.expires_at <= args.now
+  ) {
+    return "invite_expired";
+  }
+  if (args.latestInvitation.status === "pending") return "invite_sent";
+  if (args.latestInvitation.status === "expired") return "invite_expired";
+  if (args.latestInvitation.status === "revoked") return "invite_revoked";
+  if (args.latestInvitation.status === "accepted") return "active";
+  return "not_invited";
 }
 
 function getStripeStatusPatch(args: {
@@ -491,11 +540,10 @@ export const getMyOnboardingData = query({
           .collect()
       : [];
 
-    const pendingInvitations = shop
+    const invitations = shop
       ? await ctx.db
           .query("shop_invitations")
           .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
-          .filter((q: any) => q.eq(q.field("status"), "pending"))
           .collect()
       : [];
 
@@ -504,10 +552,10 @@ export const getMyOnboardingData = query({
         row.mechanic_id &&
         (row.role === "shop_mechanic" || row.role === "mechanic")
     );
-    const mechanicRolePendingInvitations = pendingInvitations.filter(
+    const mechanicRoleInvitations = invitations.filter(
       (row: any) =>
         row.mechanic_id &&
-        (row.role === "shop_mechanic" || row.role === "mechanic")
+        MECHANIC_ROLES.has(row.role)
     );
 
     const shopUserByMechanicId = new Map(
@@ -516,12 +564,13 @@ export const getMyOnboardingData = query({
     const shopUserRecordByMechanicId = new Map(
       mechanicRoleShopUsers.map((row: any) => [String(row.mechanic_id), row])
     );
-    const pendingInvitationByMechanicId = new Map(
-      mechanicRolePendingInvitations.map((row: any) => [
-        String(row.mechanic_id),
-        String(row._id),
-      ])
-    );
+    const invitationsByMechanicId = new Map<string, any[]>();
+    for (const invitation of mechanicRoleInvitations) {
+      const key = String(invitation.mechanic_id);
+      const current = invitationsByMechanicId.get(key) ?? [];
+      current.push(invitation);
+      invitationsByMechanicId.set(key, current);
+    }
 
     return {
       userRole: user.role ?? null,
@@ -563,28 +612,42 @@ export const getMyOnboardingData = query({
       serviceCategories,
       mechanics: await Promise.all(
         mechanics
-          .filter(
-            (mechanic: any) =>
-              shopUserByMechanicId.has(String(mechanic._id)) ||
-              pendingInvitationByMechanicId.has(String(mechanic._id))
-          )
           .map(async (mechanic: any) => {
             const shopUser = shopUserRecordByMechanicId.get(String(mechanic._id));
-            const linkedUser = shopUser?.user_id ? await ctx.db.get(shopUser.user_id) : null;
-            const photoUrl =
-              linkedUser?.profile_photo_storage_id
-                ? await ctx.storage.getUrl(linkedUser.profile_photo_storage_id)
-                : (linkedUser?.profile_photo_url ?? null);
+            const linkedUser: any = shopUser?.user_id ? await ctx.db.get(shopUser.user_id) : null;
+            const mechanicInvitations = (invitationsByMechanicId.get(String(mechanic._id)) ?? [])
+              .sort((a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0));
+            const latestInvitation = mechanicInvitations[0] ?? null;
+            const pendingInvitation = mechanicInvitations.find((row: any) => row.status === "pending");
+            const mechanicPhotoUrl = await resolveMechanicPhotoUrl(ctx, mechanic.photo);
+            const linkedUserPhotoUrl = linkedUser?.profile_photo_storage_id
+              ? await ctx.storage.getUrl(linkedUser.profile_photo_storage_id)
+              : (linkedUser?.profile_photo_url ?? null);
+            const activeShopUser = shopUser ?? null;
+            const blockingBookings = shop
+              ? await getBlockingBookingsForMechanic(ctx, shop._id, mechanic._id)
+              : [];
 
             return {
               _id: String(mechanic._id),
               firstName: mechanic.first_name as string,
               lastName: mechanic.last_name as string,
               title: (mechanic.title ?? "") as string,
+              email: (mechanic.email ?? latestInvitation?.email ?? "") as string,
+              rating: mechanic.rating ?? 0,
+              reviewCount: mechanic.review_count ?? 0,
               shopUserId: shopUserByMechanicId.get(String(mechanic._id)) ?? null,
-              pendingInvitationId:
-                pendingInvitationByMechanicId.get(String(mechanic._id)) ?? null,
-              photoUrl,
+              invitationId: latestInvitation ? String(latestInvitation._id) : null,
+              pendingInvitationId: pendingInvitation ? String(pendingInvitation._id) : null,
+              invitationStatus: latestInvitation?.status ?? null,
+              invitationExpiresAt: latestInvitation?.expires_at ?? null,
+              portalStatus: getMechanicPortalStatus({
+                activeShopUser,
+                latestInvitation,
+                now: Date.now(),
+              }),
+              blockingBookingCount: blockingBookings.length,
+              photoUrl: mechanicPhotoUrl ?? linkedUserPhotoUrl,
             };
           })
       ),
@@ -762,6 +825,7 @@ export const addOnboardingMechanic = mutation({
     firstName: v.string(),
     lastName: v.string(),
     title: v.optional(v.string()),
+    email: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await getOrCreateCurrentShopOwner(ctx);
@@ -776,6 +840,7 @@ export const addOnboardingMechanic = mutation({
       first_name: args.firstName.trim(),
       last_name: args.lastName.trim(),
       title: args.title?.trim() || undefined,
+      email: args.email?.trim().toLowerCase() || undefined,
       is_active: true,
       rating: 0,
       review_count: 0,
@@ -807,6 +872,11 @@ export const removeOnboardingMechanic = mutation({
       throw new Error("Mechanic not found.");
     }
 
+    const blockers = await getBlockingBookingsForMechanic(ctx, primary.shop._id, args.mechanicId);
+    if (blockers.length > 0) {
+      throw new Error("This mechanic has active bookings or jobs that must be completed or reassigned first.");
+    }
+
     await ctx.db.patch(args.mechanicId, { is_active: false });
     await syncMechanicAvailabilityWindow(ctx, {
       shopId: primary.shop._id,
@@ -834,35 +904,14 @@ export const updateOnboardingMechanicProfilePhoto = mutation({
       throw new Error("Mechanic not found.");
     }
 
-    const shopUser = await ctx.db
-      .query("shop_users")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
-      .filter((q: any) =>
-        q.and(
-          q.eq(q.field("is_active"), true),
-          q.eq(q.field("mechanic_id"), args.mechanicId),
-          q.or(
-            q.eq(q.field("role"), "shop_mechanic"),
-            q.eq(q.field("role"), "mechanic")
-          )
-        )
-      )
-      .first();
-
-    if (!shopUser?.user_id) {
-      throw new Error("Profile photo can be added after the mechanic accepts the invitation.");
-    }
-
-    await ctx.db.patch(shopUser.user_id, {
-      profile_photo_storage_id: args.profilePhotoStorageId ?? undefined,
-      profile_photo_url: undefined,
-      lastUpdated: Date.now(),
+    await ctx.db.patch(args.mechanicId, {
+      photo: args.profilePhotoStorageId ?? undefined,
     });
 
     const photoUrl = args.profilePhotoStorageId
-      ? await ctx.storage.getUrl(args.profilePhotoStorageId)
+      ? await resolveMechanicPhotoUrl(ctx, args.profilePhotoStorageId)
       : null;
-    return { userId: shopUser.user_id, photoUrl };
+    return { mechanicId: args.mechanicId, photoUrl };
   },
 });
 

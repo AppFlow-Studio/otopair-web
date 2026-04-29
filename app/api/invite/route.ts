@@ -1,26 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { fetchMutation, fetchQuery } from "convex/nextjs";
-import { api } from "@/convex/_generated/api";
+import { makeFunctionReference } from "convex/server";
 import { Id } from "@/convex/_generated/dataModel";
 import { sendInviteEmail } from "@/email/send";
+
+const getShopByIdQuery = makeFunctionReference<"query">("shops:getById");
+const hasActiveShopMembershipQuery = makeFunctionReference<"query">(
+  "users:hasActiveShopMembership"
+);
+const createInvitationMutation = makeFunctionReference<"mutation">("invitations:create");
 
 export async function POST(req: NextRequest) {
   try {
     const { userId } = await auth();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { email, role, shopId, firstName, lastName, title, mechanicId } = await req.json();
+    const { email, role, shopId, mechanicId } = await req.json();
     if (!email || !role || !shopId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
+    if ((role === "shop_mechanic" || role === "mechanic") && !mechanicId) {
+      return NextResponse.json(
+        { error: "Mechanic invitations must be tied to a mechanic profile." },
+        { status: 400 }
+      );
+    }
 
     // Fetch shop name for the invite email
-    const shop = await fetchQuery(api.shops.getById, { id: shopId as Id<"shops"> });
+    const shop = (await fetchQuery(getShopByIdQuery, {
+      id: shopId as Id<"shops">,
+    })) as { name?: string } | null;
     const shopName = shop?.name;
 
     // Block invites to users who are already an active member of any shop
-    const alreadyMember = await fetchQuery(api.users.hasActiveShopMembership, { email });
+    const alreadyMember = await fetchQuery(hasActiveShopMembershipQuery, { email });
     if (alreadyMember) {
       return NextResponse.json(
         { error: "This person is already a member of a shop and cannot be invited again." },
@@ -28,16 +42,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Optionally create a mechanic profile if name is provided and no existing mechanic_id
-    let resolvedMechanicId: string | undefined = mechanicId;
-    if (!resolvedMechanicId && firstName && lastName) {
-      resolvedMechanicId = await fetchMutation(api.mechanics.create, {
-        shopId: shopId as Id<"shops">,
-        firstName,
-        lastName,
-        title: title ?? undefined,
-      });
-    }
+    const resolvedMechanicId: string | undefined = mechanicId;
 
     // Generate token here so it can be embedded in Clerk's invitation metadata
     const invitationToken = crypto.randomUUID();
@@ -55,7 +60,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         email_address: email,
         public_metadata: {
-          // role is intentionally omitted — it is only granted after the invite token is used
+          // role is intentionally omitted - it is only granted after the invite token is used
           shop_id: shopId,
           invitation_token: invitationToken,
           ...(resolvedMechanicId ? { mechanic_id: resolvedMechanicId } : {}),
@@ -86,9 +91,9 @@ export async function POST(req: NextRequest) {
       if (emailTaken || alreadyInvited) {
         // Look up whether an active Clerk account exists for this email.
         // This covers two cases:
-        //   1. emailTaken: user already has a Clerk account → patch metadata + Resend email
+        //   1. emailTaken: user already has a Clerk account -> patch metadata + Resend email
         //   2. alreadyInvited/duplicate: Clerk has a stale invitation (e.g. from a deleted account)
-        //      → if no active account, send via Resend so the invitee still receives the link
+        //      -> if no active account, send via Resend so the invitee still receives the link
         const lookupRes = await fetch(
           `https://api.clerk.com/v1/users?email_address=${encodeURIComponent(email)}`,
           { headers: { Authorization: `Bearer ${process.env.CLERK_SECRET_KEY}` } }
@@ -97,7 +102,7 @@ export async function POST(req: NextRequest) {
           const users = await lookupRes.json();
           const existingClerkUser = users[0];
           if (existingClerkUser?.id) {
-            // Active Clerk account — patch their public_metadata so middleware lets them in
+            // Active Clerk account - patch their public_metadata so middleware lets them in
             await fetch(`https://api.clerk.com/v1/users/${existingClerkUser.id}`, {
               method: "PATCH",
               headers: {
@@ -107,7 +112,7 @@ export async function POST(req: NextRequest) {
               body: JSON.stringify({
                 public_metadata: {
                   ...((existingClerkUser.public_metadata as object) ?? {}),
-                  // role is intentionally omitted — it is only granted after the invite token is used
+                  // role is intentionally omitted - it is only granted after the invite token is used
                   shop_id: shopId,
                   invitation_token: invitationToken,
                   ...(resolvedMechanicId ? { mechanic_id: resolvedMechanicId } : {}),
@@ -115,7 +120,7 @@ export async function POST(req: NextRequest) {
               }),
             });
           }
-          // Send invite link via Resend in both cases — Clerk won't email existing users,
+          // Send invite link via Resend in both cases - Clerk won't email existing users,
           // and for stale-duplicate cases there's no active Clerk invitation to send from.
           await sendInviteEmail({ email, inviteUrl: redirectUrl, shopName });
         }
@@ -128,7 +133,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Store invitation in Convex (token is pre-generated above so it matches Clerk metadata)
-    await fetchMutation(api.invitations.create, {
+    await fetchMutation(createInvitationMutation, {
       invitedByClerkUserId: userId,
       shopId: shopId as Id<"shops">,
       email,

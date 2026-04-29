@@ -9,7 +9,7 @@
  * TABLE: bookings
  *   - Stores service appointment requests and confirmed appointments
  *   - One record per booking (user + vehicle + shop + services + time)
- *   - Status progresses: pending (user submitted) → confirmed (shop accepts) → completed/cancelled
+ *   - Status progresses: pending (user submitted) -> confirmed (shop accepts) -> completed/cancelled
  *   - VIN normalized to uppercase for consistency
  *   - Time slot becomes unavailable when user confirms appointment (pending); shop can then accept or cancel
  *
@@ -236,11 +236,7 @@ export const getByUserIdWithDetails = query({
         const shopName = shop?.name ?? "Unknown Shop";
         const shopPhone = shop?.phone ?? "";
         const mechanicName = mechanic ? `${mechanic.first_name} ${mechanic.last_name}` : shopName;
-        let mechanicImageUrl: string | undefined;
-        if (mechanic?.photo) {
-          const photoAsset = await ctx.db.get(mechanic.photo);
-          mechanicImageUrl = photoAsset?.url;
-        }
+        const mechanicImageUrl = (await resolveMechanicPhotoUrl(ctx, mechanic)) ?? undefined;
 
         const serviceIds = booking.service_ids ?? [];
         const serviceNames = await Promise.all(
@@ -1732,6 +1728,23 @@ async function resolveUserPhotoUrl(ctx: any, user: any) {
   return user.profile_photo_url ?? null;
 }
 
+async function resolveMechanicPhotoUrl(ctx: any, mechanic: any) {
+  if (!mechanic?.photo) return null;
+
+  try {
+    const asset = await ctx.db.get(mechanic.photo as any);
+    if (asset?.url) return asset.url as string;
+  } catch {
+    // New mechanic uploads store Convex storage ids directly.
+  }
+
+  try {
+    return await ctx.storage.getUrl(mechanic.photo);
+  } catch {
+    return null;
+  }
+}
+
 async function getMechanicMembershipForUser(ctx: any, userId: any, shopId: any) {
   const membership = await ctx.db
     .query("shop_users")
@@ -2644,7 +2657,8 @@ export const getMyOwnerDashboard = query({
 
           const linkedUser = shopUser.user_id ? await ctx.db.get(shopUser.user_id) : null;
           const photoUrl =
-            (await resolveUserPhotoUrl(ctx, linkedUser)) ?? mechanic.photo ?? null;
+            (await resolveMechanicPhotoUrl(ctx, mechanic)) ??
+            (await resolveUserPhotoUrl(ctx, linkedUser));
 
           const bookings = await Promise.all(
             todayBookings
@@ -3071,7 +3085,7 @@ export const getVehiclePassportForBooking = query({
   },
 });
 
-// TODO: Remove confirmVehiclePassport — passport editing now happens exclusively via the pre-job survey. This mutation is no longer called from the frontend.
+// TODO: Remove confirmVehiclePassport - passport editing now happens exclusively via the pre-job survey. This mutation is no longer called from the frontend.
 export const confirmVehiclePassport = mutation({
   args: {
     bookingId: v.id("bookings"),

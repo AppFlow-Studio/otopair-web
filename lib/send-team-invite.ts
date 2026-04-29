@@ -10,7 +10,7 @@ type SendTeamInviteArgs =
     }
   | {
       email: string;
-      role: "shop_owner";
+      role: "shop_owner" | "front_desk";
       shopId: Id<"shops">;
       firstName?: string;
       lastName?: string;

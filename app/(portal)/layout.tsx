@@ -5,6 +5,7 @@ import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
+import { makeFunctionReference } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import {
   LayoutDashboard,
@@ -36,6 +37,10 @@ const ownerManagerLinks = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
+const frontDeskLinks = [
+  { href: "/schedule", label: "Schedule", icon: Calendar },
+];
+
 const mechanicLinks = [
   { href: "/my-bookings", label: "My Bookings", icon: Briefcase },
 ];
@@ -46,6 +51,7 @@ const bookingSubLinks = [
 ];
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"];
+const getPortalAccessQuery = makeFunctionReference<"query">("shops:getMyPortalAccess");
 
 export default function PortalLayout({
   children,
@@ -74,7 +80,16 @@ export default function PortalLayout({
   const [bookingsOpen, setBookingsOpen] = useState(isBookingsActive);
   const sidebarCompact = sidebarUserCompact || sidebarAutoCompact;
 
-  const portalAccess = useQuery(api.shops.getMyPortalAccess);
+  const portalAccess = useQuery(getPortalAccessQuery) as
+    | {
+        status: "active" | "no_shop" | "deactivated";
+        role: string;
+        userRole?: string | null;
+        onboardingComplete?: boolean;
+        shopId?: string;
+      }
+    | null
+    | undefined;
   const seedBookings = useMutation(api.seed.seedDashboardBookings);
   const [, setSeeding] = useState(false);
   const hasRedirected = useRef(false);
@@ -123,6 +138,9 @@ export default function PortalLayout({
   const isOwnerManager =
     portalAccess?.status === "active" &&
     OWNER_MANAGER_ROLES.includes(portalAccess.role);
+  const isFrontDesk =
+    portalAccess?.status === "active" &&
+    portalAccess.role === "front_desk";
   const isOnboarding =
     pathname.startsWith("/shop/setup") ||
     portalAccess?.status === "no_shop" ||
@@ -146,6 +164,8 @@ export default function PortalLayout({
     ? []
     : isOwnerManager
       ? ownerManagerLinks
+      : isFrontDesk
+        ? frontDeskLinks
       : mechanicLinks;
   const showDemoBookingActions =
     process.env.NODE_ENV === "development" &&

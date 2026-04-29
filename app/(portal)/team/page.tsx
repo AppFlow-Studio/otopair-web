@@ -7,22 +7,7 @@ import { useUser } from "@clerk/nextjs";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import RemoveConfirmationDialog from "@/components/remove-confirmation-dialog";
-import { removeTeamMember } from "@/lib/remove-team-member";
-import { sendTeamInvite } from "@/lib/send-team-invite";
-import {
-  Camera,
-  Crown,
-  Ellipsis,
-  Loader2,
-  Mail,
-  Pencil,
-  RotateCw,
-  Trash2,
-  UserPlus,
-  Users,
-  Wrench,
-  X,
-} from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -31,6 +16,24 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { removeTeamMember } from "@/lib/remove-team-member";
+import { sendTeamInvite } from "@/lib/send-team-invite";
+import {
+  Camera,
+  Crown,
+  Ellipsis,
+  Headset,
+  Loader2,
+  Mail,
+  Pencil,
+  RotateCw,
+  Trash2,
+  User,
+  UserPlus,
+  Users,
+  Wrench,
+  X,
+} from "lucide-react";
 
 type MechanicRow = {
   _id: string;
@@ -59,17 +62,10 @@ type MechanicRow = {
   blockingBookingCount: number;
 };
 
-type MechanicForm = {
-  mechanicId: string | null;
-  firstName: string;
-  lastName: string;
-  title: string;
-  email: string;
-};
-
 type TeamMemberRow = {
   _id: Id<"shop_users">;
   role?: string;
+  mechanic_id?: Id<"mechanics"> | null;
   user: {
     clerkUserId?: string;
     first_name?: string;
@@ -79,11 +75,21 @@ type TeamMemberRow = {
   };
 };
 
-type OwnerInvitationRow = {
+type InvitationRow = {
   _id: Id<"shop_invitations">;
   email: string;
   role: string;
   status: string;
+  mechanic_id?: Id<"mechanics"> | null;
+};
+
+type MemberForm = {
+  role: "shop_mechanic" | "shop_owner" | "front_desk";
+  mechanicId: string | null;
+  firstName: string;
+  lastName: string;
+  title: string;
+  email: string;
 };
 
 const useTypedQuery = useQuery as <T>(
@@ -106,98 +112,120 @@ const deactivateManagedMechanicMutation = makeFunctionReference<"mutation">(
 const generateUploadUrlMutation = makeFunctionReference<"mutation">("users:generateUploadUrl");
 const updateMemberRoleMutation = makeFunctionReference<"mutation">("invitations:updateMemberRole");
 
-function getInitials(firstName?: string | null, lastName?: string | null, email?: string): string {
-  if (firstName && lastName) return `${firstName[0]}${lastName[0]}`.toUpperCase();
-  if (firstName) return firstName.slice(0, 2).toUpperCase();
-  if (email) return email.slice(0, 2).toUpperCase();
-  return "ME";
-}
+const ROLE_OPTIONS = [
+  { value: "shop_mechanic", label: "Mechanic" },
+  { value: "shop_owner", label: "Shop Owner" },
+  { value: "front_desk", label: "Front Desk" },
+] as const;
 
-function getRoleBadgeClass(role: string) {
-  if (role === "owner" || role === "shop_owner") return "bg-yellow-50 text-yellow-700 border-yellow-200";
-  return "bg-gray-50 text-gray-600 border-gray-200";
-}
-
-function getRoleLabel(role: string): string {
+function getRoleLabel(role?: string | null): string {
   if (role === "owner" || role === "shop_owner") return "Shop Owner";
   if (role === "shop_mechanic" || role === "mechanic") return "Mechanic";
-  return role.charAt(0).toUpperCase() + role.slice(1);
+  if (role === "front_desk") return "Front Desk";
+  return role ? role.replace(/_/g, " ") : "Team Member";
+}
+
+function getRoleBadgeClass(role?: string | null) {
+  if (role === "owner" || role === "shop_owner") {
+    return "border-secondary/15 bg-secondary/10 text-secondary";
+  }
+  if (role === "front_desk") {
+    return "border-accent/20 bg-accent/10 text-accent";
+  }
+  return "border-primary/15 bg-primary/10 text-primary";
 }
 
 function getPortalStatusMeta(status: MechanicRow["portalStatus"]) {
   if (status === "active") {
     return {
-      label: "Active on portal",
-      className: "border-green-200 bg-green-50 text-green-700",
+      label: "Portal active",
+      className: "border-success/20 bg-success/10 text-success",
     };
   }
   if (status === "invite_sent") {
     return {
       label: "Invite sent",
-      className: "border-amber-200 bg-amber-50 text-amber-700",
+      className: "border-primary/15 bg-primary/10 text-primary",
     };
   }
   if (status === "invite_expired") {
     return {
       label: "Invite expired",
-      className: "border-red-200 bg-red-50 text-red-700",
+      className: "border-destructive/15 bg-destructive/10 text-destructive",
     };
   }
   if (status === "invite_revoked") {
     return {
       label: "Invite revoked",
-      className: "border-gray-200 bg-gray-50 text-gray-600",
+      className: "border-border bg-muted text-muted-foreground",
     };
   }
   return {
     label: "Not invited",
-    className: "border-gray-200 bg-gray-50 text-gray-600",
+    className: "border-border bg-muted text-muted-foreground",
   };
 }
 
-function RoleIcon({ role }: { role: string }) {
+function RoleIcon({ role }: { role?: string | null }) {
   if (role === "owner" || role === "shop_owner") return <Crown className="h-3.5 w-3.5" />;
+  if (role === "front_desk") return <Headset className="h-3.5 w-3.5" />;
   return <Wrench className="h-3.5 w-3.5" />;
 }
 
-function MechanicAvatar({ mechanic }: { mechanic: MechanicRow }) {
+function PersonAvatar({
+  imageUrl,
+  name,
+}: {
+  imageUrl?: string | null;
+  name: string;
+}) {
   return (
-    <div className="h-11 w-11 shrink-0 overflow-hidden rounded-full bg-accent text-xs font-semibold text-accent-foreground">
-      {mechanic.photoUrl ? (
-        <img
-          src={mechanic.photoUrl}
-          alt={`${mechanic.firstName} ${mechanic.lastName}`}
-          className="h-full w-full object-cover"
-        />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center">
-          {getInitials(mechanic.firstName, mechanic.lastName, mechanic.email)}
-        </div>
-      )}
-    </div>
+    <Avatar className="h-11 w-11 shrink-0 border border-border bg-card">
+      {imageUrl ? <AvatarImage src={imageUrl} alt={name} className="object-cover" /> : null}
+      <AvatarFallback className="bg-muted text-muted-foreground">
+        <User className="h-5 w-5" />
+      </AvatarFallback>
+    </Avatar>
   );
 }
 
+function getRowName(member: TeamMemberRow) {
+  if (member.user.first_name && member.user.last_name) {
+    return `${member.user.first_name} ${member.user.last_name}`;
+  }
+  return member.user.email || "Team member";
+}
+
+function getFormSubmitLabel(form: MemberForm, submitting: boolean) {
+  if (submitting) {
+    if (form.role === "shop_mechanic") {
+      return form.mechanicId ? "Saving..." : form.email.trim() ? "Saving and inviting..." : "Saving...";
+    }
+    return "Sending...";
+  }
+
+  if (form.role === "shop_mechanic") {
+    if (form.mechanicId) return "Save mechanic";
+    return form.email.trim() ? "Save and invite mechanic" : "Save mechanic";
+  }
+
+  return `Invite ${getRoleLabel(form.role).toLowerCase()}`;
+}
+
 export default function TeamPage() {
-  const [ownerInvite, setOwnerInvite] = useState({
-    email: "",
-    firstName: "",
-    lastName: "",
-    title: "",
-  });
-  const [ownerInviteError, setOwnerInviteError] = useState<string | null>(null);
-  const [ownerInviteSuccess, setOwnerInviteSuccess] = useState(false);
-  const [sendingOwnerInvite, setSendingOwnerInvite] = useState(false);
-  const [mechanicForm, setMechanicForm] = useState<MechanicForm>({
+  const [memberForm, setMemberForm] = useState<MemberForm>({
+    role: "shop_mechanic",
     mechanicId: null,
     firstName: "",
     lastName: "",
     title: "",
     email: "",
   });
-  const [mechanicError, setMechanicError] = useState<string | null>(null);
-  const [mechanicSuccess, setMechanicSuccess] = useState<string | null>(null);
-  const [savingMechanic, setSavingMechanic] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formSuccess, setFormSuccess] = useState<string | null>(null);
+  const [submittingForm, setSubmittingForm] = useState(false);
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
+  const [directorySuccess, setDirectorySuccess] = useState<string | null>(null);
   const [mechanicActionId, setMechanicActionId] = useState<string | null>(null);
   const [uploadingMechanicId, setUploadingMechanicId] = useState<string | null>(null);
   const [pendingPhotoMechanicId, setPendingPhotoMechanicId] = useState<string | null>(null);
@@ -208,7 +236,10 @@ export default function TeamPage() {
     name: string;
   } | null>(null);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
-  const [changingRoleFor, setChangingRoleFor] = useState<{ shopUserId: Id<"shop_users">; currentRole: string } | null>(null);
+  const [changingRoleFor, setChangingRoleFor] = useState<{
+    shopUserId: Id<"shop_users">;
+    currentRole: string;
+  } | null>(null);
   const [newRole, setNewRole] = useState<string>("");
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const { user: clerkUser } = useUser();
@@ -219,7 +250,7 @@ export default function TeamPage() {
     getTeamMembersQuery,
     shopId ? { shopId } : "skip"
   );
-  const invitations = useTypedQuery<OwnerInvitationRow[]>(
+  const invitations = useTypedQuery<InvitationRow[]>(
     getInvitationsByShopQuery,
     shopId ? { shopId } : "skip"
   );
@@ -227,6 +258,7 @@ export default function TeamPage() {
     getManagedMechanicsQuery,
     shopId ? { shopId } : "skip"
   );
+
   const createMechanic = useMutation(createManagedMechanicMutation) as (args: {
     shopId: Id<"shops">;
     firstName: string;
@@ -254,91 +286,156 @@ export default function TeamPage() {
     role: string;
   }) => Promise<void>;
 
-  const ownerInvitations = (invitations ?? []).filter(
-    (inv) => inv.status === "pending" && inv.role === "shop_owner"
+  const membersByMechanicId = new Map<string, TeamMemberRow>();
+  for (const member of teamMembers ?? []) {
+    if (member.mechanic_id) {
+      membersByMechanicId.set(String(member.mechanic_id), member);
+    }
+  }
+
+  const mechanicIds = new Set((mechanics ?? []).map((mechanic) => mechanic._id));
+  const standaloneMembers = (teamMembers ?? [])
+    .filter((member) => !member.mechanic_id || !mechanicIds.has(String(member.mechanic_id)))
+    .sort((a, b) => {
+      const aIsCurrent = a.user.clerkUserId === clerkUser?.id ? -1 : 1;
+      const bIsCurrent = b.user.clerkUserId === clerkUser?.id ? -1 : 1;
+      return aIsCurrent - bIsCurrent;
+    });
+  const pendingNonMechanicInvitations = (invitations ?? []).filter(
+    (invitation) => invitation.status === "pending" && !invitation.mechanic_id
   );
+  const totalDirectoryCount =
+    (mechanics?.length ?? 0) +
+    standaloneMembers.length +
+    pendingNonMechanicInvitations.length;
 
   const inputClass =
-    "w-full rounded-lg border border-border bg-white px-3.5 py-2.5 text-sm text-foreground placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-ring";
-  const labelClass = "mb-1.5 block text-sm font-medium text-gray-700";
+    "w-full rounded-lg border border-input bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
+  const labelClass = "mb-1.5 block text-sm font-medium text-foreground";
+  const badgeClass = "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium";
 
-  async function handleOwnerInvite(e: React.FormEvent) {
-    e.preventDefault();
+  function clearFormMessages() {
+    setFormError(null);
+    setFormSuccess(null);
+  }
+
+  function clearDirectoryMessages() {
+    setDirectoryError(null);
+    setDirectorySuccess(null);
+  }
+
+  function handleFormRoleChange(role: MemberForm["role"]) {
+    clearFormMessages();
+    setMemberForm((prev) => ({
+      role,
+      mechanicId: role === "shop_mechanic" ? prev.mechanicId : null,
+      firstName: prev.firstName,
+      lastName: prev.lastName,
+      title: prev.title,
+      email: prev.email,
+    }));
+  }
+
+  function resetForm(role: MemberForm["role"] = "shop_mechanic") {
+    setMemberForm({
+      role,
+      mechanicId: null,
+      firstName: "",
+      lastName: "",
+      title: "",
+      email: "",
+    });
+  }
+
+  async function handleFormSubmit(event: React.FormEvent) {
+    event.preventDefault();
     if (!shopId) return;
-    setOwnerInviteError(null);
-    setOwnerInviteSuccess(false);
-    setSendingOwnerInvite(true);
+
+    clearFormMessages();
+    setSubmittingForm(true);
 
     try {
+      if (memberForm.role === "shop_mechanic") {
+        if (!memberForm.firstName.trim() || !memberForm.lastName.trim()) {
+          setFormError("Enter both a first and last name for the mechanic.");
+          return;
+        }
+
+        if (memberForm.mechanicId) {
+          await updateMechanic({
+            mechanicId: memberForm.mechanicId as Id<"mechanics">,
+            firstName: memberForm.firstName.trim(),
+            lastName: memberForm.lastName.trim(),
+            title: memberForm.title.trim() || undefined,
+            email: memberForm.email.trim() || undefined,
+          });
+          setFormSuccess("Mechanic profile updated.");
+          resetForm();
+          return;
+        }
+
+        const mechanicId = await createMechanic({
+          shopId,
+          firstName: memberForm.firstName.trim(),
+          lastName: memberForm.lastName.trim(),
+          title: memberForm.title.trim() || undefined,
+          email: memberForm.email.trim() || undefined,
+        });
+
+        if (memberForm.email.trim()) {
+          const result = await sendTeamInvite({
+            email: memberForm.email.trim(),
+            role: "shop_mechanic",
+            shopId,
+            mechanicId,
+            origin: window.location.origin,
+          });
+          if (!result.ok) {
+            setFormError(`Mechanic profile saved, but the invitation failed: ${result.error}`);
+            return;
+          }
+          setFormSuccess("Mechanic saved and invited.");
+        } else {
+          setFormSuccess("Mechanic profile saved.");
+        }
+
+        resetForm();
+        return;
+      }
+
+      if (!memberForm.email.trim()) {
+        setFormError(`Enter an email address for the ${getRoleLabel(memberForm.role).toLowerCase()}.`);
+        return;
+      }
+
       const result = await sendTeamInvite({
-        email: ownerInvite.email.trim(),
-        role: "shop_owner",
+        email: memberForm.email.trim(),
+        role: memberForm.role,
         shopId,
-        firstName: ownerInvite.firstName.trim() || undefined,
-        lastName: ownerInvite.lastName.trim() || undefined,
-        title: ownerInvite.title.trim() || undefined,
+        firstName: memberForm.firstName.trim() || undefined,
+        lastName: memberForm.lastName.trim() || undefined,
+        title: memberForm.title.trim() || undefined,
         origin: window.location.origin,
       });
 
       if (!result.ok) {
-        setOwnerInviteError(result.error);
+        setFormError(result.error);
         return;
       }
 
-      setOwnerInvite({ email: "", firstName: "", lastName: "", title: "" });
-      setOwnerInviteSuccess(true);
-      setTimeout(() => setOwnerInviteSuccess(false), 4000);
-    } catch {
-      setOwnerInviteError("Failed to send invitation. Please try again.");
-    } finally {
-      setSendingOwnerInvite(false);
-    }
-  }
-
-  async function handleSaveMechanic(e: React.FormEvent) {
-    e.preventDefault();
-    if (!shopId) return;
-    setMechanicError(null);
-    setMechanicSuccess(null);
-
-    if (!mechanicForm.firstName.trim() || !mechanicForm.lastName.trim()) {
-      setMechanicError("Enter both a first and last name for the mechanic.");
-      return;
-    }
-
-    setSavingMechanic(true);
-    try {
-      if (mechanicForm.mechanicId) {
-        await updateMechanic({
-          mechanicId: mechanicForm.mechanicId as Id<"mechanics">,
-          firstName: mechanicForm.firstName,
-          lastName: mechanicForm.lastName,
-          title: mechanicForm.title || undefined,
-          email: mechanicForm.email || undefined,
-        });
-        setMechanicSuccess("Mechanic profile updated.");
-      } else {
-        await createMechanic({
-          shopId,
-          firstName: mechanicForm.firstName,
-          lastName: mechanicForm.lastName,
-          title: mechanicForm.title || undefined,
-          email: mechanicForm.email || undefined,
-        });
-        setMechanicSuccess("Mechanic profile saved.");
-      }
-      setMechanicForm({ mechanicId: null, firstName: "", lastName: "", title: "", email: "" });
+      setFormSuccess(`${getRoleLabel(memberForm.role)} invitation sent.`);
+      resetForm(memberForm.role);
     } catch (error) {
-      setMechanicError(error instanceof Error ? error.message : "Failed to save mechanic.");
+      setFormError(error instanceof Error ? error.message : "Failed to save team member.");
     } finally {
-      setSavingMechanic(false);
+      setSubmittingForm(false);
     }
   }
 
   function editMechanic(mechanic: MechanicRow) {
-    setMechanicError(null);
-    setMechanicSuccess(null);
-    setMechanicForm({
+    clearFormMessages();
+    setMemberForm({
+      role: "shop_mechanic",
       mechanicId: mechanic._id,
       firstName: mechanic.firstName,
       lastName: mechanic.lastName,
@@ -349,12 +446,11 @@ export default function TeamPage() {
 
   async function inviteMechanic(mechanic: MechanicRow, revokeExisting = false) {
     if (!shopId || !mechanic.email.trim()) {
-      setMechanicError("Add an email address before inviting this mechanic.");
+      setDirectoryError("Add an email address before inviting this mechanic.");
       return;
     }
 
-    setMechanicError(null);
-    setMechanicSuccess(null);
+    clearDirectoryMessages();
     setMechanicActionId(mechanic._id);
     try {
       if (revokeExisting && mechanic.pendingInvitationId) {
@@ -369,12 +465,12 @@ export default function TeamPage() {
         origin: window.location.origin,
       });
       if (!result.ok) {
-        setMechanicError(result.error);
+        setDirectoryError(result.error);
         return;
       }
-      setMechanicSuccess(revokeExisting ? "Invitation resent." : "Invitation sent.");
+      setDirectorySuccess(revokeExisting ? "Invitation resent." : "Invitation sent.");
     } catch (error) {
-      setMechanicError(error instanceof Error ? error.message : "Failed to send invitation.");
+      setDirectoryError(error instanceof Error ? error.message : "Failed to send invitation.");
     } finally {
       setMechanicActionId(null);
     }
@@ -382,20 +478,20 @@ export default function TeamPage() {
 
   async function revokeInvite(mechanic: MechanicRow) {
     if (!mechanic.pendingInvitationId) return;
+    clearDirectoryMessages();
     setMechanicActionId(mechanic._id);
-    setMechanicError(null);
-    setMechanicSuccess(null);
     try {
       await removeTeamMember({ invitationId: mechanic.pendingInvitationId });
-      setMechanicSuccess("Invitation revoked.");
+      setDirectorySuccess("Invitation revoked.");
     } catch (error) {
-      setMechanicError(error instanceof Error ? error.message : "Failed to revoke invitation.");
+      setDirectoryError(error instanceof Error ? error.message : "Failed to revoke invitation.");
     } finally {
       setMechanicActionId(null);
     }
   }
 
   function chooseMechanicPhoto(mechanic: MechanicRow) {
+    clearDirectoryMessages();
     setPendingPhotoMechanicId(mechanic._id);
     photoInputRef.current?.click();
   }
@@ -406,9 +502,8 @@ export default function TeamPage() {
     event.target.value = "";
     if (!file || !mechanicId) return;
 
+    clearDirectoryMessages();
     setUploadingMechanicId(mechanicId);
-    setMechanicError(null);
-    setMechanicSuccess(null);
     try {
       const uploadUrl = await generateUploadUrl();
       const uploadResult = await fetch(uploadUrl, {
@@ -424,9 +519,11 @@ export default function TeamPage() {
         mechanicId: mechanicId as Id<"mechanics">,
         profilePhotoStorageId: storageId,
       });
-      setMechanicSuccess("Mechanic photo updated.");
+      setDirectorySuccess("Mechanic photo updated.");
     } catch (error) {
-      setMechanicError(error instanceof Error ? error.message : "Failed to update mechanic photo.");
+      setDirectoryError(
+        error instanceof Error ? error.message : "Failed to update mechanic photo."
+      );
     } finally {
       setPendingPhotoMechanicId(null);
       setUploadingMechanicId(null);
@@ -434,17 +531,18 @@ export default function TeamPage() {
   }
 
   async function removeMechanicPhoto(mechanic: MechanicRow) {
+    clearDirectoryMessages();
     setUploadingMechanicId(mechanic._id);
-    setMechanicError(null);
-    setMechanicSuccess(null);
     try {
       await updateMechanicPhoto({
         mechanicId: mechanic._id as Id<"mechanics">,
         profilePhotoStorageId: null,
       });
-      setMechanicSuccess("Mechanic photo removed.");
+      setDirectorySuccess("Mechanic photo removed.");
     } catch (error) {
-      setMechanicError(error instanceof Error ? error.message : "Failed to remove mechanic photo.");
+      setDirectoryError(
+        error instanceof Error ? error.message : "Failed to remove mechanic photo."
+      );
     } finally {
       setUploadingMechanicId(null);
     }
@@ -459,6 +557,7 @@ export default function TeamPage() {
   }
 
   async function removeMechanic(mechanic: MechanicRow) {
+    clearDirectoryMessages();
     setMechanicActionId(mechanic._id);
     try {
       if (mechanic.shopUserId) {
@@ -469,35 +568,56 @@ export default function TeamPage() {
       }
       await deactivateMechanic({ mechanicId: mechanic._id as Id<"mechanics"> });
       setRemoveMechanicConfirm(null);
-      setMechanicSuccess("Mechanic removed.");
+      setDirectorySuccess("Mechanic removed.");
     } catch (error) {
-      setMechanicError(error instanceof Error ? error.message : "Failed to remove mechanic.");
+      setDirectoryError(error instanceof Error ? error.message : "Failed to remove mechanic.");
     } finally {
       setMechanicActionId(null);
     }
   }
 
   async function handleRemoveMember(shopUserId: Id<"shop_users">) {
+    clearDirectoryMessages();
     setRemovingMemberId(shopUserId);
     try {
       await removeTeamMember({ shopUserId });
       setRemoveMemberConfirm(null);
+      setDirectorySuccess("Portal access removed.");
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "Failed to remove member.");
     } finally {
       setRemovingMemberId(null);
     }
   }
 
   async function handleChangeRole(shopUserId: Id<"shop_users">, role: string) {
-    await updateMemberRole({ shopUserId, role });
-    setChangingRoleFor(null);
+    clearDirectoryMessages();
+    try {
+      await updateMemberRole({ shopUserId, role });
+      setChangingRoleFor(null);
+      setNewRole("");
+      setDirectorySuccess(`Role updated to ${getRoleLabel(role)}.`);
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "Failed to update role.");
+    }
+  }
+
+  async function handleRevokeStandaloneInvite(invitationId: Id<"shop_invitations">) {
+    clearDirectoryMessages();
+    try {
+      await removeTeamMember({ invitationId });
+      setDirectorySuccess("Invitation revoked.");
+    } catch (error) {
+      setDirectoryError(error instanceof Error ? error.message : "Failed to revoke invitation.");
+    }
   }
 
   if (myShops === undefined) {
     return (
-      <div className="mx-auto max-w-5xl">
-        <h1 className="mb-2 text-2xl font-bold text-gray-900">Team</h1>
-        <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
-          <p className="text-sm text-gray-400">Loading...</p>
+      <div className="mx-auto max-w-6xl">
+        <h1 className="mb-2 text-2xl font-bold text-foreground">Team</h1>
+        <div className="rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
+          <p className="text-sm text-muted-foreground">Loading...</p>
         </div>
       </div>
     );
@@ -505,38 +625,77 @@ export default function TeamPage() {
 
   if (!shopId) {
     return (
-      <div className="mx-auto max-w-5xl">
-        <h1 className="mb-2 text-2xl font-bold text-gray-900">Team</h1>
-        <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
-          <p className="text-gray-500">Set up your shop first before managing your team.</p>
+      <div className="mx-auto max-w-6xl">
+        <h1 className="mb-2 text-2xl font-bold text-foreground">Team</h1>
+        <div className="rounded-2xl border border-border bg-card p-8 text-center shadow-sm">
+          <p className="text-muted-foreground">Set up your shop first before managing your team.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <div>
-        <h1 className="mb-2 text-2xl font-bold text-gray-900">Team</h1>
-        <p className="text-gray-600">Manage mechanic profiles, portal access, and shop owners.</p>
+        <h1 className="mb-2 text-2xl font-bold text-foreground">Team</h1>
+        <p className="text-muted-foreground">
+          Manage mechanic profiles, portal access, and shop staff from one place.
+        </p>
       </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white p-6">
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
         <div className="mb-5 flex items-center gap-2">
-          <Wrench className="h-5 w-5 text-primary" />
-          <h2 className="text-base font-semibold text-gray-900">
-            {mechanicForm.mechanicId ? "Edit Mechanic" : "Add Mechanic"}
+          <UserPlus className="h-5 w-5 text-primary" />
+          <h2 className="text-base font-semibold text-foreground">
+            {memberForm.mechanicId ? "Edit Mechanic Profile" : "Add or Invite Team Member"}
           </h2>
         </div>
 
-        <form onSubmit={handleSaveMechanic} className="space-y-4">
+        <form onSubmit={handleFormSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className={labelClass}>Role</label>
+              <select
+                value={memberForm.role}
+                onChange={(event) =>
+                  handleFormRoleChange(event.target.value as MemberForm["role"])
+                }
+                disabled={memberForm.mechanicId !== null}
+                className={inputClass}
+              >
+                {ROLE_OPTIONS.map((role) => (
+                  <option key={role.value} value={role.value}>
+                    {role.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Title</label>
+              <input
+                value={memberForm.title}
+                onChange={(event) =>
+                  setMemberForm((prev) => ({ ...prev, title: event.target.value }))
+                }
+                className={inputClass}
+                placeholder={
+                  memberForm.role === "shop_mechanic"
+                    ? "Master Mechanic"
+                    : memberForm.role === "front_desk"
+                    ? "Service Advisor"
+                    : "Partner"
+                }
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className={labelClass}>First Name</label>
               <input
-                value={mechanicForm.firstName}
+                value={memberForm.firstName}
                 onChange={(event) =>
-                  setMechanicForm((prev) => ({ ...prev, firstName: event.target.value }))
+                  setMemberForm((prev) => ({ ...prev, firstName: event.target.value }))
                 }
                 className={inputClass}
                 placeholder="Jane"
@@ -545,59 +704,56 @@ export default function TeamPage() {
             <div>
               <label className={labelClass}>Last Name</label>
               <input
-                value={mechanicForm.lastName}
+                value={memberForm.lastName}
                 onChange={(event) =>
-                  setMechanicForm((prev) => ({ ...prev, lastName: event.target.value }))
+                  setMemberForm((prev) => ({ ...prev, lastName: event.target.value }))
                 }
                 className={inputClass}
                 placeholder="Smith"
               />
             </div>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label className={labelClass}>Title</label>
-              <input
-                value={mechanicForm.title}
-                onChange={(event) =>
-                  setMechanicForm((prev) => ({ ...prev, title: event.target.value }))
-                }
-                className={inputClass}
-                placeholder="Master Mechanic"
-              />
-            </div>
-            <div>
-              <label className={labelClass}>Email</label>
-              <input
-                type="email"
-                value={mechanicForm.email}
-                onChange={(event) =>
-                  setMechanicForm((prev) => ({ ...prev, email: event.target.value }))
-                }
-                className={inputClass}
-                placeholder="mechanic@example.com"
-              />
-            </div>
+
+          <div>
+            <label className={labelClass}>Email</label>
+            <input
+              type="email"
+              value={memberForm.email}
+              onChange={(event) =>
+                setMemberForm((prev) => ({ ...prev, email: event.target.value }))
+              }
+              className={inputClass}
+              placeholder="name@example.com"
+            />
+            <p className="mt-2 text-xs text-muted-foreground">
+              {memberForm.role === "shop_mechanic"
+                ? "Email is optional. Leave it blank to save the mechanic profile without portal access."
+                : "This sends a portal invitation without creating a mechanic profile."}
+            </p>
+            {memberForm.mechanicId && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Mechanic profile edits stay under the mechanic role. Use the member actions below if
+                you need to change portal access after the profile is linked.
+              </p>
+            )}
           </div>
 
-          {mechanicError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {mechanicError}
+          {formError && (
+            <div className="rounded-lg border border-destructive/15 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {formError}
             </div>
           )}
-          {mechanicSuccess && (
-            <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-              {mechanicSuccess}
+          {formSuccess && (
+            <div className="rounded-lg border border-success/15 bg-success/10 px-4 py-3 text-sm text-success">
+              {formSuccess}
             </div>
           )}
 
           <div className="flex justify-end gap-2">
-            {mechanicForm.mechanicId && (
+            {memberForm.mechanicId && (
               <button
                 type="button"
-                onClick={() =>
-                  setMechanicForm({ mechanicId: null, firstName: "", lastName: "", title: "", email: "" })
-                }
+                onClick={() => resetForm()}
                 className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
               >
                 Cancel
@@ -605,25 +761,26 @@ export default function TeamPage() {
             )}
             <button
               type="submit"
-              disabled={savingMechanic}
+              disabled={
+                submittingForm ||
+                (memberForm.role !== "shop_mechanic" && !memberForm.email.trim())
+              }
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              {savingMechanic && <Loader2 className="h-4 w-4 animate-spin" />}
-              {mechanicForm.mechanicId ? "Save mechanic" : "Add mechanic"}
+              {submittingForm && <Loader2 className="h-4 w-4 animate-spin" />}
+              {getFormSubmitLabel(memberForm, submittingForm)}
             </button>
           </div>
         </form>
       </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white p-6">
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
         <div className="mb-5 flex items-center gap-2">
           <Users className="h-5 w-5 text-primary" />
-          <h2 className="text-base font-semibold text-gray-900">Mechanics</h2>
-          {mechanics && (
-            <span className="ml-auto text-xs text-muted-foreground">
-              {mechanics.length} mechanic{mechanics.length !== 1 ? "s" : ""}
-            </span>
-          )}
+          <h2 className="text-base font-semibold text-foreground">Team Directory</h2>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {totalDirectoryCount} entries
+          </span>
         </div>
 
         <input
@@ -634,315 +791,347 @@ export default function TeamPage() {
           onChange={handlePhotoSelected}
         />
 
-        {mechanics === undefined ? (
-          <p className="py-4 text-center text-sm text-gray-400">Loading...</p>
-        ) : mechanics.length === 0 ? (
-          <p className="py-4 text-center text-sm text-gray-500">No mechanics yet.</p>
+        {directoryError && (
+          <div className="mb-4 rounded-lg border border-destructive/15 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {directoryError}
+          </div>
+        )}
+        {directorySuccess && (
+          <div className="mb-4 rounded-lg border border-success/15 bg-success/10 px-4 py-3 text-sm text-success">
+            {directorySuccess}
+          </div>
+        )}
+
+        {mechanics === undefined || teamMembers === undefined || invitations === undefined ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">Loading...</p>
+        ) : totalDirectoryCount === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">No team members yet.</p>
         ) : (
           <div className="space-y-2">
             {mechanics.map((mechanic) => {
+              const linkedMember = membersByMechanicId.get(mechanic._id) ?? null;
+              const linkedRole = linkedMember?.role || "shop_mechanic";
+              const linkedName = linkedMember ? getRowName(linkedMember) : `${mechanic.firstName} ${mechanic.lastName}`;
+              const linkedEmail = linkedMember?.user.email || mechanic.email || "No email";
+              const isCurrentUser = linkedMember?.user.clerkUserId === clerkUser?.id;
+              const roleChange = changingRoleFor;
+              const isChangingRole = roleChange?.shopUserId === linkedMember?._id;
+              const avatarUrl = mechanic.photoUrl || linkedMember?.user.profile_photo_url || null;
               const status = getPortalStatusMeta(mechanic.portalStatus);
               const isBusy = mechanicActionId === mechanic._id || uploadingMechanicId === mechanic._id;
+
               return (
-                <div key={mechanic._id} className="flex items-center gap-3 rounded-lg bg-muted/40 p-3">
-                  <MechanicAvatar mechanic={mechanic} />
+                <div
+                  key={mechanic._id}
+                  className="flex items-start gap-3 rounded-xl border border-border bg-muted/40 p-4"
+                >
+                  <PersonAvatar
+                    imageUrl={avatarUrl}
+                    name={`${mechanic.firstName} ${mechanic.lastName}`}
+                  />
+
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="truncate text-sm font-semibold text-gray-900">
+                      <p className="truncate text-sm font-semibold text-foreground">
                         {mechanic.firstName} {mechanic.lastName}
                       </p>
-                      <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${status.className}`}>
-                        {status.label}
+                      <span className={`${badgeClass} ${getRoleBadgeClass(linkedRole)}`}>
+                        <RoleIcon role={linkedRole} />
+                        {getRoleLabel(linkedRole)}
                       </span>
+                      <span className={`${badgeClass} ${status.className}`}>{status.label}</span>
                     </div>
-                    <p className="mt-1 truncate text-xs text-muted-foreground">
+                    <p className="mt-1 truncate text-sm text-muted-foreground">
                       {mechanic.title || "Mechanic"}
-                      {mechanic.email ? ` - ${mechanic.email}` : ""}
+                      {linkedEmail ? ` - ${linkedEmail}` : ""}
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {mechanic.reviewCount > 0
                         ? `${mechanic.rating.toFixed(1)} rating - ${mechanic.reviewCount} reviews`
                         : "No reviews yet"}
                     </p>
+                    {linkedMember && linkedName !== `${mechanic.firstName} ${mechanic.lastName}` && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Portal member: {linkedName}
+                      </p>
+                    )}
                   </div>
 
-                  {isBusy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-8 w-8 shrink-0 rounded-full shadow-none"
-                        aria-label="Mechanic options"
+                  {isChangingRole && linkedMember && roleChange ? (
+                    <div className="flex shrink-0 items-center gap-2">
+                      <select
+                        autoFocus
+                        defaultValue={roleChange.currentRole}
+                        onChange={(event) => setNewRole(event.target.value)}
+                        className="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                       >
-                        <Ellipsis size={16} strokeWidth={2} aria-hidden="true" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onSelect={() => editMechanic(mechanic)}>
-                        <Pencil className="mr-2 h-4 w-4" />
-                        Edit profile
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => chooseMechanicPhoto(mechanic)}>
-                        <Camera className="mr-2 h-4 w-4" />
-                        {mechanic.photoUrl ? "Update photo" : "Add photo"}
-                      </DropdownMenuItem>
-                      {mechanic.photoUrl && (
-                        <DropdownMenuItem onSelect={() => removeMechanicPhoto(mechanic)}>
-                          <X className="mr-2 h-4 w-4" />
-                          Remove photo
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuSeparator />
-                      {mechanic.portalStatus === "not_invited" || mechanic.portalStatus === "invite_revoked" ? (
-                        <DropdownMenuItem onSelect={() => void inviteMechanic(mechanic)}>
-                          <Mail className="mr-2 h-4 w-4" />
-                          Invite to portal
-                        </DropdownMenuItem>
-                      ) : null}
-                      {mechanic.portalStatus === "invite_sent" || mechanic.portalStatus === "invite_expired" ? (
-                        <DropdownMenuItem onSelect={() => void inviteMechanic(mechanic, true)}>
-                          <RotateCw className="mr-2 h-4 w-4" />
-                          Resend invite
-                        </DropdownMenuItem>
-                      ) : null}
-                      {mechanic.pendingInvitationId && (
-                        <DropdownMenuItem onSelect={() => void revokeInvite(mechanic)}>
-                          <X className="mr-2 h-4 w-4" />
-                          Revoke invite
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="text-destructive focus:bg-destructive/10 focus:text-destructive"
-                        onSelect={() => requestRemoveMechanic(mechanic)}
+                        {ROLE_OPTIONS.map((role) => (
+                          <option key={role.value} value={role.value}>
+                            {role.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleChangeRole(
+                            linkedMember._id,
+                            newRole || roleChange.currentRole
+                          )
+                        }
+                        className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground transition-opacity hover:opacity-90"
                       >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Remove mechanic
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setChangingRoleFor(null)}
+                        className="rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-muted"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex shrink-0 items-center gap-2">
+                      {isBusy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-8 w-8 shrink-0 rounded-full shadow-none"
+                            aria-label="Mechanic options"
+                          >
+                            <Ellipsis size={16} strokeWidth={2} aria-hidden="true" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onSelect={() => editMechanic(mechanic)}>
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Edit profile
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => chooseMechanicPhoto(mechanic)}>
+                            <Camera className="mr-2 h-4 w-4" />
+                            {avatarUrl ? "Update photo" : "Add photo"}
+                          </DropdownMenuItem>
+                          {mechanic.photoUrl && (
+                            <DropdownMenuItem onSelect={() => void removeMechanicPhoto(mechanic)}>
+                              <X className="mr-2 h-4 w-4" />
+                              Remove photo
+                            </DropdownMenuItem>
+                          )}
+                          <DropdownMenuSeparator />
+                          {mechanic.portalStatus === "not_invited" ||
+                          mechanic.portalStatus === "invite_revoked" ? (
+                            <DropdownMenuItem onSelect={() => void inviteMechanic(mechanic)}>
+                              <Mail className="mr-2 h-4 w-4" />
+                              Invite to portal
+                            </DropdownMenuItem>
+                          ) : null}
+                          {mechanic.portalStatus === "invite_sent" ||
+                          mechanic.portalStatus === "invite_expired" ? (
+                            <DropdownMenuItem
+                              onSelect={() => void inviteMechanic(mechanic, true)}
+                            >
+                              <RotateCw className="mr-2 h-4 w-4" />
+                              Resend invite
+                            </DropdownMenuItem>
+                          ) : null}
+                          {mechanic.pendingInvitationId && (
+                            <DropdownMenuItem onSelect={() => void revokeInvite(mechanic)}>
+                              <X className="mr-2 h-4 w-4" />
+                              Revoke invite
+                            </DropdownMenuItem>
+                          )}
+                          {linkedMember && !isCurrentUser && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                onSelect={() => {
+                                  setNewRole(linkedRole);
+                                  setChangingRoleFor({
+                                    shopUserId: linkedMember._id,
+                                    currentRole: linkedRole,
+                                  });
+                                }}
+                              >
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Change role
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                                onSelect={() =>
+                                  setRemoveMemberConfirm({
+                                    shopUserId: linkedMember._id,
+                                    name: linkedName,
+                                  })
+                                }
+                              >
+                                <User className="mr-2 h-4 w-4" />
+                                Remove portal access
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                            onSelect={() => requestRemoveMechanic(mechanic)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Remove mechanic
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  )}
                 </div>
               );
             })}
-          </div>
-        )}
-      </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white p-6">
-        <div className="mb-5 flex items-center gap-2">
-          <UserPlus className="h-5 w-5 text-primary" />
-          <h2 className="text-base font-semibold text-gray-900">Invite a Shop Owner</h2>
-        </div>
-        <form onSubmit={handleOwnerInvite} className="space-y-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <input
-              value={ownerInvite.firstName}
-              onChange={(event) =>
-                setOwnerInvite((prev) => ({ ...prev, firstName: event.target.value }))
-              }
-              placeholder="First name"
-              className={inputClass}
-            />
-            <input
-              value={ownerInvite.lastName}
-              onChange={(event) =>
-                setOwnerInvite((prev) => ({ ...prev, lastName: event.target.value }))
-              }
-              placeholder="Last name"
-              className={inputClass}
-            />
-          </div>
-          <input
-            type="email"
-            value={ownerInvite.email}
-            onChange={(event) =>
-              setOwnerInvite((prev) => ({ ...prev, email: event.target.value }))
-            }
-            placeholder="owner@example.com"
-            className={inputClass}
-          />
-          {ownerInviteError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {ownerInviteError}
-            </div>
-          )}
-          {ownerInviteSuccess && (
-            <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-              Invitation sent successfully.
-            </div>
-          )}
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              disabled={sendingOwnerInvite || !ownerInvite.email.trim()}
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {sendingOwnerInvite && <Loader2 className="h-4 w-4 animate-spin" />}
-              Send owner invitation
-            </button>
-          </div>
-        </form>
-      </div>
+            {standaloneMembers.map((member) => {
+              const isCurrentUser = member.user.clerkUserId === clerkUser?.id;
+              const role = member.role || "front_desk";
+              const roleChange = changingRoleFor;
+              const isChangingRole = roleChange?.shopUserId === member._id;
+              const displayName = getRowName(member);
 
-      <div className="rounded-xl border border-gray-200 bg-white p-6">
-        <div className="mb-5 flex items-center gap-2">
-          <Crown className="h-5 w-5 text-primary" />
-          <h2 className="text-base font-semibold text-gray-900">Portal Members</h2>
-          {teamMembers && (
-            <span className="ml-auto text-xs text-muted-foreground">
-              {teamMembers.length} member{teamMembers.length !== 1 ? "s" : ""}
-            </span>
-          )}
-        </div>
+              return (
+                <div
+                  key={member._id}
+                  className="flex items-start gap-3 rounded-xl border border-border bg-muted/40 p-4"
+                >
+                  <PersonAvatar imageUrl={member.user.profile_photo_url} name={displayName} />
 
-        {teamMembers === undefined ? (
-          <p className="py-4 text-center text-sm text-gray-400">Loading...</p>
-        ) : teamMembers.length === 0 ? (
-          <p className="py-4 text-center text-sm text-gray-500">No portal members yet.</p>
-        ) : (
-          <div className="space-y-2">
-            {[...teamMembers]
-              .sort((a, b) => {
-                const aIsMe = a.user.clerkUserId === clerkUser?.id ? -1 : 1;
-                const bIsMe = b.user.clerkUserId === clerkUser?.id ? -1 : 1;
-                return aIsMe - bIsMe;
-              })
-              .map((member) => {
-                const isCurrentUser = member.user.clerkUserId === clerkUser?.id;
-                const roleChange = changingRoleFor;
-                const isChangingRole = roleChange?.shopUserId === member._id;
-                const displayName =
-                  member.user.first_name && member.user.last_name
-                    ? `${member.user.first_name} ${member.user.last_name}`
-                    : member.user.email || "Team member";
-
-                return (
-                  <div key={member._id} className="flex items-center gap-3 rounded-lg bg-muted/40 p-3">
-                    <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full bg-accent text-xs font-semibold text-accent-foreground">
-                      {member.user.profile_photo_url ? (
-                        <img src={member.user.profile_photo_url} alt="" className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center">
-                          {getInitials(member.user.first_name, member.user.last_name, member.user.email)}
-                        </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-sm font-semibold text-foreground">{displayName}</p>
+                      <span className={`${badgeClass} ${getRoleBadgeClass(role)}`}>
+                        <RoleIcon role={role} />
+                        {getRoleLabel(role)}
+                      </span>
+                      {isCurrentUser && (
+                        <span className={`${badgeClass} border-border bg-muted text-muted-foreground`}>
+                          You
+                        </span>
                       )}
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-gray-900">{displayName}</p>
-                      <p className="truncate text-xs text-muted-foreground">{member.user.email}</p>
-                    </div>
-
-                    {isChangingRole && roleChange ? (
-                      <div className="flex shrink-0 items-center gap-2">
-                        <select
-                          autoFocus
-                          defaultValue={roleChange.currentRole}
-                          onChange={(event) => setNewRole(event.target.value)}
-                          className="rounded-md border border-border bg-white px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                        >
-                          <option value="shop_mechanic">Mechanic</option>
-                          <option value="shop_owner">Shop Owner</option>
-                        </select>
-                        <button
-                          onClick={() =>
-                            handleChangeRole(
-                              member._id as Id<"shop_users">,
-                              newRole || roleChange.currentRole
-                            )
-                          }
-                          className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground transition-opacity hover:opacity-90"
-                        >
-                          Save
-                        </button>
-                        <button
-                          onClick={() => setChangingRoleFor(null)}
-                          className="rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-muted"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${getRoleBadgeClass(member.role || "shop_mechanic")}`}>
-                        <RoleIcon role={member.role || "shop_mechanic"} />
-                        {getRoleLabel(member.role || "shop_mechanic")}
-                      </span>
-                    )}
-
-                    {!isChangingRole && (
-                      isCurrentUser ? (
-                        <div className="h-8 w-8 shrink-0" />
-                      ) : (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button size="icon" variant="ghost" className="h-8 w-8 shrink-0 rounded-full shadow-none">
-                              <Ellipsis size={16} strokeWidth={2} aria-hidden="true" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onSelect={() => {
-                                setNewRole(member.role || "shop_mechanic");
-                                setChangingRoleFor({
-                                  shopUserId: member._id as Id<"shop_users">,
-                                  currentRole: member.role || "shop_mechanic",
-                                });
-                              }}
-                            >
-                              Change Role
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              className="text-destructive focus:bg-destructive/10 focus:text-destructive"
-                              onSelect={() =>
-                                setRemoveMemberConfirm({
-                                  shopUserId: member._id as Id<"shop_users">,
-                                  name: displayName,
-                                })
-                              }
-                            >
-                              Remove Member
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )
-                    )}
+                    <p className="mt-1 truncate text-sm text-muted-foreground">
+                      {member.user.email || "No email"}
+                    </p>
                   </div>
-                );
-              })}
-          </div>
-        )}
-      </div>
 
-      {ownerInvitations.length > 0 && (
-        <div className="rounded-xl border border-gray-200 bg-white p-6">
-          <div className="mb-5 flex items-center gap-2">
-            <Mail className="h-5 w-5 text-primary" />
-            <h2 className="text-base font-semibold text-gray-900">Pending Owner Invitations</h2>
-          </div>
-          <div className="space-y-2">
-            {ownerInvitations.map((inv) => (
-              <div key={inv._id} className="flex items-center gap-3 rounded-lg bg-muted/40 p-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent">
-                  <Mail className="h-4 w-4 text-muted-foreground" />
+                  {isChangingRole && roleChange ? (
+                    <div className="flex shrink-0 items-center gap-2">
+                      <select
+                        autoFocus
+                        defaultValue={roleChange.currentRole}
+                        onChange={(event) => setNewRole(event.target.value)}
+                        className="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                      >
+                        {ROLE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => handleChangeRole(member._id, newRole || roleChange.currentRole)}
+                        className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground transition-opacity hover:opacity-90"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setChangingRoleFor(null)}
+                        className="rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-muted"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : !isCurrentUser ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8 shrink-0 rounded-full shadow-none"
+                          aria-label="Member options"
+                        >
+                          <Ellipsis size={16} strokeWidth={2} aria-hidden="true" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            setNewRole(role);
+                            setChangingRoleFor({
+                              shopUserId: member._id,
+                              currentRole: role,
+                            });
+                          }}
+                        >
+                          <Pencil className="mr-2 h-4 w-4" />
+                          Change role
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                          onSelect={() =>
+                            setRemoveMemberConfirm({
+                              shopUserId: member._id,
+                              name: displayName,
+                            })
+                          }
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Remove member
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : (
+                    <div className="h-8 w-8 shrink-0" />
+                  )}
                 </div>
+              );
+            })}
+
+            {pendingNonMechanicInvitations.map((invitation) => (
+              <div
+                key={invitation._id}
+                className="flex items-start gap-3 rounded-xl border border-border bg-muted/40 p-4"
+              >
+                <PersonAvatar imageUrl={null} name={invitation.email} />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-gray-900">{inv.email}</p>
-                  <p className="text-xs text-muted-foreground">Pending invitation</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-semibold text-foreground">
+                      {invitation.email}
+                    </p>
+                    <span className={`${badgeClass} ${getRoleBadgeClass(invitation.role)}`}>
+                      <RoleIcon role={invitation.role} />
+                      {getRoleLabel(invitation.role)}
+                    </span>
+                    <span className={`${badgeClass} border-border bg-muted text-muted-foreground`}>
+                      Pending invitation
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Waiting for acceptance.
+                  </p>
                 </div>
                 <button
-                  onClick={() => removeTeamMember({ invitationId: inv._id })}
+                  type="button"
+                  onClick={() => void handleRevokeStandaloneInvite(invitation._id)}
                   title="Revoke invitation"
-                  className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-500"
+                  className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       <RemoveConfirmationDialog
         open={removeMemberConfirm !== null}
@@ -994,7 +1183,10 @@ export default function TeamPage() {
         {blockedMechanic && blockedMechanic.blockingBookings.length > 0 && (
           <div className="space-y-2">
             {blockedMechanic.blockingBookings.map((booking) => (
-              <div key={booking._id} className="rounded-lg border border-border bg-muted px-3 py-2 text-sm">
+              <div
+                key={booking._id}
+                className="rounded-lg border border-border bg-muted px-3 py-2 text-sm"
+              >
                 <span className="font-medium text-foreground">{booking.status}</span>
                 <span className="text-muted-foreground">
                   {booking.scheduledDate ? ` - ${booking.scheduledDate}` : ""}

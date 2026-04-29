@@ -149,8 +149,7 @@ async function buildManagedMechanicRows(ctx: any, shopId: any) {
         (row: any) =>
           row.is_active &&
           row.mechanic_id &&
-          String(row.mechanic_id) === String(mechanic._id) &&
-          MECHANIC_ROLES.has(row.role)
+          String(row.mechanic_id) === String(mechanic._id)
       );
       const mechanicInvitations = invitations
         .filter(
@@ -275,13 +274,17 @@ export const getManagedByShop = query({
   },
 });
 
-function getBookingTimestamp(booking: { scheduled_date?: string; scheduled_time?: string; created_at: number }) {
+function getBookingTimestamp(booking: {
+  scheduled_date?: string;
+  scheduled_time?: string;
+  created_at?: number;
+}) {
   if (booking.scheduled_date) {
     const time = booking.scheduled_time ?? "00:00";
     const parsed = new Date(`${booking.scheduled_date}T${time}`).getTime();
     if (!Number.isNaN(parsed)) return parsed;
   }
-  return booking.created_at;
+  return booking.created_at ?? 0;
 }
 
 function formatVisitLabel(bookingTs: number): string {

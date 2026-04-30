@@ -64,7 +64,6 @@ import {
   serviceRequiresParts,
   vehiclePassportUpdateValidator,
 } from "./lib/vehicle_passports";
-import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
 
 function normalizeNullableText(value: string | null | undefined) {
   const trimmed = typeof value === "string" ? value.trim() : "";
@@ -231,9 +230,10 @@ export const getByUserIdWithDetails = query({
 
     const results = await Promise.all(
       bookings.map(async (booking) => {
-        const shop = await ctx.db.get(booking.shop_id);
+        // shop_id is optional now (quote-stage tire bookings have no shop yet).
+        const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
         const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
-        const shopName = shop?.name ?? "Unknown Shop";
+        const shopName = shop?.name ?? "Awaiting shop quotes";
         const shopPhone = shop?.phone ?? "";
         const mechanicName = mechanic ? `${mechanic.first_name} ${mechanic.last_name}` : shopName;
         let mechanicImageUrl: string | undefined;
@@ -334,6 +334,7 @@ export const getByUserIdWithDetails = query({
           shopIsVerified: shop?.is_verified ?? false,
           shopLat: shop?.lat,
           shopLng: shop?.lng,
+          tire_specs: booking.tire_specs,
         };
       })
     );
@@ -1126,10 +1127,7 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
     );
 
   return {
-    mileage:
-      typeof prejob.mileage === "number" && Number.isFinite(prejob.mileage)
-        ? prejob.mileage
-        : undefined,
+    mileage: prejob.mileage,
     tires: {
       brand: prejob.tire_brand ?? undefined,
       size_front: prejob.tire_size_front ?? undefined,
@@ -1161,7 +1159,8 @@ function buildPassportPatchFromPostjob(postjob: any) {
     hasText(updates.oil_type) ||
     hasText(updates.coolant_type) ||
     hasText(updates.brake_fluid_type) ||
-    hasText(updates.transmission_fluid_type);
+    hasText(updates.transmission_fluid_type) ||
+    typeof updates.oil_capacity_qts === "number";
 
   return {
     mileage: postjob.completion_mileage,
@@ -1176,6 +1175,7 @@ function buildPassportPatchFromPostjob(postjob: any) {
     fluids: hasFluidUpdate
       ? {
           oil_viscosity: updates.oil_viscosity ?? undefined,
+          oil_capacity_qts: updates.oil_capacity_qts ?? undefined,
           oil_type: updates.oil_type ?? undefined,
           coolant_type: updates.coolant_type ?? undefined,
           brake_fluid_type: updates.brake_fluid_type ?? undefined,
@@ -1379,10 +1379,6 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
         passportRecord?.fluids?.oil_viscosity,
         engine?.oil_viscosity
       ),
-      oil_capacity_qts: firstDefinedNumber(
-        passportRecord?.fluids?.oil_capacity_qts,
-        engine?.oil_capacity_qts
-      ),
       oil_type: firstDefinedString(
         passportRecord?.fluids?.oil_type,
         engine?.oil_spec_standard
@@ -1447,11 +1443,6 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       engine?.oil_viscosity,
       "oem_default"
     ),
-    "fluids.oil_capacity_qts": buildSourceTag(
-      passportRecord?.fluids?.oil_capacity_qts,
-      engine?.oil_capacity_qts,
-      "oem_default"
-    ),
     "fluids.oil_type": buildSourceTag(
       passportRecord?.fluids?.oil_type,
       engine?.oil_spec_standard,
@@ -1492,15 +1483,10 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
     .slice(0, 3);
 
   const recent_services = await Promise.all(
-    completedVehicleBookings.map(async (row: any) => {
-      const service_names = await resolveServiceNames(ctx, row.service_ids);
-      return {
-        date_label: formatShortDateLabel(row.scheduled_date, row.updated_at),
-        service_name: service_names.join(", "),
-        service_names,
-        sort_ms: row.updated_at ?? row._creationTime ?? null,
-      };
-    })
+    completedVehicleBookings.map(async (row: any) => ({
+      date_label: formatShortDateLabel(row.scheduled_date, row.updated_at),
+      service_name: (await resolveServiceNames(ctx, row.service_ids)).join(", "),
+    }))
   );
 
   const mechanicNameCache = new Map<string, string>();
@@ -1564,22 +1550,9 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
   };
 }
 
-function validatePrejobReport(
-  prejob: any,
-  baselineMileage: number | null,
-  serviceFlags: ReturnType<typeof getBookingServiceFlags>
-) {
+function validatePrejobReport(prejob: any, baselineMileage: number | null) {
   if (typeof prejob.mileage !== "number" || !Number.isFinite(prejob.mileage)) {
     throw new Error("Mileage is required before starting this booking.");
-  }
-  if (!hasText(prejob.tire_brand)) {
-    throw new Error("Tire brand is required before starting this booking.");
-  }
-  if (!hasText(prejob.tire_size_front)) {
-    throw new Error("Front tire size is required before starting this booking.");
-  }
-  if (!hasText(prejob.tire_size_rear)) {
-    throw new Error("Rear tire size is required before starting this booking.");
   }
   if (!hasText(prejob.front_tire_condition)) {
     throw new Error("Front tire condition is required before starting this booking.");
@@ -1595,72 +1568,6 @@ function validatePrejobReport(
       `Mileage cannot move backward. Stored mileage is ${baselineMileage.toLocaleString()}.`
     );
   }
-  if (serviceFlags.hasBrakeWork) {
-    if (
-      typeof prejob.brakes?.front_pad_mm !== "number" ||
-      !Number.isFinite(prejob.brakes.front_pad_mm)
-    ) {
-      throw new Error("Front pad thickness is required for brake-related work.");
-    }
-    if (
-      typeof prejob.brakes?.rear_pad_mm !== "number" ||
-      !Number.isFinite(prejob.brakes.rear_pad_mm)
-    ) {
-      throw new Error("Rear pad thickness is required for brake-related work.");
-    }
-    if (!hasText(prejob.brakes?.rotor_condition)) {
-      throw new Error("Rotor condition is required for brake-related work.");
-    }
-  }
-  if (serviceFlags.hasOilChange) {
-    if (!hasText(prejob.fluid_overrides?.oil_viscosity)) {
-      throw new Error("Oil viscosity is required for an oil change.");
-    }
-    if (!hasText(prejob.fluid_overrides?.oil_type)) {
-      throw new Error("Oil type is required for an oil change.");
-    }
-  }
-}
-
-async function persistPrejobSurvey(
-  ctx: any,
-  {
-    booking,
-    passportView,
-    prejob,
-    now,
-    startedAtMs,
-  }: {
-    booking: any;
-    passportView: any;
-    prejob: any;
-    now: number;
-    startedAtMs?: number;
-  }
-) {
-  const jobActual = await ensureJobActualRecord(ctx, {
-    booking,
-    now,
-    startedAtMs,
-  });
-
-  const jobActualPatch: Record<string, any> = {
-    prejob_report: prejob,
-    updated_at: now,
-    logged_at_ms: now,
-  };
-  if (startedAtMs != null) {
-    jobActualPatch.started_at = jobActual.started_at ?? startedAtMs;
-  }
-
-  await ctx.db.patch(jobActual._id, jobActualPatch);
-
-  await upsertVehiclePassportRecord(ctx, {
-    vin: booking.vin,
-    patch: buildPassportPatchFromPrejob(prejob, passportView.passport),
-    now,
-    markConfirmed: true,
-  });
 }
 
 function validatePostjobReport(postjob: any, baselineMileage: number | null, requiresParts: boolean) {
@@ -3045,7 +2952,6 @@ export const getJobDetail = query({
             actualPartsCost: jobActual.actual_parts_cost ?? null,
             difficultyRating: jobActual.difficulty_rating ?? null,
             technicianNotes: jobActual.technician_notes ?? "",
-            prejobReport: jobActual.prejob_report ?? null,
             partsUsed: jobActual.parts_used ?? [],
           }
         : null,
@@ -3071,7 +2977,6 @@ export const getVehiclePassportForBooking = query({
   },
 });
 
-// TODO: Remove confirmVehiclePassport — passport editing now happens exclusively via the pre-job survey. This mutation is no longer called from the frontend.
 export const confirmVehiclePassport = mutation({
   args: {
     bookingId: v.id("bookings"),
@@ -3151,22 +3056,30 @@ export const startWithPrejob = mutation({
     }
 
     const passportView = await buildVehiclePassportForBooking(ctx, booking);
-    const serviceFlags = getBookingServiceFlags(
-      await resolveServiceNames(ctx, booking.service_ids)
-    );
-    validatePrejobReport(
-      args.prejob,
-      passportView.passport.mileage ?? null,
-      serviceFlags
-    );
+    if (passportView.missing_fields.length > 0) {
+      throw new Error("Confirm the required vehicle passport fields before starting this booking.");
+    }
+    validatePrejobReport(args.prejob, passportView.passport.mileage ?? null);
 
     const now = Date.now();
-    await persistPrejobSurvey(ctx, {
+    const jobActual = await ensureJobActualRecord(ctx, {
       booking,
-      passportView,
-      prejob: args.prejob,
       now,
       startedAtMs: now,
+    });
+
+    await ctx.db.patch(jobActual._id, {
+      prejob_report: args.prejob,
+      updated_at: now,
+      logged_at_ms: now,
+      started_at: jobActual.started_at ?? now,
+    });
+
+    await upsertVehiclePassportRecord(ctx, {
+      vin: booking.vin,
+      patch: buildPassportPatchFromPrejob(args.prejob, passportView.passport),
+      now,
+      markConfirmed: true,
     });
 
     if (booking.status !== "in_progress") {
@@ -3177,35 +3090,6 @@ export const startWithPrejob = mutation({
         reason: "started_by_shop",
       });
     }
-
-    return await buildVehiclePassportForBooking(ctx, booking);
-  },
-});
-
-export const savePrejob = mutation({
-  args: {
-    bookingId: v.id("bookings"),
-    prejob: prejobReportValidator,
-  },
-  handler: async (ctx, args) => {
-    const user = await getCurrentUser(ctx);
-    const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
-
-    await requireShopStaff(ctx, user._id, booking.shop_id);
-    if (!["confirmed", "in_progress"].includes(booking.status)) {
-      throw new Error("Only confirmed or active bookings can save pre-job details.");
-    }
-
-    const passportView = await buildVehiclePassportForBooking(ctx, booking);
-    const now = Date.now();
-
-    await persistPrejobSurvey(ctx, {
-      booking,
-      passportView,
-      prejob: args.prejob,
-      now,
-    });
 
     return await buildVehiclePassportForBooking(ctx, booking);
   },
@@ -4064,5 +3948,204 @@ export const revertExpiredReschedules = internalMutation({
     }
 
     return expired.length;
+  },
+});
+
+// ============================================================================
+// TIRE QUOTE REQUESTS — broadcast-quote flow (Apr 23 redesign)
+// ============================================================================
+
+/**
+ * MUTATION: createTireQuoteRequest
+ * Creates a quote-stage booking with status "pending_quote". No shop_id is
+ * assigned — shops respond via `tire_quote_responses.create`, and the user
+ * picks one with `acceptTireQuote`.
+ *
+ * Replaces the local-only `synthesizeTireQuoteBooking` on the mobile side.
+ */
+export const createTireQuoteRequest = mutation({
+  args: {
+    user_id: v.id("users"),
+    vin: v.string(),
+    tire_specs: v.object({
+      size: v.string(),
+      type: v.string(),
+      tier: v.string(),
+      quantity: v.number(),
+    }),
+    service_ids: v.optional(v.array(v.id("services"))),
+  },
+  handler: async (ctx, args) => {
+    const normalizedVin = args.vin.toUpperCase().trim();
+    const now = Date.now();
+
+    const bookingId = await ctx.db.insert("bookings", {
+      user_id: args.user_id,
+      vin: normalizedVin,
+      service_ids: args.service_ids ?? [],
+      status: "pending_quote",
+      tire_specs: args.tire_specs,
+      created_at: now,
+      updated_at: now,
+    });
+
+    await logBookingStatusChange(
+      ctx,
+      bookingId,
+      undefined,
+      "pending_quote",
+      args.user_id,
+      "tire_quote_requested",
+    );
+
+    await ctx.db.insert("analytics_events", {
+      user_id: args.user_id,
+      event_type: "tire_quote_request_created",
+      event_category: "booking",
+      event_data: {
+        booking_id: bookingId,
+        tire_specs: args.tire_specs,
+      },
+      timestamp: now,
+    });
+
+    return bookingId;
+  },
+});
+
+/**
+ * MUTATION: acceptTireQuote
+ * The user picks one of the shop responses for their pending tire booking.
+ * Fills in shop_id, costs, and pricing onto the booking, flips status to
+ * "confirmed", and supersedes the remaining responses.
+ */
+export const acceptTireQuote = mutation({
+  args: {
+    booking_id: v.id("bookings"),
+    response_id: v.id("tire_quote_responses"),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.booking_id);
+    if (!booking) throw new Error("Booking not found");
+    if (booking.status !== "quotes_ready" && booking.status !== "pending_quote") {
+      throw new Error(`Cannot accept a quote on a booking in status "${booking.status}".`);
+    }
+
+    const response = await ctx.db.get(args.response_id);
+    if (!response) throw new Error("Quote response not found");
+    if (String(response.booking_id) !== String(args.booking_id)) {
+      throw new Error("Response does not belong to this booking.");
+    }
+    if (response.superseded_at != null) {
+      throw new Error("This quote has already been superseded.");
+    }
+
+    const now = Date.now();
+
+    // Fill in the chosen shop + pricing on the booking. Time slot is left
+    // empty for now — scheduling against the shop's calendar is a follow-up
+    // (the response.availability is currently free-text).
+    await ctx.db.patch(args.booking_id, {
+      shop_id: response.shop_id,
+      labor_cost: response.labor_cost,
+      parts_cost: response.per_tire_price * response.quantity,
+      total_cost: response.total,
+      status: "confirmed",
+      updated_at: now,
+    });
+
+    // Supersede all other live responses for this booking.
+    const siblings = await ctx.db
+      .query("tire_quote_responses")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.booking_id))
+      .collect();
+    for (const sibling of siblings) {
+      if (String(sibling._id) === String(args.response_id)) continue;
+      if (sibling.superseded_at != null) continue;
+      await ctx.db.patch(sibling._id, { superseded_at: now });
+    }
+
+    await logBookingStatusChange(
+      ctx,
+      args.booking_id,
+      booking.status,
+      "confirmed",
+      booking.user_id,
+      "tire_quote_accepted",
+    );
+
+    return args.booking_id;
+  },
+});
+
+/**
+ * QUERY: listOpenTireQuoteRequestsForShop
+ * Returns quote-stage bookings the given shop has NOT yet responded to.
+ * Used by the website's "Tire Quote Requests" view in the shop portal.
+ *
+ * Geo / proximity filtering is post-MVP; for now this returns every open
+ * tire-quote-request globally so the shop can see what's out there.
+ */
+export const listOpenTireQuoteRequestsForShop = query({
+  args: {
+    shopId: v.id("shops"),
+  },
+  handler: async (ctx, args) => {
+    const openBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q) => q.eq("status", "pending_quote"))
+      .collect();
+
+    const alsoQuotesReady = await ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q) => q.eq("status", "quotes_ready"))
+      .collect();
+
+    const candidates = [...openBookings, ...alsoQuotesReady].filter(
+      (b) => b.tire_specs != null,
+    );
+
+    // Filter out bookings this shop has already quoted on.
+    const filtered = await Promise.all(
+      candidates.map(async (booking) => {
+        const existing = await ctx.db
+          .query("tire_quote_responses")
+          .withIndex("by_booking_and_shop", (q) =>
+            q.eq("booking_id", booking._id).eq("shop_id", args.shopId),
+          )
+          .filter((q) => q.eq(q.field("superseded_at"), undefined))
+          .first();
+        return existing ? null : booking;
+      }),
+    );
+
+    const open = filtered.filter((b): b is NonNullable<typeof b> => b != null);
+
+    // Join basic vehicle context for the shop dashboard cards.
+    return Promise.all(
+      open.map(async (booking) => {
+        const vehicle = await ctx.db
+          .query("vehicles")
+          .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+          .first();
+        const meta =
+          (vehicle?.metadata as { make?: string; model?: string } | undefined) ?? undefined;
+        return {
+          _id: booking._id,
+          _creationTime: booking._creationTime,
+          status: booking.status,
+          tire_specs: booking.tire_specs,
+          vin: booking.vin,
+          submitted_at: booking.created_at ?? booking._creationTime,
+          vehicle: vehicle
+            ? {
+                year: vehicle.year ?? null,
+                make: meta?.make ?? null,
+                model: meta?.model ?? null,
+              }
+            : null,
+        };
+      }),
+    );
   },
 });

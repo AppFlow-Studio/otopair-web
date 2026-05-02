@@ -1033,10 +1033,10 @@ export default function SchedulePage() {
       {/* Blocked time drawer */}
       <div
         className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-          drawerOpen ? "w-[420px]" : "w-0"
+          drawerOpen ? "w-[552px]" : "w-0"
         }`}
       >
-        <div className="w-[396px] ml-6 flex h-[calc(100vh-320px)] min-h-[500px] flex-col overflow-hidden rounded-xl border border-border bg-card">
+        <div className="w-[528px] ml-6 flex h-[calc(100vh-320px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
           {blockTimeDrawer && (
             <div className="flex flex-col h-full">
               {/* Header */}
@@ -1323,8 +1323,8 @@ export default function SchedulePage() {
       </div>
 
       {/* Job detail drawer */}
-      <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[504px]" : "w-0"}`}>
-        <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden h-[calc(100vh-320px)] min-h-[500px]">
+      <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[552px]" : "w-0"}`}>
+        <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-320px)] min-h-[500px]">
           {selectedBookingId && (
             <BookingDetailPanel
               ref={jobDetailRef}
@@ -1345,8 +1345,8 @@ export default function SchedulePage() {
 
       {/* Create booking drawer */}
       {createBookingDrawer && (
-        <div className="flex-shrink-0 w-[420px] h-[calc(100vh-320px)] min-h-[500px]">
-          <div className="w-[396px] ml-6 flex h-full flex-col overflow-hidden rounded-xl border border-border bg-card">
+        <div className="flex-shrink-0 w-[552px] h-[calc(100vh-320px)] min-h-[500px]">
+          <div className="w-[528px] ml-6 flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card">
             <CreateBookingDrawer
               initialDate={createBookingDrawer.date}
               initialTime={createBookingDrawer.time}

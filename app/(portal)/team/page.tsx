@@ -16,13 +16,20 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectItem,
+  SelectListBox,
+  SelectPopover,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { drawerSelectTriggerClassName } from "@/components/drawer-panel-styles";
 import { removeTeamMember } from "@/lib/remove-team-member";
 import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
   Camera,
-  Crown,
   Ellipsis,
-  Headset,
   Loader2,
   Mail,
   Pencil,
@@ -31,7 +38,6 @@ import {
   User,
   UserPlus,
   Users,
-  Wrench,
   X,
 } from "lucide-react";
 
@@ -125,16 +131,6 @@ function getRoleLabel(role?: string | null): string {
   return role ? role.replace(/_/g, " ") : "Team Member";
 }
 
-function getRoleBadgeClass(role?: string | null) {
-  if (role === "owner" || role === "shop_owner") {
-    return "border-secondary/15 bg-secondary/10 text-secondary";
-  }
-  if (role === "front_desk") {
-    return "border-accent/20 bg-accent/10 text-accent";
-  }
-  return "border-primary/15 bg-primary/10 text-primary";
-}
-
 function getPortalStatusMeta(status: MechanicRow["portalStatus"]) {
   if (status === "active") {
     return {
@@ -164,12 +160,6 @@ function getPortalStatusMeta(status: MechanicRow["portalStatus"]) {
     label: "Not invited",
     className: "border-border bg-muted text-muted-foreground",
   };
-}
-
-function RoleIcon({ role }: { role?: string | null }) {
-  if (role === "owner" || role === "shop_owner") return <Crown className="h-3.5 w-3.5" />;
-  if (role === "front_desk") return <Headset className="h-3.5 w-3.5" />;
-  return <Wrench className="h-3.5 w-3.5" />;
 }
 
 function PersonAvatar({
@@ -210,6 +200,39 @@ function getFormSubmitLabel(form: MemberForm, submitting: boolean) {
   }
 
   return `Invite ${getRoleLabel(form.role).toLowerCase()}`;
+}
+
+function RoleSelect({
+  selectedRole,
+  onSelectionChange,
+  disabled = false,
+  triggerClassName,
+}: {
+  selectedRole: string;
+  onSelectionChange: (role: string) => void;
+  disabled?: boolean;
+  triggerClassName?: string;
+}) {
+  return (
+    <Select
+      selectedKey={selectedRole}
+      onSelectionChange={(key) => onSelectionChange(String(key))}
+      isDisabled={disabled}
+    >
+      <SelectTrigger className={triggerClassName ?? drawerSelectTriggerClassName} aria-label="Role">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectPopover placement="bottom start">
+        <SelectListBox shouldFocusWrap>
+          {ROLE_OPTIONS.map((role) => (
+            <SelectItem key={role.value} id={role.value} textValue={role.label}>
+              {role.label}
+            </SelectItem>
+          ))}
+        </SelectListBox>
+      </SelectPopover>
+    </Select>
+  );
 }
 
 export default function TeamPage() {
@@ -313,6 +336,7 @@ export default function TeamPage() {
     "w-full rounded-lg border border-input bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
   const labelClass = "mb-1.5 block text-sm font-medium text-foreground";
   const badgeClass = "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium";
+  const directoryNameClass = "truncate text-sm font-semibold text-foreground";
 
   function clearFormMessages() {
     setFormError(null);
@@ -655,20 +679,14 @@ export default function TeamPage() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className={labelClass}>Role</label>
-              <select
-                value={memberForm.role}
-                onChange={(event) =>
-                  handleFormRoleChange(event.target.value as MemberForm["role"])
+              <RoleSelect
+                selectedRole={memberForm.role}
+                onSelectionChange={(role) =>
+                  handleFormRoleChange(role as MemberForm["role"])
                 }
                 disabled={memberForm.mechanicId !== null}
-                className={inputClass}
-              >
-                {ROLE_OPTIONS.map((role) => (
-                  <option key={role.value} value={role.value}>
-                    {role.label}
-                  </option>
-                ))}
-              </select>
+                triggerClassName={inputClass}
+              />
             </div>
             <div>
               <label className={labelClass}>Title</label>
@@ -725,11 +743,13 @@ export default function TeamPage() {
               className={inputClass}
               placeholder="name@example.com"
             />
-            <p className="mt-2 text-xs text-muted-foreground">
-              {memberForm.role === "shop_mechanic"
-                ? "Email is optional. Leave it blank to save the mechanic profile without portal access."
-                : "This sends a portal invitation without creating a mechanic profile."}
-            </p>
+            <div className="mt-2 min-h-5">
+              {memberForm.role === "shop_mechanic" && (
+                <p className="text-xs text-muted-foreground">
+                  Email is optional. Leave it blank to save the mechanic profile without portal access.
+                </p>
+              )}
+            </div>
             {memberForm.mechanicId && (
               <p className="mt-2 text-xs text-muted-foreground">
                 Mechanic profile edits stay under the mechanic role. Use the member actions below if
@@ -819,6 +839,12 @@ export default function TeamPage() {
               const avatarUrl = mechanic.photoUrl || linkedMember?.user.profile_photo_url || null;
               const status = getPortalStatusMeta(mechanic.portalStatus);
               const isBusy = mechanicActionId === mechanic._id || uploadingMechanicId === mechanic._id;
+              const subtitle =
+                mechanic.title && mechanic.title !== "Mechanic"
+                  ? linkedEmail
+                    ? `${mechanic.title} - ${linkedEmail}`
+                    : mechanic.title
+                  : linkedEmail;
 
               return (
                 <div
@@ -832,19 +858,19 @@ export default function TeamPage() {
 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className="truncate text-sm font-semibold text-foreground">
+                      <p className={directoryNameClass}>
                         {mechanic.firstName} {mechanic.lastName}
                       </p>
-                      <span className={`${badgeClass} ${getRoleBadgeClass(linkedRole)}`}>
-                        <RoleIcon role={linkedRole} />
+                      {mechanic.portalStatus === "not_invited" && (
+                        <span className={`${badgeClass} ${status.className}`}>{status.label}</span>
+                      )}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">
                         {getRoleLabel(linkedRole)}
                       </span>
-                      <span className={`${badgeClass} ${status.className}`}>{status.label}</span>
                     </div>
-                    <p className="mt-1 truncate text-sm text-muted-foreground">
-                      {mechanic.title || "Mechanic"}
-                      {linkedEmail ? ` - ${linkedEmail}` : ""}
-                    </p>
+                    <p className="mt-1 truncate text-sm text-muted-foreground">{subtitle}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {mechanic.reviewCount > 0
                         ? `${mechanic.rating.toFixed(1)} rating - ${mechanic.reviewCount} reviews`
@@ -859,18 +885,11 @@ export default function TeamPage() {
 
                   {isChangingRole && linkedMember && roleChange ? (
                     <div className="flex shrink-0 items-center gap-2">
-                      <select
-                        autoFocus
-                        defaultValue={roleChange.currentRole}
-                        onChange={(event) => setNewRole(event.target.value)}
-                        className="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                      >
-                        {ROLE_OPTIONS.map((role) => (
-                          <option key={role.value} value={role.value}>
-                            {role.label}
-                          </option>
-                        ))}
-                      </select>
+                      <RoleSelect
+                        selectedRole={newRole || roleChange.currentRole}
+                        onSelectionChange={setNewRole}
+                        triggerClassName={`min-w-40 ${drawerSelectTriggerClassName}`}
+                      />
                       <button
                         type="button"
                         onClick={() =>
@@ -1003,10 +1022,9 @@ export default function TeamPage() {
                   <PersonAvatar imageUrl={member.user.profile_photo_url} name={displayName} />
 
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="truncate text-sm font-semibold text-foreground">{displayName}</p>
-                      <span className={`${badgeClass} ${getRoleBadgeClass(role)}`}>
-                        <RoleIcon role={role} />
+                    <p className={directoryNameClass}>{displayName}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">
                         {getRoleLabel(role)}
                       </span>
                       {isCurrentUser && (
@@ -1022,18 +1040,11 @@ export default function TeamPage() {
 
                   {isChangingRole && roleChange ? (
                     <div className="flex shrink-0 items-center gap-2">
-                      <select
-                        autoFocus
-                        defaultValue={roleChange.currentRole}
-                        onChange={(event) => setNewRole(event.target.value)}
-                        className="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                      >
-                        {ROLE_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                      <RoleSelect
+                        selectedRole={newRole || roleChange.currentRole}
+                        onSelectionChange={setNewRole}
+                        triggerClassName={`min-w-40 ${drawerSelectTriggerClassName}`}
+                      />
                       <button
                         type="button"
                         onClick={() => handleChangeRole(member._id, newRole || roleChange.currentRole)}
@@ -1107,12 +1118,8 @@ export default function TeamPage() {
                     <p className="truncate text-sm font-semibold text-foreground">
                       {invitation.email}
                     </p>
-                    <span className={`${badgeClass} ${getRoleBadgeClass(invitation.role)}`}>
-                      <RoleIcon role={invitation.role} />
+                    <span className="text-xs font-medium text-muted-foreground">
                       {getRoleLabel(invitation.role)}
-                    </span>
-                    <span className={`${badgeClass} border-border bg-muted text-muted-foreground`}>
-                      Pending invitation
                     </span>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">

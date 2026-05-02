@@ -13,7 +13,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Check, Clock, Ellipsis, History, Loader2, RotateCcw, X } from "lucide-react";
+import { Check, Clock, Copy, Ellipsis, History, Loader2, RotateCcw, X } from "lucide-react";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 import VehiclePassportSection from "@/components/vehicle-passport-section";
@@ -305,11 +305,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
     const [isSubmittingPrejob, setIsSubmittingPrejob] = useState(false);
     const [isSubmittingPostjob, setIsSubmittingPostjob] = useState(false);
+    const [copiedField, setCopiedField] = useState<"email" | "vin" | null>(null);
 
     const wrapperRef = useRef<HTMLDivElement>(null);
     const assignTriggerRef = useRef<HTMLDivElement>(null);
     const declineTextareaRef = useRef<HTMLTextAreaElement>(null);
     const cancelTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const copyEmailTimeoutRef = useRef<number | null>(null);
 
     const acceptJob = useMutation(api.bookings.accept);
     const cancelJob = useMutation(api.bookings.cancel);
@@ -363,6 +365,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setAssigningMechanicId(currentMechanicId);
       setShowActualsDialog(false);
       setActualsDialogMode("complete");
+      setCopiedField(null);
+      if (copyEmailTimeoutRef.current !== null) {
+        window.clearTimeout(copyEmailTimeoutRef.current);
+        copyEmailTimeoutRef.current = null;
+      }
     }, [jobId, currentMechanicId]);
 
     // Reset decline modal state when it closes
@@ -392,6 +399,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         cancelTextareaRef.current?.focus();
       }
     }, [showCancelConfirm, cancelReason]);
+
+    useEffect(() => {
+      return () => {
+        if (copyEmailTimeoutRef.current !== null) {
+          window.clearTimeout(copyEmailTimeoutRef.current);
+        }
+      };
+    }, []);
 
     /* ---- Handlers ---- */
 
@@ -568,6 +583,29 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       if (!job?._id || !job.mechanicId) return;
       setActionError("");
       setShowPrejobDialog(true);
+    }
+
+    async function handleCopyValue(
+      value: string | null | undefined,
+      field: "email" | "vin",
+      errorMessage: string
+    ) {
+      const text = value?.trim();
+      if (!text) return;
+
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopiedField(field);
+        if (copyEmailTimeoutRef.current !== null) {
+          window.clearTimeout(copyEmailTimeoutRef.current);
+        }
+        copyEmailTimeoutRef.current = window.setTimeout(() => {
+          setCopiedField(null);
+          copyEmailTimeoutRef.current = null;
+        }, 1500);
+      } catch {
+        setActionError(errorMessage);
+      }
     }
 
     async function handleStartWithPrejob(
@@ -913,18 +951,73 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     <p className="text-[15px] font-medium text-foreground">
                       {job.customerName}
                     </p>
-                    <p className="mt-1 min-w-0 overflow-hidden text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere] sm:text-sm">
-                      {job.customerEmail || "No email on file"}
-                    </p>
+                    <div className="relative mt-1 pr-9">
+                      {job.customerEmail ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleCopyValue(
+                                job.customerEmail,
+                                "email",
+                                "Could not copy customer email."
+                              )
+                            }
+                            className="absolute right-0 top-0 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            aria-label="Copy customer email"
+                            title={copiedField === "email" ? "Copied" : "Copy email"}
+                          >
+                            {copiedField === "email" ? (
+                              <Check className="h-4 w-4" aria-hidden="true" />
+                            ) : (
+                              <Copy className="h-4 w-4" aria-hidden="true" />
+                            )}
+                          </button>
+                          <p
+                            className="truncate pr-1 text-xs leading-5 text-muted-foreground sm:text-sm"
+                            title={job.customerEmail}
+                          >
+                            {job.customerEmail}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-xs leading-5 text-muted-foreground sm:text-sm">
+                          No email on file
+                        </p>
+                      )}
+                    </div>
                   </div>
                   <div className={drawerInfoCardClassName}>
                     <DrawerFieldLabel>Vehicle</DrawerFieldLabel>
                     <p className="text-[15px] font-medium text-foreground">
                       {job.vehicle}
                     </p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {job.vin}
-                    </p>
+                    <div className="relative mt-1 pr-9">
+                      {job.vin ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleCopyValue(job.vin, "vin", "Could not copy VIN.")
+                            }
+                            className="absolute right-0 top-0 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            aria-label="Copy VIN"
+                            title={copiedField === "vin" ? "Copied" : "Copy VIN"}
+                          >
+                            {copiedField === "vin" ? (
+                              <Check className="h-4 w-4" aria-hidden="true" />
+                            ) : (
+                              <Copy className="h-4 w-4" aria-hidden="true" />
+                            )}
+                          </button>
+                          <p className="truncate pr-1 text-sm text-muted-foreground" title={job.vin}>
+                            {job.vin}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No VIN on file</p>
+                      )}
+                    </div>
                   </div>
                   <div className={drawerInfoCardClassName}>
                     <DrawerFieldLabel>Schedule</DrawerFieldLabel>

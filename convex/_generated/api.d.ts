@@ -91,6 +91,7 @@ import type * as spec_variances from "../spec_variances.js";
 import type * as specs from "../specs.js";
 import type * as stripe_webhook_events from "../stripe_webhook_events.js";
 import type * as time_slots from "../time_slots.js";
+import type * as tire_quote_responses from "../tire_quote_responses.js";
 import type * as transactions from "../transactions.js";
 import type * as transmissions from "../transmissions.js";
 import type * as trims from "../trims.js";
@@ -235,6 +236,7 @@ declare const fullApi: ApiFromModules<{
   specs: typeof specs;
   stripe_webhook_events: typeof stripe_webhook_events;
   time_slots: typeof time_slots;
+  tire_quote_responses: typeof tire_quote_responses;
   transactions: typeof transactions;
   transmissions: typeof transmissions;
   trims: typeof trims;

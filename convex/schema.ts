@@ -1073,7 +1073,9 @@ export default defineSchema({
   // [D] 21 fields with reschedule tracking (A/W had 16)
   bookings: defineTable({
     user_id: v.id("users"),
-    shop_id: v.id("shops"),
+    // shop_id is optional so quote-stage tire bookings can exist before any
+    // shop has accepted the request. Filled in once the user picks a quote.
+    shop_id: v.optional(v.id("shops")),
     mechanic_id: v.optional(v.id("mechanics")),
     vin: v.string(),
     service_ids: v.array(v.id("services")),
@@ -1086,6 +1088,16 @@ export default defineSchema({
     parts_cost: v.optional(v.number()),
     total_cost: v.optional(v.number()),
     estimated_labor_minutes: v.optional(v.number()),
+    // Structured tire request specs — populated for tire-quote bookings so the
+    // shop portal can display what was requested without parsing notes.
+    tire_specs: v.optional(
+      v.object({
+        size: v.string(),
+        type: v.string(),
+        tier: v.string(),
+        quantity: v.number(),
+      })
+    ),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
     previous_scheduled_date: v.optional(v.string()),
@@ -1102,6 +1114,31 @@ export default defineSchema({
     .index("by_shop_and_date", ["shop_id", "scheduled_date"])
     .index("by_shop_and_status", ["shop_id", "status"])
     .index("by_created_at", ["created_at"]),
+
+  // Tire quote responses — one row per shop response to a quote-stage
+  // booking (status === "pending_quote"). The user picks one to accept,
+  // which fills in shop_id/labor_cost/etc on the booking and flips it to
+  // "confirmed".
+  tire_quote_responses: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    tire_brand: v.string(),
+    tire_model: v.optional(v.string()),
+    per_tire_price: v.number(),
+    quantity: v.number(),
+    labor_cost: v.number(),
+    total: v.number(),
+    /** Free-text date/time for now (e.g. "Tomorrow, 10:00 AM"). Slotting + scheduling lands when the user accepts. */
+    availability: v.string(),
+    created_at: v.number(),
+    /** Optional expiration so stale quotes can be filtered out. */
+    expires_at: v.optional(v.number()),
+    /** Set when user accepts this quote (or another one). */
+    superseded_at: v.optional(v.number()),
+  })
+    .index("by_booking_id", ["booking_id"])
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_and_shop", ["booking_id", "shop_id"]),
 
   // [I]
   booking_status_history: defineTable({

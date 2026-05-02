@@ -24,6 +24,7 @@ import {
   Keyboard,
   Sprout,
   Trash2,
+  Wrench,
 } from "lucide-react";
 import { UserSupportPage } from "./user-support-page";
 import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
@@ -48,6 +49,7 @@ const mechanicLinks = [
 const bookingSubLinks = [
   { href: "/bookings/create", label: "Create Booking", icon: PlusCircle },
   { href: "/bookings", label: "All Bookings", icon: List },
+  { href: "/bookings/tire-quote-requests", label: "Tire Quote Requests", icon: Wrench },
 ];
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"];

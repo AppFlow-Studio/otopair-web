@@ -256,6 +256,7 @@ export default function SchedulePage() {
   const [btSaving, setBtSaving] = useState(false);
 
   const jobDetailRef = useRef<JobDetailPanelHandle>(null);
+  const seenLateStartReviewIdsRef = useRef<Set<string>>(new Set());
 
   const savedBlockTypes = savedBlockTypesQuery ?? [];
   const saveBlockTimeType = useMutation(api.schedule.saveBlockTimeType);
@@ -659,6 +660,24 @@ export default function SchedulePage() {
     setSelectedLateStartReviewId(null);
     setLateStartReviewError("");
   }, [selectedLateStartReviewId, selectedLateStartReview]);
+
+  useEffect(() => {
+    if (!lateStartReviews) return;
+
+    const seenIds = seenLateStartReviewIdsRef.current;
+    const nextIds = new Set(lateStartReviews.map((review) => review._id));
+    const newReview = lateStartReviews.find((review) => !seenIds.has(review._id)) ?? null;
+
+    seenLateStartReviewIdsRef.current = nextIds;
+
+    if (!newReview || selectedLateStartReviewId) {
+      return;
+    }
+
+    setLateStartReviewError("");
+    setSelectedLateStartReviewId(newReview._id);
+    setToast({ msg: "Late-start decision needed", key: Date.now() });
+  }, [lateStartReviews, selectedLateStartReviewId]);
 
   // Map bookings to calendar events
   const events: CalendarEvent[] = useMemo(() => {

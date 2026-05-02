@@ -924,6 +924,16 @@ async function getLateStartMonitorWindow(
   };
 }
 
+async function scheduleLateStartMonitorProcessing(
+  ctx: any,
+  warningDueAtMs: number
+) {
+  if (!ctx.scheduler?.runAfter) return;
+
+  const delayMs = Math.max(0, warningDueAtMs - Date.now());
+  await ctx.scheduler.runAfter(delayMs, internal.bookings.processLateStartMonitors, {});
+}
+
 function getScheduleChangeMode(booking: any): (typeof SCHEDULE_CHANGE_MODES)[number] {
   return booking.schedule_change_mode === "forced_delay"
     ? "forced_delay"
@@ -2220,6 +2230,7 @@ async function upsertLateStartMonitorForBooking(
       status: "active",
       updated_at: now,
     });
+    await scheduleLateStartMonitorProcessing(ctx, warningDueAtMs);
     return;
   }
 
@@ -2233,6 +2244,7 @@ async function upsertLateStartMonitorForBooking(
     created_at: now,
     updated_at: now,
   });
+  await scheduleLateStartMonitorProcessing(ctx, warningDueAtMs);
 }
 
 async function advanceLateStartMonitorCycle(ctx: any, monitor: any, cycleMinutes?: number) {
@@ -2263,6 +2275,7 @@ async function advanceLateStartMonitorCycle(ctx: any, monitor: any, cycleMinutes
     status: "active",
     updated_at: Date.now(),
   });
+  await scheduleLateStartMonitorProcessing(ctx, warningDueAtMs);
 }
 
 async function findBestAlternateMechanicForWindow(

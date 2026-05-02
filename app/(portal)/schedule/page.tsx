@@ -9,6 +9,7 @@ import {
   CalendarOff,
   CalendarPlus,
   Car,
+  AlertTriangle,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -29,14 +30,18 @@ import {
   type BookingStatus,
 } from "@/lib/booking-status";
 import { usePortalSidebar } from "../portal-context";
-import { statusColors, dateToString } from "./schedule-constants";
+import {
+  statusColors,
+  dateToString,
+  getPendingApprovalLabel,
+} from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 import {
   getBookingEndTime,
   overlapsBlockedSlot,
   overlapsMechanicBooking,
 } from "@/lib/schedule-overlap";
-import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
+import { Calendar, dateFnsLocalizer } from "react-big-calendar";
 import {
   Select,
   SelectItem,
@@ -50,7 +55,7 @@ import { enUS } from "date-fns/locale/en-US";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "./schedule.css";
 import DaySwimLanes from "./day-swim-lanes";
-import type { RescheduleProposal, ContextMenuCellInfo, ContextMenuBlockedInfo } from "./day-swim-lanes";
+import type { RescheduleProposal, ContextMenuCellInfo } from "./day-swim-lanes";
 import WeekSwimLanes from "./week-swim-lanes";
 import WeekSingleMechanicLanes from "./week-single-mechanic-lanes";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
@@ -64,6 +69,9 @@ import {
   DrawerSectionHeader,
 } from "@/components/drawer-panel-styles";
 import RescheduleConfirmationDialog from "@/components/reschedule-confirmation-dialog";
+import LateStartReviewDialog, {
+  type LateStartReviewView,
+} from "@/components/late-start-review-dialog";
 import CreateBookingDrawer from "./create-booking-drawer";
 
 /* ------------------------------------------------------------------ */
@@ -121,6 +129,13 @@ function formatTimeLabelCompact(hhmm: string): string {
   return `${hour}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
+function formatDecisionDueTime(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function hhmmToMinutes(hhmm: string): number {
   const [hours, minutes] = hhmm.split(":").map(Number);
   return hours * 60 + minutes;
@@ -153,6 +168,17 @@ function generateTimeOptions(): Array<{ value: string; label: string }> {
   return options;
 }
 
+const MONTH_STATUS_ORDER = [
+  "pending_shop_acceptance",
+  "pending_customer_acceptance",
+  "confirmed",
+  "in_progress",
+  "completed",
+  "cancelled",
+  "declined",
+  "no_show",
+];
+
 /* ------------------------------------------------------------------ */
 /*  Block time type defaults                                            */
 /* ------------------------------------------------------------------ */
@@ -179,6 +205,9 @@ export default function SchedulePage() {
   const [rescheduleProposal, setRescheduleProposal] = useState<RescheduleProposal | null>(null);
   const [rescheduleError, setRescheduleError] = useState("");
   const [isRescheduling, setIsRescheduling] = useState(false);
+  const [selectedLateStartReviewId, setSelectedLateStartReviewId] = useState<string | null>(null);
+  const [lateStartReviewError, setLateStartReviewError] = useState("");
+  const [isSubmittingLateStartReview, setIsSubmittingLateStartReview] = useState(false);
   const [contextMenu, setContextMenu] = useState<
     | { type: "block"; info: ContextMenuCellInfo }
     | { type: "unblock"; slotId: string; clientX: number; clientY: number }
@@ -232,6 +261,9 @@ export default function SchedulePage() {
   const deleteBlockTimeType = useMutation(api.schedule.deleteBlockTimeType);
 
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
+  const acceptLateStartReview = useMutation(api.bookings.acceptLateStartReview);
+  const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
+  const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
   const blockSlot = useMutation(api.schedule.blockSlot);
   const updateBlockedSlot = useMutation(api.schedule.updateBlockedSlot);
   const unblockSlot = useMutation(api.schedule.unblockSlot);
@@ -240,6 +272,7 @@ export default function SchedulePage() {
   const [legendOpen, setLegendOpen] = useState(false);
   const legendRef = useRef<HTMLDivElement>(null);
   const context = useQuery(api.schedule.getScheduleContext);
+  const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
 
   const selectedJobDetail = useQuery(
     api.bookings.getJobDetail,
@@ -413,22 +446,6 @@ export default function SchedulePage() {
     return () => window.cancelAnimationFrame(frame);
   }, [contextMenu]);
 
-  // Context menu action handlers
-  const handleBlockSlot = useCallback(async (info: ContextMenuCellInfo) => {
-    setContextMenu(null);
-    try {
-      await blockSlot({
-        mechanicId: info.mechanicId as Id<"mechanics">,
-        date: info.date,
-        startTime: info.startTime,
-        endTime: info.endTime,
-      });
-      setToast({ msg: `Blocked ${formatTimeLabel(info.startTime)}–${formatTimeLabel(info.endTime)} for ${info.mechanicName}`, key: Date.now() });
-    } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Failed to block slot", key: Date.now() });
-    }
-  }, [blockSlot]);
-
   const bookingsRef = useRef<typeof bookings>(undefined);
   const handleBlockFullDay = useCallback(async (mechanicId: string, mechanicName: string, date: string, force = false) => {
     setContextMenu(null);
@@ -501,6 +518,77 @@ export default function SchedulePage() {
     }
   }
 
+  async function handleAcceptLateStartReview(reviewId: string) {
+    setLateStartReviewError("");
+    setIsSubmittingLateStartReview(true);
+    try {
+      await acceptLateStartReview({ reviewId: reviewId as Id<"late_start_reviews"> });
+      setSelectedLateStartReviewId(null);
+      setToast({ msg: "Late-start delay applied", key: Date.now() });
+    } catch (err: unknown) {
+      setLateStartReviewError(
+        err instanceof Error ? err.message : "Could not apply the late-start delay.",
+      );
+    } finally {
+      setIsSubmittingLateStartReview(false);
+    }
+  }
+
+  async function handleDenyLateStartReview(reviewId: string) {
+    setLateStartReviewError("");
+    setIsSubmittingLateStartReview(true);
+    try {
+      await denyLateStartReview({ reviewId: reviewId as Id<"late_start_reviews"> });
+      setSelectedLateStartReviewId(null);
+      setToast({ msg: "Late-start delay snoozed until the next checkpoint", key: Date.now() });
+    } catch (err: unknown) {
+      setLateStartReviewError(
+        err instanceof Error ? err.message : "Could not snooze the late-start delay.",
+      );
+    } finally {
+      setIsSubmittingLateStartReview(false);
+    }
+  }
+
+  async function handleApplyManualLateStartReview(
+    reviewId: string,
+    targets: Array<{
+      bookingId: string;
+      newScheduledDate: string;
+      newScheduledTime: string;
+      newMechanicId?: string;
+    }>
+  ) {
+    setLateStartReviewError("");
+    setIsSubmittingLateStartReview(true);
+    try {
+      await applyManualLateStartReview({
+        reviewId: reviewId as Id<"late_start_reviews">,
+        manualTargets: targets.map((target) => ({
+          bookingId: target.bookingId as Id<"bookings">,
+          newScheduledDate: target.newScheduledDate,
+          newScheduledTime: target.newScheduledTime,
+          newMechanicId: target.newMechanicId
+            ? (target.newMechanicId as Id<"mechanics">)
+            : undefined,
+        })),
+      });
+      setSelectedLateStartReviewId(null);
+      setToast({ msg: "Manual late-start delay applied", key: Date.now() });
+    } catch (err: unknown) {
+      setLateStartReviewError(
+        err instanceof Error ? err.message : "Could not apply the manual late-start delay.",
+      );
+    } finally {
+      setIsSubmittingLateStartReview(false);
+    }
+  }
+
+  const openLateStartReview = useCallback((reviewId: string) => {
+    setLateStartReviewError("");
+    setSelectedLateStartReviewId(reviewId);
+  }, []);
+
   // Compute date range based on current view
   const dateRange = useMemo(() => {
     if (currentView === "month") return getMonthRange(currentDate);
@@ -518,6 +606,20 @@ export default function SchedulePage() {
     dateFrom: dateRange.from,
     dateTo: dateRange.to,
   });
+
+  const selectedLateStartReview = useMemo<LateStartReviewView | null>(() => {
+    if (!lateStartReviews || !selectedLateStartReviewId) return null;
+    return (
+      lateStartReviews.find((review) => review._id === selectedLateStartReviewId) ??
+      null
+    );
+  }, [lateStartReviews, selectedLateStartReviewId]);
+
+  useEffect(() => {
+    if (!selectedLateStartReviewId || selectedLateStartReview) return;
+    setSelectedLateStartReviewId(null);
+    setLateStartReviewError("");
+  }, [selectedLateStartReviewId, selectedLateStartReview]);
 
   // Map bookings to calendar events
   const events: CalendarEvent[] = useMemo(() => {
@@ -548,6 +650,8 @@ export default function SchedulePage() {
           mechanicName: b.mechanicName,
           serviceNames: b.serviceNames,
           totalCost: b.totalCost,
+          scheduleChangeMode: b.scheduleChangeMode,
+          customerCanRestoreOriginal: b.customerCanRestoreOriginal,
         };
       });
 
@@ -577,17 +681,6 @@ export default function SchedulePage() {
 
     return [...bookingEvents, ...blockedEvents];
   }, [bookings, blockedSlots, mechanicFilter]);
-
-  const MONTH_STATUS_ORDER = [
-    "pending_shop_acceptance",
-    "pending_customer_acceptance",
-    "confirmed",
-    "in_progress",
-    "completed",
-    "cancelled",
-    "declined",
-    "no_show",
-  ];
 
   // For month view: collapse individual bookings into one chip per status per day
   const calendarEvents = useMemo(() => {
@@ -719,6 +812,7 @@ export default function SchedulePage() {
         })()
       : (event.customerName ?? "");
     const isPendingCustomer = event.status === "pending_customer_acceptance";
+    const pendingLabel = getPendingApprovalLabel(event);
     return (
       <div
         className="px-1.5 py-0.5 rounded text-[11px] leading-tight overflow-hidden h-full cursor-pointer"
@@ -733,7 +827,7 @@ export default function SchedulePage() {
         <p className="font-medium truncate">{customerDisplay}</p>
         <p className="truncate opacity-80">{event.serviceNames?.join(", ")}</p>
         {isPendingCustomer && (
-          <p className="truncate opacity-70 text-[10px]">Awaiting approval</p>
+          <p className="truncate opacity-70 text-[10px]">{pendingLabel}</p>
         )}
       </div>
     );
@@ -881,6 +975,81 @@ export default function SchedulePage() {
         </div>
       </div>
 
+      {lateStartReviews && lateStartReviews.length > 0 ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-amber-700">
+                <AlertTriangle className="h-4 w-4" />
+                <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+                  Late Start Decisions
+                </span>
+              </div>
+              <h2 className="mt-2 text-lg font-semibold text-amber-950">
+                {lateStartReviews.length === 1
+                  ? "1 booking chain needs a delay decision"
+                  : `${lateStartReviews.length} booking chains need delay decisions`}
+              </h2>
+              <p className="mt-1 text-sm text-amber-900/80">
+                Review these before the next automatic delay applies.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => openLateStartReview(lateStartReviews[0]._id)}
+              className="inline-flex shrink-0 items-center justify-center rounded-lg bg-amber-900 px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+            >
+              Review first alert
+            </button>
+          </div>
+
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {lateStartReviews.map((review) => {
+              const autoApplyLabel =
+                review.status === "blocked_manual_review"
+                  ? "Automatic delay could not be built safely."
+                  : `Auto-applies at ${formatDecisionDueTime(review.decisionDueAtMs)} if nobody responds.`;
+              return (
+                <button
+                  key={review._id}
+                  type="button"
+                  onClick={() => openLateStartReview(review._id)}
+                  className="rounded-2xl border border-amber-200 bg-white/90 p-4 text-left transition-[border-color,box-shadow,background-color] hover:border-amber-300 hover:bg-white hover:shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground">
+                        {review.upstreamCustomerName}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Scheduled for{" "}
+                        {review.upstreamScheduledTime
+                          ? formatTimeLabel(review.upstreamScheduledTime)
+                          : "an unscheduled time"}
+                        {" "}with {review.upstreamMechanicName ?? "an assigned mechanic"}
+                      </p>
+                      {review.upstreamServiceSummary ? (
+                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                          {review.upstreamServiceSummary}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+                      +{review.cycleMinutes}m
+                    </span>
+                  </div>
+                  <p className="mt-3 text-sm text-amber-900">{autoApplyLabel}</p>
+                  <p className="mt-2 text-xs font-medium text-amber-800">
+                    {review.proposals.length} affected booking
+                    {review.proposals.length === 1 ? "" : "s"}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
       {/* Flex row: calendar + drawers */}
       <div className="flex items-start">
       {/* Main content */}
@@ -987,7 +1156,9 @@ export default function SchedulePage() {
             date={currentDate}
             view={currentView}
             onNavigate={handleNavigate}
-            onView={handleViewChange as any}
+            onView={(view) =>
+              handleViewChange(view as "month" | "week" | "day")
+            }
             min={minTime}
             max={maxTime}
             getNow={() => new Date()}
@@ -1008,8 +1179,8 @@ export default function SchedulePage() {
               weekdayFormat: (date: Date) => format(date, "EEE"),
             }}
             components={{
-              event: EventComponent as any,
-              toolbar: CustomToolbar as any,
+              event: EventComponent,
+              toolbar: CustomToolbar,
             }}
             eventPropGetter={() => ({
               style: {
@@ -1370,6 +1541,32 @@ export default function SchedulePage() {
         onCancel={() => setRescheduleProposal(null)}
         onConfirm={() => void handleConfirmReschedule()}
         reserveOriginalSlotMessage="The booking will be set to Pending Customer until the customer responds. If they don't respond within 24 hours, the original time will be restored automatically."
+      />
+
+      <LateStartReviewDialog
+        review={selectedLateStartReview}
+        mechanics={mechanics}
+        error={lateStartReviewError}
+        isSubmitting={isSubmittingLateStartReview}
+        onClose={() => {
+          setLateStartReviewError("");
+          setSelectedLateStartReviewId(null);
+        }}
+        onAccept={() =>
+          selectedLateStartReview
+            ? void handleAcceptLateStartReview(selectedLateStartReview._id)
+            : undefined
+        }
+        onDeny={() =>
+          selectedLateStartReview
+            ? void handleDenyLateStartReview(selectedLateStartReview._id)
+            : undefined
+        }
+        onApplyManual={(targets) =>
+          selectedLateStartReview
+            ? void handleApplyManualLateStartReview(selectedLateStartReview._id, targets)
+            : undefined
+        }
       />
 
       {/* Right-click context menu */}

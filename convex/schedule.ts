@@ -280,6 +280,10 @@ export const getBookingsForRange = query({
             : null,
           serviceNames: await resolveServiceNames(ctx, booking.service_ids),
           totalCost: booking.total_cost,
+          scheduleChangeMode: booking.schedule_change_mode ?? "manual_reschedule",
+          customerCanRestoreOriginal: booking.customer_can_restore_original !== false,
+          scheduleChangeSourceBookingId:
+            booking.schedule_change_source_booking_id ?? null,
         };
       })
     );

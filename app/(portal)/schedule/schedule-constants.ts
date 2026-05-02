@@ -22,6 +22,8 @@ export interface CalendarEvent {
   totalCost?: number;
   blockTitle?: string | null;
   note?: string | null;
+  scheduleChangeMode?: string;
+  customerCanRestoreOriginal?: boolean;
 }
 
 export const statusColors: Record<string, { bg: string; text: string; border: string }> = {
@@ -39,4 +41,18 @@ export function dateToString(d: Date): string {
   const mo = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${mo}-${day}`;
+}
+
+export function getPendingApprovalLabel(
+  value:
+    | Pick<CalendarEvent, "scheduleChangeMode">
+    | string
+    | null
+    | undefined,
+): string {
+  const scheduleChangeMode =
+    typeof value === "string" ? value : value?.scheduleChangeMode;
+  return scheduleChangeMode === "forced_delay"
+    ? "Late-start delay pending"
+    : "Awaiting approval";
 }

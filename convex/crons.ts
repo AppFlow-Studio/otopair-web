@@ -46,4 +46,10 @@ crons.interval(
   internal.bookings.revertExpiredReschedules,
 );
 
+crons.interval(
+  "process-late-start-monitors",
+  { minutes: 1 },
+  internal.bookings.processLateStartMonitors,
+);
+
 export default crons;

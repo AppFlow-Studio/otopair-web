@@ -1,8 +1,12 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Ban, Users } from "lucide-react";
-import { statusColors, dateToString } from "./schedule-constants";
+import {
+  statusColors,
+  dateToString,
+  getPendingApprovalLabel,
+} from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 
 interface Mechanic {
@@ -198,21 +202,33 @@ export default function DaySwimLanes({
 
   // Stable refs for values used inside pointer event closures
   const columnsRef = useRef(columns);
-  columnsRef.current = columns;
   const slotsRef = useRef(slots);
-  slotsRef.current = slots;
   const mechanicsRef = useRef(mechanics);
-  mechanicsRef.current = mechanics;
   const onSelectEventRef = useRef(onSelectEvent);
-  onSelectEventRef.current = onSelectEvent;
   const onProposeRescheduleRef = useRef(onProposeReschedule);
-  onProposeRescheduleRef.current = onProposeReschedule;
   const currentDateRef = useRef(currentDate);
-  currentDateRef.current = currentDate;
   const onDragErrorRef = useRef(onDragError);
-  onDragErrorRef.current = onDragError;
   const eventsRef = useRef(events);
-  eventsRef.current = events;
+
+  useEffect(() => {
+    columnsRef.current = columns;
+    slotsRef.current = slots;
+    mechanicsRef.current = mechanics;
+    onSelectEventRef.current = onSelectEvent;
+    onProposeRescheduleRef.current = onProposeReschedule;
+    currentDateRef.current = currentDate;
+    onDragErrorRef.current = onDragError;
+    eventsRef.current = events;
+  }, [
+    columns,
+    slots,
+    mechanics,
+    onSelectEvent,
+    onProposeReschedule,
+    currentDate,
+    onDragError,
+    events,
+  ]);
 
   /** Given a viewport coordinate, return which column + slot the pointer is over. */
   const getDropTarget = useCallback((clientX: number, clientY: number) => {
@@ -256,9 +272,10 @@ export default function DaySwimLanes({
     const startY = e.clientY;
     let dragging = false;
 
-    function createFloating() {
-      const colors = statusColors[ev.status ?? "confirmed"] ?? statusColors.confirmed;
-      const isPendingCustomer = ev.status === "pending_customer_acceptance";
+      function createFloating() {
+        const colors = statusColors[ev.status ?? "confirmed"] ?? statusColors.confirmed;
+        const isPendingCustomer = ev.status === "pending_customer_acceptance";
+        const pendingLabel = getPendingApprovalLabel(ev);
 
       const floating = document.createElement("div");
       Object.assign(floating.style, {
@@ -314,7 +331,7 @@ export default function DaySwimLanes({
           opacity: "0.7",
           fontSize: "10px",
         });
-        awaitP.textContent = "Awaiting approval";
+        awaitP.textContent = pendingLabel;
         floating.appendChild(awaitP);
       }
 
@@ -794,6 +811,7 @@ export default function DaySwimLanes({
                   const isBeingDragged = dragEventId === ev.id;
                   const isPendingCustomer =
                     ev.status === "pending_customer_acceptance";
+                  const pendingLabel = getPendingApprovalLabel(ev);
 
                   // Placeholder at original position while dragging
                   if (isBeingDragged) {
@@ -860,7 +878,7 @@ export default function DaySwimLanes({
                       </p>
                       {isPendingCustomer && (
                         <p className="truncate opacity-70 text-[10px]">
-                          Awaiting approval
+                          {pendingLabel}
                         </p>
                       )}
                     </div>

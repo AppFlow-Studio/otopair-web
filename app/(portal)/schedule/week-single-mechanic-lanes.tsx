@@ -1,8 +1,12 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addDays, format } from "date-fns";
-import { statusColors, dateToString } from "./schedule-constants";
+import {
+  statusColors,
+  dateToString,
+  getPendingApprovalLabel,
+} from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 import type { RescheduleProposal, ContextMenuCellInfo, ContextMenuBlockedInfo } from "./day-swim-lanes";
 
@@ -128,15 +132,15 @@ export default function WeekSingleMechanicLanes({
     return Array.from({ length: 7 }, (_, i) => {
       const date = addDays(weekStart, i);
       const dateStr = dateToString(date);
-      return {
-        date,
-        dateStr,
-        dayName: format(date, "EEE"),
-        dayNum: format(date, "d"),
-        isToday: dateStr === dateToString(new Date()),
-      };
-    });
-  }, [weekStart]);
+        return {
+          date,
+          dateStr,
+          dayName: format(date, "EEE"),
+          dayNum: format(date, "d"),
+          isToday: dateStr === todayStr,
+        };
+      });
+  }, [todayStr, weekStart]);
 
   // Events bucketed by day
   const { bookingsByDay, blockedByDay } = useMemo(() => {
@@ -173,19 +177,22 @@ export default function WeekSingleMechanicLanes({
 
   // Stable refs for values used inside pointer event closures
   const daysRef = useRef(days);
-  daysRef.current = days;
   const slotsRef = useRef(slots);
-  slotsRef.current = slots;
   const onSelectEventRef = useRef(onSelectEvent);
-  onSelectEventRef.current = onSelectEvent;
   const onProposeRescheduleRef = useRef(onProposeReschedule);
-  onProposeRescheduleRef.current = onProposeReschedule;
   const onDragErrorRef = useRef(onDragError);
-  onDragErrorRef.current = onDragError;
   const eventsRef = useRef(events);
-  eventsRef.current = events;
   const mechanicRef = useRef(mechanic);
-  mechanicRef.current = mechanic;
+
+  useEffect(() => {
+    daysRef.current = days;
+    slotsRef.current = slots;
+    onSelectEventRef.current = onSelectEvent;
+    onProposeRescheduleRef.current = onProposeReschedule;
+    onDragErrorRef.current = onDragError;
+    eventsRef.current = events;
+    mechanicRef.current = mechanic;
+  }, [days, slots, onSelectEvent, onProposeReschedule, onDragError, events, mechanic]);
 
   const getDropTarget = useCallback((clientX: number, clientY: number) => {
     const container = containerRef.current;
@@ -230,6 +237,7 @@ export default function WeekSingleMechanicLanes({
     function createFloating() {
       const colors = statusColors[ev.status ?? "confirmed"] ?? statusColors.confirmed;
       const isPendingCustomer = ev.status === "pending_customer_acceptance";
+      const pendingLabel = getPendingApprovalLabel(ev);
 
       const floating = document.createElement("div");
       Object.assign(floating.style, {
@@ -264,6 +272,19 @@ export default function WeekSingleMechanicLanes({
       Object.assign(svcP.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: "0.8" });
       svcP.textContent = ev.serviceNames?.join(", ") ?? "";
       floating.appendChild(svcP);
+
+      if (isPendingCustomer) {
+        const awaitP = document.createElement("p");
+        Object.assign(awaitP.style, {
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          opacity: "0.7",
+          fontSize: "10px",
+        });
+        awaitP.textContent = pendingLabel;
+        floating.appendChild(awaitP);
+      }
 
       document.body.appendChild(floating);
       floatingRef.current = floating;
@@ -660,6 +681,7 @@ export default function WeekSingleMechanicLanes({
                   const isDraggable = DRAGGABLE_STATUSES.has(ev.status ?? "");
                   const isBeingDragged = dragEventId === ev.id;
                   const isPendingCustomer = ev.status === "pending_customer_acceptance";
+                  const pendingLabel = getPendingApprovalLabel(ev);
 
                   if (isBeingDragged) {
                     return (
@@ -708,7 +730,7 @@ export default function WeekSingleMechanicLanes({
                       <p className="font-medium truncate">{ev.customerName}</p>
                       <p className="truncate opacity-80">{ev.serviceNames?.join(", ")}</p>
                       {isPendingCustomer && (
-                        <p className="truncate opacity-70 text-[10px]">Awaiting approval</p>
+                        <p className="truncate opacity-70 text-[10px]">{pendingLabel}</p>
                       )}
                     </div>
                   );

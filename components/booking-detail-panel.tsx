@@ -133,6 +133,10 @@ function pendingCountdown(creationTime: number): string | null {
   return `${minutes}m left`;
 }
 
+function isForcedDelayReason(reason?: string | null): boolean {
+  return reason?.startsWith("forced_delay_") ?? false;
+}
+
 function humanizeStatus(
   status: string,
   reason?: string | null,
@@ -141,6 +145,9 @@ function humanizeStatus(
   if (status === "confirmed" && reason === "shop_cancelled_reschedule") return "Reschedule Withdrawn";
   if (status === "confirmed" && reason === "customer_declined_reschedule") return "Reschedule Declined";
   if (status === "confirmed" && reason === "reschedule_auto_reverted_24h") return "Reschedule Expired";
+  if (status === "pending_customer_acceptance" && isForcedDelayReason(reason)) {
+    return "Late-Start Delay Pending Customer Acceptance";
+  }
   const map: Record<string, string> = {
     pending: "Pending",
     pending_shop_acceptance: "Pending Shop Acceptance",
@@ -162,14 +169,25 @@ const SYSTEM_REASONS = new Set([
   "customer_declined_reschedule",
   "reschedule_auto_reverted_24h",
   "customer_approved_reschedule",
+  "forced_delay_proposed_by_shop",
+  "forced_delay_proposed_by_system",
+  "forced_delay_updated_by_shop",
+  "forced_delay_updated_by_system",
 ]);
 
 function isSystemReason(reason: string): boolean {
   return SYSTEM_REASONS.has(reason) || reason.startsWith("seed_");
 }
 
-function getStatusDescription(status: string, reason?: string | null): string | null {
+function getStatusDescription(
+  status: string,
+  reason?: string | null,
+  scheduleChangeMode?: string | null,
+): string | null {
   if (status === "pending" || status === "pending_shop_acceptance") return "Awaiting shop review";
+  if (status === "pending_customer_acceptance" && (scheduleChangeMode === "forced_delay" || isForcedDelayReason(reason))) {
+    return "Automatic late-start delay pending customer response";
+  }
   if (status === "pending_customer_acceptance") return "Shop proposed reschedule";
   if (status === "cancelled" && reason === "cancelled_by_shop") return "Shop cancelled booking";
   if (status === "cancelled" && reason && !isSystemReason(reason)) return reason;
@@ -209,6 +227,9 @@ export interface JobDetailData {
   previousMechanicName?: string | null;
   rescheduleProposedAt?: number | null;
   estimatedLaborMinutes?: number | null;
+  scheduleChangeMode?: string | null;
+  scheduleChangeSourceBookingId?: Id<"bookings"> | null;
+  customerCanRestoreOriginal?: boolean | null;
   jobActuals?: {
     _id: Id<"job_actuals">;
     status: "draft" | "finalized";
@@ -355,6 +376,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const showAssignMechanicError = actionError.startsWith(
       "Cannot assign this mechanic"
     );
+    const isForcedDelayPending =
+      job?.status === "pending_customer_acceptance" &&
+      job.scheduleChangeMode === "forced_delay";
+    const canRestoreOriginalReschedule =
+      job?.status === "pending_customer_acceptance" &&
+      !isForcedDelayPending &&
+      job.customerCanRestoreOriginal !== false;
 
     // Sync assign dropdown with job's current mechanic
     useEffect(() => {
@@ -752,7 +780,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       },
       showMarkCompleted: () => openPostjobDialog(),
       showCancelJob: () => setShowCancelConfirm(true),
-      showCancelReschedule: () => setShowCancelRescheduleConfirm(true),
+      showCancelReschedule: () => {
+        if (!canRestoreOriginalReschedule) return;
+        setShowCancelRescheduleConfirm(true);
+      },
       openAssignDropdown: () => {
         if (!canAssignMechanic) return;
         assignTriggerRef.current
@@ -870,7 +901,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           return true;
         }
         if (
-          job?.status === "pending_customer_acceptance" &&
+          canRestoreOriginalReschedule &&
           (e.key === "c" || e.key === "C")
         ) {
           setShowCancelRescheduleConfirm(true);
@@ -1180,27 +1211,36 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   )}
                 </div>
 
-                {/* Pending customer acceptance — awaiting approval info */}
+                {/* Pending customer acceptance actions */}
                 {job.status === "pending_customer_acceptance" && (
                   <div className="rounded-2xl bg-muted/20 p-4">
                     <DrawerFieldLabel className="mb-2">
                       Actions
                     </DrawerFieldLabel>
                     <p className="mb-3 text-sm text-muted-foreground italic">
-                      Awaiting customer approval
+                      {isForcedDelayPending
+                        ? "Automatic late-start delay pending customer response"
+                        : "Awaiting customer approval"}
                     </p>
-                    <button
-                      onClick={() => setShowCancelRescheduleConfirm(true)}
-                      disabled={isActioning}
-                      className={drawerSecondaryButtonClassName}
-                    >
-                      <span>
-                        <span style={{ textDecorationLine: "underline" }}>
-                          C
+                    {isForcedDelayPending ? (
+                      <p className="text-sm text-muted-foreground">
+                        The original slot cannot be restored from this flow. The customer can
+                        accept the delayed time, pick another time, or cancel the booking in-app.
+                      </p>
+                    ) : (
+                      <button
+                        onClick={() => setShowCancelRescheduleConfirm(true)}
+                        disabled={isActioning}
+                        className={drawerSecondaryButtonClassName}
+                      >
+                        <span>
+                          <span style={{ textDecorationLine: "underline" }}>
+                            C
+                          </span>
+                          ancel reschedule
                         </span>
-                        ancel reschedule
-                      </span>
-                    </button>
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -1512,7 +1552,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                                   >{label}</span>
                                   <span className="text-[10px] text-muted-foreground shrink-0 leading-6">{formattedDate}</span>
                                 </div>
-                                {(() => { const desc = getStatusDescription(h.new_status, h.reason); return desc ? <p className="text-xs text-muted-foreground -mt-1">{desc}</p> : null; })()}
+                                {(() => {
+                                  const desc = getStatusDescription(h.new_status, h.reason);
+                                  return desc ? <p className="text-xs text-muted-foreground -mt-1">{desc}</p> : null;
+                                })()}
                               </div>
                             </div>
                           );
@@ -1705,25 +1748,27 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           )}
         </ConfirmationDialog>
 
-        <ConfirmationDialog
-          open={showCancelRescheduleConfirm}
-          title="Cancel the proposed reschedule?"
-          description="The booking will revert to its original time and mechanic."
-          onClose={() => setShowCancelRescheduleConfirm(false)}
-          enableShortcuts={false}
-          secondaryAction={{
-            label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
-            onAction: () => setShowCancelRescheduleConfirm(false),
-            disabled: isActioning,
-          }}
-          primaryAction={{
-            label: isActioning ? "Reverting..." : <ShortcutLabel text="Revert to original" shortcutKey="r" />,
-            onAction: handleCancelReschedule,
-            disabled: isActioning,
-            variant: "primary",
-            leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
-          }}
-        />
+        {!isForcedDelayPending ? (
+          <ConfirmationDialog
+            open={showCancelRescheduleConfirm}
+            title="Cancel the proposed reschedule?"
+            description="The booking will revert to its original time and mechanic."
+            onClose={() => setShowCancelRescheduleConfirm(false)}
+            enableShortcuts={false}
+            secondaryAction={{
+              label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
+              onAction: () => setShowCancelRescheduleConfirm(false),
+              disabled: isActioning,
+            }}
+            primaryAction={{
+              label: isActioning ? "Reverting..." : <ShortcutLabel text="Revert to original" shortcutKey="r" />,
+              onAction: handleCancelReschedule,
+              disabled: isActioning,
+              variant: "primary",
+              leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
+            }}
+          />
+        ) : null}
       </>
     );
   },

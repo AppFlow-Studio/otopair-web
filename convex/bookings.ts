@@ -162,6 +162,8 @@ const LIVE_STAGE_PROGRESS: Record<string, number> = {
   vehicle_ready: 90,
 };
 
+const DEFAULT_SHOP_TIMEZONE = "America/New_York";
+
 /**
  * QUERY: list
  * Returns all bookings in the system.
@@ -855,8 +857,71 @@ function minutesToHHMM(totalMinutes: number) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-function toBookingDateTimeMs(date: string, time: string) {
-  return new Date(`${date}T${time}:00`).getTime();
+function getTimeZoneOffsetMs(timeZone: string, date: Date) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+
+  const parts = formatter.formatToParts(date);
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)])
+  );
+
+  return (
+    Date.UTC(
+      values.year,
+      (values.month ?? 1) - 1,
+      values.day ?? 1,
+      values.hour ?? 0,
+      values.minute ?? 0,
+      values.second ?? 0
+    ) - date.getTime()
+  );
+}
+
+function toBookingDateTimeMs(date: string, time: string, timeZone: string) {
+  const [year, month, day] = date.split("-").map(Number);
+  const [hours, minutes] = time.split(":").map(Number);
+  const utcGuess = Date.UTC(year, month - 1, day, hours, minutes, 0, 0);
+
+  const initialOffset = getTimeZoneOffsetMs(timeZone, new Date(utcGuess));
+  const adjusted = utcGuess - initialOffset;
+  const adjustedOffset = getTimeZoneOffsetMs(timeZone, new Date(adjusted));
+
+  return adjustedOffset === initialOffset ? adjusted : utcGuess - adjustedOffset;
+}
+
+async function getShopTimezone(ctx: any, shopId: any) {
+  const shop = await ctx.db.get(shopId);
+  const timezone = normalizeNullableText(shop?.timezone);
+  return timezone ?? DEFAULT_SHOP_TIMEZONE;
+}
+
+async function getLateStartMonitorWindow(
+  ctx: any,
+  booking: any,
+  cycleMinutes: number
+) {
+  const timezone = await getShopTimezone(ctx, booking.shop_id);
+  const scheduledStartMs = toBookingDateTimeMs(
+    booking.scheduled_date,
+    booking.scheduled_time,
+    timezone
+  );
+
+  return {
+    warningDueAtMs: scheduledStartMs + (cycleMinutes - 5) * 60 * 1000,
+    autoApplyAtMs: scheduledStartMs + cycleMinutes * 60 * 1000,
+  };
 }
 
 function getScheduleChangeMode(booking: any): (typeof SCHEDULE_CHANGE_MODES)[number] {
@@ -2139,12 +2204,11 @@ async function upsertLateStartMonitorForBooking(
     await markLateStartReviewsResolved(ctx, reviews, "resolved_no_longer_needed");
   }
 
-  const scheduledStartMs = toBookingDateTimeMs(
-    booking.scheduled_date,
-    booking.scheduled_time
+  const { warningDueAtMs, autoApplyAtMs } = await getLateStartMonitorWindow(
+    ctx,
+    booking,
+    cycleMinutes
   );
-  const warningDueAtMs = scheduledStartMs + (cycleMinutes - 5) * 60 * 1000;
-  const autoApplyAtMs = scheduledStartMs + cycleMinutes * 60 * 1000;
   const now = Date.now();
   const existing = await getLateStartMonitorByUpstreamBookingId(ctx, booking._id);
 
@@ -2186,15 +2250,16 @@ async function advanceLateStartMonitorCycle(ctx: any, monitor: any, cycleMinutes
   }
 
   const nextCycleMinutes = cycleMinutes ?? ((monitor.cycle_minutes ?? 0) + 15);
-  const scheduledStartMs = toBookingDateTimeMs(
-    upstreamBooking.scheduled_date,
-    upstreamBooking.scheduled_time
+  const { warningDueAtMs, autoApplyAtMs } = await getLateStartMonitorWindow(
+    ctx,
+    upstreamBooking,
+    nextCycleMinutes
   );
 
   await ctx.db.patch(monitor._id, {
     cycle_minutes: nextCycleMinutes,
-    warning_due_at_ms: scheduledStartMs + (nextCycleMinutes - 5) * 60 * 1000,
-    auto_apply_at_ms: scheduledStartMs + nextCycleMinutes * 60 * 1000,
+    warning_due_at_ms: warningDueAtMs,
+    auto_apply_at_ms: autoApplyAtMs,
     status: "active",
     updated_at: Date.now(),
   });
@@ -4911,11 +4976,27 @@ export const processLateStartMonitors = internalMutation({
         continue;
       }
 
+      const { warningDueAtMs, autoApplyAtMs } = await getLateStartMonitorWindow(
+        ctx,
+        upstreamBooking,
+        monitor.cycle_minutes
+      );
+      if (
+        monitor.warning_due_at_ms !== warningDueAtMs ||
+        monitor.auto_apply_at_ms !== autoApplyAtMs
+      ) {
+        await ctx.db.patch(monitor._id, {
+          warning_due_at_ms: warningDueAtMs,
+          auto_apply_at_ms: autoApplyAtMs,
+          updated_at: now,
+        });
+      }
+
       if (monitor.status === "manual_takeover") {
         continue;
       }
 
-      if (now < monitor.warning_due_at_ms) {
+      if (now < warningDueAtMs) {
         continue;
       }
 
@@ -4950,7 +5031,7 @@ export const processLateStartMonitors = internalMutation({
         const reviewId = await createLateStartReview(ctx, {
           upstreamBooking,
           cycleMinutes: monitor.cycle_minutes,
-          decisionDueAtMs: monitor.auto_apply_at_ms,
+          decisionDueAtMs: autoApplyAtMs,
           proposals: plan.proposals,
           status: reviewStatus,
           blockingReason: plan.blockingReason,
@@ -4964,7 +5045,7 @@ export const processLateStartMonitors = internalMutation({
           continue;
         }
 
-        if (now < monitor.auto_apply_at_ms) {
+        if (now < autoApplyAtMs) {
           continue;
         }
 
@@ -4994,7 +5075,7 @@ export const processLateStartMonitors = internalMutation({
 
       if (
         openReview.status === "pending_staff_review" &&
-        now >= monitor.auto_apply_at_ms
+        now >= autoApplyAtMs
       ) {
         const targets = openReview.proposals.map((proposal: any) => ({
           bookingId: proposal.booking_id,

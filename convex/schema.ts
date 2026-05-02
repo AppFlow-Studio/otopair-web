@@ -934,6 +934,7 @@ export default defineSchema({
     city: v.optional(v.string()),
     state: v.optional(v.string()),
     zip: v.optional(v.string()),
+    timezone: v.optional(v.string()),
     phone: v.optional(v.string()),
     lat: v.optional(v.number()),
     lng: v.optional(v.number()),

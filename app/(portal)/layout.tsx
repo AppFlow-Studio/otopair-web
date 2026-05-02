@@ -93,6 +93,7 @@ export default function PortalLayout({
     | null
     | undefined;
   const seedBookings = useMutation(api.seed.seedDashboardBookings);
+  const clearDashboardBookingsBatch = useMutation(api.seed.clearDashboardBookingsBatch);
   const [, setSeeding] = useState(false);
   const hasRedirected = useRef(false);
   const isAcceptInvite = pathname.startsWith("/accept-invite");
@@ -177,11 +178,25 @@ export default function PortalLayout({
     if (!portalAccess?.shopId) return;
     setSeeding(true);
     try {
-      await seedBookings({
-        shopId: portalAccess.shopId,
-        clearExisting: true,
-        seedDemo,
-      });
+      for (let attempts = 0; attempts < 200; attempts += 1) {
+        const result = await clearDashboardBookingsBatch({
+          shopId: portalAccess.shopId,
+        });
+        if (result.done) {
+          break;
+        }
+        if (attempts === 199) {
+          throw new Error("Timed out while clearing demo bookings.");
+        }
+      }
+
+      if (seedDemo) {
+        await seedBookings({
+          shopId: portalAccess.shopId,
+          clearExisting: false,
+          seedDemo: true,
+        });
+      }
     } finally {
       setSeeding(false);
     }

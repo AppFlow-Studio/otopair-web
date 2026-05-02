@@ -44,3 +44,11 @@ next-env.d.ts
 /.clerk/
 convex/_generated/api.d.ts
 convex/_generated/api.d.ts
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/

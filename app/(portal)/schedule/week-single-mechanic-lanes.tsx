@@ -26,6 +26,7 @@ interface WeekSingleMechanicLanesProps {
   weekStart: Date;
   minTime: Date;
   maxTime: Date;
+  nowTimestamp: number;
   onSelectEvent: (event: CalendarEvent) => void;
   onProposeReschedule?: (proposal: RescheduleProposal) => void;
   onDragError?: (message: string) => void;
@@ -99,6 +100,7 @@ export default function WeekSingleMechanicLanes({
   weekStart,
   minTime,
   maxTime,
+  nowTimestamp,
   onSelectEvent,
   onProposeReschedule,
   onDragError,
@@ -162,7 +164,7 @@ export default function WeekSingleMechanicLanes({
   }, [days, events]);
 
   // Current time indicator
-  const now = new Date();
+  const now = new Date(nowTimestamp);
   const nowMinutes = minutesFromBase(startHour, startMinute, now.getHours(), now.getMinutes());
   const showNowLine = nowMinutes >= 0 && nowMinutes <= totalMinutes;
   const nowTop = (nowMinutes / totalMinutes) * totalHeight;

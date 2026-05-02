@@ -163,6 +163,14 @@ const LIVE_STAGE_PROGRESS: Record<string, number> = {
 };
 
 const DEFAULT_SHOP_TIMEZONE = "America/New_York";
+const LATE_START_TEST_MODE_ENABLED = process.env.LATE_START_TEST_MODE === "true";
+const LATE_START_PRODUCTION_WARNING_LEAD_MINUTES = 5;
+const LATE_START_PRODUCTION_INITIAL_CYCLE_MINUTES = 15;
+const LATE_START_PRODUCTION_CYCLE_INCREMENT_MINUTES = 15;
+const LATE_START_TEST_WARNING_LEAD_MINUTES = 1;
+const LATE_START_TEST_INITIAL_CYCLE_MINUTES = 2;
+const LATE_START_TEST_CYCLE_INCREMENT_MINUTES = 2;
+const LATE_START_TEST_MIN_VISIBLE_REVIEW_MS = 30_000;
 
 /**
  * QUERY: list
@@ -906,11 +914,28 @@ async function getShopTimezone(ctx: any, shopId: any) {
   return timezone ?? DEFAULT_SHOP_TIMEZONE;
 }
 
+function getLateStartTimingConfig() {
+  if (LATE_START_TEST_MODE_ENABLED) {
+    return {
+      warningLeadMinutes: LATE_START_TEST_WARNING_LEAD_MINUTES,
+      initialCycleMinutes: LATE_START_TEST_INITIAL_CYCLE_MINUTES,
+      cycleIncrementMinutes: LATE_START_TEST_CYCLE_INCREMENT_MINUTES,
+    };
+  }
+
+  return {
+    warningLeadMinutes: LATE_START_PRODUCTION_WARNING_LEAD_MINUTES,
+    initialCycleMinutes: LATE_START_PRODUCTION_INITIAL_CYCLE_MINUTES,
+    cycleIncrementMinutes: LATE_START_PRODUCTION_CYCLE_INCREMENT_MINUTES,
+  };
+}
+
 async function getLateStartMonitorWindow(
   ctx: any,
   booking: any,
   cycleMinutes: number
 ) {
+  const { warningLeadMinutes } = getLateStartTimingConfig();
   const timezone = await getShopTimezone(ctx, booking.shop_id);
   const scheduledStartMs = toBookingDateTimeMs(
     booking.scheduled_date,
@@ -919,7 +944,8 @@ async function getLateStartMonitorWindow(
   );
 
   return {
-    warningDueAtMs: scheduledStartMs + (cycleMinutes - 5) * 60 * 1000,
+    warningDueAtMs:
+      scheduledStartMs + Math.max(0, cycleMinutes - warningLeadMinutes) * 60 * 1000,
     autoApplyAtMs: scheduledStartMs + cycleMinutes * 60 * 1000,
   };
 }
@@ -2194,7 +2220,7 @@ export async function resolveLateStartMonitorForBooking(
 async function upsertLateStartMonitorForBooking(
   ctx: any,
   booking: any,
-  cycleMinutes = 15
+  cycleMinutes = getLateStartTimingConfig().initialCycleMinutes
 ) {
   if (!booking?._id) return;
 
@@ -2261,7 +2287,9 @@ async function advanceLateStartMonitorCycle(ctx: any, monitor: any, cycleMinutes
     return;
   }
 
-  const nextCycleMinutes = cycleMinutes ?? ((monitor.cycle_minutes ?? 0) + 15);
+  const { cycleIncrementMinutes } = getLateStartTimingConfig();
+  const nextCycleMinutes =
+    cycleMinutes ?? ((monitor.cycle_minutes ?? 0) + cycleIncrementMinutes);
   const { warningDueAtMs, autoApplyAtMs } = await getLateStartMonitorWindow(
     ctx,
     upstreamBooking,
@@ -2726,7 +2754,11 @@ export async function applyBookingStatusTransition(
 
   const nextBooking = { ...booking, ...patch };
   if (newStatus === "confirmed") {
-    await upsertLateStartMonitorForBooking(ctx, nextBooking, 15);
+    await upsertLateStartMonitorForBooking(
+      ctx,
+      nextBooking,
+      getLateStartTimingConfig().initialCycleMinutes
+    );
   } else {
     await resolveLateStartMonitorForBooking(ctx, nextBooking, changedBy);
   }
@@ -3936,7 +3968,7 @@ export const createByShop = mutation({
           estimated_labor_minutes: args.estimatedLaborMinutes,
           status,
         },
-        15
+        getLateStartTimingConfig().initialCycleMinutes
       );
     }
 
@@ -4047,7 +4079,11 @@ export const update = mutation({
 
     const nextBooking = { ...booking, ...patch };
     if (nextBooking.status === "confirmed") {
-      await upsertLateStartMonitorForBooking(ctx, nextBooking, 15);
+      await upsertLateStartMonitorForBooking(
+        ctx,
+        nextBooking,
+        getLateStartTimingConfig().initialCycleMinutes
+      );
     } else {
       await resolveLateStartMonitorForBooking(ctx, nextBooking, user._id);
     }
@@ -4989,16 +5025,28 @@ export const processLateStartMonitors = internalMutation({
         continue;
       }
 
+      const { initialCycleMinutes } = getLateStartTimingConfig();
+      let effectiveCycleMinutes = monitor.cycle_minutes;
+      if (
+        !(
+          await getOpenLateStartReviewsForUpstreamBooking(ctx, upstreamBooking._id)
+        ).some((review: any) => review.cycle_minutes === monitor.cycle_minutes)
+      ) {
+        effectiveCycleMinutes = initialCycleMinutes;
+      }
+
       const { warningDueAtMs, autoApplyAtMs } = await getLateStartMonitorWindow(
         ctx,
         upstreamBooking,
-        monitor.cycle_minutes
+        effectiveCycleMinutes
       );
       if (
+        monitor.cycle_minutes !== effectiveCycleMinutes ||
         monitor.warning_due_at_ms !== warningDueAtMs ||
         monitor.auto_apply_at_ms !== autoApplyAtMs
       ) {
         await ctx.db.patch(monitor._id, {
+          cycle_minutes: effectiveCycleMinutes,
           warning_due_at_ms: warningDueAtMs,
           auto_apply_at_ms: autoApplyAtMs,
           updated_at: now,
@@ -5015,12 +5063,12 @@ export const processLateStartMonitors = internalMutation({
 
       const openReview = (
         await getOpenLateStartReviewsForUpstreamBooking(ctx, upstreamBooking._id)
-      ).find((review: any) => review.cycle_minutes === monitor.cycle_minutes);
+      ).find((review: any) => review.cycle_minutes === effectiveCycleMinutes);
 
       if (!openReview) {
         const plan = await buildLateStartReviewPlan(ctx, {
           upstreamBooking,
-          cycleMinutes: monitor.cycle_minutes,
+          cycleMinutes: effectiveCycleMinutes,
         });
 
         if (plan.proposals.length === 0) {
@@ -5041,10 +5089,17 @@ export const processLateStartMonitors = internalMutation({
             ? "blocked_manual_review"
             : "pending_staff_review";
 
+        const decisionDueAtMs =
+          reviewStatus === "pending_staff_review" &&
+          LATE_START_TEST_MODE_ENABLED &&
+          now >= autoApplyAtMs
+            ? now + LATE_START_TEST_MIN_VISIBLE_REVIEW_MS
+            : autoApplyAtMs;
+
         const reviewId = await createLateStartReview(ctx, {
           upstreamBooking,
-          cycleMinutes: monitor.cycle_minutes,
-          decisionDueAtMs: autoApplyAtMs,
+          cycleMinutes: effectiveCycleMinutes,
+          decisionDueAtMs,
           proposals: plan.proposals,
           status: reviewStatus,
           blockingReason: plan.blockingReason,
@@ -5058,31 +5113,13 @@ export const processLateStartMonitors = internalMutation({
           continue;
         }
 
-        if (now < autoApplyAtMs) {
-          continue;
+        if (decisionDueAtMs !== autoApplyAtMs) {
+          await ctx.db.patch(monitor._id, {
+            auto_apply_at_ms: decisionDueAtMs,
+            updated_at: now,
+          });
         }
-
-        const review = await ctx.db.get(reviewId);
-        if (!review) continue;
-
-        const targets = review.proposals.map((proposal: any) => ({
-          bookingId: proposal.booking_id,
-          newScheduledDate: proposal.proposed_scheduled_date,
-          newScheduledTime: proposal.proposed_scheduled_time,
-          newMechanicId: proposal.proposed_mechanic_id,
-        }));
-
-        await applyLateStartTargets(ctx, {
-          upstreamBooking,
-          targets,
-        });
-
-        await ctx.db.patch(review._id, {
-          status: "auto_applied",
-          resolved_at: Date.now(),
-          updated_at: Date.now(),
-        });
-        await advanceLateStartMonitorCycle(ctx, monitor);
+        await scheduleLateStartMonitorProcessing(ctx, decisionDueAtMs);
         continue;
       }
 

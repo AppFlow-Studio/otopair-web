@@ -211,6 +211,7 @@ export const getScheduleContext = query({
     return {
       shopId: shop._id,
       shopName: shop.name,
+      lateStartTestMode: process.env.LATE_START_TEST_MODE === "true",
       hours: hours.map((hour: any) => ({
         _id: hour._id,
         dayOfWeek: hour.day_of_week,

@@ -198,6 +198,7 @@ const BUILT_IN_TYPES = [
 
 export default function SchedulePage() {
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("day");
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
   const [selectedBookingId, setSelectedBookingId] = useState<Id<"bookings"> | null>(null);
@@ -339,6 +340,13 @@ export default function SchedulePage() {
     const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    const updateNow = () => setNowTimestamp(Date.now());
+    updateNow();
+    const intervalId = window.setInterval(updateNow, 30_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   // Dismiss legend popover on click-outside
   useEffect(() => {
@@ -919,7 +927,14 @@ export default function SchedulePage() {
     <div className="space-y-6">
       {/* Page header */}
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-foreground">Schedule</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-foreground">Schedule</h1>
+          {context.lateStartTestMode ? (
+            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
+              Late-start test mode active
+            </span>
+          ) : null}
+        </div>
         {process.env.NODE_ENV === "development" && context.shopId ? (
           <button
             type="button"
@@ -1137,6 +1152,7 @@ export default function SchedulePage() {
             events={events}
             minTime={minTime}
             maxTime={maxTime}
+            nowTimestamp={nowTimestamp}
             currentDate={currentDate}
             onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
             onProposeReschedule={handleProposeReschedule}
@@ -1189,6 +1205,7 @@ export default function SchedulePage() {
               weekStart={startOfWeek(currentDate, { weekStartsOn: 0 })}
               minTime={minTime}
               maxTime={maxTime}
+              nowTimestamp={nowTimestamp}
               onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
               onProposeReschedule={handleProposeReschedule}
               onDragError={(msg) => setToast({ msg, key: Date.now() })}
@@ -1230,7 +1247,7 @@ export default function SchedulePage() {
             }
             min={minTime}
             max={maxTime}
-            getNow={() => new Date()}
+            getNow={() => new Date(nowTimestamp)}
             step={30}
             timeslots={2}
             style={{ height: "calc(100vh - 320px)", minHeight: 500 }}

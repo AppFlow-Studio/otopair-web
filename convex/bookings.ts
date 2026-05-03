@@ -2306,6 +2306,63 @@ async function advanceLateStartMonitorCycle(ctx: any, monitor: any, cycleMinutes
   await scheduleLateStartMonitorProcessing(ctx, warningDueAtMs);
 }
 
+async function mechanicHasLateUnstartedUpstreamConflict(
+  ctx: any,
+  {
+    shopId,
+    mechanicId,
+    date,
+    targetStartTime,
+    excludeBookingId,
+    dayBookings,
+  }: {
+    shopId: any;
+    mechanicId: any;
+    date: string;
+    targetStartTime: string;
+    excludeBookingId: string;
+    dayBookings: any[];
+  }
+) {
+  const timezone = await getShopTimezone(ctx, shopId);
+  const nowMs = Date.now();
+  const targetStartMs = toBookingDateTimeMs(date, targetStartTime, timezone);
+
+  const earlierMechanicBookings = dayBookings
+    .filter(
+      (booking: any) =>
+        String(booking.mechanic_id ?? "") === String(mechanicId) &&
+        String(booking._id) !== excludeBookingId &&
+        booking.status === "confirmed" &&
+        booking.scheduled_time < targetStartTime
+    )
+    .sort(compareBookingsBySchedule);
+
+  for (const booking of earlierMechanicBookings) {
+    if (await hasBookingActuallyStarted(ctx, booking)) {
+      continue;
+    }
+
+    const scheduledStartMs = toBookingDateTimeMs(
+      booking.scheduled_date,
+      booking.scheduled_time,
+      timezone
+    );
+
+    if (nowMs <= scheduledStartMs) {
+      continue;
+    }
+
+    const projectedEndMs =
+      nowMs + (booking.estimated_labor_minutes ?? 60) * 60 * 1000;
+    if (projectedEndMs > targetStartMs) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 async function findBestAlternateMechanicForWindow(
   ctx: any,
   {
@@ -2348,6 +2405,19 @@ async function findBestAlternateMechanicForWindow(
         excludeBookingId,
       });
     } catch {
+      continue;
+    }
+
+    if (
+      await mechanicHasLateUnstartedUpstreamConflict(ctx, {
+        shopId,
+        mechanicId: mechanic._id,
+        date,
+        targetStartTime: startTime,
+        excludeBookingId,
+        dayBookings,
+      })
+    ) {
       continue;
     }
 
@@ -4609,7 +4679,7 @@ export const shopCancelReschedule = mutation({
           schedule_change_source_booking_id: undefined,
           customer_can_restore_original: undefined,
         },
-        15
+        getLateStartTimingConfig().initialCycleMinutes
       );
     } else {
       await resolveLateStartMonitorForBooking(ctx, booking);
@@ -4777,9 +4847,16 @@ export const getOpenLateStartReviews = query({
       .filter((row: any) => OPEN_LATE_START_REVIEW_STATUSES.has(row.status))
       .sort((left: any, right: any) => left.decision_due_at_ms - right.decision_due_at_ms);
 
-    return await Promise.all(
+    const hydrated = await Promise.all(
       openReviews.map(async (review: any) => {
         const upstreamBooking = await ctx.db.get(review.upstream_booking_id);
+        if (
+          !upstreamBooking ||
+          !isLateStartMonitorEligible(upstreamBooking) ||
+          (await hasBookingActuallyStarted(ctx, upstreamBooking))
+        ) {
+          return null;
+        }
         const upstreamCustomer = upstreamBooking?.user_id
           ? await ctx.db.get(upstreamBooking.user_id)
           : null;
@@ -4844,6 +4921,8 @@ export const getOpenLateStartReviews = query({
         };
       })
     );
+
+    return hydrated.filter(Boolean);
   },
 });
 

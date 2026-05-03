@@ -3771,22 +3771,6 @@ export const clearDashboardBookingsBatch = mutation({
     const shop = await ctx.db.get(args.shopId);
     if (!shop) throw new Error(`Shop ${args.shopId} not found.`);
 
-    const lateStartReviews = await ctx.db
-      .query("late_start_reviews")
-      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
-      .take(100);
-    for (const review of lateStartReviews) {
-      await ctx.db.delete(review._id);
-    }
-
-    const lateStartMonitors = await ctx.db
-      .query("late_start_monitors")
-      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
-      .take(100);
-    for (const monitor of lateStartMonitors) {
-      await ctx.db.delete(monitor._id);
-    }
-
     const existingBookings = await ctx.db
       .query("bookings")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
@@ -3829,8 +3813,6 @@ export const clearDashboardBookingsBatch = mutation({
     }
 
     const processed =
-      lateStartReviews.length +
-      lateStartMonitors.length +
       existingBookings.length +
       existingSlots.length +
       blockTypes.length;
@@ -3841,8 +3823,8 @@ export const clearDashboardBookingsBatch = mutation({
       processedBookings: existingBookings.length,
       processedSlots: existingSlots.length,
       processedBlockTypes: blockTypes.length,
-      processedLateStartReviews: lateStartReviews.length,
-      processedLateStartMonitors: lateStartMonitors.length,
+      processedLateStartReviews: 0,
+      processedLateStartMonitors: 0,
     };
   },
 });

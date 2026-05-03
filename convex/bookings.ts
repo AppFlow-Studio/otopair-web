@@ -119,7 +119,7 @@ async function assertBookingWithinShopHours(
   const openMinutes = hhmmToMinutes(hours.open_time);
   const closeMinutes = hhmmToMinutes(hours.close_time);
 
-  if (startMinutes < openMinutes || startMinutes >= closeMinutes) {
+  if ((startMinutes < openMinutes || startMinutes >= closeMinutes) && !allowAfterClose) {
     throw new Error("The requested start time is outside the shop's operating hours.");
   }
   if (endMinutes > closeMinutes && !allowAfterClose) {
@@ -841,6 +841,7 @@ const lateStartManualTargetValidator = v.object({
   newScheduledDate: v.string(),
   newScheduledTime: v.string(),
   newMechanicId: v.optional(v.id("mechanics")),
+  allowOutsideShopHours: v.optional(v.boolean()),
 });
 
 function formatTime(hhmm: string) {
@@ -4291,6 +4292,7 @@ async function proposeRescheduleImpl(
     newScheduledDate,
     newScheduledTime,
     newMechanicId,
+    allowOutsideShopHours,
     mode = "manual_reschedule",
     sourceBookingId,
     customerCanRestoreOriginal = mode !== "forced_delay",
@@ -4300,6 +4302,7 @@ async function proposeRescheduleImpl(
     newScheduledDate: string;
     newScheduledTime: string;
     newMechanicId?: any;
+    allowOutsideShopHours?: boolean;
     mode?: (typeof SCHEDULE_CHANGE_MODES)[number];
     sourceBookingId?: any;
     customerCanRestoreOriginal?: boolean;
@@ -4335,6 +4338,7 @@ async function proposeRescheduleImpl(
     durationMinutes,
     preferredMechanicId: newMechanicId ?? currentMechanicId ?? undefined,
     excludeBookingId: String(booking._id),
+    allowAfterClose: allowOutsideShopHours === true,
   });
 
   const originalDate =
@@ -4806,6 +4810,7 @@ async function applyLateStartTargets(
       newScheduledDate: string;
       newScheduledTime: string;
       newMechanicId?: any;
+      allowOutsideShopHours?: boolean;
     }>;
     changedBy?: any;
   }
@@ -4821,6 +4826,7 @@ async function applyLateStartTargets(
       newScheduledDate: target.newScheduledDate,
       newScheduledTime: target.newScheduledTime,
       newMechanicId: target.newMechanicId,
+      allowOutsideShopHours: target.allowOutsideShopHours,
       mode: "forced_delay",
       sourceBookingId: upstreamBooking._id,
       customerCanRestoreOriginal: false,
@@ -4956,6 +4962,7 @@ export const acceptLateStartReview = mutation({
         newScheduledDate: proposal.proposed_scheduled_date,
         newScheduledTime: proposal.proposed_scheduled_time,
         newMechanicId: proposal.proposed_mechanic_id,
+        allowOutsideShopHours: false,
       };
     });
 

@@ -233,6 +233,15 @@ export default function SchedulePage() {
     date: string;
     bookingCount: number;
   } | null>(null);
+  const [lateStartOutsideHoursConfirm, setLateStartOutsideHoursConfirm] = useState<{
+    reviewId: string;
+    targets: Array<{
+      bookingId: string;
+      newScheduledDate: string;
+      newScheduledTime: string;
+      newMechanicId?: string;
+    }>;
+  } | null>(null);
 
   // Blocked time drawer state
   const [blockTimeDrawer, setBlockTimeDrawer] = useState<{
@@ -605,7 +614,8 @@ export default function SchedulePage() {
       newScheduledDate: string;
       newScheduledTime: string;
       newMechanicId?: string;
-    }>
+    }>,
+    allowOutsideShopHours = false
   ) {
     setLateStartReviewError("");
     setIsSubmittingLateStartReview(true);
@@ -619,13 +629,28 @@ export default function SchedulePage() {
           newMechanicId: target.newMechanicId
             ? (target.newMechanicId as Id<"mechanics">)
             : undefined,
+          allowOutsideShopHours: allowOutsideShopHours || undefined,
         })),
       });
       setSelectedLateStartReviewId(null);
+      setLateStartOutsideHoursConfirm(null);
       setToast({ msg: "Manual late-start delay applied", key: Date.now() });
     } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Could not apply the manual late-start delay.";
+      if (
+        !allowOutsideShopHours &&
+        (
+          message.includes("This booking would end after the shop closes.") ||
+          message.includes("The requested start time is outside the shop's operating hours.")
+        )
+      ) {
+        setLateStartOutsideHoursConfirm({ reviewId, targets });
+        setLateStartReviewError("");
+        return;
+      }
       setLateStartReviewError(
-        err instanceof Error ? err.message : "Could not apply the manual late-start delay.",
+        message,
       );
     } finally {
       setIsSubmittingLateStartReview(false);
@@ -1771,6 +1796,32 @@ export default function SchedulePage() {
           {toast.msg}
         </div>
       )}
+
+      <ConfirmationDialog
+        open={!!lateStartOutsideHoursConfirm}
+        title="Delay outside shop hours?"
+        description="This delayed booking falls outside the shop's operating hours. Would you like to apply the delay anyway?"
+        onClose={() => setLateStartOutsideHoursConfirm(null)}
+        zIndexClassName="z-[85]"
+        secondaryAction={{
+          label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
+          onAction: () => setLateStartOutsideHoursConfirm(null),
+          shortcutKey: "c",
+        }}
+        primaryAction={{
+          label: <ShortcutLabel text="Apply anyway" shortcutKey="a" />,
+          onAction: () => {
+            if (!lateStartOutsideHoursConfirm) return;
+            void handleApplyManualLateStartReview(
+              lateStartOutsideHoursConfirm.reviewId,
+              lateStartOutsideHoursConfirm.targets,
+              true
+            );
+          },
+          shortcutKey: "a",
+          variant: "primary",
+        }}
+      />
 
       <ConfirmationDialog
         open={!!blockDayConfirm}

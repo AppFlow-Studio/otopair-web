@@ -128,7 +128,6 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
   f.turbo = parseField(data?.attributes?.turbo);
   f.fuel_injection_type = parseField(data?.attributes?.fuel_injection_type);
   f.transmission_type = parseField(data?.attributes?.transmission_type);
-  f.power_steering_system = parseField(data?.attributes?.power_steering_system);
 
   // OEM Parts (original 10 + new 4)
   const parts = data?.oem_parts ?? {};
@@ -150,6 +149,8 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
   // Battery & Electrical
   f.battery_group = parseField(data?.battery?.battery_group);
   f.battery_cca = parseField(data?.battery?.battery_cca);
+  f.battery_type = parseField(data?.battery?.battery_type);
+  f.battery_location = parseField(data?.battery?.battery_location);
   f.spark_plug_quantity = parseField(data?.spark_plug?.quantity);
   f.spark_plug_gap = parseField(data?.spark_plug?.gap_mm);
   f.parking_brake_type = parseField(data?.parking_brake_type);
@@ -213,6 +214,8 @@ function parseBatch1b(data: Record<string, any>): Record<string, FieldResult> {
   // Battery
   f.battery_group = parseField(data?.battery?.battery_group);
   f.battery_cca = parseField(data?.battery?.battery_cca);
+  f.battery_type = parseField(data?.battery?.battery_type);
+  f.battery_location = parseField(data?.battery?.battery_location);
 
   // Spark plug gap (quantity comes from NHTSA in 1A)
   f.spark_plug_gap = parseField(data?.spark_plug?.gap_mm);

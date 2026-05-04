@@ -16,7 +16,7 @@
  * - NEW intervals: diff fluid, transfer case fluid — drivetrain-specific
  * - Fluid specs: oil viscosity, coolant type, brake fluid type, power steering type,
  *   trans fluid type, diff fluid type, transfer case fluid type
- * - Battery: group size, CCA
+ * - Battery: group size, CCA, type (AGM/flooded/EFB/lithium-ion), physical location
  * - Tire specs: sizes, pressures, lug nut torque, wiper sizes
  * - Attributes: timing system, parking brake type
  */
@@ -81,15 +81,15 @@ Return this exact JSON structure:
   },
   "battery": {
     "battery_group": { "value": "H8/Group 49", "source_url": "https://...", "source_type": "web_search", "confidence": 0.85 },
-    "battery_cca": { "value": 850, "source_url": "https://...", "source_type": "web_search", "confidence": 0.85 }
+    "battery_cca": { "value": 850, "source_url": "https://...", "source_type": "web_search", "confidence": 0.85 },
+    "battery_type": { "value": "AGM", "source_url": "https://...", "source_type": "web_search", "confidence": 0.85 },
+    "battery_location": { "value": "trunk", "source_url": "https://...", "source_type": "web_search", "confidence": 0.85 }
   },
   "attributes": {
     "timing_system": { "value": "chain", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
     "parking_brake_type": { "value": "electronic", "source_url": null, "source_type": "training_data", "confidence": 0.75 }
   },
   "trim_specs": {
-    "front_tire_size": { "value": "245/45R18", "source_url": "https://...", "source_type": "web_search", "confidence": 0.9 },
-    "rear_tire_size": { "value": "275/40R18", "source_url": "https://...", "source_type": "web_search", "confidence": 0.9 },
     "tire_pressure_front_psi": { "value": 35, "source_url": "https://...", "source_type": "web_search", "confidence": 0.9 },
     "tire_pressure_rear_psi": { "value": 38, "source_url": "https://...", "source_type": "web_search", "confidence": 0.9 },
     "lug_nut_torque_ft_lbs": { "value": 103, "source_url": "https://...", "source_type": "web_search", "confidence": 0.9 },
@@ -105,5 +105,7 @@ IMPORTANT REMINDERS:
 - diff_fluid and transfer_case_fluid: if FWD (no rear differential, no transfer case), set status: "not_applicable" and values to null.
 - timing_belt_or_chain_service: if timing_system is "chain", the status is typically "not_applicable" (chain is inspect-only or lifetime). If timing_system is "belt", fill the interval.
 - transmission_service: for "lifetime" fluid (ZF 8HP), status = "not_applicable". For normal service intervals, fill miles/months.
+- battery_type: the battery chemistry. Use one of: "AGM", "flooded", "EFB", "lithium-ion". Most modern vehicles use AGM if start-stop equipped; older vehicles typically use flooded lead-acid.
+- battery_location: where the battery is physically installed. Common values: "engine bay", "trunk", "under rear seat", "under front seat". Many European vehicles (BMW, Mercedes, Audi) place the battery in the trunk.
 - Return null for any field you cannot confidently determine after 1-2 searches.`;
 }

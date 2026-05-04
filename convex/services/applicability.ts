@@ -4,14 +4,14 @@ import { Doc, Id } from "../_generated/dataModel";
 /**
  * Determines if a service is applicable to a specific vehicle configuration
  * based on the service's structural applicability rules and the vehicle's
- * engine, generation, drivetrain, and trim specs.
+ * engine, chassis_specs, drivetrain, and trim specs.
  *
  * Pure function — no database calls, no side effects.
  */
 export function isServiceApplicable(
   service: Doc<"services">,
   engine: Doc<"engines">,
-  generation: Doc<"generations"> | null,
+  chassisSpecs: Doc<"chassis_specs"> | null,
   drivetrainConfig: Doc<"drivetrain_configs"> | null,
   trimSpecs: Doc<"trim_specs"> | null,
   vehicleConfig: Doc<"vehicle_configs">
@@ -29,7 +29,7 @@ export function isServiceApplicable(
   // 3. Hydraulic PS services don't apply to electric steering
   if (
     service.requires_hydraulic_ps === true &&
-    generation?.steering_type === "electric"
+    chassisSpecs?.steering_type === "electric"
   ) {
     return false;
   }
@@ -65,8 +65,8 @@ export function isServiceApplicable(
 
 /**
  * Returns all services applicable to a given vehicle config.
- * Loads the vehicle's related entities (engine, generation, drivetrain, trim specs)
- * and filters the full service list through applicability rules.
+ * Loads chassis_specs by chassis_code (single source of truth for platform
+ * structural attributes — replaces the retired `generations` table).
  */
 export async function getApplicableServices(
   ctx: QueryCtx,
@@ -77,12 +77,16 @@ export async function getApplicableServices(
     return [];
   }
 
-  // Load related entities in parallel
-  const [engine, generation, drivetrainConfig, trimSpecs, allServices] =
+  const [engine, chassisSpecs, drivetrainConfig, trimSpecs, allServices] =
     await Promise.all([
       ctx.db.get(vehicleConfig.engine_id),
-      vehicleConfig.generation_id
-        ? ctx.db.get(vehicleConfig.generation_id)
+      vehicleConfig.chassis_code
+        ? ctx.db
+            .query("chassis_specs")
+            .withIndex("by_chassis_code", (q) =>
+              q.eq("chassis_code", vehicleConfig.chassis_code!)
+            )
+            .first()
         : null,
       ctx.db
         .query("drivetrain_configs")
@@ -107,7 +111,7 @@ export async function getApplicableServices(
     isServiceApplicable(
       service,
       engine,
-      generation,
+      chassisSpecs,
       drivetrainConfig,
       trimSpecs,
       vehicleConfig

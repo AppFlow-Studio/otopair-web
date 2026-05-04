@@ -30,6 +30,7 @@ import {
   BLOCKED_DOMAINS,
 } from "./sourceRegistry";
 import type { VehicleInput } from "./types";
+import { scrapeWheelSizeOptions, type WheelSizeResult } from "./utils/wheelSizeScraper";
 
 const TTL_PARTS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_MARKDOWN_CHARS = 40_000;
@@ -40,6 +41,7 @@ export interface ScrapedSources {
   manualMarkdown: string;
   partsSourceUrls: string[];
   manualSourceUrls: string[];
+  wheelSizeResult: WheelSizeResult | null;
 }
 
 // ─── Parts + Manual ──────────────────────────────────────────────
@@ -78,18 +80,24 @@ export async function scrapeVehicleSources(
     partsPromise = searchPartsPages(ctx, vehicle);
   }
 
+  const dispL = vehicle.displacement ? parseFloat(vehicle.displacement) || null : null;
+  const wheelResult = await scrapeWheelSizeOptions(vehicle.year, vehicle.make, vehicle.model, vehicle.trim, dispL).catch(() => null);
+
   const [partsResult, manualResult] = await Promise.allSettled([
     partsPromise,
     scrapeManual(ctx, vehicle, manualQueries),
   ]);
 
-  const parts  = partsResult.status  === "fulfilled" ? partsResult.value  : { markdown: "", urls: [] };
+  const parts = partsResult.status === "fulfilled" ? partsResult.value : { markdown: "", urls: [] };
   const manual = manualResult.status === "fulfilled" ? manualResult.value : { markdown: "", urls: [] };
+  const wheel = wheelResult;
 
+  const oemCount = wheel?.tireOptions.filter(t => t.is_oem_standard).length ?? 0;
   console.log(
     `[scraper] ${vehicle.year} ${vehicle.make} ${vehicle.model}: ` +
     `parts=${parts.markdown.length} chars (${parts.urls.length} pages), ` +
-    `manual=${manual.markdown.length} chars (${manual.urls.length} src)`,
+    `manual=${manual.markdown.length} chars (${manual.urls.length} src), ` +
+    `wheel-size=${wheel ? `${wheel.tireOptions.length} options (${oemCount} OE)` : "miss"}`,
   );
 
   return {
@@ -97,6 +105,7 @@ export async function scrapeVehicleSources(
     manualMarkdown:   manual.markdown,
     partsSourceUrls:  parts.urls,
     manualSourceUrls: manual.urls,
+    wheelSizeResult:  wheel,
   };
 }
 

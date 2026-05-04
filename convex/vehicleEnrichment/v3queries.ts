@@ -15,6 +15,23 @@ export const getVehicleConfigByKey = internalQuery({
   },
 });
 
+/**
+ * Look up a cached vehicle_config by its NHTSA-only base key.
+ *
+ * This is the fast-path dedup used by confirmVehicleForUser BEFORE Haiku
+ * engine code resolution. If a config already exists for this NHTSA fingerprint
+ * we can skip the entire enrichment pipeline.
+ */
+export const getVehicleConfigByNhtsaVinKey = internalQuery({
+  args: { nhtsaVinKey: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_nhtsa_vin_key", (q) => q.eq("nhtsa_vin_key", args.nhtsaVinKey))
+      .first();
+  },
+});
+
 export const getMakeByName = internalQuery({
   args: { name: v.string() },
   handler: async (ctx, args) => {
@@ -124,10 +141,41 @@ export const findSimilarConfig = internalQuery({
 
 // ─── Fill rate queries ───────────────────────────────────────────
 
+export const getVehicleByVin = internalQuery({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin))
+      .first();
+  },
+});
+
 export const getVehicleConfigById = internalQuery({
   args: { vehicleConfigId: v.id("vehicle_configs") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.vehicleConfigId);
+  },
+});
+
+/** Resolve year/make/model/trim strings from a vehicle_config_id. */
+export const getVehicleLabels = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const config = await ctx.db.get(args.vehicleConfigId);
+    if (!config) return null;
+    const [make, model, engine] = await Promise.all([
+      config.make_id ? ctx.db.get(config.make_id as any) : null,
+      config.model_id ? ctx.db.get(config.model_id as any) : null,
+      config.engine_id ? ctx.db.get(config.engine_id as any) : null,
+    ]);
+    return {
+      year: config.year as number,
+      make: (make as any)?.name ?? "",
+      model: (model as any)?.name ?? "",
+      trim: (config as any).trim_name ?? "",
+      displacement_l: (engine as any)?.displacement_l ?? (engine as any)?.displacement_liters ?? null,
+    };
   },
 });
 
@@ -493,8 +541,7 @@ export const diagnoseFillGaps = internalQuery({
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicle_config_id))
       .first();
     const trimFields: Record<string, boolean> = {
-      front_tire_size: !!((trim as any)?.tire_size_front ?? (trim as any)?.front_tire_size),
-      rear_tire_size: !!((trim as any)?.tire_size_rear ?? (trim as any)?.rear_tire_size),
+      tire_options: ((trim as any)?.tire_options?.length ?? 0) > 0,
       tire_pressure_front: !!((trim as any)?.recommended_tire_pressure_front_psi ?? (trim as any)?.tire_pressure_front),
       tire_pressure_rear: !!((trim as any)?.recommended_tire_pressure_rear_psi ?? (trim as any)?.tire_pressure_rear),
       lug_nut_torque: !!(trim as any)?.lug_nut_torque_ft_lbs,
@@ -574,5 +621,43 @@ export const diagnoseFillGaps = internalQuery({
         ].filter(Boolean),
       },
     };
+  },
+});
+
+// ─── Engine sibling queries ───────────────────────────────────────
+
+/** Best completed sibling sharing the same engine — for head-start cloning. */
+export const findBestEngineSibling = internalQuery({
+  args: {
+    engine_id: v.id("engines"),
+    exclude_config_id: v.id("vehicle_configs"),
+  },
+  handler: async (ctx, args) => {
+    const all = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_engine", (q) => q.eq("engine_id", args.engine_id))
+      .collect();
+
+    const candidates = all
+      .filter((c) => c._id !== args.exclude_config_id)
+      .sort((a, b) => (b.fill_rate ?? 0) - (a.fill_rate ?? 0));
+
+    return candidates[0] ?? null;
+  },
+});
+
+/** All sibling configs sharing the same engine — for post-enrichment backfill. */
+export const findEngineSiblings = internalQuery({
+  args: {
+    engine_id: v.id("engines"),
+    exclude_config_id: v.id("vehicle_configs"),
+  },
+  handler: async (ctx, args) => {
+    const all = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_engine", (q) => q.eq("engine_id", args.engine_id))
+      .collect();
+
+    return all.filter((c) => c._id !== args.exclude_config_id);
   },
 });

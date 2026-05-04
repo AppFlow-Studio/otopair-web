@@ -841,7 +841,7 @@ const V4_INTERVALS = [
 ];
 const V4_ATTRIBUTES = [
   "timing_system", "drivetrain", "turbo",
-  "fuel_injection_type", "transmission_type", "power_steering_system",
+  "fuel_injection_type", "transmission_type",
 ];
 const V4_PARTS = [
   "oil_filter_oem", "air_filter_oem", "cabin_filter_oem", "spark_plug_oem",
@@ -849,8 +849,8 @@ const V4_PARTS = [
   "serpentine_belt_oem", "timing_belt_oem", "wiper_blade_set_oem",
 ];
 const V4_BATTERY = [
-  "battery_group", "battery_cca", "spark_plug_quantity",
-  "spark_plug_gap", "parking_brake_type",
+  "battery_group", "battery_cca", "battery_type", "battery_location",
+  "spark_plug_quantity", "spark_plug_gap", "parking_brake_type",
 ];
 const V4_TRIM = [
   "front_tire_size", "rear_tire_size",

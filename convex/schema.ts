@@ -36,7 +36,6 @@ import {
 } from "./lib/vehicle_passports";
 
 export default defineSchema({
-
   // ===== CORE VEHICLE REFERENCE =====
 
   // [W] 9 fields (A/D had 3)
@@ -61,10 +60,12 @@ export default defineSchema({
     slug: v.optional(v.string()),
     category: v.optional(v.string()),
     created_at: v.optional(v.number()),
-  })
-    .index("by_make_id", ["make_id"]),
+  }).index("by_make_id", ["make_id"]),
 
-  // [U-W] Vehicle model generations
+  // @deprecated — retired in favour of chassis_specs.
+  // steering_type, parking_brake_type, has_rear_wiper, cabin_filter_access
+  // have all moved to chassis_specs. Table kept in schema until all existing
+  // records are cleared and generation_id FKs are removed from vehicle_configs.
   generations: defineTable({
     model_id: v.id("models"),
     name: v.string(),
@@ -88,8 +89,7 @@ export default defineSchema({
     year_start: v.optional(v.number()),
     year_end: v.optional(v.number()),
     steering_type: v.optional(v.string()),
-  })
-    .index("by_model_id", ["model_id"]),
+  }).index("by_model_id", ["model_id"]),
 
   // [W] 24 fields (A had 6, D had 5). Absorbs deprecated engine_specs.
   engines: defineTable({
@@ -117,6 +117,7 @@ export default defineSchema({
     timing_idler_count: v.optional(v.number()),
     water_pump_timing_driven: v.optional(v.boolean()),
     data_quality: v.optional(v.string()),
+    last_enriched_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
     .index("by_trim_id", ["trim_id"])
@@ -157,9 +158,48 @@ export default defineSchema({
     .index("by_trim", ["trim_id"])
     .index("by_trim_drivetrain", ["trim_id", "drivetrain_type"]),
 
+  // Platform-stamped specs shared across all trims on the same chassis.
+  // Single source of truth for everything that is identical across every vehicle
+  // on this platform — physical specs AND structural attributes.
+  // (Replaces the unused `generations` table which has been retired.)
+  chassis_specs: defineTable({
+    chassis_code: v.string(),
+    make_id: v.optional(v.id("makes")),
+    // Physical specs
+    brake_fluid_type: v.optional(v.string()),
+    brake_fluid_capacity_oz: v.optional(v.number()),
+    ps_fluid_type: v.optional(v.string()),
+    ps_fluid_capacity_oz: v.optional(v.number()),
+    lug_nut_torque_ft_lbs: v.optional(v.number()),
+    wiper_blade_driver_size_in: v.optional(v.number()),
+    wiper_blade_passenger_size_in: v.optional(v.number()),
+    wiper_blade_rear_size_in: v.optional(v.number()),
+    battery_group: v.optional(v.string()),
+    battery_location: v.optional(v.string()),
+    battery_type: v.optional(v.string()),
+    has_brake_pad_sensor: v.optional(v.boolean()),
+    // Structural attributes (migrated from deprecated `generations` table)
+    steering_type: v.optional(v.string()),       // "electric" | "hydraulic" | "electro-hydraulic"
+    parking_brake_type: v.optional(v.string()),  // "electronic" | "manual_drum" | "manual_disc"
+    has_rear_wiper: v.optional(v.boolean()),
+    cabin_filter_access: v.optional(v.string()), // e.g. "glove_box" | "dash_pull"
+    data_quality: v.optional(v.string()),
+    confidence_score: v.optional(v.number()),
+    last_enriched_at: v.optional(v.number()),
+    source_url: v.optional(v.string()),
+    created_at: v.optional(v.number()),
+  })
+    .index("by_chassis_code", ["chassis_code"])
+    .index("by_make", ["make_id"]),
+
   // [U-W] Canonical vehicle config — THE new join key
   vehicle_configs: defineTable({
     config_key: v.string(),
+    // NHTSA-only base key — built from raw vPIC fields BEFORE engine code resolution.
+    // Format: `{year}_{make}_{model}_{trim}_{displacementL}l_{cylinders}cyl_{fuel}`
+    // Used by confirmVehicleForUser for instant cache hits without waiting on Haiku
+    // engine code resolution (e.g. "1.4 TSI" → "EA211"). See docs/ENRICHMENT_PIPELINE_HANDOFF.md.
+    nhtsa_vin_key: v.optional(v.string()),
     year: v.number(),
     make_id: v.id("makes"),
     model_id: v.id("models"),
@@ -183,9 +223,25 @@ export default defineSchema({
     verification_count: v.optional(v.number()),
     chassis_code: v.optional(v.string()),
     cloned_from_config_id: v.optional(v.id("vehicle_configs")),
+    // Packages this trim *can* ship with that affect 1+ of the 23 services.
+    // Detection-only — does NOT mean a specific VIN has the package.
+    // Used at booking time to compute which questions to ask the user.
+    // See docs/PACKAGE_AWARE_PARTS.md.
+    packages_available: v.optional(
+      v.array(
+        v.object({
+          code: v.string(),                       // e.g. "m_performance"
+          label: v.string(),                      // e.g. "M Performance Brake Package"
+          services_affected: v.array(v.string()), // e.g. ["brake_pad_replacement", "brake_rotor_replacement"]
+          detected_from: v.string(),              // "vdb_optional_options" | "vdb_standard_options" | "claude_inference" | "rules_table"
+          confidence: v.optional(v.number()),
+        }),
+      ),
+    ),
     created_at: v.optional(v.number()),
   })
     .index("by_config_key", ["config_key"])
+    .index("by_nhtsa_vin_key", ["nhtsa_vin_key"])
     .index("by_engine", ["engine_id"])
     .index("by_make_model_year", ["make_id", "model_id", "year"])
     .index("by_enrichment_status", ["enrichment_status"])
@@ -205,33 +261,66 @@ export default defineSchema({
     tc_fluid_capacity_qts: v.optional(v.number()),
     data_quality: v.optional(v.string()),
     created_at: v.optional(v.number()),
-  })
-    .index("by_vehicle_config", ["vehicle_config_id"]),
+  }).index("by_vehicle_config", ["vehicle_config_id"]),
 
-  // [W] 21 fields (A/D had 12)
+  // [W] Trim-specific variable data only — chassis hardpoints live in chassis_specs
   trim_specs: defineTable({
-    trim_id: v.id("trims"),
+    trim_id: v.optional(v.id("trims")),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    // Tire specs — vary by wheel package and trim
     tire_size_front: v.optional(v.string()),
     tire_size_rear: v.optional(v.string()),
     recommended_tire_pressure_front_psi: v.optional(v.number()),
     recommended_tire_pressure_rear_psi: v.optional(v.number()),
-    lug_nut_torque_ft_lbs: v.optional(v.number()),
-    wiper_blade_driver_size_in: v.optional(v.number()),
-    wiper_blade_passenger_size_in: v.optional(v.number()),
-    wiper_blade_rear_size_in: v.optional(v.number()),
-    parking_brake_type: v.optional(v.string()),
-    confidence_score: v.optional(v.number()),
-    created_at: v.optional(v.number()),
-    vehicle_config_id: v.optional(v.id("vehicle_configs")),
     is_staggered: v.optional(v.boolean()),
     tire_directional: v.optional(v.boolean()),
     is_run_flat: v.optional(v.boolean()),
     alignment_type: v.optional(v.string()),
-    battery_group: v.optional(v.string()),
+    // OEM tire fitments — multiple options per trim (wheel packages, regional variants)
+    tire_options: v.optional(
+      v.array(
+        v.object({
+          oem_name: v.optional(v.string()), // e.g. "Michelin Pilot Sport 4S"
+          size_front: v.string(), // e.g. "245/40R19"
+          size_rear: v.optional(v.string()), // e.g. "275/35R19" — staggered setups
+          // Parsed front components
+          width_mm: v.optional(v.number()), // 245
+          aspect_ratio: v.optional(v.number()), // 40
+          rim_diameter_in: v.optional(v.number()), // 19
+          // Parsed rear components — only present when size_rear differs from size_front
+          width_mm_rear: v.optional(v.number()), // 275
+          aspect_ratio_rear: v.optional(v.number()), // 35
+          rim_diameter_in_rear: v.optional(v.number()), // 19
+          pressure_front_psi: v.optional(v.number()),
+          pressure_rear_psi: v.optional(v.number()),
+          load_index: v.optional(v.number()),
+          speed_rating: v.optional(v.string()),
+          load_index_rear: v.optional(v.number()),
+          speed_rating_rear: v.optional(v.string()),
+          is_run_flat: v.optional(v.boolean()),
+          is_oem_standard: v.optional(v.boolean()), // true = standard fitment, false = optional
+          wheel_spec: v.optional(v.string()), // e.g. "8Jx19 ET30"
+        }),
+      ),
+    ),
+    tire_options_source: v.optional(v.string()),
+    // Battery — CCA varies by trim/climate package; group/location/type live in chassis_specs
     battery_cca: v.optional(v.number()),
-    battery_type: v.optional(v.string()),
-    battery_location: v.optional(v.string()),
+    // Brake — sensor presence varies by trim (drums vs discs)
+    has_brake_pad_sensor: v.optional(v.boolean()),
+    // Parking brake — mechanical vs EPB varies by trim
+    parking_brake_type: v.optional(v.string()),
+    confidence_score: v.optional(v.number()),
     data_quality: v.optional(v.string()),
+    created_at: v.optional(v.number()),
+    // @deprecated — migrating to chassis_specs. Remove after migrateToChassisSpecs runs.
+    lug_nut_torque_ft_lbs: v.optional(v.number()),
+    wiper_blade_driver_size_in: v.optional(v.number()),
+    wiper_blade_passenger_size_in: v.optional(v.number()),
+    wiper_blade_rear_size_in: v.optional(v.number()),
+    battery_group: v.optional(v.string()),
+    battery_location: v.optional(v.string()),
+    battery_type: v.optional(v.string()),
   })
     .index("by_trim", ["trim_id"])
     .index("by_vehicle_config", ["vehicle_config_id"]),
@@ -268,6 +357,10 @@ export default defineSchema({
     service_type: v.optional(v.string()),
     quantity_needed: v.optional(v.number()),
     position: v.optional(v.string()),
+    // null/undefined = base/default fitment (applies when no package overrides it).
+    // When set, this fitment only applies if the owner has confirmed this package
+    // in vehicle_owner_specs.confirmed_packages.
+    package_code: v.optional(v.string()),
     confidence: v.optional(v.number()),
     source_count: v.optional(v.number()),
     first_confirmed_at: v.optional(v.number()),
@@ -278,7 +371,8 @@ export default defineSchema({
   })
     .index("by_vehicle_config", ["vehicle_config_id"])
     .index("by_part", ["part_id"])
-    .index("by_config_service", ["vehicle_config_id", "service_type"]),
+    .index("by_config_service", ["vehicle_config_id", "service_type"])
+    .index("by_config_service_package", ["vehicle_config_id", "service_type", "package_code"]),
 
   // [U-W] Scraped OEM part pricing
   part_prices: defineTable({
@@ -369,8 +463,7 @@ export default defineSchema({
     blocked_by: v.optional(v.string()),
     accuracy_at_block: v.optional(v.number()),
     created_at: v.optional(v.number()),
-  })
-    .index("by_domain", ["domain"]),
+  }).index("by_domain", ["domain"]),
 
   scrape_cache: defineTable({
     cache_key: v.string(),
@@ -494,8 +587,7 @@ export default defineSchema({
     parts_cost_high: v.optional(v.number()),
     state_fee: v.optional(v.number()),
     display_order: v.optional(v.number()),
-  })
-    .index("by_service_id", ["service_id"]),
+  }).index("by_service_id", ["service_id"]),
 
   // [A] 17 fields (D had 7, W doesn't have this table)
   // Bridge table: long-term migrate to service_intervals + labor_times
@@ -555,7 +647,7 @@ export default defineSchema({
     data_quality: v.optional(v.string()),
     created_at: v.optional(v.number()),
   })
-    .index("by_vehicle_config", ["vehicle_config_id"])
+    .index("by_vehicle_config", ["vehicle_config_id", "service_id"])
     .index("by_engine_family", ["engine_family"]),
 
   // ===== VEHICLES & OWNERSHIP =====
@@ -636,6 +728,61 @@ export default defineSchema({
     .index("by_user_status", ["user_id", "status"])
     .index("by_smartcar_vehicle_id", ["smartcarVehicleId"]),
 
+  // [U-W] Owner-specific hardware facts about THIS car.
+  // Resolves which package-tagged part_fitments apply at booking time.
+  // See docs/PACKAGE_AWARE_PARTS.md.
+  // Lifecycle:
+  //   - Row created lazily on first user answer (no row = all packages "pending").
+  //   - confirmed_packages = user said "yes, my car has this package".
+  //   - denied_packages    = user said "no" — permanent, never re-asked.
+  //   - pending = vehicle_configs.packages_available − confirmed − denied (computed, not stored).
+  vehicle_owner_specs: defineTable({
+    vehicle_owner_id: v.id("vehicle_owners"),
+
+    // Package answers — accumulated over time as the user requests services.
+    confirmed_packages: v.optional(v.array(v.string())),
+    denied_packages: v.optional(v.array(v.string())),
+
+    // Tire setup actually on the car (not the OEM default — what's mounted right now).
+    tire_setup: v.optional(
+      v.object({
+        front: v.optional(
+          v.object({
+            brand: v.optional(v.string()),
+            model: v.optional(v.string()),
+            size: v.optional(v.string()),
+            confirmed_at: v.optional(v.number()),
+            source: v.optional(v.string()), // "user" | "scan" | "inferred_from_oem"
+          }),
+        ),
+        rear: v.optional(
+          v.object({
+            brand: v.optional(v.string()),
+            model: v.optional(v.string()),
+            size: v.optional(v.string()),
+            confirmed_at: v.optional(v.number()),
+            source: v.optional(v.string()),
+          }),
+        ),
+      }),
+    ),
+
+    // Aftermarket / non-package modifications the user has told us about.
+    modifications: v.optional(
+      v.array(
+        v.object({
+          type: v.string(), // "exhaust" | "intake" | "suspension" | "brakes" | "wheels" | "other"
+          brand: v.optional(v.string()),
+          note: v.optional(v.string()),
+          added_at: v.optional(v.number()),
+        }),
+      ),
+    ),
+
+    last_updated_at: v.optional(v.number()),
+    created_at: v.optional(v.number()),
+  }).index("by_vehicle_owner", ["vehicle_owner_id"]),
+
   vehicle_passports: defineTable({
     vin: v.string(),
     mileage: v.optional(v.number()),
@@ -660,8 +807,7 @@ export default defineSchema({
     distance: v.number(),
     unit: v.string(),
     recordedAt: v.number(),
-  })
-    .index("by_vehicle_and_date", ["vehicleOwnerId", "recordedAt"]),
+  }).index("by_vehicle_and_date", ["vehicleOwnerId", "recordedAt"]),
 
   // [I]
   smartcar_connections: defineTable({
@@ -702,8 +848,7 @@ export default defineSchema({
     pum_weight: v.optional(v.number()),
     hcm_weight: v.optional(v.number()),
     is_fixed: v.optional(v.boolean()),
-  })
-    .index("by_category", ["category_name"]),
+  }).index("by_category", ["category_name"]),
 
   // [U-A] Quarterly check-in data
   vehicle_checkins: defineTable({
@@ -778,8 +923,7 @@ export default defineSchema({
     source: v.optional(v.string()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
-  })
-    .index("by_vehicle_owner", ["vehicle_owner_id"]),
+  }).index("by_vehicle_owner", ["vehicle_owner_id"]),
 
   // [U-A] Per-service urgency/state for each vehicle owner
   vehicle_service_states: defineTable({
@@ -879,8 +1023,7 @@ export default defineSchema({
     language: v.optional(v.string()),
     units: v.optional(v.string()),
     last_updated: v.optional(v.number()),
-  })
-    .index("by_user_id", ["user_id"]),
+  }).index("by_user_id", ["user_id"]),
 
   // [U-D] User mechanic favorites/hidden
   user_mechanic_preferences: defineTable({
@@ -911,8 +1054,7 @@ export default defineSchema({
     miles_safe: v.optional(v.number()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
-  })
-    .index("by_user_id", ["user_id"]),
+  }).index("by_user_id", ["user_id"]),
 
   // [I]
   onboarding_questions_answers: defineTable({
@@ -921,8 +1063,7 @@ export default defineSchema({
     user_intentions: v.optional(v.any()),
     car_knowledge_level: v.optional(v.union(v.string(), v.number())),
     last_updated: v.optional(v.number()),
-  })
-    .index("by_user_id", ["user_id"]),
+  }).index("by_user_id", ["user_id"]),
 
   // ===== SHOPS & SCHEDULING =====
 
@@ -967,8 +1108,7 @@ export default defineSchema({
     open_time: v.optional(v.string()),
     close_time: v.optional(v.string()),
     is_closed: v.optional(v.boolean()),
-  })
-    .index("by_shop_id", ["shop_id"]),
+  }).index("by_shop_id", ["shop_id"]),
 
   // [I]
   shop_services: defineTable({
@@ -985,8 +1125,7 @@ export default defineSchema({
     shop_id: v.id("shops"),
     content_id: v.string(),
     display_order: v.optional(v.number()),
-  })
-    .index("by_shop_id", ["shop_id"]),
+  }).index("by_shop_id", ["shop_id"]),
 
   // [U-D] Shop staff roles, permissions, deletion tracking
   shop_users: defineTable({
@@ -1035,8 +1174,7 @@ export default defineSchema({
   block_time_types: defineTable({
     shop_id: v.id("shops"),
     title: v.string(),
-  })
-    .index("by_shop_id", ["shop_id"]),
+  }).index("by_shop_id", ["shop_id"]),
 
   // [I]
   mechanics: defineTable({
@@ -1286,8 +1424,7 @@ export default defineSchema({
     service_id: v.optional(v.id("services")),
     display_order: v.optional(v.number()),
     created_at: v.optional(v.number()),
-  })
-    .index("by_display_order", ["display_order"]),
+  }).index("by_display_order", ["display_order"]),
 
   // ===== REVIEWS & FEEDBACK =====
 
@@ -1476,4 +1613,57 @@ export default defineSchema({
     .index("by_level", ["level"])
     .index("by_timestamp", ["timestamp"])
     .index("by_user_id", ["user_id"]),
+
+  // ─── Tire Catalog ─────────────────────────────────────────────────────────
+
+  tire_brands: defineTable({
+    brand: v.string(),
+    tier: v.union(
+      v.literal("elite"),
+      v.literal("select"),
+      v.literal("standard"),
+      v.literal("unlisted"),
+    ),
+    parent_company: v.optional(v.string()),
+    is_sub_brand: v.optional(v.boolean()),
+    // Off-list tracking — auto-flagged when brand hits 3+ appearances across 2+ shops
+    appearance_count: v.optional(v.number()),
+    review_flagged: v.optional(v.boolean()),
+  }).index("by_brand", ["brand"])
+    .index("by_tier", ["tier"]),
+
+  tire_size_cache: defineTable({
+    size: v.string(),         // canonical "245/40R19"
+    scraped_at: v.number(),   // Date.now()
+    total_count: v.number(),  // SimpleTire reported total
+    source_url: v.string(),
+  }).index("by_size", ["size"]),
+
+  tire_models: defineTable({
+    brand: v.string(),
+    model: v.string(),
+    size: v.string(),
+    tier: v.optional(v.union(v.literal("elite"), v.literal("select"), v.literal("standard"), v.literal("unlisted"))),
+    tire_type: v.optional(v.string()),   // "All-Season" | "Summer" | "Winter" | "All-Terrain" | "Performance" | "Touring"
+    load_index: v.optional(v.number()),
+    speed_rating: v.optional(v.string()),
+    part_number: v.optional(v.string()), // manufacturer MPN (from SimpleTire)
+    source_url: v.optional(v.string()),
+  }).index("by_size", ["size"])
+    .index("by_brand", ["brand"])
+    .index("by_tier", ["tier"])
+    .index("by_brand_model_size", ["brand", "model", "size"]),
+
+  tire_pricing: defineTable({
+    tire_model_id: v.id("tire_models"),
+    source: v.string(),            // "simpletire" | "tirerack" | "walmart" | …
+    source_url: v.string(),
+    price_per_tire: v.number(),    // USD, current selling price
+    regular_price: v.optional(v.number()), // pre-sale price (prevPrice from TireRack); use as MSRP proxy
+    has_deal: v.boolean(),         // true = price < regular_price (on sale)
+    in_stock: v.optional(v.boolean()),
+    scraped_at: v.number(),        // Date.now()
+  }).index("by_tire_model", ["tire_model_id"])
+    .index("by_source", ["source"])
+    .index("by_tire_model_source", ["tire_model_id", "source"]),
 });

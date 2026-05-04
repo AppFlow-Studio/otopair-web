@@ -104,7 +104,6 @@ export interface Call1AResults {
     turbo: FieldResult;
     fuel_injection_type: FieldResult;
     transmission_type: FieldResult;
-    power_steering_system: FieldResult;
   };
 }
 
@@ -120,6 +119,7 @@ export interface Call1BResults {
     serpentine_belt_oem: FieldResult;
     timing_belt_oem: FieldResult;
     wiper_blade_set_oem: FieldResult;
+    wiper_blade_rear_oem: FieldResult;
   };
   battery: {
     battery_group: FieldResult;
@@ -131,8 +131,6 @@ export interface Call1BResults {
   };
   parking_brake_type: FieldResult;
   trim_specs: {
-    front_tire_size: FieldResult;
-    rear_tire_size: FieldResult;
     tire_pressure_front_psi: FieldResult;
     tire_pressure_rear_psi: FieldResult;
     lug_nut_torque_ft_lbs: FieldResult;
@@ -214,6 +212,55 @@ export function buildEngineKey(input: VehicleInput): string {
   return parts.join("_");
 }
 
+/**
+ * NHTSA-only base key used for cache lookups BEFORE engine code resolution.
+ *
+ * Built entirely from raw NHTSA vPIC fields, which are deterministic per VIN.
+ * This lets confirmVehicleForUser short-circuit to a cached vehicle_config the
+ * moment we decode a VIN — even for makes where NHTSA returns engine descriptors
+ * (e.g. VW "1.4 TSI", Hyundai "Smartstream", Ford "EcoBoost") that need
+ * Haiku resolution before the canonical config_key can be computed.
+ *
+ * Format: `{year}_{makeSlug}_{modelSlug}_{trimSlug}_{displacementL}l_{cylinders}cyl_{fuelSlug}`
+ * Example: "2020_volkswagen_jetta_r_line_1.4l_4cyl_gas"
+ */
+export function buildNhtsaVinKey(input: {
+  year: number;
+  make: string;
+  model: string;
+  trim?: string;
+  displacementL?: number | string;
+  cylinders?: number | string;
+  fuelType?: string;
+}): string {
+  const year = String(input.year);
+  const make = canonicalizeMake(input.make);
+  const model = canonicalize(input.model);
+  const trim = canonicalize(input.trim ?? "");
+
+  // Displacement: round to 1 decimal so "1.40" and "1.4" produce the same key.
+  let disp = "";
+  if (input.displacementL !== undefined && input.displacementL !== null && input.displacementL !== "") {
+    const n = typeof input.displacementL === "number" ? input.displacementL : Number(input.displacementL);
+    if (Number.isFinite(n) && n > 0) {
+      disp = `${n.toFixed(1)}l`;
+    }
+  }
+
+  let cyl = "";
+  if (input.cylinders !== undefined && input.cylinders !== null && input.cylinders !== "") {
+    const n = typeof input.cylinders === "number" ? input.cylinders : Number(input.cylinders);
+    if (Number.isFinite(n) && n > 0) {
+      cyl = `${Math.round(n)}cyl`;
+    }
+  }
+
+  const fuel = canonicalize(input.fuelType ?? "");
+
+  const parts = [year, make, model, trim, disp, cyl, fuel].filter((p) => p.length > 0);
+  return parts.join("_");
+}
+
 // ─── Field Lists (for fill rate calculation) ─────────────────────
 
 /**
@@ -250,19 +297,20 @@ export const V4_FIELD_KEYS = [
   "brake_fluid_flush_miles", "brake_fluid_flush_months",
   "serpentine_belt_miles", "serpentine_belt_months",
   "timing_service_miles", "timing_service_months",
-  // Attributes (6)
+  // Attributes (5)
   "timing_system", "drivetrain", "turbo",
-  "fuel_injection_type", "transmission_type", "power_steering_system",
-  // OEM Parts (10)
+  "fuel_injection_type", "transmission_type",
+  // Battery details (2)
+  "battery_type", "battery_location",
+  // OEM Parts (11) — wiper_blade_set_oem = front pair, wiper_blade_rear_oem = rear
   "oil_filter_oem", "air_filter_oem", "cabin_filter_oem",
   "spark_plug_oem", "front_brake_pad_oem", "rear_brake_pad_oem",
   "drain_plug_gasket_oem", "serpentine_belt_oem", "timing_belt_oem",
-  "wiper_blade_set_oem",
+  "wiper_blade_set_oem", "wiper_blade_rear_oem",
   // Battery & Electrical (5)
   "battery_group", "battery_cca", "spark_plug_quantity",
   "spark_plug_gap", "parking_brake_type",
-  // Trim (7)
-  "front_tire_size", "rear_tire_size",
+  // Trim (5)
   "tire_pressure_front_psi", "tire_pressure_rear_psi",
   "lug_nut_torque_ft_lbs", "front_wiper_size", "rear_wiper_size",
   // Pricing (6)

@@ -88,9 +88,9 @@ const SANITY_RULES: SanityRule[] = [
   { field: "transmission_type", type: "enum",
     allowed: ["automatic", "manual", "CVT", "DCT", "AMT"], severity: "reject",
     reason: "Invalid transmission type" },
-  { field: "power_steering_system", type: "enum",
-    allowed: ["electric", "hydraulic", "electro-hydraulic"], severity: "reject",
-    reason: "Invalid power steering system" },
+  { field: "battery_type", type: "enum",
+    allowed: ["AGM", "flooded", "EFB", "lithium-ion"], severity: "reject",
+    reason: "Invalid battery type" },
 ];
 
 /** Engine-size-specific validation rules. */

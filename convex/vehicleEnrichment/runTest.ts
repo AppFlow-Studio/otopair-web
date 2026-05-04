@@ -160,9 +160,13 @@ export const go = internalAction({
       `${dt?.drivetrain_type ?? vc.drivetrain} | Diff: ${dt?.diff_fluid_type ?? "none"} | TC: ${dt?.tc_fluid_type ?? "none"}`,
     );
     L("─── TRIM ───");
-    L(
-      `Tires: ${ts?.tire_size_front ?? ts?.front_tire_size ?? "?"} / ${ts?.tire_size_rear ?? ts?.rear_tire_size ?? "?"}`,
+    const tireOpts: any[] = (ts as any)?.tire_options ?? [];
+    const oemCount = tireOpts.filter((t: any) => t.is_oem_standard).length;
+    L(`Tire options: ${tireOpts.length} total (${oemCount} OE) from ${(ts as any)?.tire_options_source ?? "none"}`);
+    tireOpts.slice(0, 6).forEach((t: any) =>
+      L(`  ${t.is_oem_standard ? "OE" : "  "} ${t.size_front}${t.size_rear ? "/" + t.size_rear : ""} ${t.wheel_spec ?? ""} ${t.width_mm ? `[${t.width_mm}/${t.aspect_ratio}R${t.rim_diameter_in}]` : ""}`)
     );
+    if (tireOpts.length > 6) L(`  ... +${tireOpts.length - 6} more`);
     L(
       `Battery: ${ts?.battery_group ?? "?"} ${ts?.battery_cca ?? "?"}CCA | Lug: ${ts?.lug_nut_torque_ft_lbs ?? "?"}ft-lbs`,
     );

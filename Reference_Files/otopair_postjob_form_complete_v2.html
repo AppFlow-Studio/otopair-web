@@ -1,0 +1,191 @@
+<h2 class="sr-only">Complete post-job form showing Part A mandatory (mileage, parts installed, Vehicle ID updates, mechanic notes, flag for review) and Part B optional (labor time, difficulty, parts accuracy, additional observations).</h2>
+
+<style>
+  .pw2 { padding: 1rem 0; }
+  .po2 { min-height: 900px; background: rgba(0,0,0,0.35); display: flex; align-items: flex-start; justify-content: center; padding-top: 20px; border-radius: var(--border-radius-lg); }
+  .pm2 { width: 460px; background: var(--color-background-primary); border-radius: 16px; overflow: hidden; border: 0.5px solid var(--color-border-tertiary); }
+  .pmh2 { padding: 14px 22px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .pmh2 h3 { font-size: 15px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 2px; }
+  .pmh2 .sub { font-size: 10px; color: var(--color-text-tertiary); }
+  .pmb2 { padding: 16px 22px; max-height: 820px; overflow-y: auto; }
+  .tabs { display: flex; gap: 0; margin-bottom: 14px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .tab { padding: 7px 14px; font-size: 11px; color: var(--color-text-tertiary); cursor: pointer; border-bottom: 2px solid transparent; }
+  .tab.act { color: #C8972E; border-bottom-color: #C8972E; font-weight: 500; }
+  .tab .tbg { font-size: 8px; padding: 1px 5px; border-radius: 8px; font-weight: 600; margin-left: 4px; }
+  .tbg.rq { background: #FFEBEE; color: #C62828; }
+  .tbg.op { background: #F0F0F0; color: #888; }
+  .stg { display: inline-block; padding: 3px 8px; border-radius: 5px; font-size: 9px; font-weight: 500; background: #E8F5E9; color: #2E7D32; margin-bottom: 12px; }
+  .sl2 { font-size: 9px; font-weight: 500; letter-spacing: 1.5px; text-transform: uppercase; color: #C8972E; margin-bottom: 6px; margin-top: 14px; display: flex; justify-content: space-between; align-items: center; }
+  .sl2:first-of-type { margin-top: 0; }
+  .sl2 .rtg { font-size: 8px; padding: 1px 6px; border-radius: 8px; font-weight: 600; }
+  .rtg.rq { background: #FFEBEE; color: #C62828; }
+  .rtg.op { background: #F0F0F0; color: #888; }
+  .fd2 { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 11px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .fd2:last-child { border-bottom: none; }
+  .fl2 { color: var(--color-text-secondary); }
+  .fv2 { color: var(--color-text-primary); font-weight: 500; display: flex; align-items: center; gap: 5px; }
+  .fi2 { font-size: 11px; padding: 4px 8px; border: 0.5px solid var(--color-border-secondary); border-radius: 5px; width: 120px; text-align: right; background: var(--color-background-primary); color: var(--color-text-primary); }
+  .fi2::placeholder { color: var(--color-text-tertiary); font-size: 10px; }
+  .fs2 { font-size: 11px; padding: 4px 8px; border: 0.5px solid var(--color-border-secondary); border-radius: 5px; background: var(--color-background-primary); color: var(--color-text-primary); width: 120px; }
+  .ta2 { width: 100%; font-size: 11px; padding: 7px 9px; border: 0.5px solid var(--color-border-secondary); border-radius: 5px; resize: vertical; min-height: 50px; font-family: inherit; background: var(--color-background-primary); color: var(--color-text-primary); }
+  .ta2::placeholder { color: var(--color-text-tertiary); font-size: 10px; }
+  .sep2 { border: none; border-top: 0.5px solid var(--color-border-tertiary); margin: 10px 0; }
+  .pr2 { background: var(--color-background-secondary); border-radius: 8px; padding: 9px 11px; margin-bottom: 8px; }
+  .prg { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; font-size: 11px; }
+  .prg label { font-size: 9px; color: var(--color-text-tertiary); display: block; margin-bottom: 1px; }
+  .prg input { width: 100%; font-size: 11px; padding: 3px 7px; border: 0.5px solid var(--color-border-tertiary); border-radius: 4px; background: var(--color-background-primary); color: var(--color-text-primary); }
+  .add { font-size: 10px; color: #C8972E; font-weight: 500; cursor: pointer; padding: 4px 0; }
+  .uc { background: #FFF8ED; border: 0.5px solid #E8D5A8; border-radius: 6px; padding: 8px 11px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; }
+  .uc .ul { color: #8B6914; }
+  .uc .uv { font-weight: 500; color: #6B5A10; }
+  .chk { display: flex; align-items: center; gap: 7px; padding: 7px 10px; background: var(--color-background-secondary); border-radius: 6px; font-size: 11px; color: var(--color-text-secondary); cursor: pointer; }
+  .chk input[type="checkbox"] { accent-color: #C8972E; }
+  .btn2 { width: 100%; padding: 10px; border: none; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; margin-top: 8px; }
+  .btn2.pr { background: #1A1A1A; color: #FFF; }
+  .btn2.pr:hover { background: #333; }
+  .btn2.sc { background: var(--color-background-secondary); color: var(--color-text-secondary); border: 0.5px solid var(--color-border-tertiary); margin-top: 5px; }
+  .dif { display: flex; gap: 4px; padding: 4px 0; }
+  .dif span { padding: 3px 8px; border-radius: 5px; font-size: 10px; background: var(--color-background-secondary); color: var(--color-text-secondary); border: 0.5px solid var(--color-border-tertiary); cursor: pointer; }
+  .dif span.sel { background: #1A1A1A; color: #FFF; border-color: #1A1A1A; }
+  .opa { display: flex; gap: 4px; padding: 4px 0; }
+  .opa span { padding: 3px 10px; border-radius: 5px; font-size: 10px; background: var(--color-background-secondary); color: var(--color-text-secondary); border: 0.5px solid var(--color-border-tertiary); cursor: pointer; }
+  .opa span.sel { background: #E8F5E9; color: #2E7D32; border-color: #C8E6C9; }
+  .partb { margin-top: 14px; padding-top: 14px; border-top: 2px solid var(--color-border-tertiary); }
+  .partb-label { font-size: 11px; font-weight: 500; color: var(--color-text-tertiary); margin-bottom: 4px; }
+  .partb-sub { font-size: 10px; color: var(--color-text-tertiary); margin-bottom: 12px; }
+  @media (prefers-color-scheme: dark) {
+    .uc { background: #2C2510; border-color: #4A3D20; }
+    .uc .ul { color: #D4B06A; }
+    .uc .uv { color: #E8C87A; }
+    .btn2.pr { background: #C8972E; }
+    .btn2.pr:hover { background: #B8871E; }
+    .stg { background: #0F2E18; color: #6FCF8E; }
+    .dif span.sel { background: #C8972E; border-color: #C8972E; }
+  }
+</style>
+
+<div class="pw2">
+<div class="po2">
+  <div class="pm2">
+    <div class="pmh2">
+      <h3>Job completion report</h3>
+      <div class="sub">Sarah Kim · 2022 Toyota Camry SE · Oil change</div>
+    </div>
+    <div class="pmb2">
+
+      <div class="tabs">
+        <div class="tab act">Part A <span class="tbg rq">Required</span></div>
+        <div class="tab">Part B <span class="tbg op">Optional</span></div>
+      </div>
+
+      <div class="stg">Oil change — showing relevant fields only</div>
+
+      <!-- PJ1: MILEAGE -->
+      <div class="sl2">PJ1 · Mileage at completion <span class="rtg rq">Required</span></div>
+      <div class="fd2">
+        <span class="fl2">Odometer</span>
+        <span class="fv2"><input class="fi2" value="34,215"></span>
+      </div>
+
+      <hr class="sep2">
+
+      <!-- PJ2: PARTS INSTALLED -->
+      <div class="sl2">PJ2 · Parts used <span class="rtg rq">Required</span></div>
+      <div class="pr2">
+        <div class="prg">
+          <div><label>Part name</label><input value="Oil filter"></div>
+          <div><label>Brand</label><input value="Toyota Genuine"></div>
+          <div><label>Part number</label><input value="04152-YZZA1"></div>
+          <div><label>Cost</label><input value="$9.50"></div>
+        </div>
+      </div>
+      <div class="pr2">
+        <div class="prg">
+          <div><label>Part name</label><input value="Engine oil (5qt)"></div>
+          <div><label>Brand</label><input value="Mobil 1"></div>
+          <div><label>Part number</label><input placeholder="Optional"></div>
+          <div><label>Cost</label><input value="$28.00"></div>
+        </div>
+      </div>
+      <div class="add">+ Add another part</div>
+
+      <hr class="sep2">
+
+      <!-- PJ3: VEHICLE ID UPDATES -->
+      <div class="sl2">PJ3 · Update vehicle ID <span class="rtg rq">Context-aware</span></div>
+      <div class="uc">
+        <span class="ul">Update oil viscosity?</span>
+        <span class="uv">0W-20 (confirmed)</span>
+      </div>
+      <div class="uc">
+        <span class="ul">Update oil type?</span>
+        <span class="uv">Full synthetic (confirmed)</span>
+      </div>
+      <div class="uc">
+        <span class="ul">Update oil filter part #?</span>
+        <span class="uv">04152-YZZA1 (new)</span>
+      </div>
+
+      <hr class="sep2">
+
+      <!-- PJ4: MECHANIC NOTES -->
+      <div class="sl2">PJ4 · Tip for next mechanic <span class="rtg op">Optional</span></div>
+      <textarea class="ta2" placeholder="e.g. &quot;Drain plug slightly worn&quot; · &quot;Customer prefers Mobil 1&quot; · &quot;Check alignment next visit&quot;"></textarea>
+
+      <hr class="sep2">
+
+      <!-- PJ5: FLAG FOR REVIEW -->
+      <div class="sl2">PJ5 · Flag for review <span class="rtg op">Optional</span></div>
+      <div class="chk">
+        <input type="checkbox" id="fl">
+        <label for="fl" style="cursor:pointer;">Our vehicle specs may be incorrect for this car</label>
+      </div>
+
+      <button class="btn2 pr">Submit report and close job</button>
+
+      <!-- PART B -->
+      <div class="partb">
+        <div class="partb-label">Part B — Optimization survey</div>
+        <div class="partb-sub">Optional — helps Otopair improve estimates over time. Skip anytime.</div>
+
+        <!-- OPT1: LABOR TIME -->
+        <div class="sl2">OPT1 · Actual labor time <span class="rtg op">Optional</span></div>
+        <div class="fd2">
+          <span class="fl2">How long did it take?</span>
+          <span class="fv2"><input class="fi2" placeholder="Minutes" value="35"> <span style="font-size:9px;color:var(--color-text-tertiary);">Est: 45min</span></span>
+        </div>
+
+        <hr class="sep2">
+
+        <!-- OPT2: DIFFICULTY -->
+        <div class="sl2">OPT2 · Difficulty rating <span class="rtg op">Optional</span></div>
+        <div class="dif">
+          <span>1 Much easier</span>
+          <span>2</span>
+          <span class="sel">3 Normal</span>
+          <span>4</span>
+          <span>5 Much harder</span>
+        </div>
+
+        <hr class="sep2">
+
+        <!-- OPT3: PARTS ACCURACY -->
+        <div class="sl2">OPT3 · Parts accuracy <span class="rtg op">Optional</span></div>
+        <div class="opa">
+          <span class="sel">Yes — correct</span>
+          <span>No — used different parts</span>
+        </div>
+
+        <hr class="sep2">
+
+        <!-- OPT4: ADDITIONAL OBSERVATIONS -->
+        <div class="sl2">OPT4 · Additional observations <span class="rtg op">Optional</span></div>
+        <textarea class="ta2" placeholder="e.g. &quot;Noticed exhaust leak — unrelated to today's service&quot; · &quot;Recommend brake inspection at next visit&quot;"></textarea>
+
+        <button class="btn2 sc">Skip survey and close job</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+</div>

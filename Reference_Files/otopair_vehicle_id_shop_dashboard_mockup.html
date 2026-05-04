@@ -1,0 +1,176 @@
+<h2 class="sr-only">Mockup of the Otopair shop dashboard showing a booking detail panel with a Vehicle ID button that expands to reveal the full vehicle passport and pre-job confirmation form.</h2>
+
+<style>
+  .mock-wrap { padding: 1.5rem 0; }
+  .mock-browser { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); overflow: hidden; }
+  .mock-toolbar { background: var(--color-background-secondary); padding: 8px 16px; display: flex; align-items: center; gap: 8px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .mock-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--color-border-secondary); }
+  .mock-url { flex: 1; font-size: 11px; color: var(--color-text-tertiary); padding: 4px 10px; background: var(--color-background-primary); border-radius: 6px; border: 0.5px solid var(--color-border-tertiary); }
+  .mock-body { display: flex; min-height: 580px; }
+  .mock-sidebar { width: 48px; background: var(--color-background-secondary); border-right: 0.5px solid var(--color-border-tertiary); display: flex; flex-direction: column; align-items: center; padding-top: 16px; gap: 20px; }
+  .mock-sidebar-icon { width: 20px; height: 20px; border-radius: 4px; background: var(--color-border-tertiary); }
+  .mock-sidebar-icon.active { background: #C8972E; }
+  .mock-main { flex: 1; display: flex; }
+  .mock-list { flex: 1; padding: 20px; border-right: 0.5px solid var(--color-border-tertiary); min-width: 0; }
+  .mock-panel { width: 380px; padding: 20px; overflow-y: auto; flex-shrink: 0; }
+  .mock-h1 { font-size: 18px; font-weight: 500; margin-bottom: 16px; color: var(--color-text-primary); }
+  .mock-tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .mock-tab { padding: 8px 14px; font-size: 11px; color: var(--color-text-tertiary); cursor: default; }
+  .mock-tab.active { color: #C8972E; border-bottom: 2px solid #C8972E; font-weight: 500; }
+  .mock-row { display: grid; grid-template-columns: 1fr 1fr 1.2fr 0.8fr 0.8fr 0.8fr; gap: 0; padding: 10px 0; border-bottom: 0.5px solid var(--color-border-tertiary); font-size: 12px; align-items: center; }
+  .mock-row.header { font-weight: 500; color: var(--color-text-tertiary); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .mock-row .status { font-size: 11px; font-weight: 500; }
+  .status-progress { color: #1D9E75; }
+  .status-confirmed { color: #378ADD; }
+  .panel-title { font-size: 15px; font-weight: 500; margin-bottom: 16px; color: var(--color-text-primary); display: flex; justify-content: space-between; align-items: center; }
+  .panel-close { color: var(--color-text-tertiary); cursor: pointer; font-size: 16px; }
+  .panel-section { margin-bottom: 16px; }
+  .panel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 12px; }
+  .panel-label { color: var(--color-text-tertiary); font-size: 11px; }
+  .panel-value { color: var(--color-text-primary); font-weight: 500; font-size: 13px; }
+  .panel-divider { border: none; border-top: 0.5px solid var(--color-border-tertiary); margin: 16px 0; }
+  .vid-button { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #FFF8ED; border: 0.5px solid #E8D5A8; border-radius: 8px; cursor: pointer; margin-bottom: 16px; transition: background 0.15s; }
+  .vid-button:hover { background: #FFF0D6; }
+  .vid-button .vid-icon { width: 28px; height: 28px; border-radius: 6px; background: #C8972E; display: flex; align-items: center; justify-content: center; color: #FFF; font-size: 13px; font-weight: 500; }
+  .vid-button .vid-text { flex: 1; }
+  .vid-button .vid-text p { margin: 0; }
+  .vid-button .vid-text .vid-title { font-size: 12px; font-weight: 500; color: #1A1A1A; }
+  .vid-button .vid-text .vid-sub { font-size: 10px; color: #999; }
+  .vid-button .vid-arrow { color: #C8972E; font-size: 14px; }
+  .vid-panel { display: none; background: var(--color-background-secondary); border-radius: 8px; padding: 14px; margin-bottom: 16px; border: 0.5px solid var(--color-border-tertiary); }
+  .vid-panel.open { display: block; }
+  .vid-section-label { font-size: 9px; font-weight: 500; letter-spacing: 1.5px; text-transform: uppercase; color: #C8972E; margin-bottom: 6px; margin-top: 12px; }
+  .vid-section-label:first-child { margin-top: 0; }
+  .vid-field { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 12px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .vid-field:last-child { border-bottom: none; }
+  .vid-field .vf-label { color: var(--color-text-secondary); }
+  .vid-field .vf-value { color: var(--color-text-primary); font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .vf-badge { font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 500; }
+  .vf-badge.verified { background: #E8F5E9; color: #2E7D32; }
+  .vf-badge.unverified { background: #FFF8ED; color: #C8972E; }
+  .vf-badge.ai { background: var(--color-background-secondary); color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); }
+  .prejob-btn { width: 100%; padding: 10px; background: #1A1A1A; color: #FFF; border: none; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; margin-top: 8px; }
+  .prejob-btn:hover { background: #333; }
+  .mechanic-note { background: #FFF8ED; border-left: 2px solid #C8972E; padding: 8px 10px; border-radius: 0 6px 6px 0; font-size: 11px; color: #8B6914; margin-top: 8px; font-style: italic; }
+  .action-row { display: flex; gap: 8px; margin-top: 12px; }
+  .btn-accept { padding: 8px 20px; background: #1D9E75; color: #FFF; border: none; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; }
+  .btn-decline { padding: 8px 20px; background: transparent; color: #E24B4A; border: 0.5px solid #E24B4A; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; }
+  @media (prefers-color-scheme: dark) {
+    .vid-button { background: #2C2510; border-color: #4A3D20; }
+    .vid-button:hover { background: #3A3018; }
+    .vid-button .vid-title { color: #F0E6D0; }
+    .mechanic-note { background: #2C2510; color: #D4B06A; }
+    .prejob-btn { background: #C8972E; }
+    .prejob-btn:hover { background: #B8871E; }
+  }
+</style>
+
+<div class="mock-wrap">
+<div class="mock-browser">
+  <div class="mock-toolbar">
+    <div class="mock-dot"></div><div class="mock-dot"></div><div class="mock-dot"></div>
+    <div class="mock-url">shop.otopair.com/bookings</div>
+  </div>
+  <div class="mock-body">
+    <div class="mock-sidebar">
+      <div class="mock-sidebar-icon"></div>
+      <div class="mock-sidebar-icon active"></div>
+      <div class="mock-sidebar-icon"></div>
+      <div class="mock-sidebar-icon"></div>
+      <div class="mock-sidebar-icon"></div>
+    </div>
+    <div class="mock-main">
+      <div class="mock-list">
+        <div class="mock-h1">All jobs</div>
+        <div class="mock-tabs">
+          <div class="mock-tab active">All 25</div>
+          <div class="mock-tab">Pending 12</div>
+          <div class="mock-tab">Confirmed 11</div>
+          <div class="mock-tab">In progress 2</div>
+        </div>
+        <div class="mock-row header">
+          <span>Customer</span><span>Vehicle</span><span>Service</span><span>Status</span><span>Date</span><span>Total</span>
+        </div>
+        <div class="mock-row" style="background: var(--color-background-secondary); border-radius: 6px; padding: 10px 6px;">
+          <span>Riley Q.</span><span style="color: #C8972E; font-weight: 500;">2018 F. F-150</span><span>Tire rotation</span><span class="status status-confirmed">Pending</span><span style="font-size:11px;">Apr 17</span><span>$30.00</span>
+        </div>
+        <div class="mock-row">
+          <span>James S.</span><span>2018 F. F-150</span><span>Oil change</span><span class="status status-progress">In progress</span><span style="font-size:11px;">Today</span><span>$92.50</span>
+        </div>
+        <div class="mock-row">
+          <span>Maria R.</span><span>2021 T. RAV4</span><span>Brake pads</span><span class="status status-confirmed">Confirmed</span><span style="font-size:11px;">Today</span><span>$165.00</span>
+        </div>
+        <div class="mock-row">
+          <span>Alex L.</span><span>2015 H. Civic</span><span>Tire rotation</span><span class="status status-confirmed">Confirmed</span><span style="font-size:11px;">Today</span><span>$30.00</span>
+        </div>
+      </div>
+
+      <div class="mock-panel">
+        <div class="panel-title">Tire rotation — Riley Quinn <span class="panel-close">&times;</span></div>
+
+        <div class="panel-section">
+          <div class="panel-grid">
+            <div><div class="panel-label">Customer</div><div class="panel-value">Riley Quinn</div></div>
+            <div><div class="panel-label">Vehicle</div><div class="panel-value" style="color: #C8972E;">2018 Ford F-150</div></div>
+            <div><div class="panel-label">Schedule</div><div class="panel-value">Apr 17, 1:00 PM</div></div>
+            <div><div class="panel-label">Services</div><div class="panel-value">Tire rotation</div></div>
+          </div>
+        </div>
+
+        <hr class="panel-divider">
+
+        <div class="vid-button" onclick="document.getElementById('vid').classList.toggle('open')">
+          <div class="vid-icon">ID</div>
+          <div class="vid-text">
+            <p class="vid-title">Vehicle ID — 2018 Ford F-150</p>
+            <p class="vid-sub">Tap to view full vehicle passport</p>
+          </div>
+          <span class="vid-arrow">&#8250;</span>
+        </div>
+
+        <div class="vid-panel" id="vid">
+          <div class="vid-section-label">Tires</div>
+          <div class="vid-field"><span class="vf-label">Brand</span><span class="vf-value">Goodyear Wrangler <span class="vf-badge verified">Verified</span></span></div>
+          <div class="vid-field"><span class="vf-label">Size</span><span class="vf-value">275/65R18 <span class="vf-badge verified">Verified</span></span></div>
+          <div class="vid-field"><span class="vf-label">Condition</span><span class="vf-value">Fair <span class="vf-badge unverified">Last: Jan 8</span></span></div>
+          <div class="vid-field"><span class="vf-label">Run-flat</span><span class="vf-value">No</span></div>
+
+          <div class="vid-section-label">Fluids</div>
+          <div class="vid-field"><span class="vf-label">Oil viscosity</span><span class="vf-value">5W-20 <span class="vf-badge verified">Verified</span></span></div>
+          <div class="vid-field"><span class="vf-label">Oil type</span><span class="vf-value">Full synthetic</span></div>
+          <div class="vid-field"><span class="vf-label">Coolant</span><span class="vf-value">Motorcraft Orange <span class="vf-badge ai">OEM default</span></span></div>
+          <div class="vid-field"><span class="vf-label">Brake fluid</span><span class="vf-value">DOT 3 <span class="vf-badge ai">OEM default</span></span></div>
+
+          <div class="vid-section-label">Mileage</div>
+          <div class="vid-field"><span class="vf-label">Current</span><span class="vf-value">67,430 mi</span></div>
+          <div class="vid-field"><span class="vf-label">Velocity</span><span class="vf-value">~1,100 mi/mo</span></div>
+          <div class="vid-field"><span class="vf-label">Last updated</span><span class="vf-value">Mar 15, 2026</span></div>
+
+          <div class="vid-section-label">Recent services</div>
+          <div class="vid-field"><span class="vf-label">Mar 15</span><span class="vf-value">Oil change</span></div>
+          <div class="vid-field"><span class="vf-label">Jan 8</span><span class="vf-value">Tire rotation</span></div>
+          <div class="vid-field"><span class="vf-label">Nov 2</span><span class="vf-value">Brake inspection</span></div>
+
+          <div class="mechanic-note">"Front left tire wearing slightly uneven — check alignment at next visit. Customer prefers Goodyear brand." — Luke S., Mar 15</div>
+
+          <button class="prejob-btn" onclick="document.getElementById('vid').classList.remove('open')">Confirm vehicle specs &amp; start job</button>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-grid">
+            <div><div class="panel-label">Costs</div><div class="panel-value">$30.00 total</div></div>
+            <div><div class="panel-label">Status</div><div class="panel-value" style="color: #C8972E;">Pending shop</div></div>
+          </div>
+        </div>
+
+        <hr class="panel-divider">
+
+        <div class="action-row">
+          <button class="btn-accept">Accept</button>
+          <button class="btn-decline">Decline</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>

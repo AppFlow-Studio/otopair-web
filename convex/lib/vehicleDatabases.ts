@@ -1,0 +1,797 @@
+/**
+ * lib/vehicleDatabases.ts — Vehicle Databases API client
+ *
+ * Primary VIN decode source. Returns structured vehicle specs including
+ * engine code, tire sizes, pressures, battery CCA, brake dimensions,
+ * transmission details — data NHTSA doesn't provide.
+ *
+ * Confidence: 0.90 (paid structured source)
+ * Fallback: NHTSA (free, always available)
+ */
+
+import {
+  PACKAGE_RULES,
+  TRIM_INFERENCE_RULES,
+  KNOWN_SERVICE_SLUGS,
+  type PackageRule,
+} from "./packageRules";
+
+const VDB_BASE = "https://api.vehicledatabases.com";
+
+export async function advancedVinDecode(vin: string): Promise<any | null> {
+  // Check local cache first (saves credits, works when quota exhausted)
+  const { VDB_CACHE } = await import("./vdbCache");
+  const cached = VDB_CACHE[vin.toUpperCase()];
+  if (cached) {
+    console.log(`[vdb] Cache hit for ${vin}`);
+    return cached;
+  }
+
+  const apiKey = process.env.VEHICLE_DATABASES_API_KEY;
+  if (!apiKey) {
+    console.log("[vdb] No API key, falling back to NHTSA only");
+    return null;
+  }
+
+  try {
+    const response = await fetch(`${VDB_BASE}/advanced-vin-decode/v2/${vin}`, {
+      headers: { "x-AuthKey": apiKey },
+    });
+
+    if (!response.ok) {
+      console.log(`[vdb] API error: ${response.status} — falling back to NHTSA`);
+      return null;
+    }
+
+    const json = await response.json();
+    if (json.status !== "success") {
+      console.log(`[vdb] Decode failed: ${json.status}`);
+      return null;
+    }
+
+    return json.data;
+  } catch (err) {
+    console.log(`[vdb] Failed: ${err}`);
+    return null;
+  }
+}
+
+/** Maps VDB raw steering type string to a normalized value. */
+function mapSteeringType(raw: string | null | undefined): "electric" | "hydraulic" | "electro-hydraulic" | null {
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (lower.includes("elec") && (lower.includes("hyd") || lower.includes("assist"))) return "electro-hydraulic";
+  if (lower.includes("elec")) return "electric";
+  if (lower.includes("pwr") || lower.includes("power") || lower.includes("hyd")) return "hydraulic";
+  return null;
+}
+
+// ─── VDB Repair Estimates API ────────────────────────────────────────────────
+// Dual-source: VDB provides structured intervals (from mileage schedule), labor
+// hours, and parts cost ranges. AI enrichment fills what VDB doesn't cover.
+
+export interface VDBRepairData {
+  intervals: Array<{ slug: string; interval_miles: number }>;
+  labor: Map<string, number>;     // slug → hours
+  // v9.7: parts costs are NOT extracted from VDB. Real-time pricing comes from
+  // the oempartsonline scraper (MSRP + sale_price) and Batch 2 web-search
+  // fallback. VDB cost data is stale and doesn't reflect current market.
+}
+
+/** Optional vehicle context passed to the Haiku action mapper for better accuracy. */
+export interface VDBRepairContext {
+  year?: number;
+  make?: string;
+  model?: string;
+  trim?: string;
+}
+
+/**
+ * v9.8 — Raw VDB repair data + action list, no slug mapping yet. Use this
+ * when you want to send the action list to a Claude batch for slug mapping
+ * and apply the result later via applyVDBMappingResult().
+ */
+export interface VDBRepairRaw {
+  blocks: any[];                  // raw VDB block array (json.data.data)
+  actions: string[];              // unique VDB action strings across all blocks
+}
+
+export async function fetchVDBRepairRaw(vin: string): Promise<VDBRepairRaw | null> {
+  const apiKey = process.env.VEHICLE_DATABASES_API_KEY;
+  if (!apiKey) {
+    console.log("[vdb-repair-raw] No API key, skipping");
+    return null;
+  }
+  try {
+    const url = `${VDB_BASE}/repair-estimates/${vin}`;
+    const response = await fetch(url, { headers: { "x-AuthKey": apiKey } });
+    if (!response.ok) {
+      console.log(`[vdb-repair-raw] API error: ${response.status}`);
+      return null;
+    }
+    const json = await response.json();
+    if (json.status !== "success" || !json.data) return null;
+    const rawBlocks = json.data.data;
+    if (!Array.isArray(rawBlocks) || rawBlocks.length === 0) return null;
+
+    const actionSet = new Set<string>();
+    for (const block of rawBlocks) {
+      const itemSets = Array.isArray(block.items) ? block.items : block.items ? [block.items] : [];
+      for (const itemSet of itemSets) {
+        if (Array.isArray(itemSet?.labor)) {
+          for (const l of itemSet.labor) if (l?.type) actionSet.add(String(l.type));
+        }
+      }
+    }
+    return { blocks: rawBlocks, actions: [...actionSet] };
+  } catch (err) {
+    console.log(`[vdb-repair-raw] Failed: ${err}`);
+    return null;
+  }
+}
+
+/**
+ * v9.8 — Apply a precomputed action→slug map (e.g. from a Claude batch result)
+ * to raw VDB blocks. Returns intervals + labor in the same shape as
+ * fetchVDBRepairData. No costs.
+ */
+export function applyVDBMappingResult(
+  blocks: any[],
+  actionMap: Map<string, string | null>,
+): VDBRepairData {
+  const serviceMileages = new Map<string, number[]>();
+  const laborByType = new Map<string, number>();
+
+  for (const block of blocks) {
+    const mileage = block.mileage ? parseInt(String(block.mileage).replace(/,/g, "")) : null;
+    const itemSets = Array.isArray(block.items) ? block.items : block.items ? [block.items] : [];
+    for (const itemSet of itemSets) {
+      if (Array.isArray(itemSet?.labor)) {
+        for (const l of itemSet.labor) {
+          const type = l?.type as string;
+          if (!type) continue;
+          if (mileage && mileage > 0) {
+            if (!serviceMileages.has(type)) serviceMileages.set(type, []);
+            serviceMileages.get(type)!.push(mileage);
+          }
+          const hrs = l.time_required_hours;
+          if (hrs && hrs > 0 && !laborByType.has(type)) laborByType.set(type, hrs);
+        }
+      }
+    }
+  }
+
+  const resolveSlug = (action: string): string | null => {
+    if (actionMap.has(action)) return actionMap.get(action) ?? null;
+    return VDB_TO_SERVICE_SLUG[action] ?? null;
+  };
+
+  // Derive intervals: ≥2 checkpoints, min gap ≥5000 miles
+  const intervalsBySlug = new Map<string, number>();
+  for (const [type, mileages] of serviceMileages) {
+    const slug = resolveSlug(type);
+    if (!slug) continue;
+    const sorted = [...new Set(mileages)].sort((a, b) => a - b);
+    if (sorted.length < 2) continue;
+    let minGap = Infinity;
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i] - sorted[i - 1];
+      if (gap >= 5000 && gap < minGap) minGap = gap;
+    }
+    if (minGap === Infinity) continue;
+    const existing = intervalsBySlug.get(slug);
+    if (!existing || minGap < existing) intervalsBySlug.set(slug, minGap);
+  }
+  const intervals = [...intervalsBySlug.entries()].map(([slug, interval_miles]) => ({ slug, interval_miles }));
+
+  // Bundle labor: sum hours when multiple VDB actions map to the same slug
+  const labor = new Map<string, number>();
+  for (const [type, hours] of laborByType) {
+    const slug = resolveSlug(type);
+    if (!slug) continue;
+    labor.set(slug, (labor.get(slug) ?? 0) + hours);
+  }
+
+  return { intervals, labor };
+}
+
+/**
+ * v9.8 — Build the Haiku-batch user prompt for VDB action mapping. Use the
+ * exported HAIKU_SYSTEM constant as the system prompt, and submit with
+ * model: MODEL_HAIKU + maxSearchUses: 0.
+ */
+export function buildVDBMappingPrompt(
+  actions: string[],
+  context: VDBRepairContext,
+): { system: string; userPrompt: string } {
+  const vehicleLabel = context
+    ? `${context.year ?? "?"} ${context.make ?? "?"} ${context.model ?? "?"} ${context.trim ?? ""}`.trim()
+    : "(unknown vehicle)";
+  const userPrompt = `Vehicle: ${vehicleLabel}
+
+Otopair service slugs (pick one per action, or null):
+${OTOPAIR_SERVICE_SLUGS.map((s) => `  - ${s}`).join("\n")}
+
+VDB actions to classify:
+${actions.map((a, i) => `  ${i + 1}. ${JSON.stringify(a)}`).join("\n")}
+
+Return JSON: { "actions": [{"action": "<verbatim>", "slug": "<one of the slugs above or null>"}, ...] }`;
+  return { system: HAIKU_SYSTEM, userPrompt };
+}
+
+/** v9.8 — Parse the JSON response from a Haiku VDB-mapping batch result. */
+export function parseVDBMappingResponse(data: any, fallbackActions: string[]): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  const items: any[] = Array.isArray(data?.actions) ? data.actions : [];
+  const slugSet = new Set<string>(OTOPAIR_SERVICE_SLUGS);
+  for (const it of items) {
+    if (!it || typeof it.action !== "string") continue;
+    const slug = typeof it.slug === "string" && slugSet.has(it.slug) ? it.slug : null;
+    out.set(it.action, slug);
+  }
+  // Fill any unmapped actions via static fallback
+  for (const a of fallbackActions) {
+    if (!out.has(a)) out.set(a, VDB_TO_SERVICE_SLUG[a] ?? null);
+  }
+  return out;
+}
+
+export async function fetchVDBRepairData(
+  vin: string,
+  context?: VDBRepairContext,
+): Promise<VDBRepairData | null> {
+  const apiKey = process.env.VEHICLE_DATABASES_API_KEY;
+  if (!apiKey) {
+    console.log("[vdb-repair] No API key, skipping repair estimates");
+    return null;
+  }
+
+  try {
+    const url = `${VDB_BASE}/repair-estimates/${vin}`;
+    console.log(`[vdb-repair] Fetching: ${url}`);
+
+    const response = await fetch(url, { headers: { "x-AuthKey": apiKey } });
+
+    if (!response.ok) {
+      console.log(`[vdb-repair] API error: ${response.status}`);
+      return null;
+    }
+
+    const json = await response.json();
+
+    if (json.status !== "success" || !json.data) {
+      console.log(`[vdb-repair] status=${json.status}, no data for ${vin}`);
+      return null;
+    }
+
+    const rawBlocks = json.data.data;
+    if (!Array.isArray(rawBlocks) || rawBlocks.length === 0) {
+      console.log(`[vdb-repair] No data blocks for ${vin}`);
+      return null;
+    }
+
+    // Collect mileages where each VDB service type appears (for interval derivation).
+    const serviceMileages = new Map<string, number[]>();
+    // First-seen labor hours per VDB type.
+    const laborByType = new Map<string, number>();
+
+    for (const block of rawBlocks) {
+      const mileage = block.mileage
+        ? parseInt(String(block.mileage).replace(/,/g, ""))
+        : null;
+      const itemSets = Array.isArray(block.items)
+        ? block.items
+        : block.items
+          ? [block.items]
+          : [];
+
+      for (const itemSet of itemSets) {
+        if (Array.isArray(itemSet?.labor)) {
+          for (const l of itemSet.labor) {
+            const type = l.type as string;
+            if (!type) continue;
+            if (mileage && mileage > 0) {
+              if (!serviceMileages.has(type)) serviceMileages.set(type, []);
+              serviceMileages.get(type)!.push(mileage);
+            }
+            const hrs = l.time_required_hours;
+            if (hrs && hrs > 0 && !laborByType.has(type)) laborByType.set(type, hrs);
+          }
+        }
+        // v9.7: parts costs intentionally not collected — see VDBRepairData docs.
+      }
+    }
+
+    // v9.7: action strings vary per make/year (Volvo says "Lubricate - Door
+    // hinges", VW says "Inspect - Lights & accessories"). A static map can't
+    // catch them all. Use Haiku to map the union of action strings we saw in
+    // this VIN's response → our 23-service slugs in one call. Fallback to the
+    // static map when Haiku is unavailable.
+    const allActions = new Set<string>([
+      ...serviceMileages.keys(),
+      ...laborByType.keys(),
+    ]);
+    const dynamicMap = await mapVDBActionsToSlugsWithHaiku(
+      [...allActions],
+      context ?? {},
+    );
+
+    const resolveSlug = (action: string): string | null => {
+      if (dynamicMap.has(action)) return dynamicMap.get(action) ?? null;
+      // Fallback to static map
+      return VDB_TO_SERVICE_SLUG[action] ?? null;
+    };
+
+    // Derive intervals: need ≥2 mileage checkpoints, min gap ≥5000 miles.
+    const intervalsBySlug = new Map<string, number>();
+    for (const [type, mileages] of serviceMileages) {
+      const slug = resolveSlug(type);
+      if (!slug) continue;
+      const sorted = [...new Set(mileages)].sort((a, b) => a - b);
+      if (sorted.length < 2) continue;
+      let minGap = Infinity;
+      for (let i = 1; i < sorted.length; i++) {
+        const gap = sorted[i] - sorted[i - 1];
+        if (gap >= 5000 && gap < minGap) minGap = gap;
+      }
+      if (minGap === Infinity) continue;
+      const existing = intervalsBySlug.get(slug);
+      if (!existing || minGap < existing) intervalsBySlug.set(slug, minGap);
+    }
+    const intervals = [...intervalsBySlug.entries()].map(([slug, interval_miles]) => ({
+      slug,
+      interval_miles,
+    }));
+
+    // Bundle paired actions into single labor hours per slug (sum hours when
+    // multiple VDB actions share the same slug, e.g. "Change - Engine oil"
+    // 0.25 hr + "Replace - Oil filter" 0.10 hr → oil_change 0.35 hr).
+    const labor = new Map<string, number>();
+    for (const [type, hours] of laborByType) {
+      const slug = resolveSlug(type);
+      if (!slug) continue;
+      labor.set(slug, (labor.get(slug) ?? 0) + hours);
+    }
+
+    console.log(
+      `[vdb-repair] ${vin}: ${intervals.length} intervals, ${labor.size} labor ` +
+      `(mapped ${dynamicMap.size}/${allActions.size} actions via Haiku)`,
+    );
+    return { intervals, labor };
+  } catch (err) {
+    console.log(`[vdb-repair] Failed: ${err}`);
+    return null;
+  }
+}
+
+/** Thin wrapper for callers that only need labor hours. */
+export async function fetchVDBLaborHours(
+  vin: string,
+  context?: VDBRepairContext,
+): Promise<Map<string, number> | null> {
+  const data = await fetchVDBRepairData(vin, context);
+  return data?.labor ?? null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// v9.7 — Haiku-based dynamic VDB action mapper.
+//
+// VDB action strings vary across makes (Volvo: "Lubricate - Door hinges",
+// VW: "Inspect - Lights & accessories", Toyota: "Inspect - Engine air filter").
+// A static map misses most of them. We send the union of action strings we
+// saw in one VIN's response to Haiku and ask it to map each to one of our
+// 23-service slugs (or null if no match). Static map below is the fallback.
+// ────────────────────────────────────────────────────────────────────────────
+
+import Anthropic from "@anthropic-ai/sdk";
+
+const HAIKU_MODEL = "claude-haiku-4-5-20251001";
+let _haikuClient: Anthropic | null = null;
+function getHaikuClient(): Anthropic | null {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return null;
+  if (!_haikuClient) _haikuClient = new Anthropic({ apiKey: key });
+  return _haikuClient;
+}
+
+/**
+ * The 23-service slug vocabulary the mapper picks from. Keep in sync with
+ * SERVICE_LIST in batch2Prompt.ts and INTERVAL_TO_SERVICE in v3pipeline.ts.
+ * Order matters only for Haiku's prompt readability.
+ */
+export const OTOPAIR_SERVICE_SLUGS = [
+  "oil_change",
+  "spark_plugs",
+  "filter_replacement",          // engine air + cabin air both map here
+  "brake_pad_replacement",
+  "rotor_replacement",
+  "brake_fluid_flush",
+  "coolant_flush",
+  "transmission_service",
+  "serpentine_belt_replacement",
+  "timing_belt",
+  "battery_replacement",
+  "battery_test",                // inspect-only
+  "wiper_blade_replacement",
+  "power_steering_flush",
+  "differential_service",
+  "transfer_case_service",
+  "tire_rotation",
+  "tire_balance",
+  "wheel_alignment",
+  "ac_recharge",
+  "fuel_system_cleaning",
+  "engine_intake_cleaning",
+  "multi_point_inspection",
+] as const;
+
+export const HAIKU_SYSTEM = `You are a vehicle service classifier. You will receive a list of VDB action strings from a maintenance schedule, plus the target vehicle context. For each action, return the Otopair service slug it represents, or null if the action is not a serviceable maintenance item we track (cosmetic checks, road tests, headlight checks, generic inspections that aren't a paid service).
+
+Rules:
+- Return ONE slug per action from the fixed list provided.
+- Bundle related actions to the same slug ("Change - Engine oil" + "Replace - Oil filter" → both map to oil_change).
+- Inspect-only actions (e.g. "Inspect - Brake pads", "Inspect - Battery") are NOT serviceable maintenance — return null UNLESS the slug list explicitly includes the inspection (e.g. battery_test).
+- Generic inspections (sunroof, lights, road test, headlamp washing, tire pressure check) → null.
+- "Change/Replace - Cabin air filter" or "Change/Replace - Engine air filter" or "Replace - Air filter" → filter_replacement.
+- Output VALID JSON ONLY — no markdown fences. Format: { "actions": [{"action": "<verbatim string>", "slug": "<slug or null>"}, ...] }`;
+
+/**
+ * Map a list of VDB action strings to Otopair service slugs via Haiku.
+ * Returns a Map keyed by the original action string. Falls back to the static
+ * VDB_TO_SERVICE_SLUG table when Haiku is unavailable / fails.
+ */
+export async function mapVDBActionsToSlugsWithHaiku(
+  actions: string[],
+  context: VDBRepairContext,
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  if (actions.length === 0) return out;
+
+  const client = getHaikuClient();
+  if (!client) {
+    console.log("[vdb-mapper] No ANTHROPIC_API_KEY — using static fallback only");
+    for (const a of actions) out.set(a, VDB_TO_SERVICE_SLUG[a] ?? null);
+    return out;
+  }
+
+  const vehicleLabel = context
+    ? `${context.year ?? "?"} ${context.make ?? "?"} ${context.model ?? "?"} ${context.trim ?? ""}`.trim()
+    : "(unknown vehicle)";
+
+  const userPrompt = `Vehicle: ${vehicleLabel}
+
+Otopair service slugs (pick one per action, or null):
+${OTOPAIR_SERVICE_SLUGS.map((s) => `  - ${s}`).join("\n")}
+
+VDB actions to classify:
+${actions.map((a, i) => `  ${i + 1}. ${JSON.stringify(a)}`).join("\n")}
+
+Return JSON: { "actions": [{"action": "<verbatim>", "slug": "<one of the slugs above or null>"}, ...] }`;
+
+  try {
+    const res = await client.messages.create({
+      model: HAIKU_MODEL,
+      max_tokens: 4096,
+      temperature: 0,
+      system: HAIKU_SYSTEM,
+      messages: [{ role: "user", content: userPrompt }],
+    });
+
+    let raw = "";
+    for (const block of res.content) {
+      if (block.type === "text") raw += block.text;
+    }
+    raw = raw.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+    const parsed = JSON.parse(raw);
+    const items: any[] = Array.isArray(parsed?.actions) ? parsed.actions : [];
+
+    const slugSet = new Set<string>(OTOPAIR_SERVICE_SLUGS);
+    for (const it of items) {
+      if (!it || typeof it.action !== "string") continue;
+      const slug = typeof it.slug === "string" && slugSet.has(it.slug) ? it.slug : null;
+      out.set(it.action, slug);
+    }
+
+    // Fill any actions Haiku didn't answer for via static map.
+    for (const a of actions) {
+      if (!out.has(a)) out.set(a, VDB_TO_SERVICE_SLUG[a] ?? null);
+    }
+    const mapped = [...out.values()].filter((v) => v != null).length;
+    console.log(`[vdb-mapper] Haiku mapped ${mapped}/${actions.length} actions`);
+    return out;
+  } catch (e) {
+    console.warn(`[vdb-mapper] Haiku call failed (${e}) — falling back to static map`);
+    for (const a of actions) out.set(a, VDB_TO_SERVICE_SLUG[a] ?? null);
+    return out;
+  }
+}
+
+/**
+ * Maps VDB labor type strings to Otopair service slugs.
+ * VDB types use "Action - Component" format (e.g. "Change - Engine oil").
+ * Returns null for services we don't track or inspections we don't charge for.
+ *
+ * v9.7: this static table is a FALLBACK for when Haiku is unavailable.
+ * The primary path is mapVDBActionsToSlugsWithHaiku() above.
+ */
+const VDB_TO_SERVICE_SLUG: Record<string, string> = {
+  // Oil & filters
+  "Change - Engine oil": "oil_change",
+  "Replace - Oil filter": "oil_change", // bundled with oil change
+  "Replace - Cabin air filter": "filter_replacement",
+  "Replace - Engine air filter": "filter_replacement",
+  // Brakes
+  "Flush/replace - Brake fluid": "brake_fluid_flush",
+  "Replace - Front brake pads": "brake_pad_replacement",
+  "Replace - Rear brake pads": "brake_pad_replacement",
+  "Replace - Front brake rotors": "rotor_replacement",
+  "Replace - Rear brake rotors": "rotor_replacement",
+  // Cooling
+  "Flush/replace - Coolant": "coolant_flush",
+  "Replace - Coolant": "coolant_flush",
+  // Transmission
+  "Change - Transmission fluid": "transmission_service",
+  "Flush/replace - Transmission fluid": "transmission_service",
+  // Tires & wheels
+  "Rotate/adjust air pressure - Wheels & tires": "tire_rotation",
+  "Balance - Tires": "tire_balance",
+  // Spark plugs
+  "Replace - Spark plugs": "spark_plugs",
+  // Battery
+  "Inspect - Battery": "battery_test",
+  "Replace - Battery": "battery_replacement",
+  // Power steering
+  "Flush/replace - Power steering fluid": "power_steering_flush",
+  "Check level - Power steering fluid": "power_steering_flush",
+  // Differential
+  "Change - Rear differential fluid": "differential_service",
+  "Check level - Rear differential fluid": "differential_service",
+  "Change - Front differential fluid": "differential_service",
+  // Timing belt
+  "Replace - Timing belt": "timing_belt",
+  // Fuel
+  "Clean - Fuel injection system": "fuel_system_cleaning",
+};
+
+/**
+ * Maps raw VDB labor type strings to Otopair service slugs.
+ * Returns a Map<serviceSlug, hours>.
+ */
+export function mapVDBLaborToSlugs(
+  laborByType: Map<string, number>,
+): Map<string, number> {
+  const laborBySlug = new Map<string, number>();
+
+  for (const [type, hours] of laborByType) {
+    const slug = VDB_TO_SERVICE_SLUG[type];
+    if (!slug) continue;
+    if (laborBySlug.has(slug)) continue; // first match wins
+    laborBySlug.set(slug, hours);
+  }
+
+  return laborBySlug;
+}
+
+// ─── Package Detection ──────────────────────────────────────────────────────
+// Detects packages available for this trim that affect 1+ of the 23 services.
+// This is detection, NOT confirmation — we don't try to figure out whether THIS
+// specific VIN has the package. The result lands on vehicle_configs.packages_available
+// and the booking flow asks the user to confirm/deny when a relevant service is requested.
+// See docs/PACKAGE_AWARE_PARTS.md.
+
+export interface DetectedPackage {
+  code: string;
+  label: string;
+  services_affected: string[];
+  detected_from:
+    | "vdb_optional_options"
+    | "vdb_standard_options"
+    | "vdb_installed_equipment"
+    | "claude_inference"
+    | "rules_table";
+  confidence: number;
+}
+
+/**
+ * Walk a VDB raw response and pull every string we can match package rules against.
+ * VDB's payload shape varies by year/vintage, so we cast a wide net.
+ */
+function collectPackageStrings(vdbRaw: any): { source: DetectedPackage["detected_from"]; text: string }[] {
+  const out: { source: DetectedPackage["detected_from"]; text: string }[] = [];
+  if (!vdbRaw || typeof vdbRaw !== "object") return out;
+
+  const pushFromOptions = (
+    arr: any,
+    source: DetectedPackage["detected_from"],
+  ) => {
+    if (!Array.isArray(arr)) return;
+    for (const item of arr) {
+      if (typeof item === "string") {
+        out.push({ source, text: item });
+      } else if (item && typeof item === "object") {
+        // VDB option entries usually have { name, description, category, ... }
+        for (const key of ["name", "description", "label", "category", "package_name"]) {
+          const val = item[key];
+          if (typeof val === "string" && val.length > 0) {
+            out.push({ source, text: val });
+          }
+        }
+      }
+    }
+  };
+
+  pushFromOptions(vdbRaw.optional_options, "vdb_optional_options");
+  pushFromOptions(vdbRaw.standard_options, "vdb_standard_options");
+  pushFromOptions(vdbRaw.installed_equipment, "vdb_installed_equipment");
+  pushFromOptions(vdbRaw.equipment, "vdb_installed_equipment");
+  pushFromOptions(vdbRaw.packages, "vdb_optional_options");
+  pushFromOptions(vdbRaw.trim_packages, "vdb_optional_options");
+
+  return out;
+}
+
+/**
+ * Filter rules that affect at least one of the 23 services.
+ * Defensive: if a rule references a slug we don't ship, drop it.
+ */
+function ruleAffectsKnownService(rule: PackageRule): boolean {
+  const known = new Set<string>(KNOWN_SERVICE_SLUGS);
+  return rule.services_affected.some((s) => known.has(s));
+}
+
+/**
+ * Assess packages available for this trim that affect 1+ of the 23 services.
+ *
+ * Returns a deduped list. Rules with no service impact are filtered out before matching,
+ * so the caller can safely write the result to vehicle_configs.packages_available.
+ */
+export function assessAvailablePackages(args: {
+  vdbRaw: any;
+  make: string;
+  model: string;
+  trim: string;
+  year: number;
+}): DetectedPackage[] {
+  const { vdbRaw, make, trim } = args;
+  const detected = new Map<string, DetectedPackage>();
+
+  const upsert = (pkg: DetectedPackage) => {
+    const existing = detected.get(pkg.code);
+    if (!existing || pkg.confidence > existing.confidence) {
+      detected.set(pkg.code, pkg);
+    }
+  };
+
+  const explicitRules = PACKAGE_RULES.filter(ruleAffectsKnownService);
+  const inferenceRules = TRIM_INFERENCE_RULES.filter(ruleAffectsKnownService);
+
+  // 1. Explicit matches against VDB option/equipment strings.
+  const strings = collectPackageStrings(vdbRaw);
+  for (const { source, text } of strings) {
+    for (const rule of explicitRules) {
+      if (rule.make !== "*" && rule.make.toLowerCase() !== make.toLowerCase()) continue;
+      if (!rule.pattern.test(text)) continue;
+      upsert({
+        code: rule.code,
+        label: rule.label,
+        services_affected: rule.services_affected,
+        detected_from: source,
+        confidence: rule.base_confidence,
+      });
+    }
+  }
+
+  // 2. Trim-name inference (lower confidence). Only if we don't already have a stronger match.
+  for (const rule of inferenceRules) {
+    if (rule.make !== "*" && rule.make.toLowerCase() !== make.toLowerCase()) continue;
+    if (!rule.pattern.test(trim ?? "")) continue;
+    if (detected.has(rule.code)) continue; // explicit hit wins
+    upsert({
+      code: rule.code,
+      label: rule.label,
+      services_affected: rule.services_affected,
+      detected_from: "rules_table",
+      confidence: rule.base_confidence,
+    });
+  }
+
+  return [...detected.values()];
+}
+
+export function extractVDBFields(data: any) {
+  const specs = data.specifications || [];
+
+  const findSpec = (title: string) => {
+    const found = specs.find((s: any) => Object.keys(s)[0] === title);
+    return found ? found[title] : {};
+  };
+
+  const dims = data.dimensions || [];
+
+  const engineSpec = findSpec("engine");
+  const tireSpec = findSpec("tires");
+  const brakingSpec = findSpec("braking");
+  const electricalSpec = findSpec("electrical");
+  const steeringSpec = findSpec("steering");
+  const fuelSpec = findSpec("fuel");
+
+  const wheelDims = dims.find((d: any) => d.wheels)?.wheels || [];
+  const brakingDims = dims.find((d: any) => d.braking)?.braking || [];
+
+  const getWheelVal = (key: string) => {
+    const entry = wheelDims.find((w: any) => w[key]);
+    return entry?.[key]?.[0]?.value || null;
+  };
+
+  const getBrakeVal = (key: string) => {
+    const entry = brakingDims.find((b: any) => b[key]);
+    return entry?.[key]?.[0]?.value || null;
+  };
+
+  // Engine description from standard options
+  const engineDescription =
+    data.standard_options?.find((o: any) => o.name === "Engine")?.description || null;
+
+  // Cylinders from dimensions
+  const engineDims = dims.find((d: any) => d.engine)?.engine || [];
+  const cylindersRaw = engineDims.find((e: any) => e.engine_size)?.engine_size?.[0]?.value;
+
+  return {
+    // Identity
+    year: data.year ? parseInt(data.year) : null,
+    make: data.make || null,
+    model: data.model || null,
+    trim: data.trim || null,
+    bodyType: data.vehicle?.body_type || null,
+    doors: data.vehicle?.doors ? parseInt(data.vehicle.doors) : null,
+
+    // Engine
+    engineCode: engineSpec.code || null,
+    engineDescription,
+    cylinders: cylindersRaw ? parseFloat(cylindersRaw) : null,
+    displacement: engineSpec.displacement ? engineSpec.displacement / 1000 : null,
+    camType: engineSpec.cam_type || null,
+    blockType: engineSpec.block_type || null,
+    drivetrain: engineSpec.drivetype || null,
+    fuelType: fuelSpec?.type || null,
+
+    // Transmission
+    transType: data.transmission?.type || null,
+    transSpeeds: data.transmission?.number_of_speeds
+      ? parseInt(data.transmission.number_of_speeds)
+      : null,
+    transDescription: data.transmission?.description || null,
+
+    // Tires
+    frontTireSize: tireSpec.front_tire_size || null,
+    rearTireSize: tireSpec.rear_tire_size || null,
+    frontTirePressure: tireSpec.front_tire_pressure_psi
+      ? parseInt(tireSpec.front_tire_pressure_psi)
+      : null,
+    rearTirePressure: tireSpec.rear_tire_pressure_psi
+      ? parseInt(tireSpec.rear_tire_pressure_psi)
+      : null,
+
+    // Wheels
+    wheelTorque: getWheelVal("wheel_torque")
+      ? parseFloat(getWheelVal("wheel_torque"))
+      : null,
+
+    // Battery
+    cca: electricalSpec.cold_cranking_capacity_amps
+      ? parseInt(electricalSpec.cold_cranking_capacity_amps)
+      : null,
+
+    // Brakes
+    frontRotorDia: getBrakeVal("front_brake_rotor_dia")
+      ? parseFloat(getBrakeVal("front_brake_rotor_dia"))
+      : null,
+    rearRotorDia: getBrakeVal("rear_brake_rotor_dia")
+      ? parseFloat(getBrakeVal("rear_brake_rotor_dia"))
+      : null,
+    brakeType: brakingSpec.type || null,
+
+    // Steering (normalized: "electric" | "hydraulic" | "electro-hydraulic" | null)
+    steeringType: mapSteeringType(steeringSpec?.type),
+  };
+}

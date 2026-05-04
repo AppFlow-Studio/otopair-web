@@ -1,0 +1,236 @@
+<h2 class="sr-only">Mockup of the Otopair shop dashboard showing a first-time user's Vehicle ID with mostly empty fields, prompting the shop to fill in vehicle data during the pre-job confirmation.</h2>
+
+<style>
+  .mock-wrap { padding: 1.5rem 0; }
+  .mock-browser { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); overflow: hidden; }
+  .mock-toolbar { background: var(--color-background-secondary); padding: 8px 16px; display: flex; align-items: center; gap: 8px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .mock-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--color-border-secondary); }
+  .mock-url { flex: 1; font-size: 11px; color: var(--color-text-tertiary); padding: 4px 10px; background: var(--color-background-primary); border-radius: 6px; border: 0.5px solid var(--color-border-tertiary); }
+  .mock-body { display: flex; min-height: 720px; }
+  .mock-sidebar { width: 48px; background: var(--color-background-secondary); border-right: 0.5px solid var(--color-border-tertiary); display: flex; flex-direction: column; align-items: center; padding-top: 16px; gap: 20px; }
+  .mock-sidebar-icon { width: 20px; height: 20px; border-radius: 4px; background: var(--color-border-tertiary); }
+  .mock-sidebar-icon.active { background: #C8972E; }
+  .mock-main { flex: 1; display: flex; }
+  .mock-list { flex: 1; padding: 20px; border-right: 0.5px solid var(--color-border-tertiary); min-width: 0; }
+  .mock-panel { width: 400px; padding: 20px; overflow-y: auto; flex-shrink: 0; }
+  .mock-h1 { font-size: 18px; font-weight: 500; margin-bottom: 16px; color: var(--color-text-primary); }
+  .mock-tabs { display: flex; gap: 0; margin-bottom: 16px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .mock-tab { padding: 8px 14px; font-size: 11px; color: var(--color-text-tertiary); cursor: default; }
+  .mock-tab.active { color: #C8972E; border-bottom: 2px solid #C8972E; font-weight: 500; }
+  .mock-row { display: grid; grid-template-columns: 1fr 1fr 1.2fr 0.8fr 0.8fr 0.8fr; gap: 0; padding: 10px 0; border-bottom: 0.5px solid var(--color-border-tertiary); font-size: 12px; align-items: center; }
+  .mock-row.header { font-weight: 500; color: var(--color-text-tertiary); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .status-pending { color: #C8972E; font-weight: 500; font-size: 11px; }
+  .panel-title { font-size: 15px; font-weight: 500; margin-bottom: 16px; color: var(--color-text-primary); display: flex; justify-content: space-between; align-items: center; }
+  .panel-close { color: var(--color-text-tertiary); cursor: pointer; font-size: 16px; }
+  .panel-section { margin-bottom: 16px; }
+  .panel-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; font-size: 12px; }
+  .panel-label { color: var(--color-text-tertiary); font-size: 11px; }
+  .panel-value { color: var(--color-text-primary); font-weight: 500; font-size: 13px; }
+  .panel-divider { border: none; border-top: 0.5px solid var(--color-border-tertiary); margin: 16px 0; }
+  .new-badge { display: inline-block; font-size: 9px; padding: 2px 8px; border-radius: 10px; background: #FFF8ED; color: #C8972E; font-weight: 500; margin-left: 6px; letter-spacing: 0.3px; }
+  .vid-button { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #FFF8ED; border: 0.5px solid #E8D5A8; border-radius: 8px; margin-bottom: 16px; }
+  .vid-button .vid-icon { width: 28px; height: 28px; border-radius: 6px; background: #C8972E; display: flex; align-items: center; justify-content: center; color: #FFF; font-size: 13px; font-weight: 500; }
+  .vid-button .vid-text { flex: 1; }
+  .vid-button .vid-text p { margin: 0; }
+  .vid-button .vid-title { font-size: 12px; font-weight: 500; color: #1A1A1A; }
+  .vid-button .vid-sub { font-size: 10px; color: #C8972E; font-weight: 500; }
+  .vid-panel { background: var(--color-background-secondary); border-radius: 8px; padding: 14px; margin-bottom: 16px; border: 0.5px solid var(--color-border-tertiary); }
+  .vid-section-label { font-size: 9px; font-weight: 500; letter-spacing: 1.5px; text-transform: uppercase; color: #C8972E; margin-bottom: 6px; margin-top: 12px; }
+  .vid-section-label:first-child { margin-top: 0; }
+  .vid-field { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 12px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+  .vid-field:last-child { border-bottom: none; }
+  .vid-field .vf-label { color: var(--color-text-secondary); }
+  .vid-field .vf-value { color: var(--color-text-primary); font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .vf-badge { font-size: 9px; padding: 1px 6px; border-radius: 10px; font-weight: 500; }
+  .vf-badge.ai { background: var(--color-background-secondary); color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); }
+  .vf-badge.empty { background: #FFEBEE; color: #C62828; }
+  .vf-badge.user { background: #E6F1FB; color: #185FA5; }
+  .vf-input { font-size: 12px; padding: 4px 8px; border: 0.5px solid #C8972E; border-radius: 4px; background: #FFF; color: var(--color-text-primary); width: 140px; text-align: right; }
+  .vf-input::placeholder { color: #CCC; }
+  .vf-select { font-size: 12px; padding: 4px 8px; border: 0.5px solid #C8972E; border-radius: 4px; background: #FFF; color: var(--color-text-primary); width: 140px; text-align: right; appearance: auto; }
+  .empty-notice { background: #FFF8ED; border: 0.5px solid #E8D5A8; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; display: flex; gap: 10px; align-items: flex-start; }
+  .empty-notice .en-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; color: #C8972E; }
+  .empty-notice .en-text { font-size: 11px; color: #8B6914; line-height: 1.5; }
+  .empty-notice .en-text strong { color: #6B5A10; }
+  .no-history { text-align: center; padding: 12px; font-size: 11px; color: var(--color-text-tertiary); font-style: italic; }
+  .prejob-btn { width: 100%; padding: 10px; background: #1A1A1A; color: #FFF; border: none; border-radius: 8px; font-size: 12px; font-weight: 500; cursor: pointer; margin-top: 8px; }
+  .prejob-btn:hover { background: #333; }
+  .action-row { display: flex; gap: 8px; margin-top: 12px; }
+  .btn-accept { padding: 8px 20px; background: #1D9E75; color: #FFF; border: none; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; }
+  .btn-decline { padding: 8px 20px; background: transparent; color: #E24B4A; border: 0.5px solid #E24B4A; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; }
+  .progress-bar { height: 4px; background: var(--color-border-tertiary); border-radius: 2px; margin: 8px 0 4px; overflow: hidden; }
+  .progress-fill { height: 100%; background: #C8972E; border-radius: 2px; width: 25%; }
+  .progress-text { font-size: 10px; color: var(--color-text-tertiary); }
+  @media (prefers-color-scheme: dark) {
+    .vid-button { background: #2C2510; border-color: #4A3D20; }
+    .vid-button .vid-title { color: #F0E6D0; }
+    .vid-button .vid-sub { color: #D4A63A; }
+    .empty-notice { background: #2C2510; border-color: #4A3D20; }
+    .empty-notice .en-text { color: #D4B06A; }
+    .empty-notice .en-text strong { color: #E8C87A; }
+    .vf-input { background: #2A2A2A; border-color: #C8972E; color: #F0E6D0; }
+    .vf-select { background: #2A2A2A; border-color: #C8972E; color: #F0E6D0; }
+    .prejob-btn { background: #C8972E; }
+    .prejob-btn:hover { background: #B8871E; }
+    .new-badge { background: #2C2510; color: #D4A63A; }
+  }
+</style>
+
+<div class="mock-wrap">
+<div class="mock-browser">
+  <div class="mock-toolbar">
+    <div class="mock-dot"></div><div class="mock-dot"></div><div class="mock-dot"></div>
+    <div class="mock-url">shop.otopair.com/bookings</div>
+  </div>
+  <div class="mock-body">
+    <div class="mock-sidebar">
+      <div class="mock-sidebar-icon"></div>
+      <div class="mock-sidebar-icon active"></div>
+      <div class="mock-sidebar-icon"></div>
+      <div class="mock-sidebar-icon"></div>
+      <div class="mock-sidebar-icon"></div>
+    </div>
+    <div class="mock-main">
+      <div class="mock-list">
+        <div class="mock-h1">All jobs</div>
+        <div class="mock-tabs">
+          <div class="mock-tab active">All 25</div>
+          <div class="mock-tab">Pending 12</div>
+          <div class="mock-tab">Confirmed 11</div>
+          <div class="mock-tab">In progress 2</div>
+        </div>
+        <div class="mock-row header">
+          <span>Customer</span><span>Vehicle</span><span>Service</span><span>Status</span><span>Date</span><span>Total</span>
+        </div>
+        <div class="mock-row" style="background: var(--color-background-secondary); border-radius: 6px; padding: 10px 6px;">
+          <span>Sarah K.<span class="new-badge">New</span></span><span style="color: #C8972E; font-weight: 500;">2022 T. Camry</span><span>Oil change</span><span class="status-pending">Pending</span><span style="font-size:11px;">Apr 18</span><span>$89.00</span>
+        </div>
+        <div class="mock-row">
+          <span>James S.</span><span>2018 F. F-150</span><span>Oil change</span><span style="color:#1D9E75;font-weight:500;font-size:11px;">In progress</span><span style="font-size:11px;">Today</span><span>$92.50</span>
+        </div>
+        <div class="mock-row">
+          <span>Maria R.</span><span>2021 T. RAV4</span><span>Brake pads</span><span style="color:#378ADD;font-weight:500;font-size:11px;">Confirmed</span><span style="font-size:11px;">Today</span><span>$165.00</span>
+        </div>
+        <div class="mock-row">
+          <span>Alex L.</span><span>2015 H. Civic</span><span>Tire rotation</span><span style="color:#378ADD;font-weight:500;font-size:11px;">Confirmed</span><span style="font-size:11px;">Today</span><span>$30.00</span>
+        </div>
+      </div>
+
+      <div class="mock-panel">
+        <div class="panel-title">Oil change — Sarah Kim <span class="panel-close">&times;</span></div>
+
+        <div class="panel-section">
+          <div class="panel-grid">
+            <div><div class="panel-label">Customer</div><div class="panel-value">Sarah Kim <span class="new-badge">First visit</span></div></div>
+            <div><div class="panel-label">Vehicle</div><div class="panel-value" style="color: #C8972E;">2022 Toyota Camry</div></div>
+            <div><div class="panel-label">Schedule</div><div class="panel-value">Apr 18, 2:00 PM</div></div>
+            <div><div class="panel-label">Services</div><div class="panel-value">Oil change</div></div>
+          </div>
+        </div>
+
+        <hr class="panel-divider">
+
+        <div class="vid-button">
+          <div class="vid-icon">ID</div>
+          <div class="vid-text">
+            <p class="vid-title">Vehicle ID — 2022 Toyota Camry</p>
+            <p class="vid-sub">First visit — data entry required</p>
+          </div>
+        </div>
+
+        <div class="vid-panel">
+          <div class="empty-notice">
+            <span class="en-icon">&#9432;</span>
+            <div class="en-text"><strong>First time this vehicle is visiting a shop on Otopair.</strong> Please confirm or fill in the vehicle specs below. This data will be saved to the vehicle's profile and will be available on future visits to any Otopair partner shop.</div>
+          </div>
+
+          <div class="progress-bar"><div class="progress-fill"></div></div>
+          <div class="progress-text">Vehicle ID 25% complete — help us fill in the gaps</div>
+
+          <div class="vid-section-label">Mileage</div>
+          <div class="vid-field">
+            <span class="vf-label">Current mileage</span>
+            <span class="vf-value"><input class="vf-input" type="text" placeholder="Enter mileage" style="border-color: #E24B4A;"> <span class="vf-badge empty">Required</span></span>
+          </div>
+
+          <div class="vid-section-label">Tires</div>
+          <div class="vid-field">
+            <span class="vf-label">Brand</span>
+            <span class="vf-value"><input class="vf-input" type="text" placeholder="e.g. Michelin"> <span class="vf-badge empty">Empty</span></span>
+          </div>
+          <div class="vid-field">
+            <span class="vf-label">Model</span>
+            <span class="vf-value"><input class="vf-input" type="text" placeholder="e.g. Pilot Sport"> <span class="vf-badge empty">Empty</span></span>
+          </div>
+          <div class="vid-field">
+            <span class="vf-label">Size</span>
+            <span class="vf-value">215/55R17 <span class="vf-badge ai">OEM default</span></span>
+          </div>
+          <div class="vid-field">
+            <span class="vf-label">Condition</span>
+            <span class="vf-value">
+              <select class="vf-select"><option value="">Select...</option><option>Good</option><option>Fair</option><option>Replace soon</option></select>
+            </span>
+          </div>
+          <div class="vid-field">
+            <span class="vf-label">Run-flat</span>
+            <span class="vf-value">
+              <select class="vf-select"><option value="">Select...</option><option>Yes</option><option selected>No</option></select>
+            </span>
+          </div>
+
+          <div class="vid-section-label">Fluids</div>
+          <div class="vid-field">
+            <span class="vf-label">Oil viscosity</span>
+            <span class="vf-value">0W-20 <span class="vf-badge ai">OEM default</span></span>
+          </div>
+          <div class="vid-field">
+            <span class="vf-label">Oil type</span>
+            <span class="vf-value">Full synthetic <span class="vf-badge ai">OEM default</span></span>
+          </div>
+          <div class="vid-field">
+            <span class="vf-label">Coolant</span>
+            <span class="vf-value">Toyota SLLC <span class="vf-badge ai">OEM default</span></span>
+          </div>
+          <div class="vid-field">
+            <span class="vf-label">Brake fluid</span>
+            <span class="vf-value">DOT 3 <span class="vf-badge ai">OEM default</span></span>
+          </div>
+
+          <div class="vid-section-label">Usage</div>
+          <div class="vid-field">
+            <span class="vf-label">Driving type</span>
+            <span class="vf-value">Mostly local <span class="vf-badge user">User-reported</span></span>
+          </div>
+          <div class="vid-field">
+            <span class="vf-label">Ownership</span>
+            <span class="vf-value">Owned <span class="vf-badge user">User-reported</span></span>
+          </div>
+
+          <div class="vid-section-label">Service history</div>
+          <div class="no-history">No previous services on Otopair</div>
+
+          <div class="vid-section-label">Mechanic notes</div>
+          <div class="no-history">No notes yet — be the first to add one after the job</div>
+
+          <button class="prejob-btn">Confirm specs and start job</button>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-grid">
+            <div><div class="panel-label">Costs</div><div class="panel-value">$89.00 total</div></div>
+            <div><div class="panel-label">Status</div><div class="panel-value" style="color: #C8972E;">Pending shop</div></div>
+          </div>
+        </div>
+
+        <hr class="panel-divider">
+
+        <div class="action-row">
+          <button class="btn-accept">Accept</button>
+          <button class="btn-decline">Decline</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>

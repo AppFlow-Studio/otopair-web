@@ -91,6 +91,12 @@ function Navbar() {
                                 </Link>
                             ))
                         }
+                        <Link
+                            href="/dashboard"
+                            className={`font-medium sm:text-[15px] text-[12px] leading-[140%] tracking-[-0.15px] hover:opacity-80 transition-all duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] font-af ${!scrolled ? 'text-white' : 'text-black'} transition-all duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)]`}
+                        >
+                            Shop Sign-In
+                        </Link>
                     </div>
 
                     <div className='flex flex-row items-center gap-2'>
@@ -253,6 +259,26 @@ function Navbar() {
                                         </Link>
                                     </motion.div>
                                 ))}
+                                <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{
+                                        duration: 0.5,
+                                        delay: 0.5,
+                                        ease: [0.25, 0.1, 0.25, 1]
+                                    }}
+                                >
+                                    <Link
+                                        href="/dashboard"
+                                        onClick={() => setMobileMenuOpen(false)}
+                                        className="text-7xl font-serif text-gray-900 hover:text-gray-700 transition-colors duration-200"
+                                        style={{
+                                            fontFamily: "var(--font-Jersey_20)",
+                                        }}
+                                    >
+                                        Shop Sign-In
+                                    </Link>
+                                </motion.div>
                             </nav>
 
                             {/* Bottom Section - Company Info & Logo */}

@@ -1,5 +1,6 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
 const isPublicRoute = createRouteMatcher([
   "/",
@@ -10,6 +11,7 @@ const isPublicRoute = createRouteMatcher([
   "/api/webhooks(.*)",
   "/shop-only",
   "/account-deactivated",
+  "/director(.*)",
 ]);
 
 const isPortalRoute = createRouteMatcher([
@@ -46,7 +48,21 @@ const SHOP_ROLES = ["shop_owner", "shop_mechanic", "mechanic", "admin"];
 const OWNER_MANAGER_ROLES = ["shop_owner", "admin"];
 const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
 
+function isAdminSubdomain(request: NextRequest): boolean {
+  const host = request.headers.get('host') || ''
+  return host === 'admin.otopair.com' || host.startsWith('admin.otopair.com:')
+}
+
 export default clerkMiddleware(async (auth, request) => {
+  // Rewrite admin subdomain to the director panel route
+  if (isAdminSubdomain(request)) {
+    const url = request.nextUrl.clone()
+    if (!url.pathname.startsWith('/director')) {
+      url.pathname = '/director'
+    }
+    return NextResponse.rewrite(url)
+  }
+
   const { userId, sessionClaims } = await auth();
 
   // Allow public routes through

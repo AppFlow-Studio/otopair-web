@@ -1,10 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import {
-  applyBookingStatusTransition,
-  resolveLateStartMonitorForBooking,
-} from "./bookings";
+import { applyBookingStatusTransition } from "./bookings";
 import {
   ensureJobActualRecord,
   finalizeJobActuals,
@@ -236,12 +233,6 @@ export const startJob = mutation({
       now,
       startedAtMs: now,
     });
-
-    await resolveLateStartMonitorForBooking(
-      ctx,
-      { ...booking, status: "in_progress" },
-      user._id
-    );
 
     if (booking.status === "confirmed") {
       await applyBookingStatusTransition(ctx, {

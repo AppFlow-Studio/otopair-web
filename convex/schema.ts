@@ -1075,7 +1075,6 @@ export default defineSchema({
     city: v.optional(v.string()),
     state: v.optional(v.string()),
     zip: v.optional(v.string()),
-    timezone: v.optional(v.string()),
     phone: v.optional(v.string()),
     lat: v.optional(v.number()),
     lng: v.optional(v.number()),
@@ -1244,9 +1243,6 @@ export default defineSchema({
     previous_mechanic_id: v.optional(v.id("mechanics")),
     previous_status: v.optional(v.string()),
     reschedule_proposed_at: v.optional(v.number()),
-    schedule_change_mode: v.optional(v.string()),
-    schedule_change_source_booking_id: v.optional(v.id("bookings")),
-    customer_can_restore_original: v.optional(v.boolean()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])
@@ -1256,49 +1252,6 @@ export default defineSchema({
     .index("by_shop_and_date", ["shop_id", "scheduled_date"])
     .index("by_shop_and_status", ["shop_id", "status"])
     .index("by_created_at", ["created_at"]),
-
-  late_start_monitors: defineTable({
-    shop_id: v.id("shops"),
-    upstream_booking_id: v.id("bookings"),
-    cycle_minutes: v.number(),
-    warning_due_at_ms: v.number(),
-    auto_apply_at_ms: v.number(),
-    status: v.string(),
-    created_at: v.optional(v.number()),
-    updated_at: v.optional(v.number()),
-  })
-    .index("by_shop_id", ["shop_id"])
-    .index("by_upstream_booking_id", ["upstream_booking_id"])
-    .index("by_status", ["status"]),
-
-  late_start_reviews: defineTable({
-    shop_id: v.id("shops"),
-    upstream_booking_id: v.id("bookings"),
-    cycle_minutes: v.number(),
-    status: v.string(),
-    decision_due_at_ms: v.number(),
-    proposals: v.array(
-      v.object({
-        booking_id: v.id("bookings"),
-        original_scheduled_date: v.string(),
-        original_scheduled_time: v.string(),
-        original_mechanic_id: v.optional(v.id("mechanics")),
-        proposed_scheduled_date: v.optional(v.string()),
-        proposed_scheduled_time: v.optional(v.string()),
-        proposed_mechanic_id: v.optional(v.id("mechanics")),
-        used_alternate_mechanic: v.boolean(),
-        blocked_reason: v.optional(v.string()),
-      })
-    ),
-    blocking_reason: v.optional(v.string()),
-    resolved_at: v.optional(v.number()),
-    resolved_by_user_id: v.optional(v.id("users")),
-    created_at: v.optional(v.number()),
-    updated_at: v.optional(v.number()),
-  })
-    .index("by_shop_id", ["shop_id"])
-    .index("by_upstream_booking_id", ["upstream_booking_id"])
-    .index("by_status", ["status"]),
 
   // Tire quote responses — one row per shop response to a quote-stage
   // booking (status === "pending_quote"). The user picks one to accept,

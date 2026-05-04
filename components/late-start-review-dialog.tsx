@@ -19,14 +19,17 @@ export interface LateStartReviewView {
   blockingReason: string | null;
   upstreamBookingId: string;
   upstreamCustomerName: string;
+  upstreamMechanicId: string | null;
   upstreamMechanicName: string | null;
   upstreamScheduledDate: string | null;
   upstreamScheduledTime: string | null;
+  upstreamProjectedEndTime: string | null;
   upstreamServiceSummary: string;
   proposals: Array<{
     bookingId: string;
     customerName: string;
     serviceSummary: string;
+    estimatedMinutes: number;
     originalScheduledDate: string;
     originalScheduledTime: string;
     originalMechanicId: string | null;
@@ -46,6 +49,22 @@ function formatTimeLabel(hhmm: string | null) {
   const ampm = hours >= 12 ? "PM" : "AM";
   const hour = hours % 12 || 12;
   return `${hour}:${String(minutes).padStart(2, "0")} ${ampm}`;
+}
+
+function toMinutes(hhmm: string) {
+  const [hours, minutes] = hhmm.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function getBookingEndTime(scheduledTime: string, estimatedMinutes: number) {
+  const totalMinutes = Math.max(0, Math.min(1439, toMinutes(scheduledTime) + estimatedMinutes));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function getDayOfWeek(date: string) {
+  return new Date(`${date}T00:00:00`).getDay();
 }
 
 function generateTimeOptions() {
@@ -77,6 +96,7 @@ function buildManualTargets(review: LateStartReviewView) {
 export default function LateStartReviewDialog({
   review,
   mechanics,
+  shopHours,
   error,
   isSubmitting,
   onClose,
@@ -86,6 +106,12 @@ export default function LateStartReviewDialog({
 }: {
   review: LateStartReviewView | null;
   mechanics: Array<{ _id: string; name: string }>;
+  shopHours: Array<{
+    dayOfWeek: number;
+    openTime: string;
+    closeTime: string;
+    isClosed: boolean;
+  }>;
   error?: string;
   isSubmitting: boolean;
   onClose: () => void;
@@ -107,6 +133,7 @@ export default function LateStartReviewDialog({
       key={`${review._id}:${review.status}:${review.cycleMinutes}`}
       review={review}
       mechanics={mechanics}
+      shopHours={shopHours}
       error={error}
       isSubmitting={isSubmitting}
       onClose={onClose}
@@ -120,6 +147,7 @@ export default function LateStartReviewDialog({
 function LateStartReviewDialogBody({
   review,
   mechanics,
+  shopHours,
   error,
   isSubmitting,
   onClose,
@@ -129,6 +157,12 @@ function LateStartReviewDialogBody({
 }: {
   review: LateStartReviewView;
   mechanics: Array<{ _id: string; name: string }>;
+  shopHours: Array<{
+    dayOfWeek: number;
+    openTime: string;
+    closeTime: string;
+    isClosed: boolean;
+  }>;
   error?: string;
   isSubmitting: boolean;
   onClose: () => void;
@@ -154,6 +188,46 @@ function LateStartReviewDialogBody({
 
   const canAccept = review.status === "pending_staff_review";
   const canDeny = review.status === "pending_staff_review";
+  const manualValidationMessage = useMemo(() => {
+    for (const proposal of review.proposals) {
+      const target = manualTargets[proposal.bookingId];
+      if (!target?.mechanicId) {
+        return "Select a mechanic for every affected booking before applying the delay.";
+      }
+
+      if (
+        review.upstreamScheduledDate &&
+        review.upstreamProjectedEndTime &&
+        target.date === review.upstreamScheduledDate &&
+        target.mechanicId === review.upstreamMechanicId &&
+        toMinutes(target.time) < toMinutes(review.upstreamProjectedEndTime)
+      ) {
+        return `Choose ${formatTimeLabel(review.upstreamProjectedEndTime)} or later on ${
+          review.upstreamMechanicName ?? "the current mechanic"
+        } because the upstream booking would still overlap this slot.`;
+      }
+
+      const hours = shopHours.find((entry) => entry.dayOfWeek === getDayOfWeek(target.date));
+      if (!hours || hours.isClosed) {
+        return "The selected time falls on a day the shop is closed. Choose another slot or apply an outside-hours override.";
+      }
+
+      const startMinutes = toMinutes(target.time);
+      const endMinutes = toMinutes(getBookingEndTime(target.time, proposal.estimatedMinutes));
+      const openMinutes = toMinutes(hours.openTime);
+      const closeMinutes = toMinutes(hours.closeTime);
+      if (startMinutes < openMinutes || startMinutes >= closeMinutes || endMinutes > closeMinutes) {
+        return "This delayed booking falls outside the shop's operating hours. Applying it will require confirmation.";
+      }
+    }
+
+    return "";
+  }, [manualTargets, review, shopHours]);
+  const manualOverlapMessage = useMemo(() => {
+    if (!manualValidationMessage.includes("would still overlap")) return "";
+    return manualValidationMessage;
+  }, [manualValidationMessage]);
+  const canApplyManual = !isSubmitting && !manualOverlapMessage;
 
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center px-4 py-6">
@@ -303,6 +377,15 @@ function LateStartReviewDialogBody({
             })}
           </div>
 
+          {manualValidationMessage ? (
+            <p
+              className={`mt-4 text-sm ${
+                manualOverlapMessage ? "text-destructive" : "text-amber-700"
+              }`}
+            >
+              {manualValidationMessage}
+            </p>
+          ) : null}
           {error ? <p className="mt-4 text-sm text-destructive">{error}</p> : null}
         </div>
 
@@ -338,7 +421,7 @@ function LateStartReviewDialogBody({
                       })
                     )
                   }
-                  disabled={isSubmitting}
+                  disabled={!canApplyManual}
                   className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-70"
                 >
                   {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

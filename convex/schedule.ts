@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { getLateStartTimingConfig } from "./lib/late_start";
 import {
   getBookingEndTime,
   overlapsBlockedSlot,
@@ -163,6 +164,7 @@ async function assertNoWindowConflicts(
 export const getScheduleContext = query({
   args: {},
   handler: async (ctx) => {
+    const lateStartTiming = getLateStartTimingConfig();
     const user = await getCurrentUserOrNull(ctx);
     if (!user) return null;
 
@@ -211,7 +213,12 @@ export const getScheduleContext = query({
     return {
       shopId: shop._id,
       shopName: shop.name,
-      lateStartTestMode: process.env.LATE_START_TEST_MODE === "true",
+      lateStartTestMode: lateStartTiming.testMode,
+      lateStartTiming: {
+        warningLeadMinutes: lateStartTiming.warningLeadMinutes,
+        initialCycleMinutes: lateStartTiming.initialCycleMinutes,
+        cycleIncrementMinutes: lateStartTiming.cycleIncrementMinutes,
+      },
       hours: hours.map((hour: any) => ({
         _id: hour._id,
         dayOfWeek: hour.day_of_week,

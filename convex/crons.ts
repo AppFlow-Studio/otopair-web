@@ -1,8 +1,8 @@
 import { cronJobs } from "convex/server";
 import { internal } from "./_generated/api";
+import { isLateStartTestModeEnabled } from "./lib/late_start";
 
 const crons = cronJobs();
-const lateStartTestModeEnabled = process.env.LATE_START_TEST_MODE === "true";
 
 // crons.daily(
 //   "mark-estimated-health-scores",
@@ -47,7 +47,7 @@ crons.interval(
   internal.bookings.revertExpiredReschedules,
 );
 
-if (!lateStartTestModeEnabled) {
+if (!isLateStartTestModeEnabled()) {
   crons.interval(
     "process-late-start-monitors",
     { minutes: 1 },

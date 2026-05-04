@@ -168,6 +168,38 @@ function generateTimeOptions(): Array<{ value: string; label: string }> {
   return options;
 }
 
+function getDayOfWeekFromDateString(date: string) {
+  return new Date(`${date}T00:00:00`).getDay();
+}
+
+function bookingFallsOutsideShopHours(
+  shopHours: Array<{
+    dayOfWeek: number;
+    openTime: string;
+    closeTime: string;
+    isClosed: boolean;
+  }>,
+  {
+    date,
+    startTime,
+    estimatedMinutes,
+  }: {
+    date: string;
+    startTime: string;
+    estimatedMinutes: number;
+  }
+) {
+  const hours = shopHours.find((entry) => entry.dayOfWeek === getDayOfWeekFromDateString(date));
+  if (!hours || hours.isClosed) return true;
+
+  const startMinutes = hhmmToMinutes(startTime);
+  const endMinutes = hhmmToMinutes(getBookingEndTime(startTime, estimatedMinutes));
+  const openMinutes = hhmmToMinutes(hours.openTime);
+  const closeMinutes = hhmmToMinutes(hours.closeTime);
+
+  return startMinutes < openMinutes || startMinutes >= closeMinutes || endMinutes > closeMinutes;
+}
+
 const MONTH_STATUS_ORDER = [
   "pending_shop_acceptance",
   "pending_customer_acceptance",
@@ -620,6 +652,26 @@ export default function SchedulePage() {
     setLateStartReviewError("");
     setIsSubmittingLateStartReview(true);
     try {
+      const reviewForAction =
+        lateStartReviews?.find((review) => review._id === reviewId) ?? null;
+      if (
+        !allowOutsideShopHours &&
+        context?.hours &&
+        reviewForAction?.proposals.some((proposal) => {
+          const target = targets.find((item) => item.bookingId === proposal.bookingId);
+          if (!target) return false;
+          return bookingFallsOutsideShopHours(context.hours, {
+            date: target.newScheduledDate,
+            startTime: target.newScheduledTime,
+            estimatedMinutes: proposal.estimatedMinutes,
+          });
+        })
+      ) {
+        setLateStartOutsideHoursConfirm({ reviewId, targets });
+        setLateStartReviewError("");
+        return;
+      }
+
       await applyManualLateStartReview({
         reviewId: reviewId as Id<"late_start_reviews">,
         manualTargets: targets.map((target) => ({
@@ -957,6 +1009,7 @@ export default function SchedulePage() {
           {context.lateStartTestMode ? (
             <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
               Late-start test mode active
+              {` (${context.lateStartTiming.warningLeadMinutes}/${context.lateStartTiming.initialCycleMinutes} min)`}
             </span>
           ) : null}
         </div>
@@ -1657,6 +1710,7 @@ export default function SchedulePage() {
       <LateStartReviewDialog
         review={selectedLateStartReview}
         mechanics={mechanics}
+        shopHours={context.hours}
         error={lateStartReviewError}
         isSubmitting={isSubmittingLateStartReview}
         onClose={() => {
@@ -1802,7 +1856,7 @@ export default function SchedulePage() {
         title="Delay outside shop hours?"
         description="This delayed booking falls outside the shop's operating hours. Would you like to apply the delay anyway?"
         onClose={() => setLateStartOutsideHoursConfirm(null)}
-        zIndexClassName="z-[85]"
+        zIndexClassName="z-[95]"
         secondaryAction={{
           label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
           onAction: () => setLateStartOutsideHoursConfirm(null),

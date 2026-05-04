@@ -54,6 +54,10 @@ import {
   saveJobActualDraft,
 } from "./lib/job_actuals";
 import {
+  getLateStartTimingConfig,
+  isLateStartTestModeEnabled,
+} from "./lib/late_start";
+import {
   getMissingRequiredPassportFields,
   getPassportCompletionPercent,
   hasText,
@@ -163,14 +167,6 @@ const LIVE_STAGE_PROGRESS: Record<string, number> = {
 };
 
 const DEFAULT_SHOP_TIMEZONE = "America/New_York";
-const LATE_START_TEST_MODE_ENABLED = process.env.LATE_START_TEST_MODE === "true";
-const LATE_START_PRODUCTION_WARNING_LEAD_MINUTES = 5;
-const LATE_START_PRODUCTION_INITIAL_CYCLE_MINUTES = 15;
-const LATE_START_PRODUCTION_CYCLE_INCREMENT_MINUTES = 15;
-const LATE_START_TEST_WARNING_LEAD_MINUTES = 1;
-const LATE_START_TEST_INITIAL_CYCLE_MINUTES = 2;
-const LATE_START_TEST_CYCLE_INCREMENT_MINUTES = 2;
-const LATE_START_TEST_MIN_VISIBLE_REVIEW_MS = 30_000;
 
 /**
  * QUERY: list
@@ -913,22 +909,6 @@ async function getShopTimezone(ctx: any, shopId: any) {
   const shop = await ctx.db.get(shopId);
   const timezone = normalizeNullableText(shop?.timezone);
   return timezone ?? DEFAULT_SHOP_TIMEZONE;
-}
-
-function getLateStartTimingConfig() {
-  if (LATE_START_TEST_MODE_ENABLED) {
-    return {
-      warningLeadMinutes: LATE_START_TEST_WARNING_LEAD_MINUTES,
-      initialCycleMinutes: LATE_START_TEST_INITIAL_CYCLE_MINUTES,
-      cycleIncrementMinutes: LATE_START_TEST_CYCLE_INCREMENT_MINUTES,
-    };
-  }
-
-  return {
-    warningLeadMinutes: LATE_START_PRODUCTION_WARNING_LEAD_MINUTES,
-    initialCycleMinutes: LATE_START_PRODUCTION_INITIAL_CYCLE_MINUTES,
-    cycleIncrementMinutes: LATE_START_PRODUCTION_CYCLE_INCREMENT_MINUTES,
-  };
 }
 
 async function getLateStartMonitorWindow(
@@ -4891,6 +4871,7 @@ export const getOpenLateStartReviews = query({
               bookingId: proposal.booking_id,
               customerName: formatCustomerName(customer),
               serviceSummary: serviceNames.join(", "),
+              estimatedMinutes: booking?.estimated_labor_minutes ?? 60,
               originalScheduledDate: proposal.original_scheduled_date,
               originalScheduledTime: proposal.original_scheduled_time,
               originalMechanicId: proposal.original_mechanic_id ?? null,
@@ -4917,11 +4898,19 @@ export const getOpenLateStartReviews = query({
           blockingReason: review.blocking_reason ?? null,
           upstreamBookingId: review.upstream_booking_id,
           upstreamCustomerName: formatCustomerName(upstreamCustomer),
+          upstreamMechanicId: upstreamBooking?.mechanic_id ?? null,
           upstreamMechanicName: upstreamMechanic
             ? `${upstreamMechanic.first_name} ${upstreamMechanic.last_name}`.trim()
             : null,
           upstreamScheduledDate: upstreamBooking?.scheduled_date ?? null,
           upstreamScheduledTime: upstreamBooking?.scheduled_time ?? null,
+          upstreamProjectedEndTime:
+            upstreamBooking?.scheduled_time
+              ? addMinutesToHHMM(
+                  upstreamBooking.scheduled_time,
+                  review.cycle_minutes + (upstreamBooking.estimated_labor_minutes ?? 60)
+                )
+              : null,
           upstreamServiceSummary: upstreamServices.join(", "),
           proposals,
         };
@@ -5177,9 +5166,9 @@ export const processLateStartMonitors = internalMutation({
 
         const decisionDueAtMs =
           reviewStatus === "pending_staff_review" &&
-          LATE_START_TEST_MODE_ENABLED &&
+          isLateStartTestModeEnabled() &&
           now >= autoApplyAtMs
-            ? now + LATE_START_TEST_MIN_VISIBLE_REVIEW_MS
+            ? now + getLateStartTimingConfig().minVisibleReviewMs
             : autoApplyAtMs;
 
         const reviewId = await createLateStartReview(ctx, {

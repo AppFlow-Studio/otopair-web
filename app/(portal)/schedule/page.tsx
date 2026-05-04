@@ -241,7 +241,6 @@ export default function SchedulePage() {
   const [selectedLateStartReviewId, setSelectedLateStartReviewId] = useState<string | null>(null);
   const [lateStartReviewError, setLateStartReviewError] = useState("");
   const [isSubmittingLateStartReview, setIsSubmittingLateStartReview] = useState(false);
-  const [isSeedingLateStartScenario, setIsSeedingLateStartScenario] = useState(false);
   const [contextMenu, setContextMenu] = useState<
     | { type: "block"; info: ContextMenuCellInfo }
     | { type: "unblock"; slotId: string; clientX: number; clientY: number }
@@ -308,8 +307,6 @@ export default function SchedulePage() {
   const acceptLateStartReview = useMutation(api.bookings.acceptLateStartReview);
   const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
   const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
-  const clearDashboardBookingsBatch = useMutation(api.seed.clearDashboardBookingsBatch);
-  const seedLateStartReviewScenario = useMutation(api.seed.seedLateStartReviewScenario);
   const blockSlot = useMutation(api.schedule.blockSlot);
   const updateBlockedSlot = useMutation(api.schedule.updateBlockedSlot);
   const unblockSlot = useMutation(api.schedule.unblockSlot);
@@ -568,42 +565,6 @@ export default function SchedulePage() {
       );
     } finally {
       setIsRescheduling(false);
-    }
-  }
-
-  async function handleSeedLateStartScenario() {
-    if (!context?.shopId || isSeedingLateStartScenario) return;
-    setIsSeedingLateStartScenario(true);
-    try {
-      for (let attempts = 0; attempts < 200; attempts += 1) {
-        const result = await clearDashboardBookingsBatch({
-          shopId: context.shopId,
-        });
-        if (result.done) {
-          break;
-        }
-        if (attempts === 199) {
-          throw new Error("Timed out while clearing existing schedule data.");
-        }
-      }
-
-      await seedLateStartReviewScenario({
-        shopId: context.shopId,
-        clearExisting: false,
-      });
-      setCurrentDate(new Date());
-      setCurrentView("day");
-      setSelectedBookingId(null);
-      setSelectedLateStartReviewId(null);
-      setLateStartReviewError("");
-      setToast({ msg: "Late-start test data seeded", key: Date.now() });
-    } catch (err: unknown) {
-      setToast({
-        msg: err instanceof Error ? err.message : "Failed to seed late-start test data",
-        key: Date.now(),
-      });
-    } finally {
-      setIsSeedingLateStartScenario(false);
     }
   }
 
@@ -1013,17 +974,6 @@ export default function SchedulePage() {
             </span>
           ) : null}
         </div>
-        {process.env.NODE_ENV === "development" && context.shopId ? (
-          <button
-            type="button"
-            onClick={() => void handleSeedLateStartScenario()}
-            disabled={isSeedingLateStartScenario}
-            className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {isSeedingLateStartScenario ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Seed late-start test data
-          </button>
-        ) : null}
       </div>
 
       {/* Toolbar: nav + view switcher + mechanic filter */}

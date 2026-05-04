@@ -94,6 +94,7 @@ export default function PortalLayout({
     | undefined;
   const seedBookings = useMutation(api.seed.seedDashboardBookings);
   const clearDashboardBookingsBatch = useMutation(api.seed.clearDashboardBookingsBatch);
+  const seedLateStartReviewScenario = useMutation(api.seed.seedLateStartReviewScenario);
   const [, setSeeding] = useState(false);
   const hasRedirected = useRef(false);
   const isAcceptInvite = pathname.startsWith("/accept-invite");
@@ -174,7 +175,7 @@ export default function PortalLayout({
     process.env.NODE_ENV === "development" &&
     isOwnerManager &&
     !!portalAccess?.shopId;
-  const runDashboardSeedAction = async (seedDemo: boolean) => {
+  const runDashboardSeedAction = async (seedMode: "v1" | "v2" | null) => {
     if (!portalAccess?.shopId) return;
     setSeeding(true);
     try {
@@ -190,13 +191,38 @@ export default function PortalLayout({
         }
       }
 
-      if (seedDemo) {
+      if (seedMode) {
         await seedBookings({
           shopId: portalAccess.shopId,
           clearExisting: false,
           seedDemo: true,
+          version: seedMode,
         });
       }
+    } finally {
+      setSeeding(false);
+    }
+  };
+  const runLateStartSeedAction = async () => {
+    if (!portalAccess?.shopId) return;
+    setSeeding(true);
+    try {
+      for (let attempts = 0; attempts < 200; attempts += 1) {
+        const result = await clearDashboardBookingsBatch({
+          shopId: portalAccess.shopId,
+        });
+        if (result.done) {
+          break;
+        }
+        if (attempts === 199) {
+          throw new Error("Timed out while clearing existing schedule data.");
+        }
+      }
+
+      await seedLateStartReviewScenario({
+        shopId: portalAccess.shopId,
+        clearExisting: false,
+      });
     } finally {
       setSeeding(false);
     }
@@ -404,16 +430,30 @@ export default function PortalLayout({
                   />
                   {showDemoBookingActions ? (
                     <UserButton.Action
-                      label="Seed demo bookings"
+                      label="Seed demo bookings 1"
                       labelIcon={<Sprout className="w-4 h-4" />}
-                      onClick={() => runDashboardSeedAction(true)}
+                      onClick={() => runDashboardSeedAction("v1")}
+                    />
+                  ) : null}
+                  {showDemoBookingActions ? (
+                    <UserButton.Action
+                      label="Seed demo bookings 2"
+                      labelIcon={<Sprout className="w-4 h-4" />}
+                      onClick={() => runDashboardSeedAction("v2")}
+                    />
+                  ) : null}
+                  {showDemoBookingActions ? (
+                    <UserButton.Action
+                      label="Seed late-start test data"
+                      labelIcon={<Sprout className="w-4 h-4" />}
+                      onClick={() => void runLateStartSeedAction()}
                     />
                   ) : null}
                   {showDemoBookingActions ? (
                     <UserButton.Action
                       label="Clear demo bookings"
                       labelIcon={<Trash2 className="w-4 h-4" />}
-                      onClick={() => runDashboardSeedAction(false)}
+                      onClick={() => runDashboardSeedAction(null)}
                     />
                   ) : null}
                 </UserButton.MenuItems>
@@ -458,16 +498,30 @@ export default function PortalLayout({
                   />
                   {showDemoBookingActions ? (
                     <UserButton.Action
-                      label="Seed demo bookings"
+                      label="Seed demo bookings 1"
                       labelIcon={<Sprout className="w-4 h-4" />}
-                      onClick={() => runDashboardSeedAction(true)}
+                      onClick={() => runDashboardSeedAction("v1")}
+                    />
+                  ) : null}
+                  {showDemoBookingActions ? (
+                    <UserButton.Action
+                      label="Seed demo bookings 2"
+                      labelIcon={<Sprout className="w-4 h-4" />}
+                      onClick={() => runDashboardSeedAction("v2")}
+                    />
+                  ) : null}
+                  {showDemoBookingActions ? (
+                    <UserButton.Action
+                      label="Seed late-start test data"
+                      labelIcon={<Sprout className="w-4 h-4" />}
+                      onClick={() => void runLateStartSeedAction()}
                     />
                   ) : null}
                   {showDemoBookingActions ? (
                     <UserButton.Action
                       label="Clear demo bookings"
                       labelIcon={<Trash2 className="w-4 h-4" />}
-                      onClick={() => runDashboardSeedAction(false)}
+                      onClick={() => runDashboardSeedAction(null)}
                     />
                   ) : null}
                 </UserButton.MenuItems>

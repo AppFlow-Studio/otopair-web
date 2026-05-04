@@ -3834,6 +3834,7 @@ export const seedDashboardBookings = mutation({
     shopId: v.id("shops"),
     clearExisting: v.optional(v.boolean()),
     seedDemo: v.optional(v.boolean()),
+    version: v.optional(v.union(v.literal("v1"), v.literal("v2"))),
   },
   handler: async (ctx, args) => {
     const shop = await ctx.db.get(args.shopId);
@@ -3851,6 +3852,8 @@ export const seedDashboardBookings = mutation({
     if ((args.seedDemo ?? true) === false) {
       return { clearedOnly: true };
     }
+
+    const version = args.version ?? "v2";
 
     const existingServices = await ctx.db.query("services").collect();
     const existingCategories = await ctx.db.query("service_categories").collect();
@@ -4445,27 +4448,51 @@ export const seedDashboardBookings = mutation({
       }
     }
 
-    const averageServiceMinutes =
-      serviceOptions.reduce((sum, service) => sum + service.estimatedMinutes, 0) /
-      serviceOptions.length;
-    const bookingCapacityUtilization = 0.7;
-    const minimumBookingsPerMechanicOpenDay = 2;
-    const dayTargets = openDates.map(({ hours }) => {
-      const openMinutes = dashboardTimeToMinutes(hours.open_time!);
-      const closeMinutes = dashboardTimeToMinutes(hours.close_time!);
-      const openWindowMinutes = Math.max(0, closeMinutes - openMinutes);
-      const utilizationCapacity = Math.round(
-        (openWindowMinutes * mechanics.length * bookingCapacityUtilization) /
-          averageServiceMinutes
-      );
-      return Math.max(
-        mechanics.length * minimumBookingsPerMechanicOpenDay,
-        utilizationCapacity
-      );
-    });
+    const dayTargets =
+      version === "v1"
+        ? (() => {
+            const bookingsPerMechanicTarget = 5;
+            const minimumBookingsPerOpenDay = 5;
+            const totalBookingTarget = Math.max(
+              openDates.length * minimumBookingsPerOpenDay,
+              mechanics.length * bookingsPerMechanicTarget
+            );
+            const targets = openDates.map(() => minimumBookingsPerOpenDay);
+            for (
+              let extra = totalBookingTarget - openDates.length * minimumBookingsPerOpenDay, idx = 0;
+              extra > 0;
+              extra--, idx++
+            ) {
+              targets[idx % targets.length] += 1;
+            }
+            return targets;
+          })()
+        : (() => {
+            const averageServiceMinutes =
+              serviceOptions.reduce((sum, service) => sum + service.estimatedMinutes, 0) /
+              serviceOptions.length;
+            const bookingCapacityUtilization = 0.7;
+            const minimumBookingsPerMechanicOpenDay = 2;
+            return openDates.map(({ hours }) => {
+              const openMinutes = dashboardTimeToMinutes(hours.open_time!);
+              const closeMinutes = dashboardTimeToMinutes(hours.close_time!);
+              const openWindowMinutes = Math.max(0, closeMinutes - openMinutes);
+              const utilizationCapacity = Math.round(
+                (openWindowMinutes * mechanics.length * bookingCapacityUtilization) /
+                  averageServiceMinutes
+              );
+              return Math.max(
+                mechanics.length * minimumBookingsPerMechanicOpenDay,
+                utilizationCapacity
+              );
+            });
+          })();
 
-    const assignedBookingsByMechanic = new Map(
-      mechanics.map((mechanic) => [String(mechanic._id), 0])
+    const mechanicBookingDistribution = new Map(
+      mechanics.map((mechanic) => [
+        String(mechanic._id),
+        version === "v1" ? 5 : 0,
+      ])
     );
     const bookingStatusCounts: Record<string, number> = {};
     const mechanicDayBookingCounts = new Map<string, number>();
@@ -4480,9 +4507,15 @@ export const seedDashboardBookings = mutation({
 
       for (let dayBookingIdx = 0; dayBookingIdx < dailyTarget; dayBookingIdx++) {
         const mechanicOrder = [...mechanics].sort((a, b) => {
-          const assignedA = assignedBookingsByMechanic.get(String(a._id)) ?? 0;
-          const assignedB = assignedBookingsByMechanic.get(String(b._id)) ?? 0;
-          if (assignedA !== assignedB) return assignedA - assignedB;
+          const distributionA =
+            mechanicBookingDistribution.get(String(a._id)) ?? 0;
+          const distributionB =
+            mechanicBookingDistribution.get(String(b._id)) ?? 0;
+          if (distributionA !== distributionB) {
+            return version === "v1"
+              ? distributionB - distributionA
+              : distributionA - distributionB;
+          }
           return String(a._id).localeCompare(String(b._id));
         });
         const mechanic = mechanicOrder[(dayBookingIdx + dayIdx) % mechanicOrder.length];
@@ -4599,9 +4632,11 @@ export const seedDashboardBookings = mutation({
         }
 
         bookingStatusCounts[status] = (bookingStatusCounts[status] ?? 0) + 1;
-        assignedBookingsByMechanic.set(
+        mechanicBookingDistribution.set(
           mechanicKey,
-          (assignedBookingsByMechanic.get(mechanicKey) ?? 0) + 1
+          version === "v1"
+            ? Math.max(0, (mechanicBookingDistribution.get(mechanicKey) ?? 0) - 1)
+            : (mechanicBookingDistribution.get(mechanicKey) ?? 0) + 1
         );
         bookingSequence += 1;
       }

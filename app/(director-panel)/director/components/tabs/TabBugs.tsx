@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useContext } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { Badge, Button, Input, Select, Modal, AuditButton, Avatar, IconSearch, IconDrag, IconX } from '../Primitives'
 import { DirectorNotesPanel } from '../DirectorNotesPanel'
 import { SectionAnchor } from '../Shell'
@@ -39,7 +40,8 @@ type Bug = {
   status: string
   version?: string
   device?: string
-  assignee?: string
+  assignee?: Id<'director_users'>
+  assigneeName?: string
   archived?: boolean
   created_at: number
 }
@@ -73,19 +75,23 @@ const BugCard = ({ bug, expanded, onClick, onDragStart, onDragEnd }: {
       </div>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', borderTop:'1px solid var(--slate-100)', paddingTop:8 }}>
         <span style={{ fontSize:11, color:'var(--slate-500)' }}>{bug.device || '—'} · {ageLabel(bug.created_at)}</span>
-        {bug.assignee ? <Avatar name={bug.assignee} size={20} /> : <span style={{ width:20, height:20, borderRadius:999, border:'1.5px dashed var(--slate-300)' }} />}
+        {bug.assigneeName ? <Avatar name={bug.assigneeName} size={20} /> : <span style={{ width:20, height:20, borderRadius:999, border:'1.5px dashed var(--slate-300)' }} />}
       </div>
     </div>
   )
 }
 
 const BugModal = ({ bug, onClose }: { bug: Bug | undefined; onClose: () => void }) => {
+  const session = useContext(DirectorSessionCtx)
+  const actorName = session?.name ?? 'Director'
+  const actorId   = session?.userId as Id<'director_users'> | undefined
   const [auditOpen, setAuditOpen] = useState(false)
   const updateStatus   = useMutation(api.bugs.updateStatus)
   const updateAssignee = useMutation(api.bugs.updateAssignee)
   const archiveBug     = useMutation(api.bugs.archive)
+  const directorUsers = useQuery(api.director_auth.listUsers)
   const [localStatus,   setLocalStatus]   = useState(bug?.status ?? 'new')
-  const [localAssignee, setLocalAssignee] = useState(bug?.assignee ?? '')
+  const [localAssignee, setLocalAssignee] = useState<Id<'director_users'> | ''>(bug?.assignee ?? '')
 
   const rawAudit = useQuery(api.audit_log.listByEntity, bug ? { entity_type: 'bug', entity_id: bug._id } : 'skip')
   const auditEntries = rawAudit?.map(e => ({
@@ -104,8 +110,8 @@ const BugModal = ({ bug, onClose }: { bug: Bug | undefined; onClose: () => void 
   const handleSave = async () => {
     if (!bug) return
     await Promise.all([
-      updateStatus({ id: bug._id, status: localStatus }),
-      updateAssignee({ id: bug._id, assignee: localAssignee || undefined }),
+      updateStatus({ id: bug._id, status: localStatus, actorName, actorId }),
+      updateAssignee({ id: bug._id, assignee: localAssignee ? localAssignee as Id<'director_users'> : undefined, actorName, actorId }),
     ])
     onClose()
   }
@@ -114,7 +120,7 @@ const BugModal = ({ bug, onClose }: { bug: Bug | undefined; onClose: () => void 
     <Modal open={!!bug} onClose={onClose} width={920}
       eyebrow={bug && <><span className="mono" style={{ fontSize:13, color:'var(--slate-500)' }}>{bug._id.slice(-8)}</span><Badge tone={srcTone(bug.source)}>{srcLabel(bug.source)}</Badge></>}
       title={bug?.title ?? ''}
-      headerRight={<><AuditButton onClick={() => setAuditOpen(o => !o)} count={auditEntries?.length} />{bug?.assignee && <Avatar name={bug.assignee} size={28} />}</>}
+      headerRight={<><AuditButton onClick={() => setAuditOpen(o => !o)} count={auditEntries?.length} />{bug?.assigneeName && <Avatar name={bug.assigneeName} size={28} />}</>}
       auditDrawer={{ open:auditOpen, onClose:() => setAuditOpen(false), title:'Bug audit log', subtitle:bug ? `${bug._id.slice(-8)} · ${bug.title}` : '', entries:auditEntries }}
       footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" onClick={handleSave}>Save</Button></>}>
       {bug && <>
@@ -146,7 +152,9 @@ const BugModal = ({ bug, onClose }: { bug: Bug | undefined; onClose: () => void 
               </div>
               <div>
                 <label style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:6 }}>Assignee</label>
-                <Input value={localAssignee} onChange={e => setLocalAssignee(e.target.value)} placeholder="Name…" style={{ width:'100%' }} />
+                <Select value={localAssignee} onChange={e => setLocalAssignee(e.target.value as Id<'director_users'> | '')}
+                  options={[{ value:'', label:'Unassigned' }, ...(directorUsers ?? []).map(u => ({ value: String(u._id), label: u.name }))]}
+                  style={{ width:'100%' }} />
               </div>
               <div>
                 <label style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:6 }}>Resolution notes</label>
@@ -158,7 +166,7 @@ const BugModal = ({ bug, onClose }: { bug: Bug | undefined; onClose: () => void 
               </div>
               <div style={{ borderTop:'1px solid var(--slate-200)', paddingTop:14, marginTop:4 }}>
                 <Button variant={bug.archived ? 'secondary' : 'danger'} style={{ width:'100%' }}
-                  onClick={async () => { await archiveBug({ id: bug._id, archived: !bug.archived }); onClose() }}>
+                  onClick={async () => { await archiveBug({ id: bug._id, archived: !bug.archived, actorName, actorId }); onClose() }}>
                   {bug.archived ? 'Restore from archive' : 'Archive bug'}
                 </Button>
               </div>
@@ -171,6 +179,9 @@ const BugModal = ({ bug, onClose }: { bug: Bug | undefined; onClose: () => void 
 }
 
 export const TabBugs = () => {
+  const session = useContext(DirectorSessionCtx)
+  const actorName = session?.name ?? 'Director'
+  const actorId   = session?.userId as Id<'director_users'> | undefined
   const [expandedId,      setExpandedId]      = useState<string | null>(null)
   const [searchQ,         setSearchQ]         = useState('')
   const [sourceFilter,    setSourceFilter]    = useState('all')
@@ -187,7 +198,7 @@ export const TabBugs = () => {
   const grouped      = useQuery(api.bugs.listByStatus, { includeArchived: viewMode === 'archived' })
   const updateStatus = useMutation(api.bugs.updateStatus)
 
-  const allBugs    = grouped ? Object.values(grouped).flat() : []
+  const allBugs: Bug[]    = grouped ? (Object.values(grouped).flat() as Bug[]) : []
   const expanded   = allBugs.find(b => b._id === expandedId)
   const openCount  = grouped ? (grouped.new?.length ?? 0) + (grouped.triaged?.length ?? 0) + (grouped.assigned?.length ?? 0) : 0
   const unassigned = allBugs.filter(b => !b.assignee && !['done','verified'].includes(b.status)).length
@@ -205,7 +216,7 @@ export const TabBugs = () => {
     if (!draggingId) return
     const bug = allBugs.find(b => b._id === draggingId)
     if (bug && bug.status !== targetColId) {
-      updateStatus({ id: bug._id, status: targetColId })
+      updateStatus({ id: bug._id, status: targetColId, actorName, actorId })
     }
     setDraggingId(null)
     setDragOverCol(null)
@@ -257,7 +268,7 @@ export const TabBugs = () => {
       ) : (
         <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'repeat(6, minmax(0, 1fr))', gap:10, paddingBottom:16 }}>
           {BUG_COLUMNS.map(col => {
-            const items = filterItems(grouped[col.id] ?? [])
+            const items = filterItems((grouped[col.id] ?? []) as Bug[])
             const isOver = dragOverCol === col.id && !!draggingId
             return (
               <div key={col.id}

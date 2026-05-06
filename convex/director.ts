@@ -292,8 +292,8 @@ export const userDetail = query({
 });
 
 export const softDeleteUser = mutation({
-  args: { id: v.id("users"), reason: v.string() },
-  handler: async (ctx, { id, reason }) => {
+  args: { id: v.id("users"), reason: v.string(), actorName: v.string(), actorId: v.optional(v.id("director_users")) },
+  handler: async (ctx, { id, reason, actorName, actorId }) => {
     await ctx.db.patch(id, {
       isPendingDeletion: true,
       deletionRequestedAt: Date.now(),
@@ -303,7 +303,8 @@ export const softDeleteUser = mutation({
       entity_type: "user",
       entity_id: String(id),
       action: "status_change",
-      actor: "Director",
+      actor: actorName,
+      actor_id: actorId,
       detail: `Soft delete requested. Reason: ${reason}`,
       created_at: Date.now(),
     });
@@ -453,14 +454,15 @@ export const refundedBookingsList = query({
 });
 
 export const setShopActive = mutation({
-  args: { id: v.id("shops"), active: v.boolean(), reason: v.string() },
-  handler: async (ctx, { id, active, reason }) => {
+  args: { id: v.id("shops"), active: v.boolean(), reason: v.string(), actorName: v.string(), actorId: v.optional(v.id("director_users")) },
+  handler: async (ctx, { id, active, reason, actorName, actorId }) => {
     await ctx.db.patch(id, { is_active: active });
     await ctx.db.insert("audit_log", {
       entity_type: "shop",
       entity_id:   String(id),
       action:      "status_change",
-      actor:       "Director",
+      actor:       actorName,
+      actor_id:    actorId,
       detail:      `Shop ${active ? "reactivated" : "deactivated"}. Reason: ${reason}`,
       created_at:  Date.now(),
     });
@@ -468,14 +470,15 @@ export const setShopActive = mutation({
 });
 
 export const setShopVerified = mutation({
-  args: { id: v.id("shops"), verified: v.boolean(), reason: v.string() },
-  handler: async (ctx, { id, verified, reason }) => {
+  args: { id: v.id("shops"), verified: v.boolean(), reason: v.string(), actorName: v.string(), actorId: v.optional(v.id("director_users")) },
+  handler: async (ctx, { id, verified, reason, actorName, actorId }) => {
     await ctx.db.patch(id, { is_verified: verified });
     await ctx.db.insert("audit_log", {
       entity_type: "shop",
       entity_id:   String(id),
       action:      "field_edit",
-      actor:       "Director",
+      actor:       actorName,
+      actor_id:    actorId,
       detail:      `Verification ${verified ? "granted" : "removed"}. Reason: ${reason}`,
       created_at:  Date.now(),
     });
@@ -483,16 +486,31 @@ export const setShopVerified = mutation({
 });
 
 export const tagRefund = mutation({
-  args: { id: v.id("bookings"), reason: v.string() },
-  handler: async (ctx, { id, reason }) => {
+  args: { id: v.id("bookings"), reason: v.string(), actorName: v.string(), actorId: v.optional(v.id("director_users")) },
+  handler: async (ctx, { id, reason, actorName, actorId }) => {
     await ctx.db.patch(id, { refund_reason: reason });
     await ctx.db.insert("audit_log", {
       entity_type: "booking",
       entity_id:   String(id),
       action:      "refund_tagged",
-      actor:       "Director",
+      actor:       actorName,
+      actor_id:    actorId,
       detail:      `Refund tagged: ${reason}`,
       created_at:  Date.now(),
+    });
+  },
+});
+
+export const logView = mutation({
+  args: { entity_type: v.string(), entity_id: v.string(), actorName: v.string(), actorId: v.optional(v.id("director_users")) },
+  handler: async (ctx, { entity_type, entity_id, actorName, actorId }) => {
+    await ctx.db.insert("audit_log", {
+      entity_type, entity_id,
+      action: "view",
+      actor: actorName,
+      actor_id: actorId,
+      detail: `Viewed by ${actorName}`,
+      created_at: Date.now(),
     });
   },
 });

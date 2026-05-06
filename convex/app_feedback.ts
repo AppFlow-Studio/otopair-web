@@ -1,6 +1,11 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
+export const getById = query({
+  args: { id: v.id("app_feedback") },
+  handler: async (ctx, { id }) => ctx.db.get(id),
+});
+
 export const listByStatus = query({
   args: { includeArchived: v.optional(v.boolean()) },
   handler: async (ctx, { includeArchived = false }) => {
@@ -17,8 +22,8 @@ export const listByStatus = query({
 });
 
 export const archive = mutation({
-  args: { id: v.id("app_feedback"), archived: v.boolean() },
-  handler: async (ctx, { id, archived }) => {
+  args: { id: v.id("app_feedback"), archived: v.boolean(), actorName: v.string(), actorId: v.optional(v.id("director_users")) },
+  handler: async (ctx, { id, archived, actorName, actorId }) => {
     const fb = await ctx.db.get(id);
     if (!fb) return;
     await ctx.db.patch(id, { archived, updated_at: Date.now() });
@@ -26,7 +31,8 @@ export const archive = mutation({
       entity_type: "feedback",
       entity_id: String(id),
       action: "status_change",
-      actor: "Director",
+      actor: actorName,
+      actor_id: actorId,
       detail: archived ? "Feedback archived" : "Feedback restored from archive",
       created_at: Date.now(),
     });
@@ -34,8 +40,8 @@ export const archive = mutation({
 });
 
 export const updateStatus = mutation({
-  args: { id: v.id("app_feedback"), status: v.string() },
-  handler: async (ctx, { id, status }) => {
+  args: { id: v.id("app_feedback"), status: v.string(), actorName: v.string(), actorId: v.optional(v.id("director_users")) },
+  handler: async (ctx, { id, status, actorName, actorId }) => {
     const fb = await ctx.db.get(id);
     if (!fb || fb.status === status) return;
     await ctx.db.patch(id, { status, updated_at: Date.now() });
@@ -43,7 +49,8 @@ export const updateStatus = mutation({
       entity_type: "feedback",
       entity_id: String(id),
       action: "status_change",
-      actor: "Director",
+      actor: actorName,
+      actor_id: actorId,
       detail: `${fb.status} → ${status}`,
       created_at: Date.now(),
     });
@@ -61,8 +68,10 @@ export const updateFields = mutation({
       v.literal("positive"), v.literal("neutral"), v.literal("negative"),
     )),
     status: v.optional(v.string()),
+    actorName: v.string(),
+    actorId: v.optional(v.id("director_users")),
   },
-  handler: async (ctx, { id, ...fields }) => {
+  handler: async (ctx, { id, actorName, actorId, ...fields }) => {
     const fb = await ctx.db.get(id);
     const updates = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));
     if (Object.keys(updates).length === 0) return;
@@ -76,7 +85,8 @@ export const updateFields = mutation({
       entity_type: "feedback",
       entity_id: String(id),
       action: fields.status && fb?.status !== fields.status ? "status_change" : "field_edit",
-      actor: "Director",
+      actor: actorName,
+      actor_id: actorId,
       detail: parts.join(", "),
       created_at: Date.now(),
     });

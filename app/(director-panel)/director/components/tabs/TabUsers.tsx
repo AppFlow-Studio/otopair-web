@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useContext } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { Badge, Button, Card, Input, Select, StatusBadge, Modal, AuditButton, Avatar, tableStyles, IconUsers, IconSearch, IconExternal, IconX, IconCar, IconCard } from '../Primitives'
 import { DirectorNotesPanel } from '../DirectorNotesPanel'
 import { SectionAnchor } from '../Shell'
@@ -48,10 +49,18 @@ const ConfirmDialog = ({ action, onConfirm, onClose }: { action: string; onConfi
 }
 
 const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: () => void }) => {
+  const session = useContext(DirectorSessionCtx)
+  const actorName = session?.name ?? 'Director'
+  const actorId   = session?.userId as Id<'director_users'> | undefined
   const [auditOpen, setAuditOpen] = useState(false)
   const [confirmAction, setConfirmAction] = useState<string | null>(null)
   const softDelete = useMutation(api.director.softDeleteUser)
+  const logView    = useMutation(api.director.logView)
   const detail = useQuery(api.director.userDetail, userId ? { id: userId } : 'skip')
+
+  useEffect(() => {
+    if (userId) logView({ entity_type: 'user', entity_id: String(userId), actorName, actorId })
+  }, [String(userId)])
   const rawAudit = useQuery(api.audit_log.listByEntity, userId ? { entity_type: 'user', entity_id: userId } : 'skip')
   const auditEntries = rawAudit?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
@@ -61,7 +70,7 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
   const handleAction = async (action: string, reason: string) => {
     if (!userId) return
     if (action === 'Soft Delete') {
-      await softDelete({ id: userId, reason })
+      await softDelete({ id: userId, reason, actorName, actorId })
     }
     // Resend Verification and Reset Password require Clerk API — handled server-side
   }
@@ -209,7 +218,7 @@ export const TabUsers = () => {
 
   return (
     <SectionAnchor id="users" title="Users" subtitle="All consumer accounts on Otopair."
-      right={<Button variant="dark" iconRight={<IconExternal size={13} />}>Export CSV</Button>}>
+>
       <div style={{ display:'flex', alignItems:'center', gap:10, padding:12, background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, marginBottom:12 }}>
         <Input icon={<IconSearch size={14} />} value={q} onChange={e => setQ(e.target.value)} placeholder="Search by name, email, or phone…" style={{ width:360 }} />
         <Select value="all" onChange={() => {}} options={[{ value:'all', label:'All loyalty tiers' },{ value:'standard', label:'Standard' },{ value:'premium', label:'Premium' },{ value:'elite', label:'Elite' }]} />

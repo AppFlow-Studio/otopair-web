@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useContext } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { Badge, Button, Card, Input, Select, Toggle, StatusBadge, Modal, AuditButton, Avatar, tableStyles, IconShop, IconSearch, IconExternal, IconCheck, IconStripe, IconX } from '../Primitives'
 import { DirectorNotesPanel } from '../DirectorNotesPanel'
 import { SectionAnchor } from '../Shell'
@@ -62,9 +63,17 @@ const roleLabel = (role: string) => ({
 }[role] ?? role)
 
 const ShopModal = ({ shopId, onClose }: { shopId: Id<'shops'> | null; onClose: () => void }) => {
+  const session = useContext(DirectorSessionCtx)
+  const actorName = session?.name ?? 'Director'
+  const actorId   = session?.userId as Id<'director_users'> | undefined
   const [auditOpen, setAuditOpen]       = useState(false)
   const [confirmAction, setConfirmAction] = useState<string | null>(null)
   const detail   = useQuery(api.director.shopDetail, shopId ? { id: shopId } : 'skip')
+  const logView  = useMutation(api.director.logView)
+
+  useEffect(() => {
+    if (shopId) logView({ entity_type: 'shop', entity_id: String(shopId), actorName, actorId })
+  }, [String(shopId)])
   const rawAudit = useQuery(api.audit_log.listByEntity, shopId ? { entity_type: 'shop', entity_id: shopId } : 'skip')
   const auditEntries = rawAudit?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
@@ -75,10 +84,10 @@ const ShopModal = ({ shopId, onClose }: { shopId: Id<'shops'> | null; onClose: (
 
   const handleAction = async (action: string, reason: string) => {
     if (!shopId) return
-    if (action === 'Deactivate')           await setShopActive({ id: shopId, active: false, reason })
-    if (action === 'Reactivate')           await setShopActive({ id: shopId, active: true,  reason })
-    if (action === 'Mark Verified')        await setShopVerified({ id: shopId, verified: true,  reason })
-    if (action === 'Remove Verification')  await setShopVerified({ id: shopId, verified: false, reason })
+    if (action === 'Deactivate')           await setShopActive({ id: shopId, active: false, reason, actorName, actorId })
+    if (action === 'Reactivate')           await setShopActive({ id: shopId, active: true,  reason, actorName, actorId })
+    if (action === 'Mark Verified')        await setShopVerified({ id: shopId, verified: true,  reason, actorName, actorId })
+    if (action === 'Remove Verification')  await setShopVerified({ id: shopId, verified: false, reason, actorName, actorId })
   }
 
   return (
@@ -263,7 +272,7 @@ export const TabShops = () => {
 
   return (
     <SectionAnchor id="shops" title="Shops" subtitle="All shops on the platform. Click a row to open the full detail."
-      right={<Button variant="dark" iconRight={<IconExternal size={13} />}>Export CSV</Button>}>
+>
       <div style={{ display:'flex', alignItems:'center', gap:10, padding:12, background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, marginBottom:12, flexWrap:'wrap' }}>
         <Input icon={<IconSearch size={14} />} value={q} onChange={e => setQ(e.target.value)} placeholder="Search shop name…" style={{ width:280 }} />
         <Select value={status} onChange={e => setStatus(e.target.value)}

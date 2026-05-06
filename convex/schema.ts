@@ -1634,7 +1634,7 @@ export default defineSchema({
     status: v.string(), // new | triaged | assigned | in_progress | done | verified
     version: v.optional(v.string()),
     device: v.optional(v.string()),
-    assignee: v.optional(v.string()),
+    assignee: v.optional(v.id("director_users")),
     description: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.optional(v.number()),
@@ -1683,9 +1683,28 @@ export default defineSchema({
     entity_id: v.string(),
     action: v.string(),
     actor: v.string(),
+    actor_id: v.optional(v.id("director_users")),
     detail: v.optional(v.string()),
     created_at: v.number(),
   })
     .index("by_entity", ["entity_type", "entity_id"])
-    .index("by_created_at", ["created_at"]),
+    .index("by_created_at", ["created_at"])
+    .index("by_actor_id", ["actor_id"]),
+
+  director_users: defineTable({
+    name: v.string(),
+    role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    totp_secret: v.string(),
+    created_at: v.number(),
+    last_login: v.optional(v.number()),
+  }),
+
+  director_sessions: defineTable({
+    user_id: v.id("director_users"),
+    token: v.string(),
+    created_at: v.number(),
+    expires_at: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_user_id", ["user_id"]),
 });

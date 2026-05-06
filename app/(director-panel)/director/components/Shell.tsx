@@ -15,8 +15,12 @@ const NAV_ITEMS = [
 ]
 
 type Counts = { bugs?: number; feedback?: number; stripe?: number }
+type CurrentUser = { name: string; role: string }
 
-export const Sidebar = ({ active, onNavigate, counts }: { active: string; onNavigate: (id: string) => void; counts?: Counts }) => (
+export const Sidebar = ({ active, onNavigate, counts, currentUser, onLogout }: {
+  active: string; onNavigate: (id: string) => void; counts?: Counts
+  currentUser?: CurrentUser; onLogout?: () => void
+}) => (
   <aside style={{ width:232, flexShrink:0, background:'var(--slate-900)', color:'var(--slate-300)',
     display:'flex', flexDirection:'column', position:'sticky', top:0, height:'100vh',
     borderRight:'1px solid var(--slate-800)' }}>
@@ -62,12 +66,31 @@ export const Sidebar = ({ active, onNavigate, counts }: { active: string; onNavi
       })}
     </nav>
     <div style={{ padding:'12px 14px', borderTop:'1px solid var(--slate-800)', display:'flex', alignItems:'center', gap:10 }}>
-      <Avatar name="Temur AB" size={28} />
+      <Avatar name={currentUser?.name ?? '—'} size={28} />
       <div style={{ flex:1, minWidth:0 }}>
-        <div style={{ color:'#fff', fontSize:13, fontWeight:500, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>Temur AB</div>
-        <div style={{ color:'var(--slate-500)', fontSize:11 }}>Founder · superadmin</div>
+        <div style={{ color:'#fff', fontSize:13, fontWeight:500, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+          {currentUser?.name ?? '—'}
+        </div>
+        <div style={{ color:'var(--slate-500)', fontSize:11 }}>{currentUser?.role ?? ''}</div>
       </div>
-      <IconSettings size={15} style={{ color:'var(--slate-500)' }} />
+      <button onClick={() => onNavigate('settings')}
+        title="Settings"
+        style={{ background:'none', border:'none', cursor:'pointer', padding:4, borderRadius:6, lineHeight:0,
+          color:'var(--slate-500)', transition:'color 120ms' }}
+        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--slate-300)'}
+        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--slate-500)'}>
+        <IconSettings size={15} />
+      </button>
+      {onLogout && (
+        <button onClick={onLogout}
+          title="Log out"
+          style={{ background:'none', border:'none', cursor:'pointer', padding:'4px 6px', borderRadius:6, lineHeight:1,
+            fontSize:11, color:'var(--slate-500)', transition:'color 120ms', fontFamily:'inherit' }}
+          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--red-400)'}
+          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--slate-500)'}>
+          Out
+        </button>
+      )}
     </div>
   </aside>
 )

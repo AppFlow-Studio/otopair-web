@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useQuery } from 'convex/react'
+import { useState, useEffect, useContext } from 'react'
+import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { Button, Card, Input, Select, Toggle, StatusBadge, Modal, AuditButton, Avatar, IconStar, tableStyles, IconShop, IconExternal, IconCheck } from '../Primitives'
 import { DirectorNotesPanel } from '../DirectorNotesPanel'
 import { SectionAnchor } from '../Shell'
@@ -48,8 +49,16 @@ const BookingTimeline = ({ history, currentStatus }: { history: HistoryEntry[]; 
 }
 
 const BookingModal = ({ bookingId, onClose }: { bookingId: Id<'bookings'> | null; onClose: () => void }) => {
+  const session   = useContext(DirectorSessionCtx)
+  const actorName = session?.name ?? 'Director'
+  const actorId   = session?.userId as Id<'director_users'> | undefined
   const [auditOpen, setAuditOpen] = useState(false)
+  const logView = useMutation(api.director.logView)
   const detail = useQuery(api.director.bookingDetail, bookingId ? { id: bookingId } : 'skip')
+
+  useEffect(() => {
+    if (bookingId) logView({ entity_type: 'booking', entity_id: String(bookingId), actorName, actorId })
+  }, [String(bookingId)])
   const rawAudit = useQuery(api.audit_log.listByEntity, bookingId ? { entity_type: 'booking', entity_id: bookingId } : 'skip')
   const auditEntries = rawAudit?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
@@ -155,7 +164,7 @@ export const TabBookings = () => {
 
   return (
     <SectionAnchor id="bookings" title="Bookings" subtitle="Most recent 50 bookings across the marketplace."
-      right={<Button variant="dark" iconRight={<IconExternal size={13} />}>Export CSV</Button>}>
+>
       <div style={{ display:'flex', alignItems:'center', gap:10, padding:12, background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, marginBottom:12, flexWrap:'wrap' }}>
         <Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
           options={[{ value:'all', label:'All statuses' },{ value:'pending', label:'Pending' },{ value:'confirmed', label:'Confirmed' },{ value:'in_progress', label:'In progress' },{ value:'completed', label:'Completed' },{ value:'cancelled', label:'Cancelled' },{ value:'refunded', label:'Refunded' }]} />

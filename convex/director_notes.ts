@@ -13,14 +13,15 @@ export const list = query({
 });
 
 export const add = mutation({
-  args: { entity_type: v.string(), entity_id: v.string(), author: v.string(), text: v.string() },
-  handler: async (ctx, args) => {
+  args: { entity_type: v.string(), entity_id: v.string(), author: v.string(), actorId: v.optional(v.id("director_users")), text: v.string() },
+  handler: async (ctx, { actorId, ...args }) => {
     await ctx.db.insert("director_notes", { ...args, created_at: Date.now() });
     await ctx.db.insert("audit_log", {
       entity_type: args.entity_type,
       entity_id: args.entity_id,
       action: "note_added",
       actor: args.author,
+      actor_id: actorId,
       detail: args.text.length > 80 ? args.text.slice(0, 80) + "…" : args.text,
       created_at: Date.now(),
     });

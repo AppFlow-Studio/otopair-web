@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useContext } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { Badge, Button, Card, Select, Modal, tableStyles, IconStripe, IconCheck, IconExternal, IconTag } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 
@@ -16,12 +17,15 @@ const REFUND_REASONS: Record<string, { label: string; tone: 'red' | 'orange' | '
 }
 
 const TagRefundModal = ({ bookingId, onClose }: { bookingId: Id<'bookings'> | null; onClose: () => void }) => {
+  const session = useContext(DirectorSessionCtx)
+  const actorName = session?.name ?? 'Director'
+  const actorId   = session?.userId as Id<'director_users'> | undefined
   const [reason, setReason] = useState('')
   const tagRefund = useMutation(api.director.tagRefund)
 
   const handleSave = async () => {
     if (!bookingId || !reason) return
-    await tagRefund({ id: bookingId, reason })
+    await tagRefund({ id: bookingId, reason, actorName, actorId })
     setReason('')
     onClose()
   }

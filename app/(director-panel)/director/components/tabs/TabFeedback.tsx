@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useContext } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { Badge, Button, Input, Select, Modal, AuditButton, IconDot, IconBolt, IconSearch, IconChevronDown, IconDrag, IconX } from '../Primitives'
 import { DirectorNotesPanel } from '../DirectorNotesPanel'
 import { SectionAnchor } from '../Shell'
@@ -114,6 +115,9 @@ const FBCard = ({ fb, expanded, onClick, onDragStart, onDragEnd }: {
 }
 
 const FBModal = ({ fb, onClose }: { fb: Feedback | undefined; onClose: () => void }) => {
+  const session = useContext(DirectorSessionCtx)
+  const actorName = session?.name ?? 'Director'
+  const actorId   = session?.userId as Id<'director_users'> | undefined
   const [auditOpen,      setAuditOpen]      = useState(false)
   const updateFields  = useMutation(api.app_feedback.updateFields)
   const archiveFb     = useMutation(api.app_feedback.archive)
@@ -134,6 +138,8 @@ const FBModal = ({ fb, onClose }: { fb: Feedback | undefined; onClose: () => voi
       status: localStatus,
       category: localCategory as any,
       sentiment: localSentiment as any,
+      actorName,
+      actorId,
     })
     onClose()
   }
@@ -177,7 +183,7 @@ const FBModal = ({ fb, onClose }: { fb: Feedback | undefined; onClose: () => voi
               </div>
               <div style={{ borderTop:'1px solid var(--slate-200)', paddingTop:14, marginTop:4 }}>
                 <Button variant={fb.archived ? 'secondary' : 'danger'} style={{ width:'100%' }}
-                  onClick={async () => { await archiveFb({ id: fb._id, archived: !fb.archived }); onClose() }}>
+                  onClick={async () => { await archiveFb({ id: fb._id, archived: !fb.archived, actorName, actorId }); onClose() }}>
                   {fb.archived ? 'Restore from archive' : 'Archive feedback'}
                 </Button>
               </div>
@@ -190,6 +196,9 @@ const FBModal = ({ fb, onClose }: { fb: Feedback | undefined; onClose: () => voi
 }
 
 export const TabFeedback = () => {
+  const session = useContext(DirectorSessionCtx)
+  const actorName = session?.name ?? 'Director'
+  const actorId   = session?.userId as Id<'director_users'> | undefined
   const [expandedId,       setExpandedId]       = useState<string | null>(null)
   const [searchQ,          setSearchQ]          = useState('')
   const [categoryFilter,   setCategoryFilter]   = useState('all')
@@ -206,7 +215,7 @@ export const TabFeedback = () => {
   const grouped      = useQuery(api.app_feedback.listByStatus, { includeArchived: viewMode === 'archived' })
   const updateStatus = useMutation(api.app_feedback.updateStatus)
 
-  const allFb     = grouped ? Object.values(grouped).flat() : []
+  const allFb: Feedback[]     = grouped ? (Object.values(grouped).flat() as Feedback[]) : []
   const expanded  = allFb.find(f => f._id === expandedId)
   const hasFilter = categoryFilter !== 'all' || sentimentFilter !== 'all' || !!searchQ
 
@@ -221,7 +230,7 @@ export const TabFeedback = () => {
     if (!draggingId) return
     const fb = allFb.find(f => f._id === draggingId)
     if (fb && fb.status !== targetColId) {
-      updateStatus({ id: fb._id, status: targetColId })
+      updateStatus({ id: fb._id, status: targetColId, actorName, actorId })
     }
     setDraggingId(null)
     setDragOverCol(null)
@@ -271,7 +280,7 @@ export const TabFeedback = () => {
       ) : (
         <div style={{ flex:1, minHeight:0, display:'grid', gridTemplateColumns:'repeat(7, minmax(0, 1fr))', gap:8, paddingBottom:16 }}>
           {FB_COLUMNS.map(col => {
-            const items = filterItems(grouped[col.id] ?? [])
+            const items = filterItems((grouped[col.id] ?? []) as Feedback[])
             const isOver = dragOverCol === col.id && !!draggingId
             return (
               <div key={col.id}

@@ -1,10 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
+import type { Id } from '@/convex/_generated/dataModel'
 import type { AuditEntry } from '../../data'
-import { Badge, Button, Input, Select, Modal, Avatar, GlobalAuditTable, auditMeta, IconSearch, IconExternal, IconBolt } from '../Primitives'
+import { Badge, Button, Input, Select, Modal, Avatar, StatusBadge, GlobalAuditTable, auditMeta, IconSearch, IconExternal, IconBolt } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { gotoEntity } from '../directorNav'
 
@@ -19,6 +20,9 @@ const ACTION_LABELS: Record<string, string> = {
   email_sent:       'Email sent',
   flag_raised:      'Flag raised',
   viewed:           'Viewed (PII)',
+  view:             'Viewed',
+  login:            'Login',
+  logout:           'Logout',
 }
 
 const ENTITY_TAB: Record<string, string> = {
@@ -35,6 +39,65 @@ const ENTITY_LABEL: Record<string, string> = {
   shop:     'Shop',
   user:     'User',
   booking:  'Booking',
+}
+
+const EntityPreview = ({ entityType, entityId }: { entityType: string; entityId: string }) => {
+  const shop     = useQuery(api.director.shopDetail,          entityType === 'shop'     ? { id: entityId as Id<'shops'> }           : 'skip')
+  const user     = useQuery(api.director.userDetail,          entityType === 'user'     ? { id: entityId as Id<'users'> }           : 'skip')
+  const booking  = useQuery(api.director.bookingDetail,       entityType === 'booking'  ? { id: entityId as Id<'bookings'> }        : 'skip')
+  const bug      = useQuery(api.bugs.getById,                 entityType === 'bug'      ? { id: entityId as Id<'bugs'> }            : 'skip')
+  const feedback = useQuery(api.app_feedback.getById,         entityType === 'feedback' ? { id: entityId as Id<'app_feedback'> }    : 'skip')
+  const director = useQuery(api.director_auth.getUserPreview, entityType === 'director' ? { id: entityId as Id<'director_users'> }  : 'skip')
+
+  const row = (label: string, value: string | undefined | null, mono?: boolean) => value ? (
+    <div style={{ display:'flex', gap:8, fontSize:12, lineHeight:1.5, padding:'3px 0', borderBottom:'1px solid var(--slate-100)' }}>
+      <span style={{ width:96, flexShrink:0, color:'var(--slate-500)', fontWeight:500 }}>{label}</span>
+      <span style={{ color:'var(--slate-800)', wordBreak:'break-all', ...(mono ? { fontFamily:'monospace', color:'var(--blue-700)' } : {}) }}>{value}</span>
+    </div>
+  ) : null
+
+  const wrap = (label: string, content: ReactNode) => (
+    <div style={{ marginBottom:18 }}>
+      <div style={{ fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:8 }}>
+        {label} preview
+      </div>
+      <div style={{ background:'var(--slate-25)', border:'1px solid var(--slate-200)', borderRadius:8, padding:'10px 12px' }}>
+        {content}
+      </div>
+    </div>
+  )
+
+  if (entityType === 'shop') {
+    if (shop === undefined) return wrap('Shop', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
+    if (!shop) return wrap('Shop', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
+    return wrap('Shop', <>{row('Name', shop.name)}{row('Status', `${shop.isActive ? 'Active' : 'Inactive'}${shop.isVerified ? ' · Verified' : ''}`)}{row('City', shop.city)}{row('Phone', shop.phone)}</>)
+  }
+  if (entityType === 'user') {
+    if (user === undefined) return wrap('User', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
+    if (!user) return wrap('User', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
+    return wrap('User', <>{row('Name', user.name)}{row('Email', user.email)}{row('Phone', user.phone)}{row('Joined', user.joined)}{row('Bookings', String(user.bookings))}</>)
+  }
+  if (entityType === 'booking') {
+    if (booking === undefined) return wrap('Booking', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
+    if (!booking) return wrap('Booking', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
+    return wrap('Booking', <>{row('Services', booking.services.join(', '))}{row('Shop', booking.shop)}{row('User', booking.user)}{row('Date', `${booking.scheduled} ${booking.time}`.trim())}{row('Status', booking.status)}{row('Total', booking.total ? `$${booking.total.toFixed(2)}` : undefined)}</>)
+  }
+  if (entityType === 'bug') {
+    if (bug === undefined) return wrap('Bug', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
+    if (!bug) return wrap('Bug', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
+    return wrap('Bug', <>{row('Title', bug.title)}{row('Source', bug.source)}{row('Status', bug.status)}{row('Version', bug.version)}</>)
+  }
+  if (entityType === 'feedback') {
+    if (feedback === undefined) return wrap('Feedback', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
+    if (!feedback) return wrap('Feedback', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
+    return wrap('Feedback', <>{row('Title', feedback.title)}{row('Category', feedback.category)}{row('Sentiment', feedback.sentiment)}{row('Source', feedback.source)}</>)
+  }
+  if (entityType === 'director') {
+    if (director === undefined) return wrap('Director account', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
+    if (!director) return wrap('Director account', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
+    return wrap('Director account', <>{row('Name', director.name)}{row('Role', director.role)}</>)
+  }
+  return null
 }
 
 const AuditDetailModal = ({ entry, onClose }: { entry: AuditEntry | null; onClose: () => void }) => {
@@ -55,12 +118,10 @@ const AuditDetailModal = ({ entry, onClose }: { entry: AuditEntry | null; onClos
     { label: 'Timestamp', value: entry.timestamp, mono: true },
     { label: 'Actor',     value: entry.actor },
     { label: 'Detail',    value: entry.detail || '—' },
-    ...(entry.entityType ? [{ label: 'Entity type', value: entry.entityType }] : []),
-    ...(entry.entityId   ? [{ label: 'Entity ID',   value: entry.entityId, mono: true }] : []),
   ]
 
   return (
-    <Modal open={!!entry} onClose={onClose} width={540}
+    <Modal open={!!entry} onClose={onClose} width={560}
       title="Audit entry"
       footer={<>
         <Button onClick={onClose}>Close</Button>
@@ -87,6 +148,10 @@ const AuditDetailModal = ({ entry, onClose }: { entry: AuditEntry | null; onClos
             </div>
           </div>
         </div>
+
+        {entry.entityType && entry.entityId && (
+          <EntityPreview entityType={entry.entityType} entityId={entry.entityId} />
+        )}
 
         {fields.map(f => (
           <div key={f.label} style={{ marginBottom:14 }}>
@@ -133,7 +198,7 @@ export const TabAudit = () => {
 
   return (
     <SectionAnchor id="audit" title="Audit log" subtitle="Every admin action, system event, and PII access across the platform — immutable."
-      right={<Button variant="dark" iconRight={<IconExternal size={13} />}>Export CSV</Button>}>
+>
       <div style={{ display:'flex', alignItems:'center', gap:10, padding:12, background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, marginBottom:12, flexWrap:'wrap' }}>
         <Input icon={<IconSearch size={14} />} value={q} onChange={e => setQ(e.target.value)} placeholder="Search actions, entities, actors…" style={{ width:320 }} />
         <Select value={actionFilter} onChange={e => setActionFilter(e.target.value)}

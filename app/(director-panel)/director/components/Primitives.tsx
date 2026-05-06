@@ -91,8 +91,8 @@ export const StatusBadge = ({ status }: { status: string }) => {
 type BtnVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'dark'
 type BtnSize = 'sm' | 'md' | 'lg'
 
-export const Button = ({ variant = 'secondary', size = 'md', children, icon, iconRight, onClick, style, type = 'button' }:
-  { variant?: BtnVariant; size?: BtnSize; children?: ReactNode; icon?: ReactNode; iconRight?: ReactNode; onClick?: () => void; style?: CSSProperties; type?: 'button' | 'submit' }) => {
+export const Button = ({ variant = 'secondary', size = 'md', children, icon, iconRight, onClick, style, type = 'button', disabled }:
+  { variant?: BtnVariant; size?: BtnSize; children?: ReactNode; icon?: ReactNode; iconRight?: ReactNode; onClick?: () => void; style?: CSSProperties; type?: 'button' | 'submit'; disabled?: boolean }) => {
   const sizes = { sm:{p:'5px 10px',fs:12,gap:5,h:28}, md:{p:'7px 13px',fs:13,gap:6,h:34}, lg:{p:'10px 16px',fs:14,gap:8,h:40} }
   const variants: Record<BtnVariant, { bg:string;fg:string;bd:string;hov:string }> = {
     primary:  { bg:'var(--blue-600)', fg:'#fff',              bd:'var(--blue-600)',  hov:'var(--blue-700)' },
@@ -104,11 +104,13 @@ export const Button = ({ variant = 'secondary', size = 'md', children, icon, ico
   const [hov, setHov] = useState(false)
   const s = sizes[size]; const v = variants[variant]
   return (
-    <button type={type} onClick={onClick} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+    <button type={type} onClick={onClick} disabled={disabled}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
       style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', gap:s.gap,
-        padding:s.p, fontSize:s.fs, height:s.h, background:hov ? v.hov : v.bg, color:v.fg,
+        padding:s.p, fontSize:s.fs, height:s.h, background:hov && !disabled ? v.hov : v.bg, color:v.fg,
         border:`1px solid ${v.bd}`, borderRadius:8, fontWeight:500, transition:'background 120ms',
-        whiteSpace:'nowrap', ...style }}>
+        whiteSpace:'nowrap', cursor:disabled ? 'not-allowed' : 'pointer', opacity:disabled ? 0.6 : 1,
+        ...style }}>
       {icon}{children}{iconRight}
     </button>
   )

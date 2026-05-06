@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useQuery } from 'convex/react'
+import { api } from '@/convex/_generated/api'
 import { Sidebar } from './components/Shell'
 import { TabOverview }  from './components/tabs/TabOverview'
 import { TabShops }     from './components/tabs/TabShops'
@@ -32,6 +34,7 @@ function getHashTab(): string {
 
 export const AdminPanel = () => {
   const [active, setActive] = useState('overview')
+  const counts = useQuery(api.director.sidebarCounts)
 
   useEffect(() => {
     setActive(getHashTab())
@@ -49,7 +52,7 @@ export const AdminPanel = () => {
 
   return (
     <div style={{ display:'flex', height:'100vh', background:'var(--slate-50)', fontFamily:"'Inter', system-ui, sans-serif" }}>
-      <Sidebar active={active} onNavigate={navigate} />
+      <Sidebar active={active} onNavigate={navigate} counts={counts ?? undefined} />
       <main style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
         <Tab />
       </main>

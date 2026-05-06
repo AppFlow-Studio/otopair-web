@@ -198,13 +198,18 @@ const SystemBadge = ({ size = 28 }: { size?: number }) => (
   </div>
 )
 
-export const NotesPanel = ({ initialNotes = [], placeholder = 'Add an internal note…', label = 'Notes' }:
-  { initialNotes?: Note[]; placeholder?: string; label?: string }) => {
-  const [notes, setNotes] = useState<Note[]>(initialNotes)
+export const NotesPanel = ({ initialNotes = [], placeholder = 'Add an internal note…', label = 'Notes', notes: controlledNotes, onAdd }:
+  { initialNotes?: Note[]; placeholder?: string; label?: string; notes?: Note[]; onAdd?: (text: string) => void }) => {
+  const [localNotes, setLocalNotes] = useState<Note[]>(initialNotes)
   const [draft, setDraft] = useState('')
+  const notes = controlledNotes ?? localNotes
   const submit = () => {
     if (!draft.trim()) return
-    setNotes([{ author:'Temur AB', when:'just now', text:draft.trim() }, ...notes])
+    if (onAdd) {
+      onAdd(draft.trim())
+    } else {
+      setLocalNotes(prev => [...prev, { author:'Director', when:'just now', text:draft.trim() }])
+    }
     setDraft('')
   }
   return (
@@ -253,7 +258,7 @@ export const NotesPanel = ({ initialNotes = [], placeholder = 'Add an internal n
 }
 
 /* ---------- AUDIT LOG ---------- */
-const auditMeta = (a: string) => {
+export const auditMeta = (a: string) => {
   const m: Record<string, { tone: Tone; label: string; Icon: (p: IconProps) => JSX.Element }> = {
     status_change:    { tone:'blue',   label:'Status change',    Icon: IconRefresh },
     refund_issued:    { tone:'orange', label:'Refund issued',    Icon: IconCard },
@@ -273,42 +278,48 @@ const auditMeta = (a: string) => {
   return m[a] || { tone:'slate' as Tone, label:a, Icon: IconClock }
 }
 
-export const AuditLogCompact = ({ entries }: { entries: AuditEntry[] }) => (
+export const AuditLogCompact = ({ entries }: { entries?: AuditEntry[] }) => (
   <div style={{ display:'flex', flexDirection:'column', gap:0 }}>
-    {entries.map((e, i) => {
-      const m = auditMeta(e.action)
-      const Ic = m.Icon
-      const isSystem = e.actor === 'system'
-      return (
-        <div key={i} style={{ display:'grid', gridTemplateColumns:'24px 1fr', gap:12, padding:'12px 0',
-          borderBottom:i < entries.length - 1 ? '1px solid var(--slate-100)' : 'none' }}>
-          <div style={{ position:'relative' }}>
-            <span style={{ width:24, height:24, borderRadius:6, background:`var(--${m.tone}-50)`, color:`var(--${m.tone}-700)`,
-              display:'inline-flex', alignItems:'center', justifyContent:'center' }}>
-              <Ic size={12} />
-            </span>
-            {i < entries.length - 1 && <span style={{ position:'absolute', left:11, top:26, bottom:-12, width:2, background:'var(--slate-100)' }} />}
-          </div>
-          <div style={{ minWidth:0 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4, flexWrap:'wrap' }}>
-              <Badge tone={m.tone}>{m.label}</Badge>
-              <span className="mono" style={{ fontSize:11, color:'var(--slate-500)' }}>{e.timestamp}</span>
-            </div>
-            <div style={{ fontSize:13, color:'var(--slate-700)', lineHeight:1.5, marginBottom:6 }}>{e.detail}</div>
-            <div style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:11, color:'var(--slate-600)' }}>
-              {isSystem
-                ? <><span style={{ width:18, height:18, borderRadius:4, background:'var(--slate-900)', color:'#fff', display:'inline-flex', alignItems:'center', justifyContent:'center' }}><IconBolt size={10} /></span><span>System</span></>
-                : <><Avatar name={e.actor} size={18} /><span>{e.actor}</span></>}
-            </div>
-          </div>
-        </div>
-      )
-    })}
-    {entries.length === 0 && <div style={{ fontSize:12, color:'var(--slate-400)', fontStyle:'italic', padding:'12px 0' }}>No audit events yet.</div>}
+    {entries === undefined
+      ? <div style={{ fontSize:12, color:'var(--slate-400)', fontStyle:'italic', padding:'12px 0' }}>Loading…</div>
+      : entries.length === 0
+        ? <div style={{ fontSize:12, color:'var(--slate-400)', fontStyle:'italic', padding:'12px 0' }}>No audit events yet.</div>
+        : entries.map((e, i) => {
+            const m = auditMeta(e.action)
+            const Ic = m.Icon
+            const isSystem = e.actor === 'system'
+            return (
+              <div key={i} style={{ display:'grid', gridTemplateColumns:'24px 1fr', gap:12, padding:'12px 0',
+                borderBottom:i < entries.length - 1 ? '1px solid var(--slate-100)' : 'none' }}>
+                <div style={{ position:'relative' }}>
+                  <span style={{ width:24, height:24, borderRadius:6, background:`var(--${m.tone}-50)`, color:`var(--${m.tone}-700)`,
+                    display:'inline-flex', alignItems:'center', justifyContent:'center' }}>
+                    <Ic size={12} />
+                  </span>
+                  {i < entries.length - 1 && <span style={{ position:'absolute', left:11, top:26, bottom:-12, width:2, background:'var(--slate-100)' }} />}
+                </div>
+                <div style={{ minWidth:0 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4, flexWrap:'wrap' }}>
+                    <Badge tone={m.tone}>{m.label}</Badge>
+                    <span className="mono" style={{ fontSize:11, color:'var(--slate-500)' }}>{e.timestamp}</span>
+                  </div>
+                  <div style={{ fontSize:13, color:'var(--slate-700)', lineHeight:1.5, marginBottom:6 }}>{e.detail}</div>
+                  <div style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:11, color:'var(--slate-600)' }}>
+                    {isSystem
+                      ? <><span style={{ width:18, height:18, borderRadius:4, background:'var(--slate-900)', color:'#fff', display:'inline-flex', alignItems:'center', justifyContent:'center' }}><IconBolt size={10} /></span><span>System</span></>
+                      : <><Avatar name={e.actor} size={18} /><span>{e.actor}</span></>}
+                  </div>
+                </div>
+              </div>
+            )
+          })
+    }
   </div>
 )
 
-export const GlobalAuditTable = ({ entries }: { entries: AuditEntry[] }) => (
+export const GlobalAuditTable = ({ entries, loading, onRowClick }: {
+  entries: AuditEntry[]; loading?: boolean; onRowClick?: (entry: AuditEntry) => void
+}) => (
   <div style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:8, overflow:'hidden' }}>
     <div style={{ display:'grid', gridTemplateColumns:'150px 28px 150px 1fr 200px 130px', alignItems:'center', gap:12,
       padding:'10px 14px', background:'var(--slate-25)', borderBottom:'1px solid var(--slate-200)',
@@ -316,27 +327,37 @@ export const GlobalAuditTable = ({ entries }: { entries: AuditEntry[] }) => (
       <span>Timestamp</span><span></span><span>Action</span><span>Detail</span><span>Entity</span>
       <span style={{ justifySelf:'flex-end' }}>Actor</span>
     </div>
-    {entries.map((e, i) => {
-      const m = auditMeta(e.action)
-      const Ic = m.Icon
-      const isSystem = e.actor === 'system'
-      return (
-        <div key={i} style={{ display:'grid', gridTemplateColumns:'150px 28px 150px 1fr 200px 130px', alignItems:'center', gap:12,
-          padding:'10px 14px', borderBottom:i < entries.length - 1 ? '1px solid var(--slate-100)' : 'none', fontSize:12 }}>
-          <span className="mono" style={{ color:'var(--slate-500)', fontSize:11 }}>{e.timestamp}</span>
-          <span style={{ width:22, height:22, borderRadius:6, background:`var(--${m.tone}-50)`, color:`var(--${m.tone}-700)`,
-            display:'inline-flex', alignItems:'center', justifyContent:'center' }}><Ic size={12} /></span>
-          <Badge tone={m.tone}>{m.label}</Badge>
-          <span style={{ color:'var(--slate-700)' }}>{e.detail}</span>
-          <span className="mono" style={{ fontSize:11, color:'var(--blue-700)' }}>{e.entity}</span>
-          <span style={{ display:'inline-flex', alignItems:'center', gap:6, color:'var(--slate-600)', fontSize:11, justifySelf:'flex-end' }}>
-            {isSystem
-              ? <><span style={{ width:18, height:18, borderRadius:4, background:'var(--slate-900)', color:'#fff', display:'inline-flex', alignItems:'center', justifyContent:'center' }}><IconBolt size={10} /></span><span>System</span></>
-              : <><Avatar name={e.actor} size={18} /><span>{e.actor.split(' ')[0]}</span></>}
-          </span>
-        </div>
-      )
-    })}
+    {loading
+      ? <div style={{ padding:'24px 14px', textAlign:'center', fontSize:12, color:'var(--slate-400)', fontStyle:'italic' }}>Loading…</div>
+      : entries.length === 0
+        ? <div style={{ padding:'24px 14px', textAlign:'center', fontSize:12, color:'var(--slate-400)', fontStyle:'italic' }}>No audit entries found.</div>
+        : entries.map((e, i) => {
+            const m = auditMeta(e.action)
+            const Ic = m.Icon
+            const isSystem = e.actor === 'system'
+            return (
+              <div key={i} onClick={() => onRowClick?.(e)}
+                style={{ display:'grid', gridTemplateColumns:'150px 28px 150px 1fr 200px 130px', alignItems:'center', gap:12,
+                  padding:'10px 14px', borderBottom:i < entries.length - 1 ? '1px solid var(--slate-100)' : 'none',
+                  fontSize:12, cursor: onRowClick ? 'pointer' : 'default',
+                  transition:'background 80ms' }}
+                onMouseEnter={e2 => { if (onRowClick) (e2.currentTarget as HTMLElement).style.background = 'var(--slate-25)' }}
+                onMouseLeave={e2 => { (e2.currentTarget as HTMLElement).style.background = '' }}>
+                <span className="mono" style={{ color:'var(--slate-500)', fontSize:11 }}>{e.timestamp}</span>
+                <span style={{ width:22, height:22, borderRadius:6, background:`var(--${m.tone}-50)`, color:`var(--${m.tone}-700)`,
+                  display:'inline-flex', alignItems:'center', justifyContent:'center' }}><Ic size={12} /></span>
+                <Badge tone={m.tone}>{m.label}</Badge>
+                <span style={{ color:'var(--slate-700)' }}>{e.detail}</span>
+                <span className="mono" style={{ fontSize:11, color:'var(--blue-700)' }}>{e.entity}</span>
+                <span style={{ display:'inline-flex', alignItems:'center', gap:6, color:'var(--slate-600)', fontSize:11, justifySelf:'flex-end' }}>
+                  {isSystem
+                    ? <><span style={{ width:18, height:18, borderRadius:4, background:'var(--slate-900)', color:'#fff', display:'inline-flex', alignItems:'center', justifyContent:'center' }}><IconBolt size={10} /></span><span>System</span></>
+                    : <><Avatar name={e.actor} size={18} /><span>{e.actor.split(' ')[0]}</span></>}
+                </span>
+              </div>
+            )
+          })
+    }
   </div>
 )
 
@@ -358,7 +379,7 @@ export const AuditButton = ({ onClick, count }: { onClick: () => void; count?: n
 /* ---------- MODAL ---------- */
 type AuditDrawerProps = { open: boolean; onClose: () => void; title?: string; subtitle?: string; entries?: AuditEntry[] }
 
-const ModalAuditDrawerBody = ({ onClose, title = 'Audit log', subtitle, entries = [] }: AuditDrawerProps) => (
+const ModalAuditDrawerBody = ({ onClose, title = 'Audit log', subtitle, entries }: AuditDrawerProps) => (
   <>
     <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--slate-200)', display:'flex', alignItems:'flex-start',
       justifyContent:'space-between', gap:12, background:'var(--slate-25)', borderRadius:'0 12px 0 0' }}>

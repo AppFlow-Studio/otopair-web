@@ -64,6 +64,8 @@ export interface AuditEntry {
   actor: string
   detail: string
   entity?: string
+  entityType?: string
+  entityId?: string
 }
 
 export interface Note {

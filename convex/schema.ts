@@ -1243,6 +1243,7 @@ export default defineSchema({
     previous_mechanic_id: v.optional(v.id("mechanics")),
     previous_status: v.optional(v.string()),
     reschedule_proposed_at: v.optional(v.number()),
+    refund_reason: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])
@@ -1619,4 +1620,72 @@ export default defineSchema({
   }).index("by_tire_model", ["tire_model_id"])
     .index("by_source", ["source"])
     .index("by_tire_model_source", ["tire_model_id", "source"]),
+
+  // ─── Director Panel ───────────────────────────────────────────────────────
+
+  bugs: defineTable({
+    title: v.string(),
+    source: v.union(
+      v.literal("consumer_ios"),
+      v.literal("consumer_android"),
+      v.literal("shop_web"),
+      v.literal("manual"),
+    ),
+    status: v.string(), // new | triaged | assigned | in_progress | done | verified
+    version: v.optional(v.string()),
+    device: v.optional(v.string()),
+    assignee: v.optional(v.string()),
+    description: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+    archived: v.optional(v.boolean()),
+  })
+    .index("by_status", ["status"])
+    .index("by_created_at", ["created_at"]),
+
+  app_feedback: defineTable({
+    title: v.string(),
+    category: v.union(
+      v.literal("feature_request"),
+      v.literal("ux"),
+      v.literal("shop_quality"),
+      v.literal("general"),
+      v.literal("praise"),
+    ),
+    sentiment: v.union(
+      v.literal("positive"),
+      v.literal("neutral"),
+      v.literal("negative"),
+    ),
+    source: v.string(), // consumer_ios | consumer_android | rating_comment | email | manual
+    status: v.string(), // new | reviewed | triaged | planned | done | wontfix | duplicate
+    auto_ingested: v.optional(v.boolean()),
+    rating_shop: v.optional(v.string()),
+    description: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+    archived: v.optional(v.boolean()),
+  })
+    .index("by_status", ["status"])
+    .index("by_category", ["category"])
+    .index("by_created_at", ["created_at"]),
+
+  director_notes: defineTable({
+    entity_type: v.string(),
+    entity_id: v.string(),
+    author: v.string(),
+    text: v.string(),
+    created_at: v.number(),
+  }).index("by_entity", ["entity_type", "entity_id"]),
+
+  audit_log: defineTable({
+    entity_type: v.string(),
+    entity_id: v.string(),
+    action: v.string(),
+    actor: v.string(),
+    detail: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_entity", ["entity_type", "entity_id"])
+    .index("by_created_at", ["created_at"]),
 });

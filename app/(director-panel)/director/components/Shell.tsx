@@ -8,33 +8,32 @@ const NAV_ITEMS = [
   { id:'shops',     label:'Shops',     Icon:IconShop },
   { id:'users',     label:'Users',     Icon:IconUsers },
   { id:'bookings',  label:'Bookings',  Icon:IconCalendar },
-  { id:'bugs',      label:'Bugs',      Icon:IconBug },
-  { id:'feedback',  label:'Feedback',  Icon:IconMessage },
-  { id:'stripe',    label:'Stripe',    Icon:IconStripe },
+  { id:'bugs',      label:'Bugs',      Icon:IconBug,     badge:'bugs' },
+  { id:'feedback',  label:'Feedback',  Icon:IconMessage, badge:'feedback' },
+  { id:'stripe',    label:'Stripe',    Icon:IconStripe,  badge:'stripe' },
   { id:'audit',     label:'Audit log', Icon:IconAudit },
 ]
 
-export const Sidebar = ({ active, onNavigate }: { active: string; onNavigate: (id: string) => void }) => (
+type Counts = { bugs?: number; feedback?: number; stripe?: number }
+
+export const Sidebar = ({ active, onNavigate, counts }: { active: string; onNavigate: (id: string) => void; counts?: Counts }) => (
   <aside style={{ width:232, flexShrink:0, background:'var(--slate-900)', color:'var(--slate-300)',
     display:'flex', flexDirection:'column', position:'sticky', top:0, height:'100vh',
     borderRight:'1px solid var(--slate-800)' }}>
-    {/* Brand */}
     <div style={{ padding:'20px 18px 18px', display:'flex', alignItems:'center', gap:10 }}>
       <span style={{ width:28, height:28, borderRadius:8, background:'var(--blue-600)', color:'#fff',
         display:'inline-flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:14 }}>O</span>
       <div>
         <div style={{ color:'#fff', fontWeight:600, fontSize:14, letterSpacing:-0.1 }}>Otopair</div>
-        <div style={{ fontSize:10, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.08em', marginTop:1 }}>Admin · Internal</div>
+        <div style={{ fontSize:10, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.08em', marginTop:1 }}>Director · Internal</div>
       </div>
     </div>
-    {/* Search */}
     <div style={{ margin:'0 14px 14px', padding:'6px 10px', background:'var(--slate-800)', borderRadius:8,
       fontSize:12, color:'var(--slate-400)', display:'flex', alignItems:'center', gap:8 }}>
       <IconSearch size={13} />
       <span style={{ flex:1 }}>Quick search…</span>
       <span className="mono" style={{ fontSize:10, padding:'1px 5px', borderRadius:4, background:'var(--slate-700)', color:'var(--slate-300)' }}>⌘K</span>
     </div>
-    {/* Nav */}
     <nav style={{ padding:'0 10px', flex:1, overflowY:'auto' }}>
       <div style={{ fontSize:10, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.1em', padding:'0 10px 8px' }}>
         Control plane
@@ -42,6 +41,8 @@ export const Sidebar = ({ active, onNavigate }: { active: string; onNavigate: (i
       {NAV_ITEMS.map(item => {
         const Ic = item.Icon
         const isActive = active === item.id
+        const badgeVal = item.badge ? counts?.[item.badge as keyof Counts] : undefined
+        const isStripe = item.badge === 'stripe'
         return (
           <a key={item.id} href={`#${item.id}`} onClick={e => { e.preventDefault(); onNavigate(item.id) }}
             style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 10px', margin:'1px 0',
@@ -51,14 +52,15 @@ export const Sidebar = ({ active, onNavigate }: { active: string; onNavigate: (i
             {isActive && <span style={{ position:'absolute', left:-10, top:6, bottom:6, width:3, background:'var(--blue-500)', borderRadius:'0 3px 3px 0' }} />}
             <Ic size={16} stroke={isActive ? 2 : 1.75} style={{ color:isActive ? 'var(--blue-500)' : 'var(--slate-400)' }} />
             <span style={{ flex:1 }}>{item.label}</span>
-            {item.id === 'bugs'     && <span style={{ fontSize:11, color:'var(--slate-400)' }} className="mono">23</span>}
-            {item.id === 'feedback' && <span style={{ fontSize:11, color:'var(--slate-400)' }} className="mono">41</span>}
-            {item.id === 'stripe'   && <span style={{ fontSize:10, padding:'1px 5px', borderRadius:4, background:'#7C2D12', color:'#FED7AA' }} className="mono">5</span>}
+            {badgeVal !== undefined && badgeVal > 0 && (
+              isStripe
+                ? <span style={{ fontSize:10, padding:'1px 5px', borderRadius:4, background:'#7C2D12', color:'#FED7AA' }} className="mono">{badgeVal}</span>
+                : <span style={{ fontSize:11, color:'var(--slate-400)' }} className="mono">{badgeVal}</span>
+            )}
           </a>
         )
       })}
     </nav>
-    {/* User footer */}
     <div style={{ padding:'12px 14px', borderTop:'1px solid var(--slate-800)', display:'flex', alignItems:'center', gap:10 }}>
       <Avatar name="Temur AB" size={28} />
       <div style={{ flex:1, minWidth:0 }}>

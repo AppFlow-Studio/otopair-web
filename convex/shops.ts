@@ -8,6 +8,13 @@ import {
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
 const TERMINAL_BOOKING_STATUSES = new Set(["completed", "cancelled", "no_show"]);
+const DEFAULT_NO_SHOW_THRESHOLD_MINUTES = 30;
+const DEFAULT_OVERRUN_EXTENSION_PERCENT = 25;
+const DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES = 15;
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
 
 type StripeConnectShopFields = {
   stripe_charges_enabled?: boolean;
@@ -342,6 +349,47 @@ export const getMyShops = query({
   },
 });
 
+export const updateSchedulingSettings = mutation({
+  args: {
+    noShowThresholdMinutes: v.number(),
+    overrunDefaultExtensionPercent: v.number(),
+    overrunDefaultExtensionFloorMinutes: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Only shop owners can update scheduling settings.");
+    }
+
+    const noShowThresholdMinutes = clampNumber(
+      Math.round(args.noShowThresholdMinutes),
+      15,
+      60
+    );
+    const overrunDefaultExtensionPercent = clampNumber(
+      Math.round(args.overrunDefaultExtensionPercent),
+      1,
+      100
+    );
+    const overrunDefaultExtensionFloorMinutes = Math.max(
+      1,
+      Math.round(args.overrunDefaultExtensionFloorMinutes)
+    );
+
+    await ctx.db.patch(primary.shop._id, {
+      no_show_threshold_minutes: noShowThresholdMinutes,
+      overrun_default_extension_percent: overrunDefaultExtensionPercent,
+      overrun_default_extension_floor_minutes: overrunDefaultExtensionFloorMinutes,
+    });
+
+    return primary.shop._id;
+  },
+});
+
 export const getMyPortalAccess = query({
   args: {},
   handler: async (ctx) => {
@@ -597,6 +645,14 @@ export const getMyOnboardingData = query({
             stripeOnboardingCompletedAt: shop.stripe_onboarding_completed_at ?? null,
             stripeConnectReady: isStripeConnectReadyForShop(shop),
             onboardingComplete: shop.onboarding_complete === true,
+            noShowThresholdMinutes:
+              shop.no_show_threshold_minutes ?? DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
+            overrunDefaultExtensionPercent:
+              shop.overrun_default_extension_percent ??
+              DEFAULT_OVERRUN_EXTENSION_PERCENT,
+            overrunDefaultExtensionFloorMinutes:
+              shop.overrun_default_extension_floor_minutes ??
+              DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
           }
         : null,
       hours: hours

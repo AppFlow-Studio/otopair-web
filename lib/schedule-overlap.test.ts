@@ -54,6 +54,27 @@ test("getMechanicAssignmentConflict detects booking overlaps", () => {
   assert.equal(conflict, "booking");
 });
 
+test("overlapsMechanicBooking ignores no-show bookings", () => {
+  const hasOverlap = overlapsMechanicBooking(
+    "mech-2",
+    "2026-04-02",
+    "09:00",
+    "10:00",
+    [
+      {
+        _id: "booking-2",
+        scheduledDate: "2026-04-02",
+        scheduledTime: "09:30",
+        estimatedMinutes: 60,
+        status: "no_show",
+        mechanicId: "mech-2",
+      },
+    ]
+  );
+
+  assert.equal(hasOverlap, false);
+});
+
 test("getMechanicAssignmentConflict detects blocked-slot overlaps", () => {
   const conflict = getMechanicAssignmentConflict(
     {

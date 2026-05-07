@@ -104,6 +104,10 @@ function getScheduleStatusLabel(status: string): string {
       return "Pending";
     case "in_progress":
       return "In Progress";
+    case "vehicle_at_shop":
+      return "Vehicle Here";
+    case "no_show":
+      return "No Show";
     case "pending_customer_acceptance":
       return "Pending Customer";
     default:
@@ -344,13 +348,14 @@ function OwnerDashboardPage({
       if (selectedJob && !jobDetailRef.current?.hasOpenModal()) {
         const s = selectedJob.status;
         const isPending = s === "pending" || s === "pending_shop_acceptance";
-        const isActive = s === "confirmed" || s === "in_progress";
+        const canCancel = s === "confirmed" || s === "vehicle_at_shop" || s === "in_progress";
         if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
         if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
-        if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
-        if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
+        if (e.key === "h" && s === "confirmed") { e.preventDefault(); jobDetailRef.current?.markVehicleHere(); return; }
+        if (e.key === "r" && s === "in_progress") { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
+        if (e.key === "c" && canCancel) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
         if (e.key === "a" && !isPending) { e.preventDefault(); jobDetailRef.current?.openAssignDropdown(); return; }
-        if (e.key === "t" && s === "confirmed" && selectedJob.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
+        if (e.key === "t" && s === "vehicle_at_shop" && selectedJob.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
         if (e.key === "s" && !isPending) { e.preventDefault(); jobDetailRef.current?.assignMechanic(); return; }
       }
     }
@@ -1025,6 +1030,7 @@ function OwnerDashboardPage({
       <LateStartReviewDialog
         review={selectedLateStartReview}
         mechanics={mechanics}
+        shopHours={[]}
         error={lateStartReviewError}
         isSubmitting={isSubmittingLateStartReview}
         onClose={() => {

@@ -1,7 +1,7 @@
 'use client'
 
 import { ReactNode, CSSProperties } from 'react'
-import { IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe, IconAudit, IconSearch, IconSettings, Avatar } from './Primitives'
+import { IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe, IconAudit, IconSearch, IconSettings, IconCar, Avatar } from './Primitives'
 
 const NAV_ITEMS = [
   { id:'overview',  label:'Overview',  Icon:IconHome },
@@ -11,10 +11,11 @@ const NAV_ITEMS = [
   { id:'bugs',      label:'Bugs',      Icon:IconBug,     badge:'bugs' },
   { id:'feedback',  label:'Feedback',  Icon:IconMessage, badge:'feedback' },
   { id:'stripe',    label:'Stripe',    Icon:IconStripe,  badge:'stripe' },
-  { id:'audit',     label:'Audit log', Icon:IconAudit },
+  { id:'audit',         label:'Audit log',       Icon:IconAudit },
+  { id:'mechanicEdits', label:'Mechanic Edits',  Icon:IconCar,  badge:'mechanicEdits' },
 ]
 
-type Counts = { bugs?: number; feedback?: number; stripe?: number }
+type Counts = { bugs?: number; feedback?: number; stripe?: number; mechanicEdits?: number }
 type CurrentUser = { name: string; role: string }
 
 export const Sidebar = ({ active, onNavigate, counts, currentUser, onLogout }: {

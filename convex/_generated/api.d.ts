@@ -26,6 +26,7 @@ import type * as conversion_funnels from "../conversion_funnels.js";
 import type * as crons from "../crons.js";
 import type * as director from "../director.js";
 import type * as director_auth from "../director_auth.js";
+import type * as director_mechanic_verifications from "../director_mechanic_verifications.js";
 import type * as director_notes from "../director_notes.js";
 import type * as engines from "../engines.js";
 import type * as fitments from "../fitments.js";
@@ -187,6 +188,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   director: typeof director;
   director_auth: typeof director_auth;
+  director_mechanic_verifications: typeof director_mechanic_verifications;
   director_notes: typeof director_notes;
   engines: typeof engines;
   fitments: typeof fitments;

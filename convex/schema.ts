@@ -512,13 +512,15 @@ export default defineSchema({
     actual_labor_hours: v.optional(v.number()),
     parts_used_correct: v.optional(v.boolean()),
     overall_accuracy: v.optional(v.number()),
+    status: v.optional(v.string()), // "pending" | "accepted" | "rejected"
     verified_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])
     .index("by_mechanic", ["mechanic_id"])
     .index("by_job", ["job_id"])
-    .index("by_service", ["service_id"]),
+    .index("by_service", ["service_id"])
+    .index("by_status", ["status"]),
 
   vin_queue: defineTable({
     vin: v.string(),

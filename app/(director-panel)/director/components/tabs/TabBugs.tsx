@@ -178,11 +178,81 @@ const BugModal = ({ bug, onClose }: { bug: Bug | undefined; onClose: () => void 
   )
 }
 
+const NewBugModal = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
+  const session    = useContext(DirectorSessionCtx)
+  const actorName  = session?.name ?? 'Director'
+  const actorId    = session?.userId as Id<'director_users'> | undefined
+  const createBug  = useMutation(api.bugs.create)
+  const [title,   setTitle]   = useState('')
+  const [source,  setSource]  = useState<'consumer_ios'|'consumer_android'|'shop_web'|'manual'>('manual')
+  const [version, setVersion] = useState('')
+  const [device,  setDevice]  = useState('')
+  const [saving,  setSaving]  = useState(false)
+
+  const reset = () => { setTitle(''); setSource('manual'); setVersion(''); setDevice('') }
+
+  const handleClose = () => { reset(); onClose() }
+
+  const handleCreate = async () => {
+    if (!title.trim()) return
+    setSaving(true)
+    await createBug({
+      title: title.trim(),
+      source,
+      version: version.trim() || undefined,
+      device:  device.trim()  || undefined,
+      actorName,
+      actorId,
+    })
+    setSaving(false)
+    handleClose()
+  }
+
+  return (
+    <Modal open={open} onClose={handleClose} width={480}
+      title="New bug"
+      footer={<>
+        <Button onClick={handleClose}>Cancel</Button>
+        <Button variant="primary" onClick={handleCreate} disabled={!title.trim() || saving}>
+          {saving ? 'Creating…' : 'Create bug'}
+        </Button>
+      </>}>
+      <div style={{ padding:22, display:'flex', flexDirection:'column', gap:14 }}>
+        <div>
+          <label style={{ fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:6 }}>Title</label>
+          <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="Describe the bug…" style={{ width:'100%' }} />
+        </div>
+        <div>
+          <label style={{ fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:6 }}>Source</label>
+          <Select value={source} onChange={e => setSource(e.target.value as typeof source)}
+            options={[
+              { value:'manual',           label:'Manual' },
+              { value:'consumer_ios',     label:'iOS' },
+              { value:'consumer_android', label:'Android' },
+              { value:'shop_web',         label:'Shop web' },
+            ]} style={{ width:'100%' }} />
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+          <div>
+            <label style={{ fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:6 }}>Version</label>
+            <Input value={version} onChange={e => setVersion(e.target.value)} placeholder="e.g. 2.3.9" style={{ width:'100%' }} />
+          </div>
+          <div>
+            <label style={{ fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:6 }}>Device</label>
+            <Input value={device} onChange={e => setDevice(e.target.value)} placeholder="e.g. iPhone 15" style={{ width:'100%' }} />
+          </div>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 export const TabBugs = () => {
   const session = useContext(DirectorSessionCtx)
   const actorName = session?.name ?? 'Director'
   const actorId   = session?.userId as Id<'director_users'> | undefined
   const [expandedId,      setExpandedId]      = useState<string | null>(null)
+  const [newBugOpen,      setNewBugOpen]      = useState(false)
   const [searchQ,         setSearchQ]         = useState('')
   const [sourceFilter,    setSourceFilter]    = useState('all')
   const [assigneeFilter,  setAssigneeFilter]  = useState('all')
@@ -227,7 +297,7 @@ export const TabBugs = () => {
       subtitle={`${openCount} open · ${unassigned} unassigned`} fillViewport
       right={
         <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-          <Button variant="primary">+ New bug</Button>
+          <Button variant="primary" onClick={() => setNewBugOpen(true)}>+ New bug</Button>
         </div>
       }>
 
@@ -310,6 +380,7 @@ export const TabBugs = () => {
         </div>
       )}
       <BugModal bug={expanded} onClose={() => setExpandedId(null)} />
+      <NewBugModal open={newBugOpen} onClose={() => setNewBugOpen(false)} />
     </SectionAnchor>
   )
 }

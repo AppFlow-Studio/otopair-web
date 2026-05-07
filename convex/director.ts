@@ -6,17 +6,19 @@ import { v } from "convex/values";
 export const sidebarCounts = query({
   args: {},
   handler: async (ctx) => {
-    const [bugs, feedback, refunds] = await Promise.all([
+    const [bugs, feedback, refunds, pendingVerifications] = await Promise.all([
       ctx.db.query("bugs").collect(),
       ctx.db.query("app_feedback").collect(),
       ctx.db.query("bookings").withIndex("by_status", (q) => q.eq("status", "refunded")).collect(),
+      ctx.db.query("mechanic_verifications").withIndex("by_status", (q) => q.eq("status", "pending")).collect(),
     ]);
     const openBugStatuses = new Set(["new", "triaged", "assigned", "in_progress"]);
     const openFbStatuses  = new Set(["new", "reviewed", "triaged"]);
     return {
-      bugs:     bugs.filter((b) => openBugStatuses.has(b.status)).length,
-      feedback: feedback.filter((f) => openFbStatuses.has(f.status)).length,
-      stripe:   refunds.length,
+      bugs:          bugs.filter((b) => openBugStatuses.has(b.status)).length,
+      feedback:      feedback.filter((f) => openFbStatuses.has(f.status)).length,
+      stripe:        refunds.length,
+      mechanicEdits: pendingVerifications.length,
     };
   },
 });

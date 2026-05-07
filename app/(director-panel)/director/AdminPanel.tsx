@@ -14,7 +14,8 @@ import { TabBugs }      from './components/tabs/TabBugs'
 import { TabFeedback }  from './components/tabs/TabFeedback'
 import { TabStripe }    from './components/tabs/TabStripe'
 import { TabAudit }     from './components/tabs/TabAudit'
-import { TabSettings }  from './components/tabs/TabSettings'
+import { TabSettings }       from './components/tabs/TabSettings'
+import { TabMechanicEdits } from './components/tabs/TabMechanicEdits'
 
 const SESSION_KEY = 'otopair_director_token'
 
@@ -26,8 +27,9 @@ const TABS: Record<string, React.ComponentType> = {
   bugs:     TabBugs,
   feedback: TabFeedback,
   stripe:   TabStripe,
-  audit:    TabAudit,
-  settings: TabSettings,
+  audit:          TabAudit,
+  mechanicEdits:  TabMechanicEdits,
+  settings:       TabSettings,
 }
 
 const VALID_IDS = Object.keys(TABS)

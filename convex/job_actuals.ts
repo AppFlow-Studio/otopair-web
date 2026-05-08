@@ -1,9 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import {
-  applyBookingStatusTransition,
-} from "./bookings";
+import { applyBookingStatusTransition } from "./bookings";
 import {
   ensureJobActualRecord,
   finalizeJobActuals,
@@ -239,7 +237,7 @@ export const startJob = mutation({
       startedAtMs: now,
     });
 
-    if (booking.status === "vehicle_at_shop") {
+    if (booking.status === "confirmed") {
       await applyBookingStatusTransition(ctx, {
         booking,
         newStatus: "in_progress",

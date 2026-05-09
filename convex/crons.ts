@@ -49,6 +49,11 @@ crons.interval(
 
 if (!isLateStartTestModeEnabled()) {
   crons.interval(
+    "process-late-start-monitors",
+    { minutes: 1 },
+    internal.bookings.processLateStartMonitors,
+  );
+  crons.interval(
     "process-customer-late-monitors",
     { minutes: 1 },
     internal.bookings.processCustomerLateMonitors,

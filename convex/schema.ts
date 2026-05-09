@@ -1265,6 +1265,49 @@ export default defineSchema({
     .index("by_shop_and_status", ["shop_id", "status"])
     .index("by_created_at", ["created_at"]),
 
+  late_start_monitors: defineTable({
+    shop_id: v.id("shops"),
+    upstream_booking_id: v.id("bookings"),
+    cycle_minutes: v.number(),
+    warning_due_at_ms: v.number(),
+    auto_apply_at_ms: v.number(),
+    status: v.string(),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_upstream_booking_id", ["upstream_booking_id"])
+    .index("by_status", ["status"]),
+
+  late_start_reviews: defineTable({
+    shop_id: v.id("shops"),
+    upstream_booking_id: v.id("bookings"),
+    cycle_minutes: v.number(),
+    status: v.string(),
+    decision_due_at_ms: v.number(),
+    proposals: v.array(
+      v.object({
+        booking_id: v.id("bookings"),
+        original_scheduled_date: v.string(),
+        original_scheduled_time: v.string(),
+        original_mechanic_id: v.optional(v.id("mechanics")),
+        proposed_scheduled_date: v.optional(v.string()),
+        proposed_scheduled_time: v.optional(v.string()),
+        proposed_mechanic_id: v.optional(v.id("mechanics")),
+        used_alternate_mechanic: v.boolean(),
+        blocked_reason: v.optional(v.string()),
+      })
+    ),
+    blocking_reason: v.optional(v.string()),
+    resolved_at: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_upstream_booking_id", ["upstream_booking_id"])
+    .index("by_status", ["status"]),
+
   customer_late_monitors: defineTable({
     shop_id: v.id("shops"),
     booking_id: v.id("bookings"),

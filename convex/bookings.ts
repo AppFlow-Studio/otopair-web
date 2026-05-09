@@ -54,6 +54,10 @@ import {
   saveJobActualDraft,
 } from "./lib/job_actuals";
 import {
+  getLateStartTimingConfig,
+  isLateStartTestModeEnabled,
+} from "./lib/late_start";
+import {
   getMissingRequiredPassportFields,
   getPassportCompletionPercent,
   hasText,
@@ -895,6 +899,17 @@ const TERMINAL_BOOKING_STATUSES = new Set([
 ]);
 const RESERVED_PENDING_CUSTOMER_TITLE = "Reserved pending customer approval";
 const SCHEDULE_CHANGE_MODES = ["manual_reschedule", "forced_delay"] as const;
+const OPEN_LATE_START_REVIEW_STATUSES = new Set([
+  "pending_staff_review",
+  "blocked_manual_review",
+]);
+const lateStartManualTargetValidator = v.object({
+  bookingId: v.id("bookings"),
+  newScheduledDate: v.string(),
+  newScheduledTime: v.string(),
+  newMechanicId: v.optional(v.id("mechanics")),
+  allowOutsideShopHours: v.optional(v.boolean()),
+});
 
 function minutesToHHMM(totalMinutes: number) {
   const hours = Math.floor(totalMinutes / 60);
@@ -949,6 +964,36 @@ async function getShopTimezone(ctx: any, shopId: any) {
   const shop = await ctx.db.get(shopId);
   const timezone = normalizeNullableText(shop?.timezone);
   return timezone ?? DEFAULT_SHOP_TIMEZONE;
+}
+
+async function getLateStartMonitorWindow(
+  ctx: any,
+  booking: any,
+  cycleMinutes: number
+) {
+  const { warningLeadMinutes } = getLateStartTimingConfig();
+  const timezone = await getShopTimezone(ctx, booking.shop_id);
+  const scheduledStartMs = toBookingDateTimeMs(
+    booking.scheduled_date,
+    booking.scheduled_time,
+    timezone
+  );
+
+  return {
+    warningDueAtMs:
+      scheduledStartMs + Math.max(0, cycleMinutes - warningLeadMinutes) * 60 * 1000,
+    autoApplyAtMs: scheduledStartMs + cycleMinutes * 60 * 1000,
+  };
+}
+
+async function scheduleLateStartMonitorProcessing(
+  ctx: any,
+  warningDueAtMs: number
+) {
+  if (!ctx.scheduler?.runAfter) return;
+
+  const delayMs = Math.max(0, warningDueAtMs - Date.now());
+  await ctx.scheduler.runAfter(delayMs, internal.bookings.processLateStartMonitors, {});
 }
 
 function getScheduleChangeMode(booking: any): (typeof SCHEDULE_CHANGE_MODES)[number] {
@@ -6071,5 +6116,856 @@ export const listOpenTireQuoteRequestsForShop = query({
         };
       }),
     );
+  },
+});
+
+// ============================================================================
+// LATE START MONITORS — staff-facing late-start review & auto-reschedule system
+// ============================================================================
+
+async function getLateStartMonitorByUpstreamBookingId(ctx: any, upstreamBookingId: any) {
+  return await ctx.db
+    .query("late_start_monitors")
+    .withIndex("by_upstream_booking_id", (q: any) =>
+      q.eq("upstream_booking_id", upstreamBookingId)
+    )
+    .first();
+}
+
+async function getOpenLateStartReviewsForUpstreamBooking(ctx: any, upstreamBookingId: any) {
+  const rows = await ctx.db
+    .query("late_start_reviews")
+    .withIndex("by_upstream_booking_id", (q: any) =>
+      q.eq("upstream_booking_id", upstreamBookingId)
+    )
+    .collect();
+
+  return rows.filter((row: any) => OPEN_LATE_START_REVIEW_STATUSES.has(row.status));
+}
+
+function isLateStartMonitorEligible(booking: any) {
+  return (
+    booking?.status === "confirmed" &&
+    booking?.shop_id &&
+    booking?.mechanic_id &&
+    booking?.scheduled_date &&
+    booking?.scheduled_time
+  );
+}
+
+async function hasBookingActuallyStarted(ctx: any, booking: any) {
+  if (!booking) return false;
+  if (booking.status === "in_progress" || booking.status === "completed") {
+    return true;
+  }
+  const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
+  return jobActual?.started_at != null;
+}
+
+async function markLateStartReviewsResolved(
+  ctx: any,
+  reviews: any[],
+  status: "resolved_no_longer_needed",
+  resolvedByUserId?: any
+) {
+  const now = Date.now();
+  for (const review of reviews) {
+    if (!OPEN_LATE_START_REVIEW_STATUSES.has(review.status)) continue;
+    await ctx.db.patch(review._id, {
+      status,
+      resolved_at: now,
+      resolved_by_user_id: resolvedByUserId,
+      updated_at: now,
+    });
+  }
+}
+
+export async function resolveLateStartMonitorForBooking(
+  ctx: any,
+  booking: any,
+  resolvedByUserId?: any
+) {
+  if (!booking?._id) return;
+
+  const monitor = await getLateStartMonitorByUpstreamBookingId(ctx, booking._id);
+  const reviews = await getOpenLateStartReviewsForUpstreamBooking(ctx, booking._id);
+
+  if (reviews.length > 0) {
+    await markLateStartReviewsResolved(
+      ctx,
+      reviews,
+      "resolved_no_longer_needed",
+      resolvedByUserId
+    );
+  }
+
+  if (!monitor || monitor.status === "resolved") return;
+
+  await ctx.db.patch(monitor._id, {
+    status: "resolved",
+    updated_at: Date.now(),
+  });
+}
+
+export async function upsertLateStartMonitorForBooking(
+  ctx: any,
+  booking: any,
+  cycleMinutes = getLateStartTimingConfig().initialCycleMinutes
+) {
+  if (!booking?._id) return;
+
+  if (!isLateStartMonitorEligible(booking)) {
+    await resolveLateStartMonitorForBooking(ctx, booking);
+    return;
+  }
+
+  const started = await hasBookingActuallyStarted(ctx, booking);
+  if (started) {
+    await resolveLateStartMonitorForBooking(ctx, booking);
+    return;
+  }
+
+  const reviews = await getOpenLateStartReviewsForUpstreamBooking(ctx, booking._id);
+  if (reviews.length > 0) {
+    await markLateStartReviewsResolved(ctx, reviews, "resolved_no_longer_needed");
+  }
+
+  const { warningDueAtMs, autoApplyAtMs } = await getLateStartMonitorWindow(
+    ctx,
+    booking,
+    cycleMinutes
+  );
+  const now = Date.now();
+  const existing = await getLateStartMonitorByUpstreamBookingId(ctx, booking._id);
+
+  if (existing) {
+    await ctx.db.patch(existing._id, {
+      cycle_minutes: cycleMinutes,
+      warning_due_at_ms: warningDueAtMs,
+      auto_apply_at_ms: autoApplyAtMs,
+      status: "active",
+      updated_at: now,
+    });
+    await scheduleLateStartMonitorProcessing(ctx, warningDueAtMs);
+    return;
+  }
+
+  await ctx.db.insert("late_start_monitors", {
+    shop_id: booking.shop_id,
+    upstream_booking_id: booking._id,
+    cycle_minutes: cycleMinutes,
+    warning_due_at_ms: warningDueAtMs,
+    auto_apply_at_ms: autoApplyAtMs,
+    status: "active",
+    created_at: now,
+    updated_at: now,
+  });
+  await scheduleLateStartMonitorProcessing(ctx, warningDueAtMs);
+}
+
+async function advanceLateStartMonitorCycle(ctx: any, monitor: any, cycleMinutes?: number) {
+  const upstreamBooking = await ctx.db.get(monitor.upstream_booking_id);
+  if (!upstreamBooking || !isLateStartMonitorEligible(upstreamBooking)) {
+    if (upstreamBooking) {
+      await resolveLateStartMonitorForBooking(ctx, upstreamBooking);
+    } else if (monitor.status !== "resolved") {
+      await ctx.db.patch(monitor._id, {
+        status: "resolved",
+        updated_at: Date.now(),
+      });
+    }
+    return;
+  }
+
+  const { cycleIncrementMinutes } = getLateStartTimingConfig();
+  const nextCycleMinutes =
+    cycleMinutes ?? ((monitor.cycle_minutes ?? 0) + cycleIncrementMinutes);
+  const { warningDueAtMs, autoApplyAtMs } = await getLateStartMonitorWindow(
+    ctx,
+    upstreamBooking,
+    nextCycleMinutes
+  );
+
+  await ctx.db.patch(monitor._id, {
+    cycle_minutes: nextCycleMinutes,
+    warning_due_at_ms: warningDueAtMs,
+    auto_apply_at_ms: autoApplyAtMs,
+    status: "active",
+    updated_at: Date.now(),
+  });
+  await scheduleLateStartMonitorProcessing(ctx, warningDueAtMs);
+}
+
+async function mechanicHasLateUnstartedUpstreamConflict(
+  ctx: any,
+  {
+    shopId,
+    mechanicId,
+    date,
+    targetStartTime,
+    excludeBookingId,
+    dayBookings,
+  }: {
+    shopId: any;
+    mechanicId: any;
+    date: string;
+    targetStartTime: string;
+    excludeBookingId: string;
+    dayBookings: any[];
+  }
+) {
+  const timezone = await getShopTimezone(ctx, shopId);
+  const nowMs = Date.now();
+  const targetStartMs = toBookingDateTimeMs(date, targetStartTime, timezone);
+
+  const earlierMechanicBookings = dayBookings
+    .filter(
+      (booking: any) =>
+        String(booking.mechanic_id ?? "") === String(mechanicId) &&
+        String(booking._id) !== excludeBookingId &&
+        booking.status === "confirmed" &&
+        booking.scheduled_time < targetStartTime
+    )
+    .sort(compareBookingsBySchedule);
+
+  for (const booking of earlierMechanicBookings) {
+    if (await hasBookingActuallyStarted(ctx, booking)) {
+      continue;
+    }
+
+    const scheduledStartMs = toBookingDateTimeMs(
+      booking.scheduled_date,
+      booking.scheduled_time,
+      timezone
+    );
+
+    if (nowMs <= scheduledStartMs) {
+      continue;
+    }
+
+    const projectedEndMs =
+      nowMs + (booking.estimated_labor_minutes ?? 60) * 60 * 1000;
+    if (projectedEndMs > targetStartMs) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function buildLateStartReviewPlan(
+  ctx: any,
+  {
+    upstreamBooking,
+    cycleMinutes,
+  }: {
+    upstreamBooking: any;
+    cycleMinutes: number;
+  }
+) {
+  const proposals: any[] = [];
+  const upstreamMechanicId = upstreamBooking.mechanic_id;
+  const date = upstreamBooking.scheduled_date;
+  const projectedStartTime = addMinutesToHHMM(
+    upstreamBooking.scheduled_time,
+    cycleMinutes
+  );
+  let cursorEndMinutes = hhmmToMinutes(
+    getBookingEndTime(
+      projectedStartTime,
+      upstreamBooking.estimated_labor_minutes ?? 60
+    )
+  );
+
+  const downstreamBookings = (await getBlockingBookingsForShopDate(
+    ctx,
+    upstreamBooking.shop_id,
+    date
+  ))
+    .filter(
+      (booking: any) =>
+        String(booking._id) !== String(upstreamBooking._id) &&
+        String(booking.mechanic_id ?? "") === String(upstreamMechanicId)
+    )
+    .sort(compareBookingsBySchedule);
+
+  for (const downstreamBooking of downstreamBookings) {
+    const bookingStartMinutes = hhmmToMinutes(downstreamBooking.scheduled_time);
+    if (bookingStartMinutes >= cursorEndMinutes) {
+      break;
+    }
+
+    const existingMode = getScheduleChangeMode(downstreamBooking);
+    const isSameForcedDelayChain =
+      existingMode === "forced_delay" &&
+      String(downstreamBooking.schedule_change_source_booking_id ?? "") ===
+        String(upstreamBooking._id);
+
+    if (
+      downstreamBooking.status === "pending_customer_acceptance" &&
+      !isSameForcedDelayChain
+    ) {
+      proposals.push({
+        booking_id: downstreamBooking._id,
+        original_scheduled_date: downstreamBooking.scheduled_date,
+        original_scheduled_time: downstreamBooking.scheduled_time,
+        original_mechanic_id: downstreamBooking.mechanic_id,
+        used_alternate_mechanic: false,
+        blocked_reason: "This downstream booking already has a customer reschedule pending.",
+      });
+      return {
+        proposals,
+        blockingReason:
+          "A downstream booking already has a different reschedule pending and needs manual review.",
+      };
+    }
+
+    const durationMinutes = downstreamBooking.estimated_labor_minutes ?? 60;
+    const alternateMechanic = await findBestAlternateMechanicForWindow(ctx, {
+      shopId: upstreamBooking.shop_id,
+      date,
+      startTime: downstreamBooking.scheduled_time,
+      durationMinutes,
+      excludeMechanicId: upstreamMechanicId,
+      excludeBookingId: String(downstreamBooking._id),
+    });
+
+    if (alternateMechanic) {
+      proposals.push({
+        booking_id: downstreamBooking._id,
+        original_scheduled_date: downstreamBooking.scheduled_date,
+        original_scheduled_time: downstreamBooking.scheduled_time,
+        original_mechanic_id: downstreamBooking.mechanic_id,
+        proposed_scheduled_date: downstreamBooking.scheduled_date,
+        proposed_scheduled_time: downstreamBooking.scheduled_time,
+        proposed_mechanic_id: alternateMechanic.mechanicId,
+        used_alternate_mechanic: true,
+      });
+      continue;
+    }
+
+    const pushedStartTime = await findEarliestStartOnMechanic(ctx, {
+      shopId: upstreamBooking.shop_id,
+      mechanicId: upstreamMechanicId,
+      date,
+      fromMinutes: cursorEndMinutes,
+      durationMinutes,
+      excludeBookingId: String(downstreamBooking._id),
+    });
+
+    if (!pushedStartTime) {
+      proposals.push({
+        booking_id: downstreamBooking._id,
+        original_scheduled_date: downstreamBooking.scheduled_date,
+        original_scheduled_time: downstreamBooking.scheduled_time,
+        original_mechanic_id: downstreamBooking.mechanic_id,
+        used_alternate_mechanic: false,
+        blocked_reason: "No automatic time remains before close on the current mechanic.",
+      });
+      return {
+        proposals,
+        blockingReason:
+          "No automatic delayed slot is available before close on the current mechanic.",
+      };
+    }
+
+    proposals.push({
+      booking_id: downstreamBooking._id,
+      original_scheduled_date: downstreamBooking.scheduled_date,
+      original_scheduled_time: downstreamBooking.scheduled_time,
+      original_mechanic_id: downstreamBooking.mechanic_id,
+      proposed_scheduled_date: downstreamBooking.scheduled_date,
+      proposed_scheduled_time: pushedStartTime,
+      proposed_mechanic_id: upstreamMechanicId,
+      used_alternate_mechanic: false,
+    });
+
+    cursorEndMinutes = hhmmToMinutes(
+      getBookingEndTime(pushedStartTime, durationMinutes)
+    );
+  }
+
+  return { proposals, blockingReason: undefined as string | undefined };
+}
+
+async function createLateStartReview(
+  ctx: any,
+  {
+    upstreamBooking,
+    cycleMinutes,
+    decisionDueAtMs,
+    proposals,
+    status,
+    blockingReason,
+  }: {
+    upstreamBooking: any;
+    cycleMinutes: number;
+    decisionDueAtMs: number;
+    proposals: any[];
+    status: "pending_staff_review" | "blocked_manual_review";
+    blockingReason?: string;
+  }
+) {
+  const now = Date.now();
+  return await ctx.db.insert("late_start_reviews", {
+    shop_id: upstreamBooking.shop_id,
+    upstream_booking_id: upstreamBooking._id,
+    cycle_minutes: cycleMinutes,
+    status,
+    decision_due_at_ms: decisionDueAtMs,
+    proposals,
+    blocking_reason: blockingReason,
+    created_at: now,
+    updated_at: now,
+  });
+}
+
+async function applyLateStartTargets(
+  ctx: any,
+  {
+    upstreamBooking,
+    targets,
+    changedBy,
+  }: {
+    upstreamBooking: any;
+    targets: Array<{
+      bookingId: any;
+      newScheduledDate: string;
+      newScheduledTime: string;
+      newMechanicId?: any;
+      allowOutsideShopHours?: boolean;
+    }>;
+    changedBy?: any;
+  }
+) {
+  for (const target of targets) {
+    const downstreamBooking = await ctx.db.get(target.bookingId);
+    if (!downstreamBooking) {
+      throw new Error("A downstream booking could not be found.");
+    }
+
+    await proposeRescheduleImpl(ctx, {
+      booking: downstreamBooking,
+      newScheduledDate: target.newScheduledDate,
+      newScheduledTime: target.newScheduledTime,
+      newMechanicId: target.newMechanicId,
+      allowOutsideShopHours: target.allowOutsideShopHours,
+      mode: "forced_delay",
+      sourceBookingId: upstreamBooking._id,
+      customerCanRestoreOriginal: false,
+      changedBy,
+    });
+  }
+}
+
+export const getOpenLateStartReviews = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return [];
+
+    const rows = await ctx.db
+      .query("late_start_reviews")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+
+    const openReviews = rows
+      .filter((row: any) => OPEN_LATE_START_REVIEW_STATUSES.has(row.status))
+      .sort((left: any, right: any) => left.decision_due_at_ms - right.decision_due_at_ms);
+
+    const hydrated = await Promise.all(
+      openReviews.map(async (review: any) => {
+        const upstreamBooking = await ctx.db.get(review.upstream_booking_id);
+        if (
+          !upstreamBooking ||
+          !isLateStartMonitorEligible(upstreamBooking) ||
+          (await hasBookingActuallyStarted(ctx, upstreamBooking))
+        ) {
+          return null;
+        }
+        const upstreamCustomer = upstreamBooking?.user_id
+          ? await ctx.db.get(upstreamBooking.user_id)
+          : null;
+        const upstreamMechanic = upstreamBooking?.mechanic_id
+          ? await ctx.db.get(upstreamBooking.mechanic_id)
+          : null;
+        const upstreamServices = upstreamBooking
+          ? await resolveServiceNames(ctx, upstreamBooking.service_ids)
+          : [];
+
+        const proposals = await Promise.all(
+          review.proposals.map(async (proposal: any) => {
+            const booking = await ctx.db.get(proposal.booking_id);
+            const customer = booking?.user_id ? await ctx.db.get(booking.user_id) : null;
+            const originalMechanic = proposal.original_mechanic_id
+              ? await ctx.db.get(proposal.original_mechanic_id)
+              : null;
+            const proposedMechanic = proposal.proposed_mechanic_id
+              ? await ctx.db.get(proposal.proposed_mechanic_id)
+              : null;
+            const serviceNames = booking
+              ? await resolveServiceNames(ctx, booking.service_ids)
+              : [];
+
+            return {
+              bookingId: proposal.booking_id,
+              customerName: formatCustomerName(customer),
+              serviceSummary: serviceNames.join(", "),
+              estimatedMinutes: booking?.estimated_labor_minutes ?? 60,
+              originalScheduledDate: proposal.original_scheduled_date,
+              originalScheduledTime: proposal.original_scheduled_time,
+              originalMechanicId: proposal.original_mechanic_id ?? null,
+              originalMechanicName: originalMechanic
+                ? `${originalMechanic.first_name} ${originalMechanic.last_name}`.trim()
+                : null,
+              proposedScheduledDate: proposal.proposed_scheduled_date ?? null,
+              proposedScheduledTime: proposal.proposed_scheduled_time ?? null,
+              proposedMechanicId: proposal.proposed_mechanic_id ?? null,
+              proposedMechanicName: proposedMechanic
+                ? `${proposedMechanic.first_name} ${proposedMechanic.last_name}`.trim()
+                : null,
+              usedAlternateMechanic: proposal.used_alternate_mechanic,
+              blockedReason: proposal.blocked_reason ?? null,
+            };
+          })
+        );
+
+        return {
+          _id: review._id,
+          status: review.status,
+          cycleMinutes: review.cycle_minutes,
+          decisionDueAtMs: review.decision_due_at_ms,
+          blockingReason: review.blocking_reason ?? null,
+          upstreamBookingId: review.upstream_booking_id,
+          upstreamCustomerName: formatCustomerName(upstreamCustomer),
+          upstreamMechanicId: upstreamBooking?.mechanic_id ?? null,
+          upstreamMechanicName: upstreamMechanic
+            ? `${upstreamMechanic.first_name} ${upstreamMechanic.last_name}`.trim()
+            : null,
+          upstreamScheduledDate: upstreamBooking?.scheduled_date ?? null,
+          upstreamScheduledTime: upstreamBooking?.scheduled_time ?? null,
+          upstreamProjectedEndTime:
+            upstreamBooking?.scheduled_time
+              ? addMinutesToHHMM(
+                  upstreamBooking.scheduled_time,
+                  review.cycle_minutes + (upstreamBooking.estimated_labor_minutes ?? 60)
+                )
+              : null,
+          upstreamServiceSummary: upstreamServices.join(", "),
+          proposals,
+        };
+      })
+    );
+
+    return hydrated.filter(Boolean);
+  },
+});
+
+export const acceptLateStartReview = mutation({
+  args: { reviewId: v.id("late_start_reviews") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const review = await ctx.db.get(args.reviewId);
+    if (!review) throw new Error("Late-start review not found");
+
+    const upstreamBooking = await ctx.db.get(review.upstream_booking_id);
+    if (!upstreamBooking) throw new Error("Upstream booking not found");
+
+    await requireShopStaff(ctx, user._id, upstreamBooking.shop_id);
+
+    if (review.status !== "pending_staff_review") {
+      throw new Error("Only pending late-start reviews can be accepted.");
+    }
+
+    if (await hasBookingActuallyStarted(ctx, upstreamBooking) || !isLateStartMonitorEligible(upstreamBooking)) {
+      await resolveLateStartMonitorForBooking(ctx, upstreamBooking, user._id);
+      throw new Error("This late-start review is no longer needed.");
+    }
+
+    const targets = review.proposals.map((proposal: any) => {
+      if (!proposal.proposed_scheduled_date || !proposal.proposed_scheduled_time) {
+        throw new Error("This late-start review requires a manual schedule choice.");
+      }
+      return {
+        bookingId: proposal.booking_id,
+        newScheduledDate: proposal.proposed_scheduled_date,
+        newScheduledTime: proposal.proposed_scheduled_time,
+        newMechanicId: proposal.proposed_mechanic_id,
+        allowOutsideShopHours: false,
+      };
+    });
+
+    await applyLateStartTargets(ctx, {
+      upstreamBooking,
+      targets,
+      changedBy: user._id,
+    });
+
+    await ctx.db.patch(review._id, {
+      status: "accepted",
+      resolved_at: Date.now(),
+      resolved_by_user_id: user._id,
+      updated_at: Date.now(),
+    });
+
+    const monitor = await getLateStartMonitorByUpstreamBookingId(ctx, upstreamBooking._id);
+    if (monitor) {
+      await advanceLateStartMonitorCycle(ctx, monitor);
+    }
+
+    return review._id;
+  },
+});
+
+export const denyLateStartReview = mutation({
+  args: { reviewId: v.id("late_start_reviews") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const review = await ctx.db.get(args.reviewId);
+    if (!review) throw new Error("Late-start review not found");
+
+    const upstreamBooking = await ctx.db.get(review.upstream_booking_id);
+    if (!upstreamBooking) throw new Error("Upstream booking not found");
+
+    await requireShopStaff(ctx, user._id, upstreamBooking.shop_id);
+
+    if (review.status !== "pending_staff_review") {
+      throw new Error("Only pending late-start reviews can be denied.");
+    }
+
+    await ctx.db.patch(review._id, {
+      status: "denied_snoozed",
+      resolved_at: Date.now(),
+      resolved_by_user_id: user._id,
+      updated_at: Date.now(),
+    });
+
+    const monitor = await getLateStartMonitorByUpstreamBookingId(ctx, upstreamBooking._id);
+    if (monitor) {
+      await advanceLateStartMonitorCycle(ctx, monitor);
+    }
+
+    return review._id;
+  },
+});
+
+export const applyManualLateStartReview = mutation({
+  args: {
+    reviewId: v.id("late_start_reviews"),
+    manualTargets: v.array(lateStartManualTargetValidator),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const review = await ctx.db.get(args.reviewId);
+    if (!review) throw new Error("Late-start review not found");
+
+    const upstreamBooking = await ctx.db.get(review.upstream_booking_id);
+    if (!upstreamBooking) throw new Error("Upstream booking not found");
+
+    await requireShopStaff(ctx, user._id, upstreamBooking.shop_id);
+
+    if (!OPEN_LATE_START_REVIEW_STATUSES.has(review.status)) {
+      throw new Error("This late-start review is no longer open.");
+    }
+
+    const expectedBookingIds = review.proposals
+      .map((proposal: any) => String(proposal.booking_id))
+      .sort();
+    const providedBookingIds = args.manualTargets
+      .map((target) => String(target.bookingId))
+      .sort();
+
+    if (
+      expectedBookingIds.length !== providedBookingIds.length ||
+      expectedBookingIds.some((bookingId: string, index: number) => bookingId !== providedBookingIds[index])
+    ) {
+      throw new Error("Manual late-start changes must cover every affected downstream booking.");
+    }
+
+    if (await hasBookingActuallyStarted(ctx, upstreamBooking) || !isLateStartMonitorEligible(upstreamBooking)) {
+      await resolveLateStartMonitorForBooking(ctx, upstreamBooking, user._id);
+      throw new Error("This late-start review is no longer needed.");
+    }
+
+    await applyLateStartTargets(ctx, {
+      upstreamBooking,
+      targets: args.manualTargets,
+      changedBy: user._id,
+    });
+
+    await ctx.db.patch(review._id, {
+      status: "manual_applied",
+      resolved_at: Date.now(),
+      resolved_by_user_id: user._id,
+      updated_at: Date.now(),
+    });
+
+    const monitor = await getLateStartMonitorByUpstreamBookingId(ctx, upstreamBooking._id);
+    if (monitor) {
+      await advanceLateStartMonitorCycle(ctx, monitor);
+    }
+
+    return review._id;
+  },
+});
+
+export const processLateStartMonitors = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const active = await ctx.db
+      .query("late_start_monitors")
+      .withIndex("by_status", (q: any) => q.eq("status", "active"))
+      .collect();
+    const manualTakeover = await ctx.db
+      .query("late_start_monitors")
+      .withIndex("by_status", (q: any) => q.eq("status", "manual_takeover"))
+      .collect();
+
+    for (const monitor of [...active, ...manualTakeover]) {
+      const upstreamBooking = await ctx.db.get(monitor.upstream_booking_id);
+      if (!upstreamBooking) {
+        await ctx.db.patch(monitor._id, {
+          status: "resolved",
+          updated_at: now,
+        });
+        continue;
+      }
+
+      if (
+        !isLateStartMonitorEligible(upstreamBooking) ||
+        (await hasBookingActuallyStarted(ctx, upstreamBooking))
+      ) {
+        await resolveLateStartMonitorForBooking(ctx, upstreamBooking);
+        continue;
+      }
+
+      const { initialCycleMinutes } = getLateStartTimingConfig();
+      let effectiveCycleMinutes = monitor.cycle_minutes;
+      if (
+        !(
+          await getOpenLateStartReviewsForUpstreamBooking(ctx, upstreamBooking._id)
+        ).some((review: any) => review.cycle_minutes === monitor.cycle_minutes)
+      ) {
+        effectiveCycleMinutes = initialCycleMinutes;
+      }
+
+      const { warningDueAtMs, autoApplyAtMs } = await getLateStartMonitorWindow(
+        ctx,
+        upstreamBooking,
+        effectiveCycleMinutes
+      );
+      if (
+        monitor.cycle_minutes !== effectiveCycleMinutes ||
+        monitor.warning_due_at_ms !== warningDueAtMs ||
+        monitor.auto_apply_at_ms !== autoApplyAtMs
+      ) {
+        await ctx.db.patch(monitor._id, {
+          cycle_minutes: effectiveCycleMinutes,
+          warning_due_at_ms: warningDueAtMs,
+          auto_apply_at_ms: autoApplyAtMs,
+          updated_at: now,
+        });
+      }
+
+      if (monitor.status === "manual_takeover") {
+        continue;
+      }
+
+      if (now < warningDueAtMs) {
+        continue;
+      }
+
+      const openReview = (
+        await getOpenLateStartReviewsForUpstreamBooking(ctx, upstreamBooking._id)
+      ).find((review: any) => review.cycle_minutes === effectiveCycleMinutes);
+
+      if (!openReview) {
+        const plan = await buildLateStartReviewPlan(ctx, {
+          upstreamBooking,
+          cycleMinutes: effectiveCycleMinutes,
+        });
+
+        if (plan.proposals.length === 0) {
+          if (now >= monitor.auto_apply_at_ms) {
+            await advanceLateStartMonitorCycle(ctx, monitor);
+          }
+          continue;
+        }
+
+        const reviewStatus =
+          plan.blockingReason ||
+          plan.proposals.some(
+            (proposal: any) =>
+              !proposal.proposed_scheduled_date ||
+              !proposal.proposed_scheduled_time ||
+              !proposal.proposed_mechanic_id
+          )
+            ? "blocked_manual_review"
+            : "pending_staff_review";
+
+        const decisionDueAtMs =
+          reviewStatus === "pending_staff_review" &&
+          isLateStartTestModeEnabled() &&
+          now >= autoApplyAtMs
+            ? now + getLateStartTimingConfig().minVisibleReviewMs
+            : autoApplyAtMs;
+
+        await createLateStartReview(ctx, {
+          upstreamBooking,
+          cycleMinutes: effectiveCycleMinutes,
+          decisionDueAtMs,
+          proposals: plan.proposals,
+          status: reviewStatus,
+          blockingReason: plan.blockingReason,
+        });
+
+        if (reviewStatus === "blocked_manual_review") {
+          await ctx.db.patch(monitor._id, {
+            status: "manual_takeover",
+            updated_at: Date.now(),
+          });
+          continue;
+        }
+
+        if (decisionDueAtMs !== autoApplyAtMs) {
+          await ctx.db.patch(monitor._id, {
+            auto_apply_at_ms: decisionDueAtMs,
+            updated_at: now,
+          });
+        }
+        await scheduleLateStartMonitorProcessing(ctx, decisionDueAtMs);
+        continue;
+      }
+
+      if (
+        openReview.status === "pending_staff_review" &&
+        now >= autoApplyAtMs
+      ) {
+        const targets = openReview.proposals.map((proposal: any) => ({
+          bookingId: proposal.booking_id,
+          newScheduledDate: proposal.proposed_scheduled_date,
+          newScheduledTime: proposal.proposed_scheduled_time,
+          newMechanicId: proposal.proposed_mechanic_id,
+        }));
+
+        await applyLateStartTargets(ctx, {
+          upstreamBooking,
+          targets,
+        });
+
+        await ctx.db.patch(openReview._id, {
+          status: "auto_applied",
+          resolved_at: Date.now(),
+          updated_at: Date.now(),
+        });
+        await advanceLateStartMonitorCycle(ctx, monitor);
+      }
+    }
+
+    return { processedAt: now };
   },
 });

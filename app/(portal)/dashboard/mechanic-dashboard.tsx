@@ -8,6 +8,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import {
   AlertCircle,
   ArrowRight,
+  Clock,
   Loader2,
   PlayCircle,
   Star,
@@ -44,6 +45,13 @@ function formatTime(time: string) {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
+  });
+}
+
+function formatTimestampTime(timestampMs: number) {
+  return new Date(timestampMs).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
   });
 }
 
@@ -98,6 +106,8 @@ export default function MechanicDashboard() {
   const savePrejob = useMutation(api.bookings.savePrejob);
   const startWithPrejob = useMutation(api.bookings.startWithPrejob);
   const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
+  const answerOverrunCheckIn = useMutation(api.bookings.answerOverrunCheckIn);
+  const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
   const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
   const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -106,6 +116,18 @@ export default function MechanicDashboard() {
   const [workflowMode, setWorkflowMode] = useState<"prejob" | "postjob" | null>(null);
   const [actualsBookingId, setActualsBookingId] = useState<Id<"bookings"> | null>(null);
   const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
+  const [overrunActionId, setOverrunActionId] = useState<string | null>(null);
+  const overrunCheckIns = useQuery(api.bookings.getOpenJobOverrunCheckins) as
+    | Array<{
+        _id: string;
+        status: string;
+        bookingId: string;
+        customerName: string;
+        serviceSummary?: string | null;
+        scheduledTime?: string | null;
+        defaultApplyAtMs: number;
+      }>
+    | undefined;
   const selectedWorkflowBooking = useQuery(
     api.bookings.getJobDetail,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"
@@ -259,6 +281,39 @@ export default function MechanicDashboard() {
     }
   }
 
+  async function handleAnswerOverrun(checkInId: string, answer: "yes" | "no") {
+    setOverrunActionId(checkInId);
+    try {
+      await answerOverrunCheckIn({
+        checkInId: checkInId as Id<"job_overrun_checkins">,
+        answer,
+      });
+      setToast(answer === "yes" ? "Check-in resolved" : "Choose an extension");
+    } catch (error: unknown) {
+      setToast(error instanceof Error ? error.message : "Could not answer check-in");
+    } finally {
+      setOverrunActionId(null);
+    }
+  }
+
+  async function handleAnswerOverrunExtension(
+    checkInId: string,
+    extensionMinutes: number
+  ) {
+    setOverrunActionId(checkInId);
+    try {
+      await answerOverrunExtension({
+        checkInId: checkInId as Id<"job_overrun_checkins">,
+        extensionMinutes,
+      });
+      setToast(`${extensionMinutes} minute extension applied`);
+    } catch (error: unknown) {
+      setToast(error instanceof Error ? error.message : "Could not apply extension");
+    } finally {
+      setOverrunActionId(null);
+    }
+  }
+
   if (dashboard === undefined) {
     return (
       <div className="min-h-[40vh] flex items-center justify-center">
@@ -318,6 +373,82 @@ export default function MechanicDashboard() {
           sublabel={`${dashboard.stats.reviewCount} review${dashboard.stats.reviewCount === 1 ? "" : "s"}`}
         />
       </div>
+
+      {overrunCheckIns && overrunCheckIns.length > 0 ? (
+        <section className="rounded-2xl border border-sky-200 bg-sky-50 p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)]">
+          <div className="flex items-center gap-2 text-sky-800">
+            <Clock className="h-4 w-4" />
+            <h2 className="text-lg font-semibold">Overrun check-in</h2>
+          </div>
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {overrunCheckIns.map((checkIn) => {
+              const isBusy = overrunActionId === checkIn._id;
+              const needsExtension = checkIn.status.endsWith("_extension");
+              return (
+                <div
+                  key={checkIn._id}
+                  className="rounded-xl border border-sky-200 bg-white p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground">
+                        {checkIn.customerName}
+                      </p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {checkIn.scheduledTime ? formatTime(checkIn.scheduledTime) : "Time TBD"}
+                      </p>
+                      {checkIn.serviceSummary ? (
+                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                          {checkIn.serviceSummary}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold text-sky-800">
+                      Default {formatTimestampTime(checkIn.defaultApplyAtMs)}
+                    </span>
+                  </div>
+                  {needsExtension ? (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {[15, 30, 45, 60].map((minutes) => (
+                        <button
+                          key={minutes}
+                          type="button"
+                          onClick={() =>
+                            void handleAnswerOverrunExtension(checkIn._id, minutes)
+                          }
+                          disabled={isBusy}
+                          className="inline-flex h-9 min-w-14 items-center justify-center rounded-lg border border-sky-200 px-3 text-sm font-medium text-sky-900 transition-colors hover:bg-sky-100 disabled:opacity-60"
+                        >
+                          {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : `+${minutes}`}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleAnswerOverrun(checkIn._id, "yes")}
+                        disabled={isBusy}
+                        className="inline-flex items-center rounded-lg bg-sky-900 px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+                      >
+                        On track
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleAnswerOverrun(checkIn._id, "no")}
+                        disabled={isBusy}
+                        className="inline-flex items-center rounded-lg border border-sky-200 px-3.5 py-2 text-sm font-medium text-sky-900 transition-colors hover:bg-sky-100 disabled:opacity-60"
+                      >
+                        Needs time
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
 
       <section className="rounded-2xl border border-border bg-card p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)]">
         <div className="flex items-center justify-between gap-4">
@@ -385,6 +516,12 @@ export default function MechanicDashboard() {
 
                   <div className="mt-5 flex flex-wrap gap-2">
                     {job.status === "confirmed" ? (
+                      <span className="inline-flex items-center rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-muted-foreground">
+                        Waiting for vehicle
+                      </span>
+                    ) : null}
+
+                    {job.status === "vehicle_at_shop" ? (
                       <button
                         onClick={() => openWorkflowDialog(String(job._id), "prejob")}
                         disabled={
@@ -405,7 +542,7 @@ export default function MechanicDashboard() {
                         )}
                         {job.vehiclePassportComplete === false
                           ? "Confirm Specs in Details"
-                          : "Start Booking"}
+                          : "Open Vehicle Check"}
                       </button>
                     ) : null}
 

@@ -237,7 +237,7 @@ export const startJob = mutation({
       startedAtMs: now,
     });
 
-    if (booking.status === "confirmed") {
+    if (booking.status === "vehicle_at_shop") {
       await applyBookingStatusTransition(ctx, {
         booking,
         newStatus: "in_progress",

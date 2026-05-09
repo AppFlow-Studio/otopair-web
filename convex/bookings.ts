@@ -2571,6 +2571,26 @@ async function upsertCustomerLateMonitorForBooking(ctx: any, booking: any) {
   await scheduleCustomerLateMonitorProcessing(ctx, nextDueAt);
 }
 
+async function upsertConfirmedBookingArrivalMonitors(ctx: any, booking: any) {
+  await upsertCustomerLateMonitorForBooking(ctx, booking);
+  await upsertLateStartMonitorForBooking(ctx, booking);
+}
+
+async function resolveBookingArrivalMonitors(
+  ctx: any,
+  booking: any,
+  resolvedByUserId?: any,
+  resolution?: string
+) {
+  await resolveCustomerLateMonitorForBooking(
+    ctx,
+    booking,
+    resolvedByUserId,
+    resolution
+  );
+  await resolveLateStartMonitorForBooking(ctx, booking, resolvedByUserId);
+}
+
 async function getOpenJobOverrunCheckinForBooking(ctx: any, bookingId: any) {
   const rows = await ctx.db
     .query("job_overrun_checkins")
@@ -3074,13 +3094,12 @@ export async function applyBookingStatusTransition(
 
   const nextBooking = { ...booking, ...patch };
   if (newStatus === "confirmed") {
-    await upsertCustomerLateMonitorForBooking(ctx, nextBooking);
+    await upsertConfirmedBookingArrivalMonitors(ctx, nextBooking);
   } else {
-    await resolveCustomerLateMonitorForBooking(ctx, nextBooking, changedBy);
+    await resolveBookingArrivalMonitors(ctx, nextBooking, changedBy);
   }
 
   if (newStatus === "in_progress") {
-    await resolveCustomerLateMonitorForBooking(ctx, nextBooking, changedBy);
     await upsertJobOverrunCheckinForBooking(ctx, nextBooking);
   } else if (newStatus !== "vehicle_at_shop") {
     await resolveJobOverrunCheckinsForBooking(ctx, nextBooking, changedBy);
@@ -4049,7 +4068,7 @@ export const startWithPrejob = mutation({
         reason: "started_by_shop",
       });
     } else {
-      await resolveCustomerLateMonitorForBooking(
+      await resolveBookingArrivalMonitors(
         ctx,
         { ...booking, status: "in_progress" },
         user._id
@@ -4316,7 +4335,7 @@ export const createByShop = mutation({
     ]);
 
     if (status === "confirmed") {
-      await upsertCustomerLateMonitorForBooking(ctx, {
+      await upsertConfirmedBookingArrivalMonitors(ctx, {
         _id: bookingId,
         shop_id: args.shopId,
         mechanic_id: resolvedMechanicId,
@@ -4434,9 +4453,9 @@ export const update = mutation({
 
     const nextBooking = { ...booking, ...patch };
     if (nextBooking.status === "confirmed") {
-      await upsertCustomerLateMonitorForBooking(ctx, nextBooking);
+      await upsertConfirmedBookingArrivalMonitors(ctx, nextBooking);
     } else {
-      await resolveCustomerLateMonitorForBooking(ctx, nextBooking, user._id);
+      await resolveBookingArrivalMonitors(ctx, nextBooking, user._id);
     }
 
     return args.bookingId;
@@ -4803,11 +4822,7 @@ async function proposeRescheduleImpl(
     },
   ]);
 
-  await resolveCustomerLateMonitorForBooking(
-    ctx,
-    { ...booking, ...patch },
-    changedBy
-  );
+  await resolveBookingArrivalMonitors(ctx, { ...booking, ...patch }, changedBy);
   await resolveJobOverrunCheckinsForBooking(ctx, { ...booking, ...patch }, changedBy);
 
   return booking._id;
@@ -5002,7 +5017,7 @@ export const customerApproveReschedule = mutation({
       },
     ]);
 
-    await upsertCustomerLateMonitorForBooking(ctx, {
+    await upsertConfirmedBookingArrivalMonitors(ctx, {
       ...booking,
       status: "confirmed",
       live_stage: "booking_confirmed",
@@ -5087,7 +5102,7 @@ export const shopCancelReschedule = mutation({
     ]);
 
     if (originalStatus === "confirmed") {
-      await upsertCustomerLateMonitorForBooking(ctx, {
+      await upsertConfirmedBookingArrivalMonitors(ctx, {
         ...booking,
         status: "confirmed",
         live_stage: "booking_confirmed",
@@ -5105,7 +5120,7 @@ export const shopCancelReschedule = mutation({
         customer_can_restore_original: undefined,
       });
     } else {
-      await resolveCustomerLateMonitorForBooking(ctx, booking);
+      await resolveBookingArrivalMonitors(ctx, booking);
     }
 
     return booking._id;
@@ -5179,7 +5194,7 @@ export const customerDeclineReschedule = mutation({
     ]);
 
     if (originalStatus === "confirmed") {
-      await upsertCustomerLateMonitorForBooking(ctx, {
+      await upsertConfirmedBookingArrivalMonitors(ctx, {
         ...booking,
         status: "confirmed",
         live_stage: "booking_confirmed",
@@ -5197,7 +5212,7 @@ export const customerDeclineReschedule = mutation({
         customer_can_restore_original: undefined,
       });
     } else {
-      await resolveCustomerLateMonitorForBooking(ctx, booking);
+      await resolveBookingArrivalMonitors(ctx, booking);
     }
 
     return booking._id;
@@ -5278,7 +5293,7 @@ export const revertExpiredReschedules = internalMutation({
       ]);
 
       if (originalStatus === "confirmed") {
-        await upsertCustomerLateMonitorForBooking(ctx, {
+        await upsertConfirmedBookingArrivalMonitors(ctx, {
           ...booking,
           status: "confirmed",
           live_stage: "booking_confirmed",
@@ -5380,12 +5395,7 @@ export const markPostThresholdNoShow = mutation({
       resolved_by_user_id: user._id,
       updated_at: Date.now(),
     });
-    await resolveCustomerLateMonitorForBooking(
-      ctx,
-      booking,
-      user._id,
-      "no_show"
-    );
+    await resolveBookingArrivalMonitors(ctx, booking, user._id, "no_show");
 
     await insertNotificationOutbox(ctx, {
       shopId: booking.shop_id,
@@ -5459,12 +5469,7 @@ export const rescheduleFromNoShowAlert = mutation({
       resolved_by_user_id: user._id,
       updated_at: Date.now(),
     });
-    await resolveCustomerLateMonitorForBooking(
-      ctx,
-      booking,
-      user._id,
-      "rescheduled"
-    );
+    await resolveBookingArrivalMonitors(ctx, booking, user._id, "rescheduled");
 
     return booking._id;
   },

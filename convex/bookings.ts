@@ -944,6 +944,9 @@ export const markVehicleAtShop = mutation({
     if (!booking) throw new Error("Booking not found");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (booking.status === "vehicle_at_shop") {
+      return { success: true, oldStatus: booking.status, newStatus: booking.status };
+    }
     if (booking.status !== "confirmed") {
       throw new Error("Only confirmed bookings can be marked vehicle here.");
     }
@@ -3965,18 +3968,21 @@ async function applySilentLateralMove(
   ]);
 
   const mechanic = await ctx.db.get(newMechanicId);
-  await insertNotificationOutbox(ctx, {
+  await enqueueNotificationOutbox(ctx, {
     shopId: booking.shop_id,
     bookingId: booking._id,
     userId: booking.user_id,
     mechanicId: newMechanicId,
     channel: "push",
-    kind: "silent_lateral_mechanic_change",
-    title: "Same time, different mechanic",
-    body: `Your appointment time is unchanged. The shop moved you to ${
-      mechanic ? `${mechanic.first_name} ${mechanic.last_name}`.trim() : "another mechanic"
-    }.`,
-    metadata: { sourceBookingId },
+    category: "silent_lateral_mechanic_change",
+    dedupeKey: `silent-lateral-mechanic-change:${String(booking._id)}:${String(newMechanicId)}:${String(sourceBookingId)}`,
+    payload: {
+      title: "Same time, different mechanic",
+      body: `Your appointment time is unchanged. The shop moved you to ${
+        mechanic ? `${mechanic.first_name} ${mechanic.last_name}`.trim() : "another mechanic"
+      }.`,
+      sourceBookingId,
+    },
   });
 }
 
@@ -3994,14 +4000,15 @@ async function applyDynamicDelayPlan(
 ) {
   for (const proposal of proposals) {
     if (proposal.blocked_reason) {
-      await insertNotificationOutbox(ctx, {
+      await enqueueNotificationOutbox(ctx, {
         shopId: sourceBooking.shop_id,
         bookingId: proposal.booking_id,
         channel: "front_desk",
-        kind: "dynamic_delay_blocked",
-        title: "Manual schedule adjustment needed",
-        body: proposal.blocked_reason,
-        metadata: {
+        category: "dynamic_delay_blocked",
+        dedupeKey: `dynamic-delay-blocked:${String(proposal.booking_id)}:${String(sourceBooking._id)}`,
+        payload: {
+          title: "Manual schedule adjustment needed",
+          body: proposal.blocked_reason,
           sourceBookingId: sourceBooking._id,
           proposal,
         },
@@ -5072,8 +5079,6 @@ export const getJobDetail = query({
       mechanicName: mechanic
         ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
         : null,
-      vehicleArrivedAtMs: booking.vehicle_arrived_at_ms ?? null,
-      assignmentPreference: getAssignmentPreference(booking),
       jobActuals: jobActual
         ? {
             _id: jobActual._id,
@@ -5649,41 +5654,6 @@ export const accept = mutation({
   },
 });
 
-export const markVehicleAtShop = mutation({
-  args: { bookingId: v.id("bookings") },
-  handler: async (ctx, args) => {
-    const user = await getCurrentUser(ctx);
-    const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
-
-    await requireShopStaff(ctx, user._id, booking.shop_id);
-
-    if (booking.status === "vehicle_at_shop") {
-      return { success: true, oldStatus: booking.status, newStatus: booking.status };
-    }
-    if (booking.status !== "confirmed") {
-      throw new Error("Only confirmed bookings can be marked as vehicle here.");
-    }
-
-    const now = Date.now();
-    await ctx.db.patch(args.bookingId, {
-      vehicle_arrived_at_ms: now,
-      vehicle_arrived_by_user_id: user._id,
-    });
-
-    return await applyBookingStatusTransition(ctx, {
-      booking: {
-        ...booking,
-        vehicle_arrived_at_ms: now,
-        vehicle_arrived_by_user_id: user._id,
-      },
-      newStatus: "vehicle_at_shop",
-      changedBy: user._id,
-      reason: "vehicle_arrived_at_shop",
-    });
-  },
-});
-
 // TODO: Remove this legacy start mutation once every caller has migrated to startWithPrejob.
 export const start = mutation({
   args: { bookingId: v.id("bookings") },
@@ -5948,24 +5918,26 @@ async function proposeRescheduleImpl(
     reason
   );
 
-  await insertNotificationOutbox(ctx, {
+  await enqueueNotificationOutbox(ctx, {
     shopId: booking.shop_id,
     bookingId: booking._id,
     userId: booking.user_id,
     channel: "push",
-    kind:
+    category:
       mode === "forced_delay"
         ? "booking_forced_delay_proposed"
         : "booking_reschedule_proposed",
-    title:
-      mode === "forced_delay"
-        ? "Schedule delay proposed"
-        : "Reschedule proposed",
-    body:
-      mode === "forced_delay"
-        ? `Your booking was delayed to ${formatTime(newScheduledTime)} while the shop adjusts the schedule.`
-        : `The shop proposed ${formatTime(newScheduledTime)} for this booking.`,
-    metadata: {
+    dedupeKey:
+      `booking-schedule-proposal:${String(booking._id)}:${mode}:${newScheduledDate}:${newScheduledTime}:${String(targetMechanicId ?? "none")}:${String(sourceBookingId ?? "none")}`,
+    payload: {
+      title:
+        mode === "forced_delay"
+          ? "Schedule delay proposed"
+          : "Reschedule proposed",
+      body:
+        mode === "forced_delay"
+          ? `Your booking was delayed to ${formatTime(newScheduledTime)} while the shop adjusts the schedule.`
+          : `The shop proposed ${formatTime(newScheduledTime)} for this booking.`,
       mode,
       sourceBookingId,
       previousDate: originalDate,

@@ -64,6 +64,22 @@ export const getByMechanicId = query({
   },
 });
 
+/**
+ * Returns the set of booking IDs the user has already reviewed. Used by the
+ * mobile My Bookings screen to decide whether to show the "Leave a review"
+ * card on a completed booking.
+ */
+export const listReviewedBookingIdsForUser = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("reviews")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.userId))
+      .collect();
+    return rows.map((r) => String(r.booking_id));
+  },
+});
+
 export const submit = mutation({
   args: {
     booking_id: v.id("bookings"),

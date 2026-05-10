@@ -1,4 +1,4 @@
-import { action, internalMutation, mutation } from "./_generated/server";
+import { action, internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import {
@@ -406,6 +406,52 @@ export const claimSeedDataForCurrentUser = mutation({
 
     await ctx.db.delete(seedId);
     return { claimed: true };
+  },
+});
+
+/**
+ * Seed time slots for ONE shop. Use when `seedTimeSlots` (which runs all
+ * shops in one transaction) blows the 4096-read limit. Idempotent — the
+ * underlying syncShopAvailabilityWindow upserts per mechanic-day, so safe
+ * to re-run.
+ *
+ * Usage:
+ *   npx convex run seed:seedTimeSlotsForShop '{"shopId":"...","days":14}'
+ *
+ * Args:
+ *   shopId — Id<"shops"> to seed
+ *   days   — number of days from today (default 14, smaller = fewer reads)
+ */
+export const seedTimeSlotsForShop = mutation({
+  args: {
+    shopId: v.id("shops"),
+    days: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const result = await syncShopAvailabilityWindow(ctx, {
+      shopId: args.shopId,
+      days: args.days ?? 14,
+    });
+    return {
+      success: true,
+      shopId: args.shopId,
+      slotsCreated: result.created,
+      slotsDeleted: result.deleted,
+    };
+  },
+});
+
+/**
+ * Lists shop ids (with names) so a developer can iterate
+ * `seedTimeSlotsForShop` over each one. Read-only.
+ *
+ * Usage: npx convex run seed:listSeedShopIds
+ */
+export const listSeedShopIds = query({
+  args: {},
+  handler: async (ctx) => {
+    const shops = await ctx.db.query("shops").collect();
+    return shops.map((s) => ({ id: s._id, name: s.name }));
   },
 });
 

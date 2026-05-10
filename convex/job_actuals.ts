@@ -228,6 +228,9 @@ export const startJob = mutation({
     if (!booking) throw new Error("Booking not found");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (!["vehicle_at_shop", "in_progress"].includes(booking.status)) {
+      throw new Error("Mark the vehicle as here before starting this booking.");
+    }
 
     const now = Date.now();
     await ensureJobActualRecord(ctx, {

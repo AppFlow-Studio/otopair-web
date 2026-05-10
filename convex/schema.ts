@@ -649,7 +649,8 @@ export default defineSchema({
     data_quality: v.optional(v.string()),
     created_at: v.optional(v.number()),
   })
-    .index("by_vehicle_config", ["vehicle_config_id", "service_id"])
+    .index("by_vehicle_config", ["vehicle_config_id"])
+    .index("by_vehicle_config_and_service", ["vehicle_config_id", "service_id"])
     .index("by_engine_family", ["engine_family"]),
 
   // ===== VEHICLES & OWNERSHIP =====
@@ -965,7 +966,10 @@ export default defineSchema({
     customInputs: v.optional(v.any()),
     confirmedHealthyAt: v.optional(v.number()),
     serviceSource: v.optional(v.string()),
-    confidence: v.optional(v.number()),
+    /** Categorical: "verified" | "unverified" | "self_reported". Schema
+     *  was originally v.number() but every writer (checkin, bookings)
+     *  uses string labels — the validator was the side that drifted. */
+    confidence: v.optional(v.string()),
     createdAt: v.optional(v.number()),
     updatedAt: v.optional(v.number()),
   })
@@ -1309,6 +1313,85 @@ export default defineSchema({
     .index("by_upstream_booking_id", ["upstream_booking_id"])
     .index("by_status", ["status"]),
 
+  customer_late_monitors: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    status: v.string(),
+    threshold_minutes: v.number(),
+    push_due_at_ms: v.number(),
+    sms_due_at_ms: v.number(),
+    threshold_due_at_ms: v.number(),
+    push_sent_at_ms: v.optional(v.number()),
+    sms_sent_at_ms: v.optional(v.number()),
+    alert_id: v.optional(v.id("customer_late_alerts")),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_status", ["status"]),
+
+  customer_late_alerts: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    monitor_id: v.id("customer_late_monitors"),
+    status: v.string(),
+    threshold_due_at_ms: v.number(),
+    resolved_at_ms: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    resolution: v.optional(v.string()),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_monitor_id", ["monitor_id"])
+    .index("by_status", ["status"]),
+
+  job_overrun_checkins: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    mechanic_id: v.id("mechanics"),
+    status: v.string(),
+    prompt_due_at_ms: v.number(),
+    mechanic_response_due_at_ms: v.number(),
+    default_apply_at_ms: v.number(),
+    prompt_sent_at_ms: v.optional(v.number()),
+    front_desk_prompt_sent_at_ms: v.optional(v.number()),
+    on_track_answer: v.optional(v.string()),
+    extension_minutes: v.optional(v.number()),
+    response_source: v.optional(v.string()),
+    answered_by_user_id: v.optional(v.id("users")),
+    resolved_at_ms: v.optional(v.number()),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_mechanic_id", ["mechanic_id"])
+    .index("by_status", ["status"]),
+
+  notification_outbox: defineTable({
+    shop_id: v.optional(v.id("shops")),
+    booking_id: v.optional(v.id("bookings")),
+    user_id: v.optional(v.id("users")),
+    mechanic_id: v.optional(v.id("mechanics")),
+    channel: v.string(),
+    kind: v.string(),
+    status: v.string(),
+    title: v.string(),
+    body: v.string(),
+    action_url: v.optional(v.string()),
+    metadata: v.optional(v.any()),
+    created_at: v.number(),
+    sent_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_user_id", ["user_id"])
+    .index("by_status", ["status"])
+    .index("by_kind", ["kind"]),
+
   // Tire quote responses — one row per shop response to a quote-stage
   // booking (status === "pending_quote"). The user picks one to accept,
   // which fills in shop_id/labor_cost/etc on the booking and flips it to
@@ -1389,8 +1472,13 @@ export default defineSchema({
     quantity: v.number(),
     labor_cost: v.number(),
     total: v.number(),
-    /** Free-text date/time for now (e.g. "Tomorrow, 10:00 AM"). Slotting + scheduling lands when the user accepts. */
-    availability: v.string(),
+    /** Structured date+time the shop can install. Mobile-side `acceptTireQuote`
+     *  copies these onto the booking as `scheduled_date` / `scheduled_time` so
+     *  the booking lands on the shop's calendar without parsing free text. */
+    availability: v.object({
+      date: v.string(), // "YYYY-MM-DD"
+      time: v.string(), // "HH:MM" (24h)
+    }),
     created_at: v.number(),
     /** Optional expiration so stale quotes can be filtered out. */
     expires_at: v.optional(v.number()),

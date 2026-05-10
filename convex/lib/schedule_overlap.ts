@@ -79,7 +79,13 @@ export function overlapsMechanicBooking(
   return bookings.some((booking) => {
     if (excludeBookingId && booking._id === excludeBookingId) return false;
     if (booking.scheduledDate !== date) return false;
-    if (booking.status === "cancelled" || booking.status === "declined") return false;
+    if (
+      booking.status === "cancelled" ||
+      booking.status === "declined" ||
+      booking.status === "no_show"
+    ) {
+      return false;
+    }
     if (booking.mechanicId !== mechanicId) return false;
     const bookingStart = toMinutes(booking.scheduledTime);
     const bookingEnd = toMinutes(

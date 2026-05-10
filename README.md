@@ -1,37 +1,40 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+<p align="center">
+  <img src="assets/images/repairconnectglasslogo.png" alt="OtoPair Logo" width="120" height="200" />
+</p>
 
-## Getting Started
+<h1 align="center">OtoPair</h1>
 
-First, run the development server:
+<p align="center">
+  <strong>Your trusted companion for seamless auto repair connections</strong>
+</p>
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#getting-started">Getting Started</a> •
+  <a href="#tech-stack">Tech Stack</a> •
+  <a href="#project-structure">Structure</a> •
+  <a href="#contributing">Contributing</a>
+</p>
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 🚗 What is OtoPair?
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+**OtoPair** is a modern mobile application that bridges the gap between car owners and trusted auto repair professionals. Whether you need a quick oil change, major repairs, or routine maintenance, OtoPair connects you with verified mechanics and service centers in your area.
 
-## Learn More
+No more endless phone calls, confusing quotes, or uncertainty about repair quality. OtoPair streamlines the entire process—from finding the right mechanic to booking appointments and tracking your vehicle's service history.
 
-To learn more about Next.js, take a look at the following resources:
+## ✨ Features
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### For Car Owners
+- **🔍 Find Nearby Services** — Discover trusted mechanics and service centers based on your location
+- **📅 Easy Booking** — Schedule appointments with just a few taps
+- **🚙 Vehicle Management** — Keep track of all your vehicles in one place
+- **📋 Service History** — Access complete maintenance records anytime
+- **⭐ Reviews & Ratings** — Make informed decisions with real customer feedback
+- **💬 Direct Communication** — Chat with service providers before booking
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-# Otopair-web
+### For Service Providers
+- **📊 Manage Bookings** — Streamline your appointment schedule
+- **👥 Customer Insights** — Build lasting relationships with car owners
+- **📈 Grow Your Business** — Expand your reach and attract new customers

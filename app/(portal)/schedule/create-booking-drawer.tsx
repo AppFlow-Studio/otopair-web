@@ -138,6 +138,9 @@ export default function CreateBookingDrawer({
   const [date, setDate] = useState(initialDate);
   const [time, setTime] = useState(initialTime);
   const [mechanicId, setMechanicId] = useState(initialMechanicId);
+  const [assignmentPreference, setAssignmentPreference] = useState<
+    "any" | "specific_mechanic"
+  >(initialMechanicId ? "specific_mechanic" : "any");
 
   const [isSaving, setIsSaving] = useState(false);
   const [outsideHoursConfirmOpen, setOutsideHoursConfirmOpen] = useState(false);
@@ -145,7 +148,7 @@ export default function CreateBookingDrawer({
   const shopData = useQuery(api.schedule.getShopServicesWithCategories);
   const createBooking = useMutation(api.bookings.createByShop);
 
-  const categories = shopData?.categories ?? [];
+  const categories = useMemo(() => shopData?.categories ?? [], [shopData?.categories]);
 
   /* ---- Overlap check ---- */
   const overlapError = useMemo(() => {
@@ -172,10 +175,6 @@ export default function CreateBookingDrawer({
   const blockingHoursError = useMemo(() => {
     if (!date || !time) return null;
 
-    const allServices = categories.flatMap((c) => c.services);
-    const selected = allServices.filter((s) => selectedIds.has(s._id));
-    const estMins = selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) || 60;
-    const endTime = getBookingEndTime(time, estMins);
     const dayHours = getShopHoursForDate(shopHours, date);
 
     if (!dayHours || dayHours.isClosed) {
@@ -183,7 +182,6 @@ export default function CreateBookingDrawer({
     }
 
     const startMins = toMins(time);
-    const endMins = toMins(endTime);
     const openMins = toMins(dayHours.openTime);
     const closeMins = toMins(dayHours.closeTime);
 
@@ -192,7 +190,7 @@ export default function CreateBookingDrawer({
     }
 
     return null;
-  }, [date, time, selectedIds, categories, shopHours]);
+  }, [date, time, shopHours]);
 
   const outsideHoursWarning = useMemo(() => {
     if (!date || !time) return null;
@@ -221,7 +219,11 @@ export default function CreateBookingDrawer({
   const toggleCat = (id: string) => {
     setExpandedCats((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   };
@@ -229,7 +231,11 @@ export default function CreateBookingDrawer({
   const toggleService = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   };
@@ -256,6 +262,7 @@ export default function CreateBookingDrawer({
         scheduledTime: time,
         serviceIds: Array.from(selectedIds) as Id<"services">[],
         mechanicId: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
+        assignmentPreference,
         laborCost: 0,
         partsCost: 0,
         estimatedLaborMinutes: estMinutes,
@@ -438,18 +445,26 @@ export default function CreateBookingDrawer({
             </div>
             {mechanics.length > 0 && (
               <div>
-                <DrawerFieldLabel>Mechanic</DrawerFieldLabel>
+                <DrawerFieldLabel>Assignment</DrawerFieldLabel>
                 <Select
-                  selectedKey={mechanicId || "unassigned"}
-                  onSelectionChange={(key) => setMechanicId(key === "unassigned" ? "" : String(key))}
+                  selectedKey={assignmentPreference === "any" ? "any" : mechanicId}
+                  onSelectionChange={(key) => {
+                    if (key === "any") {
+                      setAssignmentPreference("any");
+                      setMechanicId("");
+                      return;
+                    }
+                    setAssignmentPreference("specific_mechanic");
+                    setMechanicId(String(key));
+                  }}
                 >
                   <SelectTrigger className={drawerSelectTriggerClassName}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectPopover placement="bottom start">
                     <SelectListBox shouldFocusWrap>
-                      <SelectItem id="unassigned" textValue="Unassigned">
-                        <span className="text-muted-foreground">Unassigned</span>
+                      <SelectItem id="any" textValue="Any mechanic">
+                        <span className="text-muted-foreground">Any mechanic</span>
                       </SelectItem>
                       {mechanics.map((m) => (
                         <SelectItem key={m._id} id={m._id} textValue={m.name}>{m.name}</SelectItem>

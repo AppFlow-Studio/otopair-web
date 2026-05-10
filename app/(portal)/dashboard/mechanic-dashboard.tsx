@@ -98,6 +98,8 @@ export default function MechanicDashboard() {
   const savePrejob = useMutation(api.bookings.savePrejob);
   const startWithPrejob = useMutation(api.bookings.startWithPrejob);
   const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
+  const answerOverrunCheckIn = useMutation(api.bookings.answerOverrunCheckIn);
+  const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
   const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
   const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -259,6 +261,32 @@ export default function MechanicDashboard() {
     }
   }
 
+  async function handleOverrunAnswer(
+    bookingId: string,
+    action: "complete" | number,
+  ) {
+    setBusyAction(`overrun:${bookingId}`);
+    try {
+      if (action === "complete") {
+        await answerOverrunCheckIn({
+          bookingId: bookingId as Id<"bookings">,
+          isComplete: true,
+        });
+        setToast("Overrun check-in closed");
+      } else {
+        await answerOverrunExtension({
+          bookingId: bookingId as Id<"bookings">,
+          extensionMinutes: action,
+        });
+        setToast(`Added ${action} minutes`);
+      }
+    } catch (error: unknown) {
+      setToast(error instanceof Error ? error.message : "Could not answer overrun check-in");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   if (dashboard === undefined) {
     return (
       <div className="min-h-[40vh] flex items-center justify-center">
@@ -347,6 +375,9 @@ export default function MechanicDashboard() {
             {dashboard.todaysJobs.map((job, index) => {
               const actionKeyStart = `start:${job._id}`;
               const actionKeyComplete = `complete:${job._id}`;
+              const overrunCheckin = dashboard.openOverrunCheckins?.find(
+                (row) => String(row.bookingId) === String(job._id),
+              );
               const initials = getInitials(job.customerDisplayName);
               return (
                 <div
@@ -386,6 +417,15 @@ export default function MechanicDashboard() {
                   <div className="mt-5 flex flex-wrap gap-2">
                     {job.status === "confirmed" ? (
                       <button
+                        disabled
+                        className="inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-muted-foreground opacity-70"
+                      >
+                        Awaiting vehicle
+                      </button>
+                    ) : null}
+
+                    {job.status === "vehicle_at_shop" ? (
+                      <button
                         onClick={() => openWorkflowDialog(String(job._id), "prejob")}
                         disabled={
                           busyAction === actionKeyStart ||
@@ -407,6 +447,33 @@ export default function MechanicDashboard() {
                           ? "Confirm Specs in Details"
                           : "Start Booking"}
                       </button>
+                    ) : null}
+
+                    {overrunCheckin && job.status === "in_progress" ? (
+                      <div className="flex w-full flex-wrap items-center gap-2 rounded-xl border border-cyan-200 bg-cyan-50 p-3">
+                        <span className="text-xs font-semibold text-cyan-800">
+                          Overrun check
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleOverrunAnswer(String(job._id), "complete")}
+                          disabled={busyAction === `overrun:${String(job._id)}`}
+                          className="rounded-lg bg-cyan-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+                        >
+                          On track
+                        </button>
+                        {[15, 30, 45, 60].map((minutes) => (
+                          <button
+                            key={minutes}
+                            type="button"
+                            onClick={() => void handleOverrunAnswer(String(job._id), minutes)}
+                            disabled={busyAction === `overrun:${String(job._id)}`}
+                            className="rounded-lg border border-cyan-200 bg-white px-3 py-1.5 text-xs font-medium text-cyan-900 disabled:opacity-60"
+                          >
+                            +{minutes}m
+                          </button>
+                        ))}
+                      </div>
                     ) : null}
 
                     {job.status === "in_progress" ? (

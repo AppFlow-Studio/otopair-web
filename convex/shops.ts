@@ -4,6 +4,12 @@ import {
   syncMechanicAvailabilityWindow,
   syncShopAvailabilityWindow,
 } from "./lib/timeSlotAvailability";
+import {
+  DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
+  DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
+  DEFAULT_OVERRUN_EXTENSION_PERCENT,
+  validateNoShowThresholdMinutes,
+} from "../lib/scheduling-overhaul";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
@@ -372,6 +378,50 @@ export const getMyPortalAccess = query({
     }
 
     return { status: "no_shop" as const, userRole: user.role };
+  },
+});
+
+export const updateMySchedulingSettings = mutation({
+  args: {
+    noShowThresholdMinutes: v.number(),
+    overrunDefaultExtensionPercent: v.number(),
+    overrunExtensionFloorMinutes: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Only shop owners can update scheduling settings.");
+    }
+
+    validateNoShowThresholdMinutes(args.noShowThresholdMinutes);
+    if (!Number.isFinite(args.overrunDefaultExtensionPercent) || args.overrunDefaultExtensionPercent < 0) {
+      throw new Error("Overrun default extension percent must be 0 or greater.");
+    }
+    if (!Number.isFinite(args.overrunExtensionFloorMinutes) || args.overrunExtensionFloorMinutes < 0) {
+      throw new Error("Overrun extension floor must be 0 or greater.");
+    }
+
+    await ctx.db.patch(primary.shop._id, {
+      no_show_threshold_minutes: Number.isFinite(args.noShowThresholdMinutes)
+        ? Math.round(args.noShowThresholdMinutes)
+        : DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
+      overrun_default_extension_percent: Number.isFinite(
+        args.overrunDefaultExtensionPercent,
+      )
+        ? Math.round(args.overrunDefaultExtensionPercent)
+        : DEFAULT_OVERRUN_EXTENSION_PERCENT,
+      overrun_extension_floor_minutes: Number.isFinite(
+        args.overrunExtensionFloorMinutes,
+      )
+        ? Math.round(args.overrunExtensionFloorMinutes)
+        : DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
+    });
+
+    return primary.shop._id;
   },
 });
 

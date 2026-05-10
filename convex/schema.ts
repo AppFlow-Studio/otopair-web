@@ -1096,6 +1096,10 @@ export default defineSchema({
     onboarding_complete: v.optional(v.boolean()),
     email: v.optional(v.string()),
     website: v.optional(v.string()),
+    timezone: v.optional(v.string()),
+    no_show_threshold_minutes: v.optional(v.number()),
+    overrun_default_extension_percent: v.optional(v.number()),
+    overrun_extension_floor_minutes: v.optional(v.number()),
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
@@ -1244,6 +1248,9 @@ export default defineSchema({
     previous_scheduled_time: v.optional(v.string()),
     previous_mechanic_id: v.optional(v.id("mechanics")),
     previous_status: v.optional(v.string()),
+    vehicle_arrived_at_ms: v.optional(v.number()),
+    vehicle_arrived_by_user_id: v.optional(v.id("users")),
+    assignment_preference: v.optional(v.string()),
     reschedule_proposed_at: v.optional(v.number()),
     schedule_change_mode: v.optional(v.string()),
     schedule_change_source_booking_id: v.optional(v.id("bookings")),
@@ -1306,6 +1313,73 @@ export default defineSchema({
   // booking (status === "pending_quote"). The user picks one to accept,
   // which fills in shop_id/labor_cost/etc on the booking and flips it to
   // "confirmed".
+  notification_outbox: defineTable({
+    shop_id: v.optional(v.id("shops")),
+    booking_id: v.optional(v.id("bookings")),
+    user_id: v.optional(v.id("users")),
+    mechanic_id: v.optional(v.id("mechanics")),
+    channel: v.string(),
+    category: v.string(),
+    status: v.string(),
+    dedupe_key: v.string(),
+    payload: v.any(),
+    scheduled_for_ms: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+    processed_at: v.optional(v.number()),
+  })
+    .index("by_dedupe_key", ["dedupe_key"])
+    .index("by_status", ["status"])
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
+
+  customer_late_monitors: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    status: v.string(),
+    scheduled_start_ms: v.number(),
+    push_due_at_ms: v.number(),
+    sms_due_at_ms: v.number(),
+    threshold_due_at_ms: v.number(),
+    push_enqueued_at_ms: v.optional(v.number()),
+    sms_enqueued_at_ms: v.optional(v.number()),
+    frontdesk_enqueued_at_ms: v.optional(v.number()),
+    resolved_at_ms: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_status", ["status"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
+
+  overrun_checkins: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    mechanic_id: v.optional(v.id("mechanics")),
+    status: v.string(),
+    due_at_ms: v.number(),
+    escalation_due_at_ms: v.number(),
+    auto_apply_at_ms: v.number(),
+    default_extension_minutes: v.number(),
+    mechanic_prompted_at_ms: v.optional(v.number()),
+    frontdesk_escalated_at_ms: v.optional(v.number()),
+    answered_at_ms: v.optional(v.number()),
+    answered_by_user_id: v.optional(v.id("users")),
+    answer_source: v.optional(v.string()),
+    is_complete: v.optional(v.boolean()),
+    extension_minutes: v.optional(v.number()),
+    resolved_at_ms: v.optional(v.number()),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_status", ["status"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
+
   tire_quote_responses: defineTable({
     booking_id: v.id("bookings"),
     shop_id: v.id("shops"),

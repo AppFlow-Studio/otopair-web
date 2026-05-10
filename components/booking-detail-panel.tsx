@@ -73,7 +73,7 @@ const CANCEL_REASONS = [
 ];
 
 function getCancelReasons(status?: string | null) {
-  return status === "confirmed"
+  return status === "confirmed" || status === "vehicle_at_shop"
     ? [
         CANCEL_REASONS[0],
         "Customer no-show",
@@ -153,8 +153,10 @@ function humanizeStatus(
     pending_shop_acceptance: "Pending Shop Acceptance",
     pending_customer_acceptance: "Pending Customer Acceptance",
     confirmed: "Confirmed",
+    vehicle_at_shop: "Vehicle Here",
     in_progress: "In Progress",
     completed: "Completed",
+    no_show: "No-show",
     cancelled:
       oldStatus === "pending" || oldStatus === "pending_shop_acceptance"
         ? "Declined"
@@ -213,6 +215,9 @@ export interface JobDetailData {
   laborCost: number;
   partsCost: number;
   mechanicId?: Id<"mechanics"> | null;
+  assignmentPreference?: "any" | "specific_mechanic";
+  vehicleArrivedAtMs?: number | null;
+  vehicleArrivedByUserId?: Id<"users"> | null;
   history: Array<{
     _id: Id<"booking_status_history">;
     changed_at: number;
@@ -337,6 +342,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const acceptJob = useMutation(api.bookings.accept);
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
+    const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+    const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
     const savePrejob = useMutation(api.bookings.savePrejob);
     const startWithPrejob = useMutation(api.bookings.startWithPrejob);
@@ -362,13 +369,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       !!job &&
       (job.status === "pending" ||
         job.status === "pending_shop_acceptance" ||
-        job.status === "confirmed");
+        job.status === "confirmed" ||
+        job.status === "vehicle_at_shop");
     const currentMechanicId = job?.mechanicId ? String(job.mechanicId) : "";
+    const currentAssignmentKey =
+      job?.assignmentPreference === "any" ? "" : currentMechanicId;
     const hasMechanicSelectionChange =
-      assigningMechanicId !== currentMechanicId;
+      assigningMechanicId !== currentAssignmentKey;
     const canSubmitMechanicChange =
       canAssignMechanic &&
-      !!selectedMechanicId &&
       hasMechanicSelectionChange;
     const jobId = job?._id;
     const completedColors = BOOKING_STATUS_VISUALS.completed.calendarColors;
@@ -390,7 +399,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setActionError("");
       setShowPrejobDialog(false);
       setShowPostjobDialog(false);
-      setAssigningMechanicId(currentMechanicId);
+      setAssigningMechanicId(currentAssignmentKey);
       setShowActualsDialog(false);
       setActualsDialogMode("complete");
       setCopiedField(null);
@@ -398,7 +407,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         window.clearTimeout(copyEmailTimeoutRef.current);
         copyEmailTimeoutRef.current = null;
       }
-    }, [jobId, currentMechanicId]);
+    }, [jobId, currentAssignmentKey]);
 
     // Reset decline modal state when it closes
     useEffect(() => {
@@ -522,9 +531,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     async function handleAssignMechanic() {
       if (!canSubmitMechanicChange) return;
-      if (!job?._id || !selectedMechanicId) return;
+      if (!job?._id) return;
       setActionError("");
       const assignmentConflict =
+        selectedMechanicId &&
         scheduleConflicts &&
         getMechanicAssignmentConflict(
           {
@@ -553,6 +563,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
 
       if (
+        selectedMechanicId &&
         shouldConfirmMechanicChange(
           job.mechanicId ? String(job.mechanicId) : undefined,
           String(selectedMechanicId)
@@ -592,10 +603,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       try {
         await updateJob({
           bookingId: job._id,
-          mechanicId: selectedMechanicId as Id<"mechanics">,
+          mechanicId: selectedMechanicId
+            ? (selectedMechanicId as Id<"mechanics">)
+            : null,
+          assignmentPreference: selectedMechanicId
+            ? "specific_mechanic"
+            : "any",
         });
-        setAssigningMechanicId(String(selectedMechanicId));
-        onSuccess?.(job.mechanicId ? "Mechanic reassigned" : "Mechanic assigned");
+        setAssigningMechanicId(selectedMechanicId ? String(selectedMechanicId) : "");
+        onSuccess?.(selectedMechanicId ? "Mechanic locked" : "Any mechanic selected");
       } catch (err: unknown) {
         setActionError(
           err instanceof Error
@@ -609,8 +625,44 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     async function handleStartJob() {
       if (!job?._id || !job.mechanicId) return;
+      if (job.status !== "vehicle_at_shop") {
+        setActionError("Mark the vehicle here before starting work.");
+        return;
+      }
       setActionError("");
       setShowPrejobDialog(true);
+    }
+
+    async function handleVehicleAtShop() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await markVehicleAtShop({ bookingId: job._id });
+        onSuccess?.("Vehicle marked here");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not mark vehicle here.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handlePostThresholdNoShow() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await markPostThresholdNoShow({ bookingId: job._id });
+        onSuccess?.("Booking marked no-show");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not mark no-show.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
     }
 
     async function handleCopyValue(
@@ -762,7 +814,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     function handleResetMechanicSelection() {
       setActionError("");
-      setAssigningMechanicId(currentMechanicId);
+      setAssigningMechanicId(currentAssignmentKey);
       requestAnimationFrame(() => {
         wrapperRef.current?.focus();
       });
@@ -907,7 +959,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           setShowCancelRescheduleConfirm(true);
           return true;
         }
-        if ((e.key === "t" || e.key === "T") && job?.status === "confirmed") {
+        if ((e.key === "v" || e.key === "V") && job?.status === "confirmed") {
+          handleVehicleAtShop();
+          return true;
+        }
+        if ((e.key === "t" || e.key === "T") && job?.status === "vehicle_at_shop") {
           handleStartJob();
           return true;
         }
@@ -1118,14 +1174,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 {/* Assign mechanic */}
                 <div className="rounded-2xl bg-muted/20 p-4">
                   <DrawerFieldLabel className="mb-3">
-                    Assigned Mechanic
+                    Assignment
                   </DrawerFieldLabel>
                   <div className="flex flex-wrap gap-2">
                     <div ref={assignTriggerRef}>
                       <Select
                         isDisabled={!canAssignMechanic || isActioning}
                         selectedKey={
-                          assigningMechanicId || "unassigned"
+                          assigningMechanicId || "any"
                         }
                         onOpenChange={(isOpen) => {
                           if (!isOpen) {
@@ -1142,7 +1198,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         onSelectionChange={(key) => {
                           setActionError("");
                           setAssigningMechanicId(
-                            key === "unassigned" ? "" : String(key),
+                            key === "any" ? "" : String(key),
                           );
                           requestAnimationFrame(() => {
                             wrapperRef.current?.focus();
@@ -1165,12 +1221,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           data-assign-dropdown
                         >
                           <SelectListBox shouldFocusWrap>
-                            <SelectItem
-                              id="unassigned"
-                              textValue="Unassigned"
-                            >
+                            <SelectItem id="any" textValue="Any mechanic">
                               <span className="text-muted-foreground">
-                                Unassigned
+                                Any mechanic
                               </span>
                             </SelectItem>
                             {mechanics.map((m) => (
@@ -1250,17 +1303,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   const canAccept =
                     s === "pending" || s === "pending_shop_acceptance";
                   const canComplete = s === "in_progress";
-                  const canStartJob = s === "confirmed";
+                  const canMarkVehicleHere = s === "confirmed";
+                  const canStartJob = s === "vehicle_at_shop";
+                  const canMarkNoShow = s === "confirmed";
                   const canDecline =
                     s === "pending" || s === "pending_shop_acceptance";
                   const canCancel =
-                    s === "confirmed" || s === "in_progress";
+                    s === "confirmed" ||
+                    s === "vehicle_at_shop" ||
+                    s === "in_progress";
 
                   if (
                     !canAccept &&
+                    !canMarkVehicleHere &&
                     !canComplete &&
                     !canDecline &&
-                    !canCancel
+                    !canCancel &&
+                    !canMarkNoShow
                   )
                     return null;
                   return (
@@ -1336,6 +1395,18 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             Open vehicle check
                           </button>
                         )}
+                        {canMarkVehicleHere && (
+                          <button
+                            onClick={handleVehicleAtShop}
+                            disabled={isActioning}
+                            className={drawerPrimaryButtonClassName}
+                          >
+                            {isActioning ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : null}
+                            Vehicle here
+                          </button>
+                        )}
                         {canComplete && job.status === "in_progress" && (
                           // TODO: Fix --success usage
                           <button
@@ -1382,6 +1453,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               </span>
                               ecline
                             </span>
+                          </button>
+                        )}
+                        {canMarkNoShow && (
+                          <button
+                            onClick={handlePostThresholdNoShow}
+                            disabled={isActioning}
+                            className={drawerDestructiveButtonClassName}
+                          >
+                            Mark no-show
                           </button>
                         )}
                         {canCancel && (

@@ -47,6 +47,18 @@ crons.interval(
   internal.bookings.revertExpiredReschedules,
 );
 
+crons.interval(
+  "process-customer-late-monitors",
+  { minutes: 1 },
+  internal.bookings.processCustomerLateMonitors,
+);
+
+crons.interval(
+  "process-overrun-checkins",
+  { minutes: 1 },
+  internal.bookings.processOverrunCheckins,
+);
+
 if (!isLateStartTestModeEnabled()) {
   crons.interval(
     "process-late-start-monitors",

@@ -251,6 +251,13 @@ function OwnerDashboardPage({
     shopId?: string;
     userRole?: string;
     mechanics?: Array<{ _id: string; name: string }>;
+    hours?: Array<{
+      _id: string;
+      dayOfWeek: number;
+      openTime: string;
+      closeTime: string;
+      isClosed: boolean;
+    }>;
   } | null;
 }) {
   const { user } = useUser();
@@ -1025,6 +1032,7 @@ function OwnerDashboardPage({
       <LateStartReviewDialog
         review={selectedLateStartReview}
         mechanics={mechanics}
+        shopHours={context?.hours ?? []}
         error={lateStartReviewError}
         isSubmitting={isSubmittingLateStartReview}
         onClose={() => {

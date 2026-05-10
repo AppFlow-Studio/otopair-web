@@ -2585,6 +2585,45 @@ export const getMyShopJobContext = query({
   },
 });
 
+// TODO: stub — late-start review feature is not yet implemented server-side.
+// Replace with real implementations once the `late_start_reviews` table and
+// workflow are designed.
+export const getOpenLateStartReviews = query({
+  args: {},
+  handler: async () => [] as any[],
+});
+
+export const acceptLateStartReview = mutation({
+  args: { reviewId: v.string() },
+  handler: async () => {
+    throw new Error("Late-start reviews are not implemented yet.");
+  },
+});
+
+export const denyLateStartReview = mutation({
+  args: { reviewId: v.string() },
+  handler: async () => {
+    throw new Error("Late-start reviews are not implemented yet.");
+  },
+});
+
+export const applyManualLateStartReview = mutation({
+  args: {
+    reviewId: v.string(),
+    manualTargets: v.array(
+      v.object({
+        bookingId: v.string(),
+        newScheduledDate: v.string(),
+        newScheduledTime: v.string(),
+        newMechanicId: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async () => {
+    throw new Error("Late-start reviews are not implemented yet.");
+  },
+});
+
 export const getMyOwnerDashboard = query({
   args: {},
   handler: async (ctx) => {

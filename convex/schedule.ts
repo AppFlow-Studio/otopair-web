@@ -236,6 +236,30 @@ export const getScheduleContext = query({
   },
 });
 
+export const getMyShopHours = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return [];
+
+    const hours = await ctx.db
+      .query("shops_hours")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+    hours.sort((a: any, b: any) => a.day_of_week - b.day_of_week);
+
+    return hours.map((hour: any) => ({
+      dayOfWeek: hour.day_of_week,
+      openTime: hour.open_time ?? "09:00",
+      closeTime: hour.close_time ?? "17:00",
+      isClosed: hour.is_closed ?? false,
+    }));
+  },
+});
+
 export const getBookingsForRange = query({
   args: {
     dateFrom: v.string(),

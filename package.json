@@ -24,7 +24,6 @@
     "@tsparticles/react": "^3.0.0",
     "@tsparticles/slim": "^3.9.1",
     "@types/canvas-confetti": "^1.9.0",
-
     "@types/qrcode": "^1.5.6",
     "canvas-confetti": "^1.9.4",
     "class-variance-authority": "^0.7.1",

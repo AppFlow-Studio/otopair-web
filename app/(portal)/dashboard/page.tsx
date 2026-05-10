@@ -290,6 +290,7 @@ function OwnerDashboardPage({
     actualsBookingId ? { bookingId: actualsBookingId } : "skip",
   );
   const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
+  const shopHours = useQuery(api.schedule.getMyShopHours);
   const mechanics = useMemo(() => context?.mechanics ?? [], [context?.mechanics]);
   const selectedLateStartReview = useMemo<LateStartReviewView | null>(() => {
     if (!lateStartReviews || !selectedLateStartReviewId) return null;
@@ -1025,6 +1026,7 @@ function OwnerDashboardPage({
       <LateStartReviewDialog
         review={selectedLateStartReview}
         mechanics={mechanics}
+        shopHours={shopHours ?? []}
         error={lateStartReviewError}
         isSubmitting={isSubmittingLateStartReview}
         onClose={() => {

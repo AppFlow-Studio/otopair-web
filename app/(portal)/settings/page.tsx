@@ -6,6 +6,8 @@ import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { LogOut, MapPin, Phone, Globe, Mail, ExternalLink } from "lucide-react";
+import HoursEditor from "./hours-editor";
+import ServicesEditor from "./services-editor";
 
 export default function SettingsPage() {
   const { signOut } = useClerk();
@@ -121,6 +123,9 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+
+        {shop && <HoursEditor />}
+        {shop && <ServicesEditor />}
 
         <div className="bg-white rounded-xl border border-gray-200">
           <div className="px-6 pt-5 pb-2">

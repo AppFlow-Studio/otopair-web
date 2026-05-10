@@ -929,7 +929,14 @@ export default function ShopSetupPage() {
 
     setSavingStep(0);
     try {
-      const normalizedAddress = await validateShopAddressWithGoogle(details);
+      const normalizedAddress = addressSelectedFromAutocomplete
+        ? {
+            address: details.address,
+            city: details.city,
+            state: details.state,
+            zipCode: details.zipCode,
+          }
+        : await validateShopAddressWithGoogle(details);
       const nextDetails = {
         ...details,
         ...normalizedAddress,
@@ -1754,19 +1761,66 @@ export default function ShopSetupPage() {
                       Select the services this shop should show as available.
                     </p>
                   </div>
-                  <div className="rounded-lg bg-primary/5 px-3 py-1 text-sm font-medium text-primary">
-                    {offeredCount} selected
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allIds = serviceCategories.flatMap((c) =>
+                          c.services.map((s) => s._id)
+                        );
+                        const allSelected =
+                          allIds.length > 0 && allIds.every((id) => selectedServiceIds.has(id));
+                        setSelectedServiceIds(allSelected ? new Set() : new Set(allIds));
+                      }}
+                      className="text-sm font-medium text-primary hover:underline"
+                    >
+                      {(() => {
+                        const allIds = serviceCategories.flatMap((c) =>
+                          c.services.map((s) => s._id)
+                        );
+                        return allIds.length > 0 && allIds.every((id) => selectedServiceIds.has(id))
+                          ? "Clear all"
+                          : "Select all";
+                      })()}
+                    </button>
+                    <div className="rounded-lg bg-primary/5 px-3 py-1 text-sm font-medium text-primary">
+                      {offeredCount} selected
+                    </div>
                   </div>
                 </div>
 
                 <div className="space-y-4">
-                  {serviceCategories.map((category) => (
+                  {serviceCategories
+                    .filter((category) => category.services.length > 0)
+                    .map((category) => {
+                    const categoryIds = category.services.map((s) => s._id);
+                    const allInCategorySelected = categoryIds.every((id) =>
+                      selectedServiceIds.has(id)
+                    );
+                    return (
                     <div
                       key={category.id}
                       className="overflow-hidden rounded-xl border border-border"
                     >
-                      <div className="border-b border-border bg-muted px-4 py-3">
+                      <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-3">
                         <h4 className="text-sm font-semibold text-foreground">{category.name}</h4>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedServiceIds((prev) => {
+                              const next = new Set(prev);
+                              if (allInCategorySelected) {
+                                categoryIds.forEach((id) => next.delete(id));
+                              } else {
+                                categoryIds.forEach((id) => next.add(id));
+                              }
+                              return next;
+                            })
+                          }
+                          className="text-xs font-medium text-primary hover:underline"
+                        >
+                          {allInCategorySelected ? "Clear" : "Select all"}
+                        </button>
                       </div>
                       <div className="divide-y divide-gray-100">
                         {category.services.map((service) => {
@@ -1807,7 +1861,8 @@ export default function ShopSetupPage() {
                         })}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 

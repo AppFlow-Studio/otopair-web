@@ -1219,6 +1219,14 @@ export default defineSchema({
     mechanic_id: v.optional(v.id("mechanics")),
     vin: v.string(),
     service_ids: v.array(v.id("services")),
+    custom_services: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          duration_minutes: v.optional(v.number()),
+        })
+      )
+    ),
     time_slot_id: v.optional(v.id("time_slots")),
     scheduled_date: v.optional(v.string()),
     scheduled_time: v.optional(v.string()),

@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/phone";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { ArrowRight, Calendar, Car, ChevronDown, Loader2, Search, User, Wrench, X } from "lucide-react";
+import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, Plus, Search, User, Wrench, X } from "lucide-react";
 import {
   Select,
   SelectItem,
@@ -20,6 +21,7 @@ import {
   DrawerSectionHeader,
 } from "@/components/drawer-panel-styles";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
+import DatePicker from "@/components/ui/date-picker";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 
 /* ------------------------------------------------------------------ */
@@ -47,9 +49,10 @@ interface ShopHour {
 }
 
 interface CreateBookingDrawerProps {
-  initialDate: string;
-  initialTime: string;
-  initialMechanicId: string;
+  date: string;
+  time: string;
+  mechanicId: string;
+  onDraftChange: (next: { date: string; time: string; mechanicId: string }) => void;
   mechanics: Mechanic[];
   bookings: Booking[];
   shopHours: ShopHour[];
@@ -109,9 +112,10 @@ function getUserFacingErrorMessage(err: unknown): string {
 /* ------------------------------------------------------------------ */
 
 export default function CreateBookingDrawer({
-  initialDate,
-  initialTime,
-  initialMechanicId,
+  date,
+  time,
+  mechanicId,
+  onDraftChange,
   mechanics,
   bookings,
   shopHours,
@@ -122,6 +126,7 @@ export default function CreateBookingDrawer({
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
 
   /* ---- Vehicle ---- */
   const [vin, setVin] = useState("");
@@ -129,15 +134,137 @@ export default function CreateBookingDrawer({
   const [make, setMake] = useState("");
   const [model, setModel] = useState("");
 
+  /* ---- VIN decode (NHTSA) ---- */
+  const [vinLookupState, setVinLookupState] = useState<"idle" | "loading" | "error">("idle");
+  const [vinSuggestion, setVinSuggestion] = useState<{
+    vin: string;
+    year?: string;
+    make?: string;
+    model?: string;
+    trim?: string;
+  } | null>(null);
+  const [vinImageUrl, setVinImageUrl] = useState<string | null>(null);
+  const [vinImageLoading, setVinImageLoading] = useState(false);
+  const [vinConfirmOpen, setVinConfirmOpen] = useState(false);
+  const lastDecodedVinRef = useRef<string>("");
+
+  const VIN_REGEX = /^[A-HJ-NPR-Z0-9]{17}$/i;
+
+  useEffect(() => {
+    const trimmed = vin.trim().toUpperCase();
+    if (trimmed.length !== 17 || !VIN_REGEX.test(trimmed)) {
+      setVinLookupState("idle");
+      return;
+    }
+    if (trimmed === lastDecodedVinRef.current) return;
+
+    let cancelled = false;
+    setVinLookupState("loading");
+    const handle = window.setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValuesExtended/${encodeURIComponent(
+            trimmed
+          )}?format=json`
+        );
+        if (!res.ok) throw new Error("NHTSA request failed");
+        const data = await res.json();
+        const row = data?.Results?.[0];
+        if (cancelled) return;
+        if (!row || row.ErrorCode === "11" || (!row.Make && !row.Model && !row.ModelYear)) {
+          setVinLookupState("error");
+          return;
+        }
+        lastDecodedVinRef.current = trimmed;
+        setVinSuggestion({
+          vin: trimmed,
+          year: row.ModelYear || undefined,
+          make: row.Make || undefined,
+          model: row.Model || undefined,
+          trim: row.Trim || undefined,
+        });
+        setVinImageUrl(null);
+        setVinImageLoading(true);
+        setVinConfirmOpen(true);
+        setVinLookupState("idle");
+
+        const imgParams = new URLSearchParams({ vin: trimmed });
+        if (row.ModelYear) imgParams.set("year", String(row.ModelYear));
+        if (row.Make) imgParams.set("make", String(row.Make));
+        if (row.Model) imgParams.set("model", String(row.Model));
+        if (row.Trim) imgParams.set("trim", String(row.Trim));
+        fetch(`/api/vehicle-image?${imgParams.toString()}`)
+          .then((r) => (r.ok ? r.json() : Promise.resolve({ imageUrl: null })))
+          .then((data) => {
+            if (cancelled) return;
+            setVinImageUrl(data?.imageUrl ?? null);
+          })
+          .catch(() => {
+            if (!cancelled) setVinImageUrl(null);
+          })
+          .finally(() => {
+            if (!cancelled) setVinImageLoading(false);
+          });
+      } catch {
+        if (!cancelled) setVinLookupState("error");
+      }
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [vin]);
+
+  function applyVinSuggestion() {
+    if (!vinSuggestion) return;
+    if (vinSuggestion.year) setYear(vinSuggestion.year);
+    if (vinSuggestion.make) setMake(vinSuggestion.make);
+    if (vinSuggestion.model) setModel(vinSuggestion.model);
+    setVinConfirmOpen(false);
+  }
+
   /* ---- Services ---- */
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
+  const [customServices, setCustomServices] = useState<
+    Array<{ name: string; durationMinutes?: number }>
+  >([]);
+  const [showCustomForm, setShowCustomForm] = useState(false);
+  const [customDraftName, setCustomDraftName] = useState("");
+  const [customDraftMinutes, setCustomDraftMinutes] = useState("");
 
-  /* ---- Scheduling ---- */
-  const [date, setDate] = useState(initialDate);
-  const [time, setTime] = useState(initialTime);
-  const [mechanicId, setMechanicId] = useState(initialMechanicId);
+  /* ---- Scheduling (controlled by parent) ---- */
+  const setDate = (next: string) => onDraftChange({ date: next, time, mechanicId });
+  const setTime = (next: string) => onDraftChange({ date, time: next, mechanicId });
+  const setMechanicId = (next: string) => onDraftChange({ date, time, mechanicId: next });
+
+  /* ---- Now-forward bounds ---- */
+  const todayISO = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, []);
+  const minTimeToday = useMemo(() => {
+    const d = new Date();
+    const totalMins = d.getHours() * 60 + d.getMinutes();
+    const rounded = totalMins % 15 === 0 ? totalMins : totalMins + (15 - (totalMins % 15));
+    const h = Math.min(23, Math.floor(rounded / 60));
+    const m = rounded >= 24 * 60 ? 45 : rounded % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }, []);
+  const isToday = date === todayISO;
+  const filteredTimeOptions = useMemo(() => {
+    const dayHours = getShopHoursForDate(shopHours, date);
+    return TIME_OPTIONS.filter((o) => {
+      if (isToday && o.value < minTimeToday) return false;
+      if (dayHours && !dayHours.isClosed) {
+        const m = toMins(o.value);
+        if (m < toMins(dayHours.openTime) || m >= toMins(dayHours.closeTime)) return false;
+      }
+      return true;
+    });
+  }, [isToday, minTimeToday, shopHours, date]);
 
   const [isSaving, setIsSaving] = useState(false);
   const [outsideHoursConfirmOpen, setOutsideHoursConfirmOpen] = useState(false);
@@ -152,7 +279,8 @@ export default function CreateBookingDrawer({
     if (!mechanicId || !date || !time) return null;
     const allServices = categories.flatMap((c) => c.services);
     const selected = allServices.filter((s) => selectedIds.has(s._id));
-    const estMins = selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) || 60;
+    const customMins = customServices.reduce((sum, c) => sum + (c.durationMinutes ?? 0), 0);
+    const estMins = (selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) + customMins) || 60;
     const endTime = getBookingEndTime(time, estMins);
     const startMins = toMins(time);
     const endMins = toMins(endTime);
@@ -167,14 +295,15 @@ export default function CreateBookingDrawer({
       return bStart < endMins && bEnd > startMins;
     });
     return conflict ? "This time slot overlaps an existing booking for this mechanic." : null;
-  }, [mechanicId, date, time, selectedIds, categories, bookings]);
+  }, [mechanicId, date, time, selectedIds, customServices, categories, bookings]);
 
   const blockingHoursError = useMemo(() => {
     if (!date || !time) return null;
 
     const allServices = categories.flatMap((c) => c.services);
     const selected = allServices.filter((s) => selectedIds.has(s._id));
-    const estMins = selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) || 60;
+    const customMins = customServices.reduce((sum, c) => sum + (c.durationMinutes ?? 0), 0);
+    const estMins = (selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) + customMins) || 60;
     const endTime = getBookingEndTime(time, estMins);
     const dayHours = getShopHoursForDate(shopHours, date);
 
@@ -192,14 +321,15 @@ export default function CreateBookingDrawer({
     }
 
     return null;
-  }, [date, time, selectedIds, categories, shopHours]);
+  }, [date, time, selectedIds, customServices, categories, shopHours]);
 
   const outsideHoursWarning = useMemo(() => {
     if (!date || !time) return null;
 
     const allServices = categories.flatMap((c) => c.services);
     const selected = allServices.filter((s) => selectedIds.has(s._id));
-    const estMins = selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) || 60;
+    const customMins = customServices.reduce((sum, c) => sum + (c.durationMinutes ?? 0), 0);
+    const estMins = (selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) + customMins) || 60;
     const endTime = getBookingEndTime(time, estMins);
     const dayHours = getShopHoursForDate(shopHours, date);
     if (!dayHours || dayHours.isClosed) return null;
@@ -207,7 +337,7 @@ export default function CreateBookingDrawer({
     return toMins(endTime) > toMins(dayHours.closeTime)
       ? "This booking would end after the shop closes."
       : null;
-  }, [date, time, selectedIds, categories, shopHours]);
+  }, [date, time, selectedIds, customServices, categories, shopHours]);
 
   /* ---- Filter categories/services by search ---- */
   const filteredCats = useMemo(() => {
@@ -240,12 +370,15 @@ export default function CreateBookingDrawer({
     try {
       const allServices = categories.flatMap((c) => c.services);
       const selected = allServices.filter((s) => selectedIds.has(s._id));
-      const estMinutes = selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) || undefined;
+      const customMinutes = customServices.reduce((sum, c) => sum + (c.durationMinutes ?? 0), 0);
+      const baseMinutes = selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0);
+      const estMinutes = baseMinutes + customMinutes || undefined;
       const finalVin = vin.trim() || `SHOP${Date.now()}`;
 
       await createBooking({
         shopId: shopData.shopId as Id<"shops">,
-        customerEmail: email.trim(),
+        customerEmail: email.trim() || undefined,
+        customerPhone: normalizePhoneToE164(phone) ?? undefined,
         customerFirstName: firstName.trim() || undefined,
         customerLastName: lastName.trim() || undefined,
         vin: finalVin,
@@ -255,6 +388,7 @@ export default function CreateBookingDrawer({
         scheduledDate: date,
         scheduledTime: time,
         serviceIds: Array.from(selectedIds) as Id<"services">[],
+        customServices: customServices.length > 0 ? customServices : undefined,
         mechanicId: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
         laborCost: 0,
         partsCost: 0,
@@ -273,7 +407,16 @@ export default function CreateBookingDrawer({
   }
 
   async function handleSubmit() {
-    if (!email.trim() || !shopData?.shopId) return;
+    if (!firstName.trim() || !shopData?.shopId) return;
+    if (!isValidUsPhone(phone)) {
+      onToast("Enter a valid 10-digit US phone number.");
+      return;
+    }
+
+    if (date < todayISO || (isToday && time < minTimeToday)) {
+      onToast("Pick a time from now onward.");
+      return;
+    }
 
     const preflightError = overlapError ?? blockingHoursError;
     if (preflightError) {
@@ -312,7 +455,7 @@ export default function CreateBookingDrawer({
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <DrawerFieldLabel>First Name</DrawerFieldLabel>
+                <DrawerFieldLabel>First Name <span className="text-destructive normal-case tracking-normal font-normal">*</span></DrawerFieldLabel>
                 <input type="text" placeholder="James" value={firstName} onChange={(e) => setFirstName(e.target.value)} className={drawerInputClassName} />
               </div>
               <div>
@@ -321,7 +464,11 @@ export default function CreateBookingDrawer({
               </div>
             </div>
             <div>
-              <DrawerFieldLabel>Email <span className="text-destructive normal-case tracking-normal font-normal">*</span></DrawerFieldLabel>
+              <DrawerFieldLabel>Phone <span className="text-destructive normal-case tracking-normal font-normal">*</span></DrawerFieldLabel>
+              <input type="tel" inputMode="tel" placeholder="(555) 123-4567" value={phone} onChange={(e) => setPhone(formatPhoneInput(e.target.value))} className={drawerInputClassName} />
+            </div>
+            <div>
+              <DrawerFieldLabel>Email <span className="normal-case tracking-normal font-normal text-muted-foreground/60">(Optional)</span></DrawerFieldLabel>
               <input type="email" placeholder="customer@example.com" value={email} onChange={(e) => setEmail(e.target.value)} className={drawerInputClassName} />
             </div>
           </div>
@@ -333,7 +480,35 @@ export default function CreateBookingDrawer({
           <div className="space-y-3">
             <div>
               <DrawerFieldLabel>VIN <span className="normal-case tracking-normal font-normal text-muted-foreground/60">(Optional)</span></DrawerFieldLabel>
-              <input type="text" placeholder="17-digit code" value={vin} onChange={(e) => setVin(e.target.value)} className={drawerInputClassName} />
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="17-digit code"
+                  value={vin}
+                  onChange={(e) => setVin(e.target.value.toUpperCase())}
+                  maxLength={17}
+                  className={`${drawerInputClassName} font-mono uppercase pr-9`}
+                />
+                {vinLookupState === "loading" && (
+                  <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground animate-spin" />
+                )}
+              </div>
+              {vinLookupState === "error" && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Couldn&apos;t decode VIN. Enter make/model manually.
+                </p>
+              )}
+              {vinLookupState === "idle" &&
+                vinSuggestion &&
+                lastDecodedVinRef.current === vin.trim().toUpperCase() &&
+                !vinConfirmOpen &&
+                (year === vinSuggestion.year || make === vinSuggestion.make) && (
+                  <p className="mt-1 text-xs text-primary">
+                    Decoded: {[vinSuggestion.year, vinSuggestion.make, vinSuggestion.model]
+                      .filter(Boolean)
+                      .join(" ")}
+                  </p>
+                )}
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div>
@@ -355,6 +530,41 @@ export default function CreateBookingDrawer({
         {/* ── Service Selection ── */}
         <section>
           <DrawerSectionHeader icon={Wrench} label="Service Selection" />
+
+          {/* Selected chips */}
+          {(selectedIds.size > 0 || customServices.length > 0) && (
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {categories
+                .flatMap((c: any) => c.services)
+                .filter((s: any) => selectedIds.has(s._id))
+                .map((s: any) => (
+                  <button
+                    key={s._id}
+                    type="button"
+                    onClick={() => toggleService(s._id)}
+                    className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium hover:bg-primary/15 transition-colors"
+                  >
+                    <span>{s.name}</span>
+                    <X className="w-3 h-3" />
+                  </button>
+                ))}
+              {customServices.map((c, idx) => (
+                <button
+                  key={`custom-${idx}`}
+                  type="button"
+                  onClick={() =>
+                    setCustomServices((prev) => prev.filter((_, i) => i !== idx))
+                  }
+                  className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-medium hover:bg-amber-200 transition-colors"
+                >
+                  <span>{c.name}{c.durationMinutes ? ` · ${c.durationMinutes}m` : ""}</span>
+                  <X className="w-3 h-3" />
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Search */}
           <div className="relative mb-3">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
             <input
@@ -365,6 +575,7 @@ export default function CreateBookingDrawer({
               className="w-full pl-10 pr-4 py-2.5 bg-muted/70 border-0 rounded-lg text-sm text-foreground placeholder:text-muted-foreground/50 outline-none focus:ring-2 focus:ring-primary/20"
             />
           </div>
+
           {shopData === undefined ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-5 h-5 text-primary animate-spin" />
@@ -372,36 +583,55 @@ export default function CreateBookingDrawer({
           ) : filteredCats.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-6">No services found</p>
           ) : (
-            <div className="space-y-4">
-              {filteredCats.map((cat) => {
+            <div className="space-y-2">
+              {filteredCats.map((cat: any) => {
                 const isExpanded = expandedCats.has(cat.id) || !!search.trim();
+                const selectedCount = cat.services.filter((s: any) => selectedIds.has(s._id)).length;
                 return (
-                  <div key={cat.id}>
+                  <div key={cat.id} className="rounded-xl border border-border overflow-hidden">
                     <button
                       onClick={() => toggleCat(cat.id)}
-                      className="flex justify-between items-center w-full mb-2 group"
+                      className="flex justify-between items-center w-full px-3 py-2.5 bg-muted/30 hover:bg-muted/60 transition-colors"
                     >
-                      <span className="text-[11px] font-bold text-muted-foreground tracking-widest group-hover:text-primary transition-colors">
+                      <span className="text-xs font-semibold text-foreground">
                         {cat.name}
+                        <span className="ml-2 text-muted-foreground font-normal">{cat.services.length}</span>
+                        {selectedCount > 0 && (
+                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full bg-primary text-primary-foreground text-[10px] font-semibold">
+                            {selectedCount}
+                          </span>
+                        )}
                       </span>
                       <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`} />
                     </button>
                     {isExpanded && (
-                      <div className="space-y-1.5">
-                        {cat.services.map((s) => (
-                          <label
-                            key={s._id}
-                            className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-muted/40 hover:bg-muted transition-all cursor-pointer border border-transparent hover:border-primary/10"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(s._id)}
-                              onChange={() => toggleService(s._id)}
-                              className="w-4 h-4 rounded border-border text-primary accent-primary shrink-0"
-                            />
-                            <span className="text-sm font-medium text-foreground">{s.name}</span>
-                          </label>
-                        ))}
+                      <div className="divide-y divide-border/60">
+                        {cat.services.map((s: any) => {
+                          const checked = selectedIds.has(s._id);
+                          const mins = Math.round((s.defaultLaborHours ?? 0) * 60);
+                          return (
+                            <label
+                              key={s._id}
+                              className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
+                                checked ? "bg-primary/5" : "hover:bg-muted/40"
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleService(s._id)}
+                                className="w-4 h-4 rounded border-border text-primary accent-primary shrink-0"
+                              />
+                              <span className="flex-1 text-sm text-foreground truncate">{s.name}</span>
+                              {mins > 0 && (
+                                <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground tabular-nums shrink-0">
+                                  <Clock className="w-3 h-3" />
+                                  {mins}m
+                                </span>
+                              )}
+                            </label>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -409,6 +639,74 @@ export default function CreateBookingDrawer({
               })}
             </div>
           )}
+
+          {/* Add custom service */}
+          <div className="mt-3">
+            {showCustomForm ? (
+              <div className="rounded-xl border border-dashed border-border p-3 space-y-2 bg-muted/20">
+                <div className="grid grid-cols-[1fr_88px] gap-2">
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder="Service name (e.g. Wheel alignment)"
+                    value={customDraftName}
+                    onChange={(e) => setCustomDraftName(e.target.value)}
+                    className={drawerInputClassName}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="15"
+                    placeholder="min"
+                    value={customDraftMinutes}
+                    onChange={(e) => setCustomDraftMinutes(e.target.value)}
+                    className={drawerInputClassName}
+                  />
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCustomForm(false);
+                      setCustomDraftName("");
+                      setCustomDraftMinutes("");
+                    }}
+                    className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!customDraftName.trim()}
+                    onClick={() => {
+                      const name = customDraftName.trim();
+                      if (!name) return;
+                      const mins = customDraftMinutes ? Number(customDraftMinutes) : NaN;
+                      setCustomServices((prev) => [
+                        ...prev,
+                        { name, durationMinutes: Number.isFinite(mins) && mins > 0 ? mins : undefined },
+                      ]);
+                      setShowCustomForm(false);
+                      setCustomDraftName("");
+                      setCustomDraftMinutes("");
+                    }}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowCustomForm(true)}
+                className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add custom service
+              </button>
+            )}
+          </div>
         </section>
 
         {/* ── Scheduling ── */}
@@ -418,7 +716,7 @@ export default function CreateBookingDrawer({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <DrawerFieldLabel>Date</DrawerFieldLabel>
-                <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className={drawerInputClassName} />
+                <DatePicker value={date} min={todayISO} onChange={(next) => next && setDate(next)} />
               </div>
               <div>
                 <DrawerFieldLabel>Time</DrawerFieldLabel>
@@ -428,7 +726,7 @@ export default function CreateBookingDrawer({
                   </SelectTrigger>
                   <SelectPopover placement="bottom start">
                     <SelectListBox shouldFocusWrap>
-                      {TIME_OPTIONS.map((o) => (
+                      {filteredTimeOptions.map((o) => (
                         <SelectItem key={o.value} id={o.value} textValue={o.label}>{o.label}</SelectItem>
                       ))}
                     </SelectListBox>
@@ -481,7 +779,7 @@ export default function CreateBookingDrawer({
           onClick={() => {
             void handleSubmit();
           }}
-          disabled={!email.trim() || isSaving}
+          disabled={!firstName.trim() || !isValidUsPhone(phone) || isSaving}
           className="w-full py-3 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {isSaving ? (
@@ -497,6 +795,49 @@ export default function CreateBookingDrawer({
           )}
         </button>
       </div>
+
+      <ConfirmationDialog
+        open={vinConfirmOpen && !!vinSuggestion}
+        title="Is this the right vehicle?"
+        description={
+          vinSuggestion
+            ? `${[vinSuggestion.year, vinSuggestion.make, vinSuggestion.model, vinSuggestion.trim]
+                .filter(Boolean)
+                .join(" ")} — decoded from VIN ${vinSuggestion.vin}.`
+            : ""
+        }
+        onClose={() => setVinConfirmOpen(false)}
+        secondaryAction={{
+          label: <ShortcutLabel text="No, I'll edit" shortcutKey="n" />,
+          onAction: () => setVinConfirmOpen(false),
+          shortcutKey: "n",
+        }}
+        primaryAction={{
+          label: <ShortcutLabel text="Yes, use this" shortcutKey="y" />,
+          onAction: applyVinSuggestion,
+          shortcutKey: "y",
+          variant: "primary",
+        }}
+      >
+        <div className="mb-5 flex items-center justify-center rounded-xl bg-muted/40 border border-border overflow-hidden" style={{ minHeight: 160 }}>
+          {vinImageLoading ? (
+            <Loader2 className="w-6 h-6 text-muted-foreground animate-spin" />
+          ) : vinImageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={vinImageUrl}
+              alt={
+                vinSuggestion
+                  ? `${vinSuggestion.year ?? ""} ${vinSuggestion.make ?? ""} ${vinSuggestion.model ?? ""}`.trim()
+                  : "Vehicle"
+              }
+              className="max-h-48 w-full object-contain"
+            />
+          ) : (
+            <p className="text-xs text-muted-foreground py-8">No image available for this VIN.</p>
+          )}
+        </div>
+      </ConfirmationDialog>
 
       <ConfirmationDialog
         open={outsideHoursConfirmOpen}

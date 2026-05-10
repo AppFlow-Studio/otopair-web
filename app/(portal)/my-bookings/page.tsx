@@ -8,6 +8,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Briefcase, Calendar, Loader2 } from "lucide-react";
 import { usePortalSidebar } from "../portal-context";
+import DatePicker from "@/components/ui/date-picker";
 import BookingDetailPanel from "@/components/booking-detail-panel";
 import type { JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import RescheduleConfirmationDialog, {
@@ -219,15 +220,12 @@ export default function MyBookingsPage() {
       <div className="rounded-xl border border-border bg-card">
         <div className="flex flex-col gap-4 border-b border-border px-5 py-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <label className="text-xs font-medium text-muted-foreground">
-              From
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={(event) => setDateFrom(event.target.value)}
-                className="mt-1 block w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </label>
+            <div className="text-xs font-medium text-muted-foreground">
+              <span>From</span>
+              <div className="mt-1">
+                <DatePicker value={dateFrom} onChange={setDateFrom} />
+              </div>
+            </div>
             <label className="text-xs font-medium text-muted-foreground">
               Time
               <input
@@ -237,15 +235,12 @@ export default function MyBookingsPage() {
                 className="mt-1 block w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
             </label>
-            <label className="text-xs font-medium text-muted-foreground">
-              To
-              <input
-                type="date"
-                value={dateTo}
-                onChange={(event) => setDateTo(event.target.value)}
-                className="mt-1 block w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </label>
+            <div className="text-xs font-medium text-muted-foreground">
+              <span>To</span>
+              <div className="mt-1">
+                <DatePicker value={dateTo} onChange={setDateTo} />
+              </div>
+            </div>
             <label className="text-xs font-medium text-muted-foreground">
               Time
               <input

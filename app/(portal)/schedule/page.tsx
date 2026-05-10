@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
+import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
@@ -73,6 +75,7 @@ import LateStartReviewDialog, {
   type LateStartReviewView,
 } from "@/components/late-start-review-dialog";
 import CreateBookingDrawer from "./create-booking-drawer";
+import DatePicker from "@/components/ui/date-picker";
 
 /* ------------------------------------------------------------------ */
 /*  Localizer setup                                                     */
@@ -251,12 +254,17 @@ export default function SchedulePage() {
   >(null);
   const [contextMenuStyle, setContextMenuStyle] = useState<CSSProperties | null>(null);
 
-  // Create booking drawer
+  // Create booking drawer (lifted draft state — drives drawer + ghost block on calendar)
   const [createBookingDrawer, setCreateBookingDrawer] = useState<{
     date: string;
     time: string;
     mechanicId: string;
+    durationMinutes: number;
   } | null>(null);
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const autoOpenedRef = useRef(false);
 
   // Block-full-day confirmation dialog
   const [blockDayConfirm, setBlockDayConfirm] = useState<{
@@ -374,6 +382,23 @@ export default function SchedulePage() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [createBookingDrawer]);
+
+  // Two-way sync: when user navigates the schedule (Today/Back/Forward) while drawer is open,
+  // update draft.date so the form follows. The draft → currentDate direction is handled below
+  // in the drawer's onDraftChange handler.
+  useEffect(() => {
+    if (!createBookingDrawer) return;
+    const dateStr = dateToString(currentDate);
+    if (createBookingDrawer.date === dateStr) return;
+    setCreateBookingDrawer((prev) => (prev ? { ...prev, date: dateStr } : prev));
+  }, [currentDate, createBookingDrawer]);
+
+  // Force day view while a draft is active so the ghost block is visible
+  useEffect(() => {
+    if (createBookingDrawer && currentView !== "day") {
+      setCurrentView("day");
+    }
+  }, [createBookingDrawer, currentView]);
 
   // Auto-clear toast after 3s; key changes on every trigger so the timer always resets
   useEffect(() => {
@@ -727,10 +752,66 @@ export default function SchedulePage() {
   });
   bookingsRef.current = bookings;
 
+  // Wider lookahead used only when auto-opening the create-booking drawer to find the
+  // next available slot across the next 14 days.
+  const wantsAutoOpen = searchParams.get("action") === "newBooking";
+  const lookaheadRange = useMemo(() => {
+    const start = new Date();
+    const end = new Date();
+    end.setDate(start.getDate() + 13);
+    return { dateFrom: dateToString(start), dateTo: dateToString(end) };
+  }, []);
+  const lookaheadBookings = useQuery(
+    api.schedule.getBookingsForRange,
+    wantsAutoOpen && !autoOpenedRef.current ? lookaheadRange : "skip"
+  );
+
   const blockedSlots = useQuery(api.schedule.getBlockedSlots, {
     dateFrom: dateRange.from,
     dateTo: dateRange.to,
   });
+
+  // Auto-open create-booking drawer with next available slot when ?action=newBooking is set.
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    if (!wantsAutoOpen) return;
+    if (!context?.hours || !context?.mechanics || lookaheadBookings === undefined) return;
+
+    autoOpenedRef.current = true;
+
+    const slot = findNextAvailableSlot({
+      now: new Date(),
+      shopHours: context.hours,
+      mechanics: context.mechanics,
+      bookings: lookaheadBookings,
+      durationMinutes: 60,
+    });
+
+    if (slot) {
+      const [y, mo, d] = slot.date.split("-").map(Number);
+      setCurrentDate(new Date(y, mo - 1, d));
+      setCurrentView("day");
+      setCreateBookingDrawer({
+        date: slot.date,
+        time: slot.time,
+        mechanicId: slot.mechanicId,
+        durationMinutes: slot.durationMinutes,
+      });
+    } else {
+      // Fallback: open with the soonest possible time today
+      const todayStr = dateToString(new Date());
+      const fallbackMechanic = context.mechanics[0]?._id ?? "";
+      setCreateBookingDrawer({
+        date: todayStr,
+        time: "09:00",
+        mechanicId: fallbackMechanic,
+        durationMinutes: 60,
+      });
+      setToast({ msg: "No open slot found in the next 14 days", key: Date.now() });
+    }
+
+    router.replace("/schedule", { scroll: false });
+  }, [wantsAutoOpen, context?.hours, context?.mechanics, lookaheadBookings, router]);
 
   const selectedLateStartReview = useMemo<LateStartReviewView | null>(() => {
     if (!lateStartReviews || !selectedLateStartReviewId) return null;
@@ -1257,6 +1338,7 @@ export default function SchedulePage() {
               });
             }}
             onBlockDayClick={(mechanicId, mechanicName) => handleBlockFullDay(mechanicId, mechanicName, dateToString(currentDate))}
+            draftBooking={createBookingDrawer}
           />
         )}
         {bookings !== undefined && currentView === "week" && mechanicFilter === "all" && (
@@ -1475,12 +1557,7 @@ export default function SchedulePage() {
                 {/* Date */}
                 <div>
                   <DrawerFieldLabel>Date</DrawerFieldLabel>
-                  <input
-                    type="date"
-                    value={btDate}
-                    onChange={(e) => setBtDate(e.target.value)}
-                    className={drawerInputClassName}
-                  />
+                  <DatePicker value={btDate} onChange={setBtDate} />
                 </div>
 
                 {/* From / To */}
@@ -1683,9 +1760,26 @@ export default function SchedulePage() {
         <div className="flex-shrink-0 w-[552px] h-[calc(100vh-320px)] min-h-[500px]">
           <div className="w-[528px] ml-6 flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card">
             <CreateBookingDrawer
-              initialDate={createBookingDrawer.date}
-              initialTime={createBookingDrawer.time}
-              initialMechanicId={createBookingDrawer.mechanicId}
+              date={createBookingDrawer.date}
+              time={createBookingDrawer.time}
+              mechanicId={createBookingDrawer.mechanicId}
+              onDraftChange={(next) => {
+                setCreateBookingDrawer((prev) =>
+                  prev
+                    ? { ...prev, date: next.date, time: next.time, mechanicId: next.mechanicId }
+                    : prev
+                );
+                // Two-way sync: drawer date → schedule's viewed day
+                const [y, mo, d] = next.date.split("-").map(Number);
+                if (
+                  Number.isFinite(y) &&
+                  Number.isFinite(mo) &&
+                  Number.isFinite(d) &&
+                  next.date !== dateToString(currentDate)
+                ) {
+                  setCurrentDate(new Date(y, mo - 1, d));
+                }
+              }}
               mechanics={mechanics}
               bookings={bookings ?? []}
               shopHours={context?.hours ?? []}
@@ -1759,6 +1853,7 @@ export default function SchedulePage() {
                       date: contextMenu.info.date,
                       time: contextMenu.info.startTime,
                       mechanicId: contextMenu.info.mechanicId,
+                      durationMinutes: 60,
                     });
                     setContextMenu(null);
                   }}

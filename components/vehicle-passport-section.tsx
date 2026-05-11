@@ -1,13 +1,7 @@
 "use client";
 
 import { useId, useState, type ReactNode } from "react";
-import {
-  AlertCircle,
-  ChevronDown,
-  ChevronRight,
-  Flag,
-  Info,
-} from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronRight, Info } from "lucide-react";
 import {
   formatDateLabel,
   formatMileage,
@@ -27,7 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const EMPTY_SECTION_COPY =
-  "Not yet recorded — will appear after first verification.";
+  "Not yet recorded - will appear after first verification.";
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -61,6 +55,10 @@ function isVisibleRow(row: SectionRow) {
   return isMeaningfulValue(row.value);
 }
 
+function getSectionRows(rows: SectionRow[]) {
+  return rows.filter(isVisibleRow);
+}
+
 function formatNumberValue(value?: number | null, unit?: string) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return "Unknown";
@@ -71,25 +69,13 @@ function formatNumberValue(value?: number | null, unit?: string) {
   return unit ? `${formatted} ${unit}` : formatted;
 }
 
-function buildTireHeadline(data: VehiclePassportData) {
-  const brandAndModel = [
-    data.passport.tires.brand ?? null,
-    data.passport.tires.model ?? null,
-  ]
-    .filter((value): value is string => isMeaningfulValue(value))
-    .join(" ");
-  const size =
-    data.passport.tires.size_rear &&
-    data.passport.tires.size_rear !== data.passport.tires.size_front
-      ? `${data.passport.tires.size_front ?? "Unknown"} / ${data.passport.tires.size_rear}`
-      : data.passport.tires.size_front ?? "Unknown";
-
-  const parts = [brandAndModel, isMeaningfulValue(size) ? size : null].filter(Boolean);
-  return parts.length > 0 ? parts.join(" · ") : "Unknown";
-}
-
-function getSectionRows(rows: SectionRow[]) {
-  return rows.filter(isVisibleRow);
+function buildTireSizeValue(data: VehiclePassportData) {
+  const frontSize = data.passport.tires.size_front ?? "Unknown";
+  const rearSize = data.passport.tires.size_rear;
+  if (rearSize && rearSize !== data.passport.tires.size_front) {
+    return `${frontSize} / ${rearSize}`;
+  }
+  return frontSize;
 }
 
 export default function VehiclePassportSection({
@@ -101,15 +87,10 @@ export default function VehiclePassportSection({
 }) {
   if (!data) {
     return (
-      <div className="rounded-xl border border-border bg-card p-4">
-        <div className="space-y-3 animate-pulse">
-          <div className="h-4 w-40 rounded bg-muted/60" />
-          <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-            <div className="h-4 w-3/5 rounded bg-muted/30" />
-            <div className="h-9 rounded bg-muted/60" />
-            <div className="h-9 rounded bg-muted/30" />
-            <div className="h-9 rounded bg-muted/60" />
-          </div>
+      <div className="rounded-xl border border-primary/10 bg-card p-4">
+        <div className="animate-pulse space-y-3">
+          <div className="h-4 w-40 rounded bg-muted" />
+          <div className="h-40 rounded-lg bg-muted/80" />
         </div>
       </div>
     );
@@ -132,10 +113,8 @@ function VehiclePassportSectionBody({
   bookingServices: string[];
 }) {
   const [isOpen, setIsOpen] = useState(!data.is_complete);
-  const [showMoreDetails, setShowMoreDetails] = useState(false);
   const [renderedAt] = useState(() => Date.now());
   const contentId = useId();
-  const moreDetailsId = useId();
   const serviceFlags = getBookingServiceFlags(bookingServices);
   const riskBannerEntry = [...data.recent_services]
     .filter((entry) => {
@@ -152,8 +131,27 @@ function VehiclePassportSectionBody({
     })
     .sort((left, right) => (right.sort_ms ?? 0) - (left.sort_ms ?? 0))[0];
 
+  const riskWeeks =
+    riskBannerEntry && typeof riskBannerEntry.sort_ms === "number"
+      ? Math.max(1, Math.round((renderedAt - riskBannerEntry.sort_ms) / WEEK_MS))
+      : null;
+
   const tireRows = getSectionRows([
-    { label: "Current setup", value: buildTireHeadline(data) },
+    {
+      label: "Brand",
+      value: data.passport.tires.brand ?? "Unknown",
+      source: data.sources["tires.brand"],
+    },
+    {
+      label: "Model",
+      value: data.passport.tires.model ?? "Unknown",
+      source: data.sources["tires.model"],
+    },
+    {
+      label: "Size",
+      value: buildTireSizeValue(data),
+      source: data.sources["tires.size_front"],
+    },
     {
       label: "Condition",
       value: tireConditionLabel(data.passport.tires.overall_condition),
@@ -226,7 +224,7 @@ function VehiclePassportSectionBody({
       source: data.sources.mileage,
     },
     {
-      label: "Avg per month",
+      label: "Velocity",
       value: formatMonthMileage(data.passport.mileage_velocity),
     },
     {
@@ -246,69 +244,59 @@ function VehiclePassportSectionBody({
     },
   ]);
 
-  const recentServiceRows = getSectionRows(
-    data.recent_services.map((entry) => ({
-      label: entry.date_label,
-      value: entry.service_name || "Unknown",
-    }))
-  );
-
   const sections = [
-    {
-      key: "mileage",
-      title: "Mileage",
-      relevant: true,
-      content: <DisplayRows rows={mileageRows} sectionTitle="Mileage" />,
-    },
     {
       key: "tires",
       title: "Tires",
-      relevant: serviceFlags.hasTireWork,
+      badge: serviceFlags.hasTireWork ? "Relevant today" : undefined,
       content: <DisplayRows rows={tireRows} sectionTitle="Tires" />,
     },
     {
       key: "brakes",
       title: "Brakes",
-      relevant: serviceFlags.hasBrakeWork,
+      badge: serviceFlags.hasBrakeWork ? "Relevant today" : undefined,
       content: <DisplayRows rows={brakeRows} sectionTitle="Brakes" />,
     },
     {
       key: "fluids",
       title: "Fluids",
-      relevant: serviceFlags.hasFluidWork,
+      badge: serviceFlags.hasFluidWork ? "Relevant today" : undefined,
       content: <DisplayRows rows={fluidRows} sectionTitle="Fluids" />,
     },
     {
-      key: "recent-services",
-      title: "Recent services on Otopair",
-      relevant: !!riskBannerEntry,
-      content: <DisplayRows rows={recentServiceRows} sectionTitle="Recent services" />,
-    },
-    {
-      key: "mechanic-notes",
-      title: "Mechanic notes",
-      relevant: false,
-      content: (
-        <MechanicNotesSection
-          notes={data.mechanic_notes}
-          onAddNote={() => {}}
-        />
-      ),
+      key: "mileage",
+      title: "Mileage",
+      content: <DisplayRows rows={mileageRows} sectionTitle="Mileage" />,
     },
     {
       key: "usage",
       title: "Usage",
-      relevant: false,
       content: <DisplayRows rows={usageRows} sectionTitle="Usage" />,
     },
+    {
+      key: "recent-services",
+      title: "Recent services",
+      badge: riskBannerEntry ? "Review" : undefined,
+      content: (
+        <RecentServicesSection
+          services={data.recent_services}
+          riskBanner={
+            riskBannerEntry && riskWeeks ? (
+              <RiskBanner
+                serviceName={riskBannerEntry.service_name}
+                weeksAgo={riskWeeks}
+              />
+            ) : null
+          }
+        />
+      ),
+    },
+    {
+      key: "mechanic-notes",
+      title: "Mechanic notes",
+      content: <MechanicNotesSection notes={data.mechanic_notes} />,
+    },
   ];
-
-  const primarySections = sections.filter((section) => section.relevant);
-  const secondarySections = sections.filter((section) => !section.relevant);
-  const riskWeeks =
-    riskBannerEntry && typeof riskBannerEntry.sort_ms === "number"
-      ? Math.max(1, Math.round((renderedAt - riskBannerEntry.sort_ms) / WEEK_MS))
-      : null;
 
   return (
     <section className="overflow-hidden rounded-xl border border-primary/10 bg-card shadow-[0_4px_14px_-6px_rgba(15,23,42,0.08)]">
@@ -329,14 +317,14 @@ function VehiclePassportSectionBody({
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">
-            Vehicle profile
+            Vehicle ID
           </p>
           <p className="mt-0.5 truncate text-[13px] font-semibold text-foreground">
             {data.vehicle_label}
           </p>
         </div>
         {!data.is_complete ? (
-          <span className="rounded-full bg-primary px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-primary-foreground">
+          <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-primary">
             First visit
           </span>
         ) : null}
@@ -349,58 +337,21 @@ function VehiclePassportSectionBody({
 
       {isOpen ? (
         <div id={contentId} className="space-y-3 bg-muted/40 p-3 sm:p-4">
-          {!data.is_complete ? <FirstVisitNotice /> : null}
-
-          {primarySections.map((section) => (
-            <PanelSection
-              key={section.key}
-              title={section.title}
-              relevant={section.relevant}
-            >
-              {section.key === "recent-services" && riskBannerEntry && riskWeeks ? (
-                <RiskBanner
-                  serviceName={riskBannerEntry.service_name}
-                  weeksAgo={riskWeeks}
-                />
-              ) : null}
-              {section.content}
-            </PanelSection>
-          ))}
-
-          {secondarySections.length > 0 ? (
-            <div className="rounded-lg border border-border bg-card px-3 py-2.5 sm:px-3.5">
-              <button
-                type="button"
-                onClick={() => setShowMoreDetails((current) => !current)}
-                aria-expanded={showMoreDetails}
-                aria-controls={moreDetailsId}
-                className="flex w-full items-center justify-between gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <span className="text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">
-                  More vehicle details
-                </span>
-                {showMoreDetails ? (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                )}
-              </button>
-
-              {showMoreDetails ? (
-                <div id={moreDetailsId} className="mt-3 space-y-3">
-                  {secondarySections.map((section) => (
-                    <PanelSection
-                      key={section.key}
-                      title={section.title}
-                      relevant={false}
-                    >
-                      {section.content}
-                    </PanelSection>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+          {!data.is_complete ? (
+            <FirstVisitNotice />
+          ) : (
+            <>
+              {sections.map((section) => (
+                <PanelSection
+                  key={section.key}
+                  title={section.title}
+                  badge={section.badge}
+                >
+                  {section.content}
+                </PanelSection>
+              ))}
+            </>
+          )}
         </div>
       ) : null}
     </section>
@@ -424,8 +375,9 @@ export function FirstVisitNotice({
               <span className="font-semibold text-foreground">
                 First time this vehicle is visiting a shop on Otopair.
               </span>{" "}
-              Please confirm or fill in the vehicle specs below. This data will be saved
-              to the vehicle&apos;s profile and will be available on future visits.
+              Please confirm or fill in the vehicle specs below. This data will be
+              saved to the vehicle&apos;s profile and will be available on future
+              visits.
             </>
           )}
         </p>
@@ -454,27 +406,22 @@ function RiskBanner({
 
 function PanelSection({
   title,
-  relevant,
+  badge,
   children,
 }: {
   title: string;
-  relevant: boolean;
+  badge?: string;
   children: ReactNode;
 }) {
   return (
-    <section
-      className={cn(
-        "rounded-lg border border-border bg-card px-3 py-2.5 sm:px-3.5",
-        relevant ? "border-l-2 border-l-primary" : null
-      )}
-    >
-      <div className="flex items-center gap-2">
+    <section className="rounded-lg border border-primary/10 bg-card px-3 py-2.5 sm:px-3.5">
+      <div className="flex items-center justify-between gap-3">
         <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">
           {title}
         </p>
-        {relevant ? (
-          <span className="text-[9px] font-semibold uppercase tracking-[0.16em] text-primary">
-            Relevant to today
+        {badge ? (
+          <span className="rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">
+            {badge}
           </span>
         ) : null}
       </div>
@@ -498,11 +445,10 @@ function DisplayRows({
     <>
       {rows.map((row, index) => (
         <DisplayRow
-          key={`${sectionTitle}-${row.label}-${row.value}`}
+          key={`${sectionTitle}-${row.label}-${row.value}-${index}`}
           label={row.label}
           value={row.value}
           source={row.source}
-          headline={index === 0}
         />
       ))}
     </>
@@ -521,93 +467,80 @@ function DisplayRow({
   label,
   value,
   source,
-  headline = false,
 }: {
   label: string;
   value: string;
   source?: PassportSource;
-  headline?: boolean;
 }) {
   return (
-    <div className="group flex items-center justify-between gap-3 py-2 text-[12px]">
+    <div className="flex items-center justify-between gap-3 py-2 text-[12px]">
       <span className="text-muted-foreground">{label}</span>
-      <span
-        className={cn(
-          "flex items-center gap-1.5 text-right font-medium text-foreground",
-          headline ? "text-[13px] font-semibold" : "text-[12px]"
-        )}
-      >
+      <span className="flex items-center gap-2 text-right font-medium text-foreground">
         {value}
         {source ? <SourceBadge source={source} /> : null}
-        <button
-          type="button"
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
-          aria-label={`Flag ${label} for admin review`}
-        >
-          <Flag className="h-3 w-3" />
-        </button>
       </span>
     </div>
   );
 }
 
+function RecentServicesSection({
+  services,
+  riskBanner,
+}: {
+  services: VehiclePassportData["recent_services"];
+  riskBanner?: ReactNode;
+}) {
+  return (
+    <>
+      {riskBanner}
+      {services.length === 0 ? (
+        <p className="py-2 text-center text-[11px] italic text-muted-foreground">
+          No previous services on Otopair
+        </p>
+      ) : (
+        services.map((entry, index) => (
+          <div
+            key={`${entry.date_label}-${entry.service_name}-${index}`}
+            className="flex items-center justify-between gap-3 py-2 text-[12px]"
+          >
+            <span className="text-muted-foreground">{entry.date_label}</span>
+            <span className="font-medium text-foreground">{entry.service_name}</span>
+          </div>
+        ))
+      )}
+    </>
+  );
+}
+
 function MechanicNotesSection({
   notes,
-  onAddNote,
 }: {
   notes: VehiclePassportData["mechanic_notes"];
-  onAddNote: () => void;
 }) {
   if (notes.length === 0) {
     return (
-      <>
-        <div className="flex items-center justify-between gap-3 py-2">
-          <span className="text-[12px] font-medium text-foreground">Mechanic notes</span>
-          <button
-            type="button"
-            onClick={onAddNote}
-            className="rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Add note
-          </button>
-        </div>
-        <p className="py-2 text-[11px] text-muted-foreground">
-          No mechanic notes recorded yet.
-        </p>
-      </>
+      <p className="py-2 text-center text-[11px] italic text-muted-foreground">
+        No mechanic notes recorded yet
+      </p>
     );
   }
 
   return (
-    <>
-      <div className="flex items-center justify-between gap-3 py-2">
-        <span className="text-[12px] font-medium text-foreground">Mechanic notes</span>
-        <button
-          type="button"
-          onClick={onAddNote}
-          className="rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    <div className="space-y-2 py-2">
+      {notes.map((entry, index) => (
+        <div
+          key={`${entry.author}-${entry.date_label}-${entry.note}-${index}`}
+          className="rounded-md border-l-2 border-primary bg-primary/5 px-3 py-2"
         >
-          Add note
-        </button>
-      </div>
-      <div className="space-y-2 py-2">
-        {notes.map((entry) => (
-          <div
-            key={`${entry.author}-${entry.date_label}-${entry.note}`}
-            className="rounded-md border-l-2 border-primary bg-primary/5 px-3 py-2"
-          >
-            <p className="text-[11px] leading-5 text-foreground/85">{entry.note}</p>
-            <p className="mt-1 text-[10px] font-medium text-muted-foreground">
-              {entry.author}, {entry.date_label}
-            </p>
-          </div>
-        ))}
-      </div>
-    </>
+          <p className="text-[11px] italic leading-5 text-foreground/85">
+            &quot;{entry.note}&quot;
+          </p>
+          <p className="mt-1 text-[10px] font-medium text-muted-foreground">
+            -- {entry.author}, {entry.date_label}
+          </p>
+        </div>
+      ))}
+    </div>
   );
 }
 

@@ -1,14 +1,22 @@
 import { Id } from "@/convex/_generated/dataModel";
 
-type SendTeamInviteArgs = {
-  email: string;
-  role: "shop_mechanic" | "shop_owner";
-  shopId: Id<"shops">;
-  firstName?: string;
-  lastName?: string;
-  title?: string;
-  origin: string;
-};
+type SendTeamInviteArgs =
+  | {
+      email: string;
+      role: "shop_mechanic";
+      shopId: Id<"shops">;
+      mechanicId: Id<"mechanics"> | string;
+      origin: string;
+    }
+  | {
+      email: string;
+      role: "shop_owner" | "front_desk";
+      shopId: Id<"shops">;
+      firstName?: string;
+      lastName?: string;
+      title?: string;
+      origin: string;
+    };
 
 export async function sendTeamInvite(args: SendTeamInviteArgs) {
   const res = await fetch("/api/invite", {
@@ -18,9 +26,13 @@ export async function sendTeamInvite(args: SendTeamInviteArgs) {
       email: args.email,
       role: args.role,
       shopId: args.shopId,
-      firstName: args.firstName,
-      lastName: args.lastName,
-      title: args.title,
+      ...("mechanicId" in args
+        ? { mechanicId: args.mechanicId }
+        : {
+            firstName: args.firstName,
+            lastName: args.lastName,
+            title: args.title,
+          }),
     }),
   });
 

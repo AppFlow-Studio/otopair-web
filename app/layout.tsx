@@ -68,7 +68,7 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider afterSignOutUrl="/">
-      <html lang="en">
+      <html lang="en" suppressHydrationWarning>
         <body
           className={`${Inters.variable} ${Loras.variable} ${Robotoslab.variable} ${Balthazars.variable} ${OktaRegular.variable} ${Jersey20s.variable} antialiased overscroll-none`}
         >

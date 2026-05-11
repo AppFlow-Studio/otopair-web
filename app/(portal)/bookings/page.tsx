@@ -9,6 +9,7 @@ import { Calendar, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Search
 import { useSearchParams } from "next/navigation";
 import { usePortalSidebar } from "../portal-context";
 import BookingDetailPanel from "@/components/booking-detail-panel";
+import DatePicker from "@/components/ui/date-picker";
 import type { JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
@@ -477,7 +478,7 @@ export default function BookingsPage() {
                               <p className="text-xs text-muted-foreground">
                                 Try adjusting your filters or check back later.
                               </p>
-                              <a href="/bookings/create" className="text-xs text-primary hover:underline mt-1">
+                              <a href="/schedule?action=newBooking" className="text-xs text-primary hover:underline mt-1">
                                 Create a new booking
                               </a>
                             </div>
@@ -564,10 +565,10 @@ export default function BookingsPage() {
           {/* Drawer */}
           <div
           className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-            drawerOpen ? "w-[504px]" : "w-0"
+            drawerOpen ? "w-[552px]" : "w-0"
           }`}
         >
-          <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden h-[calc(100vh-230px)] min-h-[590px]">
+          <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-230px)] min-h-[590px]">
             <BookingDetailPanel
               ref={jobDetailRef}
               job={selectedJob}
@@ -911,12 +912,9 @@ function DateTimeFilterPill({
             <div>
               <p className="text-[11px] font-medium text-muted-foreground mb-1.5">From</p>
               <div className="flex gap-2">
-                <input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => onDateFromChange(e.target.value)}
-                  className="flex-1 text-xs px-2.5 py-1.5 rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
+                <div className="flex-1">
+                  <DatePicker value={dateFrom} onChange={onDateFromChange} />
+                </div>
                 <input
                   type="time"
                   value={timeFrom}
@@ -928,12 +926,9 @@ function DateTimeFilterPill({
             <div>
               <p className="text-[11px] font-medium text-muted-foreground mb-1.5">To</p>
               <div className="flex gap-2">
-                <input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => onDateToChange(e.target.value)}
-                  className="flex-1 text-xs px-2.5 py-1.5 rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
+                <div className="flex-1">
+                  <DatePicker value={dateTo} onChange={onDateToChange} />
+                </div>
                 <input
                   type="time"
                   value={timeTo}

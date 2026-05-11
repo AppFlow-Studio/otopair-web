@@ -10,6 +10,7 @@
  */
 
 import type { VehicleInput, VehicleIdentity } from "../types";
+import type { DetectedPackage } from "../../lib/vehicleDatabases";
 
 export const BATCH_1_SYSTEM = `You are a data extraction specialist for Otopair. You will receive raw markdown scraped from OEM parts catalog pages (bmwpartsdeal.com or equivalent) and owner's manual / maintenance schedule pages for a specific vehicle.
 
@@ -29,6 +30,10 @@ RULES:
    - Honda: segmented alphanumeric (e.g., 15400-PLM-A02)
    If the format doesn't match, return null.
 5. Return VALID JSON only. No markdown fences, no explanation, no preamble.
+
+WIPER BLADE FIELDS:
+- wiper_blade_set_oem: front-pair part number. Front driver + passenger blades are usually sold as a single matched set; return that part number. If they are sold separately and the part numbers differ, return the driver-side part number.
+- wiper_blade_rear_oem: rear wiper part number. Many vehicles do not have a rear wiper — if the vehicle has none, return null.
 
 SUPERSESSION HANDLING (critical for correct part numbers):
 - Parts pages may list MULTIPLE part numbers when parts have been superseded.
@@ -55,6 +60,7 @@ export function buildBatch1Prompt(
   vPicData: VehicleIdentity | null,
   partsMarkdown: string,
   manualMarkdown: string,
+  packages: DetectedPackage[] = [],
 ): string {
   const vPicSection = vPicData
     ? `=== NHTSA vPIC DATA (verified — use these values directly) ===
@@ -82,6 +88,33 @@ ${JSON.stringify(
     ? `=== OWNER'S MANUAL / MAINTENANCE SCHEDULE (scraped) ===\n${manualMarkdown.slice(0, 20_000)}`
     : "=== OWNER'S MANUAL ===\n(no scraped data available — leave interval fields null)";
 
+  const packagesSection = packages.length > 0
+    ? `=== PACKAGES AVAILABLE FOR THIS TRIM ===
+This trim ships with optional packages that change which OEM parts are correct for some services.
+For EACH package below, return the package-specific OEM part numbers IF they differ from the base trim.
+Use null for any part that uses the same number as the base trim.
+
+The packages, with their service slugs and the OEM part fields you must consider:
+${packages.map((p) => `  - code: "${p.code}"  label: "${p.label}"  affects: ${p.services_affected.join(", ")}`).join("\n")}
+
+Add a top-level "packages" object to your response, with one key per package code. Each value MUST follow this shape:
+
+  "packages": {
+    "${packages[0]?.code ?? "package_code"}": {
+      "oem_parts": {
+        // Same field names as the top-level "oem_parts" block.
+        // Include ONLY the fields whose part number differs from the base trim.
+        // Use the same { value, source_url, source_type, confidence } shape.
+        "front_brake_pad_oem": { "value": "...", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
+        "rear_brake_pad_oem":  { "value": "...", "source_url": "...", "source_type": "scraped", "confidence": 0.9 }
+      }
+    }
+  }
+
+If a package's part numbers are unknown or unavailable in the source documents, omit that package's entry rather than guessing.
+`
+    : "";
+
   return `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim} — ${vehicle.engineCode} ${vehicle.displacement}L
 
 ${vPicSection}
@@ -89,6 +122,8 @@ ${vPicSection}
 ${partsSection}
 
 ${manualSection}
+
+${packagesSection}
 
 Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, turbo, transmission_type, fuel_injection_type, timing_system), use source_type: "nhtsa" and confidence: 1.0:
 
@@ -122,8 +157,7 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
     "drivetrain": { "value": "AWD", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
     "turbo": { "value": true, "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
     "fuel_injection_type": { "value": "direct", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "transmission_type": { "value": "automatic", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "power_steering_system": { "value": "electric", "source_url": null, "source_type": "training_data", "confidence": 0.75 }
+    "transmission_type": { "value": "automatic", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 }
   },
   "oem_parts": {
     "oil_filter_oem": { "value": "11427583220", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
@@ -138,6 +172,7 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
     "serpentine_belt_oem": { "value": "...", ... },
     "timing_belt_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
     "wiper_blade_set_oem": { "value": "...", ... },
+    "wiper_blade_rear_oem": { "value": "...", ... },
     "battery_oem": { "value": "...", ... },
     "coolant_oem": { "value": "...", ... }
   },
@@ -156,8 +191,6 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
   },
   "parking_brake_type": { "value": "electronic", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
   "trim_specs": {
-    "front_tire_size": { "value": "245/45R18", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "rear_tire_size": { "value": "275/40R18", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
     "tire_pressure_front_psi": { "value": 35, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
     "tire_pressure_rear_psi": { "value": 38, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
     "lug_nut_torque_ft_lbs": { "value": 103, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },

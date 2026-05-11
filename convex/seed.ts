@@ -1,4 +1,4 @@
-import { action, internalMutation, mutation } from "./_generated/server";
+import { action, internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import {
@@ -406,6 +406,52 @@ export const claimSeedDataForCurrentUser = mutation({
 
     await ctx.db.delete(seedId);
     return { claimed: true };
+  },
+});
+
+/**
+ * Seed time slots for ONE shop. Use when `seedTimeSlots` (which runs all
+ * shops in one transaction) blows the 4096-read limit. Idempotent — the
+ * underlying syncShopAvailabilityWindow upserts per mechanic-day, so safe
+ * to re-run.
+ *
+ * Usage:
+ *   npx convex run seed:seedTimeSlotsForShop '{"shopId":"...","days":14}'
+ *
+ * Args:
+ *   shopId — Id<"shops"> to seed
+ *   days   — number of days from today (default 14, smaller = fewer reads)
+ */
+export const seedTimeSlotsForShop = mutation({
+  args: {
+    shopId: v.id("shops"),
+    days: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const result = await syncShopAvailabilityWindow(ctx, {
+      shopId: args.shopId,
+      days: args.days ?? 14,
+    });
+    return {
+      success: true,
+      shopId: args.shopId,
+      slotsCreated: result.created,
+      slotsDeleted: result.deleted,
+    };
+  },
+});
+
+/**
+ * Lists shop ids (with names) so a developer can iterate
+ * `seedTimeSlotsForShop` over each one. Read-only.
+ *
+ * Usage: npx convex run seed:listSeedShopIds
+ */
+export const listSeedShopIds = query({
+  args: {},
+  handler: async (ctx) => {
+    const shops = await ctx.db.query("shops").collect();
+    return shops.map((s) => ({ id: s._id, name: s.name }));
   },
 });
 
@@ -3763,11 +3809,96 @@ function dashboardPickSeedValue<T>(values: readonly T[], seed: string): T {
   return values[Math.floor(dashboardSeedRatio(seed) * values.length) % values.length];
 }
 
+export const clearDashboardBookingsBatch = mutation({
+  args: {
+    shopId: v.id("shops"),
+  },
+  handler: async (ctx, args) => {
+    const shop = await ctx.db.get(args.shopId);
+    if (!shop) throw new Error(`Shop ${args.shopId} not found.`);
+
+    const existingBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .take(75);
+
+    for (const booking of existingBookings) {
+      const historyRows = await ctx.db
+        .query("booking_status_history")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+        .collect();
+      for (const row of historyRows) {
+        await ctx.db.delete(row._id);
+      }
+
+      const jobActualRows = await ctx.db
+        .query("job_actuals")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+        .collect();
+      for (const row of jobActualRows) {
+        await ctx.db.delete(row._id);
+      }
+
+      await ctx.db.delete(booking._id);
+    }
+
+    const existingSlots = await ctx.db
+      .query("time_slots")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .take(250);
+    for (const slot of existingSlots) {
+      await ctx.db.delete(slot._id);
+    }
+
+    const blockTypes = await ctx.db
+      .query("block_time_types")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .take(100);
+    for (const type of blockTypes) {
+      await ctx.db.delete(type._id);
+    }
+
+    const existingLateStartReviews = await ctx.db
+      .query("late_start_reviews")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .take(100);
+    for (const review of existingLateStartReviews) {
+      await ctx.db.delete(review._id);
+    }
+
+    const existingLateStartMonitors = await ctx.db
+      .query("late_start_monitors")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .take(100);
+    for (const monitor of existingLateStartMonitors) {
+      await ctx.db.delete(monitor._id);
+    }
+
+    const processed =
+      existingBookings.length +
+      existingSlots.length +
+      blockTypes.length +
+      existingLateStartReviews.length +
+      existingLateStartMonitors.length;
+
+    return {
+      done: processed === 0,
+      processed,
+      processedBookings: existingBookings.length,
+      processedSlots: existingSlots.length,
+      processedBlockTypes: blockTypes.length,
+      processedLateStartReviews: existingLateStartReviews.length,
+      processedLateStartMonitors: existingLateStartMonitors.length,
+    };
+  },
+});
+
 export const seedDashboardBookings = mutation({
   args: {
     shopId: v.id("shops"),
     clearExisting: v.optional(v.boolean()),
     seedDemo: v.optional(v.boolean()),
+    version: v.optional(v.union(v.literal("v1"), v.literal("v2"))),
   },
   handler: async (ctx, args) => {
     const shop = await ctx.db.get(args.shopId);
@@ -3822,6 +3953,25 @@ export const seedDashboardBookings = mutation({
       return { clearedOnly: true };
     }
 
+    const version = args.version ?? "v2";
+
+    const existingServices = await ctx.db.query("services").collect();
+    const existingCategories = await ctx.db.query("service_categories").collect();
+    const existingShopServices = await ctx.db
+      .query("shop_services")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .collect();
+    const servicesBySlug = new Map(
+      existingServices
+        .filter((service) => service.slug)
+        .map((service) => [service.slug as string, service])
+    );
+    const categoryIdsByName = new Map(
+      existingCategories.map((category) => [category.name, category._id])
+    );
+    const linkedShopServiceIds = new Set(
+      existingShopServices.map((shopService) => String(shopService.service_id))
+    );
     const ensureService = async (slug: string, name: string, categoryName: string) => {
       const services = await ctx.db.query("services").collect();
       const existingService = services.find((service) => service.slug === slug);
@@ -4399,23 +4549,51 @@ export const seedDashboardBookings = mutation({
       }
     }
 
-    const bookingsPerMechanicTarget = 5;
-    const minimumBookingsPerOpenDay = 5;
-    const totalBookingTarget = Math.max(
-      openDates.length * minimumBookingsPerOpenDay,
-      mechanics.length * bookingsPerMechanicTarget
-    );
-    const dayTargets = openDates.map(() => minimumBookingsPerOpenDay);
-    for (
-      let extra = totalBookingTarget - openDates.length * minimumBookingsPerOpenDay, idx = 0;
-      extra > 0;
-      extra--, idx++
-    ) {
-      dayTargets[idx % dayTargets.length] += 1;
-    }
+    const dayTargets =
+      version === "v1"
+        ? (() => {
+            const bookingsPerMechanicTarget = 5;
+            const minimumBookingsPerOpenDay = 5;
+            const totalBookingTarget = Math.max(
+              openDates.length * minimumBookingsPerOpenDay,
+              mechanics.length * bookingsPerMechanicTarget
+            );
+            const targets = openDates.map(() => minimumBookingsPerOpenDay);
+            for (
+              let extra = totalBookingTarget - openDates.length * minimumBookingsPerOpenDay, idx = 0;
+              extra > 0;
+              extra--, idx++
+            ) {
+              targets[idx % targets.length] += 1;
+            }
+            return targets;
+          })()
+        : (() => {
+            const averageServiceMinutes =
+              serviceOptions.reduce((sum, service) => sum + service.estimatedMinutes, 0) /
+              serviceOptions.length;
+            const bookingCapacityUtilization = 0.7;
+            const minimumBookingsPerMechanicOpenDay = 2;
+            return openDates.map(({ hours }) => {
+              const openMinutes = dashboardTimeToMinutes(hours.open_time!);
+              const closeMinutes = dashboardTimeToMinutes(hours.close_time!);
+              const openWindowMinutes = Math.max(0, closeMinutes - openMinutes);
+              const utilizationCapacity = Math.round(
+                (openWindowMinutes * mechanics.length * bookingCapacityUtilization) /
+                  averageServiceMinutes
+              );
+              return Math.max(
+                mechanics.length * minimumBookingsPerMechanicOpenDay,
+                utilizationCapacity
+              );
+            });
+          })();
 
-    const remainingBookingsByMechanic = new Map(
-      mechanics.map((mechanic) => [String(mechanic._id), bookingsPerMechanicTarget])
+    const mechanicBookingDistribution = new Map(
+      mechanics.map((mechanic) => [
+        String(mechanic._id),
+        version === "v1" ? 5 : 0,
+      ])
     );
     const bookingStatusCounts: Record<string, number> = {};
     const mechanicDayBookingCounts = new Map<string, number>();
@@ -4430,9 +4608,15 @@ export const seedDashboardBookings = mutation({
 
       for (let dayBookingIdx = 0; dayBookingIdx < dailyTarget; dayBookingIdx++) {
         const mechanicOrder = [...mechanics].sort((a, b) => {
-          const remainingA = remainingBookingsByMechanic.get(String(a._id)) ?? 0;
-          const remainingB = remainingBookingsByMechanic.get(String(b._id)) ?? 0;
-          if (remainingA !== remainingB) return remainingB - remainingA;
+          const distributionA =
+            mechanicBookingDistribution.get(String(a._id)) ?? 0;
+          const distributionB =
+            mechanicBookingDistribution.get(String(b._id)) ?? 0;
+          if (distributionA !== distributionB) {
+            return version === "v1"
+              ? distributionB - distributionA
+              : distributionA - distributionB;
+          }
           return String(a._id).localeCompare(String(b._id));
         });
         const mechanic = mechanicOrder[(dayBookingIdx + dayIdx) % mechanicOrder.length];
@@ -4549,9 +4733,11 @@ export const seedDashboardBookings = mutation({
         }
 
         bookingStatusCounts[status] = (bookingStatusCounts[status] ?? 0) + 1;
-        remainingBookingsByMechanic.set(
+        mechanicBookingDistribution.set(
           mechanicKey,
-          Math.max(0, (remainingBookingsByMechanic.get(mechanicKey) ?? 0) - 1)
+          version === "v1"
+            ? Math.max(0, (mechanicBookingDistribution.get(mechanicKey) ?? 0) - 1)
+            : (mechanicBookingDistribution.get(mechanicKey) ?? 0) + 1
         );
         bookingSequence += 1;
       }
@@ -4564,6 +4750,634 @@ export const seedDashboardBookings = mutation({
       shopId: args.shopId,
       dates: openDates.map(({ date }) => date),
       created: bookingStatusCounts,
+    };
+  },
+});
+
+export const seedLateStartReviewScenario = mutation({
+  args: {
+    shopId: v.id("shops"),
+    clearExisting: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const shop = await ctx.db.get(args.shopId);
+    if (!shop) throw new Error(`Shop ${args.shopId} not found.`);
+
+    const now = Date.now();
+    const today = new Date(now).toISOString().split("T")[0];
+
+    if (args.clearExisting ?? true) {
+      const existingReviews = await ctx.db
+        .query("late_start_reviews")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      for (const review of existingReviews) {
+        await ctx.db.delete(review._id);
+      }
+
+      const existingMonitors = await ctx.db
+        .query("late_start_monitors")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      for (const monitor of existingMonitors) {
+        await ctx.db.delete(monitor._id);
+      }
+
+      const existingBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+
+      for (const booking of existingBookings) {
+        const historyRows = await ctx.db
+          .query("booking_status_history")
+          .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+          .collect();
+        for (const row of historyRows) {
+          await ctx.db.delete(row._id);
+        }
+
+        const jobActualRows = await ctx.db
+          .query("job_actuals")
+          .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+          .collect();
+        for (const row of jobActualRows) {
+          await ctx.db.delete(row._id);
+        }
+      }
+
+      for (const booking of existingBookings) {
+        await ctx.db.delete(booking._id);
+      }
+
+      const existingSlots = await ctx.db
+        .query("time_slots")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      for (const slot of existingSlots) {
+        await ctx.db.delete(slot._id);
+      }
+    }
+
+    const existingServices = await ctx.db.query("services").collect();
+    const existingCategories = await ctx.db.query("service_categories").collect();
+    const existingShopServices = await ctx.db
+      .query("shop_services")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .collect();
+    const servicesBySlug = new Map(
+      existingServices
+        .filter((service) => service.slug)
+        .map((service) => [service.slug as string, service])
+    );
+    const categoryIdsByName = new Map(
+      existingCategories.map((category) => [category.name, category._id])
+    );
+    const linkedShopServiceIds = new Set(
+      existingShopServices.map((shopService) => String(shopService.service_id))
+    );
+
+    const ensureService = async (slug: string, name: string, categoryName: string) => {
+      const existingService = servicesBySlug.get(slug);
+      let serviceId: any;
+
+      if (existingService) {
+        serviceId = existingService._id;
+      } else {
+        const categoryId =
+          categoryIdsByName.get(categoryName) ??
+          (await ctx.db.insert("service_categories", {
+            name: categoryName,
+            icon_name: "wrench",
+            display_order: 99,
+          }));
+        categoryIdsByName.set(categoryName, categoryId);
+
+        serviceId = await ctx.db.insert("services", {
+          name,
+          slug,
+          description: name,
+          service_category_id: categoryId,
+          default_labor_hours: 1,
+          is_labor_only: false,
+          has_options: false,
+          display_order: 99,
+        });
+        servicesBySlug.set(slug, {
+          _id: serviceId,
+          name,
+          slug,
+          description: name,
+          service_category_id: categoryId,
+          default_labor_hours: 1,
+          is_labor_only: false,
+          has_options: false,
+          display_order: 99,
+        } as any);
+      }
+
+      if (!linkedShopServiceIds.has(String(serviceId))) {
+        await ctx.db.insert("shop_services", {
+          shop_id: args.shopId,
+          service_id: serviceId,
+          is_offered: true,
+        });
+        linkedShopServiceIds.add(String(serviceId));
+      }
+
+      return serviceId;
+    };
+
+    const oilChangeId = await ensureService("oil-change", "Oil Change", "Maintenance");
+    const brakePadsId = await ensureService(
+      "brake-pads",
+      "Brake Pad Replacement",
+      "Brakes"
+    );
+
+    const ensureMechanic = async ({
+      clerkUserId,
+      email,
+      firstName,
+      lastName,
+      title,
+    }: {
+      clerkUserId: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      title: string;
+    }) => {
+      let user = await ctx.db
+        .query("users")
+        .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
+        .unique();
+      if (!user) {
+        const userId = await ctx.db.insert("users", {
+          clerkUserId,
+          onboardingCompleted: true,
+          createdAt: now,
+          email,
+          first_name: firstName,
+          last_name: lastName,
+          role: "shop_mechanic",
+        });
+        user = await ctx.db.get(userId);
+      }
+      if (!user) throw new Error(`Could not create user for ${email}`);
+
+      let mechanic = await ctx.db
+        .query("mechanics")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .filter((q) =>
+          q.and(
+            q.eq(q.field("first_name"), firstName),
+            q.eq(q.field("last_name"), lastName)
+          )
+        )
+        .first();
+      if (!mechanic) {
+        const mechanicId = await ctx.db.insert("mechanics", {
+          shop_id: args.shopId,
+          first_name: firstName,
+          last_name: lastName,
+          title,
+          email,
+          is_active: true,
+          rating: 0,
+          review_count: 0,
+        });
+        mechanic = await ctx.db.get(mechanicId);
+      }
+      if (!mechanic) throw new Error(`Could not create mechanic ${firstName} ${lastName}`);
+
+      const existingMembership = await ctx.db
+        .query("shop_users")
+        .withIndex("by_user_and_shop", (q) =>
+          q.eq("user_id", user._id).eq("shop_id", args.shopId)
+        )
+        .unique();
+      if (!existingMembership) {
+        await ctx.db.insert("shop_users", {
+          user_id: user._id,
+          shop_id: args.shopId,
+          role: "shop_mechanic",
+          mechanic_id: mechanic._id,
+          is_active: true,
+          invited_at: now,
+          accepted_at: now,
+          created_at: now,
+          updated_at: now,
+        });
+      }
+
+      return mechanic;
+    };
+
+    const [johnMechanic, jamesMechanic, miaMechanic] = await Promise.all([
+      ensureMechanic({
+        clerkUserId: "late-start-mechanic-john",
+        email: "john.late.start@demo.otopair.com",
+        firstName: "John",
+        lastName: "Delay",
+        title: "Lead Tech",
+      }),
+      ensureMechanic({
+        clerkUserId: "late-start-mechanic-james",
+        email: "james.late.start@demo.otopair.com",
+        firstName: "James",
+        lastName: "Openbay",
+        title: "Shop Technician",
+      }),
+      ensureMechanic({
+        clerkUserId: "late-start-mechanic-mia",
+        email: "mia.late.start@demo.otopair.com",
+        firstName: "Mia",
+        lastName: "Backup",
+        title: "Diagnostic Tech",
+      }),
+    ]);
+
+    const ensureCustomer = async ({
+      clerkUserId,
+      email,
+      firstName,
+      lastName,
+      vin,
+      year,
+      make,
+      model,
+    }: {
+      clerkUserId: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      vin: string;
+      year: number;
+      make: string;
+      model: string;
+    }) => {
+      let user = await ctx.db
+        .query("users")
+        .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
+        .unique();
+      if (!user) {
+        const userId = await ctx.db.insert("users", {
+          clerkUserId,
+          onboardingCompleted: true,
+          createdAt: now,
+          email,
+          first_name: firstName,
+          last_name: lastName,
+        });
+        user = await ctx.db.get(userId);
+      }
+      if (!user) throw new Error(`Could not create customer ${email}`);
+
+      const existingVehicle = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q) => q.eq("vin", vin))
+        .unique();
+      if (!existingVehicle) {
+        await ctx.db.insert("vehicles", {
+          vin,
+          year,
+          created_at: now,
+          updated_at: now,
+          metadata: { make, model },
+        });
+      }
+
+      const ownership = await ctx.db
+        .query("vehicle_owners")
+        .withIndex("by_vin_user", (q) => q.eq("vin", vin).eq("user_id", user._id))
+        .unique();
+      if (!ownership) {
+        await ctx.db.insert("vehicle_owners", {
+          vin,
+          user_id: user._id,
+          status: "active",
+          is_primary: true,
+          added_at: now,
+        });
+      }
+
+      return user;
+    };
+
+    const [
+      acceptUpstreamCustomer,
+      acceptDownstreamCustomer,
+      pushUpstreamCustomer,
+      pushDownstreamCustomer,
+      manualUpstreamCustomer,
+      manualDownstreamCustomer,
+      blockerCustomer,
+    ] = await Promise.all([
+      ensureCustomer({
+        clerkUserId: "late-start-accept-upstream",
+        email: "accept.upstream@demo.otopair.com",
+        firstName: "Aaron",
+        lastName: "Accept",
+        vin: "LATETEST000001",
+        year: 2020,
+        make: "Toyota",
+        model: "Camry",
+      }),
+      ensureCustomer({
+        clerkUserId: "late-start-accept-downstream",
+        email: "accept.downstream@demo.otopair.com",
+        firstName: "Bianca",
+        lastName: "Alternate",
+        vin: "LATETEST000002",
+        year: 2021,
+        make: "Honda",
+        model: "CR-V",
+      }),
+      ensureCustomer({
+        clerkUserId: "late-start-push-upstream",
+        email: "push.upstream@demo.otopair.com",
+        firstName: "Carlos",
+        lastName: "Push",
+        vin: "LATETEST000003",
+        year: 2019,
+        make: "Ford",
+        model: "Escape",
+      }),
+      ensureCustomer({
+        clerkUserId: "late-start-push-downstream",
+        email: "push.downstream@demo.otopair.com",
+        firstName: "Diana",
+        lastName: "Delay",
+        vin: "LATETEST000004",
+        year: 2022,
+        make: "Subaru",
+        model: "Forester",
+      }),
+      ensureCustomer({
+        clerkUserId: "late-start-manual-upstream",
+        email: "manual.upstream@demo.otopair.com",
+        firstName: "Ethan",
+        lastName: "Manual",
+        vin: "LATETEST000005",
+        year: 2018,
+        make: "BMW",
+        model: "X3",
+      }),
+      ensureCustomer({
+        clerkUserId: "late-start-manual-downstream",
+        email: "manual.downstream@demo.otopair.com",
+        firstName: "Farah",
+        lastName: "Manual",
+        vin: "LATETEST000006",
+        year: 2023,
+        make: "Audi",
+        model: "Q5",
+      }),
+      ensureCustomer({
+        clerkUserId: "late-start-blocker",
+        email: "blocker.booking@demo.otopair.com",
+        firstName: "Gavin",
+        lastName: "Blocker",
+        vin: "LATETEST000007",
+        year: 2017,
+        make: "Jeep",
+        model: "Cherokee",
+      }),
+    ]);
+
+    const createBooking = async ({
+      customer,
+      vin,
+      mechanicId,
+      serviceId,
+      scheduledTime,
+      estimatedMinutes,
+      laborCost,
+      partsCost,
+    }: {
+      customer: any;
+      vin: string;
+      mechanicId: any;
+      serviceId: any;
+      scheduledTime: string;
+      estimatedMinutes: number;
+      laborCost: number;
+      partsCost: number;
+    }) => {
+      const endTime = dashboardAddMinutesToTime(scheduledTime, estimatedMinutes);
+      const slotId = await ctx.db.insert("time_slots", {
+        shop_id: args.shopId,
+        mechanic_id: mechanicId,
+        date: today,
+        start_time: scheduledTime,
+        end_time: endTime,
+        is_available: false,
+      });
+
+      const bookingId = await ctx.db.insert("bookings", {
+        user_id: customer._id,
+        vin,
+        shop_id: args.shopId,
+        mechanic_id: mechanicId,
+        service_ids: [serviceId],
+        time_slot_id: slotId,
+        scheduled_date: today,
+        scheduled_time: scheduledTime,
+        labor_cost: laborCost,
+        parts_cost: partsCost,
+        total_cost: laborCost + partsCost,
+        estimated_labor_minutes: estimatedMinutes,
+        status: "confirmed",
+        created_at: now,
+        updated_at: now,
+      });
+
+      await ctx.db.insert("booking_status_history", {
+        booking_id: bookingId,
+        old_status: undefined,
+        new_status: "confirmed",
+        reason: "seed_late_start_review",
+        changed_at: now,
+      });
+
+      return bookingId;
+    };
+
+    const acceptUpstreamBookingId = await createBooking({
+      customer: acceptUpstreamCustomer,
+      vin: "LATETEST000001",
+      mechanicId: johnMechanic._id,
+      serviceId: oilChangeId,
+      scheduledTime: "09:00",
+      estimatedMinutes: 60,
+      laborCost: 55,
+      partsCost: 30,
+    });
+    const acceptDownstreamBookingId = await createBooking({
+      customer: acceptDownstreamCustomer,
+      vin: "LATETEST000002",
+      mechanicId: johnMechanic._id,
+      serviceId: brakePadsId,
+      scheduledTime: "10:00",
+      estimatedMinutes: 60,
+      laborCost: 110,
+      partsCost: 75,
+    });
+
+    const pushUpstreamBookingId = await createBooking({
+      customer: pushUpstreamCustomer,
+      vin: "LATETEST000003",
+      mechanicId: johnMechanic._id,
+      serviceId: oilChangeId,
+      scheduledTime: "11:30",
+      estimatedMinutes: 60,
+      laborCost: 55,
+      partsCost: 30,
+    });
+    const pushDownstreamBookingId = await createBooking({
+      customer: pushDownstreamCustomer,
+      vin: "LATETEST000004",
+      mechanicId: johnMechanic._id,
+      serviceId: brakePadsId,
+      scheduledTime: "12:30",
+      estimatedMinutes: 60,
+      laborCost: 115,
+      partsCost: 80,
+    });
+    await createBooking({
+      customer: blockerCustomer,
+      vin: "LATETEST000007",
+      mechanicId: jamesMechanic._id,
+      serviceId: oilChangeId,
+      scheduledTime: "12:30",
+      estimatedMinutes: 60,
+      laborCost: 50,
+      partsCost: 20,
+    });
+
+    const manualUpstreamBookingId = await createBooking({
+      customer: manualUpstreamCustomer,
+      vin: "LATETEST000005",
+      mechanicId: johnMechanic._id,
+      serviceId: oilChangeId,
+      scheduledTime: "14:00",
+      estimatedMinutes: 60,
+      laborCost: 55,
+      partsCost: 30,
+    });
+    const manualDownstreamBookingId = await createBooking({
+      customer: manualDownstreamCustomer,
+      vin: "LATETEST000006",
+      mechanicId: johnMechanic._id,
+      serviceId: brakePadsId,
+      scheduledTime: "15:00",
+      estimatedMinutes: 60,
+      laborCost: 120,
+      partsCost: 90,
+    });
+    await createBooking({
+      customer: blockerCustomer,
+      vin: "LATETEST000007",
+      mechanicId: jamesMechanic._id,
+      serviceId: brakePadsId,
+      scheduledTime: "15:00",
+      estimatedMinutes: 60,
+      laborCost: 100,
+      partsCost: 65,
+    });
+
+    for (const monitor of [
+      { upstreamBookingId: acceptUpstreamBookingId, status: "active" },
+      { upstreamBookingId: pushUpstreamBookingId, status: "active" },
+      { upstreamBookingId: manualUpstreamBookingId, status: "manual_takeover" },
+    ]) {
+      await ctx.db.insert("late_start_monitors", {
+        shop_id: args.shopId,
+        upstream_booking_id: monitor.upstreamBookingId,
+        cycle_minutes: 15,
+        warning_due_at_ms: now - 2 * 60 * 1000,
+        auto_apply_at_ms: now + 3 * 60 * 1000,
+        status: monitor.status,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
+    await ctx.db.insert("late_start_reviews", {
+      shop_id: args.shopId,
+      upstream_booking_id: acceptUpstreamBookingId,
+      cycle_minutes: 15,
+      status: "pending_staff_review",
+      decision_due_at_ms: now + 5 * 60 * 1000,
+      proposals: [
+        {
+          booking_id: acceptDownstreamBookingId,
+          original_scheduled_date: today,
+          original_scheduled_time: "10:00",
+          original_mechanic_id: johnMechanic._id,
+          proposed_scheduled_date: today,
+          proposed_scheduled_time: "10:00",
+          proposed_mechanic_id: jamesMechanic._id,
+          used_alternate_mechanic: true,
+        },
+      ],
+      created_at: now,
+      updated_at: now,
+    });
+
+    await ctx.db.insert("late_start_reviews", {
+      shop_id: args.shopId,
+      upstream_booking_id: pushUpstreamBookingId,
+      cycle_minutes: 15,
+      status: "pending_staff_review",
+      decision_due_at_ms: now + 5 * 60 * 1000,
+      proposals: [
+        {
+          booking_id: pushDownstreamBookingId,
+          original_scheduled_date: today,
+          original_scheduled_time: "12:30",
+          original_mechanic_id: johnMechanic._id,
+          proposed_scheduled_date: today,
+          proposed_scheduled_time: "12:45",
+          proposed_mechanic_id: johnMechanic._id,
+          used_alternate_mechanic: false,
+        },
+      ],
+      created_at: now,
+      updated_at: now,
+    });
+
+    await ctx.db.insert("late_start_reviews", {
+      shop_id: args.shopId,
+      upstream_booking_id: manualUpstreamBookingId,
+      cycle_minutes: 15,
+      status: "blocked_manual_review",
+      decision_due_at_ms: now + 5 * 60 * 1000,
+      proposals: [
+        {
+          booking_id: manualDownstreamBookingId,
+          original_scheduled_date: today,
+          original_scheduled_time: "15:00",
+          original_mechanic_id: johnMechanic._id,
+          proposed_scheduled_date: today,
+          proposed_scheduled_time: "16:00",
+          proposed_mechanic_id: miaMechanic._id,
+          used_alternate_mechanic: true,
+          blocked_reason:
+            "Automatic delay was intentionally paused for manual review testing.",
+        },
+      ],
+      blocking_reason:
+        "Automatic delay was intentionally paused so staff can test manual reassignment.",
+      created_at: now,
+      updated_at: now,
+    });
+
+    return {
+      success: true,
+      seededDate: today,
+      reviewCount: 3,
     };
   },
 });

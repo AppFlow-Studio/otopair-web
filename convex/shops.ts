@@ -4,8 +4,23 @@ import {
   syncMechanicAvailabilityWindow,
   syncShopAvailabilityWindow,
 } from "./lib/timeSlotAvailability";
+import {
+  DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
+  DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
+  DEFAULT_OVERRUN_EXTENSION_PERCENT,
+  validateNoShowThresholdMinutes,
+} from "../lib/scheduling-overhaul";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
+const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
+const TERMINAL_BOOKING_STATUSES = new Set(["completed", "cancelled", "no_show"]);
+const DEFAULT_NO_SHOW_THRESHOLD_MINUTES = 30;
+const DEFAULT_OVERRUN_EXTENSION_PERCENT = 25;
+const DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES = 15;
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
 
 type StripeConnectShopFields = {
   stripe_charges_enabled?: boolean;
@@ -115,6 +130,54 @@ function isStripeConnectReadyForShop(
   );
 }
 
+async function resolveMechanicPhotoUrl(ctx: any, photo?: string | null) {
+  if (!photo) return null;
+
+  try {
+    const asset = await ctx.db.get(photo as any);
+    if (asset?.url) return asset.url as string;
+  } catch {
+    // New uploads store Convex storage ids directly on mechanics.photo.
+  }
+
+  try {
+    return await ctx.storage.getUrl(photo);
+  } catch {
+    return null;
+  }
+}
+
+async function getBlockingBookingsForMechanic(ctx: any, shopId: any, mechanicId: any) {
+  const bookings = await ctx.db
+    .query("bookings")
+    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
+    .collect();
+
+  return bookings.filter(
+    (booking: any) =>
+      String(booking.mechanic_id ?? "") === String(mechanicId) &&
+      !TERMINAL_BOOKING_STATUSES.has(booking.status)
+  );
+}
+
+function getMechanicPortalStatus(args: { activeShopUser: any; latestInvitation: any; now: number }) {
+  if (args.activeShopUser) return "active";
+  if (!args.latestInvitation) return "not_invited";
+  if (
+    args.latestInvitation.status === "pending" &&
+    args.latestInvitation.expires_at &&
+    args.latestInvitation.expires_at <= args.now
+  ) {
+    return "invite_expired";
+  }
+  if (args.latestInvitation.status === "pending") return "invite_sent";
+  if (args.latestInvitation.status === "expired") return "invite_expired";
+  if (args.latestInvitation.status === "revoked") return "invite_revoked";
+  if (args.latestInvitation.status === "accepted") return "active";
+  return "not_invited";
+}
+
+
 function getStripeStatusPatch(args: {
   shop: StripeConnectShopFields;
   chargesEnabled: boolean;
@@ -156,14 +219,6 @@ async function assertOnboardingCanBeCompleted(ctx: any, shopId: any) {
     throw new Error("Complete your operating hours before finishing setup.");
   }
 
-  const mechanics = await ctx.db
-    .query("mechanics")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .filter((q: any) => q.eq(q.field("is_active"), true))
-    .collect();
-  if (mechanics.length === 0) {
-    throw new Error("Add at least one mechanic before finishing setup.");
-  }
 }
 
 async function finalizeOnboarding(ctx: any, args: { shopId: any; userId: any }) {
@@ -293,6 +348,47 @@ export const getMyShops = query({
   },
 });
 
+export const updateSchedulingSettings = mutation({
+  args: {
+    noShowThresholdMinutes: v.number(),
+    overrunDefaultExtensionPercent: v.number(),
+    overrunDefaultExtensionFloorMinutes: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Only shop owners can update scheduling settings.");
+    }
+
+    const noShowThresholdMinutes = clampNumber(
+      Math.round(args.noShowThresholdMinutes),
+      15,
+      60
+    );
+    const overrunDefaultExtensionPercent = clampNumber(
+      Math.round(args.overrunDefaultExtensionPercent),
+      1,
+      100
+    );
+    const overrunDefaultExtensionFloorMinutes = Math.max(
+      1,
+      Math.round(args.overrunDefaultExtensionFloorMinutes)
+    );
+
+    await ctx.db.patch(primary.shop._id, {
+      no_show_threshold_minutes: noShowThresholdMinutes,
+      overrun_default_extension_percent: overrunDefaultExtensionPercent,
+      overrun_default_extension_floor_minutes: overrunDefaultExtensionFloorMinutes,
+    });
+
+    return primary.shop._id;
+  },
+});
+
 export const getMyPortalAccess = query({
   args: {},
   handler: async (ctx) => {
@@ -313,6 +409,9 @@ export const getMyPortalAccess = query({
         status: "active" as const,
         role: activeMembership.role,
         shopId: activeMembership.shop_id,
+        mechanicId: MECHANIC_ROLES.has(activeMembership.role)
+          ? activeMembership.mechanic_id ?? null
+          : null,
         onboardingComplete: shop?.onboarding_complete === true,
       };
     }
@@ -322,6 +421,50 @@ export const getMyPortalAccess = query({
     }
 
     return { status: "no_shop" as const, userRole: user.role };
+  },
+});
+
+export const updateMySchedulingSettings = mutation({
+  args: {
+    noShowThresholdMinutes: v.number(),
+    overrunDefaultExtensionPercent: v.number(),
+    overrunExtensionFloorMinutes: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Only shop owners can update scheduling settings.");
+    }
+
+    validateNoShowThresholdMinutes(args.noShowThresholdMinutes);
+    if (!Number.isFinite(args.overrunDefaultExtensionPercent) || args.overrunDefaultExtensionPercent < 0) {
+      throw new Error("Overrun default extension percent must be 0 or greater.");
+    }
+    if (!Number.isFinite(args.overrunExtensionFloorMinutes) || args.overrunExtensionFloorMinutes < 0) {
+      throw new Error("Overrun extension floor must be 0 or greater.");
+    }
+
+    await ctx.db.patch(primary.shop._id, {
+      no_show_threshold_minutes: Number.isFinite(args.noShowThresholdMinutes)
+        ? Math.round(args.noShowThresholdMinutes)
+        : DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
+      overrun_default_extension_percent: Number.isFinite(
+        args.overrunDefaultExtensionPercent,
+      )
+        ? Math.round(args.overrunDefaultExtensionPercent)
+        : DEFAULT_OVERRUN_EXTENSION_PERCENT,
+      overrun_extension_floor_minutes: Number.isFinite(
+        args.overrunExtensionFloorMinutes,
+      )
+        ? Math.round(args.overrunExtensionFloorMinutes)
+        : DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
+    });
+
+    return primary.shop._id;
   },
 });
 
@@ -491,11 +634,10 @@ export const getMyOnboardingData = query({
           .collect()
       : [];
 
-    const pendingInvitations = shop
+    const invitations = shop
       ? await ctx.db
           .query("shop_invitations")
           .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
-          .filter((q: any) => q.eq(q.field("status"), "pending"))
           .collect()
       : [];
 
@@ -504,10 +646,10 @@ export const getMyOnboardingData = query({
         row.mechanic_id &&
         (row.role === "shop_mechanic" || row.role === "mechanic")
     );
-    const mechanicRolePendingInvitations = pendingInvitations.filter(
+    const mechanicRoleInvitations = invitations.filter(
       (row: any) =>
         row.mechanic_id &&
-        (row.role === "shop_mechanic" || row.role === "mechanic")
+        MECHANIC_ROLES.has(row.role)
     );
 
     const shopUserByMechanicId = new Map(
@@ -516,12 +658,13 @@ export const getMyOnboardingData = query({
     const shopUserRecordByMechanicId = new Map(
       mechanicRoleShopUsers.map((row: any) => [String(row.mechanic_id), row])
     );
-    const pendingInvitationByMechanicId = new Map(
-      mechanicRolePendingInvitations.map((row: any) => [
-        String(row.mechanic_id),
-        String(row._id),
-      ])
-    );
+    const invitationsByMechanicId = new Map<string, any[]>();
+    for (const invitation of mechanicRoleInvitations) {
+      const key = String(invitation.mechanic_id);
+      const current = invitationsByMechanicId.get(key) ?? [];
+      current.push(invitation);
+      invitationsByMechanicId.set(key, current);
+    }
 
     return {
       userRole: user.role ?? null,
@@ -548,6 +691,14 @@ export const getMyOnboardingData = query({
             stripeOnboardingCompletedAt: shop.stripe_onboarding_completed_at ?? null,
             stripeConnectReady: isStripeConnectReadyForShop(shop),
             onboardingComplete: shop.onboarding_complete === true,
+            noShowThresholdMinutes:
+              shop.no_show_threshold_minutes ?? DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
+            overrunDefaultExtensionPercent:
+              shop.overrun_default_extension_percent ??
+              DEFAULT_OVERRUN_EXTENSION_PERCENT,
+            overrunDefaultExtensionFloorMinutes:
+              shop.overrun_default_extension_floor_minutes ??
+              DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
           }
         : null,
       hours: hours
@@ -563,28 +714,42 @@ export const getMyOnboardingData = query({
       serviceCategories,
       mechanics: await Promise.all(
         mechanics
-          .filter(
-            (mechanic: any) =>
-              shopUserByMechanicId.has(String(mechanic._id)) ||
-              pendingInvitationByMechanicId.has(String(mechanic._id))
-          )
           .map(async (mechanic: any) => {
             const shopUser = shopUserRecordByMechanicId.get(String(mechanic._id));
-            const linkedUser = shopUser?.user_id ? await ctx.db.get(shopUser.user_id) : null;
-            const photoUrl =
-              linkedUser?.profile_photo_storage_id
-                ? await ctx.storage.getUrl(linkedUser.profile_photo_storage_id)
-                : (linkedUser?.profile_photo_url ?? null);
+            const linkedUser: any = shopUser?.user_id ? await ctx.db.get(shopUser.user_id) : null;
+            const mechanicInvitations = (invitationsByMechanicId.get(String(mechanic._id)) ?? [])
+              .sort((a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0));
+            const latestInvitation = mechanicInvitations[0] ?? null;
+            const pendingInvitation = mechanicInvitations.find((row: any) => row.status === "pending");
+            const mechanicPhotoUrl = await resolveMechanicPhotoUrl(ctx, mechanic.photo);
+            const linkedUserPhotoUrl = linkedUser?.profile_photo_storage_id
+              ? await ctx.storage.getUrl(linkedUser.profile_photo_storage_id)
+              : (linkedUser?.profile_photo_url ?? null);
+            const activeShopUser = shopUser ?? null;
+            const blockingBookings = shop
+              ? await getBlockingBookingsForMechanic(ctx, shop._id, mechanic._id)
+              : [];
 
             return {
               _id: String(mechanic._id),
               firstName: mechanic.first_name as string,
               lastName: mechanic.last_name as string,
               title: (mechanic.title ?? "") as string,
+              email: (mechanic.email ?? latestInvitation?.email ?? "") as string,
+              rating: mechanic.rating ?? 0,
+              reviewCount: mechanic.review_count ?? 0,
               shopUserId: shopUserByMechanicId.get(String(mechanic._id)) ?? null,
-              pendingInvitationId:
-                pendingInvitationByMechanicId.get(String(mechanic._id)) ?? null,
-              photoUrl,
+              invitationId: latestInvitation ? String(latestInvitation._id) : null,
+              pendingInvitationId: pendingInvitation ? String(pendingInvitation._id) : null,
+              invitationStatus: latestInvitation?.status ?? null,
+              invitationExpiresAt: latestInvitation?.expires_at ?? null,
+              portalStatus: getMechanicPortalStatus({
+                activeShopUser,
+                latestInvitation,
+                now: Date.now(),
+              }),
+              blockingBookingCount: blockingBookings.length,
+              photoUrl: mechanicPhotoUrl ?? linkedUserPhotoUrl,
             };
           })
       ),
@@ -757,11 +922,101 @@ export const saveOnboardingLaborAndServices = mutation({
   },
 });
 
+export const updateShopHours = mutation({
+  args: {
+    hours: v.array(
+      v.object({
+        dayOfWeek: v.float64(),
+        dayName: v.string(),
+        isClosed: v.boolean(),
+        openTime: v.string(),
+        closeTime: v.string(),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const user = await getOrCreateCurrentShopOwner(ctx);
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Set up your shop details first.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Not authorized");
+    }
+
+    const existing = await ctx.db
+      .query("shops_hours")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
+      .collect();
+    const byDay = new Map(existing.map((row: any) => [row.day_of_week as number, row]));
+
+    for (const hour of args.hours) {
+      const patch = {
+        day_name: hour.dayName,
+        day_of_week: hour.dayOfWeek,
+        is_closed: hour.isClosed,
+        open_time: hour.isClosed ? undefined : hour.openTime,
+        close_time: hour.isClosed ? undefined : hour.closeTime,
+        shop_id: primary.shop._id,
+      };
+
+      const current = byDay.get(hour.dayOfWeek);
+      if (current) {
+        await ctx.db.patch(current._id, patch);
+      } else {
+        await ctx.db.insert("shops_hours", patch);
+      }
+    }
+
+    await syncShopAvailabilityWindow(ctx, { shopId: primary.shop._id });
+    return primary.shop._id;
+  },
+});
+
+export const updateShopOfferedServices = mutation({
+  args: {
+    serviceIds: v.array(v.id("services")),
+  },
+  handler: async (ctx, args) => {
+    const user = await getOrCreateCurrentShopOwner(ctx);
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Set up your shop details first.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Not authorized");
+    }
+
+    const existing = await ctx.db
+      .query("shop_services")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
+      .collect();
+    const byServiceId = new Map(existing.map((row: any) => [String(row.service_id), row]));
+    const selectedIds = new Set(args.serviceIds.map((id) => String(id)));
+
+    for (const row of existing) {
+      const shouldOffer = selectedIds.has(String(row.service_id));
+      if (row.is_offered !== shouldOffer) {
+        await ctx.db.patch(row._id, { is_offered: shouldOffer });
+      }
+    }
+
+    for (const serviceId of args.serviceIds) {
+      if (!byServiceId.has(String(serviceId))) {
+        await ctx.db.insert("shop_services", {
+          shop_id: primary.shop._id,
+          service_id: serviceId,
+          is_offered: true,
+        });
+      }
+    }
+
+    return primary.shop._id;
+  },
+});
+
 export const addOnboardingMechanic = mutation({
   args: {
     firstName: v.string(),
     lastName: v.string(),
     title: v.optional(v.string()),
+    email: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await getOrCreateCurrentShopOwner(ctx);
@@ -776,6 +1031,7 @@ export const addOnboardingMechanic = mutation({
       first_name: args.firstName.trim(),
       last_name: args.lastName.trim(),
       title: args.title?.trim() || undefined,
+      email: args.email?.trim().toLowerCase() || undefined,
       is_active: true,
       rating: 0,
       review_count: 0,
@@ -807,6 +1063,11 @@ export const removeOnboardingMechanic = mutation({
       throw new Error("Mechanic not found.");
     }
 
+    const blockers = await getBlockingBookingsForMechanic(ctx, primary.shop._id, args.mechanicId);
+    if (blockers.length > 0) {
+      throw new Error("This mechanic has active bookings or jobs that must be completed or reassigned first.");
+    }
+
     await ctx.db.patch(args.mechanicId, { is_active: false });
     await syncMechanicAvailabilityWindow(ctx, {
       shopId: primary.shop._id,
@@ -834,35 +1095,14 @@ export const updateOnboardingMechanicProfilePhoto = mutation({
       throw new Error("Mechanic not found.");
     }
 
-    const shopUser = await ctx.db
-      .query("shop_users")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
-      .filter((q: any) =>
-        q.and(
-          q.eq(q.field("is_active"), true),
-          q.eq(q.field("mechanic_id"), args.mechanicId),
-          q.or(
-            q.eq(q.field("role"), "shop_mechanic"),
-            q.eq(q.field("role"), "mechanic")
-          )
-        )
-      )
-      .first();
-
-    if (!shopUser?.user_id) {
-      throw new Error("Profile photo can be added after the mechanic accepts the invitation.");
-    }
-
-    await ctx.db.patch(shopUser.user_id, {
-      profile_photo_storage_id: args.profilePhotoStorageId ?? undefined,
-      profile_photo_url: undefined,
-      lastUpdated: Date.now(),
+    await ctx.db.patch(args.mechanicId, {
+      photo: args.profilePhotoStorageId ?? undefined,
     });
 
     const photoUrl = args.profilePhotoStorageId
-      ? await ctx.storage.getUrl(args.profilePhotoStorageId)
+      ? await resolveMechanicPhotoUrl(ctx, args.profilePhotoStorageId)
       : null;
-    return { userId: shopUser.user_id, photoUrl };
+    return { mechanicId: args.mechanicId, photoUrl };
   },
 });
 

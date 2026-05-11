@@ -18,6 +18,7 @@ import { api, internal } from "./_generated/api";
 import Anthropic from "@anthropic-ai/sdk";
 import { searchAndFetch } from "./vehicleEnrichment/firecrawl";
 import { advancedVinDecode, extractVDBFields } from "./lib/vehicleDatabases";
+import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -87,6 +88,29 @@ export const processVin = internalAction({
         transSpeeds: getValue(nhtsaData, "TransmissionSpeeds"),
         driveType: getValue(nhtsaData, "DriveType"),
       };
+
+      // ════════════════════════════════════════════════════════════
+      // NHTSA-ONLY BASE KEY — computed from raw vPIC fields, BEFORE
+      // Claude normalization or VDB merging. This is the dedup key
+      // used by confirmVehicleForUser to short-circuit re-enrichment.
+      // Deterministic per VIN: NHTSA is free + always available, so
+      // this works even when VDB is down (403s). See types.ts.
+      // ════════════════════════════════════════════════════════════
+      const nhtsaYearNum = parseInt(nhtsa.year || "0");
+      const nhtsaVinKey = nhtsa.make && nhtsa.model && nhtsaYearNum
+        ? buildNhtsaVinKey({
+            year: nhtsaYearNum,
+            make: nhtsa.make,
+            model: nhtsa.model,
+            trim: nhtsa.trim,
+            displacementL: nhtsa.displacementL,
+            cylinders: nhtsa.cylinders,
+            fuelType: nhtsa.fuelType,
+          })
+        : "";
+      if (nhtsaVinKey) {
+        console.log(`[decode] NHTSA base key: ${nhtsaVinKey}`);
+      }
 
       // ════════════════════════════════════════════════════════════
       // MERGE: VDB wins, NHTSA fills gaps
@@ -330,6 +354,9 @@ export const processVin = internalAction({
         cylinders: merged.cylinders, displacement: merged.displacement,
         fuelType: merged.fuelType,
         drivetrain: canonicalDrivetrain ?? "unknown",
+        // NHTSA-only base key (deterministic per VIN, computed before
+        // Claude normalization). Used for dedup in confirmVehicleForUser.
+        nhtsaVinKey,
         // VDB trim data for pre-population
         vdbTrimData: vdb ? {
           frontTireSize: vdb.frontTireSize,
@@ -943,6 +970,10 @@ export const decodeVin = action({
       cylinders: result.cylinders,
       displacement: result.displacement,
       fuelType: result.fuelType,
+      // NHTSA-only base key — pass back to the client so confirmVehicleForUser
+      // can use it for cache lookups even if Claude rewrote the trim/model
+      // between decode and confirm.
+      nhtsaVinKey: result.nhtsaVinKey,
     };
   },
 });
@@ -967,6 +998,11 @@ export const confirmVehicleForUser = action({
     fuelType: v.string(),
     color: v.optional(v.string()),
     drivetrain: v.optional(v.string()),
+    // NHTSA-only base key returned by decodeVin. When present, this is the
+    // PRIMARY dedup key — works even before Haiku has resolved synthetic
+    // engine codes (e.g. "1.4 TSI" → "EA211"). config_key is a secondary
+    // lookup for legacy paths that don't pass the NHTSA key.
+    nhtsaVinKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Resolve current user from auth
@@ -1006,21 +1042,113 @@ export const confirmVehicleForUser = action({
       is_primary: true,
     });
 
-    // Schedule v4.2 batch enrichment pipeline (Haiku + Batch API, no rate limits)
-    if (vehicle?._id && args.engineCode) {
-      await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.v3pipeline.enrichVehicleBatchV3, {
-        vehicleId: vehicle._id,
-        year: args.year,
-        make: args.make,
-        model: args.model,
-        trim: args.trim,
-        engineCode: args.engineCode,
-        displacement: args.displacement,
-        drivetrain: args.drivetrain,
-      });
+    // Early dedup. If a vehicle_configs row already exists for this VIN's
+    // make/model/trim/engine fingerprint and is fresh, skip-attach the new
+    // vehicle to it instead of running the full enrichment action.
+    //
+    // Lookup priority:
+    //   1. nhtsa_vin_key  — works BEFORE Haiku engine-code resolution.
+    //                       Critical for makes that emit descriptors like
+    //                       VW "1.4 TSI", Ford "EcoBoost", Hyundai "Smartstream".
+    //   2. config_key     — fallback for legacy/manual paths that don't
+    //                       have a NHTSA-decoded VIN handy.
+    //
+    // The pipeline's STAGE 0 cache check would catch this anyway, but doing it
+    // here saves ~2-3 sec of scheduler overhead per duplicate add.
+    let cacheHit = false;
+    let scheduledEnrichment = false;
+    let dedupSource: "nhtsa_vin_key" | "config_key" | "none" = "none";
+
+    if (vehicle?._id) {
+      let existingConfig = null as any;
+
+      // Primary: NHTSA-only base key
+      if (args.nhtsaVinKey) {
+        existingConfig = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getVehicleConfigByNhtsaVinKey,
+          { nhtsaVinKey: args.nhtsaVinKey },
+        );
+        if (existingConfig) dedupSource = "nhtsa_vin_key";
+      }
+
+      // Secondary: post-resolution config_key
+      let configKey = "";
+      if (!existingConfig && args.engineCode) {
+        configKey = buildEngineKey({
+          vehicleId: vehicle._id as any,
+          year: args.year,
+          make: args.make,
+          model: args.model,
+          trim: args.trim,
+          engineCode: args.engineCode,
+          displacement: args.displacement,
+        });
+        existingConfig = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getVehicleConfigByKey,
+          { configKey },
+        );
+        if (existingConfig) dedupSource = "config_key";
+      }
+
+      const STALE_MS = 180 * 24 * 60 * 60 * 1000;
+      const status = existingConfig?.enrichment_status;
+      const fresh =
+        existingConfig &&
+        (status === "complete" || status === "verified") &&
+        (existingConfig.last_enriched_at ?? 0) >= Date.now() - STALE_MS;
+
+      if (fresh && existingConfig?._id) {
+        // Skip-attach. The vehicle row gets pointed at the existing definition
+        // — no Claude calls, no scheduler delay.
+        await ctx.runMutation(
+          internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
+          { vehicle_id: vehicle._id, vehicle_config_id: existingConfig._id },
+        );
+        cacheHit = true;
+        console.log(
+          `[confirmVehicleForUser] cache_hit: attached vehicle ${vehicle._id} to ` +
+          `existing vehicle_configs ${existingConfig._id} ` +
+          `(via=${dedupSource}, nhtsaVinKey=${args.nhtsaVinKey ?? "none"})`,
+        );
+      } else {
+        // No fresh definition — run the full enrichment pipeline. Pass through
+        // the nhtsa_vin_key so STAGE 4 stamps it onto the new vehicle_configs row.
+        await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.v3pipeline.enrichVehicleBatchV3, {
+          vehicleId: vehicle._id,
+          year: args.year,
+          make: args.make,
+          model: args.model,
+          trim: args.trim,
+          engineCode: args.engineCode,
+          displacement: args.displacement,
+          drivetrain: args.drivetrain,
+          nhtsaVinKey: args.nhtsaVinKey,
+        });
+        scheduledEnrichment = true;
+        console.log(
+          `[confirmVehicleForUser] scheduled enrichment for vehicle ${vehicle._id} ` +
+          `(nhtsaVinKey=${args.nhtsaVinKey ?? "none"}, configKey=${configKey || "n/a"}, ` +
+          `existing=${existingConfig ? status : "none"})`,
+        );
+      }
     }
 
-    return { success: true as const, vehicleOwnerId };
+    // Schedule tire price scraping in parallel with enrichment
+    await ctx.scheduler.runAfter(0, api.tires.scrapeVehicleTires, {
+      year: args.year,
+      make: args.make,
+      model: args.model,
+      trim: args.trim,
+      displacementL: args.displacement ? parseFloat(args.displacement) : undefined,
+    });
+
+    return {
+      success: true as const,
+      vehicleOwnerId,
+      cache_hit: cacheHit,
+      cache_hit_source: dedupSource,
+      enrichment_scheduled: scheduledEnrichment,
+    };
   },
 });
 

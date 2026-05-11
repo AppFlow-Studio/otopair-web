@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
+import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
@@ -9,6 +11,7 @@ import {
   CalendarOff,
   CalendarPlus,
   Car,
+  AlertTriangle,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -29,14 +32,18 @@ import {
   type BookingStatus,
 } from "@/lib/booking-status";
 import { usePortalSidebar } from "../portal-context";
-import { statusColors, dateToString } from "./schedule-constants";
+import {
+  statusColors,
+  dateToString,
+  getPendingApprovalLabel,
+} from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 import {
   getBookingEndTime,
   overlapsBlockedSlot,
   overlapsMechanicBooking,
 } from "@/lib/schedule-overlap";
-import { Calendar, dateFnsLocalizer, Views } from "react-big-calendar";
+import { Calendar, dateFnsLocalizer } from "react-big-calendar";
 import {
   Select,
   SelectItem,
@@ -50,7 +57,7 @@ import { enUS } from "date-fns/locale/en-US";
 import "react-big-calendar/lib/css/react-big-calendar.css";
 import "./schedule.css";
 import DaySwimLanes from "./day-swim-lanes";
-import type { RescheduleProposal, ContextMenuCellInfo, ContextMenuBlockedInfo } from "./day-swim-lanes";
+import type { RescheduleProposal, ContextMenuCellInfo } from "./day-swim-lanes";
 import WeekSwimLanes from "./week-swim-lanes";
 import WeekSingleMechanicLanes from "./week-single-mechanic-lanes";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
@@ -64,7 +71,11 @@ import {
   DrawerSectionHeader,
 } from "@/components/drawer-panel-styles";
 import RescheduleConfirmationDialog from "@/components/reschedule-confirmation-dialog";
+import LateStartReviewDialog, {
+  type LateStartReviewView,
+} from "@/components/late-start-review-dialog";
 import CreateBookingDrawer from "./create-booking-drawer";
+import DatePicker from "@/components/ui/date-picker";
 
 /* ------------------------------------------------------------------ */
 /*  Localizer setup                                                     */
@@ -121,6 +132,13 @@ function formatTimeLabelCompact(hhmm: string): string {
   return `${hour}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
+function formatDecisionDueTime(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function hhmmToMinutes(hhmm: string): number {
   const [hours, minutes] = hhmm.split(":").map(Number);
   return hours * 60 + minutes;
@@ -153,6 +171,50 @@ function generateTimeOptions(): Array<{ value: string; label: string }> {
   return options;
 }
 
+function getDayOfWeekFromDateString(date: string) {
+  return new Date(`${date}T00:00:00`).getDay();
+}
+
+function bookingFallsOutsideShopHours(
+  shopHours: Array<{
+    dayOfWeek: number;
+    openTime: string;
+    closeTime: string;
+    isClosed: boolean;
+  }>,
+  {
+    date,
+    startTime,
+    estimatedMinutes,
+  }: {
+    date: string;
+    startTime: string;
+    estimatedMinutes: number;
+  }
+) {
+  const hours = shopHours.find((entry) => entry.dayOfWeek === getDayOfWeekFromDateString(date));
+  if (!hours || hours.isClosed) return true;
+
+  const startMinutes = hhmmToMinutes(startTime);
+  const endMinutes = hhmmToMinutes(getBookingEndTime(startTime, estimatedMinutes));
+  const openMinutes = hhmmToMinutes(hours.openTime);
+  const closeMinutes = hhmmToMinutes(hours.closeTime);
+
+  return startMinutes < openMinutes || startMinutes >= closeMinutes || endMinutes > closeMinutes;
+}
+
+const MONTH_STATUS_ORDER = [
+  "pending_shop_acceptance",
+  "pending_customer_acceptance",
+  "confirmed",
+  "vehicle_at_shop",
+  "in_progress",
+  "completed",
+  "cancelled",
+  "declined",
+  "no_show",
+];
+
 /* ------------------------------------------------------------------ */
 /*  Block time type defaults                                            */
 /* ------------------------------------------------------------------ */
@@ -172,6 +234,7 @@ const BUILT_IN_TYPES = [
 
 export default function SchedulePage() {
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("day");
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
   const [selectedBookingId, setSelectedBookingId] = useState<Id<"bookings"> | null>(null);
@@ -179,6 +242,18 @@ export default function SchedulePage() {
   const [rescheduleProposal, setRescheduleProposal] = useState<RescheduleProposal | null>(null);
   const [rescheduleError, setRescheduleError] = useState("");
   const [isRescheduling, setIsRescheduling] = useState(false);
+  const [noShowReschedule, setNoShowReschedule] = useState<{
+    bookingId: string;
+    customerName: string;
+    date: string;
+    time: string;
+    mechanicId: string;
+  } | null>(null);
+  const [noShowRescheduleError, setNoShowRescheduleError] = useState("");
+  const [isSubmittingNoShowReschedule, setIsSubmittingNoShowReschedule] = useState(false);
+  const [selectedLateStartReviewId, setSelectedLateStartReviewId] = useState<string | null>(null);
+  const [lateStartReviewError, setLateStartReviewError] = useState("");
+  const [isSubmittingLateStartReview, setIsSubmittingLateStartReview] = useState(false);
   const [contextMenu, setContextMenu] = useState<
     | { type: "block"; info: ContextMenuCellInfo }
     | { type: "unblock"; slotId: string; clientX: number; clientY: number }
@@ -186,13 +261,19 @@ export default function SchedulePage() {
     | { type: "blockDay"; mechanicId: string; mechanicName: string; date: string; isBlocked: boolean; slotId?: string; clientX: number; clientY: number }
     | null
   >(null);
+  const [contextMenuStyle, setContextMenuStyle] = useState<CSSProperties | null>(null);
 
-  // Create booking drawer
+  // Create booking drawer (lifted draft state — drives drawer + ghost block on calendar)
   const [createBookingDrawer, setCreateBookingDrawer] = useState<{
     date: string;
     time: string;
     mechanicId: string;
+    durationMinutes: number;
   } | null>(null);
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const autoOpenedRef = useRef(false);
 
   // Block-full-day confirmation dialog
   const [blockDayConfirm, setBlockDayConfirm] = useState<{
@@ -200,6 +281,15 @@ export default function SchedulePage() {
     mechanicName: string;
     date: string;
     bookingCount: number;
+  } | null>(null);
+  const [lateStartOutsideHoursConfirm, setLateStartOutsideHoursConfirm] = useState<{
+    reviewId: string;
+    targets: Array<{
+      bookingId: string;
+      newScheduledDate: string;
+      newScheduledTime: string;
+      newMechanicId?: string;
+    }>;
   } | null>(null);
 
   // Blocked time drawer state
@@ -220,17 +310,28 @@ export default function SchedulePage() {
   const [btMechanicId, setBtMechanicId] = useState("");
   const [btDescription, setBtDescription] = useState("");
   const [btType, setBtType] = useState("custom");
+  const [btFrequency, setBtFrequency] = useState<"none" | "daily" | "weekly" | "biweekly" | "monthly">("none");
+  const [btUntil, setBtUntil] = useState("");
   const [saveAsType, setSaveAsType] = useState(false);
   const savedBlockTypesQuery = useQuery(api.schedule.getBlockTimeTypes);
   const [btSaving, setBtSaving] = useState(false);
 
   const jobDetailRef = useRef<JobDetailPanelHandle>(null);
+  const seenLateStartReviewIdsRef = useRef<Set<string>>(new Set());
 
   const savedBlockTypes = savedBlockTypesQuery ?? [];
   const saveBlockTimeType = useMutation(api.schedule.saveBlockTimeType);
   const deleteBlockTimeType = useMutation(api.schedule.deleteBlockTimeType);
 
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
+  const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+  const dismissManualSchedulingAlert = useMutation(api.bookings.dismissManualSchedulingAlert);
+  const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
+  const rescheduleFromNoShowAlert = useMutation(api.bookings.rescheduleFromNoShowAlert);
+  const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
+  const acceptLateStartReview = useMutation(api.bookings.acceptLateStartReview);
+  const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
+  const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
   const blockSlot = useMutation(api.schedule.blockSlot);
   const updateBlockedSlot = useMutation(api.schedule.updateBlockedSlot);
   const unblockSlot = useMutation(api.schedule.unblockSlot);
@@ -239,6 +340,24 @@ export default function SchedulePage() {
   const [legendOpen, setLegendOpen] = useState(false);
   const legendRef = useRef<HTMLDivElement>(null);
   const context = useQuery(api.schedule.getScheduleContext);
+  const portalAccess = useQuery(api.shops.getMyPortalAccess);
+  const viewerMechanicId =
+    portalAccess && portalAccess.status === "active"
+      ? (portalAccess.mechanicId ?? null)
+      : null;
+  const isMechanicViewer =
+    portalAccess?.status === "active" &&
+    (portalAccess.role === "shop_mechanic" || portalAccess.role === "mechanic");
+
+  useEffect(() => {
+    if (isMechanicViewer && viewerMechanicId && mechanicFilter !== viewerMechanicId) {
+      setMechanicFilter(viewerMechanicId);
+    }
+  }, [isMechanicViewer, viewerMechanicId, mechanicFilter]);
+  const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
+  const customerLateAlerts = useQuery(api.bookings.getOpenCustomerLateAlerts);
+  const frontDeskOverrunAlerts = useQuery(api.bookings.getOpenFrontDeskOverrunAlerts);
+  const manualSchedulingAlerts = useQuery(api.bookings.getOpenManualSchedulingAlerts);
 
   const selectedJobDetail = useQuery(
     api.bookings.getJobDetail,
@@ -272,6 +391,8 @@ export default function SchedulePage() {
         setBtType(matched ? matched._id : "custom");
       }
       setSaveAsType(false);
+      setBtFrequency("none");
+      setBtUntil("");
     }
   }, [blockTimeDrawer]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -295,12 +416,36 @@ export default function SchedulePage() {
     return () => document.removeEventListener("keydown", onKey);
   }, [createBookingDrawer]);
 
+  // Two-way sync: when user navigates the schedule (Today/Back/Forward) while drawer is open,
+  // update draft.date so the form follows. The draft → currentDate direction is handled below
+  // in the drawer's onDraftChange handler.
+  useEffect(() => {
+    if (!createBookingDrawer) return;
+    const dateStr = dateToString(currentDate);
+    if (createBookingDrawer.date === dateStr) return;
+    setCreateBookingDrawer((prev) => (prev ? { ...prev, date: dateStr } : prev));
+  }, [currentDate, createBookingDrawer]);
+
+  // Force day view while a draft is active so the ghost block is visible
+  useEffect(() => {
+    if (createBookingDrawer && currentView !== "day") {
+      setCurrentView("day");
+    }
+  }, [createBookingDrawer, currentView]);
+
   // Auto-clear toast after 3s; key changes on every trigger so the timer always resets
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  useEffect(() => {
+    const updateNow = () => setNowTimestamp(Date.now());
+    updateNow();
+    const intervalId = window.setInterval(updateNow, 30_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   // Dismiss legend popover on click-outside
   useEffect(() => {
@@ -339,13 +484,14 @@ export default function SchedulePage() {
       if (selectedJobDetail && !jobDetailRef.current?.hasOpenModal()) {
         const s = selectedJobDetail.status;
         const isPending = s === "pending" || s === "pending_shop_acceptance";
-        const isActive = s === "confirmed" || s === "in_progress";
+        const isActive =
+          s === "confirmed" || s === "vehicle_at_shop" || s === "in_progress";
         if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
         if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
         if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
         if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
         if (e.key === "a" && !isPending) { e.preventDefault(); jobDetailRef.current?.openAssignDropdown(); return; }
-        if (e.key === "t" && s === "confirmed" && selectedJobDetail.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
+        if (e.key === "t" && s === "vehicle_at_shop" && selectedJobDetail.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
         if (e.key === "s" && !isPending) { e.preventDefault(); jobDetailRef.current?.assignMechanic(); return; }
       }
     }
@@ -371,21 +517,46 @@ export default function SchedulePage() {
     };
   }, [contextMenu]);
 
-  // Context menu action handlers
-  const handleBlockSlot = useCallback(async (info: ContextMenuCellInfo) => {
-    setContextMenu(null);
-    try {
-      await blockSlot({
-        mechanicId: info.mechanicId as Id<"mechanics">,
-        date: info.date,
-        startTime: info.startTime,
-        endTime: info.endTime,
-      });
-      setToast({ msg: `Blocked ${formatTimeLabel(info.startTime)}–${formatTimeLabel(info.endTime)} for ${info.mechanicName}`, key: Date.now() });
-    } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Failed to block slot", key: Date.now() });
+  useEffect(() => {
+    if (!contextMenu) {
+      setContextMenuStyle(null);
+      return;
     }
-  }, [blockSlot]);
+
+    const frame = window.requestAnimationFrame(() => {
+      const menu = contextMenuRef.current;
+      if (!menu) return;
+
+      const rect = menu.getBoundingClientRect();
+      const margin = 8;
+      const anchor =
+        contextMenu.type === "block"
+          ? {
+              x: contextMenu.info.clientX,
+              y: contextMenu.info.clientY,
+            }
+          : {
+              x: contextMenu.clientX,
+              y: contextMenu.clientY,
+            };
+
+      const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+      const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+      const left = Math.min(Math.max(anchor.x, margin), maxLeft);
+      const top =
+        anchor.y + rect.height + margin > window.innerHeight
+          ? Math.max(margin, anchor.y - rect.height)
+          : Math.min(Math.max(anchor.y, margin), maxTop);
+
+      setContextMenuStyle({
+        left,
+        top,
+        visibility: "visible",
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [contextMenu]);
 
   const bookingsRef = useRef<typeof bookings>(undefined);
   const handleBlockFullDay = useCallback(async (mechanicId: string, mechanicName: string, date: string, force = false) => {
@@ -415,7 +586,7 @@ export default function SchedulePage() {
       setToast({ msg: `Blocked full day for ${mechanicName}`, key: Date.now() });
       setBlockDayConfirm(null);
     } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Failed to block day", key: Date.now() });
+      setToast({ msg: err instanceof Error ? err.message : "Couldn't block the day. Please try again.", key: Date.now() });
     }
   }, [blockMechanicDay]);
 
@@ -425,7 +596,7 @@ export default function SchedulePage() {
       await unblockSlot({ slotId: slotId as Id<"time_slots"> });
       setToast({ msg: "Slot unblocked", key: Date.now() });
     } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Failed to unblock slot", key: Date.now() });
+      setToast({ msg: err instanceof Error ? err.message : "Couldn't unblock this time. Please try again.", key: Date.now() });
     }
   }, [unblockSlot]);
 
@@ -459,6 +630,170 @@ export default function SchedulePage() {
     }
   }
 
+  async function handleMarkVehicleHereFromAlert(bookingId: string) {
+    try {
+      await markVehicleAtShop({ bookingId: bookingId as Id<"bookings"> });
+      setToast({ msg: "Vehicle marked here", key: Date.now() });
+    } catch (err: unknown) {
+      setToast({ msg: err instanceof Error ? err.message : "Could not mark vehicle here", key: Date.now() });
+    }
+  }
+
+  async function handleMarkNoShowFromAlert(bookingId: string) {
+    try {
+      await markPostThresholdNoShow({ bookingId: bookingId as Id<"bookings"> });
+      setToast({ msg: "Booking marked no-show", key: Date.now() });
+    } catch (err: unknown) {
+      setToast({ msg: err instanceof Error ? err.message : "Could not mark no-show", key: Date.now() });
+    }
+  }
+
+  async function handleSubmitNoShowReschedule() {
+    if (!noShowReschedule) return;
+    setIsSubmittingNoShowReschedule(true);
+    setNoShowRescheduleError("");
+    try {
+      await rescheduleFromNoShowAlert({
+        bookingId: noShowReschedule.bookingId as Id<"bookings">,
+        newScheduledDate: noShowReschedule.date,
+        newScheduledTime: noShowReschedule.time,
+        newMechanicId: noShowReschedule.mechanicId
+          ? (noShowReschedule.mechanicId as Id<"mechanics">)
+          : undefined,
+        assignmentPreference: noShowReschedule.mechanicId
+          ? "specific_mechanic"
+          : "any",
+      });
+      setNoShowReschedule(null);
+      setToast({ msg: "Booking rescheduled", key: Date.now() });
+    } catch (err: unknown) {
+      setNoShowRescheduleError(
+        err instanceof Error ? err.message : "Could not reschedule booking.",
+      );
+    } finally {
+      setIsSubmittingNoShowReschedule(false);
+    }
+  }
+
+  async function handleOverrunExtension(bookingId: string, extensionMinutes: number) {
+    try {
+      await answerOverrunExtension({
+        bookingId: bookingId as Id<"bookings">,
+        extensionMinutes,
+      });
+      setToast({ msg: `Overrun extended ${extensionMinutes} minutes`, key: Date.now() });
+    } catch (err: unknown) {
+      setToast({ msg: err instanceof Error ? err.message : "Could not save overrun response", key: Date.now() });
+    }
+  }
+
+  async function handleAcceptLateStartReview(reviewId: string) {
+    setLateStartReviewError("");
+    setIsSubmittingLateStartReview(true);
+    try {
+      await acceptLateStartReview({ reviewId: reviewId as Id<"late_start_reviews"> });
+      setSelectedLateStartReviewId(null);
+      setToast({ msg: "Late-start delay applied", key: Date.now() });
+    } catch (err: unknown) {
+      setLateStartReviewError(
+        err instanceof Error ? err.message : "Could not apply the late-start delay.",
+      );
+    } finally {
+      setIsSubmittingLateStartReview(false);
+    }
+  }
+
+  async function handleDenyLateStartReview(reviewId: string) {
+    setLateStartReviewError("");
+    setIsSubmittingLateStartReview(true);
+    try {
+      await denyLateStartReview({ reviewId: reviewId as Id<"late_start_reviews"> });
+      setSelectedLateStartReviewId(null);
+      setToast({ msg: "Late-start delay snoozed until the next checkpoint", key: Date.now() });
+    } catch (err: unknown) {
+      setLateStartReviewError(
+        err instanceof Error ? err.message : "Could not snooze the late-start delay.",
+      );
+    } finally {
+      setIsSubmittingLateStartReview(false);
+    }
+  }
+
+  async function handleApplyManualLateStartReview(
+    reviewId: string,
+    targets: Array<{
+      bookingId: string;
+      newScheduledDate: string;
+      newScheduledTime: string;
+      newMechanicId?: string;
+    }>,
+    allowOutsideShopHours = false
+  ) {
+    setLateStartReviewError("");
+    setIsSubmittingLateStartReview(true);
+    try {
+      const reviewForAction =
+        lateStartReviews?.find((review) => review._id === reviewId) ?? null;
+      if (
+        !allowOutsideShopHours &&
+        context?.hours &&
+        reviewForAction?.proposals.some((proposal) => {
+          const target = targets.find((item) => item.bookingId === proposal.bookingId);
+          if (!target) return false;
+          return bookingFallsOutsideShopHours(context.hours, {
+            date: target.newScheduledDate,
+            startTime: target.newScheduledTime,
+            estimatedMinutes: proposal.estimatedMinutes,
+          });
+        })
+      ) {
+        setLateStartOutsideHoursConfirm({ reviewId, targets });
+        setLateStartReviewError("");
+        return;
+      }
+
+      await applyManualLateStartReview({
+        reviewId: reviewId as Id<"late_start_reviews">,
+        manualTargets: targets.map((target) => ({
+          bookingId: target.bookingId as Id<"bookings">,
+          newScheduledDate: target.newScheduledDate,
+          newScheduledTime: target.newScheduledTime,
+          newMechanicId: target.newMechanicId
+            ? (target.newMechanicId as Id<"mechanics">)
+            : undefined,
+          allowOutsideShopHours: allowOutsideShopHours || undefined,
+        })),
+      });
+      setSelectedLateStartReviewId(null);
+      setLateStartOutsideHoursConfirm(null);
+      setToast({ msg: "Manual late-start delay applied", key: Date.now() });
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Could not apply the manual late-start delay.";
+      if (
+        !allowOutsideShopHours &&
+        (
+          message.includes("This booking would end after the shop closes.") ||
+          message.includes("The requested start time is outside the shop's operating hours.")
+        )
+      ) {
+        setLateStartOutsideHoursConfirm({ reviewId, targets });
+        setLateStartReviewError("");
+        return;
+      }
+      setLateStartReviewError(
+        message,
+      );
+    } finally {
+      setIsSubmittingLateStartReview(false);
+    }
+  }
+
+  const openLateStartReview = useCallback((reviewId: string) => {
+    setLateStartReviewError("");
+    setSelectedLateStartReviewId(reviewId);
+  }, []);
+
   // Compute date range based on current view
   const dateRange = useMemo(() => {
     if (currentView === "month") return getMonthRange(currentDate);
@@ -472,10 +807,98 @@ export default function SchedulePage() {
   });
   bookingsRef.current = bookings;
 
+  // Wider lookahead used only when auto-opening the create-booking drawer to find the
+  // next available slot across the next 14 days.
+  const wantsAutoOpen = searchParams.get("action") === "newBooking";
+  const lookaheadRange = useMemo(() => {
+    const start = new Date();
+    const end = new Date();
+    end.setDate(start.getDate() + 13);
+    return { dateFrom: dateToString(start), dateTo: dateToString(end) };
+  }, []);
+  const lookaheadBookings = useQuery(
+    api.schedule.getBookingsForRange,
+    wantsAutoOpen && !autoOpenedRef.current ? lookaheadRange : "skip"
+  );
+
   const blockedSlots = useQuery(api.schedule.getBlockedSlots, {
     dateFrom: dateRange.from,
     dateTo: dateRange.to,
   });
+
+  // Auto-open create-booking drawer with next available slot when ?action=newBooking is set.
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    if (!wantsAutoOpen) return;
+    if (!context?.hours || !context?.mechanics || lookaheadBookings === undefined) return;
+
+    autoOpenedRef.current = true;
+
+    const slot = findNextAvailableSlot({
+      now: new Date(),
+      shopHours: context.hours,
+      mechanics: context.mechanics,
+      bookings: lookaheadBookings,
+      durationMinutes: 60,
+    });
+
+    if (slot) {
+      const [y, mo, d] = slot.date.split("-").map(Number);
+      setCurrentDate(new Date(y, mo - 1, d));
+      setCurrentView("day");
+      setCreateBookingDrawer({
+        date: slot.date,
+        time: slot.time,
+        mechanicId: slot.mechanicId,
+        durationMinutes: slot.durationMinutes,
+      });
+    } else {
+      // Fallback: open with the soonest possible time today
+      const todayStr = dateToString(new Date());
+      const fallbackMechanic = context.mechanics[0]?._id ?? "";
+      setCreateBookingDrawer({
+        date: todayStr,
+        time: "09:00",
+        mechanicId: fallbackMechanic,
+        durationMinutes: 60,
+      });
+      setToast({ msg: "No open slot found in the next 14 days", key: Date.now() });
+    }
+
+    router.replace("/schedule", { scroll: false });
+  }, [wantsAutoOpen, context?.hours, context?.mechanics, lookaheadBookings, router]);
+
+  const selectedLateStartReview = useMemo<LateStartReviewView | null>(() => {
+    if (!lateStartReviews || !selectedLateStartReviewId) return null;
+    return (
+      lateStartReviews.find((review) => review._id === selectedLateStartReviewId) ??
+      null
+    );
+  }, [lateStartReviews, selectedLateStartReviewId]);
+
+  useEffect(() => {
+    if (!selectedLateStartReviewId || selectedLateStartReview) return;
+    setSelectedLateStartReviewId(null);
+    setLateStartReviewError("");
+  }, [selectedLateStartReviewId, selectedLateStartReview]);
+
+  useEffect(() => {
+    if (!lateStartReviews) return;
+
+    const seenIds = seenLateStartReviewIdsRef.current;
+    const nextIds = new Set(lateStartReviews.map((review) => review._id));
+    const newReview = lateStartReviews.find((review) => !seenIds.has(review._id)) ?? null;
+
+    seenLateStartReviewIdsRef.current = nextIds;
+
+    if (!newReview || selectedLateStartReviewId) {
+      return;
+    }
+
+    setLateStartReviewError("");
+    setSelectedLateStartReviewId(newReview._id);
+    setToast({ msg: "Late-start decision needed", key: Date.now() });
+  }, [lateStartReviews, selectedLateStartReviewId]);
 
   // Map bookings to calendar events
   const events: CalendarEvent[] = useMemo(() => {
@@ -505,7 +928,13 @@ export default function SchedulePage() {
           customerName: b.customerName,
           mechanicName: b.mechanicName,
           serviceNames: b.serviceNames,
+          vehicleDisplay: (b as any).vehicleDisplay ?? null,
+          licensePlate: (b as any).licensePlate ?? null,
           totalCost: b.totalCost,
+          scheduleChangeMode: b.scheduleChangeMode,
+          customerCanRestoreOriginal: b.customerCanRestoreOriginal,
+          recommendationState: (b as any).recommendationState ?? null,
+          diagnosticFollowupState: (b as any).diagnosticFollowupState ?? null,
         };
       });
 
@@ -533,19 +962,88 @@ export default function SchedulePage() {
         };
       });
 
-    return [...bookingEvents, ...blockedEvents];
-  }, [bookings, blockedSlots, mechanicFilter]);
+    // Draft preview while the Add blocked time drawer is open
+    const draftEvents: CalendarEvent[] = [];
+    const draftValid =
+      blockTimeDrawer &&
+      !blockTimeDrawer.editingSlotId &&
+      btDate &&
+      btFrom &&
+      btTo &&
+      btTo > btFrom &&
+      btMechanicId &&
+      (mechanicFilter === "all" || mechanicFilter === btMechanicId);
+    if (draftValid) {
+      const draftDates: string[] = [btDate];
+      if (btFrequency !== "none" && btUntil && btUntil >= btDate) {
+        const [sy, sm, sd] = btDate.split("-").map(Number);
+        const [uy, um, ud] = btUntil.split("-").map(Number);
+        if (sy && sm && sd && uy && um && ud) {
+          const endUtc = Date.UTC(uy, um - 1, ud);
+          let y = sy, m = sm - 1, d = sd;
+          let count = 0;
+          while (count < 366) {
+            const cur = Date.UTC(y, m, d);
+            if (cur > endUtc) break;
+            const iso = new Date(cur);
+            const ds = `${iso.getUTCFullYear()}-${String(iso.getUTCMonth() + 1).padStart(2, "0")}-${String(iso.getUTCDate()).padStart(2, "0")}`;
+            if (ds !== btDate) draftDates.push(ds);
+            if (btFrequency === "daily") d += 1;
+            else if (btFrequency === "weekly") d += 7;
+            else if (btFrequency === "biweekly") d += 14;
+            else m += 1;
+            const norm = new Date(Date.UTC(y, m, d));
+            y = norm.getUTCFullYear();
+            m = norm.getUTCMonth();
+            d = norm.getUTCDate();
+            count++;
+          }
+        }
+      }
+      const [sh, sm] = btFrom.split(":").map(Number);
+      const [eh, em] = btTo.split(":").map(Number);
+      const fallbackTitle =
+        btTitle.trim() ||
+        BUILT_IN_TYPES.find((t) => t.id === btType)?.label ||
+        savedBlockTypes.find((t) => t._id === btType)?.title ||
+        "Blocked";
+      for (const ds of draftDates) {
+        const start = new Date(`${ds}T00:00:00`);
+        start.setHours(sh, sm, 0, 0);
+        const end = new Date(`${ds}T00:00:00`);
+        end.setHours(eh, em, 0, 0);
+        draftEvents.push({
+          id: `blocked-draft-${ds}`,
+          title: fallbackTitle,
+          start,
+          end,
+          resourceId: btMechanicId,
+          type: "blocked",
+          status: "blocked",
+          blockTitle: fallbackTitle,
+          note: btDescription.trim() || null,
+          isDraft: true,
+        });
+      }
+    }
 
-  const MONTH_STATUS_ORDER = [
-    "pending_shop_acceptance",
-    "pending_customer_acceptance",
-    "confirmed",
-    "in_progress",
-    "completed",
-    "cancelled",
-    "declined",
-    "no_show",
-  ];
+    return [...bookingEvents, ...blockedEvents, ...draftEvents];
+  }, [
+    bookings,
+    blockedSlots,
+    mechanicFilter,
+    blockTimeDrawer,
+    btDate,
+    btFrom,
+    btTo,
+    btMechanicId,
+    btFrequency,
+    btUntil,
+    btTitle,
+    btDescription,
+    btType,
+    savedBlockTypes,
+  ]);
 
   // For month view: collapse individual bookings into one chip per status per day
   const calendarEvents = useMemo(() => {
@@ -677,6 +1175,7 @@ export default function SchedulePage() {
         })()
       : (event.customerName ?? "");
     const isPendingCustomer = event.status === "pending_customer_acceptance";
+    const pendingLabel = getPendingApprovalLabel(event);
     return (
       <div
         className="px-1.5 py-0.5 rounded text-[11px] leading-tight overflow-hidden h-full cursor-pointer"
@@ -691,7 +1190,7 @@ export default function SchedulePage() {
         <p className="font-medium truncate">{customerDisplay}</p>
         <p className="truncate opacity-80">{event.serviceNames?.join(", ")}</p>
         {isPendingCustomer && (
-          <p className="truncate opacity-70 text-[10px]">Awaiting approval</p>
+          <p className="truncate opacity-70 text-[10px]">{pendingLabel}</p>
         )}
       </div>
     );
@@ -724,8 +1223,16 @@ export default function SchedulePage() {
   return (
     <div className="space-y-6">
       {/* Page header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-foreground">Schedule</h1>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-foreground">Schedule</h1>
+          {context.lateStartTestMode ? (
+            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
+              Late-start test mode active
+              {` (${context.lateStartTiming.warningLeadMinutes}/${context.lateStartTiming.initialCycleMinutes} min)`}
+            </span>
+          ) : null}
+        </div>
       </div>
 
       {/* Toolbar: nav + view switcher + mechanic filter */}
@@ -767,13 +1274,16 @@ export default function SchedulePage() {
               <Select
                 selectedKey={mechanicFilter}
                 onSelectionChange={(key) => setMechanicFilter(String(key))}
+                isDisabled={isMechanicViewer}
               >
                 <SelectTrigger className="h-9 rounded-lg border-border bg-card text-sm px-3 min-w-40">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectPopover placement="bottom end">
                   <SelectListBox shouldFocusWrap>
-                    <SelectItem id="all" textValue="All Mechanics">All Mechanics</SelectItem>
+                    {!isMechanicViewer && (
+                      <SelectItem id="all" textValue="All Mechanics">All Mechanics</SelectItem>
+                    )}
                     {context.mechanics.map((m) => (
                       <SelectItem key={m._id} id={m._id} textValue={m.name}>
                         {m.name}
@@ -839,6 +1349,241 @@ export default function SchedulePage() {
         </div>
       </div>
 
+      {customerLateAlerts && customerLateAlerts.length > 0 ? (
+        <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
+          <div className="flex items-center gap-2 text-orange-700">
+            <AlertTriangle className="h-4 w-4" />
+            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+              No-show decisions
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {customerLateAlerts.map((alert) => (
+              <div
+                key={String(alert._id)}
+                className="rounded-2xl border border-orange-200 bg-white/90 p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground">
+                      {alert.customerName}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
+                      {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
+                    </p>
+                    <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                      {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
+                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                  >
+                    Open
+                  </button>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleMarkVehicleHereFromAlert(String(alert.bookingId))}
+                    className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                  >
+                    Vehicle here
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setNoShowReschedule({
+                        bookingId: String(alert.bookingId),
+                        customerName: alert.customerName,
+                        date: alert.scheduledDate,
+                        time: alert.scheduledTime,
+                        mechanicId: alert.mechanicId ? String(alert.mechanicId) : "",
+                      })
+                    }
+                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                  >
+                    Reschedule
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleMarkNoShowFromAlert(String(alert.bookingId))}
+                    className="rounded-lg border border-orange-300 px-3 py-1.5 text-xs font-medium text-orange-800 transition-colors hover:bg-orange-100"
+                  >
+                    Mark no-show
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {frontDeskOverrunAlerts && frontDeskOverrunAlerts.length > 0 ? (
+        <div className="rounded-2xl border border-cyan-200 bg-cyan-50 p-4 shadow-sm">
+          <div className="flex items-center gap-2 text-cyan-700">
+            <Clock className="h-4 w-4" />
+            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+              Overrun escalations
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {frontDeskOverrunAlerts.map((alert) => (
+              <div
+                key={String(alert._id)}
+                className="rounded-2xl border border-cyan-200 bg-white/90 p-4"
+              >
+                <p className="text-sm font-semibold text-foreground">
+                  {alert.customerName}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {alert.serviceSummary}
+                  {alert.mechanicName ? ` · ${alert.mechanicName}` : ""}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {[15, 30, 45, 60].map((minutes) => (
+                    <button
+                      key={minutes}
+                      type="button"
+                      onClick={() => void handleOverrunExtension(String(alert.bookingId), minutes)}
+                      className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                    >
+                      +{minutes}m
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {manualSchedulingAlerts && manualSchedulingAlerts.length > 0 ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 shadow-sm">
+          <div className="flex items-center gap-2 text-red-700">
+            <AlertTriangle className="h-4 w-4" />
+            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+              Manual scheduling review
+            </span>
+          </div>
+          <div className="mt-3 space-y-2">
+            {manualSchedulingAlerts.map((alert) => (
+              <div
+                key={String(alert._id)}
+                className="flex items-start justify-between gap-3 rounded-xl bg-white/90 px-4 py-3 text-sm text-red-900"
+              >
+                <div className="flex-1 min-w-0">
+                  <p>{alert.reason}</p>
+                  {alert.bookingId ? (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
+                      className="mt-1.5 text-xs font-medium text-red-700 underline-offset-2 hover:underline"
+                    >
+                      Open booking
+                    </button>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await dismissManualSchedulingAlert({ alertId: alert._id as Id<"notification_outbox"> });
+                      setToast({ msg: "Alert dismissed", key: Date.now() });
+                    } catch (err) {
+                      setToast({
+                        msg: err instanceof Error ? err.message : "Couldn't dismiss alert",
+                        key: Date.now(),
+                      });
+                    }
+                  }}
+                  className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50"
+                >
+                  Dismiss
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {lateStartReviews && lateStartReviews.length > 0 ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-amber-700">
+                <AlertTriangle className="h-4 w-4" />
+                <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+                  Late Start Decisions
+                </span>
+              </div>
+              <h2 className="mt-2 text-lg font-semibold text-amber-950">
+                {lateStartReviews.length === 1
+                  ? "1 booking chain needs a delay decision"
+                  : `${lateStartReviews.length} booking chains need delay decisions`}
+              </h2>
+              <p className="mt-1 text-sm text-amber-900/80">
+                Review these before the next automatic delay applies.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => openLateStartReview(lateStartReviews[0]._id)}
+              className="inline-flex shrink-0 items-center justify-center rounded-lg bg-amber-900 px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+            >
+              Review first alert
+            </button>
+          </div>
+
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {lateStartReviews.map((review) => {
+              const autoApplyLabel =
+                review.status === "blocked_manual_review"
+                  ? "Automatic delay could not be built safely."
+                  : `Auto-applies at ${formatDecisionDueTime(review.decisionDueAtMs)} if nobody responds.`;
+              return (
+                <button
+                  key={review._id}
+                  type="button"
+                  onClick={() => openLateStartReview(review._id)}
+                  className="rounded-2xl border border-amber-200 bg-white/90 p-4 text-left transition-[border-color,box-shadow,background-color] hover:border-amber-300 hover:bg-white hover:shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground">
+                        {review.upstreamCustomerName}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Scheduled for{" "}
+                        {review.upstreamScheduledTime
+                          ? formatTimeLabel(review.upstreamScheduledTime)
+                          : "an unscheduled time"}
+                        {" "}with {review.upstreamMechanicName ?? "an assigned mechanic"}
+                      </p>
+                      {review.upstreamServiceSummary ? (
+                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                          {review.upstreamServiceSummary}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+                      +{review.cycleMinutes}m
+                    </span>
+                  </div>
+                  <p className="mt-3 text-sm text-amber-900">{autoApplyLabel}</p>
+                  <p className="mt-2 text-xs font-medium text-amber-800">
+                    {review.proposals.length} affected booking
+                    {review.proposals.length === 1 ? "" : "s"}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
       {/* Flex row: calendar + drawers */}
       <div className="flex items-start">
       {/* Main content */}
@@ -847,7 +1592,7 @@ export default function SchedulePage() {
       {/* Calendar */}
       <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar relative">
         {bookings === undefined ? (
-          <div className="flex items-center justify-center" style={{ height: "calc(100vh - 320px)", minHeight: 500 }}>
+          <div className="flex items-center justify-center" style={{ height: "calc(100vh - 180px)", minHeight: 500 }}>
             <Loader2 className="w-6 h-6 text-primary animate-spin" />
           </div>
         ) : null}
@@ -857,8 +1602,10 @@ export default function SchedulePage() {
             events={events}
             minTime={minTime}
             maxTime={maxTime}
+            nowTimestamp={nowTimestamp}
             currentDate={currentDate}
             onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
+            selectedEventId={selectedBookingId ?? null}
             onProposeReschedule={handleProposeReschedule}
             onDragError={(msg) => setToast({ msg, key: Date.now() })}
             onContextMenuCell={(info) => {
@@ -883,6 +1630,7 @@ export default function SchedulePage() {
               });
             }}
             onBlockDayClick={(mechanicId, mechanicName) => handleBlockFullDay(mechanicId, mechanicName, dateToString(currentDate))}
+            draftBooking={createBookingDrawer}
           />
         )}
         {bookings !== undefined && currentView === "week" && mechanicFilter === "all" && (
@@ -909,6 +1657,7 @@ export default function SchedulePage() {
               weekStart={startOfWeek(currentDate, { weekStartsOn: 0 })}
               minTime={minTime}
               maxTime={maxTime}
+              nowTimestamp={nowTimestamp}
               onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
               onProposeReschedule={handleProposeReschedule}
               onDragError={(msg) => setToast({ msg, key: Date.now() })}
@@ -945,13 +1694,15 @@ export default function SchedulePage() {
             date={currentDate}
             view={currentView}
             onNavigate={handleNavigate}
-            onView={handleViewChange as any}
+            onView={(view) =>
+              handleViewChange(view as "month" | "week" | "day")
+            }
             min={minTime}
             max={maxTime}
-            getNow={() => new Date()}
+            getNow={() => new Date(nowTimestamp)}
             step={30}
             timeslots={2}
-            style={{ height: "calc(100vh - 320px)", minHeight: 500 }}
+            style={{ height: "calc(100vh - 180px)", minHeight: 500 }}
             onSelectEvent={(event) => {
               const ev = event as CalendarEvent;
               if (ev.id.startsWith("month-summary-")) {
@@ -966,8 +1717,8 @@ export default function SchedulePage() {
               weekdayFormat: (date: Date) => format(date, "EEE"),
             }}
             components={{
-              event: EventComponent as any,
-              toolbar: CustomToolbar as any,
+              event: EventComponent,
+              toolbar: CustomToolbar,
             }}
             eventPropGetter={() => ({
               style: {
@@ -991,10 +1742,10 @@ export default function SchedulePage() {
       {/* Blocked time drawer */}
       <div
         className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-          drawerOpen ? "w-[420px]" : "w-0"
+          drawerOpen ? "w-[552px]" : "w-0"
         }`}
       >
-        <div className="w-[396px] ml-6 flex h-[calc(100vh-320px)] min-h-[500px] flex-col overflow-hidden rounded-xl border border-border bg-card">
+        <div className="w-[528px] ml-6 flex h-[calc(100vh-180px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
           {blockTimeDrawer && (
             <div className="flex flex-col h-full">
               {/* Header */}
@@ -1098,12 +1849,7 @@ export default function SchedulePage() {
                 {/* Date */}
                 <div>
                   <DrawerFieldLabel>Date</DrawerFieldLabel>
-                  <input
-                    type="date"
-                    value={btDate}
-                    onChange={(e) => setBtDate(e.target.value)}
-                    className={drawerInputClassName}
-                  />
+                  <DatePicker value={btDate} onChange={setBtDate} />
                 </div>
 
                 {/* From / To */}
@@ -1112,16 +1858,22 @@ export default function SchedulePage() {
                     <DrawerFieldLabel>From</DrawerFieldLabel>
                     <Select
                       selectedKey={btFrom}
-                      onSelectionChange={(key) => setBtFrom(String(key))}
+                      onSelectionChange={(key) => {
+                        const next = String(key);
+                        setBtFrom(next);
+                        if (btTo && btTo <= next) setBtTo("");
+                      }}
                     >
                       <SelectTrigger className={drawerSelectTriggerClassName}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectPopover placement="bottom start">
                         <SelectListBox shouldFocusWrap>
-                          {generateTimeOptions().map((t) => (
-                            <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
-                          ))}
+                          {generateTimeOptions()
+                            .filter((t) => t.value !== "23:45")
+                            .map((t) => (
+                              <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
+                            ))}
                         </SelectListBox>
                       </SelectPopover>
                     </Select>
@@ -1129,6 +1881,7 @@ export default function SchedulePage() {
                   <div className="flex-1">
                     <DrawerFieldLabel>To</DrawerFieldLabel>
                     <Select
+                      isDisabled={!btFrom}
                       selectedKey={btTo}
                       onSelectionChange={(key) => setBtTo(String(key))}
                     >
@@ -1137,14 +1890,21 @@ export default function SchedulePage() {
                       </SelectTrigger>
                       <SelectPopover placement="bottom start">
                         <SelectListBox shouldFocusWrap>
-                          {generateTimeOptions().map((t) => (
-                            <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
-                          ))}
+                          {generateTimeOptions()
+                            .filter((t) => !btFrom || t.value > btFrom)
+                            .map((t) => (
+                              <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
+                            ))}
                         </SelectListBox>
                       </SelectPopover>
                     </Select>
                   </div>
                 </div>
+                {btFrom && btTo && btTo <= btFrom && (
+                  <p className="text-xs text-destructive">
+                    End time must be after the start time.
+                  </p>
+                )}
                 {btFrom && btTo && btMechanicId && btDate && bookings &&
                   overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings) && (
                   <p className="text-xs text-destructive">
@@ -1183,19 +1943,53 @@ export default function SchedulePage() {
                 </div>
 
                 {/* Frequency */}
-                <div>
-                  <DrawerFieldLabel>Frequency</DrawerFieldLabel>
-                  <Select isDisabled selectedKey="none">
-                    <SelectTrigger className={drawerSelectTriggerClassName}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectPopover placement="bottom start">
-                      <SelectListBox>
-                        <SelectItem id="none" textValue="Doesn't repeat">Doesn&apos;t repeat</SelectItem>
-                      </SelectListBox>
-                    </SelectPopover>
-                  </Select>
-                </div>
+                {!blockTimeDrawer.editingSlotId && (
+                  <div>
+                    <DrawerFieldLabel>Frequency</DrawerFieldLabel>
+                    <Select
+                      selectedKey={btFrequency}
+                      onSelectionChange={(key) => {
+                        const next = String(key) as typeof btFrequency;
+                        setBtFrequency(next);
+                        if (next !== "none" && !btUntil && btDate) {
+                          const [y, m, d] = btDate.split("-").map(Number);
+                          if (y && m && d) {
+                            const dt = new Date(Date.UTC(y, m - 1, d + 30));
+                            setBtUntil(
+                              `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`,
+                            );
+                          }
+                        }
+                      }}
+                    >
+                      <SelectTrigger className={drawerSelectTriggerClassName}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopover placement="bottom start">
+                        <SelectListBox>
+                          <SelectItem id="none" textValue="Doesn't repeat">Doesn&apos;t repeat</SelectItem>
+                          <SelectItem id="daily" textValue="Daily">Daily</SelectItem>
+                          <SelectItem id="weekly" textValue="Weekly">Weekly</SelectItem>
+                          <SelectItem id="biweekly" textValue="Every 2 weeks">Every 2 weeks</SelectItem>
+                          <SelectItem id="monthly" textValue="Monthly">Monthly</SelectItem>
+                        </SelectListBox>
+                      </SelectPopover>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Ends on */}
+                {!blockTimeDrawer.editingSlotId && btFrequency !== "none" && (
+                  <div>
+                    <DrawerFieldLabel>Ends on</DrawerFieldLabel>
+                    <DatePicker value={btUntil} onChange={setBtUntil} />
+                    {btUntil && btDate && btUntil < btDate && (
+                      <p className="mt-1 text-xs text-destructive">
+                        End date must be on or after the start date.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Description */}
                 <div>
@@ -1224,6 +2018,8 @@ export default function SchedulePage() {
                 <button
                   disabled={
                     btSaving || !btDate || !btFrom || !btTo || !btMechanicId ||
+                    btTo <= btFrom ||
+                    (btFrequency !== "none" && (!btUntil || btUntil < btDate)) ||
                     !!(bookings && overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings)) ||
                     !!(blockedSlots && overlapsBlockedSlot(btMechanicId, btDate, btFrom, btTo, blockedSlots, blockTimeDrawer?.editingSlotId))
                   }
@@ -1242,6 +2038,7 @@ export default function SchedulePage() {
                         });
                         setToast({ msg: "Blocked time updated", key: Date.now() });
                       } else {
+                        const recurring = btFrequency !== "none" && !!btUntil;
                         await blockSlot({
                           mechanicId: btMechanicId as Id<"mechanics">,
                           date: btDate,
@@ -1249,8 +2046,14 @@ export default function SchedulePage() {
                           endTime: btTo,
                           ...(btTitle.trim() ? { title: btTitle.trim() } : {}),
                           ...(btDescription.trim() ? { note: btDescription.trim() } : {}),
+                          ...(recurring ? { frequency: btFrequency as "daily" | "weekly" | "biweekly" | "monthly", until: btUntil } : {}),
                         });
-                        setToast({ msg: `Blocked ${formatTimeLabel(btFrom)}–${formatTimeLabel(btTo)} for ${blockTimeDrawer.mechanicName}`, key: Date.now() });
+                        setToast({
+                          msg: recurring
+                            ? `Blocked time set to repeat ${btFrequency} until ${btUntil}`
+                            : `Blocked ${formatTimeLabel(btFrom)}–${formatTimeLabel(btTo)} for ${blockTimeDrawer.mechanicName}`,
+                          key: Date.now(),
+                        });
                       }
                       // Persist as a new saved type if the toggle is on and the title isn't already a known type
                       if (saveAsType && btTitle.trim() && btType === "custom") {
@@ -1264,7 +2067,7 @@ export default function SchedulePage() {
                       }
                       setBlockTimeDrawer(null);
                     } catch (err: unknown) {
-                      setToast({ msg: err instanceof Error ? err.message : "Failed to save blocked time", key: Date.now() });
+                      setToast({ msg: err instanceof Error ? err.message : "Couldn't save the blocked time. Please try again.", key: Date.now() });
                     } finally {
                       setBtSaving(false);
                     }
@@ -1281,8 +2084,8 @@ export default function SchedulePage() {
       </div>
 
       {/* Job detail drawer */}
-      <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[504px]" : "w-0"}`}>
-        <div className="w-[480px] ml-6 flex flex-col border border-border bg-card rounded-xl overflow-hidden h-[calc(100vh-320px)] min-h-[500px]">
+      <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[552px]" : "w-0"}`}>
+        <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-180px)] min-h-[500px]">
           {selectedBookingId && (
             <BookingDetailPanel
               ref={jobDetailRef}
@@ -1303,12 +2106,29 @@ export default function SchedulePage() {
 
       {/* Create booking drawer */}
       {createBookingDrawer && (
-        <div className="flex-shrink-0 w-[420px] h-[calc(100vh-320px)] min-h-[500px]">
-          <div className="w-[396px] ml-6 flex h-full flex-col overflow-hidden rounded-xl border border-border bg-card">
+        <div className="flex-shrink-0 w-[552px] h-[calc(100vh-180px)] min-h-[500px]">
+          <div className="w-[528px] ml-6 flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card">
             <CreateBookingDrawer
-              initialDate={createBookingDrawer.date}
-              initialTime={createBookingDrawer.time}
-              initialMechanicId={createBookingDrawer.mechanicId}
+              date={createBookingDrawer.date}
+              time={createBookingDrawer.time}
+              mechanicId={createBookingDrawer.mechanicId}
+              onDraftChange={(next) => {
+                setCreateBookingDrawer((prev) =>
+                  prev
+                    ? { ...prev, date: next.date, time: next.time, mechanicId: next.mechanicId }
+                    : prev
+                );
+                // Two-way sync: drawer date → schedule's viewed day
+                const [y, mo, d] = next.date.split("-").map(Number);
+                if (
+                  Number.isFinite(y) &&
+                  Number.isFinite(mo) &&
+                  Number.isFinite(d) &&
+                  next.date !== dateToString(currentDate)
+                ) {
+                  setCurrentDate(new Date(y, mo - 1, d));
+                }
+              }}
               mechanics={mechanics}
               bookings={bookings ?? []}
               shopHours={context?.hours ?? []}
@@ -1321,6 +2141,130 @@ export default function SchedulePage() {
 
       </div>{/* end flex row */}
 
+      {noShowReschedule ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center px-4 py-6">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setNoShowReschedule(null)}
+          />
+          <div className="relative z-[91] w-full max-w-lg rounded-2xl border border-border bg-card p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                  Reschedule late customer
+                </p>
+                <h2 className="mt-2 text-lg font-semibold text-foreground">
+                  {noShowReschedule.customerName}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNoShowReschedule(null)}
+                className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <div>
+                <DrawerFieldLabel>Date</DrawerFieldLabel>
+                <input
+                  type="date"
+                  value={noShowReschedule.date}
+                  onChange={(event) =>
+                    setNoShowReschedule((current) =>
+                      current ? { ...current, date: event.target.value } : current,
+                    )
+                  }
+                  className={drawerInputClassName}
+                />
+              </div>
+              <div>
+                <DrawerFieldLabel>Time</DrawerFieldLabel>
+                <Select
+                  selectedKey={noShowReschedule.time}
+                  onSelectionChange={(key) =>
+                    setNoShowReschedule((current) =>
+                      current ? { ...current, time: String(key) } : current,
+                    )
+                  }
+                >
+                  <SelectTrigger className={drawerSelectTriggerClassName}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopover>
+                    <SelectListBox shouldFocusWrap>
+                      {generateTimeOptions().map((option) => (
+                        <SelectItem key={option.value} id={option.value} textValue={option.label}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectListBox>
+                  </SelectPopover>
+                </Select>
+              </div>
+              <div className="sm:col-span-2">
+                <DrawerFieldLabel>Assignment</DrawerFieldLabel>
+                <Select
+                  selectedKey={noShowReschedule.mechanicId || "any"}
+                  onSelectionChange={(key) =>
+                    setNoShowReschedule((current) =>
+                      current
+                        ? {
+                            ...current,
+                            mechanicId: key === "any" ? "" : String(key),
+                          }
+                        : current,
+                    )
+                  }
+                >
+                  <SelectTrigger className={drawerSelectTriggerClassName}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopover>
+                    <SelectListBox shouldFocusWrap>
+                      <SelectItem id="any" textValue="Any mechanic">
+                        <span className="text-muted-foreground">Any mechanic</span>
+                      </SelectItem>
+                      {mechanics.map((mechanic) => (
+                        <SelectItem key={mechanic._id} id={mechanic._id} textValue={mechanic.name}>
+                          {mechanic.name}
+                        </SelectItem>
+                      ))}
+                    </SelectListBox>
+                  </SelectPopover>
+                </Select>
+              </div>
+            </div>
+            {noShowRescheduleError ? (
+              <p className="mt-4 text-sm text-destructive">
+                {noShowRescheduleError}
+              </p>
+            ) : null}
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setNoShowReschedule(null)}
+                className="rounded-lg border border-border px-3.5 py-2 text-sm font-medium transition-colors hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSubmitNoShowReschedule()}
+                disabled={isSubmittingNoShowReschedule}
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+              >
+                {isSubmittingNoShowReschedule ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : null}
+                Reschedule
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <RescheduleConfirmationDialog
         proposal={rescheduleProposal}
         error={rescheduleError}
@@ -1330,18 +2274,39 @@ export default function SchedulePage() {
         reserveOriginalSlotMessage="The booking will be set to Pending Customer until the customer responds. If they don't respond within 24 hours, the original time will be restored automatically."
       />
 
+      <LateStartReviewDialog
+        review={selectedLateStartReview}
+        mechanics={mechanics}
+        shopHours={context.hours}
+        error={lateStartReviewError}
+        isSubmitting={isSubmittingLateStartReview}
+        onClose={() => {
+          setLateStartReviewError("");
+          setSelectedLateStartReviewId(null);
+        }}
+        onAccept={() =>
+          selectedLateStartReview
+            ? void handleAcceptLateStartReview(selectedLateStartReview._id)
+            : undefined
+        }
+        onDeny={() =>
+          selectedLateStartReview
+            ? void handleDenyLateStartReview(selectedLateStartReview._id)
+            : undefined
+        }
+        onApplyManual={(targets) =>
+          selectedLateStartReview
+            ? void handleApplyManualLateStartReview(selectedLateStartReview._id, targets)
+            : undefined
+        }
+      />
+
       {/* Right-click context menu */}
       {contextMenu && (
         <div
           ref={contextMenuRef}
           className="fixed z-[80] bg-card border border-border rounded-xl shadow-lg overflow-hidden min-w-[220px]"
-          style={
-            contextMenu.type === "deleteBlockType"
-              ? { right: window.innerWidth - contextMenu.clientX - 6, top: contextMenu.clientY }
-              : contextMenu.type === "block"
-              ? { left: contextMenu.info.clientX, top: contextMenu.info.clientY }
-              : { left: contextMenu.clientX, top: contextMenu.clientY }
-          }
+          style={contextMenuStyle ?? { left: 0, top: 0, visibility: "hidden" }}
           onPointerDown={(e) => e.stopPropagation()}
         >
           {contextMenu.type === "block" && (
@@ -1361,6 +2326,7 @@ export default function SchedulePage() {
                       date: contextMenu.info.date,
                       time: contextMenu.info.startTime,
                       mechanicId: contextMenu.info.mechanicId,
+                      durationMinutes: 60,
                     });
                     setContextMenu(null);
                   }}
@@ -1409,7 +2375,7 @@ export default function SchedulePage() {
                     try {
                       await deleteBlockTimeType({ typeId: contextMenu.typeId as Id<"block_time_types"> });
                     } catch (err: unknown) {
-                      setToast({ msg: err instanceof Error ? err.message : "Failed to delete type", key: Date.now() });
+                      setToast({ msg: err instanceof Error ? err.message : "Couldn't delete that block type. Please try again.", key: Date.now() });
                     }
                   }}
                 >
@@ -1447,11 +2413,37 @@ export default function SchedulePage() {
       )}
 
       {/* Success toast — shown only when blur-overlay confirmations are not open */}
-      {toast && !rescheduleProposal && !blockDayConfirm && (
+      {toast && !rescheduleProposal && !noShowReschedule && !blockDayConfirm && (
         <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
           {toast.msg}
         </div>
       )}
+
+      <ConfirmationDialog
+        open={!!lateStartOutsideHoursConfirm}
+        title="Delay outside shop hours?"
+        description="This delayed booking falls outside the shop's operating hours. Would you like to apply the delay anyway?"
+        onClose={() => setLateStartOutsideHoursConfirm(null)}
+        zIndexClassName="z-[95]"
+        secondaryAction={{
+          label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
+          onAction: () => setLateStartOutsideHoursConfirm(null),
+          shortcutKey: "c",
+        }}
+        primaryAction={{
+          label: <ShortcutLabel text="Apply anyway" shortcutKey="a" />,
+          onAction: () => {
+            if (!lateStartOutsideHoursConfirm) return;
+            void handleApplyManualLateStartReview(
+              lateStartOutsideHoursConfirm.reviewId,
+              lateStartOutsideHoursConfirm.targets,
+              true
+            );
+          },
+          shortcutKey: "a",
+          variant: "primary",
+        }}
+      />
 
       <ConfirmationDialog
         open={!!blockDayConfirm}

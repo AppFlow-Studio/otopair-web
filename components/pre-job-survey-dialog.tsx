@@ -1,6 +1,14 @@
 "use client";
 
-import { useMemo, useState, type InputHTMLAttributes, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+} from "react";
 import { Check, Loader2 } from "lucide-react";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
@@ -47,7 +55,175 @@ const conditionPalette: Record<
 
 const TIRE_SIZE_PATTERN = /^\d{3}\/\d{2}R\d{2}$/i;
 
+type SelectOption = { value: string; label: string; aliases?: string[] };
+
+function normalizeForAlias(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function resolveOption(value: string | null | undefined, options: SelectOption[]): SelectOption | null {
+  if (!value) return null;
+  const direct = options.find((o) => o.value === value);
+  if (direct) return direct;
+  const normalized = normalizeForAlias(value);
+  return (
+    options.find(
+      (o) =>
+        normalizeForAlias(o.value) === normalized ||
+        normalizeForAlias(o.label) === normalized ||
+        o.aliases?.some((a) => normalizeForAlias(a) === normalized),
+    ) ?? null
+  );
+}
+
+function optionLabel(value: string | null | undefined, options: SelectOption[]): string {
+  return resolveOption(value, options)?.label ?? (value ?? "");
+}
+
+const TIRE_BRAND_OPTIONS: SelectOption[] = [
+  { value: "goodyear", label: "Goodyear" },
+  { value: "michelin", label: "Michelin" },
+  { value: "bridgestone", label: "Bridgestone" },
+  { value: "firestone", label: "Firestone" },
+  { value: "continental", label: "Continental" },
+  { value: "pirelli", label: "Pirelli" },
+  { value: "cooper", label: "Cooper" },
+  { value: "hankook", label: "Hankook" },
+  { value: "yokohama", label: "Yokohama" },
+  { value: "bfgoodrich", label: "BFGoodrich", aliases: ["bf goodrich", "b.f. goodrich"] },
+  { value: "toyo", label: "Toyo" },
+  { value: "falken", label: "Falken" },
+  { value: "general", label: "General" },
+  { value: "kumho", label: "Kumho" },
+  { value: "dunlop", label: "Dunlop" },
+  { value: "nitto", label: "Nitto" },
+  { value: "nexen", label: "Nexen" },
+  { value: "mastercraft", label: "Mastercraft" },
+  { value: "sumitomo", label: "Sumitomo" },
+];
+
+const OIL_VISCOSITY_OPTIONS: SelectOption[] = [
+  { value: "0w_8", label: "0W-8", aliases: ["0w8", "0w-8"] },
+  { value: "0w_16", label: "0W-16", aliases: ["0w16", "0w-16"] },
+  { value: "0w_20", label: "0W-20", aliases: ["0w20", "0w-20"] },
+  { value: "0w_30", label: "0W-30", aliases: ["0w30", "0w-30"] },
+  { value: "0w_40", label: "0W-40", aliases: ["0w40", "0w-40"] },
+  { value: "5w_20", label: "5W-20", aliases: ["5w20", "5w-20"] },
+  { value: "5w_30", label: "5W-30", aliases: ["5w30", "5w-30"] },
+  { value: "5w_40", label: "5W-40", aliases: ["5w40", "5w-40"] },
+  { value: "10w_30", label: "10W-30", aliases: ["10w30", "10w-30"] },
+  { value: "10w_40", label: "10W-40", aliases: ["10w40", "10w-40"] },
+  { value: "15w_40", label: "15W-40", aliases: ["15w40", "15w-40"] },
+  { value: "20w_50", label: "20W-50", aliases: ["20w50", "20w-50"] },
+];
+
+const OIL_TYPE_OPTIONS: SelectOption[] = [
+  { value: "full_synthetic", label: "Full synthetic", aliases: ["synthetic", "fully synthetic"] },
+  { value: "synthetic_blend", label: "Synthetic blend", aliases: ["blend", "semi synthetic", "semi-synthetic"] },
+  { value: "conventional", label: "Conventional", aliases: ["mineral"] },
+  { value: "high_mileage", label: "High mileage", aliases: ["hm"] },
+  { value: "diesel_hd", label: "Diesel (HD)", aliases: ["hdeo", "ck-4", "cj-4", "diesel"] },
+];
+
+const OIL_CAPACITY_OPTIONS: SelectOption[] = (() => {
+  const out: SelectOption[] = [];
+  for (let q = 3.0; q <= 10.0 + 1e-9; q += 0.5) {
+    const s = q.toFixed(1);
+    out.push({ value: s, label: `${s} qts` });
+  }
+  return out;
+})();
+
+const COOLANT_TYPE_OPTIONS: SelectOption[] = [
+  { value: "iat", label: "IAT (Green)", aliases: ["iat green", "green"] },
+  {
+    value: "oat",
+    label: "OAT (Orange / Yellow / Red — Dex-Cool, G12)",
+    aliases: ["oat", "dexcool", "dex-cool", "dex cool", "g12", "orange"],
+  },
+  { value: "hoat", label: "HOAT (Yellow / Orange)", aliases: ["hoat", "yellow"] },
+  {
+    value: "p_hoat",
+    label: "P-HOAT (Pink / Blue — Asian OEM)",
+    aliases: ["phoat", "p-hoat", "asian", "toyota red", "honda blue", "pink"],
+  },
+  {
+    value: "si_oat",
+    label: "Si-OAT (Pink / Purple — VW/Audi/MB)",
+    aliases: ["sioat", "si-oat", "g12++", "g13", "mb 325.5"],
+  },
+  { value: "universal", label: "Universal / Global", aliases: ["universal", "prediluted"] },
+];
+
+const BRAKE_FLUID_OPTIONS: SelectOption[] = [
+  { value: "dot_3", label: "DOT 3", aliases: ["dot3"] },
+  { value: "dot_4", label: "DOT 4", aliases: ["dot4"] },
+  { value: "dot_4_lv", label: "DOT 4 LV", aliases: ["dot4lv", "dot 4 low viscosity", "low viscosity dot 4"] },
+  { value: "dot_5", label: "DOT 5 (silicone)", aliases: ["dot5", "silicone"] },
+  { value: "dot_5_1", label: "DOT 5.1", aliases: ["dot5.1", "dot 5-1", "dot51"] },
+];
+
+const TRANSMISSION_FLUID_OPTIONS: SelectOption[] = [
+  { value: "dexron_vi", label: "Dexron VI", aliases: ["dex 6", "dexvi", "dex vi", "dexron 6"] },
+  { value: "dexron_iii_mercon", label: "Dexron III / Mercon (legacy)", aliases: ["dex iii", "dex/merc", "dexron iii", "dex-merc"] },
+  { value: "mercon_lv", label: "Mercon LV", aliases: ["merc lv"] },
+  { value: "mercon_v", label: "Mercon V", aliases: ["merc v"] },
+  { value: "atf_plus_4", label: "ATF+4", aliases: ["atf 4", "atf+4", "atf plus 4"] },
+  { value: "type_f", label: "Type F", aliases: ["typef"] },
+  { value: "toyota_ws", label: "Toyota WS", aliases: ["ws", "world standard"] },
+  { value: "toyota_t_iv", label: "Toyota T-IV", aliases: ["t-iv", "t4", "tiv"] },
+  { value: "honda_dw_1", label: "Honda DW-1", aliases: ["dw1", "atf-z1", "z1", "dw-1"] },
+  { value: "nissan_matic_s", label: "Nissan Matic-S", aliases: ["matic s", "matic-j", "matic j"] },
+  { value: "hyundai_kia_sp_iv", label: "Hyundai/Kia SP-IV", aliases: ["sp-iv", "sp4", "sp iv"] },
+  { value: "cvt_ns_2_3", label: "CVT NS-2 / NS-3", aliases: ["ns-2", "ns-3", "ns2", "ns3"] },
+  { value: "cvt_universal", label: "CVT (universal)", aliases: ["cvt"] },
+  { value: "dct_universal", label: "DCT (universal)", aliases: ["dct", "dsg"] },
+  { value: "manual_75w90_gl4", label: "Manual 75W-90 GL-4", aliases: ["75w90 gl-4", "gl-4"] },
+  { value: "manual_75w90_gl5", label: "Manual 75W-90 GL-5", aliases: ["75w90 gl-5", "gl-5"] },
+];
+
+const PAD_THICKNESS_OPTIONS: SelectOption[] = (() => {
+  const out: SelectOption[] = [];
+  for (let mm = 1.0; mm <= 12.0 + 1e-9; mm += 0.5) {
+    const s = mm.toFixed(1);
+    out.push({ value: s, label: `${s} mm` });
+  }
+  return out;
+})();
+
 type SubmitIntent = "close" | "start";
+type SectionTabId =
+  | "mileage"
+  | "tire-condition"
+  | "brakes"
+  | "fluids"
+  | "inspection"
+  | "modifications"
+  | "review";
+
+const SECTION_TABS: Array<{
+  id: SectionTabId;
+  label: string;
+  requiredWhen?: "always" | "brake-work" | "oil-change";
+}> = [
+  { id: "mileage", label: "Mileage", requiredWhen: "always" },
+  {
+    id: "tire-condition",
+    label: "Tire condition",
+    requiredWhen: "always",
+  },
+  { id: "brakes", label: "Brakes", requiredWhen: "brake-work" },
+  { id: "fluids", label: "Fluids", requiredWhen: "oil-change" },
+  {
+    id: "inspection",
+    label: "Inspection",
+  },
+  {
+    id: "modifications",
+    label: "Modifications",
+  },
+  { id: "review", label: "Review" },
+];
 
 function keepDigitsOnly(value: string) {
   return value.replace(/\D+/g, "");
@@ -68,6 +244,126 @@ function normalizeTireSizeValue(value?: string | null) {
 
 function isValidTireSize(value: string) {
   return TIRE_SIZE_PATTERN.test(normalizeTireSizeValue(value));
+}
+
+function parseTireSizeParts(value: string): { width: string; aspect: string; wheel: string } {
+  const normalized = normalizeTireSizeValue(value);
+  const match = normalized.match(/^(\d{0,3})(?:\/(\d{0,2}))?(?:R(\d{0,2}))?$/i);
+  return {
+    width: match?.[1] ?? "",
+    aspect: match?.[2] ?? "",
+    wheel: match?.[3] ?? "",
+  };
+}
+
+function composeTireSize(width: string, aspect: string, wheel: string): string {
+  if (!width && !aspect && !wheel) return "";
+  return `${width}/${aspect}R${wheel}`;
+}
+
+function TireSizeInput({
+  value,
+  onChange,
+  className,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  className?: string;
+}) {
+  const parts = parseTireSizeParts(value);
+  const aspectRef = useRef<HTMLInputElement | null>(null);
+  const wheelRef = useRef<HTMLInputElement | null>(null);
+
+  const emit = (width: string, aspect: string, wheel: string) => {
+    onChange(composeTireSize(width, aspect, wheel));
+  };
+
+  const sanitize = (s: string, max: number) =>
+    s.replace(/[^0-9]/g, "").slice(0, max);
+
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-sm",
+        "focus-within:ring-2 focus-within:ring-ring focus-within:border-ring",
+        className,
+      )}
+      aria-label="Tire size"
+    >
+      <input
+        inputMode="numeric"
+        maxLength={3}
+        value={parts.width}
+        placeholder="225"
+        aria-label="Section width"
+        onChange={(e) => {
+          const next = sanitize(e.target.value, 3);
+          emit(next, parts.aspect, parts.wheel);
+          if (next.length === 3) aspectRef.current?.focus();
+        }}
+        className="w-9 bg-transparent text-center outline-none"
+      />
+      <span className="text-muted-foreground">/</span>
+      <input
+        ref={aspectRef}
+        inputMode="numeric"
+        maxLength={2}
+        value={parts.aspect}
+        placeholder="65"
+        aria-label="Aspect ratio"
+        onChange={(e) => {
+          const next = sanitize(e.target.value, 2);
+          emit(parts.width, next, parts.wheel);
+          if (next.length === 2) wheelRef.current?.focus();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Backspace" && !parts.aspect) {
+            e.preventDefault();
+            emit(parts.width.slice(0, -1), parts.aspect, parts.wheel);
+          }
+        }}
+        className="w-7 bg-transparent text-center outline-none"
+      />
+      <span className="text-muted-foreground">R</span>
+      <input
+        ref={wheelRef}
+        inputMode="numeric"
+        maxLength={2}
+        value={parts.wheel}
+        placeholder="17"
+        aria-label="Wheel diameter"
+        onChange={(e) => {
+          const next = sanitize(e.target.value, 2);
+          emit(parts.width, parts.aspect, next);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Backspace" && !parts.wheel) {
+            e.preventDefault();
+            emit(parts.width, parts.aspect.slice(0, -1), parts.wheel);
+            aspectRef.current?.focus();
+          }
+        }}
+        className="w-7 bg-transparent text-center outline-none"
+      />
+    </div>
+  );
+}
+
+function findScrollableAncestor(element: HTMLElement): HTMLElement | null {
+  let current = element.parentElement;
+
+  while (current) {
+    const overflowY = window.getComputedStyle(current).overflowY;
+    const canScroll = current.scrollHeight > current.clientHeight;
+
+    if (canScroll && (overflowY === "auto" || overflowY === "scroll")) {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  return null;
 }
 
 function rotorConditionLabel(value: string) {
@@ -315,6 +611,21 @@ function PreJobSurveyDialogBody({
   const [error, setError] = useState("");
   const [activeSubmitAction, setActiveSubmitAction] = useState<SubmitIntent | null>(null);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [activeSection, setActiveSection] = useState<SectionTabId>("mileage");
+  const activeSectionRef = useRef<SectionTabId>("mileage");
+  const navRef = useRef<HTMLDivElement | null>(null);
+  const scrollStripRef = useRef<HTMLDivElement | null>(null);
+  const horizontalScrollTargetRef = useRef(0);
+  const horizontalScrollFrameRef = useRef<number | null>(null);
+  const sectionRefs = useRef<Record<SectionTabId, HTMLElement | null>>({
+    mileage: null,
+    "tire-condition": null,
+    brakes: null,
+    fluids: null,
+    inspection: null,
+    modifications: null,
+    review: null,
+  });
 
   const isFirstVisit = !!passportData && !passportData.is_complete;
   const frontSizeSource = passportData?.sources["tires.size_front"];
@@ -581,6 +892,210 @@ function PreJobSurveyDialogBody({
 
   const mileageError = mileage.trim() === "" && error !== "";
 
+  const cancelTabScrollAnimation = useCallback(() => {
+    if (horizontalScrollFrameRef.current == null) {
+      return;
+    }
+
+    window.cancelAnimationFrame(horizontalScrollFrameRef.current);
+    horizontalScrollFrameRef.current = null;
+  }, []);
+
+  const centerTab = useCallback(
+    (sectionId: SectionTabId, behavior: ScrollBehavior = "smooth") => {
+      const scrollElement = scrollStripRef.current;
+      const tabElement = navRef.current?.querySelector<HTMLElement>(
+        `[data-tab-id="${sectionId}"]`
+      );
+      if (!scrollElement || !tabElement) {
+        return;
+      }
+
+      const scrollRect = scrollElement.getBoundingClientRect();
+      const tabRect = tabElement.getBoundingClientRect();
+      const targetLeft =
+        scrollElement.scrollLeft +
+        tabRect.left -
+        scrollRect.left -
+        (scrollElement.clientWidth - tabRect.width) / 2;
+      const maxScrollLeft = scrollElement.scrollWidth - scrollElement.clientWidth;
+      const nextScrollLeft = Math.max(0, Math.min(targetLeft, maxScrollLeft));
+
+      cancelTabScrollAnimation();
+      horizontalScrollTargetRef.current = nextScrollLeft;
+      scrollElement.scrollTo({
+        left: nextScrollLeft,
+        behavior,
+      });
+    },
+    [cancelTabScrollAnimation]
+  );
+
+  useEffect(() => {
+    if (!open) {
+      activeSectionRef.current = "mileage";
+      setActiveSection("mileage");
+      return;
+    }
+
+    const navElement = navRef.current;
+    const scrollContainer = navElement ? findScrollableAncestor(navElement) : null;
+    if (!navElement || !scrollContainer) {
+      return;
+    }
+
+    const updateActiveSection = () => {
+      const navHeight = navElement.getBoundingClientRect().height;
+      const containerTop = scrollContainer.getBoundingClientRect().top;
+      const probeLine = containerTop + navHeight + 24;
+      let currentSection: SectionTabId = "mileage";
+
+      for (const tab of SECTION_TABS) {
+        const element = sectionRefs.current[tab.id];
+        if (!element) continue;
+        const rect = element.getBoundingClientRect();
+        if (rect.top <= probeLine) {
+          currentSection = tab.id;
+        } else {
+          break;
+        }
+      }
+
+      const activeSectionChanged = activeSectionRef.current !== currentSection;
+      if (activeSectionChanged) {
+        activeSectionRef.current = currentSection;
+        setActiveSection(currentSection);
+      }
+      centerTab(currentSection, "auto");
+    };
+
+    updateActiveSection();
+    scrollContainer.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+
+    return () => {
+      scrollContainer.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
+  }, [centerTab, open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const el = scrollStripRef.current;
+    if (!el) {
+      return;
+    }
+
+    let isDown = false;
+    let startX = 0;
+    let scrollLeft = 0;
+    horizontalScrollTargetRef.current = el.scrollLeft;
+
+    const animateScroll = () => {
+      const distance = horizontalScrollTargetRef.current - el.scrollLeft;
+      if (Math.abs(distance) < 0.5) {
+        el.scrollLeft = horizontalScrollTargetRef.current;
+        horizontalScrollFrameRef.current = null;
+        return;
+      }
+
+      el.scrollLeft += distance * 0.18;
+      horizontalScrollFrameRef.current = window.requestAnimationFrame(animateScroll);
+    };
+
+    const startSmoothScroll = () => {
+      if (horizontalScrollFrameRef.current != null) {
+        return;
+      }
+      horizontalScrollFrameRef.current = window.requestAnimationFrame(animateScroll);
+    };
+
+    const onMouseDown = (event: MouseEvent) => {
+      isDown = true;
+      cancelTabScrollAnimation();
+      el.style.cursor = "grabbing";
+      startX = event.pageX - el.offsetLeft;
+      scrollLeft = el.scrollLeft;
+      horizontalScrollTargetRef.current = el.scrollLeft;
+    };
+
+    const onMouseLeave = () => {
+      isDown = false;
+      el.style.cursor = "grab";
+    };
+
+    const onMouseUp = () => {
+      isDown = false;
+      el.style.cursor = "grab";
+    };
+
+    const onMouseMove = (event: MouseEvent) => {
+      if (!isDown) {
+        return;
+      }
+      event.preventDefault();
+      const x = event.pageX - el.offsetLeft;
+      const walk = (x - startX) * 1.5;
+      el.scrollLeft = scrollLeft - walk;
+      horizontalScrollTargetRef.current = el.scrollLeft;
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+        return;
+      }
+
+      const maxScrollLeft = el.scrollWidth - el.clientWidth;
+      if (maxScrollLeft <= 0) {
+        return;
+      }
+
+      event.preventDefault();
+      horizontalScrollTargetRef.current = Math.max(
+        0,
+        Math.min(horizontalScrollTargetRef.current + event.deltaY, maxScrollLeft)
+      );
+      startSmoothScroll();
+    };
+
+    el.addEventListener("mousedown", onMouseDown);
+    el.addEventListener("mouseleave", onMouseLeave);
+    el.addEventListener("mouseup", onMouseUp);
+    el.addEventListener("mousemove", onMouseMove);
+    el.addEventListener("wheel", onWheel, { passive: false });
+
+    return () => {
+      el.removeEventListener("mousedown", onMouseDown);
+      el.removeEventListener("mouseleave", onMouseLeave);
+      el.removeEventListener("mouseup", onMouseUp);
+      el.removeEventListener("mousemove", onMouseMove);
+      el.removeEventListener("wheel", onWheel);
+      cancelTabScrollAnimation();
+    };
+  }, [cancelTabScrollAnimation, open]);
+
+  function scrollToSection(sectionId: SectionTabId) {
+    const target = sectionRefs.current[sectionId];
+    const navElement = navRef.current;
+    const scrollContainer = navElement ? findScrollableAncestor(navElement) : null;
+    if (!target || !navElement || !scrollContainer) return;
+
+    activeSectionRef.current = sectionId;
+    setActiveSection(sectionId);
+    centerTab(sectionId);
+    const containerTop = scrollContainer.getBoundingClientRect().top;
+    const targetTop = target.getBoundingClientRect().top;
+    const navHeight = navElement.getBoundingClientRect().height;
+
+    scrollContainer.scrollTo({
+      top: scrollContainer.scrollTop + targetTop - containerTop - navHeight,
+      behavior: "smooth",
+    });
+  }
+
   return (
     <>
       <SurveyDialogShell
@@ -594,7 +1109,7 @@ function PreJobSurveyDialogBody({
           ) : null
         }
         onClose={requestClose}
-        maxWidthClassName="max-w-lg"
+        maxWidthClassName="max-w-6xl"
         footer={
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             {error ? (
@@ -639,7 +1154,41 @@ function PreJobSurveyDialogBody({
           </div>
         }
       >
-        <div className="space-y-4">
+        <div className="lg:flex lg:items-start lg:gap-6">
+          <aside className="hidden lg:sticky lg:top-0 lg:block lg:w-56 lg:shrink-0 lg:self-start lg:py-1">
+            <nav aria-label="Pre-job sections" className="flex flex-col gap-1">
+              <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                Sections
+              </p>
+              {SECTION_TABS.map((tab) => {
+                const isActive = activeSection === tab.id;
+                const isRequired =
+                  tab.requiredWhen === "always" ||
+                  (tab.requiredWhen === "brake-work" && serviceFlags.hasBrakeWork) ||
+                  (tab.requiredWhen === "oil-change" && serviceFlags.hasOilChange);
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => scrollToSection(tab.id)}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-2 rounded-md border-l-2 px-3 py-2 text-left text-[13px] font-medium transition-colors",
+                      isActive
+                        ? "border-primary bg-primary/5 text-primary"
+                        : "border-transparent text-muted-foreground hover:bg-primary/5 hover:text-foreground"
+                    )}
+                  >
+                    <span className="truncate">{tab.label}</span>
+                    {isRequired ? (
+                      <span className="text-destructive" aria-label="required">*</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </nav>
+          </aside>
+
+        <div className="space-y-4 lg:min-w-0 lg:flex-1">
           <VehicleSummaryCard label={bookingLabel} subLabel={bookingSubLabel} />
 
           {isFirstVisit ? (
@@ -652,8 +1201,66 @@ function PreJobSurveyDialogBody({
             </FirstVisitNotice>
           ) : null}
 
+          <div
+            ref={navRef}
+            className="sticky -top-4 z-20 -mx-5 border-b border-primary/10 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/88 sm:-top-5 sm:-mx-6 lg:hidden"
+          >
+            <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-8 bg-gradient-to-r from-card/95 to-transparent" />
+            <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-8 bg-gradient-to-l from-card/95 to-transparent" />
+            <div
+              ref={scrollStripRef}
+              className="tab-strip-scroll overflow-x-auto px-5 pb-0.5 pt-3 select-none sm:px-6"
+              style={{
+                scrollbarWidth: "none",
+                msOverflowStyle: "none",
+                WebkitOverflowScrolling: "touch",
+                cursor: "grab",
+              }}
+            >
+              <style>{`
+                .tab-strip-scroll::-webkit-scrollbar { display: none; }
+              `}</style>
+              <div className="flex min-w-max gap-5 px-1">
+                {SECTION_TABS.map((tab) => {
+                  const isActive = activeSection === tab.id;
+                  const isRequired =
+                    tab.requiredWhen === "always" ||
+                    (tab.requiredWhen === "brake-work" && serviceFlags.hasBrakeWork) ||
+                    (tab.requiredWhen === "oil-change" && serviceFlags.hasOilChange);
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      data-tab-id={tab.id}
+                      onClick={() => scrollToSection(tab.id)}
+                      className={cn(
+                        "relative flex shrink-0 items-center gap-1.5 border-b-2 px-0 py-3 text-[13px] font-semibold transition-colors",
+                        isActive
+                          ? "border-primary text-primary"
+                          : "border-transparent text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {tab.label}
+                      {isRequired ? (
+                        <span className="text-destructive" aria-label="required">
+                          *
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           <div className="divide-y divide-primary/10">
-            <SectionBlock eyebrow="Mileage">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.mileage = element;
+              }}
+              sectionId="prejob-section-mileage"
+              eyebrow="Mileage"
+            >
               <FieldRow
                 label={
                   <FieldLabelWithSource
@@ -665,7 +1272,7 @@ function PreJobSurveyDialogBody({
                 }
               >
                 <input
-                  value={mileage}
+                  value={mileage ? Number(mileage).toLocaleString("en-US") : ""}
                   onChange={(event) => setMileage(keepDigitsOnly(event.target.value))}
                   inputMode="numeric"
                   placeholder="Enter mileage"
@@ -674,7 +1281,15 @@ function PreJobSurveyDialogBody({
               </FieldRow>
             </SectionBlock>
 
-            <SectionBlock eyebrow="Tire condition" badge="Required" accent="required">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current["tire-condition"] = element;
+              }}
+              sectionId="prejob-section-tire-condition"
+              eyebrow="Tire condition"
+              badge="Required"
+              accent="required"
+            >
               <div className="space-y-2">
                 <div className="rounded-lg border border-primary/10 bg-muted/40 px-3 py-2.5">
                   <label className="flex items-center gap-2 text-[12px] font-medium text-foreground">
@@ -710,13 +1325,10 @@ function PreJobSurveyDialogBody({
                     />
                   }
                 >
-                  <input
+                  <TireSizeInput
                     value={frontTireSize}
-                    onChange={(event) =>
-                      setFrontTireSize(normalizeTireSizeValue(event.target.value))
-                    }
-                    placeholder="275/45R20"
-                    className={cn(baseField(), "w-full text-right sm:w-[160px]")}
+                    onChange={setFrontTireSize}
+                    className="sm:w-[160px]"
                   />
                 </FieldRow>
                 {!rearMatchesFront ? (
@@ -730,13 +1342,10 @@ function PreJobSurveyDialogBody({
                       />
                     }
                   >
-                    <input
+                    <TireSizeInput
                       value={rearTireSize}
-                      onChange={(event) =>
-                        setRearTireSize(normalizeTireSizeValue(event.target.value))
-                      }
-                      placeholder="275/45R20"
-                      className={cn(baseField(), "w-full text-right sm:w-[160px]")}
+                      onChange={setRearTireSize}
+                      className="sm:w-[160px]"
                     />
                   </FieldRow>
                 ) : null}
@@ -750,65 +1359,71 @@ function PreJobSurveyDialogBody({
                   value={rearCondition}
                   onChange={setRearCondition}
                 />
-                <FieldRow
-                  label={
-                    <FieldLabelWithSource
-                      text="Tire brand"
-                      required
-                      source={passportData?.sources["tires.brand"]}
-                      showSource={hasPrefilledText(passportData?.passport.tires.brand)}
-                    />
-                  }
-                >
-                  <input
+                <div className="w-full sm:max-w-[260px] sm:self-end">
+                  <SelectableFieldCard
+                    label={
+                      <FieldLabelWithSource
+                        text="Tire brand"
+                        required
+                        source={passportData?.sources["tires.brand"]}
+                        showSource={hasPrefilledText(passportData?.passport.tires.brand)}
+                      />
+                    }
                     value={tireBrand}
-                    onChange={(event) => setTireBrand(event.target.value)}
-                    placeholder="e.g. Goodyear Wrangler"
-                    className={cn(baseField(), "w-full text-right sm:w-[160px]")}
+                    onChange={setTireBrand}
+                    options={TIRE_BRAND_OPTIONS}
+                    placeholder="Select brand…"
+                    otherPlaceholder="Brand name"
                   />
-                </FieldRow>
+                </div>
               </div>
             </SectionBlock>
 
             <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.brakes = element;
+              }}
+              sectionId="prejob-section-brakes"
               eyebrow="Brakes"
               badge={serviceFlags.hasBrakeWork ? "Required" : "Optional"}
               accent={serviceFlags.hasBrakeWork ? "required" : "muted"}
             >
-              <FieldRow
-                label={
-                  serviceFlags.hasBrakeWork ? (
-                    <RequiredLabel text="Front pad thickness" />
-                  ) : (
-                    "Front pad thickness"
-                  )
-                }
-              >
-                <input
+              <div className="grid gap-2 sm:grid-cols-2">
+                <SelectableFieldCard
+                  label={
+                    serviceFlags.hasBrakeWork ? (
+                      <RequiredLabel text="Front pad thickness" />
+                    ) : (
+                      "Front pad thickness"
+                    )
+                  }
                   value={frontPadMm}
-                  onChange={(event) => setFrontPadMm(keepNumericInput(event.target.value))}
-                  placeholder="mm"
-                  inputMode="decimal"
-                  className={cn(baseField(), "w-[90px] text-right")}
+                  onChange={setFrontPadMm}
+                  options={PAD_THICKNESS_OPTIONS}
+                  placeholder="Select mm…"
+                  otherPlaceholder="mm"
+                  otherInputMode="decimal"
+                  otherSanitize={keepNumericInput}
+                  helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
                 />
-              </FieldRow>
-              <FieldRow
-                label={
-                  serviceFlags.hasBrakeWork ? (
-                    <RequiredLabel text="Rear pad thickness" />
-                  ) : (
-                    "Rear pad thickness"
-                  )
-                }
-              >
-                <input
+                <SelectableFieldCard
+                  label={
+                    serviceFlags.hasBrakeWork ? (
+                      <RequiredLabel text="Rear pad thickness" />
+                    ) : (
+                      "Rear pad thickness"
+                    )
+                  }
                   value={rearPadMm}
-                  onChange={(event) => setRearPadMm(keepNumericInput(event.target.value))}
-                  placeholder="mm"
-                  inputMode="decimal"
-                  className={cn(baseField(), "w-[90px] text-right")}
+                  onChange={setRearPadMm}
+                  options={PAD_THICKNESS_OPTIONS}
+                  placeholder="Select mm…"
+                  otherPlaceholder="mm"
+                  otherInputMode="decimal"
+                  otherSanitize={keepNumericInput}
+                  helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
                 />
-              </FieldRow>
+              </div>
               <FieldRow
                 label={
                   serviceFlags.hasBrakeWork ? (
@@ -851,9 +1466,17 @@ function PreJobSurveyDialogBody({
               </FieldRow>
             </SectionBlock>
 
-            <SectionBlock eyebrow="Fluids" badge="Optional" accent="muted">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.fluids = element;
+              }}
+              sectionId="prejob-section-fluids"
+              eyebrow="Fluids"
+              badge="Optional"
+              accent="muted"
+            >
               <div className="grid gap-2 sm:grid-cols-2">
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Oil viscosity"
@@ -864,9 +1487,11 @@ function PreJobSurveyDialogBody({
                   }
                   value={oilViscosity}
                   onChange={setOilViscosity}
-                  placeholder="Oil viscosity"
+                  options={OIL_VISCOSITY_OPTIONS}
+                  placeholder="Select grade…"
+                  otherPlaceholder="e.g. 25W-60"
                 />
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Oil capacity (qts)"
@@ -877,11 +1502,14 @@ function PreJobSurveyDialogBody({
                     />
                   }
                   value={oilCapacity}
-                  onChange={(value) => setOilCapacity(keepNumericInput(value))}
-                  placeholder="Oil capacity"
-                  inputMode="decimal"
+                  onChange={setOilCapacity}
+                  options={OIL_CAPACITY_OPTIONS}
+                  placeholder="Select capacity…"
+                  otherPlaceholder="qts"
+                  otherInputMode="decimal"
+                  otherSanitize={keepNumericInput}
                 />
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Oil type"
@@ -892,9 +1520,11 @@ function PreJobSurveyDialogBody({
                   }
                   value={oilType}
                   onChange={setOilType}
-                  placeholder="Oil type"
+                  options={OIL_TYPE_OPTIONS}
+                  placeholder="Select oil type…"
+                  otherPlaceholder="Oil type"
                 />
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Coolant type"
@@ -904,9 +1534,12 @@ function PreJobSurveyDialogBody({
                   }
                   value={coolantType}
                   onChange={setCoolantType}
-                  placeholder="Coolant type"
+                  options={COOLANT_TYPE_OPTIONS}
+                  placeholder="Select coolant chemistry…"
+                  otherPlaceholder="Coolant type"
+                  helperText="Match to chemistry family, not color — mixing chemistries can sludge the system."
                 />
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Brake fluid type"
@@ -918,9 +1551,11 @@ function PreJobSurveyDialogBody({
                   }
                   value={brakeFluidType}
                   onChange={setBrakeFluidType}
-                  placeholder="Brake fluid type"
+                  options={BRAKE_FLUID_OPTIONS}
+                  placeholder="Select DOT spec…"
+                  otherPlaceholder="Brake fluid type"
                 />
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Transmission fluid type"
@@ -932,12 +1567,22 @@ function PreJobSurveyDialogBody({
                   }
                   value={transmissionFluidType}
                   onChange={setTransmissionFluidType}
-                  placeholder="Transmission fluid type"
+                  options={TRANSMISSION_FLUID_OPTIONS}
+                  placeholder="Select ATF spec…"
+                  otherPlaceholder="Transmission fluid type"
                 />
               </div>
             </SectionBlock>
 
-            <SectionBlock eyebrow="Inspection" badge="Optional" accent="muted">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.inspection = element;
+              }}
+              sectionId="prejob-section-inspection"
+              eyebrow="Inspection"
+              badge="Optional"
+              accent="muted"
+            >
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <span className="text-[12px] text-muted-foreground">Sticker looks current?</span>
                 <div className="flex flex-wrap gap-1.5">
@@ -986,7 +1631,15 @@ function PreJobSurveyDialogBody({
               </div>
             </SectionBlock>
 
-            <SectionBlock eyebrow="Modifications" badge="Optional" accent="muted">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.modifications = element;
+              }}
+              sectionId="prejob-section-modifications"
+              eyebrow="Modifications"
+              badge="Optional"
+              accent="muted"
+            >
               <FieldRow label="Any aftermarket parts?">
                 <Select
                   selectedKey={modificationsStatus || "none"}
@@ -1037,7 +1690,15 @@ function PreJobSurveyDialogBody({
               ) : null}
             </SectionBlock>
 
-            <SectionBlock eyebrow="Review" badge="Optional" accent="muted">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.review = element;
+              }}
+              sectionId="prejob-section-review"
+              eyebrow="Review"
+              badge="Optional"
+              accent="muted"
+            >
               <label className="flex items-start gap-2 text-[12px] text-foreground">
                 <button
                   type="button"
@@ -1063,6 +1724,7 @@ function PreJobSurveyDialogBody({
               />
             </SectionBlock>
           </div>
+        </div>
         </div>
       </SurveyDialogShell>
 
@@ -1109,11 +1771,15 @@ function VehicleSummaryCard({ label, subLabel }: { label: string; subLabel: stri
 }
 
 function SectionBlock({
+  sectionId,
+  sectionRef,
   eyebrow,
   badge,
   accent = "muted",
   children,
 }: {
+  sectionId?: string;
+  sectionRef?: (element: HTMLElement | null) => void;
   eyebrow: string;
   badge?: string;
   accent?: "required" | "muted";
@@ -1125,7 +1791,11 @@ function SectionBlock({
       : "border border-border bg-card text-muted-foreground";
 
   return (
-    <section className="py-4 first:pt-0 last:pb-0">
+    <section
+      id={sectionId}
+      ref={sectionRef}
+      className="scroll-mt-24 py-4 first:pt-0 last:pb-0"
+    >
       <div className="flex items-center justify-between gap-3">
         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
           {eyebrow}
@@ -1234,6 +1904,132 @@ function EditableFieldCard({
         inputMode={inputMode}
         className={cn(baseField(), "w-full text-left")}
       />
+    </div>
+  );
+}
+
+const OTHER_OPTION_ID = "__other__";
+
+function SelectableFieldCard({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder = "Select...",
+  otherPlaceholder = "Enter value",
+  otherInputMode,
+  otherSanitize,
+  helperText,
+}: {
+  label: ReactNode;
+  value: string;
+  onChange: (value: string) => void;
+  options: SelectOption[];
+  placeholder?: string;
+  otherPlaceholder?: string;
+  otherInputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"];
+  otherSanitize?: (raw: string) => string;
+  helperText?: ReactNode;
+}) {
+  const matched = resolveOption(value, options);
+  const isOther = !!value && !matched;
+  const selectedKey = matched ? matched.value : isOther ? OTHER_OPTION_ID : "none";
+  const triggerLabel = matched ? matched.label : isOther ? "Other…" : placeholder;
+  const showSearch = options.length > 5;
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = normalizedQuery
+    ? options.filter((option) => {
+        const haystack = [option.label, option.value, ...(option.aliases ?? [])];
+        return haystack.some((h) => h.toLowerCase().includes(normalizedQuery));
+      })
+    : options;
+  const otherMatchesQuery = !normalizedQuery || "other".includes(normalizedQuery);
+  return (
+    <div className="rounded-lg border border-primary/10 bg-muted/40 p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      </div>
+      <Select
+        selectedKey={selectedKey}
+        onSelectionChange={(key) => {
+          const k = String(key);
+          if (k === "none") {
+            onChange("");
+          } else if (k === OTHER_OPTION_ID) {
+            if (matched) onChange("");
+          } else {
+            onChange(k);
+          }
+          setQuery("");
+        }}
+      >
+        <SelectTrigger className={cn(selectTriggerClassName, "w-full justify-between")}>
+          <SelectValue>{triggerLabel}</SelectValue>
+        </SelectTrigger>
+        <SelectPopover className={selectPopoverClassName}>
+          {showSearch ? (
+            <div
+              className="border-b border-primary/10 p-1.5"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  // Let printable keys edit the input; stop them bubbling into the listbox's typeahead.
+                  if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter" && e.key !== "Escape") {
+                    e.stopPropagation();
+                  }
+                }}
+                placeholder="Search…"
+                className={cn(baseField(), "w-full text-left")}
+              />
+            </div>
+          ) : null}
+          <SelectListBox shouldFocusWrap className={cn(selectListBoxClassName, "max-h-64 overflow-y-auto")}>
+            <SelectItem id="none" textValue={placeholder} className={selectItemClassName}>
+              <span className="text-muted-foreground">{placeholder}</span>
+            </SelectItem>
+            {filteredOptions.map((option) => (
+              <SelectItem
+                key={option.value}
+                id={option.value}
+                textValue={option.label}
+                className={selectItemClassName}
+              >
+                {option.label}
+              </SelectItem>
+            ))}
+            {otherMatchesQuery ? (
+              <SelectItem id={OTHER_OPTION_ID} textValue="Other…" className={selectItemClassName}>
+                Other…
+              </SelectItem>
+            ) : null}
+            {filteredOptions.length === 0 && !otherMatchesQuery ? (
+              <SelectItem id="__no_results__" isDisabled textValue="No matches" className={cn(selectItemClassName, "text-muted-foreground")}>
+                No matches
+              </SelectItem>
+            ) : null}
+          </SelectListBox>
+        </SelectPopover>
+      </Select>
+      {isOther ? (
+        <input
+          value={value}
+          onChange={(event) => {
+            const next = otherSanitize ? otherSanitize(event.target.value) : event.target.value;
+            onChange(next);
+          }}
+          placeholder={otherPlaceholder}
+          inputMode={otherInputMode}
+          className={cn(baseField(), "mt-2 w-full text-left")}
+        />
+      ) : null}
+      {helperText ? (
+        <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">{helperText}</p>
+      ) : null}
     </div>
   );
 }

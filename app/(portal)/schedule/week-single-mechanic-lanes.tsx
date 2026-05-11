@@ -1,8 +1,12 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addDays, format } from "date-fns";
-import { statusColors, dateToString } from "./schedule-constants";
+import {
+  statusColors,
+  dateToString,
+  getPendingApprovalLabel,
+} from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 import type { RescheduleProposal, ContextMenuCellInfo, ContextMenuBlockedInfo } from "./day-swim-lanes";
 
@@ -22,6 +26,7 @@ interface WeekSingleMechanicLanesProps {
   weekStart: Date;
   minTime: Date;
   maxTime: Date;
+  nowTimestamp: number;
   onSelectEvent: (event: CalendarEvent) => void;
   onProposeReschedule?: (proposal: RescheduleProposal) => void;
   onDragError?: (message: string) => void;
@@ -95,6 +100,7 @@ export default function WeekSingleMechanicLanes({
   weekStart,
   minTime,
   maxTime,
+  nowTimestamp,
   onSelectEvent,
   onProposeReschedule,
   onDragError,
@@ -128,15 +134,15 @@ export default function WeekSingleMechanicLanes({
     return Array.from({ length: 7 }, (_, i) => {
       const date = addDays(weekStart, i);
       const dateStr = dateToString(date);
-      return {
-        date,
-        dateStr,
-        dayName: format(date, "EEE"),
-        dayNum: format(date, "d"),
-        isToday: dateStr === dateToString(new Date()),
-      };
-    });
-  }, [weekStart]);
+        return {
+          date,
+          dateStr,
+          dayName: format(date, "EEE"),
+          dayNum: format(date, "d"),
+          isToday: dateStr === todayStr,
+        };
+      });
+  }, [todayStr, weekStart]);
 
   // Events bucketed by day
   const { bookingsByDay, blockedByDay } = useMemo(() => {
@@ -158,7 +164,7 @@ export default function WeekSingleMechanicLanes({
   }, [days, events]);
 
   // Current time indicator
-  const now = new Date();
+  const now = new Date(nowTimestamp);
   const nowMinutes = minutesFromBase(startHour, startMinute, now.getHours(), now.getMinutes());
   const showNowLine = nowMinutes >= 0 && nowMinutes <= totalMinutes;
   const nowTop = (nowMinutes / totalMinutes) * totalHeight;
@@ -173,19 +179,22 @@ export default function WeekSingleMechanicLanes({
 
   // Stable refs for values used inside pointer event closures
   const daysRef = useRef(days);
-  daysRef.current = days;
   const slotsRef = useRef(slots);
-  slotsRef.current = slots;
   const onSelectEventRef = useRef(onSelectEvent);
-  onSelectEventRef.current = onSelectEvent;
   const onProposeRescheduleRef = useRef(onProposeReschedule);
-  onProposeRescheduleRef.current = onProposeReschedule;
   const onDragErrorRef = useRef(onDragError);
-  onDragErrorRef.current = onDragError;
   const eventsRef = useRef(events);
-  eventsRef.current = events;
   const mechanicRef = useRef(mechanic);
-  mechanicRef.current = mechanic;
+
+  useEffect(() => {
+    daysRef.current = days;
+    slotsRef.current = slots;
+    onSelectEventRef.current = onSelectEvent;
+    onProposeRescheduleRef.current = onProposeReschedule;
+    onDragErrorRef.current = onDragError;
+    eventsRef.current = events;
+    mechanicRef.current = mechanic;
+  }, [days, slots, onSelectEvent, onProposeReschedule, onDragError, events, mechanic]);
 
   const getDropTarget = useCallback((clientX: number, clientY: number) => {
     const container = containerRef.current;
@@ -230,6 +239,7 @@ export default function WeekSingleMechanicLanes({
     function createFloating() {
       const colors = statusColors[ev.status ?? "confirmed"] ?? statusColors.confirmed;
       const isPendingCustomer = ev.status === "pending_customer_acceptance";
+      const pendingLabel = getPendingApprovalLabel(ev);
 
       const floating = document.createElement("div");
       Object.assign(floating.style, {
@@ -264,6 +274,19 @@ export default function WeekSingleMechanicLanes({
       Object.assign(svcP.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: "0.8" });
       svcP.textContent = ev.serviceNames?.join(", ") ?? "";
       floating.appendChild(svcP);
+
+      if (isPendingCustomer) {
+        const awaitP = document.createElement("p");
+        Object.assign(awaitP.style, {
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          opacity: "0.7",
+          fontSize: "10px",
+        });
+        awaitP.textContent = pendingLabel;
+        floating.appendChild(awaitP);
+      }
 
       document.body.appendChild(floating);
       floatingRef.current = floating;
@@ -370,7 +393,7 @@ export default function WeekSingleMechanicLanes({
 
           // Forbidden: blocked slot in target day
           const blocked = eventsRef.current.filter(
-            (be) => be.type === "blocked" && dateToString(be.start) === day.dateStr,
+            (be) => be.type === "blocked" && !be.isDraft && dateToString(be.start) === day.dateStr,
           );
           const overlapsBlocked = blocked.some((bl) => {
             const blStart = formatHHMM(bl.start.getHours(), bl.start.getMinutes());
@@ -600,10 +623,15 @@ export default function WeekSingleMechanicLanes({
                   return (
                     <div
                       key={bl.id}
-                      className="absolute left-0 right-0 z-[5] blocked-slot-pattern group cursor-pointer overflow-hidden"
+                      className={`absolute left-0 right-0 z-[5] blocked-slot-pattern group overflow-hidden ${
+                        bl.isDraft
+                          ? "pointer-events-none opacity-70 outline outline-2 outline-dashed outline-red-400 -outline-offset-2 animate-pulse"
+                          : "cursor-pointer"
+                      }`}
                       style={{ top: Math.max(0, blTop), height: Math.max(ROW_HEIGHT * 0.5, blHeight) }}
                       title={bl.note ?? undefined}
                       onClick={() => {
+                        if (bl.isDraft) return;
                         if (!bl.slotId || !onSelectBlocked) return;
                         onSelectBlocked({
                           slotId: bl.slotId,
@@ -616,12 +644,18 @@ export default function WeekSingleMechanicLanes({
                         });
                       }}
                       onContextMenu={(e) => {
+                        if (bl.isDraft) return;
                         if (!bl.slotId || !onContextMenuBlocked) return;
                         e.preventDefault();
                         onContextMenuBlocked({ slotId: bl.slotId, clientX: e.clientX, clientY: e.clientY });
                       }}
                     >
-                      <span className="absolute inset-0 flex items-center justify-center overflow-hidden px-1 pointer-events-none select-none">
+                      <span className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden px-1 pointer-events-none select-none gap-0.5">
+                        {bl.isDraft && (
+                          <span className="text-[9px] font-semibold uppercase tracking-wide text-red-500">
+                            Draft preview
+                          </span>
+                        )}
                         <span
                           className="overflow-hidden text-center text-[11px] font-medium leading-tight text-red-400 whitespace-normal break-words"
                           style={{
@@ -632,6 +666,16 @@ export default function WeekSingleMechanicLanes({
                         >
                           {bl.blockTitle ?? "Blocked"}
                         </span>
+                        {bl.isDraft && blHeight > 36 && (
+                          <span className="text-[10px] text-red-400/80">
+                            {`${formatCompactTime(bl.start.getHours(), bl.start.getMinutes())} – ${formatCompactTime(bl.end.getHours(), bl.end.getMinutes())}`}
+                          </span>
+                        )}
+                        {bl.isDraft && bl.note && blHeight > 56 && (
+                          <span className="text-[10px] text-red-400/70 line-clamp-2 text-center px-1">
+                            {bl.note}
+                          </span>
+                        )}
                       </span>
                     </div>
                   );
@@ -660,6 +704,7 @@ export default function WeekSingleMechanicLanes({
                   const isDraggable = DRAGGABLE_STATUSES.has(ev.status ?? "");
                   const isBeingDragged = dragEventId === ev.id;
                   const isPendingCustomer = ev.status === "pending_customer_acceptance";
+                  const pendingLabel = getPendingApprovalLabel(ev);
 
                   if (isBeingDragged) {
                     return (
@@ -708,7 +753,7 @@ export default function WeekSingleMechanicLanes({
                       <p className="font-medium truncate">{ev.customerName}</p>
                       <p className="truncate opacity-80">{ev.serviceNames?.join(", ")}</p>
                       {isPendingCustomer && (
-                        <p className="truncate opacity-70 text-[10px]">Awaiting approval</p>
+                        <p className="truncate opacity-70 text-[10px]">{pendingLabel}</p>
                       )}
                     </div>
                   );

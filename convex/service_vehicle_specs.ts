@@ -52,7 +52,7 @@ export const getByEngineAndService = query({
 
     const labor = await ctx.db
       .query("labor_times")
-      .withIndex("by_vehicle_config", (q) =>
+      .withIndex("by_vehicle_config_and_service", (q) =>
         q.eq("vehicle_config_id", vehicle.vehicle_config_id).eq("service_id", args.serviceId)
       )
       .first();
@@ -131,7 +131,7 @@ export const getSpecsForEngineAndServices = query({
 
       const labor = await ctx.db
         .query("labor_times")
-        .withIndex("by_vehicle_config", (q) =>
+        .withIndex("by_vehicle_config_and_service", (q) =>
           q.eq("vehicle_config_id", vehicleConfigId as any).eq("service_id", serviceId)
         )
         .first();

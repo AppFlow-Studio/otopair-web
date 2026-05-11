@@ -50,7 +50,7 @@ export async function updateSourceScores(
     const entityId = fieldEvidence[0].entity_id;
     const fullEvidence = await ctx.db
       .query("enrichment_evidence")
-      .withIndex("by_entity", (q) =>
+      .withIndex("by_entity_field", (q) =>
         q.eq("entity_type", entityType).eq("entity_id", entityId).eq("field_name", fieldName)
       )
       .collect();
@@ -138,13 +138,22 @@ export async function updateSourceScores(
 
       await ctx.db.patch(existingSource._id, patch);
     } else {
-      // Domain has evidence but no source_registry entry.
-      // Log it so we can add it to the registry manually or via seeding.
+      // Auto-register: domain has evidence but no source_registry entry.
+      // Insert with scoring data — url_template/slug_fn_type filled in later if needed.
       const accuracy = totalNew > 0 ? stats.agreements / totalNew : 0;
+      const reliability = accuracy * 0.7 + (Math.min(totalNew, 100) / 100) * 0.3;
+      await ctx.db.insert("source_registry", {
+        domain,
+        source_type: "web_search",
+        total_observations: totalNew,
+        accuracy_rate: accuracy,
+        reliability_score: reliability,
+        is_blocked: accuracy < 0.4 && totalNew > 20,
+        created_at: Date.now(),
+      });
       console.log(
-        `[sourceScoring] Unregistered domain: ${domain} — ` +
-        `${stats.agreements}/${totalNew} agreed (${Math.round(accuracy * 100)}% accuracy). ` +
-        `Add to source_registry to enable auto-scoring.`
+        `[sourceScoring] Auto-registered: ${domain} — ` +
+        `${stats.agreements}/${totalNew} agreed (${Math.round(accuracy * 100)}% accuracy, reliability=${reliability.toFixed(2)})`
       );
     }
   }

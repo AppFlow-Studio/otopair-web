@@ -1,5 +1,6 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
 const isPublicRoute = createRouteMatcher([
   "/",
@@ -10,6 +11,7 @@ const isPublicRoute = createRouteMatcher([
   "/api/webhooks(.*)",
   "/shop-only",
   "/account-deactivated",
+  "/director(.*)",
 ]);
 
 const isPortalRoute = createRouteMatcher([
@@ -25,28 +27,48 @@ const isPortalRoute = createRouteMatcher([
   "/my-jobs(.*)",
 ]);
 
-// Routes only accessible to owner/manager roles (mechanics cannot access)
-const isOwnerManagerRoute = createRouteMatcher([
-  "/team(.*)",
+// Routes restricted to owner/manager roles only
+const isOwnerOnlyRoute = createRouteMatcher([
   "/mechanics(.*)",
   "/settings(.*)",
-  "/schedule(.*)",
   "/payouts(.*)",
+  "/shop(.*)",
+]);
+
+// Routes accessible to owner/manager and front desk (mechanics cannot access)
+const isOwnerOrFrontDeskRoute = createRouteMatcher([
+  "/team(.*)",
   "/bookings(.*)",
 ]);
 
 // Routes only accessible to mechanics (owners/managers cannot access)
 const isMechanicRoute = createRouteMatcher([
   "/my-jobs(.*)",
+  "/my-bookings(.*)",
 ]);
 
 const isAdminRoute = createRouteMatcher(["/admin(.*)"]);
 
-const SHOP_ROLES = ["shop_owner", "shop_mechanic", "mechanic", "admin"];
+const SHOP_ROLES = ["shop_owner", "shop_mechanic", "mechanic", "front_desk", "admin"];
 const OWNER_MANAGER_ROLES = ["shop_owner", "admin"];
 const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
+const OWNER_OR_FRONT_DESK_ROLES = ["shop_owner", "admin", "front_desk"];
+
+function isAdminSubdomain(request: NextRequest): boolean {
+  const host = request.headers.get('host') || ''
+  return host === 'admin.otopair.com' || host.startsWith('admin.otopair.com:')
+}
 
 export default clerkMiddleware(async (auth, request) => {
+  // Rewrite admin subdomain to the director panel route
+  if (isAdminSubdomain(request)) {
+    const url = request.nextUrl.clone()
+    if (!url.pathname.startsWith('/director')) {
+      url.pathname = '/director'
+    }
+    return NextResponse.rewrite(url)
+  }
+
   const { userId, sessionClaims } = await auth();
 
   // Allow public routes through
@@ -78,12 +100,17 @@ export default clerkMiddleware(async (auth, request) => {
       return NextResponse.redirect(new URL("/shop-only", request.url));
     }
 
-    // Owner/manager-only routes — redirect mechanics to dashboard
-    if (isOwnerManagerRoute(request) && !OWNER_MANAGER_ROLES.includes(role)) {
+    // Owner-only routes (settings, payouts, shop setup, mechanics directory)
+    if (isOwnerOnlyRoute(request) && !OWNER_MANAGER_ROLES.includes(role)) {
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }
 
-    // Mechanic-only routes — redirect owners/managers to dashboard
+    // Routes for owners + front desk (team, bookings list)
+    if (isOwnerOrFrontDeskRoute(request) && !OWNER_OR_FRONT_DESK_ROLES.includes(role)) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+
+    // Mechanic-only routes — redirect non-mechanics
     if (isMechanicRoute(request) && !MECHANIC_ROLES.includes(role)) {
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }

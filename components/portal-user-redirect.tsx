@@ -4,7 +4,7 @@ import { useAuth } from "@clerk/nextjs";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect } from "react";
 
-const PORTAL_ROLES = ["shop_owner", "shop_mechanic", "mechanic", "admin"];
+const PORTAL_ROLES = ["shop_owner", "shop_mechanic", "mechanic", "front_desk", "admin"];
 
 /**
  * When a signed-in portal user lands on the home page (e.g. after Clerk redirects

@@ -13,12 +13,15 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Check, Clock, Ellipsis, History, Loader2, RotateCcw, X } from "lucide-react";
+import { Check, Clock, Copy, Ellipsis, History, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 import VehiclePassportSection from "@/components/vehicle-passport-section";
 import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
+import RecommendServiceDrawer from "@/components/recommend-service-drawer";
+import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
 import {
   getMechanicAssignmentConflict,
   type ScheduleBlockedSlot,
@@ -73,7 +76,7 @@ const CANCEL_REASONS = [
 ];
 
 function getCancelReasons(status?: string | null) {
-  return status === "confirmed"
+  return status === "confirmed" || status === "vehicle_at_shop"
     ? [
         CANCEL_REASONS[0],
         "Customer no-show",
@@ -133,6 +136,10 @@ function pendingCountdown(creationTime: number): string | null {
   return `${minutes}m left`;
 }
 
+function isForcedDelayReason(reason?: string | null): boolean {
+  return reason?.startsWith("forced_delay_") ?? false;
+}
+
 function humanizeStatus(
   status: string,
   reason?: string | null,
@@ -141,13 +148,18 @@ function humanizeStatus(
   if (status === "confirmed" && reason === "shop_cancelled_reschedule") return "Reschedule Withdrawn";
   if (status === "confirmed" && reason === "customer_declined_reschedule") return "Reschedule Declined";
   if (status === "confirmed" && reason === "reschedule_auto_reverted_24h") return "Reschedule Expired";
+  if (status === "pending_customer_acceptance" && isForcedDelayReason(reason)) {
+    return "Late-Start Delay Pending Customer Acceptance";
+  }
   const map: Record<string, string> = {
     pending: "Pending",
     pending_shop_acceptance: "Pending Shop Acceptance",
     pending_customer_acceptance: "Pending Customer Acceptance",
     confirmed: "Confirmed",
+    vehicle_at_shop: "Vehicle Here",
     in_progress: "In Progress",
     completed: "Completed",
+    no_show: "No-show",
     cancelled:
       oldStatus === "pending" || oldStatus === "pending_shop_acceptance"
         ? "Declined"
@@ -162,19 +174,204 @@ const SYSTEM_REASONS = new Set([
   "customer_declined_reschedule",
   "reschedule_auto_reverted_24h",
   "customer_approved_reschedule",
+  "forced_delay_proposed_by_shop",
+  "forced_delay_proposed_by_system",
+  "forced_delay_updated_by_shop",
+  "forced_delay_updated_by_system",
 ]);
 
 function isSystemReason(reason: string): boolean {
   return SYSTEM_REASONS.has(reason) || reason.startsWith("seed_");
 }
 
-function getStatusDescription(status: string, reason?: string | null): string | null {
+function getStatusDescription(
+  status: string,
+  reason?: string | null,
+  scheduleChangeMode?: string | null,
+): string | null {
   if (status === "pending" || status === "pending_shop_acceptance") return "Awaiting shop review";
+  if (status === "pending_customer_acceptance" && (scheduleChangeMode === "forced_delay" || isForcedDelayReason(reason))) {
+    return "Automatic late-start delay pending customer response";
+  }
   if (status === "pending_customer_acceptance") return "Shop proposed reschedule";
   if (status === "cancelled" && reason === "cancelled_by_shop") return "Shop cancelled booking";
   if (status === "cancelled" && reason && !isSystemReason(reason)) return reason;
   return null;
 }
+
+const OUT_OF_SCOPE_LABELS: Record<string, string> = {
+  bodywork: "Bodywork",
+  transmission: "Transmission",
+  electrical_major: "Major electrical",
+  other: "Other",
+};
+
+function OutOfScopeCard({ job }: { job: JobDetailData }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-2xl border border-border bg-muted/40 p-4 text-muted-foreground">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider">
+        Out-of-scope finding · discuss at pickup
+      </div>
+      {job.outOfScopeCategory ? (
+        <span className="inline-flex rounded-full bg-background px-2 py-0.5 text-[11px] font-medium text-foreground">
+          {OUT_OF_SCOPE_LABELS[job.outOfScopeCategory] ?? job.outOfScopeCategory}
+        </span>
+      ) : null}
+      {job.outOfScopeNote ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-2 text-xs font-medium text-foreground underline-offset-2 hover:underline"
+          >
+            {expanded ? "Hide mechanic's note" : "View mechanic's full note"}
+          </button>
+          {expanded ? (
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+              {job.outOfScopeNote}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+      <p className="mt-3 text-xs">
+        This work is outside Otopair&apos;s service scope. The shop will discuss
+        directly with the customer at pickup.
+      </p>
+    </div>
+  );
+}
+
+const RECOMMENDATION_RESPONSE_WINDOW_MS = 10 * 60 * 1000;
+
+function RecommendedServiceCard({ job }: { job: JobDetailData }) {
+  const decide = useMutation(api.bookings.customerDecideRecommendation);
+  const [busy, setBusy] = useState<"confirmed" | "declined" | null>(null);
+  const state = job.recommendationState ?? "none";
+
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (state !== "pending_customer" || !job.recommendationSentAtMs) return;
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [state, job.recommendationSentAtMs]);
+
+  const msRemaining =
+    state === "pending_customer" && job.recommendationSentAtMs
+      ? Math.max(
+          0,
+          job.recommendationSentAtMs +
+            RECOMMENDATION_RESPONSE_WINDOW_MS -
+            nowMs,
+        )
+      : null;
+  const expired = msRemaining === 0;
+  const countdownLabel =
+    msRemaining != null
+      ? `${Math.floor(msRemaining / 60000)}:${String(
+          Math.floor((msRemaining % 60000) / 1000),
+        ).padStart(2, "0")}`
+      : null;
+
+  async function handleDecision(decision: "confirmed" | "declined") {
+    setBusy(decision);
+    try {
+      await decide({ bookingId: job._id, decision });
+    } catch {
+      // toast handled upstream; silent for now
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const tone =
+    state === "confirmed"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+      : state === "declined"
+        ? "border-border bg-muted/40 text-muted-foreground"
+        : "border-amber-200 bg-amber-50 text-amber-900";
+
+  return (
+    <div className={`rounded-2xl border p-4 ${tone}`}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider">
+          Recommended service ·{" "}
+          {state === "pending_customer"
+            ? "Sent to customer"
+            : state === "confirmed"
+              ? "Confirmed"
+              : state === "declined"
+                ? "Declined"
+                : state}
+        </span>
+        {countdownLabel ? (
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums ${
+              expired
+                ? "bg-rose-100 text-rose-900"
+                : "bg-amber-100 text-amber-900"
+            }`}
+            title="Customer has 10 minutes to respond"
+          >
+            {expired ? "Expired" : `${countdownLabel} left`}
+          </span>
+        ) : null}
+      </div>
+      <div className="text-sm font-semibold">
+        {job.recommendedServiceName ?? "Recommended service"}
+      </div>
+      {job.recommendedServiceNote ? (
+        <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed opacity-90">
+          &quot;{job.recommendedServiceNote}&quot;
+        </p>
+      ) : null}
+      {job.recommendedScheduledDate && job.recommendedScheduledTime ? (
+        <p className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-white/60 px-2 py-1 text-[12px] font-medium">
+          <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+          Proposed: {formatBookingDate(
+            job.recommendedScheduledDate,
+            job.recommendedScheduledTime,
+          )}
+        </p>
+      ) : (
+        <p className="mt-2 text-[12px] font-medium opacity-80">
+          Right after this job
+        </p>
+      )}
+      {state === "pending_customer" ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => handleDecision("confirmed")}
+            disabled={busy !== null}
+            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {busy === "confirmed" ? "Confirming…" : "Simulate customer confirm"}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleDecision("declined")}
+            disabled={busy !== null}
+            className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+          >
+            {busy === "declined" ? "Declining…" : "Simulate customer decline"}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const DIAGNOSTIC_SYSTEM_LABELS: Record<
+  "brakes" | "tires_wheels" | "engine" | "battery_electrical" | "not_sure",
+  string
+> = {
+  brakes: "Brakes",
+  tires_wheels: "Tires & Wheels",
+  engine: "Engine",
+  battery_electrical: "Battery & Electrical",
+  not_sure: "Not sure",
+};
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -186,6 +383,45 @@ export interface JobDetailData {
   status: string;
   customerName: string;
   customerEmail: string;
+  customerNotes?: string | null;
+  diagnosticSystem?:
+    | "brakes"
+    | "tires_wheels"
+    | "engine"
+    | "battery_electrical"
+    | "not_sure"
+    | null;
+  diagnosticChecklist?: Array<{
+    label: string;
+    status: "pending" | "checked" | "skipped";
+    mechanic_note?: string;
+  }> | null;
+  diagnosticChecklistCompletedAtMs?: number | null;
+  recommendedServiceId?: Id<"services"> | null;
+  recommendedServiceName?: string | null;
+  recommendedServiceNote?: string | null;
+  recommendationState?:
+    | "none"
+    | "pending_customer"
+    | "confirmed"
+    | "declined"
+    | "out_of_scope"
+    | null;
+  recommendationSentAtMs?: number | null;
+  recommendedScheduledDate?: string | null;
+  recommendedScheduledTime?: string | null;
+  recommendationDecidedAtMs?: number | null;
+  parentJobId?: Id<"bookings"> | null;
+  diagnosticFollowupState?: "pending" | "awaiting_info" | "resolved" | null;
+  awaitingInfoNote?: string | null;
+  awaitingInfoAtMs?: number | null;
+  outOfScopeNote?: string | null;
+  outOfScopeCategory?:
+    | "bodywork"
+    | "transmission"
+    | "electrical_major"
+    | "other"
+    | null;
   vehicle: string;
   vin: string;
   scheduledDate: string;
@@ -195,6 +431,9 @@ export interface JobDetailData {
   laborCost: number;
   partsCost: number;
   mechanicId?: Id<"mechanics"> | null;
+  assignmentPreference?: "any" | "specific_mechanic";
+  vehicleArrivedAtMs?: number | null;
+  vehicleArrivedByUserId?: Id<"users"> | null;
   history: Array<{
     _id: Id<"booking_status_history">;
     changed_at: number;
@@ -209,6 +448,9 @@ export interface JobDetailData {
   previousMechanicName?: string | null;
   rescheduleProposedAt?: number | null;
   estimatedLaborMinutes?: number | null;
+  scheduleChangeMode?: string | null;
+  scheduleChangeSourceBookingId?: Id<"bookings"> | null;
+  customerCanRestoreOriginal?: boolean | null;
   jobActuals?: {
     _id: Id<"job_actuals">;
     status: "draft" | "finalized";
@@ -297,6 +539,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [declineOtherText, setDeclineOtherText] = useState("");
     const [showPrejobDialog, setShowPrejobDialog] = useState(false);
     const [showPostjobDialog, setShowPostjobDialog] = useState(false);
+    const [showDiagnosticDialog, setShowDiagnosticDialog] = useState(false);
+    const [recommendDrawerCtx, setRecommendDrawerCtx] = useState<
+      import("@/components/recommend-service-drawer").RecommendServiceContext | null
+    >(null);
     const [showActualsDialog, setShowActualsDialog] = useState(false);
     const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -305,15 +551,19 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
     const [isSubmittingPrejob, setIsSubmittingPrejob] = useState(false);
     const [isSubmittingPostjob, setIsSubmittingPostjob] = useState(false);
+    const [copiedField, setCopiedField] = useState<"email" | "vin" | null>(null);
 
     const wrapperRef = useRef<HTMLDivElement>(null);
     const assignTriggerRef = useRef<HTMLDivElement>(null);
     const declineTextareaRef = useRef<HTMLTextAreaElement>(null);
     const cancelTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const copyEmailTimeoutRef = useRef<number | null>(null);
 
     const acceptJob = useMutation(api.bookings.accept);
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
+    const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+    const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
     const savePrejob = useMutation(api.bookings.savePrejob);
     const startWithPrejob = useMutation(api.bookings.startWithPrejob);
@@ -339,13 +589,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       !!job &&
       (job.status === "pending" ||
         job.status === "pending_shop_acceptance" ||
-        job.status === "confirmed");
+        job.status === "confirmed" ||
+        job.status === "vehicle_at_shop");
     const currentMechanicId = job?.mechanicId ? String(job.mechanicId) : "";
+    const currentAssignmentKey =
+      job?.assignmentPreference === "any" ? "" : currentMechanicId;
     const hasMechanicSelectionChange =
-      assigningMechanicId !== currentMechanicId;
+      assigningMechanicId !== currentAssignmentKey;
     const canSubmitMechanicChange =
       canAssignMechanic &&
-      !!selectedMechanicId &&
       hasMechanicSelectionChange;
     const jobId = job?._id;
     const completedColors = BOOKING_STATUS_VISUALS.completed.calendarColors;
@@ -353,6 +605,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const showAssignMechanicError = actionError.startsWith(
       "Cannot assign this mechanic"
     );
+    const isForcedDelayPending =
+      job?.status === "pending_customer_acceptance" &&
+      job.scheduleChangeMode === "forced_delay";
+    const canRestoreOriginalReschedule =
+      job?.status === "pending_customer_acceptance" &&
+      !isForcedDelayPending &&
+      job.customerCanRestoreOriginal !== false;
 
     // Sync assign dropdown with job's current mechanic
     useEffect(() => {
@@ -360,10 +619,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setActionError("");
       setShowPrejobDialog(false);
       setShowPostjobDialog(false);
-      setAssigningMechanicId(currentMechanicId);
+      setAssigningMechanicId(currentAssignmentKey);
       setShowActualsDialog(false);
       setActualsDialogMode("complete");
-    }, [jobId, currentMechanicId]);
+      setCopiedField(null);
+      if (copyEmailTimeoutRef.current !== null) {
+        window.clearTimeout(copyEmailTimeoutRef.current);
+        copyEmailTimeoutRef.current = null;
+      }
+    }, [jobId, currentAssignmentKey]);
 
     // Reset decline modal state when it closes
     useEffect(() => {
@@ -392,6 +656,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         cancelTextareaRef.current?.focus();
       }
     }, [showCancelConfirm, cancelReason]);
+
+    useEffect(() => {
+      return () => {
+        if (copyEmailTimeoutRef.current !== null) {
+          window.clearTimeout(copyEmailTimeoutRef.current);
+        }
+      };
+    }, []);
 
     /* ---- Handlers ---- */
 
@@ -479,9 +751,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     async function handleAssignMechanic() {
       if (!canSubmitMechanicChange) return;
-      if (!job?._id || !selectedMechanicId) return;
+      if (!job?._id) return;
       setActionError("");
       const assignmentConflict =
+        selectedMechanicId &&
         scheduleConflicts &&
         getMechanicAssignmentConflict(
           {
@@ -510,6 +783,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
 
       if (
+        selectedMechanicId &&
         shouldConfirmMechanicChange(
           job.mechanicId ? String(job.mechanicId) : undefined,
           String(selectedMechanicId)
@@ -549,10 +823,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       try {
         await updateJob({
           bookingId: job._id,
-          mechanicId: selectedMechanicId as Id<"mechanics">,
+          mechanicId: selectedMechanicId
+            ? (selectedMechanicId as Id<"mechanics">)
+            : null,
+          assignmentPreference: selectedMechanicId
+            ? "specific_mechanic"
+            : "any",
         });
-        setAssigningMechanicId(String(selectedMechanicId));
-        onSuccess?.(job.mechanicId ? "Mechanic reassigned" : "Mechanic assigned");
+        setAssigningMechanicId(selectedMechanicId ? String(selectedMechanicId) : "");
+        onSuccess?.(selectedMechanicId ? "Mechanic locked" : "Any mechanic selected");
       } catch (err: unknown) {
         setActionError(
           err instanceof Error
@@ -566,8 +845,67 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     async function handleStartJob() {
       if (!job?._id || !job.mechanicId) return;
+      if (job.status !== "vehicle_at_shop") {
+        setActionError("Mark the vehicle here before starting work.");
+        return;
+      }
       setActionError("");
       setShowPrejobDialog(true);
+    }
+
+    async function handleVehicleAtShop() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await markVehicleAtShop({ bookingId: job._id });
+        onSuccess?.("Vehicle marked here");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not mark vehicle here.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handlePostThresholdNoShow() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await markPostThresholdNoShow({ bookingId: job._id });
+        onSuccess?.("Booking marked no-show");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not mark no-show.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleCopyValue(
+      value: string | null | undefined,
+      field: "email" | "vin",
+      errorMessage: string
+    ) {
+      const text = value?.trim();
+      if (!text) return;
+
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopiedField(field);
+        if (copyEmailTimeoutRef.current !== null) {
+          window.clearTimeout(copyEmailTimeoutRef.current);
+        }
+        copyEmailTimeoutRef.current = window.setTimeout(() => {
+          setCopiedField(null);
+          copyEmailTimeoutRef.current = null;
+        }, 1500);
+      } catch {
+        setActionError(errorMessage);
+      }
     }
 
     async function handleStartWithPrejob(
@@ -612,7 +950,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     function openPostjobDialog() {
       setActionError("");
-      setShowPostjobDialog(true);
+      if (job?.diagnosticSystem) {
+        setShowDiagnosticDialog(true);
+      } else {
+        setShowPostjobDialog(true);
+      }
     }
 
     async function handleCompleteWithPostjob(payload: PostJobSurveyPayload) {
@@ -696,7 +1038,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     function handleResetMechanicSelection() {
       setActionError("");
-      setAssigningMechanicId(currentMechanicId);
+      setAssigningMechanicId(currentAssignmentKey);
       requestAnimationFrame(() => {
         wrapperRef.current?.focus();
       });
@@ -714,7 +1056,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       },
       showMarkCompleted: () => openPostjobDialog(),
       showCancelJob: () => setShowCancelConfirm(true),
-      showCancelReschedule: () => setShowCancelRescheduleConfirm(true),
+      showCancelReschedule: () => {
+        if (!canRestoreOriginalReschedule) return;
+        setShowCancelRescheduleConfirm(true);
+      },
       openAssignDropdown: () => {
         if (!canAssignMechanic) return;
         assignTriggerRef.current
@@ -832,13 +1177,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           return true;
         }
         if (
-          job?.status === "pending_customer_acceptance" &&
+          canRestoreOriginalReschedule &&
           (e.key === "c" || e.key === "C")
         ) {
           setShowCancelRescheduleConfirm(true);
           return true;
         }
-        if ((e.key === "t" || e.key === "T") && job?.status === "confirmed") {
+        if ((e.key === "v" || e.key === "V") && job?.status === "confirmed") {
+          handleVehicleAtShop();
+          return true;
+        }
+        if ((e.key === "t" || e.key === "T") && job?.status === "vehicle_at_shop") {
           handleStartJob();
           return true;
         }
@@ -906,6 +1255,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               </p>
             ) : (
               <div className="space-y-6">
+                <VehiclePassportSection
+                  data={vehiclePassport}
+                  bookingServices={job.serviceNames}
+                />
+
                 {/* Booking info grid */}
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div className={drawerInfoCardClassName}>
@@ -913,18 +1267,73 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     <p className="text-[15px] font-medium text-foreground">
                       {job.customerName}
                     </p>
-                    <p className="mt-1 min-w-0 overflow-hidden text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere] sm:text-sm">
-                      {job.customerEmail || "No email on file"}
-                    </p>
+                    <div className="relative mt-1 pr-9">
+                      {job.customerEmail ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleCopyValue(
+                                job.customerEmail,
+                                "email",
+                                "Could not copy customer email."
+                              )
+                            }
+                            className="absolute right-0 top-0 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            aria-label="Copy customer email"
+                            title={copiedField === "email" ? "Copied" : "Copy email"}
+                          >
+                            {copiedField === "email" ? (
+                              <Check className="h-4 w-4" aria-hidden="true" />
+                            ) : (
+                              <Copy className="h-4 w-4" aria-hidden="true" />
+                            )}
+                          </button>
+                          <p
+                            className="truncate pr-1 text-xs leading-5 text-muted-foreground sm:text-sm"
+                            title={job.customerEmail}
+                          >
+                            {job.customerEmail}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-xs leading-5 text-muted-foreground sm:text-sm">
+                          No email on file
+                        </p>
+                      )}
+                    </div>
                   </div>
                   <div className={drawerInfoCardClassName}>
                     <DrawerFieldLabel>Vehicle</DrawerFieldLabel>
                     <p className="text-[15px] font-medium text-foreground">
                       {job.vehicle}
                     </p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {job.vin}
-                    </p>
+                    <div className="relative mt-1 pr-9">
+                      {job.vin ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleCopyValue(job.vin, "vin", "Could not copy VIN.")
+                            }
+                            className="absolute right-0 top-0 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            aria-label="Copy VIN"
+                            title={copiedField === "vin" ? "Copied" : "Copy VIN"}
+                          >
+                            {copiedField === "vin" ? (
+                              <Check className="h-4 w-4" aria-hidden="true" />
+                            ) : (
+                              <Copy className="h-4 w-4" aria-hidden="true" />
+                            )}
+                          </button>
+                          <p className="truncate pr-1 text-sm text-muted-foreground" title={job.vin}>
+                            {job.vin}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">No VIN on file</p>
+                      )}
+                    </div>
                   </div>
                   <div className={drawerInfoCardClassName}>
                     <DrawerFieldLabel>Schedule</DrawerFieldLabel>
@@ -948,6 +1357,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     <p className="text-[15px] font-medium text-foreground">
                       {job.serviceNames.join(", ")}
                     </p>
+                    {job.diagnosticSystem && (
+                      <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                        Diagnostic · {DIAGNOSTIC_SYSTEM_LABELS[job.diagnosticSystem]}
+                      </span>
+                    )}
                   </div>
                   <div className={drawerInfoCardClassName}>
                     <DrawerFieldLabel>Costs</DrawerFieldLabel>
@@ -986,22 +1400,39 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   </div>
                 </div>
 
-                <VehiclePassportSection
-                  data={vehiclePassport}
-                  bookingServices={job.serviceNames}
-                />
+                {job.recommendationState &&
+                  job.recommendationState !== "none" &&
+                  job.recommendationState !== "out_of_scope" && (
+                    <RecommendedServiceCard job={job} />
+                  )}
+
+                {job.recommendationState === "out_of_scope" && (
+                  <OutOfScopeCard job={job} />
+                )}
+
+                {job.customerNotes && job.customerNotes.trim().length > 0 && (
+                  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-sky-900">
+                      <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                      Customer states
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-sky-900">
+                      {job.customerNotes}
+                    </p>
+                  </div>
+                )}
 
                 {/* Assign mechanic */}
                 <div className="rounded-2xl bg-muted/20 p-4">
                   <DrawerFieldLabel className="mb-3">
-                    Assigned Mechanic
+                    Assignment
                   </DrawerFieldLabel>
                   <div className="flex flex-wrap gap-2">
                     <div ref={assignTriggerRef}>
                       <Select
                         isDisabled={!canAssignMechanic || isActioning}
                         selectedKey={
-                          assigningMechanicId || "unassigned"
+                          assigningMechanicId || "any"
                         }
                         onOpenChange={(isOpen) => {
                           if (!isOpen) {
@@ -1018,7 +1449,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         onSelectionChange={(key) => {
                           setActionError("");
                           setAssigningMechanicId(
-                            key === "unassigned" ? "" : String(key),
+                            key === "any" ? "" : String(key),
                           );
                           requestAnimationFrame(() => {
                             wrapperRef.current?.focus();
@@ -1041,12 +1472,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           data-assign-dropdown
                         >
                           <SelectListBox shouldFocusWrap>
-                            <SelectItem
-                              id="unassigned"
-                              textValue="Unassigned"
-                            >
+                            <SelectItem id="any" textValue="Any mechanic">
                               <span className="text-muted-foreground">
-                                Unassigned
+                                Any mechanic
                               </span>
                             </SelectItem>
                             {mechanics.map((m) => (
@@ -1087,27 +1515,36 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   )}
                 </div>
 
-                {/* Pending customer acceptance — awaiting approval info */}
+                {/* Pending customer acceptance actions */}
                 {job.status === "pending_customer_acceptance" && (
                   <div className="rounded-2xl bg-muted/20 p-4">
                     <DrawerFieldLabel className="mb-2">
                       Actions
                     </DrawerFieldLabel>
                     <p className="mb-3 text-sm text-muted-foreground italic">
-                      Awaiting customer approval
+                      {isForcedDelayPending
+                        ? "Automatic late-start delay pending customer response"
+                        : "Awaiting customer approval"}
                     </p>
-                    <button
-                      onClick={() => setShowCancelRescheduleConfirm(true)}
-                      disabled={isActioning}
-                      className={drawerSecondaryButtonClassName}
-                    >
-                      <span>
-                        <span style={{ textDecorationLine: "underline" }}>
-                          C
+                    {isForcedDelayPending ? (
+                      <p className="text-sm text-muted-foreground">
+                        The original slot cannot be restored from this flow. The customer can
+                        accept the delayed time, pick another time, or cancel the booking in-app.
+                      </p>
+                    ) : (
+                      <button
+                        onClick={() => setShowCancelRescheduleConfirm(true)}
+                        disabled={isActioning}
+                        className={drawerSecondaryButtonClassName}
+                      >
+                        <span>
+                          <span style={{ textDecorationLine: "underline" }}>
+                            C
+                          </span>
+                          ancel reschedule
                         </span>
-                        ancel reschedule
-                      </span>
-                    </button>
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -1117,17 +1554,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   const canAccept =
                     s === "pending" || s === "pending_shop_acceptance";
                   const canComplete = s === "in_progress";
-                  const canStartJob = s === "confirmed";
+                  const canMarkVehicleHere = s === "confirmed";
+                  const canStartJob = s === "vehicle_at_shop";
+                  const canMarkNoShow = s === "confirmed";
                   const canDecline =
                     s === "pending" || s === "pending_shop_acceptance";
                   const canCancel =
-                    s === "confirmed" || s === "in_progress";
+                    s === "confirmed" ||
+                    s === "vehicle_at_shop" ||
+                    s === "in_progress";
 
                   if (
                     !canAccept &&
+                    !canMarkVehicleHere &&
                     !canComplete &&
                     !canDecline &&
-                    !canCancel
+                    !canCancel &&
+                    !canMarkNoShow
                   )
                     return null;
                   return (
@@ -1203,6 +1646,18 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             Open vehicle check
                           </button>
                         )}
+                        {canMarkVehicleHere && (
+                          <button
+                            onClick={handleVehicleAtShop}
+                            disabled={isActioning}
+                            className={drawerPrimaryButtonClassName}
+                          >
+                            {isActioning ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : null}
+                            Vehicle here
+                          </button>
+                        )}
                         {canComplete && job.status === "in_progress" && (
                           // TODO: Fix --success usage
                           <button
@@ -1210,25 +1665,31 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             disabled={isActioning}
                             className={drawerPrimaryButtonClassName}
                             style={
-                              job.status === "in_progress"
-                                ? undefined
-                                : {
-                                    backgroundColor: completedColors.text,
-                                    color: "#fff",
-                                  }
+                              job.diagnosticSystem
+                                ? { backgroundColor: "#b45309", color: "#fff" }
+                                : job.status === "in_progress"
+                                  ? undefined
+                                  : {
+                                      backgroundColor: completedColors.text,
+                                      color: "#fff",
+                                    }
                             }
                           >
-                            <span>
-                              Ma
-                              <span
-                                style={{
-                                  textDecorationLine: "underline",
-                                }}
-                              >
-                                r
+                            {job.diagnosticSystem ? (
+                              <span>Run diagnostic checklist</span>
+                            ) : (
+                              <span>
+                                Ma
+                                <span
+                                  style={{
+                                    textDecorationLine: "underline",
+                                  }}
+                                >
+                                  r
+                                </span>
+                                k completed
                               </span>
-                              k completed
-                            </span>
+                            )}
                           </button>
                         )}
                         {canDecline && (
@@ -1249,6 +1710,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               </span>
                               ecline
                             </span>
+                          </button>
+                        )}
+                        {canMarkNoShow && (
+                          <button
+                            onClick={handlePostThresholdNoShow}
+                            disabled={isActioning}
+                            className={drawerDestructiveButtonClassName}
+                          >
+                            Mark no-show
                           </button>
                         )}
                         {canCancel && (
@@ -1275,6 +1745,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     </div>
                   );
                 })()}
+
+                {job.status === "completed" && job._id ? (
+                  <PostjobPhotoStrip bookingId={job._id} />
+                ) : null}
 
                 {job.status === "completed" && (
                   <div className="rounded-2xl bg-muted/20 p-4">
@@ -1419,7 +1893,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                                   >{label}</span>
                                   <span className="text-[10px] text-muted-foreground shrink-0 leading-6">{formattedDate}</span>
                                 </div>
-                                {(() => { const desc = getStatusDescription(h.new_status, h.reason); return desc ? <p className="text-xs text-muted-foreground -mt-1">{desc}</p> : null; })()}
+                                {(() => {
+                                  const desc = getStatusDescription(h.new_status, h.reason);
+                                  return desc ? <p className="text-xs text-muted-foreground -mt-1">{desc}</p> : null;
+                                })()}
                               </div>
                             </div>
                           );
@@ -1470,8 +1947,71 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onSubmit={handleStartWithPrejob}
         />
 
+        <DiagnosticChecklistDialog
+          open={showDiagnosticDialog}
+          bookingId={job?._id ?? null}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          system={(job?.diagnosticSystem ?? "not_sure") as any}
+          checklist={
+            job?.diagnosticChecklist && job.diagnosticChecklist.length > 0
+              ? job.diagnosticChecklist
+              : job?.diagnosticSystem
+                ? templateForSystem(job.diagnosticSystem as any)
+                : []
+          }
+          customerNotes={job?.customerNotes ?? null}
+          findingsNote={(job as any)?.diagnosticFindingsNote ?? null}
+          recommendationState={job?.recommendationState ?? null}
+          recommendedServiceName={job?.recommendedServiceName ?? null}
+          recommendedServiceNote={job?.recommendedServiceNote ?? null}
+          followupState={job?.diagnosticFollowupState ?? null}
+          awaitingInfoNote={job?.awaitingInfoNote ?? null}
+          onClose={() => setShowDiagnosticDialog(false)}
+          onCompleted={() => {
+            setShowDiagnosticDialog(false);
+            onSuccess?.("Diagnostic completed");
+          }}
+          onError={(msg) => setActionError(msg)}
+          onOpenScheduler={(ctx) => {
+            if (!job) return;
+            setShowDiagnosticDialog(false);
+            setRecommendDrawerCtx({
+              diagnosticBookingId: job._id,
+              customerName: job.customerName,
+              vehicleDisplay: job.vehicle,
+              serviceId: ctx.serviceId as Id<"services">,
+              serviceName: ctx.serviceName,
+              mechanicNote: ctx.mechanicNote,
+              defaultDate: job.scheduledDate,
+              defaultTime: job.scheduledTime,
+              defaultMechanicName: (job as any).mechanicName ?? null,
+              defaultDurationMinutes: ctx.defaultDurationMinutes,
+            });
+          }}
+        />
+
+        <RecommendServiceDrawer
+          open={recommendDrawerCtx !== null}
+          context={recommendDrawerCtx}
+          onClose={() => setRecommendDrawerCtx(null)}
+          onSent={() => {
+            setRecommendDrawerCtx(null);
+            onSuccess?.("Recommendation sent to customer");
+          }}
+          onError={(msg) => setActionError(msg)}
+        />
+
         <PostJobSurveyDialog
           open={showPostjobDialog}
+          bookingId={job ? String(job._id) : null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
@@ -1612,29 +2152,64 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           )}
         </ConfirmationDialog>
 
-        <ConfirmationDialog
-          open={showCancelRescheduleConfirm}
-          title="Cancel the proposed reschedule?"
-          description="The booking will revert to its original time and mechanic."
-          onClose={() => setShowCancelRescheduleConfirm(false)}
-          enableShortcuts={false}
-          secondaryAction={{
-            label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
-            onAction: () => setShowCancelRescheduleConfirm(false),
-            disabled: isActioning,
-          }}
-          primaryAction={{
-            label: isActioning ? "Reverting..." : <ShortcutLabel text="Revert to original" shortcutKey="r" />,
-            onAction: handleCancelReschedule,
-            disabled: isActioning,
-            variant: "primary",
-            leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
-          }}
-        />
+        {!isForcedDelayPending ? (
+          <ConfirmationDialog
+            open={showCancelRescheduleConfirm}
+            title="Cancel the proposed reschedule?"
+            description="The booking will revert to its original time and mechanic."
+            onClose={() => setShowCancelRescheduleConfirm(false)}
+            enableShortcuts={false}
+            secondaryAction={{
+              label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
+              onAction: () => setShowCancelRescheduleConfirm(false),
+              disabled: isActioning,
+            }}
+            primaryAction={{
+              label: isActioning ? "Reverting..." : <ShortcutLabel text="Revert to original" shortcutKey="r" />,
+              onAction: handleCancelReschedule,
+              disabled: isActioning,
+              variant: "primary",
+              leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
+            }}
+          />
+        ) : null}
       </>
     );
   },
 );
 
 export default JobDetailPanel;
+
+function PostjobPhotoStrip({ bookingId }: { bookingId: Id<"bookings"> }) {
+  const photos = useQuery(api.bookings.getPostjobPhotoUrls, { bookingId });
+  if (!photos || photos.length === 0) return null;
+  return (
+    <div className="rounded-2xl bg-muted/20 p-4">
+      <DrawerFieldLabel className="mb-2">Service photos</DrawerFieldLabel>
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+        {photos.map((photo) => (
+          <a
+            key={photo.storage_id}
+            href={photo.url ?? "#"}
+            target="_blank"
+            rel="noreferrer"
+            className="group block overflow-hidden rounded-lg border border-primary/10 bg-background"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={photo.url ?? ""}
+              alt={photo.caption ?? ""}
+              className="aspect-square w-full object-cover transition-transform group-hover:scale-[1.02]"
+            />
+            {photo.caption ? (
+              <p className="truncate border-t border-primary/10 px-2 py-1 text-[10px] text-muted-foreground">
+                {photo.caption}
+              </p>
+            ) : null}
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
 

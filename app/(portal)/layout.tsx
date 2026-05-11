@@ -5,6 +5,7 @@ import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
+import { makeFunctionReference } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import {
   LayoutDashboard,
@@ -37,17 +38,26 @@ const ownerManagerLinks = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
-const mechanicLinks = [
-  { href: "/my-bookings", label: "My Bookings", icon: Briefcase },
+const frontDeskLinks = [
+  { href: "/schedule", label: "Schedule", icon: Calendar },
+  { href: "/team", label: "Team", icon: Users },
 ];
 
+const mechanicLinks = [
+  { href: "/my-bookings", label: "My Bookings", icon: Briefcase },
+  { href: "/schedule", label: "Schedule", icon: Calendar },
+];
+
+const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
+
 const bookingSubLinks = [
-  { href: "/bookings/create", label: "Create Booking", icon: PlusCircle },
+  { href: "/schedule?action=newBooking", label: "Create Booking", icon: PlusCircle },
   { href: "/bookings", label: "All Bookings", icon: List },
   { href: "/bookings/tire-quote-requests", label: "Tire Quote Requests", icon: Wrench },
 ];
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"];
+const getPortalAccessQuery = makeFunctionReference<"query">("shops:getMyPortalAccess");
 
 export default function PortalLayout({
   children,
@@ -65,7 +75,8 @@ export default function PortalLayout({
       ? user.publicMetadata.role
       : null;
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCompact, setSidebarCompact] = useState(false);
+  const [sidebarUserCompact, setSidebarUserCompact] = useState(false);
+  const [sidebarAutoCompact, setSidebarAutoCompact] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const isBookingsActive =
     pathname === "/bookings" ||
@@ -73,9 +84,21 @@ export default function PortalLayout({
     pathname === "/my-bookings" ||
     pathname.startsWith("/my-bookings/");
   const [bookingsOpen, setBookingsOpen] = useState(isBookingsActive);
+  const sidebarCompact = sidebarUserCompact || sidebarAutoCompact;
 
-  const portalAccess = useQuery(api.shops.getMyPortalAccess);
+  const portalAccess = useQuery(getPortalAccessQuery) as
+    | {
+        status: "active" | "no_shop" | "deactivated";
+        role: string;
+        userRole?: string | null;
+        onboardingComplete?: boolean;
+        shopId?: string;
+      }
+    | null
+    | undefined;
   const seedBookings = useMutation(api.seed.seedDashboardBookings);
+  const clearDashboardBookingsBatch = useMutation(api.seed.clearDashboardBookingsBatch);
+  const seedLateStartReviewScenario = useMutation(api.seed.seedLateStartReviewScenario);
   const [, setSeeding] = useState(false);
   const hasRedirected = useRef(false);
   const isAcceptInvite = pathname.startsWith("/accept-invite");
@@ -123,6 +146,12 @@ export default function PortalLayout({
   const isOwnerManager =
     portalAccess?.status === "active" &&
     OWNER_MANAGER_ROLES.includes(portalAccess.role);
+  const isFrontDesk =
+    portalAccess?.status === "active" &&
+    portalAccess.role === "front_desk";
+  const isMechanic =
+    portalAccess?.status === "active" &&
+    MECHANIC_ROLES.includes(portalAccess.role);
   const isOnboarding =
     pathname.startsWith("/shop/setup") ||
     portalAccess?.status === "no_shop" ||
@@ -146,19 +175,60 @@ export default function PortalLayout({
     ? []
     : isOwnerManager
       ? ownerManagerLinks
+      : isFrontDesk
+        ? frontDeskLinks
       : mechanicLinks;
   const showDemoBookingActions =
     process.env.NODE_ENV === "development" &&
     isOwnerManager &&
     !!portalAccess?.shopId;
-  const runDashboardSeedAction = async (seedDemo: boolean) => {
+  const runDashboardSeedAction = async (seedMode: "v1" | "v2" | null) => {
     if (!portalAccess?.shopId) return;
     setSeeding(true);
     try {
-      await seedBookings({
+      for (let attempts = 0; attempts < 200; attempts += 1) {
+        const result = await clearDashboardBookingsBatch({
+          shopId: portalAccess.shopId,
+        });
+        if (result.done) {
+          break;
+        }
+        if (attempts === 199) {
+          throw new Error("Timed out while clearing demo bookings.");
+        }
+      }
+
+      if (seedMode) {
+        await seedBookings({
+          shopId: portalAccess.shopId,
+          clearExisting: false,
+          seedDemo: true,
+          version: seedMode,
+        });
+      }
+    } finally {
+      setSeeding(false);
+    }
+  };
+  const runLateStartSeedAction = async () => {
+    if (!portalAccess?.shopId) return;
+    setSeeding(true);
+    try {
+      for (let attempts = 0; attempts < 200; attempts += 1) {
+        const result = await clearDashboardBookingsBatch({
+          shopId: portalAccess.shopId,
+        });
+        if (result.done) {
+          break;
+        }
+        if (attempts === 199) {
+          throw new Error("Timed out while clearing existing schedule data.");
+        }
+      }
+
+      await seedLateStartReviewScenario({
         shopId: portalAccess.shopId,
-        clearExisting: true,
-        seedDemo,
+        clearExisting: false,
       });
     } finally {
       setSeeding(false);
@@ -191,7 +261,7 @@ export default function PortalLayout({
   );
 
   return (
-    <PortalSidebarContext.Provider value={{ setSidebarCompact }}>
+    <PortalSidebarContext.Provider value={{ setSidebarCompact: setSidebarAutoCompact }}>
       <div className="min-h-screen flex bg-gray-50">
         {/* Mobile overlay */}
         {sidebarOpen && (
@@ -234,7 +304,7 @@ export default function PortalLayout({
             </Link>
             <button
               type="button"
-              onClick={() => setSidebarCompact((compact) => !compact)}
+              onClick={() => setSidebarUserCompact((compact) => !compact)}
               className={`ml-auto hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 lg:flex ${
                 sidebarCompact ? "lg:mx-auto" : ""
               }`}
@@ -271,7 +341,8 @@ export default function PortalLayout({
               <NavText>Dashboard</NavText>
             </Link>
 
-            {/* Bookings accordion — always the same DOM structure; chevron fades with text */}
+            {/* Bookings accordion — hidden for mechanics (they use My Bookings) */}
+            {!isMechanic && (
             <div className={onboardingDisabledClass}>
               <button
                 onClick={() => {
@@ -324,6 +395,7 @@ export default function PortalLayout({
                 </div>
               </div>
             </div>
+            )}
 
             {/* Role-specific links */}
             {sidebarLinks.map((link) => {
@@ -367,16 +439,30 @@ export default function PortalLayout({
                   />
                   {showDemoBookingActions ? (
                     <UserButton.Action
-                      label="Seed demo bookings"
+                      label="Seed demo bookings 1"
                       labelIcon={<Sprout className="w-4 h-4" />}
-                      onClick={() => runDashboardSeedAction(true)}
+                      onClick={() => runDashboardSeedAction("v1")}
+                    />
+                  ) : null}
+                  {showDemoBookingActions ? (
+                    <UserButton.Action
+                      label="Seed demo bookings 2"
+                      labelIcon={<Sprout className="w-4 h-4" />}
+                      onClick={() => runDashboardSeedAction("v2")}
+                    />
+                  ) : null}
+                  {showDemoBookingActions ? (
+                    <UserButton.Action
+                      label="Seed late-start test data"
+                      labelIcon={<Sprout className="w-4 h-4" />}
+                      onClick={() => void runLateStartSeedAction()}
                     />
                   ) : null}
                   {showDemoBookingActions ? (
                     <UserButton.Action
                       label="Clear demo bookings"
                       labelIcon={<Trash2 className="w-4 h-4" />}
-                      onClick={() => runDashboardSeedAction(false)}
+                      onClick={() => runDashboardSeedAction(null)}
                     />
                   ) : null}
                 </UserButton.MenuItems>
@@ -421,16 +507,30 @@ export default function PortalLayout({
                   />
                   {showDemoBookingActions ? (
                     <UserButton.Action
-                      label="Seed demo bookings"
+                      label="Seed demo bookings 1"
                       labelIcon={<Sprout className="w-4 h-4" />}
-                      onClick={() => runDashboardSeedAction(true)}
+                      onClick={() => runDashboardSeedAction("v1")}
+                    />
+                  ) : null}
+                  {showDemoBookingActions ? (
+                    <UserButton.Action
+                      label="Seed demo bookings 2"
+                      labelIcon={<Sprout className="w-4 h-4" />}
+                      onClick={() => runDashboardSeedAction("v2")}
+                    />
+                  ) : null}
+                  {showDemoBookingActions ? (
+                    <UserButton.Action
+                      label="Seed late-start test data"
+                      labelIcon={<Sprout className="w-4 h-4" />}
+                      onClick={() => void runLateStartSeedAction()}
                     />
                   ) : null}
                   {showDemoBookingActions ? (
                     <UserButton.Action
                       label="Clear demo bookings"
                       labelIcon={<Trash2 className="w-4 h-4" />}
-                      onClick={() => runDashboardSeedAction(false)}
+                      onClick={() => runDashboardSeedAction(null)}
                     />
                   ) : null}
                 </UserButton.MenuItems>
@@ -445,7 +545,7 @@ export default function PortalLayout({
             </div>
           </header>
 
-          <main className="flex-1 p-6">{children}</main>
+          <main className="flex-1 px-6 pt-6 pb-0">{children}</main>
         </div>
       </div>
       <KeyboardShortcutsModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />

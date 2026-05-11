@@ -2,13 +2,14 @@
 
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
-import { api } from "@/convex/_generated/api";
+import { makeFunctionReference } from "convex/server";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
+import RemoveConfirmationDialog from "@/components/remove-confirmation-dialog";
 import { removeTeamMember } from "@/lib/remove-team-member";
 import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
@@ -66,7 +67,7 @@ const STEP_META = [
   },
   {
     title: "Add mechanics",
-    description: "Create at least one mechanic profile to receive work.",
+    description: "Invite mechanics now, or skip this step and add them later.",
     icon: UserRoundCog,
   },
   {
@@ -77,6 +78,24 @@ const STEP_META = [
 ] as const;
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"] as const;
+
+const getPortalAccessQuery = makeFunctionReference<"query">("shops:getMyPortalAccess");
+const getOnboardingDataQuery = makeFunctionReference<"query">("shops:getMyOnboardingData");
+const getShopBySlugQuery = makeFunctionReference<"query">("shops:getBySlug");
+const ensureUserMutation = makeFunctionReference<"mutation">("users:getOrCreateMe");
+const generateUploadUrlMutation = makeFunctionReference<"mutation">("users:generateUploadUrl");
+const updateMechanicProfilePhotoMutation = makeFunctionReference<"mutation">(
+  "shops:updateOnboardingMechanicProfilePhoto"
+);
+const upsertShopDetailsMutation = makeFunctionReference<"mutation">(
+  "shops:upsertOnboardingShopDetails"
+);
+const saveHoursMutation = makeFunctionReference<"mutation">("shops:saveOnboardingHours");
+const saveLaborAndServicesMutation = makeFunctionReference<"mutation">(
+  "shops:saveOnboardingLaborAndServices"
+);
+const addMechanicMutation = makeFunctionReference<"mutation">("shops:addOnboardingMechanic");
+const removeMechanicMutation = makeFunctionReference<"mutation">("shops:removeOnboardingMechanic");
 
 type GoogleMapsWindow = Window & {
   google?: {
@@ -130,6 +149,51 @@ type ShopDetailsForm = {
   state: string;
   zipCode: string;
   phone: string;
+};
+
+type OnboardingService = {
+  _id: string;
+  name: string;
+  description?: string;
+  defaultLaborHours: number;
+  isOffered: boolean;
+};
+
+type OnboardingServiceCategory = {
+  id: string;
+  name: string;
+  services: OnboardingService[];
+};
+
+type PortalAccess =
+  | null
+  | {
+      status: string;
+      role?: string | null;
+      userRole?: string | null;
+    };
+
+type OnboardingData = {
+  userRole?: string | null;
+  ownerEmail?: string | null;
+  shop: {
+    _id: Id<"shops">;
+    name: string;
+    slug: string;
+    address: string;
+    city: string;
+    state: string;
+    zipCode: string;
+    phone: string;
+    laborRate?: number;
+    stripeConnectAccountId?: string | null;
+    stripeRequirementsCurrentlyDue?: string[];
+    stripeConnectReady?: boolean;
+    onboardingComplete?: boolean;
+  } | null;
+  hours: HoursFormRow[];
+  serviceCategories: OnboardingServiceCategory[];
+  mechanics: unknown[];
 };
 
 type NormalizedShopAddress = {
@@ -330,6 +394,21 @@ function getInitials(firstName: string, lastName: string): string {
   return initials || "ME";
 }
 
+function getMechanicPortalStatusLabel(status?: string | null): string {
+  if (status === "active") return "Portal active";
+  if (status === "invite_sent") return "Invitation pending";
+  if (status === "invite_expired") return "Invitation expired";
+  if (status === "invite_revoked") return "Invitation revoked";
+  return "Profile saved";
+}
+
+function getMechanicInviteLabel(status?: string | null): string {
+  if (status === "invite_sent") return "Resend invite";
+  if (status === "invite_expired") return "Resend invite";
+  if (status === "invite_revoked") return "Send invite";
+  return "Send invite";
+}
+
 function getFirstIncompleteSavedStep(params: {
   hasSavedShop: boolean;
   savedHoursCount: number;
@@ -339,7 +418,6 @@ function getFirstIncompleteSavedStep(params: {
   if (!params.hasSavedShop) return 0;
   if (params.savedHoursCount < 7) return 1;
   if (params.savedServiceCount === 0) return 2;
-  if (params.mechanicCount === 0) return 3;
   return 4;
 }
 
@@ -347,17 +425,39 @@ export default function ShopSetupPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isLoaded: isUserLoaded } = useUser();
-  const portalAccess = useQuery(api.shops.getMyPortalAccess);
-  const onboardingData = useQuery(api.shops.getMyOnboardingData);
-  const ensureUser = useMutation(api.users.getOrCreateMe);
-  const generateUploadUrl = useMutation(api.users.generateUploadUrl);
-  const updateMechanicProfilePhoto = useMutation(
-    api.shops.updateOnboardingMechanicProfilePhoto
-  );
-  const upsertShopDetails = useMutation(api.shops.upsertOnboardingShopDetails);
-  const saveHours = useMutation(api.shops.saveOnboardingHours);
-  const saveLaborAndServices = useMutation(api.shops.saveOnboardingLaborAndServices);
-  const removeMechanic = useMutation(api.shops.removeOnboardingMechanic);
+  const portalAccess = useQuery(getPortalAccessQuery) as PortalAccess | undefined;
+  const onboardingData = useQuery(getOnboardingDataQuery) as OnboardingData | null | undefined;
+  const ensureUser = useMutation(ensureUserMutation) as () => Promise<unknown>;
+  const generateUploadUrl = useMutation(generateUploadUrlMutation) as () => Promise<string>;
+  const updateMechanicProfilePhoto = useMutation(updateMechanicProfilePhotoMutation) as (args: {
+    mechanicId: Id<"mechanics">;
+    profilePhotoStorageId: string | null;
+  }) => Promise<{ mechanicId: Id<"mechanics">; photoUrl: string | null }>;
+  const upsertShopDetails = useMutation(upsertShopDetailsMutation) as (args: {
+    name: string;
+    slug: string;
+    address: string;
+    city: string;
+    state: string;
+    zipCode: string;
+    phone: string;
+  }) => Promise<Id<"shops">>;
+  const saveHours = useMutation(saveHoursMutation) as (args: {
+    hours: HoursFormRow[];
+  }) => Promise<Id<"shops">>;
+  const saveLaborAndServices = useMutation(saveLaborAndServicesMutation) as (args: {
+    laborRate: number;
+    serviceIds: Id<"services">[];
+  }) => Promise<Id<"shops">>;
+  const addMechanic = useMutation(addMechanicMutation) as (args: {
+    firstName: string;
+    lastName: string;
+    title?: string;
+    email?: string;
+  }) => Promise<Id<"mechanics">>;
+  const removeMechanic = useMutation(removeMechanicMutation) as (args: {
+    mechanicId: Id<"mechanics">;
+  }) => Promise<Id<"mechanics">>;
 
   const [details, setDetails] = useState<ShopDetailsForm>({
     name: "",
@@ -381,6 +481,7 @@ export default function ShopSetupPage() {
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
   const [addressLookupLoading, setAddressLookupLoading] = useState(false);
   const [addressSelectedFromAutocomplete, setAddressSelectedFromAutocomplete] = useState(false);
+  const [highlightedAddressSuggestionIndex, setHighlightedAddressSuggestionIndex] = useState(-1);
   const addressLookupSessionRef = useRef<unknown>(null);
   const addressLookupRequestIdRef = useRef(0);
   const addressContainerRef = useRef<HTMLDivElement | null>(null);
@@ -399,6 +500,15 @@ export default function ShopSetupPage() {
   const [ensuredConvexUser, setEnsuredConvexUser] = useState(false);
   const [uploadingMechanicId, setUploadingMechanicId] = useState<string | null>(null);
   const [photoDialogMechanicId, setPhotoDialogMechanicId] = useState<string | null>(null);
+  const [removeMechanicConfirm, setRemoveMechanicConfirm] = useState<{
+    mechanicId: string;
+    shopUserId: string | null;
+    pendingInvitationId: string | null;
+    firstName: string;
+    lastName: string;
+  } | null>(null);
+  const [mechanicInviteActionId, setMechanicInviteActionId] = useState<string | null>(null);
+  const [removingMechanicId, setRemovingMechanicId] = useState<string | null>(null);
   const clerkRole =
     typeof user?.publicMetadata?.role === "string"
       ? user.publicMetadata.role
@@ -420,17 +530,21 @@ export default function ShopSetupPage() {
       : false;
 
   const slugCheckResult = useQuery(
-    api.shops.getBySlug,
+    getShopBySlugQuery,
     details.slug.length >= 2 && SLUG_REGEX.test(details.slug)
       ? { slug: details.slug }
       : "skip"
+  ) as { _id: Id<"shops"> } | null | undefined;
+  const serviceCategories = useMemo(
+    () => (onboardingData?.serviceCategories ?? []) as OnboardingServiceCategory[],
+    [onboardingData]
   );
   const persistedServiceCount = useMemo(
     () =>
-      onboardingData?.serviceCategories.flatMap((category) =>
+      serviceCategories.flatMap((category) =>
         category.services.filter((service) => service.isOffered)
       ).length ?? 0,
-    [onboardingData]
+    [serviceCategories]
   );
   const firstIncompleteSavedStep = useMemo(
     () =>
@@ -481,8 +595,8 @@ export default function ShopSetupPage() {
     };
     const nextHours = normalizeHours(onboardingData.hours);
     const nextLaborRate = String(onboardingData.shop?.laborRate ?? 150);
-    const nextSelectedServiceIds = new Set(
-      onboardingData.serviceCategories.flatMap((category) =>
+    const nextSelectedServiceIds = new Set<string>(
+      serviceCategories.flatMap((category) =>
         category.services
           .filter((service) => service.isOffered)
           .map((service) => service._id)
@@ -500,7 +614,7 @@ export default function ShopSetupPage() {
     );
     setCurrentStep(firstIncompleteSavedStep);
     setHydratedShopId(shopId);
-  }, [firstIncompleteSavedStep, hydratedShopId, onboardingData, router]);
+  }, [firstIncompleteSavedStep, hydratedShopId, onboardingData, router, serviceCategories]);
 
   useEffect(() => {
     const stripeStatus = searchParams.get("stripe");
@@ -561,12 +675,24 @@ export default function ShopSetupPage() {
     function handlePointerDown(event: MouseEvent) {
       if (!addressContainerRef.current?.contains(event.target as Node)) {
         setAddressSuggestions([]);
+        setHighlightedAddressSuggestionIndex(-1);
       }
     }
 
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
+
+  useEffect(() => {
+    if (addressSuggestions.length === 0) {
+      setHighlightedAddressSuggestionIndex(-1);
+      return;
+    }
+
+    setHighlightedAddressSuggestionIndex((currentIndex) =>
+      currentIndex >= 0 && currentIndex < addressSuggestions.length ? currentIndex : 0
+    );
+  }, [addressSuggestions]);
 
   useEffect(() => {
     const query = details.address.trim();
@@ -679,6 +805,46 @@ export default function ShopSetupPage() {
     }));
   }
 
+  function handleAddressInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (addressSuggestions.length === 0) {
+      if (event.key === "Escape") {
+        setHighlightedAddressSuggestionIndex(-1);
+      }
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightedAddressSuggestionIndex((currentIndex) =>
+        currentIndex < 0 ? 0 : (currentIndex + 1) % addressSuggestions.length
+      );
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedAddressSuggestionIndex((currentIndex) =>
+        currentIndex <= 0 ? addressSuggestions.length - 1 : currentIndex - 1
+      );
+      return;
+    }
+
+    if (event.key === "Enter") {
+      if (highlightedAddressSuggestionIndex < 0) return;
+      event.preventDefault();
+      void handleSelectAddressSuggestion(
+        addressSuggestions[highlightedAddressSuggestionIndex]
+      );
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setAddressSuggestions([]);
+      setHighlightedAddressSuggestionIndex(-1);
+    }
+  }
+
   function handleStepChange(nextStep: number) {
     clearBanners();
     if (nextStep <= Math.max(currentStep, firstIncompleteSavedStep)) {
@@ -692,6 +858,7 @@ export default function ShopSetupPage() {
       setDetails((prev) => ({ ...prev, address: entry.primaryText }));
       setAddressSelectedFromAutocomplete(true);
       setAddressSuggestions([]);
+      setHighlightedAddressSuggestionIndex(-1);
       return;
     }
 
@@ -724,6 +891,7 @@ export default function ShopSetupPage() {
       }));
       setAddressSelectedFromAutocomplete(true);
       setAddressSuggestions([]);
+      setHighlightedAddressSuggestionIndex(-1);
       addressLookupSessionRef.current = null;
     } catch {
       setStepError("Failed to load address details. Try selecting the address again.");
@@ -761,7 +929,14 @@ export default function ShopSetupPage() {
 
     setSavingStep(0);
     try {
-      const normalizedAddress = await validateShopAddressWithGoogle(details);
+      const normalizedAddress = addressSelectedFromAutocomplete
+        ? {
+            address: details.address,
+            city: details.city,
+            state: details.state,
+            zipCode: details.zipCode,
+          }
+        : await validateShopAddressWithGoogle(details);
       const nextDetails = {
         ...details,
         ...normalizedAddress,
@@ -843,42 +1018,98 @@ export default function ShopSetupPage() {
     setMechanicInviteSuccess(false);
 
     if (!onboardingData?.shop?._id) {
-      setMechanicInviteError("Save your shop details before inviting mechanics.");
+      setMechanicInviteError("Save your shop details before adding mechanics.");
       return;
     }
     if (!mechanicForm.firstName.trim() || !mechanicForm.lastName.trim()) {
       setMechanicInviteError("Enter both a first and last name for the mechanic.");
       return;
     }
-    if (!mechanicForm.email.trim()) {
-      setMechanicInviteError("Enter an email address for the mechanic.");
-      return;
-    }
 
     setSendingInvite(true);
     try {
-      // TODO: Remove temporary invite-link console logging from sendTeamInvite after invite flow verification is complete.
-      const result = await sendTeamInvite({
-        email: mechanicForm.email.trim(),
-        role: "shop_mechanic",
-        shopId: onboardingData.shop._id,
+      const mechanicId = await addMechanic({
         firstName: mechanicForm.firstName.trim(),
         lastName: mechanicForm.lastName.trim(),
         title: mechanicForm.title.trim() || undefined,
+        email: mechanicForm.email.trim() || undefined,
+      });
+
+      if (mechanicForm.email.trim()) {
+        const result = await sendTeamInvite({
+          email: mechanicForm.email.trim(),
+          role: "shop_mechanic",
+          shopId: onboardingData.shop._id,
+          mechanicId,
+          origin: window.location.origin,
+        });
+
+        if (!result.ok) {
+          setMechanicInviteError(
+            `Mechanic profile saved, but the invitation failed: ${result.error}`
+          );
+          return;
+        }
+      }
+
+      setMechanicForm({ firstName: "", lastName: "", title: "", email: "" });
+      setMechanicInviteSuccess(true);
+      setTimeout(() => setMechanicInviteSuccess(false), 4000);
+    } catch (error) {
+      setMechanicInviteError(
+        error instanceof Error ? error.message : "Failed to save mechanic. Please try again."
+      );
+    } finally {
+      setSendingInvite(false);
+    }
+  }
+
+  async function handleInviteExistingMechanic(mechanic: {
+    _id: string;
+    email?: string | null;
+    pendingInvitationId: string | null;
+    portalStatus?: string | null;
+  }) {
+    clearBanners();
+    setMechanicInviteError(null);
+    setMechanicInviteSuccess(false);
+
+    if (!onboardingData?.shop?._id) return;
+    if (!mechanic.email?.trim()) {
+      setMechanicInviteError("Add an email address before inviting this mechanic.");
+      return;
+    }
+
+    setMechanicInviteActionId(mechanic._id);
+    try {
+      if (
+        mechanic.pendingInvitationId &&
+        (mechanic.portalStatus === "invite_sent" || mechanic.portalStatus === "invite_expired")
+      ) {
+        await removeTeamMember({ invitationId: mechanic.pendingInvitationId });
+      }
+
+      const result = await sendTeamInvite({
+        email: mechanic.email.trim(),
+        role: "shop_mechanic",
+        shopId: onboardingData.shop._id,
+        mechanicId: mechanic._id,
         origin: window.location.origin,
       });
 
       if (!result.ok) {
         setMechanicInviteError(result.error);
-      } else {
-        setMechanicForm({ firstName: "", lastName: "", title: "", email: "" });
-        setMechanicInviteSuccess(true);
-        setTimeout(() => setMechanicInviteSuccess(false), 4000);
+        return;
       }
-    } catch {
-      setMechanicInviteError("Failed to send invitation. Please try again.");
+
+      setMechanicInviteSuccess(true);
+      setTimeout(() => setMechanicInviteSuccess(false), 4000);
+    } catch (error) {
+      setMechanicInviteError(
+        error instanceof Error ? error.message : "Failed to send invitation. Please try again."
+      );
     } finally {
-      setSendingInvite(false);
+      setMechanicInviteActionId(null);
     }
   }
 
@@ -975,6 +1206,7 @@ export default function ShopSetupPage() {
     pendingInvitationId: string | null;
   }) {
     clearBanners();
+    setRemovingMechanicId(args.mechanicId);
     try {
       await removeTeamMember({
         shopUserId: args.shopUserId,
@@ -982,11 +1214,14 @@ export default function ShopSetupPage() {
       });
 
       await removeMechanic({ mechanicId: args.mechanicId as Id<"mechanics"> });
+      setRemoveMechanicConfirm(null);
       setStepSuccess("Mechanic removed.");
     } catch (error) {
       setStepError(
         error instanceof Error ? error.message : "Failed to remove mechanic."
       );
+    } finally {
+      setRemovingMechanicId(null);
     }
   }
 
@@ -1075,14 +1310,24 @@ export default function ShopSetupPage() {
     firstName: string;
     lastName: string;
     title: string;
+    email?: string | null;
     shopUserId: string | null;
+    invitationId: string | null;
     pendingInvitationId: string | null;
+    invitationStatus?: string | null;
+    portalStatus?: string | null;
+    blockingBookingCount?: number;
     photoUrl?: string | null;
   }>;
   const selectedMechanicForPhotoDialog =
     photoDialogMechanicId === null
       ? null
       : mechanics.find((mechanic) => mechanic._id === photoDialogMechanicId) ?? null;
+  const selectedMechanicForRemoveDialog =
+    removeMechanicConfirm === null
+      ? null
+      : mechanics.find((mechanic) => mechanic._id === removeMechanicConfirm.mechanicId) ??
+        removeMechanicConfirm;
   const offeredCount = selectedServiceIds.size;
   const stripeRequirements =
     onboardingData.shop?.stripeRequirementsCurrentlyDue ?? [];
@@ -1101,7 +1346,7 @@ export default function ShopSetupPage() {
         </h1>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
           Let&apos;s get your shop ready to receive bookings. This takes about 15
-          minutes — your progress is saved at every step.
+          minutes - your progress is saved at every step.
         </p>
       </div>
 
@@ -1251,14 +1496,16 @@ export default function ShopSetupPage() {
                   onChange={(event) => {
                     const value = event.target.value;
                     setAddressSelectedFromAutocomplete(false);
+                    setHighlightedAddressSuggestionIndex(-1);
                     setDetails((prev) => ({ ...prev, address: value }));
                   }}
+                  onKeyDown={handleAddressInputKeyDown}
                   autoComplete="off"
                   placeholder="1234 Main St"
                   className={inputClass}
                 />
                 <p className="mt-1.5 text-xs text-muted-foreground">
-                  Start typing and pick your address from the suggestions — we&apos;ll fill in the rest.
+                  Start typing and pick your address from the suggestions - we&apos;ll fill in the rest.
                 </p>
                 {(addressLookupLoading || addressSuggestions.length > 0) && (
                   <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-border bg-white shadow-lg">
@@ -1268,13 +1515,18 @@ export default function ShopSetupPage() {
                         Looking up addresses...
                       </div>
                     ) : (
-                      addressSuggestions.map((entry) => (
+                      addressSuggestions.map((entry, index) => (
                         <button
                           key={entry.id}
                           type="button"
                           onMouseDown={(event) => event.preventDefault()}
                           onClick={() => void handleSelectAddressSuggestion(entry)}
-                          className="block w-full border-b border-border px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-muted"
+                          onMouseEnter={() => setHighlightedAddressSuggestionIndex(index)}
+                          className={`block w-full border-b border-border px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-muted ${
+                            addressSuggestions[highlightedAddressSuggestionIndex]?.id === entry.id
+                              ? "bg-muted"
+                              : ""
+                          }`}
                         >
                           <div className="text-sm font-medium text-foreground">
                             {entry.primaryText}
@@ -1509,19 +1761,66 @@ export default function ShopSetupPage() {
                       Select the services this shop should show as available.
                     </p>
                   </div>
-                  <div className="rounded-lg bg-primary/5 px-3 py-1 text-sm font-medium text-primary">
-                    {offeredCount} selected
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allIds = serviceCategories.flatMap((c) =>
+                          c.services.map((s) => s._id)
+                        );
+                        const allSelected =
+                          allIds.length > 0 && allIds.every((id) => selectedServiceIds.has(id));
+                        setSelectedServiceIds(allSelected ? new Set() : new Set(allIds));
+                      }}
+                      className="text-sm font-medium text-primary hover:underline"
+                    >
+                      {(() => {
+                        const allIds = serviceCategories.flatMap((c) =>
+                          c.services.map((s) => s._id)
+                        );
+                        return allIds.length > 0 && allIds.every((id) => selectedServiceIds.has(id))
+                          ? "Clear all"
+                          : "Select all";
+                      })()}
+                    </button>
+                    <div className="rounded-lg bg-primary/5 px-3 py-1 text-sm font-medium text-primary">
+                      {offeredCount} selected
+                    </div>
                   </div>
                 </div>
 
                 <div className="space-y-4">
-                  {onboardingData.serviceCategories.map((category) => (
+                  {serviceCategories
+                    .filter((category) => category.services.length > 0)
+                    .map((category) => {
+                    const categoryIds = category.services.map((s) => s._id);
+                    const allInCategorySelected = categoryIds.every((id) =>
+                      selectedServiceIds.has(id)
+                    );
+                    return (
                     <div
                       key={category.id}
                       className="overflow-hidden rounded-xl border border-border"
                     >
-                      <div className="border-b border-border bg-muted px-4 py-3">
+                      <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-3">
                         <h4 className="text-sm font-semibold text-foreground">{category.name}</h4>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedServiceIds((prev) => {
+                              const next = new Set(prev);
+                              if (allInCategorySelected) {
+                                categoryIds.forEach((id) => next.delete(id));
+                              } else {
+                                categoryIds.forEach((id) => next.add(id));
+                              }
+                              return next;
+                            })
+                          }
+                          className="text-xs font-medium text-primary hover:underline"
+                        >
+                          {allInCategorySelected ? "Clear" : "Select all"}
+                        </button>
                       </div>
                       <div className="divide-y divide-gray-100">
                         {category.services.map((service) => {
@@ -1562,7 +1861,8 @@ export default function ShopSetupPage() {
                         })}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1644,9 +1944,7 @@ export default function ShopSetupPage() {
                   />
                 </div>
                 <div className="md:col-span-3">
-                  <label className={labelClass}>
-                    Email Address <span className="text-destructive">*</span>
-                  </label>
+                  <label className={labelClass}>Email Address</label>
                   <input
                     type="email"
                     value={mechanicForm.email}
@@ -1672,7 +1970,7 @@ export default function ShopSetupPage() {
                     ) : (
                       <Wrench className="mr-2 h-4 w-4" />
                     )}
-                    Send mechanic invitation
+                    {mechanicForm.email.trim() ? "Save and invite mechanic" : "Save mechanic"}
                   </button>
                 </div>
               </div>
@@ -1685,7 +1983,7 @@ export default function ShopSetupPage() {
 
               {mechanicInviteSuccess && (
                 <div className="rounded-xl border border-success/20 bg-success/10 px-4 py-3 text-sm text-success">
-                  Invitation sent successfully.
+                  Mechanic saved successfully.
                 </div>
               )}
 
@@ -1709,7 +2007,7 @@ export default function ShopSetupPage() {
                         Your team will appear here
                       </p>
                       <p className="mt-1 text-xs">
-                        Invite your first mechanic using the form above.
+                        Add your first mechanic using the form above.
                       </p>
                     </div>
                   ) : null
@@ -1727,7 +2025,7 @@ export default function ShopSetupPage() {
                           className="group relative h-14 w-14 shrink-0 disabled:cursor-wait disabled:opacity-80"
                           aria-label={`Add a profile photo for ${mechanic.firstName} ${mechanic.lastName}`}
                         >
-                          <div className="h-14 w-14 overflow-hidden rounded-lg border border-input bg-slate-700 text-white transition-colors group-hover:border-blue-300 group-hover:bg-slate-800">
+                          <div className="h-14 w-14 overflow-hidden rounded-full border border-input bg-slate-700 text-white transition-colors group-hover:border-blue-300 group-hover:bg-slate-800">
                             {mechanic.photoUrl ? (
                               <img
                                 src={mechanic.photoUrl}
@@ -1739,9 +2037,9 @@ export default function ShopSetupPage() {
                                 {getInitials(mechanic.firstName, mechanic.lastName)}
                               </div>
                             )}
-                            <span className="absolute inset-0 rounded-lg bg-black/0 transition-colors group-hover:bg-black/10" />
+                            <span className="absolute inset-0 rounded-full bg-black/0 transition-colors group-hover:bg-black/10" />
                           </div>
-                          <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-lg bg-primary text-white ring-2 ring-white">
+                          <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-white ring-2 ring-white">
                             {uploadingMechanicId === mechanic._id ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             ) : (
@@ -1755,31 +2053,55 @@ export default function ShopSetupPage() {
                             {mechanic.firstName} {mechanic.lastName}
                           </p>
                           <p className="mt-1 text-sm text-muted-foreground">
-                            {mechanic.pendingInvitationId
-                              ? "Invitation pending"
-                              : mechanic.title || "Mechanic"}
+                            {mechanic.title || "Mechanic"}
                           </p>
                           <p className="mt-1 text-xs font-medium text-primary">
-                            {mechanic.shopUserId
-                              ? "Click to add a photo."
-                              : "Click the photo to view options. Upload is available after acceptance."}
+                            {getMechanicPortalStatusLabel(mechanic.portalStatus)}
                           </p>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleRemoveMechanic({
-                            mechanicId: mechanic._id,
-                            shopUserId: mechanic.shopUserId,
-                            pendingInvitationId: mechanic.pendingInvitationId,
-                          })
-                        }
-                        className="inline-flex items-center gap-2 rounded-lg border border-destructive/20 px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        Remove
-                      </button>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {mechanic.portalStatus !== "active" && (
+                          <button
+                            type="button"
+                            onClick={() => void handleInviteExistingMechanic(mechanic)}
+                            disabled={mechanicInviteActionId === mechanic._id}
+                            className="inline-flex items-center gap-2 rounded-lg border border-input px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {mechanicInviteActionId === mechanic._id && (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            )}
+                            {getMechanicInviteLabel(mechanic.portalStatus)}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if ((mechanic.blockingBookingCount ?? 0) > 0) {
+                              setStepError(
+                                "This mechanic has active bookings or jobs that must be completed or reassigned first."
+                              );
+                              return;
+                            }
+                            setRemoveMechanicConfirm({
+                              mechanicId: mechanic._id,
+                              shopUserId: mechanic.shopUserId,
+                              pendingInvitationId: mechanic.pendingInvitationId,
+                              firstName: mechanic.firstName,
+                              lastName: mechanic.lastName,
+                            });
+                          }}
+                          disabled={removingMechanicId === mechanic._id}
+                          className="inline-flex items-center gap-2 rounded-lg border border-destructive/20 px-3 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10"
+                        >
+                          {removingMechanicId === mechanic._id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
+                          {removingMechanicId === mechanic._id ? "Removing..." : "Remove"}
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -1804,18 +2126,10 @@ export default function ShopSetupPage() {
                 maxWidthClassName="max-w-md"
               >
                 <div className="space-y-3">
-                  {!selectedMechanicForPhotoDialog?.shopUserId && (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                      This mechanic needs to accept the invitation before a photo can be added or removed.
-                    </div>
-                  )}
                   <button
                     type="button"
                     onClick={handleChooseMechanicPhoto}
-                    disabled={
-                      !selectedMechanicForPhotoDialog?.shopUserId ||
-                      uploadingMechanicId === selectedMechanicForPhotoDialog?._id
-                    }
+                    disabled={uploadingMechanicId === selectedMechanicForPhotoDialog?._id}
                     className="inline-flex h-12 w-full items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-white transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Add photo
@@ -1824,7 +2138,6 @@ export default function ShopSetupPage() {
                     type="button"
                     onClick={handleRemoveMechanicPhoto}
                     disabled={
-                      !selectedMechanicForPhotoDialog?.shopUserId ||
                       !selectedMechanicForPhotoDialog?.photoUrl ||
                       uploadingMechanicId === selectedMechanicForPhotoDialog?._id
                     }
@@ -1842,6 +2155,24 @@ export default function ShopSetupPage() {
                 </div>
               </ConfirmationDialog>
 
+              <RemoveConfirmationDialog
+                open={removeMechanicConfirm !== null}
+                title="Remove mechanic?"
+                subjectName={
+                  selectedMechanicForRemoveDialog
+                    ? `${selectedMechanicForRemoveDialog.firstName} ${selectedMechanicForRemoveDialog.lastName}`
+                    : undefined
+                }
+                confirmLabel="Remove mechanic"
+                isSubmitting={!!removingMechanicId}
+                submittingLabel="Removing..."
+                onClose={() => setRemoveMechanicConfirm(null)}
+                onConfirm={() => {
+                  if (!removeMechanicConfirm) return;
+                  void handleRemoveMechanic(removeMechanicConfirm);
+                }}
+              />
+
               <div className="flex justify-between pt-2">
                 <button
                   type="button"
@@ -1854,16 +2185,12 @@ export default function ShopSetupPage() {
                   type="button"
                   onClick={() => {
                     clearBanners();
-                    if (mechanics.length === 0) {
-                      setStepError("Add at least one mechanic before continuing.");
-                      return;
-                    }
                     setCurrentStep(4);
                   }}
                   className={`${stepButtonClass} border-blue-600 bg-primary text-white hover:bg-primary/90`}
                 >
                   <ChevronRight className="mr-2 h-4 w-4" />
-                  Continue
+                  {mechanics.length === 0 ? "Skip for now" : "Continue"}
                 </button>
               </div>
             </div>
@@ -1931,7 +2258,7 @@ export default function ShopSetupPage() {
                     ) : null}
                   </div>
                   <p className="mt-3 text-xs text-muted-foreground">
-                    Otopair never sees or stores your bank details — Stripe handles everything.
+                    Otopair never sees or stores your bank details - Stripe handles everything.
                   </p>
                 </div>
 

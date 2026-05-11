@@ -15,6 +15,7 @@ import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
 } from "@/components/reschedule-confirmation-dialog";
 import {
+  AlertTriangle,
   ArrowUpRight,
   BadgeDollarSign,
   CalendarClock,
@@ -24,6 +25,9 @@ import {
   Store,
 } from "lucide-react";
 import MechanicDashboard from "./mechanic-dashboard";
+import LateStartReviewDialog, {
+  type LateStartReviewView,
+} from "@/components/late-start-review-dialog";
 
 const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
 
@@ -74,6 +78,18 @@ function formatScheduledDateLabel(dateString: string): string {
   return date.toLocaleDateString("en-US", {
     month: "long",
     day: "numeric",
+  });
+}
+
+function formatTimeLabel(hhmm?: string | null): string {
+  if (!hhmm) return "Time TBD";
+  const [hours, minutes] = hhmm.split(":").map(Number);
+  const date = new Date();
+  date.setHours(hours, minutes, 0, 0);
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
   });
 }
 
@@ -235,6 +251,13 @@ function OwnerDashboardPage({
     shopId?: string;
     userRole?: string;
     mechanics?: Array<{ _id: string; name: string }>;
+    hours?: Array<{
+      _id: string;
+      dayOfWeek: number;
+      openTime: string;
+      closeTime: string;
+      isClosed: boolean;
+    }>;
   } | null;
 }) {
   const { user } = useUser();
@@ -246,6 +269,9 @@ function OwnerDashboardPage({
     useState<RescheduleConfirmationProposal | null>(null);
   const [rescheduleError, setRescheduleError] = useState("");
   const [isRescheduling, setIsRescheduling] = useState(false);
+  const [selectedLateStartReviewId, setSelectedLateStartReviewId] = useState<string | null>(null);
+  const [lateStartReviewError, setLateStartReviewError] = useState("");
+  const [isSubmittingLateStartReview, setIsSubmittingLateStartReview] = useState(false);
   const jobDetailRef = useRef<JobDetailPanelHandle>(null);
   const selectedJob = useQuery(
     api.bookings.getJobDetail,
@@ -270,9 +296,20 @@ function OwnerDashboardPage({
     api.job_actuals.getPrefillData,
     actualsBookingId ? { bookingId: actualsBookingId } : "skip",
   );
+  const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
   const mechanics = useMemo(() => context?.mechanics ?? [], [context?.mechanics]);
+  const selectedLateStartReview = useMemo<LateStartReviewView | null>(() => {
+    if (!lateStartReviews || !selectedLateStartReviewId) return null;
+    return (
+      lateStartReviews.find((review) => review._id === selectedLateStartReviewId) ??
+      null
+    );
+  }, [lateStartReviews, selectedLateStartReviewId]);
   const drawerOpen = !!selectedJobId;
   const { setSidebarCompact } = usePortalSidebar();
+  const acceptLateStartReview = useMutation(api.bookings.acceptLateStartReview);
+  const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
+  const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
 
   useEffect(() => {
     setSidebarCompact(drawerOpen);
@@ -284,6 +321,12 @@ function OwnerDashboardPage({
     const timeout = setTimeout(() => setSuccessMessage(""), 3000);
     return () => clearTimeout(timeout);
   }, [successMessage]);
+
+  useEffect(() => {
+    if (!selectedLateStartReviewId || selectedLateStartReview) return;
+    setSelectedLateStartReviewId(null);
+    setLateStartReviewError("");
+  }, [selectedLateStartReviewId, selectedLateStartReview]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -395,6 +438,72 @@ function OwnerDashboardPage({
     }
   }
 
+  async function handleAcceptLateStartReview(reviewId: string) {
+    setLateStartReviewError("");
+    setIsSubmittingLateStartReview(true);
+    try {
+      await acceptLateStartReview({ reviewId: reviewId as Id<"late_start_reviews"> });
+      setSelectedLateStartReviewId(null);
+      setSuccessMessage("Late-start delay applied");
+    } catch (error: unknown) {
+      setLateStartReviewError(
+        error instanceof Error ? error.message : "Could not apply the late-start delay.",
+      );
+    } finally {
+      setIsSubmittingLateStartReview(false);
+    }
+  }
+
+  async function handleDenyLateStartReview(reviewId: string) {
+    setLateStartReviewError("");
+    setIsSubmittingLateStartReview(true);
+    try {
+      await denyLateStartReview({ reviewId: reviewId as Id<"late_start_reviews"> });
+      setSelectedLateStartReviewId(null);
+      setSuccessMessage("Late-start delay snoozed until the next checkpoint");
+    } catch (error: unknown) {
+      setLateStartReviewError(
+        error instanceof Error ? error.message : "Could not snooze the late-start delay.",
+      );
+    } finally {
+      setIsSubmittingLateStartReview(false);
+    }
+  }
+
+  async function handleApplyManualLateStartReview(
+    reviewId: string,
+    targets: Array<{
+      bookingId: string;
+      newScheduledDate: string;
+      newScheduledTime: string;
+      newMechanicId?: string;
+    }>,
+  ) {
+    setLateStartReviewError("");
+    setIsSubmittingLateStartReview(true);
+    try {
+      await applyManualLateStartReview({
+        reviewId: reviewId as Id<"late_start_reviews">,
+        manualTargets: targets.map((target) => ({
+          bookingId: target.bookingId as Id<"bookings">,
+          newScheduledDate: target.newScheduledDate,
+          newScheduledTime: target.newScheduledTime,
+          newMechanicId: target.newMechanicId
+            ? (target.newMechanicId as Id<"mechanics">)
+            : undefined,
+        })),
+      });
+      setSelectedLateStartReviewId(null);
+      setSuccessMessage("Manual late-start delay applied");
+    } catch (error: unknown) {
+      setLateStartReviewError(
+        error instanceof Error ? error.message : "Could not apply the manual late-start delay.",
+      );
+    } finally {
+      setIsSubmittingLateStartReview(false);
+    }
+  }
+
   if (dashboard === undefined) {
     return (
       <div className="space-y-6">
@@ -416,7 +525,8 @@ function OwnerDashboardPage({
             <div className="h-6 w-40 rounded bg-muted" />
             <div className="mt-2 h-4 w-72 rounded bg-muted" />
           </div>
-          <div className="mt-6 grid gap-4 xl:grid-cols-3">
+          <div className="mt-6 grid gap-4 xl:grid-cols-4">
+            <PendingActionSkeletonCard />
             <PendingActionSkeletonCard />
             <PendingActionSkeletonCard />
             <PendingActionSkeletonCard />
@@ -450,10 +560,27 @@ function OwnerDashboardPage({
   const ownerInitials = `${user?.firstName?.[0] ?? ""}${user?.lastName?.[0] ?? ""}`.toUpperCase() || "OW";
   const todayLabel = formatLongDate(new Date());
   const hasScheduledBookings = dashboard.todaySchedule.some((column) => column.bookings.length > 0);
+  const lateStartReviewCount = lateStartReviews?.length ?? 0;
   const hasPendingActions =
     dashboard.pendingActions.jobsToAcceptCount > 0 ||
     dashboard.pendingActions.actualsNeededCount > 0 ||
-    dashboard.pendingActions.invitesPendingCount > 0;
+    dashboard.pendingActions.invitesPendingCount > 0 ||
+    lateStartReviewCount > 0;
+  const todayScheduleRows = dashboard.todaySchedule
+    .flatMap((column) =>
+      column.bookings.map((booking) => ({
+        booking,
+        mechanicName: column.mechanicName,
+        mechanicFirstName: column.firstName,
+        mechanicLastName: column.lastName,
+        mechanicPhotoUrl: column.photoUrl,
+      }))
+    )
+    .sort((left, right) => {
+      const leftTime = left.booking.scheduledTime ?? "";
+      const rightTime = right.booking.scheduledTime ?? "";
+      return String(leftTime).localeCompare(String(rightTime));
+    });
 
   return (
     <>
@@ -520,13 +647,15 @@ function OwnerDashboardPage({
             }
             href="/bookings?filter=pending"
           />
-          <DashboardStatCard
-            icon={BadgeDollarSign}
-            label="This week's revenue"
-            value={formatCurrency(dashboard.stats.weekRevenue)}
-            sublabel="Captured payments this week"
-            accentClassName="text-success"
-          />
+          {context?.userRole !== "front_desk" && (
+            <DashboardStatCard
+              icon={BadgeDollarSign}
+              label="This week's revenue"
+              value={formatCurrency(dashboard.stats.weekRevenue)}
+              sublabel="Captured payments this week"
+              accentClassName="text-success"
+            />
+          )}
           <DashboardStatCard
             icon={Star}
             label="Shop rating"
@@ -556,7 +685,7 @@ function OwnerDashboardPage({
             </div>
           </div>
 
-          <div className="mt-6 grid gap-4 xl:grid-cols-3">
+          <div className="mt-6 grid gap-4 xl:grid-cols-4">
             <div className="flex max-h-[32rem] flex-col rounded-2xl border border-border bg-muted/70 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -603,6 +732,86 @@ function OwnerDashboardPage({
                 className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
               >
                 View all bookings
+                <ArrowUpRight className="h-4 w-4" />
+              </Link>
+            </div>
+
+            <div className="flex max-h-[32rem] flex-col rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                    <AlertTriangle className="h-4 w-4 text-amber-700" />
+                    Late start decisions
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Delay warnings that need review before auto-apply
+                  </p>
+                </div>
+                {lateStartReviewCount > 0 ? (
+                  <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">
+                    {lateStartReviewCount}
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
+                {!lateStartReviews ? (
+                  <EmptyCard
+                    title="Loading late-start reviews"
+                    description="Checking whether any upcoming bookings need a forced delay."
+                  />
+                ) : lateStartReviews.length === 0 ? (
+                  <EmptyCard
+                    title="No late-start decisions"
+                    description="Warnings about delayed booking chains will appear here."
+                  />
+                ) : (
+                  lateStartReviews.map((review) => (
+                    <button
+                      key={review._id}
+                      type="button"
+                      onClick={() => {
+                        setLateStartReviewError("");
+                        setSelectedLateStartReviewId(review._id);
+                      }}
+                      className="block w-full rounded-2xl border border-amber-200 bg-white/90 p-4 text-left transition-[border-color,box-shadow,background-color] hover:border-amber-300 hover:bg-white hover:shadow-sm"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-foreground">
+                            {review.upstreamCustomerName}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {formatTimeLabel(review.upstreamScheduledTime)}
+                            {" "}with {review.upstreamMechanicName ?? "an assigned mechanic"}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+                          +{review.cycleMinutes}m
+                        </span>
+                      </div>
+                      <p className="mt-3 text-xs text-amber-900">
+                        {review.status === "blocked_manual_review"
+                          ? "Automatic delay could not be built safely. A manual move is required."
+                          : `Auto-applies at ${new Date(review.decisionDueAtMs).toLocaleTimeString("en-US", {
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })} if nobody responds.`}
+                      </p>
+                      <p className="mt-2 text-xs font-medium text-amber-800">
+                        {review.proposals.length} affected booking
+                        {review.proposals.length === 1 ? "" : "s"}
+                      </p>
+                    </button>
+                  ))
+                )}
+              </div>
+
+              <Link
+                href="/schedule"
+                className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
+              >
+                Open schedule
                 <ArrowUpRight className="h-4 w-4" />
               </Link>
             </div>
@@ -715,22 +924,8 @@ function OwnerDashboardPage({
           </div>
         ) : (
           <ul className="mt-6 max-h-[32rem] space-y-2 overflow-y-auto pr-1">
-            {dashboard.todaySchedule
-              .flatMap((column: any) =>
-                column.bookings.map((booking: any) => ({
-                  booking,
-                  mechanicName: column.mechanicName,
-                  mechanicFirstName: column.firstName,
-                  mechanicLastName: column.lastName,
-                  mechanicPhotoUrl: column.photoUrl,
-                }))
-              )
-              .sort((a: any, b: any) => {
-                const aTime = a.booking.scheduledTime ?? "";
-                const bTime = b.booking.scheduledTime ?? "";
-                return String(aTime).localeCompare(String(bTime));
-              })
-              .map(({ booking, mechanicName, mechanicFirstName, mechanicLastName, mechanicPhotoUrl }: any) => {
+            {todayScheduleRows
+              .map(({ booking, mechanicName, mechanicFirstName, mechanicLastName, mechanicPhotoUrl }) => {
                 const isSelected = selectedJobId === booking._id;
                 return (
                   <li key={String(booking._id)}>
@@ -752,6 +947,11 @@ function OwnerDashboardPage({
                           {booking.customerDisplayName}
                         </p>
                         <p className="truncate text-sm text-muted-foreground">{booking.vehicle}</p>
+                        {booking.vin ? (
+                          <p className="truncate font-mono text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                            VIN {booking.vin}
+                          </p>
+                        ) : null}
                         {booking.serviceSummary ? (
                           <p className="truncate text-xs text-muted-foreground">
                             {booking.serviceSummary}
@@ -801,11 +1001,11 @@ function OwnerDashboardPage({
 
         <div
           className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-            drawerOpen ? "w-[504px]" : "w-0"
+            drawerOpen ? "w-[552px]" : "w-0"
           }`}
         >
           <div
-            className={`fixed right-6 top-6 z-20 flex h-[calc(100vh-3rem)] max-h-[calc(100vh-3rem)] w-[480px] flex-col overflow-hidden rounded-2xl border border-border bg-card transition-all duration-200 ease-out ${
+            className={`fixed right-6 top-6 z-20 flex h-[calc(100vh-3rem)] max-h-[calc(100vh-3rem)] w-[528px] flex-col overflow-hidden rounded-2xl border border-border bg-card transition-all duration-200 ease-out ${
               drawerOpen
                 ? "translate-x-0 opacity-100"
                 : "pointer-events-none translate-x-6 opacity-0"
@@ -834,6 +1034,33 @@ function OwnerDashboardPage({
         onCancel={() => setRescheduleProposal(null)}
         onConfirm={() => void handleConfirmReschedule()}
         reserveOriginalSlotMessage="The original time will be reserved until the customer responds. If they don't respond within 24 hours, the original booking slot will be restored automatically."
+      />
+
+      <LateStartReviewDialog
+        review={selectedLateStartReview}
+        mechanics={mechanics}
+        shopHours={context?.hours ?? []}
+        error={lateStartReviewError}
+        isSubmitting={isSubmittingLateStartReview}
+        onClose={() => {
+          setLateStartReviewError("");
+          setSelectedLateStartReviewId(null);
+        }}
+        onAccept={() =>
+          selectedLateStartReview
+            ? void handleAcceptLateStartReview(selectedLateStartReview._id)
+            : undefined
+        }
+        onDeny={() =>
+          selectedLateStartReview
+            ? void handleDenyLateStartReview(selectedLateStartReview._id)
+            : undefined
+        }
+        onApplyManual={(targets) =>
+          selectedLateStartReview
+            ? void handleApplyManualLateStartReview(selectedLateStartReview._id, targets)
+            : undefined
+        }
       />
 
       {successMessage && !rescheduleProposal ? (

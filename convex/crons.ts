@@ -1,6 +1,5 @@
 import { cronJobs } from "convex/server";
 import { internal } from "./_generated/api";
-import { isLateStartTestModeEnabled } from "./lib/late_start";
 
 const crons = cronJobs();
 
@@ -46,19 +45,5 @@ crons.interval(
   { minutes: 15 },
   internal.bookings.revertExpiredReschedules,
 );
-
-crons.interval(
-  "process-overrun-checkins",
-  { minutes: 1 },
-  internal.bookings.processOverrunCheckins,
-);
-
-if (!isLateStartTestModeEnabled()) {
-  crons.interval(
-    "process-customer-late-monitors",
-    { minutes: 1 },
-    internal.bookings.processCustomerLateMonitors,
-  );
-}
 
 export default crons;

@@ -22,7 +22,11 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
     "pending_customer_acceptance",
   ],
   confirmed: ["vehicle_at_shop", "cancelled", "no_show", "pending_customer_acceptance"],
-  vehicle_at_shop: ["in_progress", "cancelled", "pending_customer_acceptance"],
+  vehicle_at_shop: [
+    "in_progress",
+    "cancelled",
+    "pending_customer_acceptance",
+  ],
   pending_customer_acceptance: [
     "pending",
     "pending_shop_acceptance",

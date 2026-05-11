@@ -215,31 +215,6 @@ const MONTH_STATUS_ORDER = [
   "no_show",
 ];
 
-const OVERRUN_EXTENSION_OPTIONS = [15, 30, 45, 60];
-
-type CustomerLateAlertView = {
-  _id: string;
-  bookingId: string;
-  customerName: string;
-  mechanicName?: string | null;
-  scheduledDate?: string | null;
-  scheduledTime?: string | null;
-  serviceSummary?: string | null;
-  thresholdDueAtMs: number;
-};
-
-type OverrunCheckInView = {
-  _id: string;
-  status: string;
-  bookingId: string;
-  customerName: string;
-  mechanicName?: string | null;
-  scheduledDate?: string | null;
-  scheduledTime?: string | null;
-  serviceSummary?: string | null;
-  defaultApplyAtMs: number;
-};
-
 /* ------------------------------------------------------------------ */
 /*  Block time type defaults                                            */
 /* ------------------------------------------------------------------ */
@@ -267,16 +242,18 @@ export default function SchedulePage() {
   const [rescheduleProposal, setRescheduleProposal] = useState<RescheduleProposal | null>(null);
   const [rescheduleError, setRescheduleError] = useState("");
   const [isRescheduling, setIsRescheduling] = useState(false);
+  const [noShowReschedule, setNoShowReschedule] = useState<{
+    bookingId: string;
+    customerName: string;
+    date: string;
+    time: string;
+    mechanicId: string;
+  } | null>(null);
+  const [noShowRescheduleError, setNoShowRescheduleError] = useState("");
+  const [isSubmittingNoShowReschedule, setIsSubmittingNoShowReschedule] = useState(false);
   const [selectedLateStartReviewId, setSelectedLateStartReviewId] = useState<string | null>(null);
   const [lateStartReviewError, setLateStartReviewError] = useState("");
   const [isSubmittingLateStartReview, setIsSubmittingLateStartReview] = useState(false);
-  const [customerLateActionId, setCustomerLateActionId] = useState<string | null>(null);
-  const [customerLateReschedule, setCustomerLateReschedule] = useState<{
-    alertId: string;
-    date: string;
-    time: string;
-  } | null>(null);
-  const [overrunActionId, setOverrunActionId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<
     | { type: "block"; info: ContextMenuCellInfo }
     | { type: "unblock"; slotId: string; clientX: number; clientY: number }
@@ -345,9 +322,9 @@ export default function SchedulePage() {
   const deleteBlockTimeType = useMutation(api.schedule.deleteBlockTimeType);
 
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
+  const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
   const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
   const rescheduleFromNoShowAlert = useMutation(api.bookings.rescheduleFromNoShowAlert);
-  const answerOverrunCheckIn = useMutation(api.bookings.answerOverrunCheckIn);
   const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
   const acceptLateStartReview = useMutation(api.bookings.acceptLateStartReview);
   const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
@@ -361,12 +338,9 @@ export default function SchedulePage() {
   const legendRef = useRef<HTMLDivElement>(null);
   const context = useQuery(api.schedule.getScheduleContext);
   const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
-  const customerLateAlerts = useQuery(api.bookings.getOpenCustomerLateAlerts) as
-    | CustomerLateAlertView[]
-    | undefined;
-  const overrunCheckIns = useQuery(api.bookings.getOpenJobOverrunCheckins) as
-    | OverrunCheckInView[]
-    | undefined;
+  const customerLateAlerts = useQuery(api.bookings.getOpenCustomerLateAlerts);
+  const frontDeskOverrunAlerts = useQuery(api.bookings.getOpenFrontDeskOverrunAlerts);
+  const manualSchedulingAlerts = useQuery(api.bookings.getOpenManualSchedulingAlerts);
 
   const selectedJobDetail = useQuery(
     api.bookings.getJobDetail,
@@ -491,12 +465,12 @@ export default function SchedulePage() {
       if (selectedJobDetail && !jobDetailRef.current?.hasOpenModal()) {
         const s = selectedJobDetail.status;
         const isPending = s === "pending" || s === "pending_shop_acceptance";
-        const canCancel = s === "confirmed" || s === "vehicle_at_shop" || s === "in_progress";
+        const isActive =
+          s === "confirmed" || s === "vehicle_at_shop" || s === "in_progress";
         if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
         if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
-        if (e.key === "h" && s === "confirmed") { e.preventDefault(); jobDetailRef.current?.markVehicleHere(); return; }
-        if (e.key === "r" && s === "in_progress") { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
-        if (e.key === "c" && canCancel) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
+        if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
+        if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
         if (e.key === "a" && !isPending) { e.preventDefault(); jobDetailRef.current?.openAssignDropdown(); return; }
         if (e.key === "t" && s === "vehicle_at_shop" && selectedJobDetail.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
         if (e.key === "s" && !isPending) { e.preventDefault(); jobDetailRef.current?.assignMechanic(); return; }
@@ -637,91 +611,60 @@ export default function SchedulePage() {
     }
   }
 
-  function beginCustomerLateReschedule(alert: CustomerLateAlertView) {
-    setCustomerLateReschedule({
-      alertId: alert._id,
-      date: alert.scheduledDate ?? dateToString(currentDate),
-      time: alert.scheduledTime ?? "09:00",
-    });
+  async function handleMarkVehicleHereFromAlert(bookingId: string) {
+    try {
+      await markVehicleAtShop({ bookingId: bookingId as Id<"bookings"> });
+      setToast({ msg: "Vehicle marked here", key: Date.now() });
+    } catch (err: unknown) {
+      setToast({ msg: err instanceof Error ? err.message : "Could not mark vehicle here", key: Date.now() });
+    }
   }
 
-  async function handleMarkNoShow(alertId: string) {
-    setCustomerLateActionId(alertId);
+  async function handleMarkNoShowFromAlert(bookingId: string) {
     try {
-      await markPostThresholdNoShow({
-        alertId: alertId as Id<"customer_late_alerts">,
-      });
-      if (customerLateReschedule?.alertId === alertId) {
-        setCustomerLateReschedule(null);
-      }
+      await markPostThresholdNoShow({ bookingId: bookingId as Id<"bookings"> });
       setToast({ msg: "Booking marked no-show", key: Date.now() });
     } catch (err: unknown) {
-      setToast({
-        msg: err instanceof Error ? err.message : "Could not mark no-show.",
-        key: Date.now(),
-      });
-    } finally {
-      setCustomerLateActionId(null);
+      setToast({ msg: err instanceof Error ? err.message : "Could not mark no-show", key: Date.now() });
     }
   }
 
-  async function handleCustomerLateReschedule() {
-    if (!customerLateReschedule) return;
-    setCustomerLateActionId(customerLateReschedule.alertId);
+  async function handleSubmitNoShowReschedule() {
+    if (!noShowReschedule) return;
+    setIsSubmittingNoShowReschedule(true);
+    setNoShowRescheduleError("");
     try {
       await rescheduleFromNoShowAlert({
-        alertId: customerLateReschedule.alertId as Id<"customer_late_alerts">,
-        newScheduledDate: customerLateReschedule.date,
-        newScheduledTime: customerLateReschedule.time,
+        bookingId: noShowReschedule.bookingId as Id<"bookings">,
+        newScheduledDate: noShowReschedule.date,
+        newScheduledTime: noShowReschedule.time,
+        newMechanicId: noShowReschedule.mechanicId
+          ? (noShowReschedule.mechanicId as Id<"mechanics">)
+          : undefined,
+        assignmentPreference: noShowReschedule.mechanicId
+          ? "specific_mechanic"
+          : "any",
       });
-      setCustomerLateReschedule(null);
-      setToast({ msg: "Reschedule proposed - awaiting customer approval", key: Date.now() });
+      setNoShowReschedule(null);
+      setToast({ msg: "Booking rescheduled", key: Date.now() });
     } catch (err: unknown) {
-      setToast({
-        msg: err instanceof Error ? err.message : "Could not reschedule booking.",
-        key: Date.now(),
-      });
+      setNoShowRescheduleError(
+        err instanceof Error ? err.message : "Could not reschedule booking.",
+      );
     } finally {
-      setCustomerLateActionId(null);
+      setIsSubmittingNoShowReschedule(false);
     }
   }
 
-  async function handleAnswerOverrun(checkInId: string, answer: "yes" | "no") {
-    setOverrunActionId(checkInId);
-    try {
-      await answerOverrunCheckIn({
-        checkInId: checkInId as Id<"job_overrun_checkins">,
-        answer,
-      });
-      setToast({
-        msg: answer === "yes" ? "Overrun check-in resolved" : "Extension requested",
-        key: Date.now(),
-      });
-    } catch (err: unknown) {
-      setToast({
-        msg: err instanceof Error ? err.message : "Could not answer overrun check-in.",
-        key: Date.now(),
-      });
-    } finally {
-      setOverrunActionId(null);
-    }
-  }
-
-  async function handleAnswerOverrunExtension(checkInId: string, extensionMinutes: number) {
-    setOverrunActionId(checkInId);
+  async function handleOverrunExtension(bookingId: string, extensionMinutes: number) {
     try {
       await answerOverrunExtension({
-        checkInId: checkInId as Id<"job_overrun_checkins">,
+        bookingId: bookingId as Id<"bookings">,
         extensionMinutes,
       });
-      setToast({ msg: `${extensionMinutes} minute extension applied`, key: Date.now() });
+      setToast({ msg: `Overrun extended ${extensionMinutes} minutes`, key: Date.now() });
     } catch (err: unknown) {
-      setToast({
-        msg: err instanceof Error ? err.message : "Could not apply overrun extension.",
-        key: Date.now(),
-      });
-    } finally {
-      setOverrunActionId(null);
+      setToast({ msg: err instanceof Error ? err.message : "Could not save overrun response", key: Date.now() });
     }
   }
 
@@ -1301,236 +1244,130 @@ export default function SchedulePage() {
       </div>
 
       {customerLateAlerts && customerLateAlerts.length > 0 ? (
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 shadow-sm">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-rose-700">
-                <AlertTriangle className="h-4 w-4" />
-                <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-                  No-show decisions
-                </span>
-              </div>
-              <h2 className="mt-2 text-lg font-semibold text-rose-950">
-                {customerLateAlerts.length === 1
-                  ? "1 customer is past the no-show threshold"
-                  : `${customerLateAlerts.length} customers are past the no-show threshold`}
-              </h2>
-            </div>
+        <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
+          <div className="flex items-center gap-2 text-orange-700">
+            <AlertTriangle className="h-4 w-4" />
+            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+              No-show decisions
+            </span>
           </div>
-
           <div className="mt-4 grid gap-3 xl:grid-cols-2">
-            {customerLateAlerts.map((alert) => {
-              const isRescheduling = customerLateReschedule?.alertId === alert._id;
-              const isBusy = customerLateActionId === alert._id;
-              return (
-                <div
-                  key={alert._id}
-                  className="rounded-2xl border border-rose-200 bg-white/90 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground">
-                        {alert.customerName}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {alert.scheduledTime
-                          ? formatTimeLabel(alert.scheduledTime)
-                          : "Time TBD"}
-                        {" "}with {alert.mechanicName ?? "an assigned mechanic"}
-                      </p>
-                      {alert.serviceSummary ? (
-                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
-                          {alert.serviceSummary}
-                        </p>
-                      ) : null}
-                    </div>
-                    <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold text-rose-800">
-                      Since {formatDecisionDueTime(alert.thresholdDueAtMs)}
-                    </span>
+            {customerLateAlerts.map((alert) => (
+              <div
+                key={String(alert._id)}
+                className="rounded-2xl border border-orange-200 bg-white/90 p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground">
+                      {alert.customerName}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
+                      {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
+                    </p>
+                    <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                      {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
+                    </p>
                   </div>
-
-                  {isRescheduling ? (
-                    <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
-                      <input
-                        type="date"
-                        value={customerLateReschedule.date}
-                        onChange={(event) =>
-                          setCustomerLateReschedule((current) =>
-                            current
-                              ? { ...current, date: event.target.value }
-                              : current
-                          )
-                        }
-                        className="h-9 rounded-lg border border-border bg-white px-3 text-sm text-foreground outline-none focus:border-primary"
-                      />
-                      <Select
-                        selectedKey={customerLateReschedule.time}
-                        onSelectionChange={(key) =>
-                          setCustomerLateReschedule((current) =>
-                            current ? { ...current, time: String(key) } : current
-                          )
-                        }
-                      >
-                        <SelectTrigger className="h-9 rounded-lg border-border bg-white text-sm px-3">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectPopover placement="bottom start">
-                          <SelectListBox shouldFocusWrap>
-                            {generateTimeOptions().map((option) => (
-                              <SelectItem
-                                key={option.value}
-                                id={option.value}
-                                textValue={option.label}
-                              >
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectListBox>
-                        </SelectPopover>
-                      </Select>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => void handleCustomerLateReschedule()}
-                          disabled={isBusy}
-                          className="inline-flex h-9 items-center justify-center rounded-lg bg-rose-900 px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
-                        >
-                          {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Apply"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCustomerLateReschedule(null)}
-                          disabled={isBusy}
-                          className="inline-flex h-9 items-center justify-center rounded-lg border border-border px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void handleMarkNoShow(alert._id)}
-                        disabled={isBusy}
-                        className="inline-flex items-center gap-2 rounded-lg bg-rose-900 px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
-                      >
-                        {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                        Mark no-show
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => beginCustomerLateReschedule(alert)}
-                        disabled={isBusy}
-                        className="inline-flex items-center rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-medium text-rose-900 transition-colors hover:bg-rose-100 disabled:opacity-60"
-                      >
-                        Reschedule
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
-                        className="inline-flex items-center rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-                      >
-                        Open booking
-                      </button>
-                    </div>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
+                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                  >
+                    Open
+                  </button>
                 </div>
-              );
-            })}
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleMarkVehicleHereFromAlert(String(alert.bookingId))}
+                    className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                  >
+                    Vehicle here
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setNoShowReschedule({
+                        bookingId: String(alert.bookingId),
+                        customerName: alert.customerName,
+                        date: alert.scheduledDate,
+                        time: alert.scheduledTime,
+                        mechanicId: alert.mechanicId ? String(alert.mechanicId) : "",
+                      })
+                    }
+                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                  >
+                    Reschedule
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleMarkNoShowFromAlert(String(alert.bookingId))}
+                    className="rounded-lg border border-orange-300 px-3 py-1.5 text-xs font-medium text-orange-800 transition-colors hover:bg-orange-100"
+                  >
+                    Mark no-show
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       ) : null}
 
-      {overrunCheckIns && overrunCheckIns.length > 0 ? (
-        <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 shadow-sm">
-          <div className="flex items-center gap-2 text-sky-700">
+      {frontDeskOverrunAlerts && frontDeskOverrunAlerts.length > 0 ? (
+        <div className="rounded-2xl border border-cyan-200 bg-cyan-50 p-4 shadow-sm">
+          <div className="flex items-center gap-2 text-cyan-700">
             <Clock className="h-4 w-4" />
             <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-              Overrun check-ins
+              Overrun escalations
             </span>
           </div>
           <div className="mt-4 grid gap-3 xl:grid-cols-2">
-            {overrunCheckIns.map((checkIn) => {
-              const isBusy = overrunActionId === checkIn._id;
-              const needsExtension = checkIn.status.endsWith("_extension");
-              return (
-                <div
-                  key={checkIn._id}
-                  className="rounded-2xl border border-sky-200 bg-white/90 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground">
-                        {checkIn.customerName}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {checkIn.scheduledTime
-                          ? formatTimeLabel(checkIn.scheduledTime)
-                          : "Time TBD"}
-                        {" "}with {checkIn.mechanicName ?? "an assigned mechanic"}
-                      </p>
-                      {checkIn.serviceSummary ? (
-                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
-                          {checkIn.serviceSummary}
-                        </p>
-                      ) : null}
-                    </div>
-                    <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold text-sky-800">
-                      Default {formatDecisionDueTime(checkIn.defaultApplyAtMs)}
-                    </span>
-                  </div>
-
-                  {needsExtension ? (
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      {OVERRUN_EXTENSION_OPTIONS.map((minutes) => (
-                        <button
-                          key={minutes}
-                          type="button"
-                          onClick={() =>
-                            void handleAnswerOverrunExtension(checkIn._id, minutes)
-                          }
-                          disabled={isBusy}
-                          className="inline-flex h-9 min-w-14 items-center justify-center rounded-lg border border-sky-200 bg-white px-3 text-sm font-medium text-sky-900 transition-colors hover:bg-sky-100 disabled:opacity-60"
-                        >
-                          {isBusy ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            `+${minutes}`
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void handleAnswerOverrun(checkIn._id, "yes")}
-                        disabled={isBusy}
-                        className="inline-flex items-center rounded-lg bg-sky-900 px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
-                      >
-                        On track
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleAnswerOverrun(checkIn._id, "no")}
-                        disabled={isBusy}
-                        className="inline-flex items-center rounded-lg border border-sky-200 bg-white px-3.5 py-2 text-sm font-medium text-sky-900 transition-colors hover:bg-sky-100 disabled:opacity-60"
-                      >
-                        Needs time
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedBookingId(checkIn.bookingId as Id<"bookings">)}
-                        className="inline-flex items-center rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-                      >
-                        Open booking
-                      </button>
-                    </div>
-                  )}
+            {frontDeskOverrunAlerts.map((alert) => (
+              <div
+                key={String(alert._id)}
+                className="rounded-2xl border border-cyan-200 bg-white/90 p-4"
+              >
+                <p className="text-sm font-semibold text-foreground">
+                  {alert.customerName}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {alert.serviceSummary}
+                  {alert.mechanicName ? ` · ${alert.mechanicName}` : ""}
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {[15, 30, 45, 60].map((minutes) => (
+                    <button
+                      key={minutes}
+                      type="button"
+                      onClick={() => void handleOverrunExtension(String(alert.bookingId), minutes)}
+                      className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                    >
+                      +{minutes}m
+                    </button>
+                  ))}
                 </div>
-              );
-            })}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {manualSchedulingAlerts && manualSchedulingAlerts.length > 0 ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 shadow-sm">
+          <div className="flex items-center gap-2 text-red-700">
+            <AlertTriangle className="h-4 w-4" />
+            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+              Manual scheduling review
+            </span>
+          </div>
+          <div className="mt-3 space-y-2">
+            {manualSchedulingAlerts.map((alert) => (
+              <div key={String(alert._id)} className="rounded-xl bg-white/90 px-4 py-3 text-sm text-red-900">
+                {alert.reason}
+              </div>
+            ))}
           </div>
         </div>
       ) : null}
@@ -2109,6 +1946,130 @@ export default function SchedulePage() {
 
       </div>{/* end flex row */}
 
+      {noShowReschedule ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center px-4 py-6">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setNoShowReschedule(null)}
+          />
+          <div className="relative z-[91] w-full max-w-lg rounded-2xl border border-border bg-card p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                  Reschedule late customer
+                </p>
+                <h2 className="mt-2 text-lg font-semibold text-foreground">
+                  {noShowReschedule.customerName}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNoShowReschedule(null)}
+                className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <div>
+                <DrawerFieldLabel>Date</DrawerFieldLabel>
+                <input
+                  type="date"
+                  value={noShowReschedule.date}
+                  onChange={(event) =>
+                    setNoShowReschedule((current) =>
+                      current ? { ...current, date: event.target.value } : current,
+                    )
+                  }
+                  className={drawerInputClassName}
+                />
+              </div>
+              <div>
+                <DrawerFieldLabel>Time</DrawerFieldLabel>
+                <Select
+                  selectedKey={noShowReschedule.time}
+                  onSelectionChange={(key) =>
+                    setNoShowReschedule((current) =>
+                      current ? { ...current, time: String(key) } : current,
+                    )
+                  }
+                >
+                  <SelectTrigger className={drawerSelectTriggerClassName}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopover>
+                    <SelectListBox shouldFocusWrap>
+                      {generateTimeOptions().map((option) => (
+                        <SelectItem key={option.value} id={option.value} textValue={option.label}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectListBox>
+                  </SelectPopover>
+                </Select>
+              </div>
+              <div className="sm:col-span-2">
+                <DrawerFieldLabel>Assignment</DrawerFieldLabel>
+                <Select
+                  selectedKey={noShowReschedule.mechanicId || "any"}
+                  onSelectionChange={(key) =>
+                    setNoShowReschedule((current) =>
+                      current
+                        ? {
+                            ...current,
+                            mechanicId: key === "any" ? "" : String(key),
+                          }
+                        : current,
+                    )
+                  }
+                >
+                  <SelectTrigger className={drawerSelectTriggerClassName}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopover>
+                    <SelectListBox shouldFocusWrap>
+                      <SelectItem id="any" textValue="Any mechanic">
+                        <span className="text-muted-foreground">Any mechanic</span>
+                      </SelectItem>
+                      {mechanics.map((mechanic) => (
+                        <SelectItem key={mechanic._id} id={mechanic._id} textValue={mechanic.name}>
+                          {mechanic.name}
+                        </SelectItem>
+                      ))}
+                    </SelectListBox>
+                  </SelectPopover>
+                </Select>
+              </div>
+            </div>
+            {noShowRescheduleError ? (
+              <p className="mt-4 text-sm text-destructive">
+                {noShowRescheduleError}
+              </p>
+            ) : null}
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setNoShowReschedule(null)}
+                className="rounded-lg border border-border px-3.5 py-2 text-sm font-medium transition-colors hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSubmitNoShowReschedule()}
+                disabled={isSubmittingNoShowReschedule}
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+              >
+                {isSubmittingNoShowReschedule ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : null}
+                Reschedule
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <RescheduleConfirmationDialog
         proposal={rescheduleProposal}
         error={rescheduleError}
@@ -2257,7 +2218,7 @@ export default function SchedulePage() {
       )}
 
       {/* Success toast — shown only when blur-overlay confirmations are not open */}
-      {toast && !rescheduleProposal && !blockDayConfirm && (
+      {toast && !rescheduleProposal && !noShowReschedule && !blockDayConfirm && (
         <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
           {toast.msg}
         </div>

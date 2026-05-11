@@ -13,7 +13,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Check, Clock, Copy, History, Loader2, RotateCcw, X } from "lucide-react";
+import { Check, Clock, Copy, Ellipsis, History, Loader2, RotateCcw, X } from "lucide-react";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 import VehiclePassportSection from "@/components/vehicle-passport-section";
@@ -25,6 +25,12 @@ import {
   type ScheduleBooking,
   shouldConfirmMechanicChange,
 } from "@/lib/schedule-overlap";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectItem,
@@ -66,8 +72,17 @@ const CANCEL_REASONS = [
   "Other",
 ];
 
-function getCancelReasons() {
-  return CANCEL_REASONS;
+function getCancelReasons(status?: string | null) {
+  return status === "confirmed" || status === "vehicle_at_shop"
+    ? [
+        CANCEL_REASONS[0],
+        "Customer no-show",
+        CANCEL_REASONS[2],
+        "Shop capacity issue",
+        CANCEL_REASONS[1],
+        CANCEL_REASONS[3],
+      ]
+    : CANCEL_REASONS;
 }
 
 /* ------------------------------------------------------------------ */
@@ -103,19 +118,6 @@ function formatBookingDate(
     day: "numeric",
   });
   return `${dateLabel}, ${timeLabel}`;
-}
-
-function formatClockTime(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function formatAssignmentPreference(preference?: string | null): string {
-  return preference === "specific_mechanic"
-    ? "Specific mechanic"
-    : "Any mechanic";
 }
 
 function pendingCountdown(creationTime: number): string | null {
@@ -154,7 +156,7 @@ function humanizeStatus(
     vehicle_at_shop: "Vehicle Here",
     in_progress: "In Progress",
     completed: "Completed",
-    no_show: "No Show",
+    no_show: "No-show",
     cancelled:
       oldStatus === "pending" || oldStatus === "pending_shop_acceptance"
         ? "Declined"
@@ -185,8 +187,6 @@ function getStatusDescription(
   scheduleChangeMode?: string | null,
 ): string | null {
   if (status === "pending" || status === "pending_shop_acceptance") return "Awaiting shop review";
-  if (status === "confirmed") return "Waiting for vehicle arrival";
-  if (status === "vehicle_at_shop") return "Vehicle checked in, ready to start";
   if (status === "pending_customer_acceptance" && (scheduleChangeMode === "forced_delay" || isForcedDelayReason(reason))) {
     return "Automatic late-start delay pending customer response";
   }
@@ -215,6 +215,9 @@ export interface JobDetailData {
   laborCost: number;
   partsCost: number;
   mechanicId?: Id<"mechanics"> | null;
+  assignmentPreference?: "any" | "specific_mechanic";
+  vehicleArrivedAtMs?: number | null;
+  vehicleArrivedByUserId?: Id<"users"> | null;
   history: Array<{
     _id: Id<"booking_status_history">;
     changed_at: number;
@@ -229,8 +232,6 @@ export interface JobDetailData {
   previousMechanicName?: string | null;
   rescheduleProposedAt?: number | null;
   estimatedLaborMinutes?: number | null;
-  vehicleArrivedAtMs?: number | null;
-  assignmentPreference?: string | null;
   scheduleChangeMode?: string | null;
   scheduleChangeSourceBookingId?: Id<"bookings"> | null;
   customerCanRestoreOriginal?: boolean | null;
@@ -258,7 +259,6 @@ export interface JobDetailData {
 export interface JobDetailPanelHandle {
   accept: () => void;
   showDecline: () => void;
-  markVehicleHere: () => void;
   startJob: () => void;
   showMarkCompleted: () => void;
   showCancelJob: () => void;
@@ -340,9 +340,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const copyEmailTimeoutRef = useRef<number | null>(null);
 
     const acceptJob = useMutation(api.bookings.accept);
-    const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
+    const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+    const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
     const savePrejob = useMutation(api.bookings.savePrejob);
     const startWithPrejob = useMutation(api.bookings.startWithPrejob);
@@ -371,15 +372,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         job.status === "confirmed" ||
         job.status === "vehicle_at_shop");
     const currentMechanicId = job?.mechanicId ? String(job.mechanicId) : "";
+    const currentAssignmentKey =
+      job?.assignmentPreference === "any" ? "" : currentMechanicId;
     const hasMechanicSelectionChange =
-      assigningMechanicId !== currentMechanicId;
+      assigningMechanicId !== currentAssignmentKey;
     const canSubmitMechanicChange =
       canAssignMechanic &&
-      !!selectedMechanicId &&
       hasMechanicSelectionChange;
     const jobId = job?._id;
     const completedColors = BOOKING_STATUS_VISUALS.completed.calendarColors;
-    const cancelReasonOptions = getCancelReasons();
+    const cancelReasonOptions = getCancelReasons(job?.status);
     const showAssignMechanicError = actionError.startsWith(
       "Cannot assign this mechanic"
     );
@@ -397,7 +399,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setActionError("");
       setShowPrejobDialog(false);
       setShowPostjobDialog(false);
-      setAssigningMechanicId(currentMechanicId);
+      setAssigningMechanicId(currentAssignmentKey);
       setShowActualsDialog(false);
       setActualsDialogMode("complete");
       setCopiedField(null);
@@ -405,7 +407,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         window.clearTimeout(copyEmailTimeoutRef.current);
         copyEmailTimeoutRef.current = null;
       }
-    }, [jobId, currentMechanicId]);
+    }, [jobId, currentAssignmentKey]);
 
     // Reset decline modal state when it closes
     useEffect(() => {
@@ -457,22 +459,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       } catch (err: unknown) {
         setActionError(
           err instanceof Error ? err.message : "Could not update status.",
-        );
-      } finally {
-        setIsActioning(false);
-      }
-    }
-
-    async function handleVehicleHere() {
-      if (!job?._id) return;
-      setActionError("");
-      setIsActioning(true);
-      try {
-        await markVehicleAtShop({ bookingId: job._id });
-        onSuccess?.("Vehicle marked here");
-      } catch (err: unknown) {
-        setActionError(
-          err instanceof Error ? err.message : "Could not mark vehicle here.",
         );
       } finally {
         setIsActioning(false);
@@ -545,9 +531,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     async function handleAssignMechanic() {
       if (!canSubmitMechanicChange) return;
-      if (!job?._id || !selectedMechanicId) return;
+      if (!job?._id) return;
       setActionError("");
       const assignmentConflict =
+        selectedMechanicId &&
         scheduleConflicts &&
         getMechanicAssignmentConflict(
           {
@@ -576,6 +563,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
 
       if (
+        selectedMechanicId &&
         shouldConfirmMechanicChange(
           job.mechanicId ? String(job.mechanicId) : undefined,
           String(selectedMechanicId)
@@ -615,10 +603,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       try {
         await updateJob({
           bookingId: job._id,
-          mechanicId: selectedMechanicId as Id<"mechanics">,
+          mechanicId: selectedMechanicId
+            ? (selectedMechanicId as Id<"mechanics">)
+            : null,
+          assignmentPreference: selectedMechanicId
+            ? "specific_mechanic"
+            : "any",
         });
-        setAssigningMechanicId(String(selectedMechanicId));
-        onSuccess?.(job.mechanicId ? "Mechanic reassigned" : "Mechanic assigned");
+        setAssigningMechanicId(selectedMechanicId ? String(selectedMechanicId) : "");
+        onSuccess?.(selectedMechanicId ? "Mechanic locked" : "Any mechanic selected");
       } catch (err: unknown) {
         setActionError(
           err instanceof Error
@@ -633,11 +626,43 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     async function handleStartJob() {
       if (!job?._id || !job.mechanicId) return;
       if (job.status !== "vehicle_at_shop") {
-        setActionError("Mark the vehicle as here before opening the vehicle check.");
+        setActionError("Mark the vehicle here before starting work.");
         return;
       }
       setActionError("");
       setShowPrejobDialog(true);
+    }
+
+    async function handleVehicleAtShop() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await markVehicleAtShop({ bookingId: job._id });
+        onSuccess?.("Vehicle marked here");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not mark vehicle here.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handlePostThresholdNoShow() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await markPostThresholdNoShow({ bookingId: job._id });
+        onSuccess?.("Booking marked no-show");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not mark no-show.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
     }
 
     async function handleCopyValue(
@@ -789,7 +814,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     function handleResetMechanicSelection() {
       setActionError("");
-      setAssigningMechanicId(currentMechanicId);
+      setAssigningMechanicId(currentAssignmentKey);
       requestAnimationFrame(() => {
         wrapperRef.current?.focus();
       });
@@ -802,17 +827,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         handleStatusAction("accept");
       },
       showDecline: () => setShowDeclineModal(true),
-      markVehicleHere: () => {
-        if (job?.status !== "confirmed") return;
-        void handleVehicleHere();
-      },
       startJob: () => {
         handleStartJob();
       },
-      showMarkCompleted: () => {
-        if (job?.status !== "in_progress") return;
-        openPostjobDialog();
-      },
+      showMarkCompleted: () => openPostjobDialog(),
       showCancelJob: () => setShowCancelConfirm(true),
       showCancelReschedule: () => {
         if (!canRestoreOriginalReschedule) return;
@@ -941,8 +959,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           setShowCancelRescheduleConfirm(true);
           return true;
         }
-        if ((e.key === "h" || e.key === "H") && job?.status === "confirmed") {
-          void handleVehicleHere();
+        if ((e.key === "v" || e.key === "V") && job?.status === "confirmed") {
+          handleVehicleAtShop();
           return true;
         }
         if ((e.key === "t" || e.key === "T") && job?.status === "vehicle_at_shop") {
@@ -1145,14 +1163,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           ) : null;
                         })()}
                     </div>
-                    {job.vehicleArrivedAtMs ? (
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        Vehicle here {formatClockTime(job.vehicleArrivedAtMs)}
-                      </p>
-                    ) : null}
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {formatAssignmentPreference(job.assignmentPreference)}
-                    </p>
                   </div>
                 </div>
 
@@ -1164,14 +1174,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 {/* Assign mechanic */}
                 <div className="rounded-2xl bg-muted/20 p-4">
                   <DrawerFieldLabel className="mb-3">
-                    Assigned Mechanic
+                    Assignment
                   </DrawerFieldLabel>
                   <div className="flex flex-wrap gap-2">
                     <div ref={assignTriggerRef}>
                       <Select
                         isDisabled={!canAssignMechanic || isActioning}
                         selectedKey={
-                          assigningMechanicId || "unassigned"
+                          assigningMechanicId || "any"
                         }
                         onOpenChange={(isOpen) => {
                           if (!isOpen) {
@@ -1188,7 +1198,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         onSelectionChange={(key) => {
                           setActionError("");
                           setAssigningMechanicId(
-                            key === "unassigned" ? "" : String(key),
+                            key === "any" ? "" : String(key),
                           );
                           requestAnimationFrame(() => {
                             wrapperRef.current?.focus();
@@ -1211,12 +1221,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           data-assign-dropdown
                         >
                           <SelectListBox shouldFocusWrap>
-                            <SelectItem
-                              id="unassigned"
-                              textValue="Unassigned"
-                            >
+                            <SelectItem id="any" textValue="Any mechanic">
                               <span className="text-muted-foreground">
-                                Unassigned
+                                Any mechanic
                               </span>
                             </SelectItem>
                             {mechanics.map((m) => (
@@ -1295,9 +1302,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   const s = job.status;
                   const canAccept =
                     s === "pending" || s === "pending_shop_acceptance";
-                  const canMarkVehicleHere = s === "confirmed";
                   const canComplete = s === "in_progress";
+                  const canMarkVehicleHere = s === "confirmed";
                   const canStartJob = s === "vehicle_at_shop";
+                  const canMarkNoShow = s === "confirmed";
                   const canDecline =
                     s === "pending" || s === "pending_shop_acceptance";
                   const canCancel =
@@ -1310,7 +1318,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     !canMarkVehicleHere &&
                     !canComplete &&
                     !canDecline &&
-                    !canCancel
+                    !canCancel &&
+                    !canMarkNoShow
                   )
                     return null;
                   return (
@@ -1319,6 +1328,30 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         <DrawerFieldLabel className="mb-0">
                           Actions
                         </DrawerFieldLabel>
+                        {canComplete && job.status === "confirmed" && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                disabled={isActioning}
+                                aria-label="More booking actions"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                              >
+                                <Ellipsis
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onSelect={() => openPostjobDialog()}
+                              >
+                                Mark completed
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {canAccept && (
@@ -1364,20 +1397,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         )}
                         {canMarkVehicleHere && (
                           <button
-                            onClick={handleVehicleHere}
-                            disabled={!job.mechanicId || isActioning}
-                            title={
-                              !job.mechanicId
-                                ? "Assign a mechanic first"
-                                : undefined
-                            }
+                            onClick={handleVehicleAtShop}
+                            disabled={isActioning}
                             className={drawerPrimaryButtonClassName}
                           >
                             {isActioning ? (
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <Check className="h-4 w-4" />
-                            )}
+                            ) : null}
                             Vehicle here
                           </button>
                         )}
@@ -1427,6 +1453,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               </span>
                               ecline
                             </span>
+                          </button>
+                        )}
+                        {canMarkNoShow && (
+                          <button
+                            onClick={handlePostThresholdNoShow}
+                            disabled={isActioning}
+                            className={drawerDestructiveButtonClassName}
+                          >
+                            Mark no-show
                           </button>
                         )}
                         {canCancel && (

@@ -48,19 +48,28 @@ crons.interval(
 );
 
 crons.interval(
-  "process-late-start-monitors",
-  { minutes: isLateStartTestModeEnabled() ? 1 : 10 },
-  internal.bookings.processLateStartMonitors,
-);
-crons.interval(
   "process-customer-late-monitors",
   { minutes: 1 },
   internal.bookings.processCustomerLateMonitors,
 );
+
 crons.interval(
-  "process-job-overrun-checkins",
+  "process-overrun-checkins",
   { minutes: 1 },
-  internal.bookings.processJobOverrunCheckins,
+  internal.bookings.processOverrunCheckins,
 );
+
+if (!isLateStartTestModeEnabled()) {
+  crons.interval(
+    "process-customer-late-monitors",
+    { minutes: 1 },
+    internal.bookings.processCustomerLateMonitors,
+  );
+  crons.interval(
+    "process-job-overrun-checkins",
+    { minutes: 1 },
+    internal.bookings.processJobOverrunCheckins,
+  );
+}
 
 export default crons;

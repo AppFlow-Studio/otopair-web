@@ -25,7 +25,11 @@ export const create = mutation({
     quantity: v.number(),
     labor_cost: v.number(),
     total: v.number(),
-    availability: v.string(),
+    /** Structured slot the shop offers. `acceptTireQuote` reads this directly. */
+    availability: v.object({
+      date: v.string(), // "YYYY-MM-DD"
+      time: v.string(), // "HH:MM" (24h)
+    }),
     expires_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {

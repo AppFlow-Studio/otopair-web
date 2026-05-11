@@ -7,7 +7,16 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Wrench } from "lucide-react";
+import { format } from "date-fns";
 import ConfirmationDialog from "@/components/confirmation-dialog";
+
+const todayIso = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 
 type OpenRequest = {
   _id: Id<"bookings">;
@@ -45,12 +54,28 @@ export default function TireQuoteRequestsPage() {
   const context = useQuery(api.bookings.getMyShopJobContext);
   const shopId = context?.shopId as Id<"shops"> | undefined;
 
-  const requests = useQuery(
+  const allRequests = useQuery(
     api.bookings.listOpenTireQuoteRequestsForShop,
     shopId ? { shopId } : "skip",
   ) as OpenRequest[] | undefined;
 
   const [activeRequest, setActiveRequest] = useState<OpenRequest | null>(null);
+  // Client-side rejection state — does not persist across page refreshes.
+  // Backend mutation pending; once shipped, replace this with a real call.
+  const [rejectedIds, setRejectedIds] = useState<Set<string>>(new Set());
+
+  const requests = useMemo(
+    () => allRequests?.filter((r) => !rejectedIds.has(String(r._id))),
+    [allRequests, rejectedIds],
+  );
+
+  const handleReject = (id: Id<"bookings">) => {
+    setRejectedIds((prev) => {
+      const next = new Set(prev);
+      next.add(String(id));
+      return next;
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -112,12 +137,20 @@ export default function TireQuoteRequestsPage() {
                     {formatRelative(r.submitted_at)}
                   </td>
                   <td className="px-5 py-4 text-right">
-                    <button
-                      onClick={() => setActiveRequest(r)}
-                      className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
-                    >
-                      Quote
-                    </button>
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        onClick={() => setActiveRequest(r)}
+                        className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+                      >
+                        Make Quote
+                      </button>
+                      <button
+                        onClick={() => handleReject(r._id)}
+                        className="inline-flex items-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+                      >
+                        Reject
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -152,11 +185,27 @@ function QuoteSubmissionDialog({
   const [tireModel, setTireModel] = useState("");
   const [perTirePrice, setPerTirePrice] = useState("");
   const [laborCost, setLaborCost] = useState("");
-  const [availability, setAvailability] = useState("");
+  const [availabilityDate, setAvailabilityDate] = useState("");
+  const [availabilityTime, setAvailabilityTime] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const quantity = request.tire_specs?.quantity ?? 0;
+  const minDate = todayIso();
+
+  const availabilityDateTime = useMemo(() => {
+    if (!availabilityDate || !availabilityTime) return null;
+    const dt = new Date(`${availabilityDate}T${availabilityTime}`);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  }, [availabilityDate, availabilityTime]);
+
+  const availabilityFormatted = useMemo(() => {
+    if (!availabilityDateTime) return "";
+    return format(availabilityDateTime, "MMM d, yyyy 'at' h:mm a");
+  }, [availabilityDateTime]);
+
+  const availabilityIsFuture =
+    availabilityDateTime !== null && availabilityDateTime.getTime() > Date.now();
 
   const total = useMemo(() => {
     const ppt = Number(perTirePrice);
@@ -171,7 +220,7 @@ function QuoteSubmissionDialog({
     Number(perTirePrice) > 0 &&
     laborCost !== "" &&
     Number(laborCost) >= 0 &&
-    availability.trim().length > 0 &&
+    availabilityIsFuture &&
     total !== null &&
     !submitting;
 
@@ -189,7 +238,7 @@ function QuoteSubmissionDialog({
         quantity,
         labor_cost: Number(laborCost),
         total,
-        availability: availability.trim(),
+        availability: { date: availabilityDate, time: availabilityTime },
       });
       onClose();
     } catch (e) {
@@ -282,15 +331,34 @@ function QuoteSubmissionDialog({
           />
         </Field>
 
-        <Field label="Availability" required>
-          <input
-            type="text"
-            value={availability}
-            onChange={(e) => setAvailability(e.target.value)}
-            placeholder='e.g. "Tomorrow, 10:00 AM"'
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-          />
-        </Field>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground">
+            Ready by<span className="ml-0.5 text-destructive">*</span>
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <input
+              type="date"
+              min={minDate}
+              value={availabilityDate}
+              onChange={(e) => setAvailabilityDate(e.target.value)}
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            />
+            <input
+              type="time"
+              value={availabilityTime}
+              onChange={(e) => setAvailabilityTime(e.target.value)}
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            />
+          </div>
+          {availabilityDateTime && !availabilityIsFuture && (
+            <p className="text-xs text-destructive">Pick a date and time in the future.</p>
+          )}
+          {availabilityFormatted && availabilityIsFuture && (
+            <p className="text-xs text-muted-foreground">
+              Customer will see: <span className="text-foreground font-medium">{availabilityFormatted}</span>
+            </p>
+          )}
+        </div>
 
         {error && (
           <div className="rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive">

@@ -207,12 +207,38 @@ const MONTH_STATUS_ORDER = [
   "pending_shop_acceptance",
   "pending_customer_acceptance",
   "confirmed",
+  "vehicle_at_shop",
   "in_progress",
   "completed",
   "cancelled",
   "declined",
   "no_show",
 ];
+
+const OVERRUN_EXTENSION_OPTIONS = [15, 30, 45, 60];
+
+type CustomerLateAlertView = {
+  _id: string;
+  bookingId: string;
+  customerName: string;
+  mechanicName?: string | null;
+  scheduledDate?: string | null;
+  scheduledTime?: string | null;
+  serviceSummary?: string | null;
+  thresholdDueAtMs: number;
+};
+
+type OverrunCheckInView = {
+  _id: string;
+  status: string;
+  bookingId: string;
+  customerName: string;
+  mechanicName?: string | null;
+  scheduledDate?: string | null;
+  scheduledTime?: string | null;
+  serviceSummary?: string | null;
+  defaultApplyAtMs: number;
+};
 
 /* ------------------------------------------------------------------ */
 /*  Block time type defaults                                            */
@@ -244,7 +270,13 @@ export default function SchedulePage() {
   const [selectedLateStartReviewId, setSelectedLateStartReviewId] = useState<string | null>(null);
   const [lateStartReviewError, setLateStartReviewError] = useState("");
   const [isSubmittingLateStartReview, setIsSubmittingLateStartReview] = useState(false);
-  const [isSeedingLateStartScenario, setIsSeedingLateStartScenario] = useState(false);
+  const [customerLateActionId, setCustomerLateActionId] = useState<string | null>(null);
+  const [customerLateReschedule, setCustomerLateReschedule] = useState<{
+    alertId: string;
+    date: string;
+    time: string;
+  } | null>(null);
+  const [overrunActionId, setOverrunActionId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<
     | { type: "block"; info: ContextMenuCellInfo }
     | { type: "unblock"; slotId: string; clientX: number; clientY: number }
@@ -313,11 +345,13 @@ export default function SchedulePage() {
   const deleteBlockTimeType = useMutation(api.schedule.deleteBlockTimeType);
 
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
+  const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
+  const rescheduleFromNoShowAlert = useMutation(api.bookings.rescheduleFromNoShowAlert);
+  const answerOverrunCheckIn = useMutation(api.bookings.answerOverrunCheckIn);
+  const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
   const acceptLateStartReview = useMutation(api.bookings.acceptLateStartReview);
   const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
   const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
-  const clearDashboardBookingsBatch = useMutation(api.seed.clearDashboardBookingsBatch);
-  const seedLateStartReviewScenario = useMutation(api.seed.seedLateStartReviewScenario);
   const blockSlot = useMutation(api.schedule.blockSlot);
   const updateBlockedSlot = useMutation(api.schedule.updateBlockedSlot);
   const unblockSlot = useMutation(api.schedule.unblockSlot);
@@ -327,6 +361,12 @@ export default function SchedulePage() {
   const legendRef = useRef<HTMLDivElement>(null);
   const context = useQuery(api.schedule.getScheduleContext);
   const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
+  const customerLateAlerts = useQuery(api.bookings.getOpenCustomerLateAlerts) as
+    | CustomerLateAlertView[]
+    | undefined;
+  const overrunCheckIns = useQuery(api.bookings.getOpenJobOverrunCheckins) as
+    | OverrunCheckInView[]
+    | undefined;
 
   const selectedJobDetail = useQuery(
     api.bookings.getJobDetail,
@@ -451,13 +491,14 @@ export default function SchedulePage() {
       if (selectedJobDetail && !jobDetailRef.current?.hasOpenModal()) {
         const s = selectedJobDetail.status;
         const isPending = s === "pending" || s === "pending_shop_acceptance";
-        const isActive = s === "confirmed" || s === "in_progress";
+        const canCancel = s === "confirmed" || s === "vehicle_at_shop" || s === "in_progress";
         if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
         if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
-        if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
-        if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
+        if (e.key === "h" && s === "confirmed") { e.preventDefault(); jobDetailRef.current?.markVehicleHere(); return; }
+        if (e.key === "r" && s === "in_progress") { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
+        if (e.key === "c" && canCancel) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
         if (e.key === "a" && !isPending) { e.preventDefault(); jobDetailRef.current?.openAssignDropdown(); return; }
-        if (e.key === "t" && s === "confirmed" && selectedJobDetail.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
+        if (e.key === "t" && s === "vehicle_at_shop" && selectedJobDetail.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
         if (e.key === "s" && !isPending) { e.preventDefault(); jobDetailRef.current?.assignMechanic(); return; }
       }
     }
@@ -596,39 +637,91 @@ export default function SchedulePage() {
     }
   }
 
-  async function handleSeedLateStartScenario() {
-    if (!context?.shopId || isSeedingLateStartScenario) return;
-    setIsSeedingLateStartScenario(true);
-    try {
-      for (let attempts = 0; attempts < 200; attempts += 1) {
-        const result = await clearDashboardBookingsBatch({
-          shopId: context.shopId,
-        });
-        if (result.done) {
-          break;
-        }
-        if (attempts === 199) {
-          throw new Error("Timed out while clearing existing schedule data.");
-        }
-      }
+  function beginCustomerLateReschedule(alert: CustomerLateAlertView) {
+    setCustomerLateReschedule({
+      alertId: alert._id,
+      date: alert.scheduledDate ?? dateToString(currentDate),
+      time: alert.scheduledTime ?? "09:00",
+    });
+  }
 
-      await seedLateStartReviewScenario({
-        shopId: context.shopId,
-        clearExisting: false,
+  async function handleMarkNoShow(alertId: string) {
+    setCustomerLateActionId(alertId);
+    try {
+      await markPostThresholdNoShow({
+        alertId: alertId as Id<"customer_late_alerts">,
       });
-      setCurrentDate(new Date());
-      setCurrentView("day");
-      setSelectedBookingId(null);
-      setSelectedLateStartReviewId(null);
-      setLateStartReviewError("");
-      setToast({ msg: "Late-start test data seeded", key: Date.now() });
+      if (customerLateReschedule?.alertId === alertId) {
+        setCustomerLateReschedule(null);
+      }
+      setToast({ msg: "Booking marked no-show", key: Date.now() });
     } catch (err: unknown) {
       setToast({
-        msg: err instanceof Error ? err.message : "Failed to seed late-start test data",
+        msg: err instanceof Error ? err.message : "Could not mark no-show.",
         key: Date.now(),
       });
     } finally {
-      setIsSeedingLateStartScenario(false);
+      setCustomerLateActionId(null);
+    }
+  }
+
+  async function handleCustomerLateReschedule() {
+    if (!customerLateReschedule) return;
+    setCustomerLateActionId(customerLateReschedule.alertId);
+    try {
+      await rescheduleFromNoShowAlert({
+        alertId: customerLateReschedule.alertId as Id<"customer_late_alerts">,
+        newScheduledDate: customerLateReschedule.date,
+        newScheduledTime: customerLateReschedule.time,
+      });
+      setCustomerLateReschedule(null);
+      setToast({ msg: "Reschedule proposed - awaiting customer approval", key: Date.now() });
+    } catch (err: unknown) {
+      setToast({
+        msg: err instanceof Error ? err.message : "Could not reschedule booking.",
+        key: Date.now(),
+      });
+    } finally {
+      setCustomerLateActionId(null);
+    }
+  }
+
+  async function handleAnswerOverrun(checkInId: string, answer: "yes" | "no") {
+    setOverrunActionId(checkInId);
+    try {
+      await answerOverrunCheckIn({
+        checkInId: checkInId as Id<"job_overrun_checkins">,
+        answer,
+      });
+      setToast({
+        msg: answer === "yes" ? "Overrun check-in resolved" : "Extension requested",
+        key: Date.now(),
+      });
+    } catch (err: unknown) {
+      setToast({
+        msg: err instanceof Error ? err.message : "Could not answer overrun check-in.",
+        key: Date.now(),
+      });
+    } finally {
+      setOverrunActionId(null);
+    }
+  }
+
+  async function handleAnswerOverrunExtension(checkInId: string, extensionMinutes: number) {
+    setOverrunActionId(checkInId);
+    try {
+      await answerOverrunExtension({
+        checkInId: checkInId as Id<"job_overrun_checkins">,
+        extensionMinutes,
+      });
+      setToast({ msg: `${extensionMinutes} minute extension applied`, key: Date.now() });
+    } catch (err: unknown) {
+      setToast({
+        msg: err instanceof Error ? err.message : "Could not apply overrun extension.",
+        key: Date.now(),
+      });
+    } finally {
+      setOverrunActionId(null);
     }
   }
 
@@ -1094,17 +1187,6 @@ export default function SchedulePage() {
             </span>
           ) : null}
         </div>
-        {process.env.NODE_ENV === "development" && context.shopId ? (
-          <button
-            type="button"
-            onClick={() => void handleSeedLateStartScenario()}
-            disabled={isSeedingLateStartScenario}
-            className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {isSeedingLateStartScenario ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Seed late-start test data
-          </button>
-        ) : null}
       </div>
 
       {/* Toolbar: nav + view switcher + mechanic filter */}
@@ -1217,6 +1299,241 @@ export default function SchedulePage() {
           </div>
         </div>
       </div>
+
+      {customerLateAlerts && customerLateAlerts.length > 0 ? (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-rose-700">
+                <AlertTriangle className="h-4 w-4" />
+                <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+                  No-show decisions
+                </span>
+              </div>
+              <h2 className="mt-2 text-lg font-semibold text-rose-950">
+                {customerLateAlerts.length === 1
+                  ? "1 customer is past the no-show threshold"
+                  : `${customerLateAlerts.length} customers are past the no-show threshold`}
+              </h2>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {customerLateAlerts.map((alert) => {
+              const isRescheduling = customerLateReschedule?.alertId === alert._id;
+              const isBusy = customerLateActionId === alert._id;
+              return (
+                <div
+                  key={alert._id}
+                  className="rounded-2xl border border-rose-200 bg-white/90 p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground">
+                        {alert.customerName}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {alert.scheduledTime
+                          ? formatTimeLabel(alert.scheduledTime)
+                          : "Time TBD"}
+                        {" "}with {alert.mechanicName ?? "an assigned mechanic"}
+                      </p>
+                      {alert.serviceSummary ? (
+                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                          {alert.serviceSummary}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold text-rose-800">
+                      Since {formatDecisionDueTime(alert.thresholdDueAtMs)}
+                    </span>
+                  </div>
+
+                  {isRescheduling ? (
+                    <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+                      <input
+                        type="date"
+                        value={customerLateReschedule.date}
+                        onChange={(event) =>
+                          setCustomerLateReschedule((current) =>
+                            current
+                              ? { ...current, date: event.target.value }
+                              : current
+                          )
+                        }
+                        className="h-9 rounded-lg border border-border bg-white px-3 text-sm text-foreground outline-none focus:border-primary"
+                      />
+                      <Select
+                        selectedKey={customerLateReschedule.time}
+                        onSelectionChange={(key) =>
+                          setCustomerLateReschedule((current) =>
+                            current ? { ...current, time: String(key) } : current
+                          )
+                        }
+                      >
+                        <SelectTrigger className="h-9 rounded-lg border-border bg-white text-sm px-3">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectPopover placement="bottom start">
+                          <SelectListBox shouldFocusWrap>
+                            {generateTimeOptions().map((option) => (
+                              <SelectItem
+                                key={option.value}
+                                id={option.value}
+                                textValue={option.label}
+                              >
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectListBox>
+                        </SelectPopover>
+                      </Select>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleCustomerLateReschedule()}
+                          disabled={isBusy}
+                          className="inline-flex h-9 items-center justify-center rounded-lg bg-rose-900 px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+                        >
+                          {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Apply"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCustomerLateReschedule(null)}
+                          disabled={isBusy}
+                          className="inline-flex h-9 items-center justify-center rounded-lg border border-border px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleMarkNoShow(alert._id)}
+                        disabled={isBusy}
+                        className="inline-flex items-center gap-2 rounded-lg bg-rose-900 px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+                      >
+                        {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        Mark no-show
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => beginCustomerLateReschedule(alert)}
+                        disabled={isBusy}
+                        className="inline-flex items-center rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-medium text-rose-900 transition-colors hover:bg-rose-100 disabled:opacity-60"
+                      >
+                        Reschedule
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
+                        className="inline-flex items-center rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                      >
+                        Open booking
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
+      {overrunCheckIns && overrunCheckIns.length > 0 ? (
+        <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 shadow-sm">
+          <div className="flex items-center gap-2 text-sky-700">
+            <Clock className="h-4 w-4" />
+            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+              Overrun check-ins
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {overrunCheckIns.map((checkIn) => {
+              const isBusy = overrunActionId === checkIn._id;
+              const needsExtension = checkIn.status.endsWith("_extension");
+              return (
+                <div
+                  key={checkIn._id}
+                  className="rounded-2xl border border-sky-200 bg-white/90 p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-foreground">
+                        {checkIn.customerName}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {checkIn.scheduledTime
+                          ? formatTimeLabel(checkIn.scheduledTime)
+                          : "Time TBD"}
+                        {" "}with {checkIn.mechanicName ?? "an assigned mechanic"}
+                      </p>
+                      {checkIn.serviceSummary ? (
+                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                          {checkIn.serviceSummary}
+                        </p>
+                      ) : null}
+                    </div>
+                    <span className="rounded-full bg-sky-100 px-2.5 py-1 text-[11px] font-semibold text-sky-800">
+                      Default {formatDecisionDueTime(checkIn.defaultApplyAtMs)}
+                    </span>
+                  </div>
+
+                  {needsExtension ? (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {OVERRUN_EXTENSION_OPTIONS.map((minutes) => (
+                        <button
+                          key={minutes}
+                          type="button"
+                          onClick={() =>
+                            void handleAnswerOverrunExtension(checkIn._id, minutes)
+                          }
+                          disabled={isBusy}
+                          className="inline-flex h-9 min-w-14 items-center justify-center rounded-lg border border-sky-200 bg-white px-3 text-sm font-medium text-sky-900 transition-colors hover:bg-sky-100 disabled:opacity-60"
+                        >
+                          {isBusy ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            `+${minutes}`
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleAnswerOverrun(checkIn._id, "yes")}
+                        disabled={isBusy}
+                        className="inline-flex items-center rounded-lg bg-sky-900 px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+                      >
+                        On track
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleAnswerOverrun(checkIn._id, "no")}
+                        disabled={isBusy}
+                        className="inline-flex items-center rounded-lg border border-sky-200 bg-white px-3.5 py-2 text-sm font-medium text-sky-900 transition-colors hover:bg-sky-100 disabled:opacity-60"
+                      >
+                        Needs time
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedBookingId(checkIn.bookingId as Id<"bookings">)}
+                        className="inline-flex items-center rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                      >
+                        Open booking
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       {lateStartReviews && lateStartReviews.length > 0 ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">

@@ -25,18 +25,20 @@ export const create = mutation({
     quantity: v.number(),
     labor_cost: v.number(),
     total: v.number(),
-    availability: v.string(),
+    /** Structured slot the shop offers. `acceptTireQuote` reads this directly. */
+    availability: v.object({
+      date: v.string(), // "YYYY-MM-DD"
+      time: v.string(), // "HH:MM" (24h)
+    }),
     expires_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.booking_id);
     if (!booking) {
-      throw new Error("Booking not found");
+      throw new Error("We couldn't find that quote request. It may have been withdrawn.");
     }
     if (booking.status !== "pending_quote" && booking.status !== "quotes_ready") {
-      throw new Error(
-        `Cannot quote on a booking in status "${booking.status}" — only pending_quote / quotes_ready accept new quotes.`,
-      );
+      throw new Error("This quote request is no longer accepting new quotes.");
     }
 
     // Prevent duplicate quotes from the same shop on the same booking.

@@ -1,6 +1,14 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
+function isClerkDefaultAvatarUrl(url?: string | null) {
+  return (
+    typeof url === "string" &&
+    url.includes("img.clerk.com/") &&
+    url.includes("eyJ0eXBlIjoiZGVmYXVsdCI")
+  );
+}
+
 export const create = mutation({
   args: {
     invitedByClerkUserId: v.string(),
@@ -16,7 +24,7 @@ export const create = mutation({
       .query("users")
       .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", args.invitedByClerkUserId))
       .unique();
-    if (!inviter) throw new Error("Inviter not found");
+    if (!inviter) throw new Error("We couldn't verify who's sending this invitation. Please sign in again.");
 
     const existing = await ctx.db
       .query("shop_invitations")
@@ -100,7 +108,24 @@ export const getTeamMembers = query({
     const members = await Promise.all(
       shopUsers.map(async (su) => {
         const user = await ctx.db.get(su.user_id);
-        return user ? { ...su, user } : null;
+        if (!user) return null;
+
+        const uploadedPhotoUrl = user.profile_photo_storage_id
+          ? await ctx.storage.getUrl(user.profile_photo_storage_id)
+          : null;
+        const displayPhotoUrl =
+          uploadedPhotoUrl ??
+          (isClerkDefaultAvatarUrl(user.profile_photo_url)
+            ? user.profile_photo_url
+            : undefined);
+
+        return {
+          ...su,
+          user: {
+            ...user,
+            profile_photo_url: displayPhotoUrl,
+          },
+        };
       })
     );
 
@@ -181,7 +206,7 @@ export const acceptAsCurrentUser = mutation({
   args: { token: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+    if (!identity) throw new Error("Your session has expired. Please sign in again.");
 
     const now = Date.now();
     const invitation = await ctx.db
@@ -189,7 +214,7 @@ export const acceptAsCurrentUser = mutation({
       .withIndex("by_token", (q) => q.eq("token", args.token))
       .first();
 
-    if (!invitation) throw new Error("Invitation not found.");
+    if (!invitation) throw new Error("This invitation link is no longer valid.");
     if (invitation.status === "revoked") throw new Error("This invitation has been revoked.");
     if (invitation.status === "accepted") {
       return { shopId: invitation.shop_id, role: invitation.role };
@@ -217,7 +242,7 @@ export const acceptAsCurrentUser = mutation({
       user = await ctx.db.get(userId);
     }
 
-    if (!user) throw new Error("User not found");
+    if (!user) throw new Error("We couldn't find your account. Try signing in again.");
 
     const existingShopUser = await ctx.db
       .query("shop_users")
@@ -276,7 +301,7 @@ export const updateMemberRole = mutation({
   args: { shopUserId: v.id("shop_users"), role: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+    if (!identity) throw new Error("Your session has expired. Please sign in again.");
     await ctx.db.patch(args.shopUserId, { role: args.role, updated_at: Date.now() });
   },
 });

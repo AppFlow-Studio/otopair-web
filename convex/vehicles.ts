@@ -65,7 +65,7 @@ export const getVehicleWithOwners = query({
       .unique();
     
     if (!vehicle) {
-      throw new Error(`Vehicle not found: ${args.vin}`);
+      throw new Error("We couldn't find this vehicle. Double-check the VIN and try again.");
     }
     
     // Get active owners
@@ -394,7 +394,7 @@ export const removeOwner = mutation({
       .unique();
     
     if (!ownership) {
-      throw new Error(`No ownership found for VIN: ${args.vin}, User: ${args.userId}`);
+      throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
     // Delete Smartcar connection rows for this ownership
@@ -450,7 +450,7 @@ export const removeOwnerById = mutation({
   handler: async (ctx, args) => {
     const ownership = await ctx.db.get(args.vehicleOwnerId);
     if (!ownership) {
-      throw new Error(`No ownership found for id: ${args.vehicleOwnerId}`);
+      throw new Error("We couldn't find that vehicle ownership record.");
     }
 
     const smartcarConnections = await ctx.db
@@ -514,7 +514,7 @@ export const updateOwnershipPrimary = mutation({
       .unique();
     
     if (!ownership) {
-      throw new Error(`No ownership found for VIN: ${args.vin}, User: ${args.userId}`);
+      throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
     if (args.is_primary) {
@@ -561,7 +561,7 @@ export const updateMileage = mutation({
       .unique();
     
     if (!ownership) {
-      throw new Error(`No ownership found for VIN: ${args.vin}, User: ${args.userId}`);
+      throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
     await ctx.db.patch(ownership._id, { mileage: args.mileage });

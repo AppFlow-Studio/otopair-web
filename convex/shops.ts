@@ -219,14 +219,6 @@ async function assertOnboardingCanBeCompleted(ctx: any, shopId: any) {
     throw new Error("Complete your operating hours before finishing setup.");
   }
 
-  const mechanics = await ctx.db
-    .query("mechanics")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .filter((q: any) => q.eq(q.field("is_active"), true))
-    .collect();
-  if (mechanics.length === 0) {
-    throw new Error("Add at least one mechanic before finishing setup.");
-  }
 }
 
 async function finalizeOnboarding(ctx: any, args: { shopId: any; userId: any }) {
@@ -898,6 +890,95 @@ export const saveOnboardingLaborAndServices = mutation({
       labor_rate: args.laborRate,
       onboarding_complete: false,
     });
+
+    const existing = await ctx.db
+      .query("shop_services")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
+      .collect();
+    const byServiceId = new Map(existing.map((row: any) => [String(row.service_id), row]));
+    const selectedIds = new Set(args.serviceIds.map((id) => String(id)));
+
+    for (const row of existing) {
+      const shouldOffer = selectedIds.has(String(row.service_id));
+      if (row.is_offered !== shouldOffer) {
+        await ctx.db.patch(row._id, { is_offered: shouldOffer });
+      }
+    }
+
+    for (const serviceId of args.serviceIds) {
+      if (!byServiceId.has(String(serviceId))) {
+        await ctx.db.insert("shop_services", {
+          shop_id: primary.shop._id,
+          service_id: serviceId,
+          is_offered: true,
+        });
+      }
+    }
+
+    return primary.shop._id;
+  },
+});
+
+export const updateShopHours = mutation({
+  args: {
+    hours: v.array(
+      v.object({
+        dayOfWeek: v.float64(),
+        dayName: v.string(),
+        isClosed: v.boolean(),
+        openTime: v.string(),
+        closeTime: v.string(),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const user = await getOrCreateCurrentShopOwner(ctx);
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Set up your shop details first.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Not authorized");
+    }
+
+    const existing = await ctx.db
+      .query("shops_hours")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
+      .collect();
+    const byDay = new Map(existing.map((row: any) => [row.day_of_week as number, row]));
+
+    for (const hour of args.hours) {
+      const patch = {
+        day_name: hour.dayName,
+        day_of_week: hour.dayOfWeek,
+        is_closed: hour.isClosed,
+        open_time: hour.isClosed ? undefined : hour.openTime,
+        close_time: hour.isClosed ? undefined : hour.closeTime,
+        shop_id: primary.shop._id,
+      };
+
+      const current = byDay.get(hour.dayOfWeek);
+      if (current) {
+        await ctx.db.patch(current._id, patch);
+      } else {
+        await ctx.db.insert("shops_hours", patch);
+      }
+    }
+
+    await syncShopAvailabilityWindow(ctx, { shopId: primary.shop._id });
+    return primary.shop._id;
+  },
+});
+
+export const updateShopOfferedServices = mutation({
+  args: {
+    serviceIds: v.array(v.id("services")),
+  },
+  handler: async (ctx, args) => {
+    const user = await getOrCreateCurrentShopOwner(ctx);
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Set up your shop details first.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Not authorized");
+    }
 
     const existing = await ctx.db
       .query("shop_services")

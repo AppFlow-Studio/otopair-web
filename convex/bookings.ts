@@ -4584,6 +4584,45 @@ export const getMyShopJobContext = query({
   },
 });
 
+// TODO: stub — late-start review feature is not yet implemented server-side.
+// Replace with real implementations once the `late_start_reviews` table and
+// workflow are designed.
+export const getOpenLateStartReviews = query({
+  args: {},
+  handler: async () => [] as any[],
+});
+
+export const acceptLateStartReview = mutation({
+  args: { reviewId: v.string() },
+  handler: async () => {
+    throw new Error("Late-start reviews are not implemented yet.");
+  },
+});
+
+export const denyLateStartReview = mutation({
+  args: { reviewId: v.string() },
+  handler: async () => {
+    throw new Error("Late-start reviews are not implemented yet.");
+  },
+});
+
+export const applyManualLateStartReview = mutation({
+  args: {
+    reviewId: v.string(),
+    manualTargets: v.array(
+      v.object({
+        bookingId: v.string(),
+        newScheduledDate: v.string(),
+        newScheduledTime: v.string(),
+        newMechanicId: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async () => {
+    throw new Error("Late-start reviews are not implemented yet.");
+  },
+});
+
 export const getMyOwnerDashboard = query({
   args: {},
   handler: async (ctx) => {
@@ -5348,7 +5387,8 @@ export const completeWithPostjob = mutation({
 export const createByShop = mutation({
   args: {
     shopId: v.id("shops"),
-    customerEmail: v.string(),
+    customerEmail: v.optional(v.string()),
+    customerPhone: v.optional(v.string()),
     customerFirstName: v.optional(v.string()),
     customerLastName: v.optional(v.string()),
     vin: v.string(),
@@ -5358,6 +5398,14 @@ export const createByShop = mutation({
     scheduledDate: v.string(),
     scheduledTime: v.string(),
     serviceIds: v.array(v.id("services")),
+    customServices: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          durationMinutes: v.optional(v.float64()),
+        })
+      )
+    ),
     mechanicId: v.optional(v.id("mechanics")),
     assignmentPreference: v.optional(
       v.union(v.literal("any"), v.literal("specific_mechanic"))
@@ -5375,10 +5423,30 @@ export const createByShop = mutation({
     const now = Date.now();
     const canonicalVin = toCanonicalVin(args.vin);
 
-    let customer = await ctx.db
-      .query("users")
-      .withIndex("by_email", (q: any) => q.eq("email", args.customerEmail))
-      .first();
+    if (!args.customerEmail && !args.customerPhone) {
+      throw new Error("Provide a customer email or phone number.");
+    }
+
+    let normalizedPhone: string | undefined;
+    if (args.customerPhone) {
+      const digits = args.customerPhone.replace(/\D/g, "");
+      if (digits.length === 10) normalizedPhone = `+1${digits}`;
+      else if (digits.length === 11 && digits.startsWith("1")) normalizedPhone = `+${digits}`;
+      else throw new Error("Phone number must be a valid 10-digit US number.");
+    }
+
+    let customer = args.customerEmail
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_email", (q: any) => q.eq("email", args.customerEmail))
+          .first()
+      : null;
+
+    if (!customer && normalizedPhone) {
+      const phoneMatches = await ctx.db.query("users").collect();
+      customer =
+        phoneMatches.find((u: any) => u.phone && u.phone === normalizedPhone) ?? null;
+    }
 
     if (!customer) {
       const randomSuffix = Math.random().toString(36).slice(2, 8);
@@ -5387,6 +5455,7 @@ export const createByShop = mutation({
         createdAt: now,
         onboardingCompleted: false,
         email: args.customerEmail,
+        phone: normalizedPhone,
         first_name: args.customerFirstName,
         last_name: args.customerLastName,
       });
@@ -5453,6 +5522,12 @@ export const createByShop = mutation({
     const assignmentPreference =
       args.assignmentPreference ??
       (args.mechanicId ? "specific_mechanic" : "any");
+    const customServicesNormalized = args.customServices
+      ?.map((c: any) => ({
+        name: String(c.name).trim(),
+        duration_minutes: c.durationMinutes,
+      }))
+      .filter((c: any) => c.name.length > 0);
     const bookingId = await ctx.db.insert("bookings", {
       labor_cost: args.laborCost,
       parts_cost: args.partsCost,
@@ -5462,6 +5537,10 @@ export const createByShop = mutation({
       scheduled_date: args.scheduledDate,
       scheduled_time: args.scheduledTime,
       service_ids: args.serviceIds,
+      custom_services:
+        customServicesNormalized && customServicesNormalized.length > 0
+          ? customServicesNormalized
+          : undefined,
       shop_id: args.shopId,
       status,
       assignment_preference: assignmentPreference,

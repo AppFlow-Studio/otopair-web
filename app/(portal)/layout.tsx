@@ -47,7 +47,7 @@ const mechanicLinks = [
 ];
 
 const bookingSubLinks = [
-  { href: "/bookings/create", label: "Create Booking", icon: PlusCircle },
+  { href: "/schedule?action=newBooking", label: "Create Booking", icon: PlusCircle },
   { href: "/bookings", label: "All Bookings", icon: List },
   { href: "/bookings/tire-quote-requests", label: "Tire Quote Requests", icon: Wrench },
 ];

@@ -62,6 +62,12 @@ interface DaySwimLanesProps {
   onSelectBlocked?: (info: { slotId: string; date: string; startTime: string; endTime: string; mechanicId: string | null; blockTitle: string | null; note: string | null }) => void;
   onBlockDayClick?: (mechanicId: string, mechanicName: string) => void;
   currentDate?: Date;
+  draftBooking?: {
+    date: string;
+    time: string;
+    mechanicId: string;
+    durationMinutes: number;
+  } | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -135,6 +141,7 @@ export default function DaySwimLanes({
   onSelectBlocked,
   onBlockDayClick,
   currentDate,
+  draftBooking,
 }: DaySwimLanesProps) {
   const startHour = minTime.getHours();
   const startMinute = minTime.getMinutes();
@@ -718,6 +725,32 @@ export default function DaySwimLanes({
                     }}
                   />
                 )}
+
+                {/* Draft booking ghost — shows where a draft booking is about to land */}
+                {draftBooking &&
+                  (draftBooking.mechanicId || "__unassigned__") === col.id &&
+                  currentDate &&
+                  draftBooking.date === dateToString(currentDate) &&
+                  (() => {
+                    const [dh, dm] = draftBooking.time.split(":").map(Number);
+                    const draftStartMin = minutesFromBase(startHour, startMinute, dh, dm);
+                    if (draftStartMin < 0 || draftStartMin >= totalMinutes) return null;
+                    const draftTop = (draftStartMin / totalMinutes) * totalHeight;
+                    const draftHeight = Math.max(
+                      ROW_HEIGHT,
+                      (draftBooking.durationMinutes / totalMinutes) * totalHeight
+                    );
+                    return (
+                      <div
+                        className="absolute left-1 right-1 z-[6] rounded-lg border-2 border-dashed border-primary bg-primary/15 pointer-events-none flex items-center justify-center px-2"
+                        style={{ top: draftTop, height: draftHeight }}
+                      >
+                        <span className="text-[11px] font-semibold text-primary uppercase tracking-wide">
+                          Draft — new booking
+                        </span>
+                      </div>
+                    );
+                  })()}
 
                 {/* Gridlines — drawn at the top of each slot so hour marks land exactly on the hour */}
                 {slots.map((s, i) => (

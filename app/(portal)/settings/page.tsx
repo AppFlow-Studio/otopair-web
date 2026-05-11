@@ -12,6 +12,8 @@ import {
   DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_PERCENT,
 } from "@/lib/scheduling-overhaul";
+import HoursEditor from "./hours-editor";
+import ServicesEditor from "./services-editor";
 
 export default function SettingsPage() {
   const { signOut } = useClerk();
@@ -160,6 +162,9 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+
+        {shop && <HoursEditor />}
+        {shop && <ServicesEditor />}
 
         <div className="bg-white rounded-xl border border-gray-200">
           <div className="px-6 pt-5 pb-2">

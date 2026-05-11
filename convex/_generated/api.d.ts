@@ -12,8 +12,11 @@ import type * as ai_conversations from "../ai_conversations.js";
 import type * as ai_enrichment_logs from "../ai_enrichment_logs.js";
 import type * as ai_messages from "../ai_messages.js";
 import type * as analytics_events from "../analytics_events.js";
+import type * as app_feedback from "../app_feedback.js";
+import type * as audit_log from "../audit_log.js";
 import type * as booking_status_history from "../booking_status_history.js";
 import type * as bookings from "../bookings.js";
+import type * as bugs from "../bugs.js";
 import type * as cdn_assets from "../cdn_assets.js";
 import type * as chassis_variants from "../chassis_variants.js";
 import type * as checkin from "../checkin.js";
@@ -21,6 +24,10 @@ import type * as cleanup from "../cleanup.js";
 import type * as client_logs from "../client_logs.js";
 import type * as conversion_funnels from "../conversion_funnels.js";
 import type * as crons from "../crons.js";
+import type * as director from "../director.js";
+import type * as director_auth from "../director_auth.js";
+import type * as director_mechanic_verifications from "../director_mechanic_verifications.js";
+import type * as director_notes from "../director_notes.js";
 import type * as engines from "../engines.js";
 import type * as fitments from "../fitments.js";
 import type * as follow_ups from "../follow_ups.js";
@@ -155,6 +162,7 @@ import type * as vehicle_owners from "../vehicle_owners.js";
 import type * as vehicle_pipeline from "../vehicle_pipeline.js";
 import type * as vehicle_specs from "../vehicle_specs.js";
 import type * as vehicles from "../vehicles.js";
+import type * as ymmtCatalog from "../ymmtCatalog.js";
 
 import type {
   ApiFromModules,
@@ -167,8 +175,11 @@ declare const fullApi: ApiFromModules<{
   ai_enrichment_logs: typeof ai_enrichment_logs;
   ai_messages: typeof ai_messages;
   analytics_events: typeof analytics_events;
+  app_feedback: typeof app_feedback;
+  audit_log: typeof audit_log;
   booking_status_history: typeof booking_status_history;
   bookings: typeof bookings;
+  bugs: typeof bugs;
   cdn_assets: typeof cdn_assets;
   chassis_variants: typeof chassis_variants;
   checkin: typeof checkin;
@@ -176,6 +187,10 @@ declare const fullApi: ApiFromModules<{
   client_logs: typeof client_logs;
   conversion_funnels: typeof conversion_funnels;
   crons: typeof crons;
+  director: typeof director;
+  director_auth: typeof director_auth;
+  director_mechanic_verifications: typeof director_mechanic_verifications;
+  director_notes: typeof director_notes;
   engines: typeof engines;
   fitments: typeof fitments;
   follow_ups: typeof follow_ups;
@@ -310,6 +325,7 @@ declare const fullApi: ApiFromModules<{
   vehicle_pipeline: typeof vehicle_pipeline;
   vehicle_specs: typeof vehicle_specs;
   vehicles: typeof vehicles;
+  ymmtCatalog: typeof ymmtCatalog;
 }>;
 
 /**

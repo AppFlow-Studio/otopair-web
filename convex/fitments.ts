@@ -31,13 +31,13 @@ type FitmentRole = (typeof ROLE_ALLOWLIST)[number];
 
 function assertValidRole(role: string): asserts role is FitmentRole {
   if (!ROLE_ALLOWLIST.includes(role as FitmentRole)) {
-    throw new Error(`Invalid fitment role: ${role}`);
+    throw new Error("That fitment role isn't supported.");
   }
 }
 
 const assertConfidence = (value: number) => {
   if (Number.isNaN(value) || value < 0 || value > 1) {
-    throw new Error("confidence_score must be between 0.0 and 1.0");
+    throw new Error("Confidence score must be between 0 and 1.");
   }
 };
 
@@ -73,7 +73,7 @@ export const upsertPartFitment = mutation({
     assertConfidence(args.confidence);
 
     const part = await ctx.db.get(args.part_id);
-    if (!part) throw new Error("Referenced OEM part not found");
+    if (!part) throw new Error("The OEM part you referenced couldn't be found.");
 
     const existing = await ctx.db
       .query("part_fitments")
@@ -149,7 +149,7 @@ export const upsertEnginePartFitment = mutation({
     assertConfidence(args.confidence_score);
 
     const part = await ctx.db.get(args.part_id);
-    if (!part) throw new Error("Referenced OEM part not found");
+    if (!part) throw new Error("The OEM part you referenced couldn't be found.");
 
     // Find vehicle_config that uses this engine
     const config = await ctx.db
@@ -158,7 +158,7 @@ export const upsertEnginePartFitment = mutation({
       .first();
 
     if (!config) {
-      throw new Error(`No vehicle_config found for engine ${args.engine_id}`);
+      throw new Error("We couldn't find a matching engine configuration for this vehicle.");
     }
 
     const existing = await ctx.db
@@ -235,14 +235,14 @@ export const upsertTransmissionPartFitment = mutation({
     assertConfidence(args.confidence_score);
 
     const part = await ctx.db.get(args.part_id);
-    if (!part) throw new Error("Referenced OEM part not found");
+    if (!part) throw new Error("The OEM part you referenced couldn't be found.");
 
     // Find vehicle_config via engine → vehicle_configs
     const configs = await ctx.db.query("vehicle_configs").collect();
     const config = configs.find((c: any) => c.transmission_id === args.transmission_id);
 
     if (!config) {
-      throw new Error(`No vehicle_config found for transmission ${args.transmission_id}`);
+      throw new Error("We couldn't find a matching transmission configuration for this vehicle.");
     }
 
     const existing = await ctx.db
@@ -315,7 +315,7 @@ export const upsertTrimPartFitment = mutation({
     assertConfidence(args.confidence_score);
 
     const part = await ctx.db.get(args.part_id);
-    if (!part) throw new Error("Referenced OEM part not found");
+    if (!part) throw new Error("The OEM part you referenced couldn't be found.");
 
     // Find vehicle_config via trim name match
     const configs = await ctx.db.query("vehicle_configs").collect();
@@ -325,7 +325,7 @@ export const upsertTrimPartFitment = mutation({
       : null;
 
     if (!config) {
-      throw new Error(`No vehicle_config found for trim ${args.trim_id}`);
+      throw new Error("We couldn't find a matching trim configuration for this vehicle.");
     }
 
     const existing = await ctx.db

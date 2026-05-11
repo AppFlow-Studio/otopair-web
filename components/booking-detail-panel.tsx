@@ -20,6 +20,7 @@ import VehiclePassportSection from "@/components/vehicle-passport-section";
 import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
+import RecommendServiceDrawer from "@/components/recommend-service-drawer";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
 import {
   getMechanicAssignmentConflict,
@@ -241,10 +242,36 @@ function OutOfScopeCard({ job }: { job: JobDetailData }) {
   );
 }
 
+const RECOMMENDATION_RESPONSE_WINDOW_MS = 10 * 60 * 1000;
+
 function RecommendedServiceCard({ job }: { job: JobDetailData }) {
   const decide = useMutation(api.bookings.customerDecideRecommendation);
   const [busy, setBusy] = useState<"confirmed" | "declined" | null>(null);
   const state = job.recommendationState ?? "none";
+
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (state !== "pending_customer" || !job.recommendationSentAtMs) return;
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [state, job.recommendationSentAtMs]);
+
+  const msRemaining =
+    state === "pending_customer" && job.recommendationSentAtMs
+      ? Math.max(
+          0,
+          job.recommendationSentAtMs +
+            RECOMMENDATION_RESPONSE_WINDOW_MS -
+            nowMs,
+        )
+      : null;
+  const expired = msRemaining === 0;
+  const countdownLabel =
+    msRemaining != null
+      ? `${Math.floor(msRemaining / 60000)}:${String(
+          Math.floor((msRemaining % 60000) / 1000),
+        ).padStart(2, "0")}`
+      : null;
 
   async function handleDecision(decision: "confirmed" | "declined") {
     setBusy(decision);
@@ -277,6 +304,18 @@ function RecommendedServiceCard({ job }: { job: JobDetailData }) {
                 ? "Declined"
                 : state}
         </span>
+        {countdownLabel ? (
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums ${
+              expired
+                ? "bg-rose-100 text-rose-900"
+                : "bg-amber-100 text-amber-900"
+            }`}
+            title="Customer has 10 minutes to respond"
+          >
+            {expired ? "Expired" : `${countdownLabel} left`}
+          </span>
+        ) : null}
       </div>
       <div className="text-sm font-semibold">
         {job.recommendedServiceName ?? "Recommended service"}
@@ -286,6 +325,19 @@ function RecommendedServiceCard({ job }: { job: JobDetailData }) {
           &quot;{job.recommendedServiceNote}&quot;
         </p>
       ) : null}
+      {job.recommendedScheduledDate && job.recommendedScheduledTime ? (
+        <p className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-white/60 px-2 py-1 text-[12px] font-medium">
+          <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+          Proposed: {formatBookingDate(
+            job.recommendedScheduledDate,
+            job.recommendedScheduledTime,
+          )}
+        </p>
+      ) : (
+        <p className="mt-2 text-[12px] font-medium opacity-80">
+          Right after this job
+        </p>
+      )}
       {state === "pending_customer" ? (
         <div className="mt-3 flex flex-wrap gap-2">
           <button
@@ -356,6 +408,8 @@ export interface JobDetailData {
     | "out_of_scope"
     | null;
   recommendationSentAtMs?: number | null;
+  recommendedScheduledDate?: string | null;
+  recommendedScheduledTime?: string | null;
   recommendationDecidedAtMs?: number | null;
   parentJobId?: Id<"bookings"> | null;
   diagnosticFollowupState?: "pending" | "awaiting_info" | "resolved" | null;
@@ -486,6 +540,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showPrejobDialog, setShowPrejobDialog] = useState(false);
     const [showPostjobDialog, setShowPostjobDialog] = useState(false);
     const [showDiagnosticDialog, setShowDiagnosticDialog] = useState(false);
+    const [recommendDrawerCtx, setRecommendDrawerCtx] = useState<
+      import("@/components/recommend-service-drawer").RecommendServiceContext | null
+    >(null);
     const [showActualsDialog, setShowActualsDialog] = useState(false);
     const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -1198,6 +1255,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               </p>
             ) : (
               <div className="space-y-6">
+                <VehiclePassportSection
+                  data={vehiclePassport}
+                  bookingServices={job.serviceNames}
+                />
+
                 {/* Booking info grid */}
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div className={drawerInfoCardClassName}>
@@ -1349,21 +1411,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 )}
 
                 {job.customerNotes && job.customerNotes.trim().length > 0 && (
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                    <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-sky-900">
                       <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
                       Customer states
                     </div>
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-amber-900">
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-sky-900">
                       {job.customerNotes}
                     </p>
                   </div>
                 )}
-
-                <VehiclePassportSection
-                  data={vehiclePassport}
-                  bookingServices={job.serviceNames}
-                />
 
                 {/* Assign mechanic */}
                 <div className="rounded-2xl bg-muted/20 p-4">
@@ -1911,6 +1968,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 : []
           }
           customerNotes={job?.customerNotes ?? null}
+          findingsNote={(job as any)?.diagnosticFindingsNote ?? null}
           recommendationState={job?.recommendationState ?? null}
           recommendedServiceName={job?.recommendedServiceName ?? null}
           recommendedServiceNote={job?.recommendedServiceNote ?? null}
@@ -1920,6 +1978,33 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onCompleted={() => {
             setShowDiagnosticDialog(false);
             onSuccess?.("Diagnostic completed");
+          }}
+          onError={(msg) => setActionError(msg)}
+          onOpenScheduler={(ctx) => {
+            if (!job) return;
+            setShowDiagnosticDialog(false);
+            setRecommendDrawerCtx({
+              diagnosticBookingId: job._id,
+              customerName: job.customerName,
+              vehicleDisplay: job.vehicle,
+              serviceId: ctx.serviceId as Id<"services">,
+              serviceName: ctx.serviceName,
+              mechanicNote: ctx.mechanicNote,
+              defaultDate: job.scheduledDate,
+              defaultTime: job.scheduledTime,
+              defaultMechanicName: (job as any).mechanicName ?? null,
+              defaultDurationMinutes: ctx.defaultDurationMinutes,
+            });
+          }}
+        />
+
+        <RecommendServiceDrawer
+          open={recommendDrawerCtx !== null}
+          context={recommendDrawerCtx}
+          onClose={() => setRecommendDrawerCtx(null)}
+          onSent={() => {
+            setRecommendDrawerCtx(null);
+            onSuccess?.("Recommendation sent to customer");
           }}
           onError={(msg) => setActionError(msg)}
         />

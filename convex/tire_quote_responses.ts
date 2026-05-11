@@ -35,12 +35,10 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.booking_id);
     if (!booking) {
-      throw new Error("Booking not found");
+      throw new Error("We couldn't find that quote request. It may have been withdrawn.");
     }
     if (booking.status !== "pending_quote" && booking.status !== "quotes_ready") {
-      throw new Error(
-        `Cannot quote on a booking in status "${booking.status}" — only pending_quote / quotes_ready accept new quotes.`,
-      );
+      throw new Error("This quote request is no longer accepting new quotes.");
     }
 
     // Prevent duplicate quotes from the same shop on the same booking.

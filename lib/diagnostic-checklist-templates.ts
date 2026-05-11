@@ -5,13 +5,31 @@ export type DiagnosticSystem =
   | "battery_electrical"
   | "not_sure";
 
-export type DiagnosticChecklistItemStatus = "pending" | "checked" | "skipped";
+export type DiagnosticChecklistItemStatus =
+  | "pending"
+  | "checked"
+  | "flagged"
+  | "skipped";
+
+export type DiagnosticSkipReason =
+  | "not_applicable"
+  | "no_equipment"
+  | "customer_declined"
+  | "out_of_time";
 
 export interface DiagnosticChecklistItem {
   label: string;
   status: DiagnosticChecklistItemStatus;
   mechanic_note?: string;
+  skip_reason?: DiagnosticSkipReason;
 }
+
+export const SKIP_REASON_LABELS: Record<DiagnosticSkipReason, string> = {
+  not_applicable: "Not applicable",
+  no_equipment: "No equipment",
+  customer_declined: "Customer declined",
+  out_of_time: "Out of time",
+};
 
 const TEMPLATES: Record<DiagnosticSystem, string[]> = {
   brakes: [

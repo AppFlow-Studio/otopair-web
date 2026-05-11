@@ -242,7 +242,7 @@ function QuoteSubmissionDialog({
       });
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to submit quote");
+      setError(e instanceof Error ? e.message : "Couldn't submit your quote. Please try again.");
     } finally {
       setSubmitting(false);
     }

@@ -716,6 +716,7 @@ export default function MechanicDashboard() {
               : []
         }
         customerNotes={selectedWorkflowBooking?.customerNotes ?? null}
+        findingsNote={(selectedWorkflowBooking as any)?.diagnosticFindingsNote ?? null}
         recommendationState={selectedWorkflowBooking?.recommendationState ?? null}
         recommendedServiceName={selectedWorkflowBooking?.recommendedServiceName ?? null}
         recommendedServiceNote={selectedWorkflowBooking?.recommendedServiceNote ?? null}

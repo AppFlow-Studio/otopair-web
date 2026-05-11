@@ -92,9 +92,9 @@ export const submit = mutation({
   handler: async (ctx, args) => {
     // Verify booking exists and is completed
     const booking = await ctx.db.get(args.booking_id);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     if (booking.status !== "completed") {
-      throw new Error(`Cannot review booking with status "${booking.status}", expected "completed"`);
+      throw new Error("You can leave a review once this booking has been completed.");
     }
 
     // Invariant: Ensure only one review per booking

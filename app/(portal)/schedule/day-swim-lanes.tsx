@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Ban, Users } from "lucide-react";
+import { Ban, Car, Users } from "lucide-react";
 import {
   statusColors,
   dateToString,
@@ -54,6 +54,7 @@ interface DaySwimLanesProps {
   minTime: Date;
   maxTime: Date;
   nowTimestamp: number;
+  selectedEventId?: string | null;
   onSelectEvent: (event: CalendarEvent) => void;
   onProposeReschedule?: (proposal: RescheduleProposal) => void;
   onDragError?: (message: string) => void;
@@ -133,6 +134,7 @@ export default function DaySwimLanes({
   minTime,
   maxTime,
   nowTimestamp,
+  selectedEventId,
   onSelectEvent,
   onProposeReschedule,
   onDragError,
@@ -587,7 +589,7 @@ export default function DaySwimLanes({
     <div
       ref={containerRef}
       className="overflow-auto"
-      style={{ height: "calc(100vh - 320px)", minHeight: 500 }}
+      style={{ height: "calc(100vh - 180px)", minHeight: 500 }}
     >
       <div
         className="flex"
@@ -868,6 +870,15 @@ export default function DaySwimLanes({
                   const isBeingDragged = dragEventId === ev.id;
                   const isPendingCustomer =
                     ev.status === "pending_customer_acceptance";
+                  const isAwaitingRecResponse =
+                    ev.recommendationState === "pending_customer";
+                  const isAwaitingInfo =
+                    ev.diagnosticFollowupState === "awaiting_info";
+                  const diagnosticBadge = isAwaitingRecResponse
+                    ? "Waiting for customer response"
+                    : isAwaitingInfo
+                      ? "Awaiting info"
+                      : null;
                   const pendingLabel = getPendingApprovalLabel(ev);
 
                   // Placeholder at original position while dragging
@@ -895,6 +906,8 @@ export default function DaySwimLanes({
                     );
                   }
 
+                  const isSelected = selectedEventId === ev.id;
+
                   return (
                     <div
                       key={ev.id}
@@ -903,7 +916,7 @@ export default function DaySwimLanes({
                         isDraggable
                           ? "cursor-grab active:cursor-grabbing"
                           : "cursor-pointer"
-                      }`}
+                      } ${isSelected ? "ring-2 ring-primary ring-offset-1 shadow-md z-20" : ""}`}
                       style={{
                         top: slotTop,
                         height: slotHeight,
@@ -933,9 +946,24 @@ export default function DaySwimLanes({
                       <p className="truncate opacity-80">
                         {ev.serviceNames?.join(", ")}
                       </p>
+                      {(ev.vehicleDisplay || ev.licensePlate) && slotHeight > ROW_HEIGHT * 1.5 && (
+                        <p className="mt-0.5 flex items-center gap-1 truncate opacity-75 text-[10px]">
+                          <Car className="w-2.5 h-2.5 shrink-0" />
+                          <span className="truncate">
+                            {ev.vehicleDisplay}
+                            {ev.licensePlate ? ` · ${ev.licensePlate}` : ""}
+                          </span>
+                        </p>
+                      )}
                       {isPendingCustomer && (
                         <p className="truncate opacity-70 text-[10px]">
                           {pendingLabel}
+                        </p>
+                      )}
+                      {diagnosticBadge && (
+                        <p className="mt-0.5 inline-flex items-center gap-1 truncate rounded-sm bg-amber-100 px-1 text-[10px] font-semibold text-amber-900">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                          {diagnosticBadge}
                         </p>
                       )}
                     </div>

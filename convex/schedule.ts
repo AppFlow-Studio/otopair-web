@@ -56,6 +56,29 @@ async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
   return names;
 }
 
+async function resolveVehicleDisplay(ctx: any, vin?: string | null): Promise<string | null> {
+  if (!vin) return null;
+  const vehicle = await ctx.db
+    .query("vehicles")
+    .withIndex("by_vin", (q: any) => q.eq("vin", vin))
+    .unique();
+  if (!vehicle) return null;
+  const parts: string[] = [];
+  if (vehicle.year != null) parts.push(String(vehicle.year));
+  if (vehicle.trim_id) {
+    const trim = await ctx.db.get(vehicle.trim_id);
+    if (trim) {
+      const model = await ctx.db.get(trim.model_id);
+      if (model) {
+        const make = await ctx.db.get(model.make_id);
+        if (make) parts.push(make.name);
+        parts.push(model.name);
+      }
+    }
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
 async function resolveMechanicPhotoUrl(ctx: any, photo?: string | null) {
   if (!photo) return null;
 
@@ -311,7 +334,11 @@ export const getBookingsForRange = query({
             ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
             : null,
           serviceNames: await resolveServiceNames(ctx, booking.service_ids),
+          vehicleDisplay: await resolveVehicleDisplay(ctx, booking.vin),
+          licensePlate: booking.vin ? String(booking.vin).slice(-4) : null,
           totalCost: booking.total_cost,
+          recommendationState: booking.recommendation_state ?? null,
+          diagnosticFollowupState: booking.diagnostic_followup_state ?? null,
         };
       })
     );
@@ -340,14 +367,14 @@ export const deleteBlockTimeType = mutation({
   args: { typeId: v.id("block_time_types") },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const record = await ctx.db.get(args.typeId);
     if (!record) throw new Error("Block time type not found");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary || String(primary.shopId) !== String(record.shop_id)) {
-      throw new Error("Not authorized");
+      throw new Error("You don't have access to this shop's schedule.");
     }
 
     await ctx.db.delete(args.typeId);
@@ -358,10 +385,10 @@ export const saveBlockTimeType = mutation({
   args: { title: v.string() },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
-    if (!primary) throw new Error("Not authorized");
+    if (!primary) throw new Error("You don't have access to this shop's schedule.");
 
     const existing = await ctx.db
       .query("block_time_types")
@@ -416,14 +443,14 @@ export const updateShopHours = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const hoursRecord = await ctx.db.get(args.hoursId);
     if (!hoursRecord) throw new Error("Hours record not found");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary || String(primary.shopId) !== String(hoursRecord.shop_id)) {
-      throw new Error("Not authorized");
+      throw new Error("You don't have access to this shop's schedule.");
     }
 
     const patch: any = {};
@@ -444,7 +471,7 @@ function expandOccurrenceDates(
   const [sy, sm, sd] = startDate.split("-").map(Number);
   const [uy, um, ud] = until.split("-").map(Number);
   if (!sy || !sm || !sd || !uy || !um || !ud) {
-    throw new Error("Invalid date format");
+    throw new Error("That date doesn't look right. Please use the date picker and try again.");
   }
   const endUtc = Date.UTC(uy, um - 1, ud);
   const out: string[] = [];
@@ -501,14 +528,14 @@ export const blockSlot = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
-    if (!primary) throw new Error("Not authorized");
+    if (!primary) throw new Error("You don't have access to this shop's schedule.");
 
     const mechanicIds = await getMechanicIdsForBlock(ctx, primary.shopId, args.mechanicId);
     if (mechanicIds.length === 0) {
-      throw new Error("No active mechanics available for this shop");
+      throw new Error("No active mechanics yet. Add a team member in the Team page before scheduling.");
     }
 
     const isRecurring = !!(args.frequency && args.until);
@@ -569,14 +596,14 @@ export const updateBlockedSlot = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const slot = await ctx.db.get(args.slotId);
     if (!slot) throw new Error("Slot not found");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary || String(primary.shopId) !== String(slot.shop_id)) {
-      throw new Error("Not authorized");
+      throw new Error("You don't have access to this shop's schedule.");
     }
 
     const nextMechanicId = args.mechanicId ?? slot.mechanic_id;
@@ -626,14 +653,14 @@ export const unblockSlot = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const slot = await ctx.db.get(args.slotId);
     if (!slot) throw new Error("Slot not found");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary || String(primary.shopId) !== String(slot.shop_id)) {
-      throw new Error("Not authorized");
+      throw new Error("You don't have access to this shop's schedule.");
     }
 
     const mechanicId = slot.mechanic_id;
@@ -655,10 +682,10 @@ export const blockMechanicDay = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
-    if (!primary) throw new Error("Not authorized");
+    if (!primary) throw new Error("You don't have access to this shop's schedule.");
 
     const dayDate = new Date(`${args.date}T00:00:00`);
     const dayOfWeek = dayDate.getDay();
@@ -760,10 +787,10 @@ export const copyBlockedSlotsToNextWeek = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
-    if (!primary) throw new Error("Not authorized");
+    if (!primary) throw new Error("You don't have access to this shop's schedule.");
 
     const start = new Date(`${args.weekStartDate}T00:00:00`);
     const endDate = new Date(start);

@@ -79,7 +79,8 @@ export const updateStatus = mutation({
 
     // Prevent transitions from terminal states
     if (isTerminal(payment.status)) {
-      throw new Error(`Cannot transition from terminal state: ${payment.status}`);
+      const readable = String(payment.status).replace(/_/g, " ");
+      throw new Error(`This payment is already ${readable} and can no longer change.`);
     }
 
     // Patch payment with new status

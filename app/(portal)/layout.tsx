@@ -545,7 +545,7 @@ export default function PortalLayout({
             </div>
           </header>
 
-          <main className="flex-1 p-6">{children}</main>
+          <main className="flex-1 px-6 pt-6 pb-0">{children}</main>
         </div>
       </div>
       <KeyboardShortcutsModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />

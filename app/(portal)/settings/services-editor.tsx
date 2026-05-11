@@ -74,7 +74,7 @@ export default function ServicesEditor() {
       });
       setMessage("Services saved.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save services.");
+      setError(err instanceof Error ? err.message : "Couldn't save your services. Please try again.");
     } finally {
       setSaving(false);
     }

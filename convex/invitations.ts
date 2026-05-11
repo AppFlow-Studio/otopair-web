@@ -24,7 +24,7 @@ export const create = mutation({
       .query("users")
       .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", args.invitedByClerkUserId))
       .unique();
-    if (!inviter) throw new Error("Inviter not found");
+    if (!inviter) throw new Error("We couldn't verify who's sending this invitation. Please sign in again.");
 
     const existing = await ctx.db
       .query("shop_invitations")
@@ -206,7 +206,7 @@ export const acceptAsCurrentUser = mutation({
   args: { token: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+    if (!identity) throw new Error("Your session has expired. Please sign in again.");
 
     const now = Date.now();
     const invitation = await ctx.db
@@ -214,7 +214,7 @@ export const acceptAsCurrentUser = mutation({
       .withIndex("by_token", (q) => q.eq("token", args.token))
       .first();
 
-    if (!invitation) throw new Error("Invitation not found.");
+    if (!invitation) throw new Error("This invitation link is no longer valid.");
     if (invitation.status === "revoked") throw new Error("This invitation has been revoked.");
     if (invitation.status === "accepted") {
       return { shopId: invitation.shop_id, role: invitation.role };
@@ -242,7 +242,7 @@ export const acceptAsCurrentUser = mutation({
       user = await ctx.db.get(userId);
     }
 
-    if (!user) throw new Error("User not found");
+    if (!user) throw new Error("We couldn't find your account. Try signing in again.");
 
     const existingShopUser = await ctx.db
       .query("shop_users")
@@ -301,7 +301,7 @@ export const updateMemberRole = mutation({
   args: { shopUserId: v.id("shop_users"), role: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+    if (!identity) throw new Error("Your session has expired. Please sign in again.");
     await ctx.db.patch(args.shopUserId, { role: args.role, updated_at: Date.now() });
   },
 });

@@ -65,7 +65,7 @@ export const getVehicleWithOwners = query({
       .unique();
     
     if (!vehicle) {
-      throw new Error(`Vehicle not found: ${args.vin}`);
+      throw new Error("We couldn't find this vehicle. Double-check the VIN and try again.");
     }
     
     // Get active owners
@@ -394,7 +394,7 @@ export const removeOwner = mutation({
       .unique();
     
     if (!ownership) {
-      throw new Error(`No ownership found for VIN: ${args.vin}, User: ${args.userId}`);
+      throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
     // Delete Smartcar connection rows for this ownership
@@ -450,7 +450,7 @@ export const removeOwnerById = mutation({
   handler: async (ctx, args) => {
     const ownership = await ctx.db.get(args.vehicleOwnerId);
     if (!ownership) {
-      throw new Error(`No ownership found for id: ${args.vehicleOwnerId}`);
+      throw new Error("We couldn't find that vehicle ownership record.");
     }
 
     const smartcarConnections = await ctx.db
@@ -514,7 +514,7 @@ export const updateOwnershipPrimary = mutation({
       .unique();
     
     if (!ownership) {
-      throw new Error(`No ownership found for VIN: ${args.vin}, User: ${args.userId}`);
+      throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
     if (args.is_primary) {
@@ -561,7 +561,7 @@ export const updateMileage = mutation({
       .unique();
     
     if (!ownership) {
-      throw new Error(`No ownership found for VIN: ${args.vin}, User: ${args.userId}`);
+      throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
     await ctx.db.patch(ownership._id, { mileage: args.mileage });
@@ -657,17 +657,17 @@ export const saveVehiclePreOnboarding = mutation({
   handler: async (ctx, args) => {
     const owner = await ctx.db.get(args.vehicleOwnerId);
     if (!owner) {
-      throw new Error(`Vehicle ownership not found: ${args.vehicleOwnerId}`);
+      throw new Error("We couldn't find that vehicle ownership record.");
     }
 
     if (args.ownershipType !== "leased" && args.ownershipType !== "owned") {
-      throw new Error("Invalid ownershipType");
+      throw new Error("Please choose a valid ownership type (owned or leased).");
     }
     if (args.ownershipType === "owned" && args.ownedSinceNew === undefined) {
-      throw new Error("ownedSinceNew is required when ownershipType is owned");
+      throw new Error("Please tell us whether the vehicle was bought new or used.");
     }
     if (args.currentMileage < 0) {
-      throw new Error("currentMileage must be >= 0");
+      throw new Error("Current mileage can't be negative.");
     }
 
     // Map new pre-onboarding bands to existing fields used by maintenance logic.
@@ -1051,7 +1051,7 @@ export const saveOnboardingField = mutation({
         break;
       }
       default:
-        throw new Error(`Unknown onboarding field: ${field}`);
+        throw new Error("We couldn't save that detail. Please refresh and try again.");
     }
 
     // ── Auto-compute onboardingComplete ────────────────────────────────
@@ -1151,7 +1151,7 @@ export const autoCompleteNewVehicleOnboarding = mutation({
   handler: async (ctx, args) => {
     const { vehicleOwnerId } = args;
     const owner = await ctx.db.get(vehicleOwnerId);
-    if (!owner) throw new Error("Vehicle owner not found");
+    if (!owner) throw new Error("We couldn't find that vehicle owner record.");
     if (owner.onboardingComplete) return { success: true };
 
     const now = Date.now();
@@ -1233,7 +1233,7 @@ export const updateWarningLight = mutation({
   },
   handler: async (ctx, args) => {
     const owner = await ctx.db.get(args.vehicleOwnerId);
-    if (!owner) throw new Error("Vehicle owner not found");
+    if (!owner) throw new Error("We couldn't find that vehicle owner record.");
 
     const current = (owner.knownIssues as string[] | undefined) ?? [];
 

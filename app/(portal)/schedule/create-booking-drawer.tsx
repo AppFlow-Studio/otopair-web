@@ -81,6 +81,14 @@ function buildTimeOptions(): Array<{ value: string; label: string }> {
 
 const TIME_OPTIONS = buildTimeOptions();
 
+const DIAGNOSTIC_TIME_BAND: Record<string, string> = {
+  brakes: "30–60 min",
+  tires_wheels: "30–60 min",
+  engine: "45–90 min",
+  battery_electrical: "45–90 min",
+  not_sure: "45–90 min",
+};
+
 function toMins(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
   return h * 60 + m;
@@ -758,7 +766,7 @@ export default function CreateBookingDrawer({
         {isDiagnostic && (
           <section>
             <DrawerSectionHeader icon={Stethoscope} label="Diagnostic system" />
-            <DrawerFieldLabel>What's bothering the customer?</DrawerFieldLabel>
+            <DrawerFieldLabel>What&apos;s bothering the customer?</DrawerFieldLabel>
             <div className="space-y-1.5">
               {([
                 { value: "brakes", label: "Brakes", hint: "Squealing, grinding, soft pedal" },
@@ -792,6 +800,27 @@ export default function CreateBookingDrawer({
                 );
               })}
             </div>
+
+            {diagnosticSystem && (
+              <div className="mt-3 rounded-xl border border-border bg-muted/30 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="text-muted-foreground">Time at shop</span>
+                  <span className="font-semibold text-foreground tabular-nums">
+                    {DIAGNOSTIC_TIME_BAND[diagnosticSystem]}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="text-muted-foreground">Diagnostic fee</span>
+                  <span className="font-semibold text-foreground tabular-nums">
+                    $120–180
+                    <span className="ml-1 font-normal text-muted-foreground">· captured on completion</span>
+                  </span>
+                </div>
+                <p className="rounded-md bg-background/70 px-2.5 py-2 text-[11px] font-medium text-foreground border border-border">
+                  🛡 No repair is booked or charged without the customer&apos;s confirmation.
+                </p>
+              </div>
+            )}
           </section>
         )}
 

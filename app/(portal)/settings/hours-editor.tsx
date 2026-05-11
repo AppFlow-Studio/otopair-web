@@ -70,7 +70,7 @@ export default function HoursEditor() {
       await updateHours({ hours: rows });
       setMessage("Hours saved.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save hours.");
+      setError(err instanceof Error ? err.message : "Couldn't save your hours. Please try again.");
     } finally {
       setSaving(false);
     }

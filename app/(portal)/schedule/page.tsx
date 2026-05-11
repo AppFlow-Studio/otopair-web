@@ -325,6 +325,7 @@ export default function SchedulePage() {
 
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
   const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+  const dismissManualSchedulingAlert = useMutation(api.bookings.dismissManualSchedulingAlert);
   const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
   const rescheduleFromNoShowAlert = useMutation(api.bookings.rescheduleFromNoShowAlert);
   const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
@@ -585,7 +586,7 @@ export default function SchedulePage() {
       setToast({ msg: `Blocked full day for ${mechanicName}`, key: Date.now() });
       setBlockDayConfirm(null);
     } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Failed to block day", key: Date.now() });
+      setToast({ msg: err instanceof Error ? err.message : "Couldn't block the day. Please try again.", key: Date.now() });
     }
   }, [blockMechanicDay]);
 
@@ -595,7 +596,7 @@ export default function SchedulePage() {
       await unblockSlot({ slotId: slotId as Id<"time_slots"> });
       setToast({ msg: "Slot unblocked", key: Date.now() });
     } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Failed to unblock slot", key: Date.now() });
+      setToast({ msg: err instanceof Error ? err.message : "Couldn't unblock this time. Please try again.", key: Date.now() });
     }
   }, [unblockSlot]);
 
@@ -927,9 +928,13 @@ export default function SchedulePage() {
           customerName: b.customerName,
           mechanicName: b.mechanicName,
           serviceNames: b.serviceNames,
+          vehicleDisplay: (b as any).vehicleDisplay ?? null,
+          licensePlate: (b as any).licensePlate ?? null,
           totalCost: b.totalCost,
           scheduleChangeMode: b.scheduleChangeMode,
           customerCanRestoreOriginal: b.customerCanRestoreOriginal,
+          recommendationState: (b as any).recommendationState ?? null,
+          diagnosticFollowupState: (b as any).diagnosticFollowupState ?? null,
         };
       });
 
@@ -1465,8 +1470,39 @@ export default function SchedulePage() {
           </div>
           <div className="mt-3 space-y-2">
             {manualSchedulingAlerts.map((alert) => (
-              <div key={String(alert._id)} className="rounded-xl bg-white/90 px-4 py-3 text-sm text-red-900">
-                {alert.reason}
+              <div
+                key={String(alert._id)}
+                className="flex items-start justify-between gap-3 rounded-xl bg-white/90 px-4 py-3 text-sm text-red-900"
+              >
+                <div className="flex-1 min-w-0">
+                  <p>{alert.reason}</p>
+                  {alert.bookingId ? (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
+                      className="mt-1.5 text-xs font-medium text-red-700 underline-offset-2 hover:underline"
+                    >
+                      Open booking
+                    </button>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await dismissManualSchedulingAlert({ alertId: alert._id as Id<"notification_outbox"> });
+                      setToast({ msg: "Alert dismissed", key: Date.now() });
+                    } catch (err) {
+                      setToast({
+                        msg: err instanceof Error ? err.message : "Couldn't dismiss alert",
+                        key: Date.now(),
+                      });
+                    }
+                  }}
+                  className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50"
+                >
+                  Dismiss
+                </button>
               </div>
             ))}
           </div>
@@ -1556,7 +1592,7 @@ export default function SchedulePage() {
       {/* Calendar */}
       <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar relative">
         {bookings === undefined ? (
-          <div className="flex items-center justify-center" style={{ height: "calc(100vh - 320px)", minHeight: 500 }}>
+          <div className="flex items-center justify-center" style={{ height: "calc(100vh - 180px)", minHeight: 500 }}>
             <Loader2 className="w-6 h-6 text-primary animate-spin" />
           </div>
         ) : null}
@@ -1569,6 +1605,7 @@ export default function SchedulePage() {
             nowTimestamp={nowTimestamp}
             currentDate={currentDate}
             onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
+            selectedEventId={selectedBookingId ?? null}
             onProposeReschedule={handleProposeReschedule}
             onDragError={(msg) => setToast({ msg, key: Date.now() })}
             onContextMenuCell={(info) => {
@@ -1665,7 +1702,7 @@ export default function SchedulePage() {
             getNow={() => new Date(nowTimestamp)}
             step={30}
             timeslots={2}
-            style={{ height: "calc(100vh - 320px)", minHeight: 500 }}
+            style={{ height: "calc(100vh - 180px)", minHeight: 500 }}
             onSelectEvent={(event) => {
               const ev = event as CalendarEvent;
               if (ev.id.startsWith("month-summary-")) {
@@ -1708,7 +1745,7 @@ export default function SchedulePage() {
           drawerOpen ? "w-[552px]" : "w-0"
         }`}
       >
-        <div className="w-[528px] ml-6 flex h-[calc(100vh-320px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
+        <div className="w-[528px] ml-6 flex h-[calc(100vh-180px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
           {blockTimeDrawer && (
             <div className="flex flex-col h-full">
               {/* Header */}
@@ -2030,7 +2067,7 @@ export default function SchedulePage() {
                       }
                       setBlockTimeDrawer(null);
                     } catch (err: unknown) {
-                      setToast({ msg: err instanceof Error ? err.message : "Failed to save blocked time", key: Date.now() });
+                      setToast({ msg: err instanceof Error ? err.message : "Couldn't save the blocked time. Please try again.", key: Date.now() });
                     } finally {
                       setBtSaving(false);
                     }
@@ -2048,7 +2085,7 @@ export default function SchedulePage() {
 
       {/* Job detail drawer */}
       <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[552px]" : "w-0"}`}>
-        <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-320px)] min-h-[500px]">
+        <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-180px)] min-h-[500px]">
           {selectedBookingId && (
             <BookingDetailPanel
               ref={jobDetailRef}
@@ -2069,7 +2106,7 @@ export default function SchedulePage() {
 
       {/* Create booking drawer */}
       {createBookingDrawer && (
-        <div className="flex-shrink-0 w-[552px] h-[calc(100vh-320px)] min-h-[500px]">
+        <div className="flex-shrink-0 w-[552px] h-[calc(100vh-180px)] min-h-[500px]">
           <div className="w-[528px] ml-6 flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card">
             <CreateBookingDrawer
               date={createBookingDrawer.date}
@@ -2338,7 +2375,7 @@ export default function SchedulePage() {
                     try {
                       await deleteBlockTimeType({ typeId: contextMenu.typeId as Id<"block_time_types"> });
                     } catch (err: unknown) {
-                      setToast({ msg: err instanceof Error ? err.message : "Failed to delete type", key: Date.now() });
+                      setToast({ msg: err instanceof Error ? err.message : "Couldn't delete that block type. Please try again.", key: Date.now() });
                     }
                   }}
                 >

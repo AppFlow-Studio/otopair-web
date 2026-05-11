@@ -494,7 +494,7 @@ export const redeemSelected = mutation({
 
     // Gift card: deduct full balance
     if (wallet.balance <= 0) {
-      throw new Error("No balance to redeem");
+      throw new Error("You don't have any rewards balance to redeem yet.");
     }
 
     const amount = wallet.balance;
@@ -555,7 +555,7 @@ export const claimContributionReward = mutation({
           q.and(q.eq(q.field("action_type"), args.actionType), q.eq(q.field("reference_id"), args.referenceId))
         )
         .first();
-      if (existing) throw new Error("Reward already claimed");
+      if (existing) throw new Error("This reward has already been claimed.");
     }
 
     // Referral cap: 5 max
@@ -564,7 +564,7 @@ export const claimContributionReward = mutation({
         .query("user_contribution_claims")
         .withIndex("by_user_action", (q) => q.eq("user_id", args.userId).eq("action_type", "referral"))
         .collect();
-      if (referrals.length >= 5) throw new Error("Referral credit cap reached");
+      if (referrals.length >= 5) throw new Error("You've reached the maximum of 5 referral credits.");
     }
 
     const now = Date.now();

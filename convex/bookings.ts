@@ -36,6 +36,7 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { isTerminal, validateTransition } from "./booking_status_history";
+import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import {
   addMinutesToHHMM,
   getBookingEndTime,
@@ -84,6 +85,20 @@ import {
   templateForSystem,
   type DiagnosticSystem,
 } from "../lib/diagnostic-checklist-templates";
+
+function assertFlaggedItemsHaveNotes(booking: any) {
+  const checklist = booking.diagnostic_checklist ?? [];
+  const offenders = checklist.filter(
+    (item: any) =>
+      item.status === "flagged" &&
+      (!item.mechanic_note || item.mechanic_note.trim().length === 0),
+  );
+  if (offenders.length > 0) {
+    throw new Error(
+      `Add a note to ${offenders.length} flagged item${offenders.length === 1 ? "" : "s"} before submitting.`,
+    );
+  }
+}
 
 function resolveDiagnosticSystem(
   booking: any,
@@ -702,7 +717,7 @@ export const create = mutation({
       .withIndex("by_vin", (q) => q.eq("vin", normalizedVin))
       .unique();
     if (!vehicle) {
-      throw new Error(`Vehicle not found: ${args.vin}`);
+      throw new Error("We couldn't find this vehicle in our records. Double-check the VIN and try again.");
     }
 
     // Validate user owns this vehicle (active ownership)
@@ -840,7 +855,7 @@ export const createBatch = mutation({
       .withIndex("by_vin", (q) => q.eq("vin", normalizedVin))
       .unique();
     if (!vehicle) {
-      throw new Error(`Vehicle not found: ${args.vin}`);
+      throw new Error("We couldn't find this vehicle in our records. Double-check the VIN and try again.");
     }
 
     // Validate user owns this vehicle
@@ -982,7 +997,7 @@ export const updateStatus = mutation({
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     if (args.newStatus === "no_show") {
       throw new Error("Use markPostThresholdNoShow to mark a booking no-show.");
     }
@@ -1001,7 +1016,7 @@ export const markVehicleAtShop = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
     if (booking.status === "vehicle_at_shop") {
@@ -1050,7 +1065,7 @@ export const markPostThresholdNoShow = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
     await assertCustomerLateThresholdReached(ctx, booking);
@@ -1204,7 +1219,7 @@ export const rescheduleFromNoShowAlert = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
     await assertCustomerLateThresholdReached(ctx, booking);
@@ -1236,11 +1251,11 @@ export const answerOverrunCheckIn = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     const shopUser = await requireShopStaff(ctx, user._id, booking.shop_id);
 
     const checkin = await getOpenOverrunCheckinForBooking(ctx, booking._id);
-    if (!checkin) throw new Error("No active overrun check-in found.");
+    if (!checkin) throw new Error("This overrun check-in has already been resolved. Refresh to see the latest status.");
 
     const now = Date.now();
     if (args.isComplete) {
@@ -1277,7 +1292,7 @@ export const answerOverrunExtension = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     const shopUser = await requireShopStaff(ctx, user._id, booking.shop_id);
 
     if (!OVERRUN_EXTENSION_OPTION_SET.has(args.extensionMinutes)) {
@@ -1285,7 +1300,7 @@ export const answerOverrunExtension = mutation({
     }
 
     const checkin = await getOpenOverrunCheckinForBooking(ctx, booking._id);
-    if (!checkin) throw new Error("No active overrun check-in found.");
+    if (!checkin) throw new Error("This overrun check-in has already been resolved. Refresh to see the latest status.");
 
     await applyOverrunExtension(ctx, {
       checkin,
@@ -1317,7 +1332,7 @@ export const updateLiveStage = mutation({
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     if (booking.status !== "in_progress") {
       throw new Error("Booking is not in progress");
     }
@@ -1610,14 +1625,14 @@ function formatCustomerName(customer: any) {
 
 async function getCurrentUser(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
-  if (!identity) throw new Error("Not authenticated");
+  if (!identity) throw new Error("Your session has expired. Please sign in again.");
 
   const user = await ctx.db
     .query("users")
     .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", identity.subject))
     .unique();
 
-  if (!user) throw new Error("User not found");
+  if (!user) throw new Error("We couldn't find your account. Try signing in again.");
   return user;
 }
 
@@ -3481,9 +3496,22 @@ async function buildDownstreamMovementPlan(
     if (bookingStartMinutes >= cursorEndMinutes) break;
 
     if (!DOWNSTREAM_MOVABLE_STATUSES.has(downstreamBooking.status)) {
+      const customer = downstreamBooking.user_id
+        ? await ctx.db.get(downstreamBooking.user_id)
+        : null;
+      const customerName =
+        `${(customer as any)?.first_name ?? ""} ${(customer as any)?.last_name ?? ""}`.trim() ||
+        (customer as any)?.email ||
+        "the next customer";
+      const statusLabel =
+        BOOKING_STATUS_VISUALS[downstreamBooking.status as BookingStatus]?.label?.toLowerCase() ??
+        String(downstreamBooking.status).replace(/_/g, " ");
+      const timeLabel = downstreamBooking.scheduled_time
+        ? ` at ${downstreamBooking.scheduled_time}`
+        : "";
       return {
         proposals,
-        blockingReason: `Booking ${String(downstreamBooking._id)} is already ${downstreamBooking.status} and needs manual schedule review.`,
+        blockingReason: `${customerName}'s booking${timeLabel} is already ${statusLabel} and can't be moved automatically. Please reschedule it manually.`,
       };
     }
 
@@ -4212,7 +4240,10 @@ export async function applyBookingStatusTransition(
   if (error) throw new Error(error);
 
   if (isTerminal(booking.status)) {
-    throw new Error(`Cannot transition from terminal state: ${booking.status}`);
+    const label =
+      BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
+      String(booking.status).replace(/_/g, " ");
+    throw new Error(`This booking is already ${label} and can no longer be updated.`);
   }
 
   const patch: { status: string; updated_at: number; live_stage?: string } = {
@@ -5139,6 +5170,7 @@ export const getJobDetail = query({
       diagnosticChecklist: booking.diagnostic_checklist ?? null,
       diagnosticChecklistCompletedAtMs:
         booking.diagnostic_checklist_completed_at_ms ?? null,
+      diagnosticFindingsNote: booking.diagnostic_findings_note ?? null,
       recommendedServiceId: booking.recommended_service_id ?? null,
       recommendedServiceName: booking.recommended_service_id
         ? ((await ctx.db.get(booking.recommended_service_id)) as any)?.name ?? null
@@ -5147,6 +5179,8 @@ export const getJobDetail = query({
       recommendationState: booking.recommendation_state ?? null,
       recommendationSentAtMs: booking.recommendation_sent_at_ms ?? null,
       recommendationDecidedAtMs: booking.recommendation_decided_at_ms ?? null,
+      recommendedScheduledDate: booking.recommended_scheduled_date ?? null,
+      recommendedScheduledTime: booking.recommended_scheduled_time ?? null,
       parentJobId: booking.parent_job_id ?? null,
       diagnosticFollowupState: booking.diagnostic_followup_state ?? null,
       awaitingInfoNote: booking.awaiting_info_note ?? null,
@@ -5208,7 +5242,7 @@ export const confirmVehiclePassport = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
     if (!["vehicle_at_shop", "in_progress"].includes(booking.status)) {
@@ -5271,7 +5305,7 @@ export const startWithPrejob = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
     if (!["vehicle_at_shop", "in_progress"].includes(booking.status)) {
@@ -5341,7 +5375,7 @@ export const savePrejob = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
     if (!["vehicle_at_shop", "in_progress"].includes(booking.status)) {
@@ -5370,7 +5404,7 @@ export const completeWithPostjob = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
@@ -5457,14 +5491,23 @@ export const updateDiagnosticChecklistItem = mutation({
     status: v.union(
       v.literal("pending"),
       v.literal("checked"),
+      v.literal("flagged"),
       v.literal("skipped"),
     ),
     mechanicNote: v.optional(v.string()),
+    skipReason: v.optional(
+      v.union(
+        v.literal("not_applicable"),
+        v.literal("no_equipment"),
+        v.literal("customer_declined"),
+        v.literal("out_of_time"),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
     let checklist = booking.diagnostic_checklist ?? [];
@@ -5478,17 +5521,29 @@ export const updateDiagnosticChecklistItem = mutation({
       }
     }
     if (args.index < 0 || args.index >= checklist.length) {
-      throw new Error("Invalid checklist index");
+      throw new Error("That checklist item is no longer available. Refresh and try again.");
     }
-    const next = checklist.map((item, idx) =>
-      idx === args.index
-        ? {
-            ...item,
-            status: args.status,
-            mechanic_note: args.mechanicNote?.trim() || undefined,
-          }
-        : item,
-    );
+    const trimmedNote = args.mechanicNote?.trim();
+    const next = checklist.map((item, idx) => {
+      if (idx !== args.index) return item;
+      const updated: any = { ...item, status: args.status };
+      if (args.status === "pending") {
+        delete updated.mechanic_note;
+        delete updated.skip_reason;
+      } else {
+        if (trimmedNote && trimmedNote.length > 0) {
+          updated.mechanic_note = trimmedNote;
+        } else if (args.mechanicNote !== undefined) {
+          delete updated.mechanic_note;
+        }
+        if (args.status === "skipped") {
+          if (args.skipReason) updated.skip_reason = args.skipReason;
+        } else {
+          delete updated.skip_reason;
+        }
+      }
+      return updated;
+    });
 
     await ctx.db.patch(booking._id, {
       diagnostic_checklist: next,
@@ -5499,12 +5554,30 @@ export const updateDiagnosticChecklistItem = mutation({
   },
 });
 
+export const updateDiagnosticFindings = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    note: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    await ctx.db.patch(booking._id, {
+      diagnostic_findings_note: args.note.trim() || undefined,
+      updated_at: Date.now(),
+    });
+    return { success: true };
+  },
+});
+
 export const completeDiagnosticBooking = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
     const resolvedSystem = resolveDiagnosticSystem(
@@ -5524,6 +5597,7 @@ export const completeDiagnosticBooking = mutation({
         `Resolve all ${checklist.length} checklist items before completing (${unresolved.length} pending).`,
       );
     }
+    assertFlaggedItemsHaveNotes(booking);
 
     const now = Date.now();
     await ctx.db.patch(booking._id, {
@@ -5553,7 +5627,7 @@ export const parkDiagnosticForInfo = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
     const note = args.note.trim();
@@ -5575,7 +5649,7 @@ export const resumeDiagnosticFollowUp = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
     await ctx.db.patch(booking._id, {
@@ -5648,11 +5722,12 @@ export const flagOutOfScopeFinding = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
     const note = args.note.trim();
     if (!note) throw new Error("Describe the finding before flagging.");
+    assertFlaggedItemsHaveNotes(booking);
 
     const now = Date.now();
     await ctx.db.patch(booking._id, {
@@ -5682,11 +5757,13 @@ export const attachRecommendedService = mutation({
     bookingId: v.id("bookings"),
     serviceId: v.id("services"),
     mechanicNote: v.string(),
+    scheduledDate: v.optional(v.string()),
+    scheduledTime: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
     const service = await ctx.db.get(args.serviceId);
@@ -5694,6 +5771,7 @@ export const attachRecommendedService = mutation({
 
     const note = args.mechanicNote.trim();
     if (!note) throw new Error("Add a short note explaining the finding.");
+    assertFlaggedItemsHaveNotes(booking);
 
     const now = Date.now();
     await ctx.db.patch(booking._id, {
@@ -5702,6 +5780,8 @@ export const attachRecommendedService = mutation({
       recommendation_state: "pending_customer",
       recommendation_sent_at_ms: now,
       recommendation_decided_at_ms: undefined,
+      recommended_scheduled_date: args.scheduledDate,
+      recommended_scheduled_time: args.scheduledTime,
       diagnostic_followup_state: "resolved",
       updated_at: now,
     });
@@ -5718,7 +5798,7 @@ export const customerDecideRecommendation = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
     if (booking.recommendation_state !== "pending_customer") {
@@ -5742,30 +5822,93 @@ export const customerDecideRecommendation = mutation({
     const service = await ctx.db.get(booking.recommended_service_id);
     if (!service) throw new Error("Recommended service no longer exists.");
 
+    const scheduledForLater =
+      !!booking.recommended_scheduled_date &&
+      !!booking.recommended_scheduled_time &&
+      (booking.recommended_scheduled_date !== booking.scheduled_date ||
+        booking.recommended_scheduled_time !== booking.scheduled_time);
+
+    const followUpMinutes = Math.round(
+      ((service as any).default_labor_hours ?? 1) * 60,
+    );
+
+    const followUpDate = scheduledForLater
+      ? booking.recommended_scheduled_date!
+      : booking.scheduled_date;
+    const followUpStart = scheduledForLater
+      ? booking.recommended_scheduled_time!
+      : getBookingEndTime(
+          booking.scheduled_time,
+          booking.estimated_labor_minutes,
+        );
+
     const followUpId = await ctx.db.insert("bookings", {
       user_id: booking.user_id,
       shop_id: booking.shop_id,
       mechanic_id: booking.mechanic_id,
       vin: booking.vin,
       service_ids: [booking.recommended_service_id],
-      scheduled_date: booking.scheduled_date,
-      scheduled_time: booking.scheduled_time,
-      status: "in_progress",
+      scheduled_date: followUpDate,
+      scheduled_time: followUpStart,
+      status: scheduledForLater ? "confirmed" : "in_progress",
       assignment_preference: booking.assignment_preference,
       labor_cost: 0,
       parts_cost: 0,
       total_cost: 0,
-      estimated_labor_minutes:
-        Math.round(((service as any).default_labor_hours ?? 1) * 60),
+      estimated_labor_minutes: followUpMinutes,
       parent_job_id: booking._id,
-      vehicle_arrived_at_ms: booking.vehicle_arrived_at_ms ?? now,
+      vehicle_arrived_at_ms: scheduledForLater
+        ? undefined
+        : booking.vehicle_arrived_at_ms ?? now,
       created_at: now,
       updated_at: now,
     });
 
+    // Right-after path: cascade-push later bookings on the same mechanic's lane
+    if (!scheduledForLater && booking.mechanic_id) {
+      const toMinutes = (hhmm: string) => {
+        const [h, m] = hhmm.split(":").map(Number);
+        return h * 60 + m;
+      };
+      const shopBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_shop_id", (q: any) =>
+          q.eq("shop_id", booking.shop_id),
+        )
+        .collect();
+      const laneBookings = shopBookings
+        .filter(
+          (b: any) =>
+            String(b.mechanic_id) === String(booking.mechanic_id) &&
+            b.scheduled_date === followUpDate &&
+            String(b._id) !== String(booking._id) &&
+            String(b._id) !== String(followUpId) &&
+            b.status !== "cancelled" &&
+            b.status !== "declined" &&
+            b.status !== "no_show" &&
+            toMinutes(b.scheduled_time) >= toMinutes(followUpStart),
+        )
+        .sort(
+          (a: any, b: any) =>
+            toMinutes(a.scheduled_time) - toMinutes(b.scheduled_time),
+        );
+
+      let cursor = addMinutesToHHMM(followUpStart, followUpMinutes);
+      for (const b of laneBookings) {
+        if (toMinutes(b.scheduled_time) >= toMinutes(cursor)) break;
+        await ctx.db.patch(b._id, {
+          scheduled_time: cursor,
+          updated_at: now,
+        });
+        cursor = addMinutesToHHMM(cursor, b.estimated_labor_minutes ?? 60);
+      }
+    }
+
     await ctx.db.patch(booking._id, {
       recommendation_state: "confirmed",
       recommendation_decided_at_ms: now,
+      status: "completed",
+      completed_at_ms: now,
       updated_at: now,
     });
 
@@ -5778,7 +5921,7 @@ export const generatePostjobPhotoUploadUrl = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     await requireShopStaff(ctx, user._id, booking.shop_id);
     return await ctx.storage.generateUploadUrl();
   },
@@ -6037,7 +6180,7 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
     const currentMechanicId = await getBookingMechanicId(ctx, booking);
@@ -6152,7 +6295,7 @@ export const accept = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
@@ -6175,7 +6318,7 @@ export const start = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
     if (booking.status !== "vehicle_at_shop") {
@@ -6208,7 +6351,7 @@ export const complete = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
@@ -6253,7 +6396,7 @@ export const cancel = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
@@ -6298,7 +6441,10 @@ async function proposeRescheduleImpl(
     "pending_customer_acceptance",
   ];
   if (!allowed.includes(booking.status)) {
-    throw new Error(`Cannot reschedule a booking with status: ${booking.status}`);
+    const label =
+      BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
+      String(booking.status).replace(/_/g, " ");
+    throw new Error(`This booking can't be rescheduled while it's ${label}.`);
   }
 
   if (
@@ -6506,7 +6652,7 @@ export const proposeReschedule = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
@@ -6528,7 +6674,7 @@ export const customerApproveReschedule = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     if (booking.status !== "pending_customer_acceptance") {
       throw new Error("Booking is not pending customer acceptance");
@@ -6610,7 +6756,7 @@ export const shopCancelReschedule = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     if (booking.status !== "pending_customer_acceptance") {
       throw new Error("Booking is not pending customer acceptance");
@@ -6710,7 +6856,7 @@ export const customerDeclineReschedule = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     if (booking.status !== "pending_customer_acceptance") {
       throw new Error("Booking is not pending customer acceptance");
@@ -6938,6 +7084,28 @@ export const getOpenFrontDeskOverrunAlerts = query({
     );
 
     return items.filter(Boolean);
+  },
+});
+
+export const dismissManualSchedulingAlert = mutation({
+  args: { alertId: v.id("notification_outbox") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) throw new Error("You're not linked to an active shop yet.");
+    const row = await ctx.db.get(args.alertId);
+    if (!row || (row as any).shop_id !== primary.shopId) {
+      throw new Error("Alert not found");
+    }
+    if ((row as any).category !== "manual_scheduling_required") {
+      throw new Error("Cannot dismiss this alert");
+    }
+    await ctx.db.patch(args.alertId, {
+      status: "resolved",
+      processed_at: Date.now(),
+      updated_at: Date.now(),
+    } as any);
   },
 });
 
@@ -7774,15 +7942,18 @@ export const acceptTireQuote = mutation({
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.booking_id);
-    if (!booking) throw new Error("Booking not found");
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
     if (booking.status !== "quotes_ready" && booking.status !== "pending_quote") {
-      throw new Error(`Cannot accept a quote on a booking in status "${booking.status}".`);
+      const label =
+        BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
+        String(booking.status).replace(/_/g, " ");
+      throw new Error(`Quotes can only be accepted while a request is awaiting a quote. This one is ${label}.`);
     }
 
     const response = await ctx.db.get(args.response_id);
-    if (!response) throw new Error("Quote response not found");
+    if (!response) throw new Error("We couldn't find that quote. It may have been withdrawn.");
     if (String(response.booking_id) !== String(args.booking_id)) {
-      throw new Error("Response does not belong to this booking.");
+      throw new Error("This quote doesn't belong to the selected request.");
     }
     if (response.superseded_at != null) {
       throw new Error("This quote has already been superseded.");

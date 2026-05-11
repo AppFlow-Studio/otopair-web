@@ -1260,13 +1260,23 @@ export default defineSchema({
           status: v.union(
             v.literal("pending"),
             v.literal("checked"),
+            v.literal("flagged"),
             v.literal("skipped"),
           ),
           mechanic_note: v.optional(v.string()),
+          skip_reason: v.optional(
+            v.union(
+              v.literal("not_applicable"),
+              v.literal("no_equipment"),
+              v.literal("customer_declined"),
+              v.literal("out_of_time"),
+            ),
+          ),
         }),
       ),
     ),
     diagnostic_checklist_completed_at_ms: v.optional(v.number()),
+    diagnostic_findings_note: v.optional(v.string()),
     recommended_service_id: v.optional(v.id("services")),
     recommended_service_note: v.optional(v.string()),
     recommendation_state: v.optional(
@@ -1280,6 +1290,8 @@ export default defineSchema({
     ),
     recommendation_sent_at_ms: v.optional(v.number()),
     recommendation_decided_at_ms: v.optional(v.number()),
+    recommended_scheduled_date: v.optional(v.string()),
+    recommended_scheduled_time: v.optional(v.string()),
     parent_job_id: v.optional(v.id("bookings")),
     diagnostic_followup_state: v.optional(
       v.union(

@@ -169,6 +169,24 @@ export type VehicleUpdateValues = {
   oil_filter_part_number?: string | null;
 };
 
+export type TimeVariance = "faster" | "on_time" | "slower";
+export type TimeVarianceReason =
+  | "vehicle_quirk"
+  | "parts_issue"
+  | "customer_info_wrong"
+  | "unexpected_complication"
+  | "easier_than_expected"
+  | "experienced_with_platform"
+  | "customer_info_accurate"
+  | "well_prepped"
+  | "other";
+
+export type PostjobPhotoInput = {
+  storage_id: string;
+  caption?: string | null;
+  taken_at: number;
+};
+
 export type PostJobSurveyPayload = {
   completion_mileage: number;
   parts_used: JobActualPartPayload[];
@@ -183,6 +201,10 @@ export type PostJobSurveyPayload = {
   parts_accuracy_feedback?: string | null;
   additional_observations?: string | null;
   skip_optional_survey?: boolean;
+  postjob_photos?: PostjobPhotoInput[];
+  time_variance?: TimeVariance | null;
+  time_variance_reason?: TimeVarianceReason | null;
+  time_variance_note?: string | null;
 };
 
 type VehicleUpdatePrompt = {

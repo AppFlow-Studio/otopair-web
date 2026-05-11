@@ -13,12 +13,14 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Check, Clock, Copy, Ellipsis, History, Loader2, RotateCcw, X } from "lucide-react";
+import { Check, Clock, Copy, Ellipsis, History, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 import VehiclePassportSection from "@/components/vehicle-passport-section";
 import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
+import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
 import {
   getMechanicAssignmentConflict,
   type ScheduleBlockedSlot,
@@ -196,6 +198,129 @@ function getStatusDescription(
   return null;
 }
 
+const OUT_OF_SCOPE_LABELS: Record<string, string> = {
+  bodywork: "Bodywork",
+  transmission: "Transmission",
+  electrical_major: "Major electrical",
+  other: "Other",
+};
+
+function OutOfScopeCard({ job }: { job: JobDetailData }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-2xl border border-border bg-muted/40 p-4 text-muted-foreground">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider">
+        Out-of-scope finding · discuss at pickup
+      </div>
+      {job.outOfScopeCategory ? (
+        <span className="inline-flex rounded-full bg-background px-2 py-0.5 text-[11px] font-medium text-foreground">
+          {OUT_OF_SCOPE_LABELS[job.outOfScopeCategory] ?? job.outOfScopeCategory}
+        </span>
+      ) : null}
+      {job.outOfScopeNote ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-2 text-xs font-medium text-foreground underline-offset-2 hover:underline"
+          >
+            {expanded ? "Hide mechanic's note" : "View mechanic's full note"}
+          </button>
+          {expanded ? (
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+              {job.outOfScopeNote}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+      <p className="mt-3 text-xs">
+        This work is outside Otopair&apos;s service scope. The shop will discuss
+        directly with the customer at pickup.
+      </p>
+    </div>
+  );
+}
+
+function RecommendedServiceCard({ job }: { job: JobDetailData }) {
+  const decide = useMutation(api.bookings.customerDecideRecommendation);
+  const [busy, setBusy] = useState<"confirmed" | "declined" | null>(null);
+  const state = job.recommendationState ?? "none";
+
+  async function handleDecision(decision: "confirmed" | "declined") {
+    setBusy(decision);
+    try {
+      await decide({ bookingId: job._id, decision });
+    } catch {
+      // toast handled upstream; silent for now
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const tone =
+    state === "confirmed"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+      : state === "declined"
+        ? "border-border bg-muted/40 text-muted-foreground"
+        : "border-amber-200 bg-amber-50 text-amber-900";
+
+  return (
+    <div className={`rounded-2xl border p-4 ${tone}`}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider">
+          Recommended service ·{" "}
+          {state === "pending_customer"
+            ? "Sent to customer"
+            : state === "confirmed"
+              ? "Confirmed"
+              : state === "declined"
+                ? "Declined"
+                : state}
+        </span>
+      </div>
+      <div className="text-sm font-semibold">
+        {job.recommendedServiceName ?? "Recommended service"}
+      </div>
+      {job.recommendedServiceNote ? (
+        <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed opacity-90">
+          &quot;{job.recommendedServiceNote}&quot;
+        </p>
+      ) : null}
+      {state === "pending_customer" ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => handleDecision("confirmed")}
+            disabled={busy !== null}
+            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {busy === "confirmed" ? "Confirming…" : "Simulate customer confirm"}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleDecision("declined")}
+            disabled={busy !== null}
+            className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+          >
+            {busy === "declined" ? "Declining…" : "Simulate customer decline"}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const DIAGNOSTIC_SYSTEM_LABELS: Record<
+  "brakes" | "tires_wheels" | "engine" | "battery_electrical" | "not_sure",
+  string
+> = {
+  brakes: "Brakes",
+  tires_wheels: "Tires & Wheels",
+  engine: "Engine",
+  battery_electrical: "Battery & Electrical",
+  not_sure: "Not sure",
+};
+
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
 /* ------------------------------------------------------------------ */
@@ -206,6 +331,43 @@ export interface JobDetailData {
   status: string;
   customerName: string;
   customerEmail: string;
+  customerNotes?: string | null;
+  diagnosticSystem?:
+    | "brakes"
+    | "tires_wheels"
+    | "engine"
+    | "battery_electrical"
+    | "not_sure"
+    | null;
+  diagnosticChecklist?: Array<{
+    label: string;
+    status: "pending" | "checked" | "skipped";
+    mechanic_note?: string;
+  }> | null;
+  diagnosticChecklistCompletedAtMs?: number | null;
+  recommendedServiceId?: Id<"services"> | null;
+  recommendedServiceName?: string | null;
+  recommendedServiceNote?: string | null;
+  recommendationState?:
+    | "none"
+    | "pending_customer"
+    | "confirmed"
+    | "declined"
+    | "out_of_scope"
+    | null;
+  recommendationSentAtMs?: number | null;
+  recommendationDecidedAtMs?: number | null;
+  parentJobId?: Id<"bookings"> | null;
+  diagnosticFollowupState?: "pending" | "awaiting_info" | "resolved" | null;
+  awaitingInfoNote?: string | null;
+  awaitingInfoAtMs?: number | null;
+  outOfScopeNote?: string | null;
+  outOfScopeCategory?:
+    | "bodywork"
+    | "transmission"
+    | "electrical_major"
+    | "other"
+    | null;
   vehicle: string;
   vin: string;
   scheduledDate: string;
@@ -323,6 +485,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [declineOtherText, setDeclineOtherText] = useState("");
     const [showPrejobDialog, setShowPrejobDialog] = useState(false);
     const [showPostjobDialog, setShowPostjobDialog] = useState(false);
+    const [showDiagnosticDialog, setShowDiagnosticDialog] = useState(false);
     const [showActualsDialog, setShowActualsDialog] = useState(false);
     const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -730,7 +893,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     function openPostjobDialog() {
       setActionError("");
-      setShowPostjobDialog(true);
+      if (job?.diagnosticSystem) {
+        setShowDiagnosticDialog(true);
+      } else {
+        setShowPostjobDialog(true);
+      }
     }
 
     async function handleCompleteWithPostjob(payload: PostJobSurveyPayload) {
@@ -1128,6 +1295,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     <p className="text-[15px] font-medium text-foreground">
                       {job.serviceNames.join(", ")}
                     </p>
+                    {job.diagnosticSystem && (
+                      <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                        Diagnostic · {DIAGNOSTIC_SYSTEM_LABELS[job.diagnosticSystem]}
+                      </span>
+                    )}
                   </div>
                   <div className={drawerInfoCardClassName}>
                     <DrawerFieldLabel>Costs</DrawerFieldLabel>
@@ -1165,6 +1337,28 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     </div>
                   </div>
                 </div>
+
+                {job.recommendationState &&
+                  job.recommendationState !== "none" &&
+                  job.recommendationState !== "out_of_scope" && (
+                    <RecommendedServiceCard job={job} />
+                  )}
+
+                {job.recommendationState === "out_of_scope" && (
+                  <OutOfScopeCard job={job} />
+                )}
+
+                {job.customerNotes && job.customerNotes.trim().length > 0 && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                      <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                      Customer states
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-amber-900">
+                      {job.customerNotes}
+                    </p>
+                  </div>
+                )}
 
                 <VehiclePassportSection
                   data={vehiclePassport}
@@ -1414,25 +1608,31 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             disabled={isActioning}
                             className={drawerPrimaryButtonClassName}
                             style={
-                              job.status === "in_progress"
-                                ? undefined
-                                : {
-                                    backgroundColor: completedColors.text,
-                                    color: "#fff",
-                                  }
+                              job.diagnosticSystem
+                                ? { backgroundColor: "#b45309", color: "#fff" }
+                                : job.status === "in_progress"
+                                  ? undefined
+                                  : {
+                                      backgroundColor: completedColors.text,
+                                      color: "#fff",
+                                    }
                             }
                           >
-                            <span>
-                              Ma
-                              <span
-                                style={{
-                                  textDecorationLine: "underline",
-                                }}
-                              >
-                                r
+                            {job.diagnosticSystem ? (
+                              <span>Run diagnostic checklist</span>
+                            ) : (
+                              <span>
+                                Ma
+                                <span
+                                  style={{
+                                    textDecorationLine: "underline",
+                                  }}
+                                >
+                                  r
+                                </span>
+                                k completed
                               </span>
-                              k completed
-                            </span>
+                            )}
                           </button>
                         )}
                         {canDecline && (
@@ -1488,6 +1688,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     </div>
                   );
                 })()}
+
+                {job.status === "completed" && job._id ? (
+                  <PostjobPhotoStrip bookingId={job._id} />
+                ) : null}
 
                 {job.status === "completed" && (
                   <div className="rounded-2xl bg-muted/20 p-4">
@@ -1686,8 +1890,43 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onSubmit={handleStartWithPrejob}
         />
 
+        <DiagnosticChecklistDialog
+          open={showDiagnosticDialog}
+          bookingId={job?._id ?? null}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          system={(job?.diagnosticSystem ?? "not_sure") as any}
+          checklist={
+            job?.diagnosticChecklist && job.diagnosticChecklist.length > 0
+              ? job.diagnosticChecklist
+              : job?.diagnosticSystem
+                ? templateForSystem(job.diagnosticSystem as any)
+                : []
+          }
+          customerNotes={job?.customerNotes ?? null}
+          recommendationState={job?.recommendationState ?? null}
+          recommendedServiceName={job?.recommendedServiceName ?? null}
+          recommendedServiceNote={job?.recommendedServiceNote ?? null}
+          followupState={job?.diagnosticFollowupState ?? null}
+          awaitingInfoNote={job?.awaitingInfoNote ?? null}
+          onClose={() => setShowDiagnosticDialog(false)}
+          onCompleted={() => {
+            setShowDiagnosticDialog(false);
+            onSuccess?.("Diagnostic completed");
+          }}
+          onError={(msg) => setActionError(msg)}
+        />
+
         <PostJobSurveyDialog
           open={showPostjobDialog}
+          bookingId={job ? String(job._id) : null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
@@ -1855,4 +2094,37 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 );
 
 export default JobDetailPanel;
+
+function PostjobPhotoStrip({ bookingId }: { bookingId: Id<"bookings"> }) {
+  const photos = useQuery(api.bookings.getPostjobPhotoUrls, { bookingId });
+  if (!photos || photos.length === 0) return null;
+  return (
+    <div className="rounded-2xl bg-muted/20 p-4">
+      <DrawerFieldLabel className="mb-2">Service photos</DrawerFieldLabel>
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+        {photos.map((photo) => (
+          <a
+            key={photo.storage_id}
+            href={photo.url ?? "#"}
+            target="_blank"
+            rel="noreferrer"
+            className="group block overflow-hidden rounded-lg border border-primary/10 bg-background"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={photo.url ?? ""}
+              alt={photo.caption ?? ""}
+              className="aspect-square w-full object-cover transition-transform group-hover:scale-[1.02]"
+            />
+            {photo.caption ? (
+              <p className="truncate border-t border-primary/10 px-2 py-1 text-[10px] text-muted-foreground">
+                {photo.caption}
+              </p>
+            ) : null}
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
 

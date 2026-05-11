@@ -860,6 +860,7 @@ export const getShopServicesWithCategories = query({
           return {
             _id: service._id as string,
             name: service.name as string,
+            slug: (service.slug ?? "") as string,
             defaultLaborHours: (service.default_labor_hours ?? 1) as number,
             displayOrder: (service.display_order ?? 0) as number,
             categoryId: service.service_category_id as string,
@@ -871,6 +872,7 @@ export const getShopServicesWithCategories = query({
     ).filter(Boolean) as Array<{
       _id: string;
       name: string;
+      slug: string;
       defaultLaborHours: number;
       displayOrder: number;
       categoryId: string;

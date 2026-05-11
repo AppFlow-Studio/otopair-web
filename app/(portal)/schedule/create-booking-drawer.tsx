@@ -5,7 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/phone";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, Plus, Search, User, Wrench, X } from "lucide-react";
+import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, MessageSquare, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
 import {
   Select,
   SelectItem,
@@ -237,6 +237,18 @@ export default function CreateBookingDrawer({
   const [customDraftName, setCustomDraftName] = useState("");
   const [customDraftMinutes, setCustomDraftMinutes] = useState("");
 
+  /* ---- Customer states / notes ---- */
+  const [customerNotes, setCustomerNotes] = useState("");
+
+  /* ---- Diagnostic system ---- */
+  type DiagnosticSystem =
+    | "brakes"
+    | "tires_wheels"
+    | "engine"
+    | "battery_electrical"
+    | "not_sure";
+  const [diagnosticSystem, setDiagnosticSystem] = useState<DiagnosticSystem | null>(null);
+
   /* ---- Scheduling (controlled by parent) ---- */
   const setDate = (next: string) => onDraftChange({ date: next, time, mechanicId });
   const setTime = (next: string) => onDraftChange({ date, time: next, mechanicId });
@@ -279,6 +291,29 @@ export default function CreateBookingDrawer({
   const createBooking = useMutation(api.bookings.createByShop);
 
   const categories = useMemo(() => shopData?.categories ?? [], [shopData?.categories]);
+
+  const isDiagnostic = useMemo(() => {
+    const matchesDiagnostic = (text: string | undefined | null) =>
+      typeof text === "string" && /diagnost/i.test(text);
+    for (const cat of categories as any[]) {
+      const catLooksDiagnostic = matchesDiagnostic(cat.name);
+      for (const s of cat.services) {
+        if (!selectedIds.has(s._id)) continue;
+        if (
+          catLooksDiagnostic ||
+          matchesDiagnostic(s.slug) ||
+          matchesDiagnostic(s.name)
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }, [categories, selectedIds]);
+
+  useEffect(() => {
+    if (!isDiagnostic && diagnosticSystem !== null) setDiagnosticSystem(null);
+  }, [isDiagnostic, diagnosticSystem]);
 
   /* ---- Overlap check ---- */
   const overlapError = useMemo(() => {
@@ -398,6 +433,8 @@ export default function CreateBookingDrawer({
         scheduledTime: time,
         serviceIds: Array.from(selectedIds) as Id<"services">[],
         customServices: customServices.length > 0 ? customServices : undefined,
+        customerNotes: customerNotes.trim() || undefined,
+        diagnosticSystem: isDiagnostic && diagnosticSystem ? diagnosticSystem : undefined,
         mechanicId: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
         assignmentPreference,
         laborCost: 0,
@@ -715,6 +752,60 @@ export default function CreateBookingDrawer({
               </button>
             )}
           </div>
+        </section>
+
+        {/* ── Diagnostic system (only when a diagnostic service is selected) ── */}
+        {isDiagnostic && (
+          <section>
+            <DrawerSectionHeader icon={Stethoscope} label="Diagnostic system" />
+            <DrawerFieldLabel>What's bothering the customer?</DrawerFieldLabel>
+            <div className="space-y-1.5">
+              {([
+                { value: "brakes", label: "Brakes", hint: "Squealing, grinding, soft pedal" },
+                { value: "tires_wheels", label: "Tires & Wheels", hint: "Vibration, thudding, pulling" },
+                { value: "engine", label: "Engine", hint: "Rattle, rough idle, warning light" },
+                { value: "battery_electrical", label: "Battery & Electrical", hint: "Won't start, dim lights" },
+                { value: "not_sure", label: "Not sure", hint: "Let the mechanic look around" },
+              ] as Array<{ value: DiagnosticSystem; label: string; hint: string }>).map((opt) => {
+                const selected = diagnosticSystem === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setDiagnosticSystem(opt.value)}
+                    className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${
+                      selected
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted/40"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-foreground">{opt.label}</div>
+                      <div className="text-xs text-muted-foreground truncate">{opt.hint}</div>
+                    </div>
+                    <div
+                      className={`w-4 h-4 rounded-full border-2 shrink-0 ${
+                        selected ? "border-primary bg-primary" : "border-border"
+                      }`}
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        {/* ── Customer states ── */}
+        <section>
+          <DrawerSectionHeader icon={MessageSquare} label="Customer states" />
+          <DrawerFieldLabel>Notes from the customer (optional)</DrawerFieldLabel>
+          <textarea
+            value={customerNotes}
+            onChange={(e) => setCustomerNotes(e.target.value.slice(0, 1000))}
+            placeholder="Thudding from the front, gets worse around 50 mph. Started a week ago."
+            rows={3}
+            className={`${drawerInputClassName} resize-none leading-relaxed`}
+          />
         </section>
 
         {/* ── Scheduling ── */}

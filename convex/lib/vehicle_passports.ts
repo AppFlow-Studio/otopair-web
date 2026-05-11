@@ -130,6 +130,30 @@ export const postjobPartValidator = v.object({
   cost: v.float64(),
 });
 
+export const postjobPhotoValidator = v.object({
+  storage_id: v.id("_storage"),
+  caption: v.optional(nullableStringValidator),
+  taken_at: v.float64(),
+});
+
+export const timeVarianceValidator = v.union(
+  v.literal("faster"),
+  v.literal("on_time"),
+  v.literal("slower")
+);
+
+export const timeVarianceReasonValidator = v.union(
+  v.literal("vehicle_quirk"),
+  v.literal("parts_issue"),
+  v.literal("customer_info_wrong"),
+  v.literal("unexpected_complication"),
+  v.literal("easier_than_expected"),
+  v.literal("experienced_with_platform"),
+  v.literal("customer_info_accurate"),
+  v.literal("well_prepped"),
+  v.literal("other")
+);
+
 export const postjobReportValidator = v.object({
   completion_mileage: v.float64(),
   parts_used: v.array(postjobPartValidator),
@@ -144,6 +168,10 @@ export const postjobReportValidator = v.object({
   parts_accuracy_feedback: v.optional(nullableStringValidator),
   additional_observations: v.optional(nullableStringValidator),
   skip_optional_survey: v.optional(v.boolean()),
+  postjob_photos: v.optional(v.array(postjobPhotoValidator)),
+  time_variance: v.optional(v.union(timeVarianceValidator, v.null())),
+  time_variance_reason: v.optional(v.union(timeVarianceReasonValidator, v.null())),
+  time_variance_note: v.optional(nullableStringValidator),
 });
 
 export function hasText(value: unknown): value is string {

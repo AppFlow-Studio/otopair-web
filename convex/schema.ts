@@ -1243,6 +1243,62 @@ export default defineSchema({
     mechanic_id: v.optional(v.id("mechanics")),
     vin: v.string(),
     service_ids: v.array(v.id("services")),
+    customer_notes: v.optional(v.string()),
+    diagnostic_system: v.optional(
+      v.union(
+        v.literal("brakes"),
+        v.literal("tires_wheels"),
+        v.literal("engine"),
+        v.literal("battery_electrical"),
+        v.literal("not_sure"),
+      ),
+    ),
+    diagnostic_checklist: v.optional(
+      v.array(
+        v.object({
+          label: v.string(),
+          status: v.union(
+            v.literal("pending"),
+            v.literal("checked"),
+            v.literal("skipped"),
+          ),
+          mechanic_note: v.optional(v.string()),
+        }),
+      ),
+    ),
+    diagnostic_checklist_completed_at_ms: v.optional(v.number()),
+    recommended_service_id: v.optional(v.id("services")),
+    recommended_service_note: v.optional(v.string()),
+    recommendation_state: v.optional(
+      v.union(
+        v.literal("none"),
+        v.literal("pending_customer"),
+        v.literal("confirmed"),
+        v.literal("declined"),
+        v.literal("out_of_scope"),
+      ),
+    ),
+    recommendation_sent_at_ms: v.optional(v.number()),
+    recommendation_decided_at_ms: v.optional(v.number()),
+    parent_job_id: v.optional(v.id("bookings")),
+    diagnostic_followup_state: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("awaiting_info"),
+        v.literal("resolved"),
+      ),
+    ),
+    awaiting_info_note: v.optional(v.string()),
+    awaiting_info_at_ms: v.optional(v.number()),
+    out_of_scope_note: v.optional(v.string()),
+    out_of_scope_category: v.optional(
+      v.union(
+        v.literal("bodywork"),
+        v.literal("transmission"),
+        v.literal("electrical_major"),
+        v.literal("other"),
+      ),
+    ),
     custom_services: v.optional(
       v.array(
         v.object({

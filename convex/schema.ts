@@ -1268,12 +1268,6 @@ export default defineSchema({
     schedule_change_source_booking_id: v.optional(v.id("bookings")),
     customer_can_restore_original: v.optional(v.boolean()),
     refund_reason: v.optional(v.string()),
-    schedule_change_mode: v.optional(v.string()),
-    schedule_change_source_booking_id: v.optional(v.id("bookings")),
-    customer_can_restore_original: v.optional(v.boolean()),
-    vehicle_arrived_at_ms: v.optional(v.number()),
-    vehicle_arrived_by_user_id: v.optional(v.id("users")),
-    assignment_preference: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])

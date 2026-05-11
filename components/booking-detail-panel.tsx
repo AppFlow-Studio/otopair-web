@@ -13,7 +13,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Check, Clock, Copy, History, Loader2, RotateCcw, X } from "lucide-react";
+import { Check, Clock, Copy, Ellipsis, History, Loader2, RotateCcw, X } from "lucide-react";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 import VehiclePassportSection from "@/components/vehicle-passport-section";
@@ -25,6 +25,12 @@ import {
   type ScheduleBooking,
   shouldConfirmMechanicChange,
 } from "@/lib/schedule-overlap";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectItem,
@@ -114,19 +120,6 @@ function formatBookingDate(
   return `${dateLabel}, ${timeLabel}`;
 }
 
-function formatClockTime(timestampMs: number): string {
-  return new Date(timestampMs).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function formatAssignmentPreference(preference?: string | null): string {
-  return preference === "specific_mechanic"
-    ? "Specific mechanic"
-    : "Any mechanic";
-}
-
 function pendingCountdown(creationTime: number): string | null {
   if (!creationTime || isNaN(creationTime)) return null;
   const deadline = creationTime + 24 * 60 * 60 * 1000;
@@ -194,8 +187,6 @@ function getStatusDescription(
   scheduleChangeMode?: string | null,
 ): string | null {
   if (status === "pending" || status === "pending_shop_acceptance") return "Awaiting shop review";
-  if (status === "confirmed") return "Waiting for vehicle arrival";
-  if (status === "vehicle_at_shop") return "Vehicle checked in, ready to start";
   if (status === "pending_customer_acceptance" && (scheduleChangeMode === "forced_delay" || isForcedDelayReason(reason))) {
     return "Automatic late-start delay pending customer response";
   }
@@ -241,8 +232,6 @@ export interface JobDetailData {
   previousMechanicName?: string | null;
   rescheduleProposedAt?: number | null;
   estimatedLaborMinutes?: number | null;
-  vehicleArrivedAtMs?: number | null;
-  assignmentPreference?: string | null;
   scheduleChangeMode?: string | null;
   scheduleChangeSourceBookingId?: Id<"bookings"> | null;
   customerCanRestoreOriginal?: boolean | null;
@@ -270,7 +259,6 @@ export interface JobDetailData {
 export interface JobDetailPanelHandle {
   accept: () => void;
   showDecline: () => void;
-  markVehicleHere: () => void;
   startJob: () => void;
   showMarkCompleted: () => void;
   showCancelJob: () => void;
@@ -352,7 +340,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const copyEmailTimeoutRef = useRef<number | null>(null);
 
     const acceptJob = useMutation(api.bookings.accept);
-    const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
     const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
@@ -394,7 +381,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       hasMechanicSelectionChange;
     const jobId = job?._id;
     const completedColors = BOOKING_STATUS_VISUALS.completed.calendarColors;
-    const cancelReasonOptions = getCancelReasons();
+    const cancelReasonOptions = getCancelReasons(job?.status);
     const showAssignMechanicError = actionError.startsWith(
       "Cannot assign this mechanic"
     );
@@ -472,22 +459,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       } catch (err: unknown) {
         setActionError(
           err instanceof Error ? err.message : "Could not update status.",
-        );
-      } finally {
-        setIsActioning(false);
-      }
-    }
-
-    async function handleVehicleHere() {
-      if (!job?._id) return;
-      setActionError("");
-      setIsActioning(true);
-      try {
-        await markVehicleAtShop({ bookingId: job._id });
-        onSuccess?.("Vehicle marked here");
-      } catch (err: unknown) {
-        setActionError(
-          err instanceof Error ? err.message : "Could not mark vehicle here.",
         );
       } finally {
         setIsActioning(false);
@@ -856,17 +827,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         handleStatusAction("accept");
       },
       showDecline: () => setShowDeclineModal(true),
-      markVehicleHere: () => {
-        if (job?.status !== "confirmed") return;
-        void handleVehicleHere();
-      },
       startJob: () => {
         handleStartJob();
       },
-      showMarkCompleted: () => {
-        if (job?.status !== "in_progress") return;
-        openPostjobDialog();
-      },
+      showMarkCompleted: () => openPostjobDialog(),
       showCancelJob: () => setShowCancelConfirm(true),
       showCancelReschedule: () => {
         if (!canRestoreOriginalReschedule) return;
@@ -1199,14 +1163,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           ) : null;
                         })()}
                     </div>
-                    {job.vehicleArrivedAtMs ? (
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        Vehicle here {formatClockTime(job.vehicleArrivedAtMs)}
-                      </p>
-                    ) : null}
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {formatAssignmentPreference(job.assignmentPreference)}
-                    </p>
                   </div>
                 </div>
 
@@ -1346,7 +1302,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   const s = job.status;
                   const canAccept =
                     s === "pending" || s === "pending_shop_acceptance";
-                  const canMarkVehicleHere = s === "confirmed";
                   const canComplete = s === "in_progress";
                   const canMarkVehicleHere = s === "confirmed";
                   const canStartJob = s === "vehicle_at_shop";
@@ -1373,6 +1328,30 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         <DrawerFieldLabel className="mb-0">
                           Actions
                         </DrawerFieldLabel>
+                        {canComplete && job.status === "confirmed" && (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <button
+                                type="button"
+                                disabled={isActioning}
+                                aria-label="More booking actions"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                              >
+                                <Ellipsis
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
+                              </button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onSelect={() => openPostjobDialog()}
+                              >
+                                Mark completed
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        )}
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {canAccept && (

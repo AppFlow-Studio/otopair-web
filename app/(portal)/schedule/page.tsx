@@ -215,31 +215,6 @@ const MONTH_STATUS_ORDER = [
   "no_show",
 ];
 
-const OVERRUN_EXTENSION_OPTIONS = [15, 30, 45, 60];
-
-type CustomerLateAlertView = {
-  _id: string;
-  bookingId: string;
-  customerName: string;
-  mechanicName?: string | null;
-  scheduledDate?: string | null;
-  scheduledTime?: string | null;
-  serviceSummary?: string | null;
-  thresholdDueAtMs: number;
-};
-
-type OverrunCheckInView = {
-  _id: string;
-  status: string;
-  bookingId: string;
-  customerName: string;
-  mechanicName?: string | null;
-  scheduledDate?: string | null;
-  scheduledTime?: string | null;
-  serviceSummary?: string | null;
-  defaultApplyAtMs: number;
-};
-
 /* ------------------------------------------------------------------ */
 /*  Block time type defaults                                            */
 /* ------------------------------------------------------------------ */
@@ -279,13 +254,6 @@ export default function SchedulePage() {
   const [selectedLateStartReviewId, setSelectedLateStartReviewId] = useState<string | null>(null);
   const [lateStartReviewError, setLateStartReviewError] = useState("");
   const [isSubmittingLateStartReview, setIsSubmittingLateStartReview] = useState(false);
-  const [customerLateActionId, setCustomerLateActionId] = useState<string | null>(null);
-  const [customerLateReschedule, setCustomerLateReschedule] = useState<{
-    alertId: string;
-    date: string;
-    time: string;
-  } | null>(null);
-  const [overrunActionId, setOverrunActionId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<
     | { type: "block"; info: ContextMenuCellInfo }
     | { type: "unblock"; slotId: string; clientX: number; clientY: number }
@@ -501,9 +469,8 @@ export default function SchedulePage() {
           s === "confirmed" || s === "vehicle_at_shop" || s === "in_progress";
         if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
         if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
-        if (e.key === "h" && s === "confirmed") { e.preventDefault(); jobDetailRef.current?.markVehicleHere(); return; }
-        if (e.key === "r" && s === "in_progress") { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
-        if (e.key === "c" && canCancel) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
+        if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
+        if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
         if (e.key === "a" && !isPending) { e.preventDefault(); jobDetailRef.current?.openAssignDropdown(); return; }
         if (e.key === "t" && s === "vehicle_at_shop" && selectedJobDetail.mechanicId) { e.preventDefault(); jobDetailRef.current?.startJob(); return; }
         if (e.key === "s" && !isPending) { e.preventDefault(); jobDetailRef.current?.assignMechanic(); return; }

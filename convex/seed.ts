@@ -3908,7 +3908,45 @@ export const seedDashboardBookings = mutation({
     const today = new Date(now).toISOString().split("T")[0];
 
     if (args.clearExisting ?? false) {
-      await clearDashboardBookingsFully(ctx, args.shopId);
+      const existingBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      const bookingIds = new Set(existingBookings.map((booking) => String(booking._id)));
+
+      const history = await ctx.db.query("booking_status_history").collect();
+      for (const row of history) {
+        if (bookingIds.has(String(row.booking_id))) {
+          await ctx.db.delete(row._id);
+        }
+      }
+
+      const jobActuals = await ctx.db.query("job_actuals").collect();
+      for (const row of jobActuals) {
+        if (bookingIds.has(String(row.booking_id))) {
+          await ctx.db.delete(row._id);
+        }
+      }
+
+      for (const booking of existingBookings) {
+        await ctx.db.delete(booking._id);
+      }
+
+      const existingSlots = await ctx.db
+        .query("time_slots")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      for (const slot of existingSlots) {
+        await ctx.db.delete(slot._id);
+      }
+
+      const blockTypes = await ctx.db
+        .query("block_time_types")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      for (const type of blockTypes) {
+        await ctx.db.delete(type._id);
+      }
     }
 
     if ((args.seedDemo ?? true) === false) {

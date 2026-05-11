@@ -3,18 +3,22 @@ export type JobStatusFilter =
   | "pending_shop_acceptance"
   | "pending_customer_acceptance"
   | "confirmed"
+  | "vehicle_at_shop"
   | "in_progress"
   | "completed"
-  | "cancelled";
+  | "cancelled"
+  | "no_show";
 
 export const STATUS_TABS: { key: JobStatusFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "pending_shop_acceptance", label: "Pending Shop" },
   { key: "pending_customer_acceptance", label: "Pending Customer" },
   { key: "confirmed", label: "Confirmed" },
+  { key: "vehicle_at_shop", label: "Vehicle Here" },
   { key: "in_progress", label: "In Progress" },
   { key: "completed", label: "Completed" },
   { key: "cancelled", label: "Cancelled" },
+  { key: "no_show", label: "No-show" },
 ];
 
 export function todayString() {

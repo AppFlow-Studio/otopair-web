@@ -84,6 +84,9 @@ export const getByBookingId = query({
     if (!booking) return null;
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (booking.status !== "vehicle_at_shop" && booking.status !== "in_progress") {
+      throw new Error("Mark the vehicle here before starting work.");
+    }
 
     return await getLatestJobActualForBooking(ctx, args.bookingId);
   },
@@ -239,12 +242,6 @@ export const startJob = mutation({
       now,
       startedAtMs: now,
     });
-
-    await resolveLateStartMonitorForBooking(
-      ctx,
-      { ...booking, status: "in_progress" },
-      user._id
-    );
 
     if (booking.status === "vehicle_at_shop") {
       await applyBookingStatusTransition(ctx, {

@@ -61,8 +61,8 @@ export const BOOKING_STATUS_VISUALS: Record<BookingStatus, BookingStatusVisuals>
     label: "Vehicle Here",
     pillClass: "bg-cyan-50 text-cyan-700",
     calendarColors: {
-      bg: "rgb(207 250 254)",
-      text: "rgb(8 145 178)",
+      bg: "rgb(236 254 255)",
+      text: "rgb(14 116 144)",
       border: "rgb(103 232 249)",
     },
   },
@@ -95,12 +95,12 @@ export const BOOKING_STATUS_VISUALS: Record<BookingStatus, BookingStatusVisuals>
     },
   },
   no_show: {
-    label: "No Show",
-    pillClass: "bg-red-50 text-destructive",
+    label: "No-show",
+    pillClass: "bg-orange-50 text-orange-700",
     calendarColors: {
-      bg: "rgb(254 242 242)",
-      text: "rgb(239 68 68)",
-      border: "rgb(252 165 165)",
+      bg: "rgb(255 247 237)",
+      text: "rgb(194 65 12)",
+      border: "rgb(253 186 116)",
     },
   },
   declined: {
@@ -121,6 +121,7 @@ export const BOOKING_STATUS_LEGEND_KEYS: BookingStatus[] = [
   "vehicle_at_shop",
   "in_progress",
   "completed",
+  "no_show",
 ];
 
 export function getBookingStatusLabel(status: string): string {

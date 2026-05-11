@@ -1,4 +1,4 @@
-import { action, internalMutation, mutation } from "./_generated/server";
+import { action, internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import {
@@ -406,6 +406,52 @@ export const claimSeedDataForCurrentUser = mutation({
 
     await ctx.db.delete(seedId);
     return { claimed: true };
+  },
+});
+
+/**
+ * Seed time slots for ONE shop. Use when `seedTimeSlots` (which runs all
+ * shops in one transaction) blows the 4096-read limit. Idempotent — the
+ * underlying syncShopAvailabilityWindow upserts per mechanic-day, so safe
+ * to re-run.
+ *
+ * Usage:
+ *   npx convex run seed:seedTimeSlotsForShop '{"shopId":"...","days":14}'
+ *
+ * Args:
+ *   shopId — Id<"shops"> to seed
+ *   days   — number of days from today (default 14, smaller = fewer reads)
+ */
+export const seedTimeSlotsForShop = mutation({
+  args: {
+    shopId: v.id("shops"),
+    days: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const result = await syncShopAvailabilityWindow(ctx, {
+      shopId: args.shopId,
+      days: args.days ?? 14,
+    });
+    return {
+      success: true,
+      shopId: args.shopId,
+      slotsCreated: result.created,
+      slotsDeleted: result.deleted,
+    };
+  },
+});
+
+/**
+ * Lists shop ids (with names) so a developer can iterate
+ * `seedTimeSlotsForShop` over each one. Read-only.
+ *
+ * Usage: npx convex run seed:listSeedShopIds
+ */
+export const listSeedShopIds = query({
+  args: {},
+  handler: async (ctx) => {
+    const shops = await ctx.db.query("shops").collect();
+    return shops.map((s) => ({ id: s._id, name: s.name }));
   },
 });
 
@@ -3763,131 +3809,6 @@ function dashboardPickSeedValue<T>(values: readonly T[], seed: string): T {
   return values[Math.floor(dashboardSeedRatio(seed) * values.length) % values.length];
 }
 
-async function clearDashboardBookingsBatchImpl(ctx: any, shopId: any) {
-  const lateStartReviews = await ctx.db
-    .query("late_start_reviews")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .take(100);
-  for (const review of lateStartReviews) {
-    await ctx.db.delete(review._id);
-  }
-
-  const lateStartMonitors = await ctx.db
-    .query("late_start_monitors")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .take(100);
-  for (const monitor of lateStartMonitors) {
-    await ctx.db.delete(monitor._id);
-  }
-
-  const customerLateAlerts = await ctx.db
-    .query("customer_late_alerts")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .take(100);
-  for (const alert of customerLateAlerts) {
-    await ctx.db.delete(alert._id);
-  }
-
-  const customerLateMonitors = await ctx.db
-    .query("customer_late_monitors")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .take(100);
-  for (const monitor of customerLateMonitors) {
-    await ctx.db.delete(monitor._id);
-  }
-
-  const jobOverrunCheckins = await ctx.db
-    .query("job_overrun_checkins")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .take(100);
-  for (const checkin of jobOverrunCheckins) {
-    await ctx.db.delete(checkin._id);
-  }
-
-  const notificationOutboxRows = await ctx.db
-    .query("notification_outbox")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .take(100);
-  for (const row of notificationOutboxRows) {
-    await ctx.db.delete(row._id);
-  }
-
-  const existingBookings = await ctx.db
-    .query("bookings")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .take(75);
-
-  for (const booking of existingBookings) {
-    const historyRows = await ctx.db
-      .query("booking_status_history")
-      .withIndex("by_booking_id", (q: any) => q.eq("booking_id", booking._id))
-      .collect();
-    for (const row of historyRows) {
-      await ctx.db.delete(row._id);
-    }
-
-    const jobActualRows = await ctx.db
-      .query("job_actuals")
-      .withIndex("by_booking_id", (q: any) => q.eq("booking_id", booking._id))
-      .collect();
-    for (const row of jobActualRows) {
-      await ctx.db.delete(row._id);
-    }
-
-    await ctx.db.delete(booking._id);
-  }
-
-  const existingSlots = await ctx.db
-    .query("time_slots")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .take(250);
-  for (const slot of existingSlots) {
-    await ctx.db.delete(slot._id);
-  }
-
-  const blockTypes = await ctx.db
-    .query("block_time_types")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .take(100);
-  for (const type of blockTypes) {
-    await ctx.db.delete(type._id);
-  }
-
-  const processed =
-    lateStartReviews.length +
-    lateStartMonitors.length +
-    customerLateAlerts.length +
-    customerLateMonitors.length +
-    jobOverrunCheckins.length +
-    notificationOutboxRows.length +
-    existingBookings.length +
-    existingSlots.length +
-    blockTypes.length;
-
-  return {
-    done: processed === 0,
-    processed,
-    processedBookings: existingBookings.length,
-    processedSlots: existingSlots.length,
-    processedBlockTypes: blockTypes.length,
-    processedLateStartReviews: lateStartReviews.length,
-    processedLateStartMonitors: lateStartMonitors.length,
-    processedCustomerLateAlerts: customerLateAlerts.length,
-    processedCustomerLateMonitors: customerLateMonitors.length,
-    processedJobOverrunCheckins: jobOverrunCheckins.length,
-    processedNotificationOutbox: notificationOutboxRows.length,
-  };
-}
-
-async function clearDashboardBookingsFully(ctx: any, shopId: any) {
-  while (true) {
-    const result = await clearDashboardBookingsBatchImpl(ctx, shopId);
-    if (result.done) {
-      return result;
-    }
-  }
-}
-
 export const clearDashboardBookingsBatch = mutation({
   args: {
     shopId: v.id("shops"),
@@ -3896,7 +3817,79 @@ export const clearDashboardBookingsBatch = mutation({
     const shop = await ctx.db.get(args.shopId);
     if (!shop) throw new Error(`Shop ${args.shopId} not found.`);
 
-    return await clearDashboardBookingsBatchImpl(ctx, args.shopId);
+    const existingBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .take(75);
+
+    for (const booking of existingBookings) {
+      const historyRows = await ctx.db
+        .query("booking_status_history")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+        .collect();
+      for (const row of historyRows) {
+        await ctx.db.delete(row._id);
+      }
+
+      const jobActualRows = await ctx.db
+        .query("job_actuals")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+        .collect();
+      for (const row of jobActualRows) {
+        await ctx.db.delete(row._id);
+      }
+
+      await ctx.db.delete(booking._id);
+    }
+
+    const existingSlots = await ctx.db
+      .query("time_slots")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .take(250);
+    for (const slot of existingSlots) {
+      await ctx.db.delete(slot._id);
+    }
+
+    const blockTypes = await ctx.db
+      .query("block_time_types")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .take(100);
+    for (const type of blockTypes) {
+      await ctx.db.delete(type._id);
+    }
+
+    const existingLateStartReviews = await ctx.db
+      .query("late_start_reviews")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .take(100);
+    for (const review of existingLateStartReviews) {
+      await ctx.db.delete(review._id);
+    }
+
+    const existingLateStartMonitors = await ctx.db
+      .query("late_start_monitors")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .take(100);
+    for (const monitor of existingLateStartMonitors) {
+      await ctx.db.delete(monitor._id);
+    }
+
+    const processed =
+      existingBookings.length +
+      existingSlots.length +
+      blockTypes.length +
+      existingLateStartReviews.length +
+      existingLateStartMonitors.length;
+
+    return {
+      done: processed === 0,
+      processed,
+      processedBookings: existingBookings.length,
+      processedSlots: existingSlots.length,
+      processedBlockTypes: blockTypes.length,
+      processedLateStartReviews: existingLateStartReviews.length,
+      processedLateStartMonitors: existingLateStartMonitors.length,
+    };
   },
 });
 
@@ -3922,6 +3915,25 @@ export const seedDashboardBookings = mutation({
       return { clearedOnly: true };
     }
 
+    const version = args.version ?? "v2";
+
+    const existingServices = await ctx.db.query("services").collect();
+    const existingCategories = await ctx.db.query("service_categories").collect();
+    const existingShopServices = await ctx.db
+      .query("shop_services")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .collect();
+    const servicesBySlug = new Map(
+      existingServices
+        .filter((service) => service.slug)
+        .map((service) => [service.slug as string, service])
+    );
+    const categoryIdsByName = new Map(
+      existingCategories.map((category) => [category.name, category._id])
+    );
+    const linkedShopServiceIds = new Set(
+      existingShopServices.map((shopService) => String(shopService.service_id))
+    );
     const ensureService = async (slug: string, name: string, categoryName: string) => {
       const services = await ctx.db.query("services").collect();
       const existingService = services.find((service) => service.slug === slug);
@@ -4499,23 +4511,51 @@ export const seedDashboardBookings = mutation({
       }
     }
 
-    const bookingsPerMechanicTarget = 5;
-    const minimumBookingsPerOpenDay = 5;
-    const totalBookingTarget = Math.max(
-      openDates.length * minimumBookingsPerOpenDay,
-      mechanics.length * bookingsPerMechanicTarget
-    );
-    const dayTargets = openDates.map(() => minimumBookingsPerOpenDay);
-    for (
-      let extra = totalBookingTarget - openDates.length * minimumBookingsPerOpenDay, idx = 0;
-      extra > 0;
-      extra--, idx++
-    ) {
-      dayTargets[idx % dayTargets.length] += 1;
-    }
+    const dayTargets =
+      version === "v1"
+        ? (() => {
+            const bookingsPerMechanicTarget = 5;
+            const minimumBookingsPerOpenDay = 5;
+            const totalBookingTarget = Math.max(
+              openDates.length * minimumBookingsPerOpenDay,
+              mechanics.length * bookingsPerMechanicTarget
+            );
+            const targets = openDates.map(() => minimumBookingsPerOpenDay);
+            for (
+              let extra = totalBookingTarget - openDates.length * minimumBookingsPerOpenDay, idx = 0;
+              extra > 0;
+              extra--, idx++
+            ) {
+              targets[idx % targets.length] += 1;
+            }
+            return targets;
+          })()
+        : (() => {
+            const averageServiceMinutes =
+              serviceOptions.reduce((sum, service) => sum + service.estimatedMinutes, 0) /
+              serviceOptions.length;
+            const bookingCapacityUtilization = 0.7;
+            const minimumBookingsPerMechanicOpenDay = 2;
+            return openDates.map(({ hours }) => {
+              const openMinutes = dashboardTimeToMinutes(hours.open_time!);
+              const closeMinutes = dashboardTimeToMinutes(hours.close_time!);
+              const openWindowMinutes = Math.max(0, closeMinutes - openMinutes);
+              const utilizationCapacity = Math.round(
+                (openWindowMinutes * mechanics.length * bookingCapacityUtilization) /
+                  averageServiceMinutes
+              );
+              return Math.max(
+                mechanics.length * minimumBookingsPerMechanicOpenDay,
+                utilizationCapacity
+              );
+            });
+          })();
 
-    const remainingBookingsByMechanic = new Map(
-      mechanics.map((mechanic) => [String(mechanic._id), bookingsPerMechanicTarget])
+    const mechanicBookingDistribution = new Map(
+      mechanics.map((mechanic) => [
+        String(mechanic._id),
+        version === "v1" ? 5 : 0,
+      ])
     );
     const bookingStatusCounts: Record<string, number> = {};
     const mechanicDayBookingCounts = new Map<string, number>();
@@ -4530,9 +4570,15 @@ export const seedDashboardBookings = mutation({
 
       for (let dayBookingIdx = 0; dayBookingIdx < dailyTarget; dayBookingIdx++) {
         const mechanicOrder = [...mechanics].sort((a, b) => {
-          const remainingA = remainingBookingsByMechanic.get(String(a._id)) ?? 0;
-          const remainingB = remainingBookingsByMechanic.get(String(b._id)) ?? 0;
-          if (remainingA !== remainingB) return remainingB - remainingA;
+          const distributionA =
+            mechanicBookingDistribution.get(String(a._id)) ?? 0;
+          const distributionB =
+            mechanicBookingDistribution.get(String(b._id)) ?? 0;
+          if (distributionA !== distributionB) {
+            return version === "v1"
+              ? distributionB - distributionA
+              : distributionA - distributionB;
+          }
           return String(a._id).localeCompare(String(b._id));
         });
         const mechanic = mechanicOrder[(dayBookingIdx + dayIdx) % mechanicOrder.length];
@@ -4649,9 +4695,11 @@ export const seedDashboardBookings = mutation({
         }
 
         bookingStatusCounts[status] = (bookingStatusCounts[status] ?? 0) + 1;
-        remainingBookingsByMechanic.set(
+        mechanicBookingDistribution.set(
           mechanicKey,
-          Math.max(0, (remainingBookingsByMechanic.get(mechanicKey) ?? 0) - 1)
+          version === "v1"
+            ? Math.max(0, (mechanicBookingDistribution.get(mechanicKey) ?? 0) - 1)
+            : (mechanicBookingDistribution.get(mechanicKey) ?? 0) + 1
         );
         bookingSequence += 1;
       }
@@ -4681,14 +4729,63 @@ export const seedLateStartReviewScenario = mutation({
     const today = new Date(now).toISOString().split("T")[0];
 
     if (args.clearExisting ?? true) {
-      await clearDashboardBookingsFully(ctx, args.shopId);
+      const existingReviews = await ctx.db
+        .query("late_start_reviews")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      for (const review of existingReviews) {
+        await ctx.db.delete(review._id);
+      }
+
+      const existingMonitors = await ctx.db
+        .query("late_start_monitors")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      for (const monitor of existingMonitors) {
+        await ctx.db.delete(monitor._id);
+      }
+
+      const existingBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+
+      for (const booking of existingBookings) {
+        const historyRows = await ctx.db
+          .query("booking_status_history")
+          .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+          .collect();
+        for (const row of historyRows) {
+          await ctx.db.delete(row._id);
+        }
+
+        const jobActualRows = await ctx.db
+          .query("job_actuals")
+          .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+          .collect();
+        for (const row of jobActualRows) {
+          await ctx.db.delete(row._id);
+        }
+      }
+
+      for (const booking of existingBookings) {
+        await ctx.db.delete(booking._id);
+      }
+
+      const existingSlots = await ctx.db
+        .query("time_slots")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+        .collect();
+      for (const slot of existingSlots) {
+        await ctx.db.delete(slot._id);
+      }
     }
 
     const existingServices = await ctx.db.query("services").collect();
     const existingCategories = await ctx.db.query("service_categories").collect();
     const existingShopServices = await ctx.db
       .query("shop_services")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", args.shopId))
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
       .collect();
     const servicesBySlug = new Map(
       existingServices
@@ -5054,7 +5151,6 @@ export const seedLateStartReviewScenario = mutation({
         total_cost: laborCost + partsCost,
         estimated_labor_minutes: estimatedMinutes,
         status: "confirmed",
-        assignment_preference: "any",
         created_at: now,
         updated_at: now,
       });
@@ -5230,7 +5326,8 @@ export const seedLateStartReviewScenario = mutation({
           proposed_scheduled_time: "16:00",
           proposed_mechanic_id: miaMechanic._id,
           used_alternate_mechanic: true,
-          blocked_reason: "Automatic delay was intentionally paused for manual review testing.",
+          blocked_reason:
+            "Automatic delay was intentionally paused for manual review testing.",
         },
       ],
       blocking_reason:
@@ -5238,8 +5335,6 @@ export const seedLateStartReviewScenario = mutation({
       created_at: now,
       updated_at: now,
     });
-
-    await syncShopAvailabilityWindow(ctx, { shopId: args.shopId });
 
     return {
       success: true,

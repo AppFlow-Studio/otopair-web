@@ -91,6 +91,20 @@ export default defineSchema({
     steering_type: v.optional(v.string()),
   }).index("by_model_id", ["model_id"]),
 
+  // Cache marker: presence means we've already pulled NHTSA models for (make, year).
+  model_year_cache: defineTable({
+    make_id: v.id("makes"),
+    year: v.number(),
+    fetched_at: v.number(),
+  }).index("by_make_year", ["make_id", "year"]),
+
+  // Cache marker: presence means we've already pulled NHTSA trims for (model, year).
+  trim_year_cache: defineTable({
+    model_id: v.id("models"),
+    year: v.number(),
+    fetched_at: v.number(),
+  }).index("by_model_year", ["model_id", "year"]),
+
   // [W] 24 fields (A had 6, D had 5). Absorbs deprecated engine_specs.
   engines: defineTable({
     trim_id: v.optional(v.id("trims")),
@@ -1210,11 +1224,13 @@ export default defineSchema({
     is_available: v.boolean(),
     note: v.optional(v.string()),
     title: v.optional(v.string()),
+    series_id: v.optional(v.string()),
   })
     .index("by_shop_id", ["shop_id"])
     .index("by_mechanic_id", ["mechanic_id"])
     .index("by_shop_and_date", ["shop_id", "date"])
-    .index("by_availability", ["is_available"]),
+    .index("by_availability", ["is_available"])
+    .index("by_series_id", ["series_id"]),
 
   // ===== BOOKINGS & PAYMENTS =====
 

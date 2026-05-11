@@ -24,6 +24,7 @@ export interface CalendarEvent {
   note?: string | null;
   scheduleChangeMode?: string;
   customerCanRestoreOriginal?: boolean;
+  isDraft?: boolean;
 }
 
 export const statusColors: Record<string, { bg: string; text: string; border: string }> = {

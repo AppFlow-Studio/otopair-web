@@ -55,6 +55,142 @@ const conditionPalette: Record<
 
 const TIRE_SIZE_PATTERN = /^\d{3}\/\d{2}R\d{2}$/i;
 
+type SelectOption = { value: string; label: string; aliases?: string[] };
+
+function normalizeForAlias(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function resolveOption(value: string | null | undefined, options: SelectOption[]): SelectOption | null {
+  if (!value) return null;
+  const direct = options.find((o) => o.value === value);
+  if (direct) return direct;
+  const normalized = normalizeForAlias(value);
+  return (
+    options.find(
+      (o) =>
+        normalizeForAlias(o.value) === normalized ||
+        normalizeForAlias(o.label) === normalized ||
+        o.aliases?.some((a) => normalizeForAlias(a) === normalized),
+    ) ?? null
+  );
+}
+
+function optionLabel(value: string | null | undefined, options: SelectOption[]): string {
+  return resolveOption(value, options)?.label ?? (value ?? "");
+}
+
+const TIRE_BRAND_OPTIONS: SelectOption[] = [
+  { value: "goodyear", label: "Goodyear" },
+  { value: "michelin", label: "Michelin" },
+  { value: "bridgestone", label: "Bridgestone" },
+  { value: "firestone", label: "Firestone" },
+  { value: "continental", label: "Continental" },
+  { value: "pirelli", label: "Pirelli" },
+  { value: "cooper", label: "Cooper" },
+  { value: "hankook", label: "Hankook" },
+  { value: "yokohama", label: "Yokohama" },
+  { value: "bfgoodrich", label: "BFGoodrich", aliases: ["bf goodrich", "b.f. goodrich"] },
+  { value: "toyo", label: "Toyo" },
+  { value: "falken", label: "Falken" },
+  { value: "general", label: "General" },
+  { value: "kumho", label: "Kumho" },
+  { value: "dunlop", label: "Dunlop" },
+  { value: "nitto", label: "Nitto" },
+  { value: "nexen", label: "Nexen" },
+  { value: "mastercraft", label: "Mastercraft" },
+  { value: "sumitomo", label: "Sumitomo" },
+];
+
+const OIL_VISCOSITY_OPTIONS: SelectOption[] = [
+  { value: "0w_8", label: "0W-8", aliases: ["0w8", "0w-8"] },
+  { value: "0w_16", label: "0W-16", aliases: ["0w16", "0w-16"] },
+  { value: "0w_20", label: "0W-20", aliases: ["0w20", "0w-20"] },
+  { value: "0w_30", label: "0W-30", aliases: ["0w30", "0w-30"] },
+  { value: "0w_40", label: "0W-40", aliases: ["0w40", "0w-40"] },
+  { value: "5w_20", label: "5W-20", aliases: ["5w20", "5w-20"] },
+  { value: "5w_30", label: "5W-30", aliases: ["5w30", "5w-30"] },
+  { value: "5w_40", label: "5W-40", aliases: ["5w40", "5w-40"] },
+  { value: "10w_30", label: "10W-30", aliases: ["10w30", "10w-30"] },
+  { value: "10w_40", label: "10W-40", aliases: ["10w40", "10w-40"] },
+  { value: "15w_40", label: "15W-40", aliases: ["15w40", "15w-40"] },
+  { value: "20w_50", label: "20W-50", aliases: ["20w50", "20w-50"] },
+];
+
+const OIL_TYPE_OPTIONS: SelectOption[] = [
+  { value: "full_synthetic", label: "Full synthetic", aliases: ["synthetic", "fully synthetic"] },
+  { value: "synthetic_blend", label: "Synthetic blend", aliases: ["blend", "semi synthetic", "semi-synthetic"] },
+  { value: "conventional", label: "Conventional", aliases: ["mineral"] },
+  { value: "high_mileage", label: "High mileage", aliases: ["hm"] },
+  { value: "diesel_hd", label: "Diesel (HD)", aliases: ["hdeo", "ck-4", "cj-4", "diesel"] },
+];
+
+const OIL_CAPACITY_OPTIONS: SelectOption[] = (() => {
+  const out: SelectOption[] = [];
+  for (let q = 3.0; q <= 10.0 + 1e-9; q += 0.5) {
+    const s = q.toFixed(1);
+    out.push({ value: s, label: `${s} qts` });
+  }
+  return out;
+})();
+
+const COOLANT_TYPE_OPTIONS: SelectOption[] = [
+  { value: "iat", label: "IAT (Green)", aliases: ["iat green", "green"] },
+  {
+    value: "oat",
+    label: "OAT (Orange / Yellow / Red — Dex-Cool, G12)",
+    aliases: ["oat", "dexcool", "dex-cool", "dex cool", "g12", "orange"],
+  },
+  { value: "hoat", label: "HOAT (Yellow / Orange)", aliases: ["hoat", "yellow"] },
+  {
+    value: "p_hoat",
+    label: "P-HOAT (Pink / Blue — Asian OEM)",
+    aliases: ["phoat", "p-hoat", "asian", "toyota red", "honda blue", "pink"],
+  },
+  {
+    value: "si_oat",
+    label: "Si-OAT (Pink / Purple — VW/Audi/MB)",
+    aliases: ["sioat", "si-oat", "g12++", "g13", "mb 325.5"],
+  },
+  { value: "universal", label: "Universal / Global", aliases: ["universal", "prediluted"] },
+];
+
+const BRAKE_FLUID_OPTIONS: SelectOption[] = [
+  { value: "dot_3", label: "DOT 3", aliases: ["dot3"] },
+  { value: "dot_4", label: "DOT 4", aliases: ["dot4"] },
+  { value: "dot_4_lv", label: "DOT 4 LV", aliases: ["dot4lv", "dot 4 low viscosity", "low viscosity dot 4"] },
+  { value: "dot_5", label: "DOT 5 (silicone)", aliases: ["dot5", "silicone"] },
+  { value: "dot_5_1", label: "DOT 5.1", aliases: ["dot5.1", "dot 5-1", "dot51"] },
+];
+
+const TRANSMISSION_FLUID_OPTIONS: SelectOption[] = [
+  { value: "dexron_vi", label: "Dexron VI", aliases: ["dex 6", "dexvi", "dex vi", "dexron 6"] },
+  { value: "dexron_iii_mercon", label: "Dexron III / Mercon (legacy)", aliases: ["dex iii", "dex/merc", "dexron iii", "dex-merc"] },
+  { value: "mercon_lv", label: "Mercon LV", aliases: ["merc lv"] },
+  { value: "mercon_v", label: "Mercon V", aliases: ["merc v"] },
+  { value: "atf_plus_4", label: "ATF+4", aliases: ["atf 4", "atf+4", "atf plus 4"] },
+  { value: "type_f", label: "Type F", aliases: ["typef"] },
+  { value: "toyota_ws", label: "Toyota WS", aliases: ["ws", "world standard"] },
+  { value: "toyota_t_iv", label: "Toyota T-IV", aliases: ["t-iv", "t4", "tiv"] },
+  { value: "honda_dw_1", label: "Honda DW-1", aliases: ["dw1", "atf-z1", "z1", "dw-1"] },
+  { value: "nissan_matic_s", label: "Nissan Matic-S", aliases: ["matic s", "matic-j", "matic j"] },
+  { value: "hyundai_kia_sp_iv", label: "Hyundai/Kia SP-IV", aliases: ["sp-iv", "sp4", "sp iv"] },
+  { value: "cvt_ns_2_3", label: "CVT NS-2 / NS-3", aliases: ["ns-2", "ns-3", "ns2", "ns3"] },
+  { value: "cvt_universal", label: "CVT (universal)", aliases: ["cvt"] },
+  { value: "dct_universal", label: "DCT (universal)", aliases: ["dct", "dsg"] },
+  { value: "manual_75w90_gl4", label: "Manual 75W-90 GL-4", aliases: ["75w90 gl-4", "gl-4"] },
+  { value: "manual_75w90_gl5", label: "Manual 75W-90 GL-5", aliases: ["75w90 gl-5", "gl-5"] },
+];
+
+const PAD_THICKNESS_OPTIONS: SelectOption[] = (() => {
+  const out: SelectOption[] = [];
+  for (let mm = 1.0; mm <= 12.0 + 1e-9; mm += 0.5) {
+    const s = mm.toFixed(1);
+    out.push({ value: s, label: `${s} mm` });
+  }
+  return out;
+})();
+
 type SubmitIntent = "close" | "start";
 type SectionTabId =
   | "mileage"
@@ -108,6 +244,109 @@ function normalizeTireSizeValue(value?: string | null) {
 
 function isValidTireSize(value: string) {
   return TIRE_SIZE_PATTERN.test(normalizeTireSizeValue(value));
+}
+
+function parseTireSizeParts(value: string): { width: string; aspect: string; wheel: string } {
+  const normalized = normalizeTireSizeValue(value);
+  const match = normalized.match(/^(\d{0,3})(?:\/(\d{0,2}))?(?:R(\d{0,2}))?$/i);
+  return {
+    width: match?.[1] ?? "",
+    aspect: match?.[2] ?? "",
+    wheel: match?.[3] ?? "",
+  };
+}
+
+function composeTireSize(width: string, aspect: string, wheel: string): string {
+  if (!width && !aspect && !wheel) return "";
+  return `${width}/${aspect}R${wheel}`;
+}
+
+function TireSizeInput({
+  value,
+  onChange,
+  className,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  className?: string;
+}) {
+  const parts = parseTireSizeParts(value);
+  const aspectRef = useRef<HTMLInputElement | null>(null);
+  const wheelRef = useRef<HTMLInputElement | null>(null);
+
+  const emit = (width: string, aspect: string, wheel: string) => {
+    onChange(composeTireSize(width, aspect, wheel));
+  };
+
+  const sanitize = (s: string, max: number) =>
+    s.replace(/[^0-9]/g, "").slice(0, max);
+
+  return (
+    <div
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-sm",
+        "focus-within:ring-2 focus-within:ring-ring focus-within:border-ring",
+        className,
+      )}
+      aria-label="Tire size"
+    >
+      <input
+        inputMode="numeric"
+        maxLength={3}
+        value={parts.width}
+        placeholder="225"
+        aria-label="Section width"
+        onChange={(e) => {
+          const next = sanitize(e.target.value, 3);
+          emit(next, parts.aspect, parts.wheel);
+          if (next.length === 3) aspectRef.current?.focus();
+        }}
+        className="w-9 bg-transparent text-center outline-none"
+      />
+      <span className="text-muted-foreground">/</span>
+      <input
+        ref={aspectRef}
+        inputMode="numeric"
+        maxLength={2}
+        value={parts.aspect}
+        placeholder="65"
+        aria-label="Aspect ratio"
+        onChange={(e) => {
+          const next = sanitize(e.target.value, 2);
+          emit(parts.width, next, parts.wheel);
+          if (next.length === 2) wheelRef.current?.focus();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Backspace" && !parts.aspect) {
+            e.preventDefault();
+            emit(parts.width.slice(0, -1), parts.aspect, parts.wheel);
+          }
+        }}
+        className="w-7 bg-transparent text-center outline-none"
+      />
+      <span className="text-muted-foreground">R</span>
+      <input
+        ref={wheelRef}
+        inputMode="numeric"
+        maxLength={2}
+        value={parts.wheel}
+        placeholder="17"
+        aria-label="Wheel diameter"
+        onChange={(e) => {
+          const next = sanitize(e.target.value, 2);
+          emit(parts.width, parts.aspect, next);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Backspace" && !parts.wheel) {
+            e.preventDefault();
+            emit(parts.width, parts.aspect.slice(0, -1), parts.wheel);
+            aspectRef.current?.focus();
+          }
+        }}
+        className="w-7 bg-transparent text-center outline-none"
+      />
+    </div>
+  );
 }
 
 function findScrollableAncestor(element: HTMLElement): HTMLElement | null {
@@ -870,7 +1109,7 @@ function PreJobSurveyDialogBody({
           ) : null
         }
         onClose={requestClose}
-        maxWidthClassName="max-w-lg"
+        maxWidthClassName="max-w-6xl"
         footer={
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             {error ? (
@@ -915,7 +1154,41 @@ function PreJobSurveyDialogBody({
           </div>
         }
       >
-        <div className="space-y-4">
+        <div className="lg:flex lg:items-start lg:gap-6">
+          <aside className="hidden lg:sticky lg:top-0 lg:block lg:w-56 lg:shrink-0 lg:self-start lg:py-1">
+            <nav aria-label="Pre-job sections" className="flex flex-col gap-1">
+              <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                Sections
+              </p>
+              {SECTION_TABS.map((tab) => {
+                const isActive = activeSection === tab.id;
+                const isRequired =
+                  tab.requiredWhen === "always" ||
+                  (tab.requiredWhen === "brake-work" && serviceFlags.hasBrakeWork) ||
+                  (tab.requiredWhen === "oil-change" && serviceFlags.hasOilChange);
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => scrollToSection(tab.id)}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-2 rounded-md border-l-2 px-3 py-2 text-left text-[13px] font-medium transition-colors",
+                      isActive
+                        ? "border-primary bg-primary/5 text-primary"
+                        : "border-transparent text-muted-foreground hover:bg-primary/5 hover:text-foreground"
+                    )}
+                  >
+                    <span className="truncate">{tab.label}</span>
+                    {isRequired ? (
+                      <span className="text-destructive" aria-label="required">*</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </nav>
+          </aside>
+
+        <div className="space-y-4 lg:min-w-0 lg:flex-1">
           <VehicleSummaryCard label={bookingLabel} subLabel={bookingSubLabel} />
 
           {isFirstVisit ? (
@@ -930,7 +1203,7 @@ function PreJobSurveyDialogBody({
 
           <div
             ref={navRef}
-            className="sticky -top-4 z-20 -mx-5 border-b border-primary/10 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/88 sm:-top-5 sm:-mx-6"
+            className="sticky -top-4 z-20 -mx-5 border-b border-primary/10 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/88 sm:-top-5 sm:-mx-6 lg:hidden"
           >
             <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-8 bg-gradient-to-r from-card/95 to-transparent" />
             <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-8 bg-gradient-to-l from-card/95 to-transparent" />
@@ -999,7 +1272,7 @@ function PreJobSurveyDialogBody({
                 }
               >
                 <input
-                  value={mileage}
+                  value={mileage ? Number(mileage).toLocaleString("en-US") : ""}
                   onChange={(event) => setMileage(keepDigitsOnly(event.target.value))}
                   inputMode="numeric"
                   placeholder="Enter mileage"
@@ -1052,13 +1325,10 @@ function PreJobSurveyDialogBody({
                     />
                   }
                 >
-                  <input
+                  <TireSizeInput
                     value={frontTireSize}
-                    onChange={(event) =>
-                      setFrontTireSize(normalizeTireSizeValue(event.target.value))
-                    }
-                    placeholder="275/45R20"
-                    className={cn(baseField(), "w-full text-right sm:w-[160px]")}
+                    onChange={setFrontTireSize}
+                    className="sm:w-[160px]"
                   />
                 </FieldRow>
                 {!rearMatchesFront ? (
@@ -1072,13 +1342,10 @@ function PreJobSurveyDialogBody({
                       />
                     }
                   >
-                    <input
+                    <TireSizeInput
                       value={rearTireSize}
-                      onChange={(event) =>
-                        setRearTireSize(normalizeTireSizeValue(event.target.value))
-                      }
-                      placeholder="275/45R20"
-                      className={cn(baseField(), "w-full text-right sm:w-[160px]")}
+                      onChange={setRearTireSize}
+                      className="sm:w-[160px]"
                     />
                   </FieldRow>
                 ) : null}
@@ -1092,23 +1359,23 @@ function PreJobSurveyDialogBody({
                   value={rearCondition}
                   onChange={setRearCondition}
                 />
-                <FieldRow
-                  label={
-                    <FieldLabelWithSource
-                      text="Tire brand"
-                      required
-                      source={passportData?.sources["tires.brand"]}
-                      showSource={hasPrefilledText(passportData?.passport.tires.brand)}
-                    />
-                  }
-                >
-                  <input
+                <div className="w-full sm:max-w-[260px] sm:self-end">
+                  <SelectableFieldCard
+                    label={
+                      <FieldLabelWithSource
+                        text="Tire brand"
+                        required
+                        source={passportData?.sources["tires.brand"]}
+                        showSource={hasPrefilledText(passportData?.passport.tires.brand)}
+                      />
+                    }
                     value={tireBrand}
-                    onChange={(event) => setTireBrand(event.target.value)}
-                    placeholder="e.g. Goodyear Wrangler"
-                    className={cn(baseField(), "w-full text-right sm:w-[160px]")}
+                    onChange={setTireBrand}
+                    options={TIRE_BRAND_OPTIONS}
+                    placeholder="Select brand…"
+                    otherPlaceholder="Brand name"
                   />
-                </FieldRow>
+                </div>
               </div>
             </SectionBlock>
 
@@ -1121,40 +1388,42 @@ function PreJobSurveyDialogBody({
               badge={serviceFlags.hasBrakeWork ? "Required" : "Optional"}
               accent={serviceFlags.hasBrakeWork ? "required" : "muted"}
             >
-              <FieldRow
-                label={
-                  serviceFlags.hasBrakeWork ? (
-                    <RequiredLabel text="Front pad thickness" />
-                  ) : (
-                    "Front pad thickness"
-                  )
-                }
-              >
-                <input
+              <div className="grid gap-2 sm:grid-cols-2">
+                <SelectableFieldCard
+                  label={
+                    serviceFlags.hasBrakeWork ? (
+                      <RequiredLabel text="Front pad thickness" />
+                    ) : (
+                      "Front pad thickness"
+                    )
+                  }
                   value={frontPadMm}
-                  onChange={(event) => setFrontPadMm(keepNumericInput(event.target.value))}
-                  placeholder="mm"
-                  inputMode="decimal"
-                  className={cn(baseField(), "w-[90px] text-right")}
+                  onChange={setFrontPadMm}
+                  options={PAD_THICKNESS_OPTIONS}
+                  placeholder="Select mm…"
+                  otherPlaceholder="mm"
+                  otherInputMode="decimal"
+                  otherSanitize={keepNumericInput}
+                  helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
                 />
-              </FieldRow>
-              <FieldRow
-                label={
-                  serviceFlags.hasBrakeWork ? (
-                    <RequiredLabel text="Rear pad thickness" />
-                  ) : (
-                    "Rear pad thickness"
-                  )
-                }
-              >
-                <input
+                <SelectableFieldCard
+                  label={
+                    serviceFlags.hasBrakeWork ? (
+                      <RequiredLabel text="Rear pad thickness" />
+                    ) : (
+                      "Rear pad thickness"
+                    )
+                  }
                   value={rearPadMm}
-                  onChange={(event) => setRearPadMm(keepNumericInput(event.target.value))}
-                  placeholder="mm"
-                  inputMode="decimal"
-                  className={cn(baseField(), "w-[90px] text-right")}
+                  onChange={setRearPadMm}
+                  options={PAD_THICKNESS_OPTIONS}
+                  placeholder="Select mm…"
+                  otherPlaceholder="mm"
+                  otherInputMode="decimal"
+                  otherSanitize={keepNumericInput}
+                  helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
                 />
-              </FieldRow>
+              </div>
               <FieldRow
                 label={
                   serviceFlags.hasBrakeWork ? (
@@ -1207,7 +1476,7 @@ function PreJobSurveyDialogBody({
               accent="muted"
             >
               <div className="grid gap-2 sm:grid-cols-2">
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Oil viscosity"
@@ -1218,9 +1487,11 @@ function PreJobSurveyDialogBody({
                   }
                   value={oilViscosity}
                   onChange={setOilViscosity}
-                  placeholder="Oil viscosity"
+                  options={OIL_VISCOSITY_OPTIONS}
+                  placeholder="Select grade…"
+                  otherPlaceholder="e.g. 25W-60"
                 />
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Oil capacity (qts)"
@@ -1231,11 +1502,14 @@ function PreJobSurveyDialogBody({
                     />
                   }
                   value={oilCapacity}
-                  onChange={(value) => setOilCapacity(keepNumericInput(value))}
-                  placeholder="Oil capacity"
-                  inputMode="decimal"
+                  onChange={setOilCapacity}
+                  options={OIL_CAPACITY_OPTIONS}
+                  placeholder="Select capacity…"
+                  otherPlaceholder="qts"
+                  otherInputMode="decimal"
+                  otherSanitize={keepNumericInput}
                 />
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Oil type"
@@ -1246,9 +1520,11 @@ function PreJobSurveyDialogBody({
                   }
                   value={oilType}
                   onChange={setOilType}
-                  placeholder="Oil type"
+                  options={OIL_TYPE_OPTIONS}
+                  placeholder="Select oil type…"
+                  otherPlaceholder="Oil type"
                 />
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Coolant type"
@@ -1258,9 +1534,12 @@ function PreJobSurveyDialogBody({
                   }
                   value={coolantType}
                   onChange={setCoolantType}
-                  placeholder="Coolant type"
+                  options={COOLANT_TYPE_OPTIONS}
+                  placeholder="Select coolant chemistry…"
+                  otherPlaceholder="Coolant type"
+                  helperText="Match to chemistry family, not color — mixing chemistries can sludge the system."
                 />
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Brake fluid type"
@@ -1272,9 +1551,11 @@ function PreJobSurveyDialogBody({
                   }
                   value={brakeFluidType}
                   onChange={setBrakeFluidType}
-                  placeholder="Brake fluid type"
+                  options={BRAKE_FLUID_OPTIONS}
+                  placeholder="Select DOT spec…"
+                  otherPlaceholder="Brake fluid type"
                 />
-                <EditableFieldCard
+                <SelectableFieldCard
                   label={
                     <FieldLabelWithSource
                       text="Transmission fluid type"
@@ -1286,7 +1567,9 @@ function PreJobSurveyDialogBody({
                   }
                   value={transmissionFluidType}
                   onChange={setTransmissionFluidType}
-                  placeholder="Transmission fluid type"
+                  options={TRANSMISSION_FLUID_OPTIONS}
+                  placeholder="Select ATF spec…"
+                  otherPlaceholder="Transmission fluid type"
                 />
               </div>
             </SectionBlock>
@@ -1441,6 +1724,7 @@ function PreJobSurveyDialogBody({
               />
             </SectionBlock>
           </div>
+        </div>
         </div>
       </SurveyDialogShell>
 
@@ -1620,6 +1904,132 @@ function EditableFieldCard({
         inputMode={inputMode}
         className={cn(baseField(), "w-full text-left")}
       />
+    </div>
+  );
+}
+
+const OTHER_OPTION_ID = "__other__";
+
+function SelectableFieldCard({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder = "Select...",
+  otherPlaceholder = "Enter value",
+  otherInputMode,
+  otherSanitize,
+  helperText,
+}: {
+  label: ReactNode;
+  value: string;
+  onChange: (value: string) => void;
+  options: SelectOption[];
+  placeholder?: string;
+  otherPlaceholder?: string;
+  otherInputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"];
+  otherSanitize?: (raw: string) => string;
+  helperText?: ReactNode;
+}) {
+  const matched = resolveOption(value, options);
+  const isOther = !!value && !matched;
+  const selectedKey = matched ? matched.value : isOther ? OTHER_OPTION_ID : "none";
+  const triggerLabel = matched ? matched.label : isOther ? "Other…" : placeholder;
+  const showSearch = options.length > 5;
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = normalizedQuery
+    ? options.filter((option) => {
+        const haystack = [option.label, option.value, ...(option.aliases ?? [])];
+        return haystack.some((h) => h.toLowerCase().includes(normalizedQuery));
+      })
+    : options;
+  const otherMatchesQuery = !normalizedQuery || "other".includes(normalizedQuery);
+  return (
+    <div className="rounded-lg border border-primary/10 bg-muted/40 p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      </div>
+      <Select
+        selectedKey={selectedKey}
+        onSelectionChange={(key) => {
+          const k = String(key);
+          if (k === "none") {
+            onChange("");
+          } else if (k === OTHER_OPTION_ID) {
+            if (matched) onChange("");
+          } else {
+            onChange(k);
+          }
+          setQuery("");
+        }}
+      >
+        <SelectTrigger className={cn(selectTriggerClassName, "w-full justify-between")}>
+          <SelectValue>{triggerLabel}</SelectValue>
+        </SelectTrigger>
+        <SelectPopover className={selectPopoverClassName}>
+          {showSearch ? (
+            <div
+              className="border-b border-primary/10 p-1.5"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  // Let printable keys edit the input; stop them bubbling into the listbox's typeahead.
+                  if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter" && e.key !== "Escape") {
+                    e.stopPropagation();
+                  }
+                }}
+                placeholder="Search…"
+                className={cn(baseField(), "w-full text-left")}
+              />
+            </div>
+          ) : null}
+          <SelectListBox shouldFocusWrap className={cn(selectListBoxClassName, "max-h-64 overflow-y-auto")}>
+            <SelectItem id="none" textValue={placeholder} className={selectItemClassName}>
+              <span className="text-muted-foreground">{placeholder}</span>
+            </SelectItem>
+            {filteredOptions.map((option) => (
+              <SelectItem
+                key={option.value}
+                id={option.value}
+                textValue={option.label}
+                className={selectItemClassName}
+              >
+                {option.label}
+              </SelectItem>
+            ))}
+            {otherMatchesQuery ? (
+              <SelectItem id={OTHER_OPTION_ID} textValue="Other…" className={selectItemClassName}>
+                Other…
+              </SelectItem>
+            ) : null}
+            {filteredOptions.length === 0 && !otherMatchesQuery ? (
+              <SelectItem id="__no_results__" isDisabled textValue="No matches" className={cn(selectItemClassName, "text-muted-foreground")}>
+                No matches
+              </SelectItem>
+            ) : null}
+          </SelectListBox>
+        </SelectPopover>
+      </Select>
+      {isOther ? (
+        <input
+          value={value}
+          onChange={(event) => {
+            const next = otherSanitize ? otherSanitize(event.target.value) : event.target.value;
+            onChange(next);
+          }}
+          placeholder={otherPlaceholder}
+          inputMode={otherInputMode}
+          className={cn(baseField(), "mt-2 w-full text-left")}
+        />
+      ) : null}
+      {helperText ? (
+        <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground/80">{helperText}</p>
+      ) : null}
     </div>
   );
 }

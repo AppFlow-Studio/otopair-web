@@ -409,6 +409,9 @@ export const getMyPortalAccess = query({
         status: "active" as const,
         role: activeMembership.role,
         shopId: activeMembership.shop_id,
+        mechanicId: MECHANIC_ROLES.has(activeMembership.role)
+          ? activeMembership.mechanic_id ?? null
+          : null,
         onboardingComplete: shop?.onboarding_complete === true,
       };
     }

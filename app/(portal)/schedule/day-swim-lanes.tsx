@@ -469,6 +469,7 @@ export default function DaySwimLanes({
           const blocked = eventsRef.current.filter(
             (be) =>
               be.type === "blocked" &&
+              !be.isDraft &&
               (be.resourceId === target.colId || !be.resourceId),
           );
           const overlapsBlocked = blocked.some((bl) => {
@@ -774,13 +775,18 @@ export default function DaySwimLanes({
                   return (
                     <div
                       key={bl.id}
-                      className="absolute left-0 right-0 z-[5] blocked-slot-pattern group cursor-pointer overflow-hidden"
+                      className={`absolute left-0 right-0 z-[5] blocked-slot-pattern group overflow-hidden ${
+                        bl.isDraft
+                          ? "pointer-events-none opacity-70 ring-2 ring-dashed ring-red-400 outline outline-2 outline-dashed outline-red-400 -outline-offset-2 animate-pulse"
+                          : "cursor-pointer"
+                      }`}
                       style={{
                         top: Math.max(0, blTop),
                         height: Math.max(ROW_HEIGHT * 0.5, blHeight),
                       }}
                       title={bl.note ?? undefined}
                       onClick={() => {
+                        if (bl.isDraft) return;
                         if (!bl.slotId || !onSelectBlocked) return;
                         onSelectBlocked({
                           slotId: bl.slotId,
@@ -793,12 +799,18 @@ export default function DaySwimLanes({
                         });
                       }}
                       onContextMenu={(e) => {
+                        if (bl.isDraft) return;
                         if (!bl.slotId || !onContextMenuBlocked) return;
                         e.preventDefault();
                         onContextMenuBlocked({ slotId: bl.slotId, clientX: e.clientX, clientY: e.clientY });
                       }}
                     >
-                      <span className="absolute inset-0 flex items-center justify-center overflow-hidden px-1 pointer-events-none select-none">
+                      <span className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden px-1 pointer-events-none select-none gap-0.5">
+                        {bl.isDraft && (
+                          <span className="text-[9px] font-semibold uppercase tracking-wide text-red-500">
+                            Draft preview
+                          </span>
+                        )}
                         <span
                           className="overflow-hidden text-center text-[11px] font-medium leading-tight text-red-400 whitespace-normal break-words"
                           style={{
@@ -809,6 +821,16 @@ export default function DaySwimLanes({
                         >
                           {bl.blockTitle ?? "Blocked"}
                         </span>
+                        {bl.isDraft && blHeight > 36 && (
+                          <span className="text-[10px] text-red-400/80">
+                            {`${formatCompactTime(bl.start.getHours(), bl.start.getMinutes())} – ${formatCompactTime(bl.end.getHours(), bl.end.getMinutes())}`}
+                          </span>
+                        )}
+                        {bl.isDraft && bl.note && blHeight > 56 && (
+                          <span className="text-[10px] text-red-400/70 line-clamp-2 text-center px-1">
+                            {bl.note}
+                          </span>
+                        )}
                       </span>
                     </div>
                   );

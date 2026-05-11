@@ -310,6 +310,8 @@ export default function SchedulePage() {
   const [btMechanicId, setBtMechanicId] = useState("");
   const [btDescription, setBtDescription] = useState("");
   const [btType, setBtType] = useState("custom");
+  const [btFrequency, setBtFrequency] = useState<"none" | "daily" | "weekly" | "biweekly" | "monthly">("none");
+  const [btUntil, setBtUntil] = useState("");
   const [saveAsType, setSaveAsType] = useState(false);
   const savedBlockTypesQuery = useQuery(api.schedule.getBlockTimeTypes);
   const [btSaving, setBtSaving] = useState(false);
@@ -337,6 +339,20 @@ export default function SchedulePage() {
   const [legendOpen, setLegendOpen] = useState(false);
   const legendRef = useRef<HTMLDivElement>(null);
   const context = useQuery(api.schedule.getScheduleContext);
+  const portalAccess = useQuery(api.shops.getMyPortalAccess);
+  const viewerMechanicId =
+    portalAccess && portalAccess.status === "active"
+      ? (portalAccess.mechanicId ?? null)
+      : null;
+  const isMechanicViewer =
+    portalAccess?.status === "active" &&
+    (portalAccess.role === "shop_mechanic" || portalAccess.role === "mechanic");
+
+  useEffect(() => {
+    if (isMechanicViewer && viewerMechanicId && mechanicFilter !== viewerMechanicId) {
+      setMechanicFilter(viewerMechanicId);
+    }
+  }, [isMechanicViewer, viewerMechanicId, mechanicFilter]);
   const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
   const customerLateAlerts = useQuery(api.bookings.getOpenCustomerLateAlerts);
   const frontDeskOverrunAlerts = useQuery(api.bookings.getOpenFrontDeskOverrunAlerts);
@@ -374,6 +390,8 @@ export default function SchedulePage() {
         setBtType(matched ? matched._id : "custom");
       }
       setSaveAsType(false);
+      setBtFrequency("none");
+      setBtUntil("");
     }
   }, [blockTimeDrawer]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -939,8 +957,88 @@ export default function SchedulePage() {
         };
       });
 
-    return [...bookingEvents, ...blockedEvents];
-  }, [bookings, blockedSlots, mechanicFilter]);
+    // Draft preview while the Add blocked time drawer is open
+    const draftEvents: CalendarEvent[] = [];
+    const draftValid =
+      blockTimeDrawer &&
+      !blockTimeDrawer.editingSlotId &&
+      btDate &&
+      btFrom &&
+      btTo &&
+      btTo > btFrom &&
+      btMechanicId &&
+      (mechanicFilter === "all" || mechanicFilter === btMechanicId);
+    if (draftValid) {
+      const draftDates: string[] = [btDate];
+      if (btFrequency !== "none" && btUntil && btUntil >= btDate) {
+        const [sy, sm, sd] = btDate.split("-").map(Number);
+        const [uy, um, ud] = btUntil.split("-").map(Number);
+        if (sy && sm && sd && uy && um && ud) {
+          const endUtc = Date.UTC(uy, um - 1, ud);
+          let y = sy, m = sm - 1, d = sd;
+          let count = 0;
+          while (count < 366) {
+            const cur = Date.UTC(y, m, d);
+            if (cur > endUtc) break;
+            const iso = new Date(cur);
+            const ds = `${iso.getUTCFullYear()}-${String(iso.getUTCMonth() + 1).padStart(2, "0")}-${String(iso.getUTCDate()).padStart(2, "0")}`;
+            if (ds !== btDate) draftDates.push(ds);
+            if (btFrequency === "daily") d += 1;
+            else if (btFrequency === "weekly") d += 7;
+            else if (btFrequency === "biweekly") d += 14;
+            else m += 1;
+            const norm = new Date(Date.UTC(y, m, d));
+            y = norm.getUTCFullYear();
+            m = norm.getUTCMonth();
+            d = norm.getUTCDate();
+            count++;
+          }
+        }
+      }
+      const [sh, sm] = btFrom.split(":").map(Number);
+      const [eh, em] = btTo.split(":").map(Number);
+      const fallbackTitle =
+        btTitle.trim() ||
+        BUILT_IN_TYPES.find((t) => t.id === btType)?.label ||
+        savedBlockTypes.find((t) => t._id === btType)?.title ||
+        "Blocked";
+      for (const ds of draftDates) {
+        const start = new Date(`${ds}T00:00:00`);
+        start.setHours(sh, sm, 0, 0);
+        const end = new Date(`${ds}T00:00:00`);
+        end.setHours(eh, em, 0, 0);
+        draftEvents.push({
+          id: `blocked-draft-${ds}`,
+          title: fallbackTitle,
+          start,
+          end,
+          resourceId: btMechanicId,
+          type: "blocked",
+          status: "blocked",
+          blockTitle: fallbackTitle,
+          note: btDescription.trim() || null,
+          isDraft: true,
+        });
+      }
+    }
+
+    return [...bookingEvents, ...blockedEvents, ...draftEvents];
+  }, [
+    bookings,
+    blockedSlots,
+    mechanicFilter,
+    blockTimeDrawer,
+    btDate,
+    btFrom,
+    btTo,
+    btMechanicId,
+    btFrequency,
+    btUntil,
+    btTitle,
+    btDescription,
+    btType,
+    savedBlockTypes,
+  ]);
 
   // For month view: collapse individual bookings into one chip per status per day
   const calendarEvents = useMemo(() => {
@@ -1171,13 +1269,16 @@ export default function SchedulePage() {
               <Select
                 selectedKey={mechanicFilter}
                 onSelectionChange={(key) => setMechanicFilter(String(key))}
+                isDisabled={isMechanicViewer}
               >
                 <SelectTrigger className="h-9 rounded-lg border-border bg-card text-sm px-3 min-w-40">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectPopover placement="bottom end">
                   <SelectListBox shouldFocusWrap>
-                    <SelectItem id="all" textValue="All Mechanics">All Mechanics</SelectItem>
+                    {!isMechanicViewer && (
+                      <SelectItem id="all" textValue="All Mechanics">All Mechanics</SelectItem>
+                    )}
                     {context.mechanics.map((m) => (
                       <SelectItem key={m._id} id={m._id} textValue={m.name}>
                         {m.name}
@@ -1720,16 +1821,22 @@ export default function SchedulePage() {
                     <DrawerFieldLabel>From</DrawerFieldLabel>
                     <Select
                       selectedKey={btFrom}
-                      onSelectionChange={(key) => setBtFrom(String(key))}
+                      onSelectionChange={(key) => {
+                        const next = String(key);
+                        setBtFrom(next);
+                        if (btTo && btTo <= next) setBtTo("");
+                      }}
                     >
                       <SelectTrigger className={drawerSelectTriggerClassName}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectPopover placement="bottom start">
                         <SelectListBox shouldFocusWrap>
-                          {generateTimeOptions().map((t) => (
-                            <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
-                          ))}
+                          {generateTimeOptions()
+                            .filter((t) => t.value !== "23:45")
+                            .map((t) => (
+                              <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
+                            ))}
                         </SelectListBox>
                       </SelectPopover>
                     </Select>
@@ -1737,6 +1844,7 @@ export default function SchedulePage() {
                   <div className="flex-1">
                     <DrawerFieldLabel>To</DrawerFieldLabel>
                     <Select
+                      isDisabled={!btFrom}
                       selectedKey={btTo}
                       onSelectionChange={(key) => setBtTo(String(key))}
                     >
@@ -1745,14 +1853,21 @@ export default function SchedulePage() {
                       </SelectTrigger>
                       <SelectPopover placement="bottom start">
                         <SelectListBox shouldFocusWrap>
-                          {generateTimeOptions().map((t) => (
-                            <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
-                          ))}
+                          {generateTimeOptions()
+                            .filter((t) => !btFrom || t.value > btFrom)
+                            .map((t) => (
+                              <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
+                            ))}
                         </SelectListBox>
                       </SelectPopover>
                     </Select>
                   </div>
                 </div>
+                {btFrom && btTo && btTo <= btFrom && (
+                  <p className="text-xs text-destructive">
+                    End time must be after the start time.
+                  </p>
+                )}
                 {btFrom && btTo && btMechanicId && btDate && bookings &&
                   overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings) && (
                   <p className="text-xs text-destructive">
@@ -1791,19 +1906,53 @@ export default function SchedulePage() {
                 </div>
 
                 {/* Frequency */}
-                <div>
-                  <DrawerFieldLabel>Frequency</DrawerFieldLabel>
-                  <Select isDisabled selectedKey="none">
-                    <SelectTrigger className={drawerSelectTriggerClassName}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectPopover placement="bottom start">
-                      <SelectListBox>
-                        <SelectItem id="none" textValue="Doesn't repeat">Doesn&apos;t repeat</SelectItem>
-                      </SelectListBox>
-                    </SelectPopover>
-                  </Select>
-                </div>
+                {!blockTimeDrawer.editingSlotId && (
+                  <div>
+                    <DrawerFieldLabel>Frequency</DrawerFieldLabel>
+                    <Select
+                      selectedKey={btFrequency}
+                      onSelectionChange={(key) => {
+                        const next = String(key) as typeof btFrequency;
+                        setBtFrequency(next);
+                        if (next !== "none" && !btUntil && btDate) {
+                          const [y, m, d] = btDate.split("-").map(Number);
+                          if (y && m && d) {
+                            const dt = new Date(Date.UTC(y, m - 1, d + 30));
+                            setBtUntil(
+                              `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`,
+                            );
+                          }
+                        }
+                      }}
+                    >
+                      <SelectTrigger className={drawerSelectTriggerClassName}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopover placement="bottom start">
+                        <SelectListBox>
+                          <SelectItem id="none" textValue="Doesn't repeat">Doesn&apos;t repeat</SelectItem>
+                          <SelectItem id="daily" textValue="Daily">Daily</SelectItem>
+                          <SelectItem id="weekly" textValue="Weekly">Weekly</SelectItem>
+                          <SelectItem id="biweekly" textValue="Every 2 weeks">Every 2 weeks</SelectItem>
+                          <SelectItem id="monthly" textValue="Monthly">Monthly</SelectItem>
+                        </SelectListBox>
+                      </SelectPopover>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Ends on */}
+                {!blockTimeDrawer.editingSlotId && btFrequency !== "none" && (
+                  <div>
+                    <DrawerFieldLabel>Ends on</DrawerFieldLabel>
+                    <DatePicker value={btUntil} onChange={setBtUntil} />
+                    {btUntil && btDate && btUntil < btDate && (
+                      <p className="mt-1 text-xs text-destructive">
+                        End date must be on or after the start date.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Description */}
                 <div>
@@ -1832,6 +1981,8 @@ export default function SchedulePage() {
                 <button
                   disabled={
                     btSaving || !btDate || !btFrom || !btTo || !btMechanicId ||
+                    btTo <= btFrom ||
+                    (btFrequency !== "none" && (!btUntil || btUntil < btDate)) ||
                     !!(bookings && overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings)) ||
                     !!(blockedSlots && overlapsBlockedSlot(btMechanicId, btDate, btFrom, btTo, blockedSlots, blockTimeDrawer?.editingSlotId))
                   }
@@ -1850,6 +2001,7 @@ export default function SchedulePage() {
                         });
                         setToast({ msg: "Blocked time updated", key: Date.now() });
                       } else {
+                        const recurring = btFrequency !== "none" && !!btUntil;
                         await blockSlot({
                           mechanicId: btMechanicId as Id<"mechanics">,
                           date: btDate,
@@ -1857,8 +2009,14 @@ export default function SchedulePage() {
                           endTime: btTo,
                           ...(btTitle.trim() ? { title: btTitle.trim() } : {}),
                           ...(btDescription.trim() ? { note: btDescription.trim() } : {}),
+                          ...(recurring ? { frequency: btFrequency as "daily" | "weekly" | "biweekly" | "monthly", until: btUntil } : {}),
                         });
-                        setToast({ msg: `Blocked ${formatTimeLabel(btFrom)}–${formatTimeLabel(btTo)} for ${blockTimeDrawer.mechanicName}`, key: Date.now() });
+                        setToast({
+                          msg: recurring
+                            ? `Blocked time set to repeat ${btFrequency} until ${btUntil}`
+                            : `Blocked ${formatTimeLabel(btFrom)}–${formatTimeLabel(btTo)} for ${blockTimeDrawer.mechanicName}`,
+                          key: Date.now(),
+                        });
                       }
                       // Persist as a new saved type if the toggle is on and the title isn't already a known type
                       if (saveAsType && btTitle.trim() && btType === "custom") {

@@ -23,6 +23,7 @@ import {
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import DatePicker from "@/components/ui/date-picker";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
+import VehicleYMMTPicker from "./vehicle-ymmt-picker";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -133,6 +134,7 @@ export default function CreateBookingDrawer({
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [make, setMake] = useState("");
   const [model, setModel] = useState("");
+  const [trim, setTrim] = useState("");
 
   /* ---- VIN decode (NHTSA) ---- */
   const [vinLookupState, setVinLookupState] = useState<"idle" | "loading" | "error">("idle");
@@ -391,6 +393,7 @@ export default function CreateBookingDrawer({
         vehicleYear: year ? Number(year) : undefined,
         vehicleMake: make.trim() || undefined,
         vehicleModel: model.trim() || undefined,
+        vehicleTrim: trim.trim() || undefined,
         scheduledDate: date,
         scheduledTime: time,
         serviceIds: Array.from(selectedIds) as Id<"services">[],
@@ -517,20 +520,18 @@ export default function CreateBookingDrawer({
                   </p>
                 )}
             </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <DrawerFieldLabel>Year</DrawerFieldLabel>
-                <input type="number" value={year} onChange={(e) => setYear(e.target.value)} className={drawerInputClassName} />
-              </div>
-              <div className="col-span-2">
-                <DrawerFieldLabel>Make</DrawerFieldLabel>
-                <input type="text" placeholder="Toyota" value={make} onChange={(e) => setMake(e.target.value)} className={drawerInputClassName} />
-              </div>
-            </div>
-            <div>
-              <DrawerFieldLabel>Model</DrawerFieldLabel>
-              <input type="text" placeholder="Camry" value={model} onChange={(e) => setModel(e.target.value)} className={drawerInputClassName} />
-            </div>
+            <VehicleYMMTPicker
+              year={year}
+              make={make}
+              model={model}
+              trim={trim}
+              onChange={(next) => {
+                if (next.year !== undefined) setYear(next.year);
+                if (next.make !== undefined) setMake(next.make);
+                if (next.model !== undefined) setModel(next.model);
+                if (next.trim !== undefined) setTrim(next.trim);
+              }}
+            />
           </div>
         </section>
 

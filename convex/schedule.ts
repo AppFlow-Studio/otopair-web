@@ -436,6 +436,51 @@ export const updateShopHours = mutation({
   },
 });
 
+function expandOccurrenceDates(
+  startDate: string,
+  until: string,
+  frequency: "daily" | "weekly" | "biweekly" | "monthly",
+): string[] {
+  const [sy, sm, sd] = startDate.split("-").map(Number);
+  const [uy, um, ud] = until.split("-").map(Number);
+  if (!sy || !sm || !sd || !uy || !um || !ud) {
+    throw new Error("Invalid date format");
+  }
+  const endUtc = Date.UTC(uy, um - 1, ud);
+  const out: string[] = [];
+  let y = sy;
+  let m = sm - 1;
+  let d = sd;
+  const MAX = 366;
+  while (out.length < MAX) {
+    const cur = Date.UTC(y, m, d);
+    if (cur > endUtc) break;
+    const dt = new Date(cur);
+    out.push(
+      `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(
+        dt.getUTCDate(),
+      ).padStart(2, "0")}`,
+    );
+    if (frequency === "daily") {
+      d += 1;
+    } else if (frequency === "weekly") {
+      d += 7;
+    } else if (frequency === "biweekly") {
+      d += 14;
+    } else {
+      m += 1;
+    }
+    const norm = new Date(Date.UTC(y, m, d));
+    y = norm.getUTCFullYear();
+    m = norm.getUTCMonth();
+    d = norm.getUTCDate();
+  }
+  if (out.length >= MAX) {
+    throw new Error("Recurrence range is too large (max 366 occurrences)");
+  }
+  return out;
+}
+
 export const blockSlot = mutation({
   args: {
     mechanicId: v.optional(v.id("mechanics")),
@@ -444,6 +489,15 @@ export const blockSlot = mutation({
     endTime: v.string(),
     title: v.optional(v.string()),
     note: v.optional(v.string()),
+    frequency: v.optional(
+      v.union(
+        v.literal("daily"),
+        v.literal("weekly"),
+        v.literal("biweekly"),
+        v.literal("monthly"),
+      ),
+    ),
+    until: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
@@ -457,31 +511,48 @@ export const blockSlot = mutation({
       throw new Error("No active mechanics available for this shop");
     }
 
+    const isRecurring = !!(args.frequency && args.until);
+    const dates = isRecurring
+      ? expandOccurrenceDates(args.date, args.until as string, args.frequency!)
+      : [args.date];
+    if (dates.length === 0) {
+      throw new Error("Recurrence end date is before the start date");
+    }
+    const seriesId = isRecurring ? crypto.randomUUID() : undefined;
+
     for (const mechanicId of mechanicIds) {
-      await assertNoWindowConflicts(ctx, {
-        shopId: primary.shopId,
-        mechanicId,
-        date: args.date,
-        startTime: args.startTime,
-        endTime: args.endTime,
-      });
+      for (const date of dates) {
+        try {
+          await assertNoWindowConflicts(ctx, {
+            shopId: primary.shopId,
+            mechanicId,
+            date,
+            startTime: args.startTime,
+            endTime: args.endTime,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Conflict";
+          throw new Error(`${msg} on ${date}`);
+        }
 
-      await ctx.db.insert("time_slots", {
-        shop_id: primary.shopId,
-        mechanic_id: mechanicId,
-        date: args.date,
-        start_time: args.startTime,
-        end_time: args.endTime,
-        is_available: false,
-        ...(args.title ? { title: args.title } : {}),
-        ...(args.note ? { note: args.note } : {}),
-      });
+        await ctx.db.insert("time_slots", {
+          shop_id: primary.shopId,
+          mechanic_id: mechanicId,
+          date,
+          start_time: args.startTime,
+          end_time: args.endTime,
+          is_available: false,
+          ...(args.title ? { title: args.title } : {}),
+          ...(args.note ? { note: args.note } : {}),
+          ...(seriesId ? { series_id: seriesId } : {}),
+        });
 
-      await syncMechanicDayAvailability(ctx, {
-        shopId: primary.shopId,
-        mechanicId,
-        date: args.date,
-      });
+        await syncMechanicDayAvailability(ctx, {
+          shopId: primary.shopId,
+          mechanicId,
+          date,
+        });
+      }
     }
   },
 });

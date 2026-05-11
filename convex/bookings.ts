@@ -240,14 +240,6 @@ export function getCustomerLateReminderOffsets(thresholdMinutes: number) {
   };
 }
 
-function getDefaultOverrunExtensionMinutes(
-  estimatedMinutes: number,
-  settings: { percent: number; floorMinutes: number }
-) {
-  const percentageMinutes = Math.ceil((estimatedMinutes * settings.percent) / 100);
-  return Math.max(settings.floorMinutes, percentageMinutes);
-}
-
 /**
  * QUERY: list
  * Returns all bookings in the system.
@@ -578,6 +570,59 @@ export const getByShopId = query({
       .query("bookings")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
       .collect();
+  },
+});
+
+/**
+ * QUERY: getShopBookingSeries
+ * Daily aggregate of bookings + completed revenue for a shop over the last
+ * `days` days. Powers the Payouts screen analytics charts.
+ *
+ * Returns an array of length `days` (oldest → newest, gaps filled with zeros)
+ * shaped: { date: YYYY-MM-DD, total: number, completed: number, revenue: number }
+ */
+export const getShopBookingSeries = query({
+  args: { shopId: v.id("shops"), days: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const days = Math.max(1, Math.min(args.days ?? 30, 180));
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    const start = new Date(today);
+    start.setUTCDate(start.getUTCDate() - (days - 1));
+
+    const fmt = (d: Date) =>
+      `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+    const startStr = fmt(start);
+    const endStr = fmt(today);
+
+    const rows = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_date", (q) =>
+        q.eq("shop_id", args.shopId).gte("scheduled_date", startStr).lte("scheduled_date", endStr)
+      )
+      .collect();
+
+    const buckets = new Map<string, { date: string; total: number; completed: number; revenue: number }>();
+    for (let i = 0; i < days; i += 1) {
+      const d = new Date(start);
+      d.setUTCDate(start.getUTCDate() + i);
+      const key = fmt(d);
+      buckets.set(key, { date: key, total: 0, completed: 0, revenue: 0 });
+    }
+
+    for (const row of rows) {
+      const key = row.scheduled_date;
+      if (!key) continue;
+      const bucket = buckets.get(key);
+      if (!bucket) continue;
+      bucket.total += 1;
+      if (row.status === "completed") {
+        bucket.completed += 1;
+        bucket.revenue += row.total_cost ?? 0;
+      }
+    }
+
+    return Array.from(buckets.values());
   },
 });
 
@@ -4288,6 +4333,7 @@ async function mapMechanicDashboardJob(ctx: any, booking: any) {
       .join(" "),
     vehicle: vehicleLabels.full,
     vehicleShort: vehicleLabels.short,
+    vin: booking.vin,
     serviceNames,
     vehiclePassportComplete,
     estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
@@ -4581,45 +4627,6 @@ export const getMyShopJobContext = query({
       })),
       services: services.filter(Boolean),
     };
-  },
-});
-
-// TODO: stub — late-start review feature is not yet implemented server-side.
-// Replace with real implementations once the `late_start_reviews` table and
-// workflow are designed.
-export const getOpenLateStartReviews = query({
-  args: {},
-  handler: async () => [] as any[],
-});
-
-export const acceptLateStartReview = mutation({
-  args: { reviewId: v.string() },
-  handler: async () => {
-    throw new Error("Late-start reviews are not implemented yet.");
-  },
-});
-
-export const denyLateStartReview = mutation({
-  args: { reviewId: v.string() },
-  handler: async () => {
-    throw new Error("Late-start reviews are not implemented yet.");
-  },
-});
-
-export const applyManualLateStartReview = mutation({
-  args: {
-    reviewId: v.string(),
-    manualTargets: v.array(
-      v.object({
-        bookingId: v.string(),
-        newScheduledDate: v.string(),
-        newScheduledTime: v.string(),
-        newMechanicId: v.optional(v.string()),
-      }),
-    ),
-  },
-  handler: async () => {
-    throw new Error("Late-start reviews are not implemented yet.");
   },
 });
 
@@ -5395,6 +5402,7 @@ export const createByShop = mutation({
     vehicleYear: v.optional(v.float64()),
     vehicleMake: v.optional(v.string()),
     vehicleModel: v.optional(v.string()),
+    vehicleTrim: v.optional(v.string()),
     scheduledDate: v.string(),
     scheduledTime: v.string(),
     serviceIds: v.array(v.id("services")),
@@ -5476,6 +5484,7 @@ export const createByShop = mutation({
         metadata: {
           make: args.vehicleMake,
           model: args.vehicleModel,
+          trim: args.vehicleTrim,
         },
         created_at: now,
         updated_at: now,

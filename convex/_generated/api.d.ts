@@ -163,6 +163,7 @@ import type * as vehicle_owners from "../vehicle_owners.js";
 import type * as vehicle_pipeline from "../vehicle_pipeline.js";
 import type * as vehicle_specs from "../vehicle_specs.js";
 import type * as vehicles from "../vehicles.js";
+import type * as ymmtCatalog from "../ymmtCatalog.js";
 
 import type {
   ApiFromModules,
@@ -326,6 +327,7 @@ declare const fullApi: ApiFromModules<{
   vehicle_pipeline: typeof vehicle_pipeline;
   vehicle_specs: typeof vehicle_specs;
   vehicles: typeof vehicles;
+  ymmtCatalog: typeof ymmtCatalog;
 }>;
 
 /**

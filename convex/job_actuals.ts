@@ -1,7 +1,10 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { applyBookingStatusTransition } from "./bookings";
+import {
+  applyBookingStatusTransition,
+  resolveLateStartMonitorForBooking,
+} from "./bookings";
 import {
   ensureJobActualRecord,
   finalizeJobActuals,
@@ -225,6 +228,9 @@ export const startJob = mutation({
     if (!booking) throw new Error("Booking not found");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (!["vehicle_at_shop", "in_progress"].includes(booking.status)) {
+      throw new Error("Mark the vehicle as here before starting this booking.");
+    }
 
     const now = Date.now();
     await ensureJobActualRecord(ctx, {
@@ -234,7 +240,13 @@ export const startJob = mutation({
       startedAtMs: now,
     });
 
-    if (booking.status === "confirmed") {
+    await resolveLateStartMonitorForBooking(
+      ctx,
+      { ...booking, status: "in_progress" },
+      user._id
+    );
+
+    if (booking.status === "vehicle_at_shop") {
       await applyBookingStatusTransition(ctx, {
         booking,
         newStatus: "in_progress",

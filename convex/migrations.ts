@@ -17,3 +17,20 @@ export const backfillModelMakeId = mutation({
     return { updated };
   },
 });
+
+export const backfillBookingAssignmentPreferenceAny = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const bookings = await ctx.db.query("bookings").collect();
+    let updated = 0;
+
+    for (const booking of bookings) {
+      if (booking.assignment_preference === undefined) {
+        await ctx.db.patch(booking._id, { assignment_preference: "any" });
+        updated += 1;
+      }
+    }
+
+    return { updated };
+  },
+});

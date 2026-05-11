@@ -1,6 +1,14 @@
 "use client";
 
-import { useMemo, useState, type InputHTMLAttributes, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+} from "react";
 import { Check, Loader2 } from "lucide-react";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
@@ -48,6 +56,38 @@ const conditionPalette: Record<
 const TIRE_SIZE_PATTERN = /^\d{3}\/\d{2}R\d{2}$/i;
 
 type SubmitIntent = "close" | "start";
+type SectionTabId =
+  | "mileage"
+  | "tire-condition"
+  | "brakes"
+  | "fluids"
+  | "inspection"
+  | "modifications"
+  | "review";
+
+const SECTION_TABS: Array<{
+  id: SectionTabId;
+  label: string;
+  requiredWhen?: "always" | "brake-work" | "oil-change";
+}> = [
+  { id: "mileage", label: "Mileage", requiredWhen: "always" },
+  {
+    id: "tire-condition",
+    label: "Tire condition",
+    requiredWhen: "always",
+  },
+  { id: "brakes", label: "Brakes", requiredWhen: "brake-work" },
+  { id: "fluids", label: "Fluids", requiredWhen: "oil-change" },
+  {
+    id: "inspection",
+    label: "Inspection",
+  },
+  {
+    id: "modifications",
+    label: "Modifications",
+  },
+  { id: "review", label: "Review" },
+];
 
 function keepDigitsOnly(value: string) {
   return value.replace(/\D+/g, "");
@@ -68,6 +108,23 @@ function normalizeTireSizeValue(value?: string | null) {
 
 function isValidTireSize(value: string) {
   return TIRE_SIZE_PATTERN.test(normalizeTireSizeValue(value));
+}
+
+function findScrollableAncestor(element: HTMLElement): HTMLElement | null {
+  let current = element.parentElement;
+
+  while (current) {
+    const overflowY = window.getComputedStyle(current).overflowY;
+    const canScroll = current.scrollHeight > current.clientHeight;
+
+    if (canScroll && (overflowY === "auto" || overflowY === "scroll")) {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  return null;
 }
 
 function rotorConditionLabel(value: string) {
@@ -315,6 +372,21 @@ function PreJobSurveyDialogBody({
   const [error, setError] = useState("");
   const [activeSubmitAction, setActiveSubmitAction] = useState<SubmitIntent | null>(null);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [activeSection, setActiveSection] = useState<SectionTabId>("mileage");
+  const activeSectionRef = useRef<SectionTabId>("mileage");
+  const navRef = useRef<HTMLDivElement | null>(null);
+  const scrollStripRef = useRef<HTMLDivElement | null>(null);
+  const horizontalScrollTargetRef = useRef(0);
+  const horizontalScrollFrameRef = useRef<number | null>(null);
+  const sectionRefs = useRef<Record<SectionTabId, HTMLElement | null>>({
+    mileage: null,
+    "tire-condition": null,
+    brakes: null,
+    fluids: null,
+    inspection: null,
+    modifications: null,
+    review: null,
+  });
 
   const isFirstVisit = !!passportData && !passportData.is_complete;
   const frontSizeSource = passportData?.sources["tires.size_front"];
@@ -581,6 +653,210 @@ function PreJobSurveyDialogBody({
 
   const mileageError = mileage.trim() === "" && error !== "";
 
+  const cancelTabScrollAnimation = useCallback(() => {
+    if (horizontalScrollFrameRef.current == null) {
+      return;
+    }
+
+    window.cancelAnimationFrame(horizontalScrollFrameRef.current);
+    horizontalScrollFrameRef.current = null;
+  }, []);
+
+  const centerTab = useCallback(
+    (sectionId: SectionTabId, behavior: ScrollBehavior = "smooth") => {
+      const scrollElement = scrollStripRef.current;
+      const tabElement = navRef.current?.querySelector<HTMLElement>(
+        `[data-tab-id="${sectionId}"]`
+      );
+      if (!scrollElement || !tabElement) {
+        return;
+      }
+
+      const scrollRect = scrollElement.getBoundingClientRect();
+      const tabRect = tabElement.getBoundingClientRect();
+      const targetLeft =
+        scrollElement.scrollLeft +
+        tabRect.left -
+        scrollRect.left -
+        (scrollElement.clientWidth - tabRect.width) / 2;
+      const maxScrollLeft = scrollElement.scrollWidth - scrollElement.clientWidth;
+      const nextScrollLeft = Math.max(0, Math.min(targetLeft, maxScrollLeft));
+
+      cancelTabScrollAnimation();
+      horizontalScrollTargetRef.current = nextScrollLeft;
+      scrollElement.scrollTo({
+        left: nextScrollLeft,
+        behavior,
+      });
+    },
+    [cancelTabScrollAnimation]
+  );
+
+  useEffect(() => {
+    if (!open) {
+      activeSectionRef.current = "mileage";
+      setActiveSection("mileage");
+      return;
+    }
+
+    const navElement = navRef.current;
+    const scrollContainer = navElement ? findScrollableAncestor(navElement) : null;
+    if (!navElement || !scrollContainer) {
+      return;
+    }
+
+    const updateActiveSection = () => {
+      const navHeight = navElement.getBoundingClientRect().height;
+      const containerTop = scrollContainer.getBoundingClientRect().top;
+      const probeLine = containerTop + navHeight + 24;
+      let currentSection: SectionTabId = "mileage";
+
+      for (const tab of SECTION_TABS) {
+        const element = sectionRefs.current[tab.id];
+        if (!element) continue;
+        const rect = element.getBoundingClientRect();
+        if (rect.top <= probeLine) {
+          currentSection = tab.id;
+        } else {
+          break;
+        }
+      }
+
+      const activeSectionChanged = activeSectionRef.current !== currentSection;
+      if (activeSectionChanged) {
+        activeSectionRef.current = currentSection;
+        setActiveSection(currentSection);
+      }
+      centerTab(currentSection, "auto");
+    };
+
+    updateActiveSection();
+    scrollContainer.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+
+    return () => {
+      scrollContainer.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
+  }, [centerTab, open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const el = scrollStripRef.current;
+    if (!el) {
+      return;
+    }
+
+    let isDown = false;
+    let startX = 0;
+    let scrollLeft = 0;
+    horizontalScrollTargetRef.current = el.scrollLeft;
+
+    const animateScroll = () => {
+      const distance = horizontalScrollTargetRef.current - el.scrollLeft;
+      if (Math.abs(distance) < 0.5) {
+        el.scrollLeft = horizontalScrollTargetRef.current;
+        horizontalScrollFrameRef.current = null;
+        return;
+      }
+
+      el.scrollLeft += distance * 0.18;
+      horizontalScrollFrameRef.current = window.requestAnimationFrame(animateScroll);
+    };
+
+    const startSmoothScroll = () => {
+      if (horizontalScrollFrameRef.current != null) {
+        return;
+      }
+      horizontalScrollFrameRef.current = window.requestAnimationFrame(animateScroll);
+    };
+
+    const onMouseDown = (event: MouseEvent) => {
+      isDown = true;
+      cancelTabScrollAnimation();
+      el.style.cursor = "grabbing";
+      startX = event.pageX - el.offsetLeft;
+      scrollLeft = el.scrollLeft;
+      horizontalScrollTargetRef.current = el.scrollLeft;
+    };
+
+    const onMouseLeave = () => {
+      isDown = false;
+      el.style.cursor = "grab";
+    };
+
+    const onMouseUp = () => {
+      isDown = false;
+      el.style.cursor = "grab";
+    };
+
+    const onMouseMove = (event: MouseEvent) => {
+      if (!isDown) {
+        return;
+      }
+      event.preventDefault();
+      const x = event.pageX - el.offsetLeft;
+      const walk = (x - startX) * 1.5;
+      el.scrollLeft = scrollLeft - walk;
+      horizontalScrollTargetRef.current = el.scrollLeft;
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+        return;
+      }
+
+      const maxScrollLeft = el.scrollWidth - el.clientWidth;
+      if (maxScrollLeft <= 0) {
+        return;
+      }
+
+      event.preventDefault();
+      horizontalScrollTargetRef.current = Math.max(
+        0,
+        Math.min(horizontalScrollTargetRef.current + event.deltaY, maxScrollLeft)
+      );
+      startSmoothScroll();
+    };
+
+    el.addEventListener("mousedown", onMouseDown);
+    el.addEventListener("mouseleave", onMouseLeave);
+    el.addEventListener("mouseup", onMouseUp);
+    el.addEventListener("mousemove", onMouseMove);
+    el.addEventListener("wheel", onWheel, { passive: false });
+
+    return () => {
+      el.removeEventListener("mousedown", onMouseDown);
+      el.removeEventListener("mouseleave", onMouseLeave);
+      el.removeEventListener("mouseup", onMouseUp);
+      el.removeEventListener("mousemove", onMouseMove);
+      el.removeEventListener("wheel", onWheel);
+      cancelTabScrollAnimation();
+    };
+  }, [cancelTabScrollAnimation, open]);
+
+  function scrollToSection(sectionId: SectionTabId) {
+    const target = sectionRefs.current[sectionId];
+    const navElement = navRef.current;
+    const scrollContainer = navElement ? findScrollableAncestor(navElement) : null;
+    if (!target || !navElement || !scrollContainer) return;
+
+    activeSectionRef.current = sectionId;
+    setActiveSection(sectionId);
+    centerTab(sectionId);
+    const containerTop = scrollContainer.getBoundingClientRect().top;
+    const targetTop = target.getBoundingClientRect().top;
+    const navHeight = navElement.getBoundingClientRect().height;
+
+    scrollContainer.scrollTo({
+      top: scrollContainer.scrollTop + targetTop - containerTop - navHeight,
+      behavior: "smooth",
+    });
+  }
+
   return (
     <>
       <SurveyDialogShell
@@ -652,8 +928,66 @@ function PreJobSurveyDialogBody({
             </FirstVisitNotice>
           ) : null}
 
+          <div
+            ref={navRef}
+            className="sticky -top-4 z-20 -mx-5 border-b border-primary/10 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/88 sm:-top-5 sm:-mx-6"
+          >
+            <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-8 bg-gradient-to-r from-card/95 to-transparent" />
+            <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-8 bg-gradient-to-l from-card/95 to-transparent" />
+            <div
+              ref={scrollStripRef}
+              className="tab-strip-scroll overflow-x-auto px-5 pb-0.5 pt-3 select-none sm:px-6"
+              style={{
+                scrollbarWidth: "none",
+                msOverflowStyle: "none",
+                WebkitOverflowScrolling: "touch",
+                cursor: "grab",
+              }}
+            >
+              <style>{`
+                .tab-strip-scroll::-webkit-scrollbar { display: none; }
+              `}</style>
+              <div className="flex min-w-max gap-5 px-1">
+                {SECTION_TABS.map((tab) => {
+                  const isActive = activeSection === tab.id;
+                  const isRequired =
+                    tab.requiredWhen === "always" ||
+                    (tab.requiredWhen === "brake-work" && serviceFlags.hasBrakeWork) ||
+                    (tab.requiredWhen === "oil-change" && serviceFlags.hasOilChange);
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      data-tab-id={tab.id}
+                      onClick={() => scrollToSection(tab.id)}
+                      className={cn(
+                        "relative flex shrink-0 items-center gap-1.5 border-b-2 px-0 py-3 text-[13px] font-semibold transition-colors",
+                        isActive
+                          ? "border-primary text-primary"
+                          : "border-transparent text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {tab.label}
+                      {isRequired ? (
+                        <span className="text-destructive" aria-label="required">
+                          *
+                        </span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
           <div className="divide-y divide-primary/10">
-            <SectionBlock eyebrow="Mileage">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.mileage = element;
+              }}
+              sectionId="prejob-section-mileage"
+              eyebrow="Mileage"
+            >
               <FieldRow
                 label={
                   <FieldLabelWithSource
@@ -674,7 +1008,15 @@ function PreJobSurveyDialogBody({
               </FieldRow>
             </SectionBlock>
 
-            <SectionBlock eyebrow="Tire condition" badge="Required" accent="required">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current["tire-condition"] = element;
+              }}
+              sectionId="prejob-section-tire-condition"
+              eyebrow="Tire condition"
+              badge="Required"
+              accent="required"
+            >
               <div className="space-y-2">
                 <div className="rounded-lg border border-primary/10 bg-muted/40 px-3 py-2.5">
                   <label className="flex items-center gap-2 text-[12px] font-medium text-foreground">
@@ -771,6 +1113,10 @@ function PreJobSurveyDialogBody({
             </SectionBlock>
 
             <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.brakes = element;
+              }}
+              sectionId="prejob-section-brakes"
               eyebrow="Brakes"
               badge={serviceFlags.hasBrakeWork ? "Required" : "Optional"}
               accent={serviceFlags.hasBrakeWork ? "required" : "muted"}
@@ -851,7 +1197,15 @@ function PreJobSurveyDialogBody({
               </FieldRow>
             </SectionBlock>
 
-            <SectionBlock eyebrow="Fluids" badge="Optional" accent="muted">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.fluids = element;
+              }}
+              sectionId="prejob-section-fluids"
+              eyebrow="Fluids"
+              badge="Optional"
+              accent="muted"
+            >
               <div className="grid gap-2 sm:grid-cols-2">
                 <EditableFieldCard
                   label={
@@ -937,7 +1291,15 @@ function PreJobSurveyDialogBody({
               </div>
             </SectionBlock>
 
-            <SectionBlock eyebrow="Inspection" badge="Optional" accent="muted">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.inspection = element;
+              }}
+              sectionId="prejob-section-inspection"
+              eyebrow="Inspection"
+              badge="Optional"
+              accent="muted"
+            >
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <span className="text-[12px] text-muted-foreground">Sticker looks current?</span>
                 <div className="flex flex-wrap gap-1.5">
@@ -986,7 +1348,15 @@ function PreJobSurveyDialogBody({
               </div>
             </SectionBlock>
 
-            <SectionBlock eyebrow="Modifications" badge="Optional" accent="muted">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.modifications = element;
+              }}
+              sectionId="prejob-section-modifications"
+              eyebrow="Modifications"
+              badge="Optional"
+              accent="muted"
+            >
               <FieldRow label="Any aftermarket parts?">
                 <Select
                   selectedKey={modificationsStatus || "none"}
@@ -1037,7 +1407,15 @@ function PreJobSurveyDialogBody({
               ) : null}
             </SectionBlock>
 
-            <SectionBlock eyebrow="Review" badge="Optional" accent="muted">
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.review = element;
+              }}
+              sectionId="prejob-section-review"
+              eyebrow="Review"
+              badge="Optional"
+              accent="muted"
+            >
               <label className="flex items-start gap-2 text-[12px] text-foreground">
                 <button
                   type="button"
@@ -1109,11 +1487,15 @@ function VehicleSummaryCard({ label, subLabel }: { label: string; subLabel: stri
 }
 
 function SectionBlock({
+  sectionId,
+  sectionRef,
   eyebrow,
   badge,
   accent = "muted",
   children,
 }: {
+  sectionId?: string;
+  sectionRef?: (element: HTMLElement | null) => void;
   eyebrow: string;
   badge?: string;
   accent?: "required" | "muted";
@@ -1125,7 +1507,11 @@ function SectionBlock({
       : "border border-border bg-card text-muted-foreground";
 
   return (
-    <section className="py-4 first:pt-0 last:pb-0">
+    <section
+      id={sectionId}
+      ref={sectionRef}
+      className="scroll-mt-24 py-4 first:pt-0 last:pb-0"
+    >
       <div className="flex items-center justify-between gap-3">
         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
           {eyebrow}

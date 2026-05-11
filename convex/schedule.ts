@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { getLateStartTimingConfig } from "./lib/late_start";
 import {
   getBookingEndTime,
   overlapsBlockedSlot,
@@ -163,6 +164,7 @@ async function assertNoWindowConflicts(
 export const getScheduleContext = query({
   args: {},
   handler: async (ctx) => {
+    const lateStartTiming = getLateStartTimingConfig();
     const user = await getCurrentUserOrNull(ctx);
     if (!user) return null;
 
@@ -211,6 +213,12 @@ export const getScheduleContext = query({
     return {
       shopId: shop._id,
       shopName: shop.name,
+      lateStartTestMode: lateStartTiming.testMode,
+      lateStartTiming: {
+        warningLeadMinutes: lateStartTiming.warningLeadMinutes,
+        initialCycleMinutes: lateStartTiming.initialCycleMinutes,
+        cycleIncrementMinutes: lateStartTiming.cycleIncrementMinutes,
+      },
       hours: hours.map((hour: any) => ({
         _id: hour._id,
         dayOfWeek: hour.day_of_week,
@@ -304,6 +312,10 @@ export const getBookingsForRange = query({
             : null,
           serviceNames: await resolveServiceNames(ctx, booking.service_ids),
           totalCost: booking.total_cost,
+          scheduleChangeMode: booking.schedule_change_mode ?? "manual_reschedule",
+          customerCanRestoreOriginal: booking.customer_can_restore_original !== false,
+          scheduleChangeSourceBookingId:
+            booking.schedule_change_source_booking_id ?? null,
         };
       })
     );

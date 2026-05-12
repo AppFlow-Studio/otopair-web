@@ -1210,11 +1210,13 @@ export default defineSchema({
     is_available: v.boolean(),
     note: v.optional(v.string()),
     title: v.optional(v.string()),
+    series_id: v.optional(v.string()),
   })
     .index("by_shop_id", ["shop_id"])
     .index("by_mechanic_id", ["mechanic_id"])
     .index("by_shop_and_date", ["shop_id", "date"])
-    .index("by_availability", ["is_available"]),
+    .index("by_availability", ["is_available"])
+    .index("by_series_id", ["series_id"]),
 
   // ===== BOOKINGS & PAYMENTS =====
 

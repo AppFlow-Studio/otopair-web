@@ -24,6 +24,21 @@ const omitUndefined = (record: Record<string, any>) => {
   return result;
 };
 
+// trim_specs is intentionally multi-row per trim_id (different wheel packages,
+// regional variants, separate enrichment runs). Pick the canonical row by
+// highest confidence_score, breaking ties on most recent created_at.
+const pickCanonicalTrimSpec = <T extends { confidence_score?: number; created_at?: number }>(
+  rows: T[],
+): T | null => {
+  if (rows.length === 0) return null;
+  return rows.reduce((best, row) => {
+    const bc = best.confidence_score ?? 0;
+    const rc = row.confidence_score ?? 0;
+    if (rc !== bc) return rc > bc ? row : best;
+    return (row.created_at ?? 0) > (best.created_at ?? 0) ? row : best;
+  });
+};
+
 // -----------------------------------------------------------------------------
 // Upserts
 // -----------------------------------------------------------------------------
@@ -99,10 +114,11 @@ export const upsertTrimSpecs = mutation({
   handler: async (ctx, args) => {
     assertConfidence(args.confidence_score);
 
-    const existing = await ctx.db
+    const existingRows = await ctx.db
       .query("trim_specs")
       .withIndex("by_trim", (q) => q.eq("trim_id", args.trim_id))
-      .unique();
+      .collect();
+    const existing = pickCanonicalTrimSpec(existingRows);
 
     const payload = omitUndefined({
       tire_size_front: args.tire_size_front,
@@ -171,10 +187,11 @@ export const getTransmissionSpecs = query({
 export const getTrimSpecs = query({
   args: { trim_id: v.id("trims") },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const rows = await ctx.db
       .query("trim_specs")
       .withIndex("by_trim", (q) => q.eq("trim_id", args.trim_id))
-      .unique();
+      .collect();
+    return pickCanonicalTrimSpec(rows);
   },
 });
 
@@ -220,10 +237,12 @@ export const getFullVehicleSpecPack = query({
     ]);
 
     const trimSpecs = vehicle.trim_id
-      ? await ctx.db
-          .query("trim_specs")
-          .withIndex("by_trim", (q) => q.eq("trim_id", vehicle.trim_id!))
-          .unique()
+      ? pickCanonicalTrimSpec(
+          await ctx.db
+            .query("trim_specs")
+            .withIndex("by_trim", (q) => q.eq("trim_id", vehicle.trim_id!))
+            .collect(),
+        )
       : null;
 
     // Fitments from unified part_fitments table (keyed by vehicle_config_id)

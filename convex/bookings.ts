@@ -2075,7 +2075,17 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       ? ctx.db
           .query("trim_specs")
           .withIndex("by_trim", (q: any) => q.eq("trim_id", vehicle.trim_id))
-          .unique()
+          .collect()
+          .then((rows: any[]) =>
+            rows.length === 0
+              ? null
+              : rows.reduce((best, row) => {
+                  const bc = best.confidence_score ?? 0;
+                  const rc = row.confidence_score ?? 0;
+                  if (rc !== bc) return rc > bc ? row : best;
+                  return (row.created_at ?? 0) > (best.created_at ?? 0) ? row : best;
+                })
+          )
       : null,
     vehicle?.engine_id ? ctx.db.get(vehicle.engine_id) : null,
     vehicle?.transmission_id ? ctx.db.get(vehicle.transmission_id) : null,

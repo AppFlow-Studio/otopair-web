@@ -1100,6 +1100,10 @@ export default defineSchema({
     onboarding_complete: v.optional(v.boolean()),
     email: v.optional(v.string()),
     website: v.optional(v.string()),
+    timezone: v.optional(v.string()),
+    no_show_threshold_minutes: v.optional(v.number()),
+    overrun_default_extension_percent: v.optional(v.number()),
+    overrun_extension_floor_minutes: v.optional(v.number()),
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
@@ -1322,6 +1326,17 @@ export default defineSchema({
     completed_at_ms: v.optional(v.number()),
     refund_reason: v.optional(v.string()),
     reschedule_proposed_at: v.optional(v.number()),
+    schedule_change_mode: v.optional(v.string()),
+    schedule_change_source_booking_id: v.optional(v.id("bookings")),
+    customer_can_restore_original: v.optional(v.boolean()),
+    custom_services: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          durationMinutes: v.optional(v.float64()),
+        })
+      )
+    ),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])
@@ -1808,4 +1823,161 @@ export default defineSchema({
   })
     .index("by_token", ["token"])
     .index("by_user_id", ["user_id"]),
+
+  // ==========================================================================
+  // Scheduling-overhaul tables — late-start monitoring, no-show monitoring,
+  // overrun check-ins, and the notification outbox queue. Backed by
+  // convex/bookings.ts late-start / customer-late / overrun mutations and
+  // queries (mobile doesn't render this surface yet, but the shared deployment
+  // needs the tables for the web shop dashboard).
+  // ==========================================================================
+  late_start_monitors: defineTable({
+    shop_id: v.id("shops"),
+    upstream_booking_id: v.id("bookings"),
+    cycle_minutes: v.number(),
+    warning_due_at_ms: v.number(),
+    auto_apply_at_ms: v.number(),
+    status: v.string(),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_upstream_booking_id", ["upstream_booking_id"])
+    .index("by_status", ["status"]),
+
+  late_start_reviews: defineTable({
+    shop_id: v.id("shops"),
+    upstream_booking_id: v.id("bookings"),
+    cycle_minutes: v.number(),
+    status: v.string(),
+    decision_due_at_ms: v.number(),
+    proposals: v.array(
+      v.object({
+        booking_id: v.id("bookings"),
+        original_scheduled_date: v.string(),
+        original_scheduled_time: v.string(),
+        original_mechanic_id: v.optional(v.id("mechanics")),
+        proposed_scheduled_date: v.optional(v.string()),
+        proposed_scheduled_time: v.optional(v.string()),
+        proposed_mechanic_id: v.optional(v.id("mechanics")),
+        used_alternate_mechanic: v.boolean(),
+        blocked_reason: v.optional(v.string()),
+      })
+    ),
+    blocking_reason: v.optional(v.string()),
+    resolved_at: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_upstream_booking_id", ["upstream_booking_id"])
+    .index("by_status", ["status"]),
+
+  customer_late_alerts: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    monitor_id: v.id("customer_late_monitors"),
+    status: v.string(),
+    threshold_due_at_ms: v.number(),
+    resolved_at_ms: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    resolution: v.optional(v.string()),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_monitor_id", ["monitor_id"])
+    .index("by_status", ["status"]),
+
+  customer_late_monitors: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    status: v.string(),
+    scheduled_start_ms: v.number(),
+    push_due_at_ms: v.number(),
+    sms_due_at_ms: v.number(),
+    threshold_due_at_ms: v.number(),
+    push_enqueued_at_ms: v.optional(v.number()),
+    sms_enqueued_at_ms: v.optional(v.number()),
+    frontdesk_enqueued_at_ms: v.optional(v.number()),
+    resolved_at_ms: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_status", ["status"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
+
+  job_overrun_checkins: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    mechanic_id: v.id("mechanics"),
+    status: v.string(),
+    prompt_due_at_ms: v.number(),
+    mechanic_response_due_at_ms: v.number(),
+    default_apply_at_ms: v.number(),
+    prompt_sent_at_ms: v.optional(v.number()),
+    front_desk_prompt_sent_at_ms: v.optional(v.number()),
+    on_track_answer: v.optional(v.string()),
+    extension_minutes: v.optional(v.number()),
+    response_source: v.optional(v.string()),
+    answered_by_user_id: v.optional(v.id("users")),
+    resolved_at_ms: v.optional(v.number()),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_mechanic_id", ["mechanic_id"])
+    .index("by_status", ["status"]),
+
+  overrun_checkins: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    mechanic_id: v.optional(v.id("mechanics")),
+    status: v.string(),
+    due_at_ms: v.number(),
+    escalation_due_at_ms: v.number(),
+    auto_apply_at_ms: v.number(),
+    default_extension_minutes: v.number(),
+    mechanic_prompted_at_ms: v.optional(v.number()),
+    frontdesk_escalated_at_ms: v.optional(v.number()),
+    answered_at_ms: v.optional(v.number()),
+    answered_by_user_id: v.optional(v.id("users")),
+    answer_source: v.optional(v.string()),
+    is_complete: v.optional(v.boolean()),
+    extension_minutes: v.optional(v.number()),
+    resolved_at_ms: v.optional(v.number()),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_status", ["status"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
+
+  notification_outbox: defineTable({
+    shop_id: v.optional(v.id("shops")),
+    booking_id: v.optional(v.id("bookings")),
+    user_id: v.optional(v.id("users")),
+    mechanic_id: v.optional(v.id("mechanics")),
+    channel: v.string(),
+    category: v.string(),
+    status: v.string(),
+    dedupe_key: v.string(),
+    payload: v.any(),
+    scheduled_for_ms: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+    processed_at: v.optional(v.number()),
+  })
+    .index("by_dedupe_key", ["dedupe_key"])
+    .index("by_status", ["status"])
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
 });

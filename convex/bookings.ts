@@ -5773,6 +5773,42 @@ export const attachRecommendedService = mutation({
     if (!note) throw new Error("Add a short note explaining the finding.");
     assertFlaggedItemsHaveNotes(booking);
 
+    // Validate proposed slot against blocked time on the mechanic's lane.
+    if (
+      args.scheduledDate &&
+      args.scheduledTime &&
+      booking.mechanic_id
+    ) {
+      const durationMin = Math.round(
+        ((service as any).default_labor_hours ?? 1) * 60,
+      );
+      const blocks = (
+        await getManualBlockedSlotsForShop(
+          ctx,
+          booking.shop_id,
+          args.scheduledDate,
+        )
+      ).filter(
+        (s: any) => String(s.mechanic_id) === String(booking.mechanic_id),
+      );
+      const toMin = (hhmm: string) => {
+        const [h, m] = hhmm.split(":").map(Number);
+        return h * 60 + m;
+      };
+      const ps = toMin(args.scheduledTime);
+      const pe = ps + durationMin;
+      const blocked = (blocks as any[]).some((blk) => {
+        const bs = toMin(blk.start_time);
+        const be = toMin(blk.end_time);
+        return bs < pe && be > ps;
+      });
+      if (blocked) {
+        throw new Error(
+          "Proposed slot overlaps blocked time on the mechanic's lane. Pick a different slot.",
+        );
+      }
+    }
+
     const now = Date.now();
     await ctx.db.patch(booking._id, {
       recommended_service_id: args.serviceId,
@@ -5835,12 +5871,73 @@ export const customerDecideRecommendation = mutation({
     const followUpDate = scheduledForLater
       ? booking.recommended_scheduled_date!
       : booking.scheduled_date;
-    const followUpStart = scheduledForLater
+
+    const toMinutes = (hhmm: string) => {
+      const [h, m] = hhmm.split(":").map(Number);
+      return h * 60 + m;
+    };
+
+    // Fetch blocks for the follow-up's date on this mechanic's lane (skip if no
+    // mechanic assigned — manual blocks always have a mechanic_id).
+    const blocksForDay = booking.mechanic_id
+      ? (
+          await getManualBlockedSlotsForShop(
+            ctx,
+            booking.shop_id,
+            followUpDate,
+          )
+        ).filter(
+          (s: any) =>
+            String(s.mechanic_id) === String(booking.mechanic_id),
+        )
+      : [];
+
+    // Advance a candidate start past any blocked windows it would overlap.
+    const advancePastBlocks = (startHHMM: string, durationMin: number) => {
+      let cursor = toMinutes(startHHMM);
+      let advanced = true;
+      while (advanced) {
+        advanced = false;
+        for (const blk of blocksForDay as any[]) {
+          const bs = toMinutes(blk.start_time);
+          const be = toMinutes(blk.end_time);
+          if (bs < cursor + durationMin && be > cursor) {
+            cursor = be;
+            advanced = true;
+          }
+        }
+      }
+      return addMinutesToHHMM("00:00", cursor);
+    };
+
+    const rawFollowUpStart = scheduledForLater
       ? booking.recommended_scheduled_time!
       : getBookingEndTime(
           booking.scheduled_time,
           booking.estimated_labor_minutes,
         );
+
+    // For schedule-for-later, hard-reject if the proposed slot overlaps a
+    // mechanic break / blocked window. For right-after, silently advance past
+    // any blocks so the follow-up lands on the first clear gap.
+    if (scheduledForLater) {
+      const proposalStart = toMinutes(rawFollowUpStart);
+      const proposalEnd = proposalStart + followUpMinutes;
+      const blocked = (blocksForDay as any[]).some((blk) => {
+        const bs = toMinutes(blk.start_time);
+        const be = toMinutes(blk.end_time);
+        return bs < proposalEnd && be > proposalStart;
+      });
+      if (blocked) {
+        throw new Error(
+          "Proposed slot overlaps blocked time on the mechanic's lane. Pick a different slot.",
+        );
+      }
+    }
+
+    const followUpStart = scheduledForLater
+      ? rawFollowUpStart
+      : advancePastBlocks(rawFollowUpStart, followUpMinutes);
 
     const followUpId = await ctx.db.insert("bookings", {
       user_id: booking.user_id,
@@ -5864,12 +5961,9 @@ export const customerDecideRecommendation = mutation({
       updated_at: now,
     });
 
-    // Right-after path: cascade-push later bookings on the same mechanic's lane
+    // Right-after path: cascade-push later bookings on the same mechanic's lane,
+    // hopping over any blocked windows / breaks.
     if (!scheduledForLater && booking.mechanic_id) {
-      const toMinutes = (hhmm: string) => {
-        const [h, m] = hhmm.split(":").map(Number);
-        return h * 60 + m;
-      };
       const shopBookings = await ctx.db
         .query("bookings")
         .withIndex("by_shop_id", (q: any) =>
@@ -5895,12 +5989,14 @@ export const customerDecideRecommendation = mutation({
 
       let cursor = addMinutesToHHMM(followUpStart, followUpMinutes);
       for (const b of laneBookings) {
-        if (toMinutes(b.scheduled_time) >= toMinutes(cursor)) break;
+        const duration = b.estimated_labor_minutes ?? 60;
+        const safeCursor = advancePastBlocks(cursor, duration);
+        if (toMinutes(b.scheduled_time) >= toMinutes(safeCursor)) break;
         await ctx.db.patch(b._id, {
-          scheduled_time: cursor,
+          scheduled_time: safeCursor,
           updated_at: now,
         });
-        cursor = addMinutesToHHMM(cursor, b.estimated_labor_minutes ?? 60);
+        cursor = addMinutesToHHMM(safeCursor, duration);
       }
     }
 
@@ -5908,7 +6004,6 @@ export const customerDecideRecommendation = mutation({
       recommendation_state: "confirmed",
       recommendation_decided_at_ms: now,
       status: "completed",
-      completed_at_ms: now,
       updated_at: now,
     });
 

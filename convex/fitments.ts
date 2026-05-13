@@ -58,6 +58,39 @@ const attachPart = async (ctx: { db: any }, fitment: any) => {
 // Upsert fitment (unified)
 // -----------------------------------------------------------------------------
 
+/**
+ * Mark all base (non-package) part_fitments for a (config, service) pair as
+ * mechanic_verified. Called from the post-job flow when a mechanic confirms
+ * the OEM-recommended parts were the parts actually used.
+ */
+export const markVerified = mutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_type: v.string(),
+    part_ids: v.optional(v.array(v.id("oem_parts"))),
+  },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_config_service", (q) =>
+        q
+          .eq("vehicle_config_id", args.vehicle_config_id)
+          .eq("service_type", args.service_type),
+      )
+      .collect();
+    const filterSet = args.part_ids ? new Set(args.part_ids) : null;
+    let count = 0;
+    for (const row of rows) {
+      if (row.package_code != null) continue;
+      if (filterSet && !filterSet.has(row.part_id)) continue;
+      if (row.mechanic_verified) continue;
+      await ctx.db.patch(row._id, { mechanic_verified: true });
+      count += 1;
+    }
+    return { verified_count: count };
+  },
+});
+
 export const upsertPartFitment = mutation({
   args: {
     vehicle_config_id: v.id("vehicle_configs"),

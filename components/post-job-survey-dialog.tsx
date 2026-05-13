@@ -10,15 +10,21 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  ArrowLeftRight,
   Camera,
+  Car,
   Check,
   ChevronRight,
+  Info,
   Loader2,
+  Minus,
   Plus,
+  Search,
   Trash2,
   X,
 } from "lucide-react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import { makeFunctionReference } from "convex/server";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import {
@@ -48,11 +54,37 @@ import {
 } from "@/lib/vehicle-passport";
 import { cn } from "@/lib/utils";
 
+type OemRecommendationPart = {
+  oem_part_number: string;
+  part_name: string;
+  brand?: string | null;
+  part_tier?: string | null;
+  category?: string | null;
+  quantity_needed?: number | null;
+  position?: string | null;
+  average_price?: number;
+  price_sample_size?: number;
+  price_sources_used?: number;
+};
+
+type OemRecommendation = {
+  service_slug: string;
+  service_name: string;
+  parts: OemRecommendationPart[];
+};
+
 type PostJobPrefillData = {
   vehicleLabel: string;
   serviceName: string;
   serviceSlug: string;
   suggestedParts: JobActualPartPayload[];
+  // Optional engine/trim context used by the parts step's sticky vehicle bar.
+  // Server-side getPrefillData already returns engineCode; the others are
+  // forward-compatible if/when we choose to surface them.
+  engineCode?: string | null;
+  chassisLabel?: string | null;
+  trimLabel?: string | null;
+  oemRecommendations?: OemRecommendation[];
 } | null;
 
 type PartRowState = {
@@ -60,6 +92,9 @@ type PartRowState = {
   brand: string;
   oem_number: string;
   cost: string;
+  quantity: number;
+  supplied_by: "shop" | "customer";
+  part_tier: string;
 };
 
 type PhotoState = {
@@ -364,6 +399,12 @@ function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
     brand: part.brand ?? "",
     oem_number: part.oem_number,
     cost: Number.isFinite(part.cost) ? String(part.cost) : "",
+    quantity:
+      typeof part.quantity === "number" && Number.isFinite(part.quantity)
+        ? Math.max(1, Math.round(part.quantity))
+        : 1,
+    supplied_by: part.supplied_by === "customer" ? "customer" : "shop",
+    part_tier: part.part_tier ?? "oem",
   }));
 }
 
@@ -487,19 +528,22 @@ function PostJobSurveyDialogBody({
 
   // Steps
   const visibleSteps = useMemo<StepKey[]>(() => {
-    const list: StepKey[] = ["time_check"];
-    if (timeVariance && timeVariance !== "on_time") list.push("time_reason");
+    const list: StepKey[] = [];
+    // Required, non-skippable steps come first.
     list.push("mileage");
     if (requiresParts || (prefillData?.suggestedParts?.length ?? 0) > 0) {
       list.push("parts");
     }
-    list.push("difficulty");
     if (requiresParts) list.push("parts_accuracy");
     if (updatePrompts.length > 0) list.push("vehicle_updates");
+    list.push("flag");
+    // Optional steps follow — each shows a Skip button in the top-right.
+    list.push("time_check");
+    if (timeVariance && timeVariance !== "on_time") list.push("time_reason");
+    list.push("difficulty");
     list.push("photos");
     list.push("tip");
     list.push("observations");
-    list.push("flag");
     list.push("summary");
     return list;
   }, [
@@ -543,18 +587,30 @@ function PostJobSurveyDialogBody({
 
   function normalizeParts() {
     return parts
-      .map((part) => ({
-        part_name: part.part_name.trim(),
-        brand: part.brand.trim() || null,
-        oem_number: part.oem_number.trim(),
-        cost: Number(part.cost || 0),
-      }))
+      .map((part) => {
+        const suppliedBy: "shop" | "customer" =
+          part.supplied_by === "customer" ? "customer" : "shop";
+        const rawCost = Number(part.cost || 0);
+        // Customer-supplied parts log at $0 regardless of what's in the field.
+        const cost = suppliedBy === "customer" ? 0 : rawCost;
+        const quantity = Math.max(1, Math.round(part.quantity || 1));
+        return {
+          part_name: part.part_name.trim(),
+          brand: part.brand.trim() || null,
+          oem_number: part.oem_number.trim(),
+          cost,
+          quantity,
+          supplied_by: suppliedBy,
+          part_tier: part.part_tier || "oem",
+        };
+      })
       .filter(
         (part) =>
           part.part_name ||
           part.brand ||
           part.oem_number ||
-          (Number.isFinite(part.cost) && part.cost > 0)
+          (Number.isFinite(part.cost) && part.cost > 0) ||
+          part.supplied_by === "customer"
       );
   }
 
@@ -569,7 +625,9 @@ function PostJobSurveyDialogBody({
 
     const normalizedParts = normalizeParts();
     if (requiresParts && normalizedParts.length === 0) {
-      setError("Please add at least one part used.");
+      setError(
+        "This service requires parts — please add at least one part used before submitting."
+      );
       const partsIdx = visibleSteps.indexOf("parts");
       if (partsIdx >= 0) setStepIndex(partsIdx);
       return;
@@ -686,6 +744,16 @@ function PostJobSurveyDialogBody({
   const showOneMore =
     answeredCount === 3 || answeredCount === 6 || answeredCount === 9;
   const skipMoreVisible = answeredCount >= 5;
+  // Required steps that cannot be skipped: mileage, parts used, parts accuracy,
+  // vehicle passport updates, and flag-for-review. Everything else is optional.
+  const REQUIRED_STEPS: StepKey[] = [
+    "mileage",
+    "parts",
+    "parts_accuracy",
+    "vehicle_updates",
+    "flag",
+  ];
+  const skipHiddenForStep = REQUIRED_STEPS.includes(currentStep);
 
   const stepHeader = (
     <div className="flex items-center justify-between gap-2 px-4 pt-3 sm:px-6">
@@ -712,7 +780,7 @@ function PostJobSurveyDialogBody({
           />
         ))}
       </div>
-      {isLast ? (
+      {isLast || skipHiddenForStep ? (
         <span className="w-8" />
       ) : (
         <button
@@ -745,11 +813,21 @@ function PostJobSurveyDialogBody({
         {stepHeader}
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-6 sm:px-10 sm:py-10">
+          {passportData?.vehicle_spec_label ? (
+            <div className="mx-auto mb-6 w-full max-w-xl rounded-xl border border-primary/10 bg-muted/40 px-3 py-2">
+              <p className="truncate text-center text-[12px] font-medium text-foreground/80">
+                {passportData.vehicle_spec_label}
+              </p>
+            </div>
+          ) : null}
+
           <StepContent
             step={currentStep}
             bookingLabel={bookingLabel}
             bookingSubLabel={bookingSubLabel}
             serviceLabel={prefillData?.serviceName ?? null}
+            vehicleLabel={prefillData?.vehicleLabel ?? null}
+            engineCode={prefillData?.engineCode ?? null}
             estimatedLaborMinutes={estimatedLaborMinutes}
             timeVariance={timeVariance}
             setTimeVariance={(value) => {
@@ -773,6 +851,7 @@ function PostJobSurveyDialogBody({
             setParts={setParts}
             requiresParts={requiresParts}
             suggestedParts={prefillData?.suggestedParts ?? []}
+            oemRecommendations={prefillData?.oemRecommendations ?? []}
             difficultyRating={difficultyRating}
             setDifficultyRating={(value) => {
               setDifficultyRating(value);
@@ -865,6 +944,8 @@ function PostJobSurveyDialogBody({
                   timeReasonNote,
                   partsAccuracyStatus,
                   partsAccuracyFeedback,
+                  requiresParts,
+                  filledPartsCount: parts.filter((p) => p.part_name.trim() !== "").length,
                 })}
                 className={cn(
                   drawerPrimaryButtonClassName,
@@ -890,12 +971,20 @@ function canAdvance(
     timeReasonNote: string;
     partsAccuracyStatus: PartsAccuracyStatus | null;
     partsAccuracyFeedback: string;
+    requiresParts: boolean;
+    filledPartsCount: number;
   }
 ) {
   if (step === "mileage") return state.completionMileage.trim() !== "";
   if (step === "time_reason") {
     if (state.timeReason === "other") return state.timeReasonNote.trim() !== "";
     return state.timeReason !== null;
+  }
+  if (step === "parts") {
+    // If the service is flagged as requiring parts, the mechanic must add at
+    // least one part with a non-empty name before moving on.
+    if (state.requiresParts) return state.filledPartsCount > 0;
+    return true;
   }
   if (step === "parts_accuracy") {
     if (state.partsAccuracyStatus === "different_parts") {
@@ -911,6 +1000,8 @@ function StepContent(props: {
   bookingLabel: string;
   bookingSubLabel: string;
   serviceLabel: string | null;
+  vehicleLabel: string | null;
+  engineCode: string | null;
   estimatedLaborMinutes: number | null;
   timeVariance: TimeVariance | null;
   setTimeVariance: (value: TimeVariance) => void;
@@ -926,6 +1017,7 @@ function StepContent(props: {
   setParts: React.Dispatch<React.SetStateAction<PartRowState[]>>;
   requiresParts: boolean;
   suggestedParts: JobActualPartPayload[];
+  oemRecommendations: OemRecommendation[];
   difficultyRating: string;
   setDifficultyRating: (value: string) => void;
   partsAccuracyStatus: PartsAccuracyStatus | null;
@@ -1061,9 +1153,12 @@ function StepContent(props: {
           setParts={props.setParts}
           requiresParts={props.requiresParts}
           suggestedParts={props.suggestedParts}
+          oemRecommendations={props.oemRecommendations}
           actualPartsCost={props.actualPartsCost}
           setActualPartsCost={props.setActualPartsCost}
           partsCostSum={props.partsCostSum}
+          vehicleLabel={props.vehicleLabel}
+          engineCode={props.engineCode}
         />
       );
     case "difficulty":
@@ -1369,96 +1464,333 @@ function Chip({
   );
 }
 
+function tierLabelOf(tier?: string) {
+  switch (tier) {
+    case "oem":
+      return "OEM";
+    case "aftermarket":
+      return "Aftermarket";
+    case "performance":
+      return "Performance";
+    case "economy":
+      return "Economy";
+    default:
+      return null;
+  }
+}
+
 function PartsStep({
   parts,
   setParts,
   requiresParts,
   suggestedParts,
+  oemRecommendations,
   actualPartsCost,
   setActualPartsCost,
   partsCostSum,
+  vehicleLabel,
+  engineCode,
 }: {
   parts: PartRowState[];
   setParts: React.Dispatch<React.SetStateAction<PartRowState[]>>;
   requiresParts: boolean;
   suggestedParts: JobActualPartPayload[];
+  oemRecommendations: OemRecommendation[];
   actualPartsCost: string;
   setActualPartsCost: (value: string) => void;
   partsCostSum: number;
+  vehicleLabel: string | null;
+  engineCode: string | null;
 }) {
+  const normalizeOem = (n: string) =>
+    n.trim().toUpperCase().replace(/\s+/g, "");
+  const oemRecommendedMap = useMemo(() => {
+    const map = new Map<string, OemRecommendationPart>();
+    for (const rec of oemRecommendations) {
+      for (const part of rec.parts) {
+        const key = normalizeOem(part.oem_part_number);
+        if (key && !map.has(key)) map.set(key, part);
+      }
+    }
+    return map;
+  }, [oemRecommendations]);
+  const oemRecommendedSet = useMemo(
+    () => new Set(oemRecommendedMap.keys()),
+    [oemRecommendedMap],
+  );
+  const totalRecommended = oemRecommendedSet.size;
+  const confirmedRecommended = useMemo(() => {
+    const present = new Set<string>();
+    for (const p of parts) {
+      const key = normalizeOem(p.oem_number ?? "");
+      if (key && oemRecommendedSet.has(key)) present.add(key);
+    }
+    return present.size;
+  }, [parts, oemRecommendedSet]);
   function updatePart(index: number, next: Partial<PartRowState>) {
     setParts((current) =>
       current.map((part, idx) => (idx === index ? { ...part, ...next } : part))
     );
   }
 
+  function adjustQuantity(index: number, delta: number) {
+    setParts((current) =>
+      current.map((part, idx) =>
+        idx === index
+          ? { ...part, quantity: Math.max(1, (part.quantity || 1) + delta) }
+          : part,
+      ),
+    );
+  }
+
+  const hasFilledPart = parts.some((p) => p.part_name.trim() !== "");
+  const prefilled = suggestedParts.length > 0;
+  // Step copy adapts: when the cascade pre-loaded suggestions, the step is
+  // "confirm what we already think you used" — otherwise it's "tell us what
+  // you used."
+  const eyebrow = prefilled ? "Confirm" : requiresParts ? "Required" : "Optional";
+  const question = prefilled ? "Confirm parts used" : "What parts did you use?";
+  const hint = prefilled
+    ? "Verify the inventory used during this service task."
+    : requiresParts
+      ? "This service requires parts — please add at least one part used before continuing."
+      : "Add each part you installed. Skip if none.";
+
+  const [swapIndex, setSwapIndex] = useState<number | null>(null);
+  const closeSwap = () => setSwapIndex(null);
+  const applySwap = (next: {
+    part_name: string;
+    oem_number: string;
+    brand?: string | null;
+    part_tier?: string | null;
+  }) => {
+    if (swapIndex === null) return;
+    updatePart(swapIndex, {
+      part_name: next.part_name,
+      oem_number: next.oem_number,
+      brand: next.brand ?? "",
+      part_tier: next.part_tier ?? "oem",
+    });
+    closeSwap();
+  };
+
+  const vehicleBarSubtitle = [vehicleLabel, engineCode]
+    .filter((v) => typeof v === "string" && v.trim().length > 0)
+    .join(" · ");
+
   return (
-    <QuestionScreen
-      eyebrow={requiresParts ? "Required" : "Optional"}
-      question="What parts did you use?"
-      hint={
-        suggestedParts.length > 0
-          ? "Suggested parts pre-loaded — tweak as needed."
-          : "Add each part you installed. Skip if none."
-      }
-    >
+    <QuestionScreen eyebrow={eyebrow} question={question} hint={hint}>
       <div className="space-y-3">
+        {prefilled ? (
+          <div className="flex items-start gap-2 rounded-xl bg-primary/8 px-3 py-2.5 text-[12px] text-primary">
+            <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            <span>Pre-filled from Otopair catalog — confirm or swap.</span>
+          </div>
+        ) : null}
+
+        {requiresParts && !hasFilledPart ? (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+            This service is flagged as requiring parts. Add at least one part below to continue.
+          </div>
+        ) : null}
+
         {parts.length === 0 ? (
           <div className="rounded-xl border border-dashed border-primary/20 bg-muted/30 px-4 py-6 text-center text-[12px] text-muted-foreground">
             No parts added yet.
           </div>
         ) : (
-          parts.map((part, index) => (
-            <div
-              key={index}
-              className="rounded-xl border border-primary/15 bg-background px-3 py-3"
-            >
-              <div className="grid grid-cols-2 gap-2">
-                <LabeledInput
-                  label="Part name"
-                  value={part.part_name}
-                  onChange={(value) => updatePart(index, { part_name: value })}
-                />
-                <LabeledInput
-                  label="Brand"
-                  value={part.brand}
-                  onChange={(value) => updatePart(index, { brand: value })}
-                />
-                <LabeledInput
-                  label="Part number"
-                  value={part.oem_number}
-                  onChange={(value) => updatePart(index, { oem_number: value })}
-                />
-                <LabeledInput
-                  label="Cost"
-                  value={part.cost}
-                  onChange={(value) => updatePart(index, { cost: value })}
-                  inputMode="decimal"
-                />
+          parts.map((part, index) => {
+            const isCustomer = part.supplied_by === "customer";
+            const tierLabel = tierLabelOf(part.part_tier);
+            const qty = Math.max(1, part.quantity || 1);
+            const oemKey = normalizeOem(part.oem_number ?? "");
+            const oemRec = oemKey.length > 0 ? oemRecommendedMap.get(oemKey) : undefined;
+            const isOemRecommended = !!oemRec;
+            const sourcesUsed = oemRec?.price_sources_used ?? 0;
+            const avgPrice = oemRec?.average_price ?? 0;
+            return (
+              <div
+                key={index}
+                className="rounded-2xl border border-primary/15 bg-background px-3 py-3"
+              >
+                {/* Top: name + tier chip on the left, quantity stepper on the right */}
+                <div className="flex items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        value={part.part_name}
+                        onChange={(event) =>
+                          updatePart(index, { part_name: event.target.value })
+                        }
+                        placeholder="Part name"
+                        className="h-8 min-w-0 flex-1 rounded-md border border-primary/10 bg-background px-2 text-[13px] font-semibold leading-tight text-foreground outline-none placeholder:font-normal placeholder:text-muted-foreground focus:border-primary/30"
+                      />
+                      {isOemRecommended ? (
+                        <span
+                          className="inline-flex shrink-0 items-center rounded-md bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary"
+                          title="Matches the OEM part Otopair has on file for this car"
+                        >
+                          OEM
+                        </span>
+                      ) : null}
+                      {tierLabel ? (
+                        <span className="inline-flex shrink-0 items-center rounded-md bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          {tierLabel}
+                        </span>
+                      ) : null}
+                    </div>
+                    {/* Brand + part number, compact and inline */}
+                    <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                      <input
+                        value={part.brand}
+                        onChange={(event) =>
+                          updatePart(index, { brand: event.target.value })
+                        }
+                        placeholder="Brand"
+                        className="h-7 rounded-md border border-primary/10 bg-background px-2 text-[11px] outline-none focus:border-primary/30"
+                      />
+                      <input
+                        value={part.oem_number}
+                        onChange={(event) =>
+                          updatePart(index, { oem_number: event.target.value })
+                        }
+                        placeholder="Part number"
+                        className="h-7 rounded-md border border-primary/10 bg-background px-2 text-[11px] outline-none focus:border-primary/30"
+                      />
+                    </div>
+                    {/* Otopair price line / cost editor */}
+                    <div className="mt-2 flex items-center gap-2 text-[12px]">
+                      <span className="text-muted-foreground">
+                        {isCustomer ? "Customer-supplied:" : "Price per unit: "}
+                      </span>
+                      {isCustomer ? (
+                        <span className="font-medium text-muted-foreground">$0</span>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <span className="text-muted-foreground">$</span>
+                          <input
+                            value={part.cost}
+                            onChange={(event) =>
+                              updatePart(index, { cost: event.target.value })
+                            }
+                            inputMode="decimal"
+                            placeholder={avgPrice > 0 ? avgPrice.toFixed(2) : "0.00"}
+                            title={
+                              isOemRecommended && sourcesUsed > 0 && avgPrice > 0
+                                ? `Otopair average $${avgPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
+                                : undefined
+                            }
+                            className="h-6 w-20 rounded-md border border-primary/10 bg-background px-1.5 text-[12px] font-medium tabular-nums outline-none focus:border-primary/30"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {/* Quantity stepper */}
+                  <div className="inline-flex items-center gap-0 rounded-full border border-primary/15 bg-background">
+                    <button
+                      type="button"
+                      onClick={() => adjustQuantity(index, -1)}
+                      aria-label="Decrease quantity"
+                      disabled={qty <= 1}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors enabled:hover:bg-primary/5 enabled:hover:text-foreground disabled:opacity-30"
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </button>
+                    <span className="w-6 text-center text-[13px] font-semibold tabular-nums">
+                      {qty}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => adjustQuantity(index, 1)}
+                      aria-label="Increase quantity"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Footer row: Swap | Remove | Customer-supplied toggle.
+                    Swap is hidden on blank rows (no part name yet) — it's only
+                    useful once you have an item to swap. */}
+                <div className="mt-3 flex items-center justify-between border-t border-primary/10 pt-2.5 text-[12px]">
+                  <div className="flex items-center gap-3">
+                    {part.part_name.trim() !== "" ? (
+                      <button
+                        type="button"
+                        onClick={() => setSwapIndex(index)}
+                        className="inline-flex items-center gap-1.5 rounded-md text-foreground transition-colors hover:text-primary"
+                      >
+                        <ArrowLeftRight className="h-3.5 w-3.5" />
+                        <span className="font-medium">Swap part</span>
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setParts((current) => current.filter((_, idx) => idx !== index))
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-md text-muted-foreground transition-colors hover:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Remove</span>
+                    </button>
+                  </div>
+                  <label className="inline-flex cursor-pointer items-center gap-2 select-none">
+                    <span className="text-[11px] text-muted-foreground">
+                      Customer supplied
+                    </span>
+                    <span
+                      role="switch"
+                      aria-checked={isCustomer}
+                      tabIndex={0}
+                      onClick={() =>
+                        updatePart(index, {
+                          supplied_by: isCustomer ? "shop" : "customer",
+                        })
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === " " || e.key === "Enter") {
+                          e.preventDefault();
+                          updatePart(index, {
+                            supplied_by: isCustomer ? "shop" : "customer",
+                          });
+                        }
+                      }}
+                      className={cn(
+                        "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
+                        isCustomer ? "bg-primary" : "bg-muted",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "inline-block h-4 w-4 transform rounded-full bg-background shadow-sm transition-transform",
+                          isCustomer ? "translate-x-4" : "translate-x-0.5",
+                        )}
+                      />
+                    </span>
+                  </label>
+                </div>
               </div>
-              <div className="mt-2 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setParts((current) =>
-                      current.filter((_, idx) => idx !== index)
-                    )
-                  }
-                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-destructive/5 hover:text-destructive"
-                >
-                  <Trash2 className="h-3 w-3" />
-                  Remove
-                </button>
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
+
         <button
           type="button"
           onClick={() =>
             setParts((current) => [
               ...current,
-              { part_name: "", brand: "", oem_number: "", cost: "" },
+              {
+                part_name: "",
+                brand: "",
+                oem_number: "",
+                cost: "",
+                quantity: 1,
+                supplied_by: "shop",
+                part_tier: "oem",
+              },
             ])
           }
           className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
@@ -1467,25 +1799,196 @@ function PartsStep({
           Add another part
         </button>
 
-        <div className="mt-4 flex items-center justify-between rounded-xl bg-muted/40 px-4 py-3">
-          <div>
-            <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-              Actual parts cost
+        {totalRecommended > 0 ? (
+          <div className="rounded-xl border border-primary/15 bg-primary/5 px-3 py-2 text-[11px] text-foreground">
+            <span className="font-semibold">{confirmedRecommended}</span>
+            <span className="text-muted-foreground"> of </span>
+            <span className="font-semibold">{totalRecommended}</span>
+            <span className="text-muted-foreground">
+              {" "}
+              OEM-recommended part{totalRecommended === 1 ? "" : "s"} confirmed
+              {confirmedRecommended < totalRecommended
+                ? " — swap any rows that aren't what you installed."
+                : "."}
+            </span>
+          </div>
+        ) : null}
+
+        {/* Pinned vehicle-identified + total parts footer */}
+        <div className="mt-2 flex items-center justify-between gap-3 rounded-2xl border border-primary/10 bg-muted/30 px-3 py-2.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-background text-muted-foreground">
+              <Car className="h-3.5 w-3.5" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                Vehicle identified
+              </p>
+              <p className="truncate text-[11px] font-medium text-foreground">
+                {vehicleBarSubtitle || "—"}
+              </p>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Total parts
             </p>
-            <p className="text-[11px] text-muted-foreground">
-              Auto: {partsCostSum.toFixed(2)}
+            <p className="text-[14px] font-semibold tabular-nums text-foreground">
+              ${partsCostSum.toFixed(2)}
             </p>
+          </div>
+        </div>
+
+        {/* Override the auto-summed parts cost if the shop charges differently. */}
+        <div className="flex items-center justify-between rounded-xl bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
+          <div className="flex flex-col">
+            <span>Override total (optional)</span>
+            <span className="text-[10px]">Auto sum: ${partsCostSum.toFixed(2)}</span>
           </div>
           <input
             value={actualPartsCost}
             onChange={(event) => setActualPartsCost(event.target.value)}
             placeholder={partsCostSum.toFixed(2)}
             inputMode="decimal"
-            className="w-32 rounded-lg border border-primary/15 bg-background px-3 py-2 text-right text-[13px] outline-none focus:border-primary"
+            className="w-24 rounded-lg border border-primary/15 bg-background px-2 py-1.5 text-right text-[12px] outline-none focus:border-primary"
           />
         </div>
       </div>
+
+      {swapIndex !== null ? (
+        <SwapPartModal
+          onClose={closeSwap}
+          onPick={applySwap}
+          initialQuery={parts[swapIndex]?.oem_number || parts[swapIndex]?.part_name || ""}
+        />
+      ) : null}
     </QuestionScreen>
+  );
+}
+
+/**
+ * Modal picker against the canonical oem_parts catalog. Used by the "Swap
+ * part" action on each parts-row footer. Otopair currently supplies OEM only,
+ * but the search query already ranks OEM-tier first so future tiers slot in
+ * cleanly. The mechanic sees brand + name + part number; on pick, those plus
+ * the part_tier propagate back to the row.
+ */
+function SwapPartModal({
+  onClose,
+  onPick,
+  initialQuery,
+}: {
+  onClose: () => void;
+  onPick: (next: {
+    part_name: string;
+    oem_number: string;
+    brand?: string | null;
+    part_tier?: string | null;
+  }) => void;
+  initialQuery: string;
+}) {
+  const [query, setQuery] = useState(initialQuery);
+  const results = useQuery(api.oemParts.search, {
+    query,
+    limit: 25,
+  });
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Swap part"
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-foreground/40 px-3 pb-3 sm:items-center sm:pb-0"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-primary/10 bg-background shadow-xl"
+      >
+        <div className="flex items-center justify-between border-b border-primary/10 px-4 py-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Swap part
+            </p>
+            <p className="text-[13px] font-semibold">Pick from the catalog</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="border-b border-primary/10 px-4 py-2.5">
+          <div className="flex items-center gap-2 rounded-lg border border-primary/15 bg-background px-2.5 py-2 focus-within:border-primary">
+            <Search className="h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search by part number, name, or brand…"
+              autoFocus
+              className="flex-1 bg-transparent text-[13px] outline-none"
+            />
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-2 py-2">
+          {results === undefined ? (
+            <div className="flex items-center justify-center py-8 text-[12px] text-muted-foreground">
+              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              Searching…
+            </div>
+          ) : results.length === 0 ? (
+            <div className="py-8 text-center text-[12px] text-muted-foreground">
+              No catalog matches. Try a different query, or type the part in directly.
+            </div>
+          ) : (
+            <ul className="space-y-1">
+              {results.map((part) => {
+                const tierLabel = tierLabelOf(part.part_tier ?? "oem");
+                return (
+                  <li key={part._id}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onPick({
+                          part_name: part.name ?? "",
+                          oem_number: part.oem_part_number ?? "",
+                          brand: part.brand ?? null,
+                          part_tier: part.part_tier ?? "oem",
+                        })
+                      }
+                      className="flex w-full flex-col items-start gap-0.5 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-primary/15 hover:bg-primary/5"
+                    >
+                      <div className="flex w-full items-center gap-1.5">
+                        <span className="text-[13px] font-semibold text-foreground">
+                          {part.name}
+                        </span>
+                        {tierLabel ? (
+                          <span className="inline-flex items-center rounded-md bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                            {tierLabel}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="flex w-full items-center gap-2 text-[11px] text-muted-foreground">
+                        {part.brand ? <span>{part.brand}</span> : null}
+                        {part.brand && part.oem_part_number ? (
+                          <span aria-hidden>·</span>
+                        ) : null}
+                        {part.oem_part_number ? (
+                          <span className="font-mono">{part.oem_part_number}</span>
+                        ) : null}
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

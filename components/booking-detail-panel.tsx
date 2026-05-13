@@ -509,6 +509,11 @@ interface JobDetailPanelProps {
     blockedSlots: ScheduleBlockedSlot[];
   };
   onRequestRescheduleConfirmation?: (proposal: RescheduleRequest) => void;
+  onRequestReschedule?: () => void;
+  onRequestNewBookingAfterCancel?: (info: {
+    mechanicId: string | null;
+    scheduledDate: string;
+  }) => void;
   onClose: () => void;
   onSuccess?: (message: string) => void;
   showBookingsLink?: boolean;
@@ -525,6 +530,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       mechanics,
       scheduleConflicts,
       onRequestRescheduleConfirmation,
+      onRequestReschedule,
+      onRequestNewBookingAfterCancel,
       onClose,
       onSuccess,
       showBookingsLink,
@@ -546,6 +553,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showActualsDialog, setShowActualsDialog] = useState(false);
     const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+    const [createNewAfterCancel, setCreateNewAfterCancel] = useState(false);
     const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
     const [cancelOtherText, setCancelOtherText] = useState("");
     const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
@@ -577,6 +585,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     );
     const vehiclePassport = useQuery(
       api.bookings.getVehiclePassportForBooking,
+      job ? { bookingId: job._id } : "skip"
+    );
+    const oemPartsByService = useQuery(
+      api.serviceParts.getOemPartsForBooking,
       job ? { bookingId: job._id } : "skip"
     );
 
@@ -722,7 +734,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           reason,
         });
         setShowCancelConfirm(false);
+        const shouldOpenNew = createNewAfterCancel;
+        setCreateNewAfterCancel(false);
         onSuccess?.("Booking cancelled");
+        if (shouldOpenNew && onRequestNewBookingAfterCancel) {
+          onRequestNewBookingAfterCancel({
+            mechanicId: job.mechanicId ?? null,
+            scheduledDate: job.scheduledDate,
+          });
+        }
       } catch (err: unknown) {
         setActionError(
           err instanceof Error ? err.message : "Could not cancel booking.",
@@ -1942,6 +1962,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingServices={job?.serviceNames ?? []}
           passportData={vehiclePassport ?? null}
           prefillData={job?.jobActuals?.prejobReport ?? null}
+          oemPartsByService={oemPartsByService ?? null}
           isSubmitting={isSubmittingPrejob}
           onClose={() => setShowPrejobDialog(false)}
           onSubmit={handleStartWithPrejob}
@@ -2115,6 +2136,48 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
           }}
         >
+          {onRequestReschedule &&
+            job?.status !== "in_progress" &&
+            job?.status !== "vehicle_at_shop" ? (
+            <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <p className="text-xs text-muted-foreground">
+                Could this booking be moved instead? Rescheduling keeps the customer and revenue.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCancelConfirm(false);
+                  onRequestReschedule();
+                }}
+                disabled={isActioning}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-primary bg-card px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
+              >
+                Reschedule instead
+              </button>
+            </div>
+          ) : null}
+
+          {(job?.status === "in_progress" || job?.status === "vehicle_at_shop") ? (
+            <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                Work has already started
+              </p>
+              <p className="mt-1 text-xs text-amber-900">
+                This booking can't be rescheduled — cancelling it ends the current job. If the customer wants to return, book a new appointment.
+              </p>
+              {onRequestNewBookingAfterCancel ? (
+                <label className="mt-2 flex items-start gap-2 text-xs text-amber-900 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={createNewAfterCancel}
+                    onChange={(e) => setCreateNewAfterCancel(e.target.checked)}
+                    className="mt-0.5 accent-amber-700"
+                  />
+                  <span>Open a new booking for this customer after cancelling.</span>
+                </label>
+              ) : null}
+            </div>
+          ) : null}
           <div className="space-y-2.5 mb-4">
             {cancelReasonOptions.map((r) => (
               <label

@@ -435,6 +435,20 @@ function ConditionButtons({
   );
 }
 
+export type PreJobOemPart = {
+  oem_part_number: string;
+  name: string;
+  category?: string | null;
+  position?: string | null;
+  quantity_needed?: number | null;
+};
+
+export type PreJobOemPartsForService = {
+  serviceName: string;
+  serviceSlug: string;
+  parts: PreJobOemPart[];
+};
+
 export default function PreJobSurveyDialog({
   open,
   bookingLabel,
@@ -442,6 +456,7 @@ export default function PreJobSurveyDialog({
   bookingServices = [],
   passportData,
   prefillData,
+  oemPartsByService,
   isSubmitting,
   onClose,
   onSubmit,
@@ -452,6 +467,7 @@ export default function PreJobSurveyDialog({
   bookingServices?: string[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
+  oemPartsByService?: PreJobOemPartsForService[] | null;
   isSubmitting: boolean;
   onClose: () => void;
   onSubmit: (payload: PreJobSurveyPayload, action: SubmitIntent) => Promise<void>;
@@ -465,6 +481,7 @@ export default function PreJobSurveyDialog({
       bookingServices={bookingServices}
       passportData={passportData ?? null}
       prefillData={prefillData ?? null}
+      oemPartsByService={oemPartsByService ?? null}
       isSubmitting={isSubmitting}
       onClose={onClose}
       onSubmit={onSubmit}
@@ -479,6 +496,7 @@ function PreJobSurveyDialogBody({
   bookingServices,
   passportData,
   prefillData,
+  oemPartsByService,
   isSubmitting,
   onClose,
   onSubmit,
@@ -489,6 +507,7 @@ function PreJobSurveyDialogBody({
   bookingServices: string[];
   passportData: VehiclePassportData | null;
   prefillData: PreJobSurveyPayload | null;
+  oemPartsByService: PreJobOemPartsForService[] | null;
   isSubmitting: boolean;
   onClose: () => void;
   onSubmit: (payload: PreJobSurveyPayload, action: SubmitIntent) => Promise<void>;
@@ -1189,7 +1208,68 @@ function PreJobSurveyDialogBody({
           </aside>
 
         <div className="space-y-4 lg:min-w-0 lg:flex-1">
-          <VehicleSummaryCard label={bookingLabel} subLabel={bookingSubLabel} />
+          <VehicleSummaryCard
+            label={bookingLabel}
+            subLabel={bookingSubLabel}
+            specLabel={passportData?.vehicle_spec_label ?? null}
+          />
+
+          {oemPartsByService && oemPartsByService.length > 0 ? (
+            <section className="rounded-lg border border-primary/15 bg-card p-3.5">
+              <div className="mb-2 flex items-baseline justify-between gap-2">
+                <h3 className="text-[13px] font-semibold uppercase tracking-wide text-foreground">
+                  OEM parts for this job
+                </h3>
+                <span className="text-[11px] text-muted-foreground">
+                  From Otopair catalog · informational
+                </span>
+              </div>
+              <div className="space-y-3">
+                {oemPartsByService.map((svc) => (
+                  <div
+                    key={svc.serviceSlug}
+                    className="rounded-md border border-primary/10 bg-muted/30 p-3"
+                  >
+                    <div className="mb-2 text-[12px] font-semibold text-foreground">
+                      {svc.serviceName}
+                    </div>
+                    {svc.parts.length === 0 ? (
+                      <div className="text-[12px] text-muted-foreground">
+                        No catalog parts on file for this service — capture
+                        what&apos;s used in post-job.
+                      </div>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {svc.parts.map((p) => (
+                          <li
+                            key={`${svc.serviceSlug}-${p.oem_part_number}`}
+                            className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12px]"
+                          >
+                            <span className="font-medium text-foreground">
+                              {p.name}
+                            </span>
+                            <span className="font-mono text-[11px] text-muted-foreground">
+                              {p.oem_part_number}
+                            </span>
+                            {p.position ? (
+                              <span className="text-[11px] text-muted-foreground">
+                                · {p.position}
+                              </span>
+                            ) : null}
+                            {p.quantity_needed && p.quantity_needed > 1 ? (
+                              <span className="text-[11px] text-muted-foreground">
+                                · qty {p.quantity_needed}
+                              </span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           {isFirstVisit ? (
             <FirstVisitNotice>
@@ -1756,7 +1836,15 @@ const selectPopoverClassName = "rounded-md";
 const selectListBoxClassName = "p-1 text-[12px]";
 const selectItemClassName = "min-h-0 rounded-sm px-2.5 py-1.5 text-[12px]";
 
-function VehicleSummaryCard({ label, subLabel }: { label: string; subLabel: string }) {
+function VehicleSummaryCard({
+  label,
+  subLabel,
+  specLabel,
+}: {
+  label: string;
+  subLabel: string;
+  specLabel?: string | null;
+}) {
   return (
     <div className="flex items-center gap-3 rounded-xl bg-muted/60 px-3 py-2.5">
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground">
@@ -1764,6 +1852,11 @@ function VehicleSummaryCard({ label, subLabel }: { label: string; subLabel: stri
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13px] font-semibold text-foreground">{label}</p>
+        {specLabel ? (
+          <p className="mt-0.5 truncate text-[11px] font-medium text-foreground/80">
+            {specLabel}
+          </p>
+        ) : null}
         <p className="mt-0.5 truncate text-[10px] text-muted-foreground">{subLabel}</p>
       </div>
     </div>

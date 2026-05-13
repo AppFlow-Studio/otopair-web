@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as adminCleanupMechanics from "../adminCleanupMechanics.js";
 import type * as ai_conversations from "../ai_conversations.js";
 import type * as ai_enrichment_logs from "../ai_enrichment_logs.js";
 import type * as ai_messages from "../ai_messages.js";
@@ -176,6 +177,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  adminCleanupMechanics: typeof adminCleanupMechanics;
   ai_conversations: typeof ai_conversations;
   ai_enrichment_logs: typeof ai_enrichment_logs;
   ai_messages: typeof ai_messages;

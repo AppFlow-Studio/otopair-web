@@ -1354,6 +1354,10 @@ export default defineSchema({
   tire_quote_responses: defineTable({
     booking_id: v.id("bookings"),
     shop_id: v.id("shops"),
+    /** Mechanic the shop assigned to do the job when submitting the quote.
+     *  Propagated onto the booking by `acceptTireQuote` so the schedule
+     *  page can resolve "Open vehicle check" without a separate reassign. */
+    mechanic_id: v.optional(v.id("mechanics")),
     tire_brand: v.string(),
     tire_model: v.optional(v.string()),
     per_tire_price: v.number(),

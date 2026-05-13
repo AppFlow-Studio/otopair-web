@@ -532,6 +532,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     ref,
   ) {
     const [assigningMechanicId, setAssigningMechanicId] = useState("");
+    const [showMechanicPicker, setShowMechanicPicker] = useState(false);
     const [isActioning, setIsActioning] = useState(false);
     const [actionError, setActionError] = useState("");
     const [showDeclineModal, setShowDeclineModal] = useState(false);
@@ -592,8 +593,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         job.status === "confirmed" ||
         job.status === "vehicle_at_shop");
     const currentMechanicId = job?.mechanicId ? String(job.mechanicId) : "";
-    const currentAssignmentKey =
-      job?.assignmentPreference === "any" ? "" : currentMechanicId;
+    // Reflect whoever is actually assigned. The customer's original
+    // "any vs specific" preference is a historical artifact — once a
+    // mechanic is on the booking, the dropdown should show them. When
+    // mechanic_id is null, the Select's `|| "any"` fallback below
+    // renders "Any mechanic".
+    const currentAssignmentKey = currentMechanicId;
     const hasMechanicSelectionChange =
       assigningMechanicId !== currentAssignmentKey;
     const canSubmitMechanicChange =
@@ -753,6 +758,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       if (!canSubmitMechanicChange) return;
       if (!job?._id) return;
       setActionError("");
+
+      // "Any mechanic" selected → let the operator pick from an availability list
+      // instead of auto-assigning the first-available one server-side.
+      if (!selectedMechanicId) {
+        setShowMechanicPicker(true);
+        return;
+      }
+
       const assignmentConflict =
         selectedMechanicId &&
         scheduleConflicts &&
@@ -2173,12 +2186,176 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             }}
           />
         ) : null}
+
+        {showMechanicPicker && job ? (
+          <MechanicAvailabilityPicker
+            bookingDate={job.scheduledDate}
+            mechanics={mechanics}
+            onClose={() => setShowMechanicPicker(false)}
+            onSelect={async ({ mechanicId, slot }) => {
+              setIsActioning(true);
+              setActionError("");
+              try {
+                await updateJob({
+                  bookingId: job._id,
+                  mechanicId: mechanicId as Id<"mechanics">,
+                  scheduledDate: slot.date,
+                  scheduledTime: slot.start_time,
+                  assignmentPreference: "specific_mechanic",
+                });
+                setAssigningMechanicId(String(mechanicId));
+                setShowMechanicPicker(false);
+                const name = mechanics.find((m) => String(m._id) === String(mechanicId))?.name ?? "Mechanic";
+                onSuccess?.(`Assigned to ${name}`);
+              } catch (err: unknown) {
+                setActionError(
+                  err instanceof Error ? err.message : "Could not assign mechanic.",
+                );
+              } finally {
+                setIsActioning(false);
+              }
+            }}
+          />
+        ) : null}
       </>
     );
   },
 );
 
 export default JobDetailPanel;
+
+type AvailabilitySlot = {
+  _id: Id<"time_slots">;
+  date: string;
+  start_time: string;
+  end_time: string;
+  is_available: boolean;
+};
+
+function formatSlotTime(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 || 12;
+  return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function formatPickerDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function MechanicAvailabilityPicker({
+  bookingDate,
+  mechanics,
+  onSelect,
+  onClose,
+}: {
+  bookingDate: string;
+  mechanics: Array<{ _id: string; name: string }>;
+  onSelect: (choice: { mechanicId: string; slot: AvailabilitySlot }) => void | Promise<void>;
+  onClose: () => void;
+}) {
+  const context = useQuery(api.bookings.getMyShopJobContext);
+  const shopId = (context as { shopId?: Id<"shops"> } | null | undefined)?.shopId;
+
+  const availability = useQuery(
+    api.time_slots.getNextAvailableByShopPerMechanic,
+    shopId ? { shopId } : "skip",
+  ) as Array<{ mechanicId: Id<"mechanics">; slots: AvailabilitySlot[] }> | undefined;
+
+  const [selected, setSelected] = useState<{ mechanicId: string; slot: AvailabilitySlot } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const mechanicNameById = useMemo(
+    () => new Map(mechanics.map((m) => [String(m._id), m.name])),
+    [mechanics],
+  );
+
+  const byMechanicForDate = useMemo(() => {
+    if (!availability) return null;
+    return availability.map((row) => ({
+      mechanicId: String(row.mechanicId),
+      name: mechanicNameById.get(String(row.mechanicId)) ?? "Mechanic",
+      slots: row.slots.filter((s) => s.date === bookingDate && s.is_available),
+    }));
+  }, [availability, mechanicNameById, bookingDate]);
+
+  const handleConfirm = async () => {
+    if (!selected || submitting) return;
+    setSubmitting(true);
+    try {
+      await onSelect(selected);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ConfirmationDialog
+      open
+      title="Pick a mechanic and time"
+      description={`Available slots on ${formatPickerDate(bookingDate)}`}
+      onClose={onClose}
+      secondaryAction={{
+        label: "Cancel",
+        onAction: onClose,
+        disabled: submitting,
+      }}
+      primaryAction={{
+        label: submitting ? "Assigning…" : "Assign",
+        onAction: handleConfirm,
+        disabled: !selected || submitting,
+        variant: "primary",
+      }}
+      maxWidthClassName="max-w-2xl"
+    >
+      <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+        {byMechanicForDate === null ? (
+          <div className="text-center text-sm text-muted-foreground py-8">Loading availability…</div>
+        ) : byMechanicForDate.length === 0 ? (
+          <div className="text-center text-sm text-muted-foreground py-8">
+            No mechanics at this shop.
+          </div>
+        ) : (
+          byMechanicForDate.map((row) => (
+            <div key={row.mechanicId} className="rounded-lg border border-border p-3">
+              <div className="text-sm font-medium text-foreground mb-2">{row.name}</div>
+              {row.slots.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No availability on this date.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {row.slots.map((slot) => {
+                    const isSelected =
+                      selected?.mechanicId === row.mechanicId &&
+                      String(selected.slot._id) === String(slot._id);
+                    return (
+                      <button
+                        key={String(slot._id)}
+                        type="button"
+                        onClick={() => setSelected({ mechanicId: row.mechanicId, slot })}
+                        className={`inline-flex items-center rounded-md px-3 py-1.5 text-xs font-medium border transition-colors ${
+                          isSelected
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background text-foreground border-border hover:bg-muted"
+                        }`}
+                      >
+                        {formatSlotTime(slot.start_time)}–{formatSlotTime(slot.end_time)}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </ConfirmationDialog>
+  );
+}
 
 function PostjobPhotoStrip({ bookingId }: { bookingId: Id<"bookings"> }) {
   const photos = useQuery(api.bookings.getPostjobPhotoUrls, { bookingId });

@@ -7,7 +7,8 @@ import { v } from "convex/values";
  * Valid booking transitions:
  * pending -> confirmed | cancelled | pending_customer_acceptance
  * pending_shop_acceptance -> confirmed | cancelled | pending_customer_acceptance
- * confirmed -> in_progress | cancelled | no_show | pending_customer_acceptance
+ * confirmed -> vehicle_at_shop | in_progress | cancelled | no_show | pending_customer_acceptance
+ * vehicle_at_shop -> in_progress | cancelled | pending_customer_acceptance
  * pending_customer_acceptance -> pending | pending_shop_acceptance | confirmed | cancelled
  * in_progress -> completed | cancelled
  * completed, cancelled, no_show, declined -> (terminal)
@@ -20,7 +21,21 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
     "cancelled",
     "pending_customer_acceptance",
   ],
-  confirmed: ["in_progress", "cancelled", "no_show", "pending_customer_acceptance"],
+  confirmed: [
+    "vehicle_at_shop",
+    "in_progress",
+    "cancelled",
+    "no_show",
+    "pending_customer_acceptance",
+  ],
+  // vehicle_at_shop is the sub-state between "confirmed" and "in_progress":
+  // the shop has marked the customer's car as physically here but work
+  // hasn't started yet. Set by bookings:markVehicleAtShop from web.
+  vehicle_at_shop: [
+    "in_progress",
+    "cancelled",
+    "pending_customer_acceptance",
+  ],
   pending_customer_acceptance: [
     "pending",
     "pending_shop_acceptance",

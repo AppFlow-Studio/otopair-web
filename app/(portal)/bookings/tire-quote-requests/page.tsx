@@ -163,6 +163,7 @@ export default function TireQuoteRequestsPage() {
         <QuoteSubmissionDialog
           request={activeRequest}
           shopId={shopId}
+          shopMechanics={context?.mechanics ?? []}
           onClose={() => setActiveRequest(null)}
         />
       )}
@@ -173,10 +174,12 @@ export default function TireQuoteRequestsPage() {
 function QuoteSubmissionDialog({
   request,
   shopId,
+  shopMechanics,
   onClose,
 }: {
   request: OpenRequest;
   shopId: Id<"shops">;
+  shopMechanics: Array<{ _id: Id<"mechanics">; name: string }>;
   onClose: () => void;
 }) {
   const submit = useMutation(api.tire_quote_responses.create);
@@ -187,6 +190,7 @@ function QuoteSubmissionDialog({
   const [laborCost, setLaborCost] = useState("");
   const [availabilityDate, setAvailabilityDate] = useState("");
   const [availabilityTime, setAvailabilityTime] = useState("");
+  const [mechanicId, setMechanicId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -221,6 +225,7 @@ function QuoteSubmissionDialog({
     laborCost !== "" &&
     Number(laborCost) >= 0 &&
     availabilityIsFuture &&
+    mechanicId !== "" &&
     total !== null &&
     !submitting;
 
@@ -239,6 +244,7 @@ function QuoteSubmissionDialog({
         labor_cost: Number(laborCost),
         total,
         availability: { date: availabilityDate, time: availabilityTime },
+        mechanic_id: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
       });
       onClose();
     } catch (e) {
@@ -329,6 +335,23 @@ function QuoteSubmissionDialog({
             readOnly
             className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-foreground"
           />
+        </Field>
+
+        <Field label="Assign mechanic" required>
+          <select
+            value={mechanicId}
+            onChange={(e) => setMechanicId(e.target.value)}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+          >
+            <option value="" disabled>
+              Select a mechanic
+            </option>
+            {shopMechanics.map((m) => (
+              <option key={String(m._id)} value={String(m._id)}>
+                {m.name || "Unnamed"}
+              </option>
+            ))}
+          </select>
         </Field>
 
         <div className="space-y-1.5">

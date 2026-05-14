@@ -1,5 +1,6 @@
 import { cronJobs } from "convex/server";
 import { internal } from "./_generated/api";
+import { isLateStartTestModeEnabled } from "./lib/late_start";
 
 const crons = cronJobs();
 
@@ -16,34 +17,48 @@ crons.daily(
   internal.cleanup.cleanupExpiredAccounts,
 );
 
-// // ─── Marketplace VIN Discovery Pipeline ─────────────────────────
+// ─── Marketplace VIN Discovery Pipeline ─────────────────────────
 
-// // Scrape CarGurus for VINs — runs twice daily (8 AM and 6 PM UTC)
-// crons.daily(
-//   "marketplace-scrape-cargurus-morning",
-//   { hourUTC: 8, minuteUTC: 0 },
-//   internal.vehicleEnrichment.marketplaceScraper.runScheduledScrape,
-//   { source: "cargurus" }
-// );
+// Scrape CarGurus for VINs — runs twice daily (8 AM and 6 PM UTC)
+crons.daily(
+  "marketplace-scrape-cargurus-morning",
+  { hourUTC: 8, minuteUTC: 0 },
+  internal.vehicleEnrichment.marketplaceScraper.runScheduledScrape,
+  { source: "cargurus" }
+);
 
-// crons.daily(
-//   "marketplace-scrape-cargurus-evening",
-//   { hourUTC: 18, minuteUTC: 0 },
-//   internal.vehicleEnrichment.marketplaceScraper.runScheduledScrape,
-//   { source: "carscom" }
-// );
+crons.daily(
+  "marketplace-scrape-cargurus-evening",
+  { hourUTC: 18, minuteUTC: 0 },
+  internal.vehicleEnrichment.marketplaceScraper.runScheduledScrape,
+  { source: "carscom" }
+);
 
-// // Process VIN queue every 30 minutes — pick up pending VINs and trigger enrichment
-// crons.interval(
-//   "process-vin-queue",
-//   { minutes: 30 },
-//   internal.vehicleEnrichment.marketplaceScraper.processVinQueue,
-// );
+// Process VIN queue every 10 minutes — pick up pending VINs and trigger enrichment.
+// Gated by env var ENRICHMENT_PAUSED — set to "true" in Convex env to pause without redeploying.
+crons.interval(
+  "process-vin-queue",
+  { minutes: 10 },
+  internal.vehicleEnrichment.marketplaceScraper.processVinQueue,
+);
 
 crons.interval(
   "revert-expired-booking-reschedules",
   { minutes: 15 },
   internal.bookings.revertExpiredReschedules,
 );
+
+crons.interval(
+  "process-customer-late-monitors",
+  { minutes: 1 },
+  internal.bookings.processCustomerLateMonitors,
+);
+
+crons.interval(
+  "process-overrun-checkins",
+  { minutes: 1 },
+  internal.bookings.processOverrunCheckins,
+);
+
 
 export default crons;

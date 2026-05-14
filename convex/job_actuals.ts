@@ -226,6 +226,9 @@ export const getByBookingId = query({
     if (!booking) return null;
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (booking.status !== "vehicle_at_shop" && booking.status !== "in_progress") {
+      throw new Error("Mark the vehicle here before starting work.");
+    }
 
     return await getLatestJobActualForBooking(ctx, args.bookingId);
   },
@@ -477,6 +480,9 @@ export const startJob = mutation({
     if (!booking) throw new Error("Booking not found");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (!["vehicle_at_shop", "in_progress"].includes(booking.status)) {
+      throw new Error("Mark the vehicle as here before starting this booking.");
+    }
 
     const now = Date.now();
     await ensureJobActualRecord(ctx, {
@@ -486,7 +492,7 @@ export const startJob = mutation({
       startedAtMs: now,
     });
 
-    if (booking.status === "confirmed") {
+    if (booking.status === "vehicle_at_shop") {
       await applyBookingStatusTransition(ctx, {
         booking,
         newStatus: "in_progress",

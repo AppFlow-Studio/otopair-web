@@ -57,6 +57,7 @@ import {
   type ToolResultBlock,
   type ToolUseBlock,
 } from "./dispatcher";
+import { SYSTEM_PROMPT, SYSTEM_PROMPT_VERSION } from "./system_prompt";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -65,8 +66,10 @@ const MAX_TOKENS = 1024;
 const HISTORY_TURNS = 10;
 const MAX_TOOL_ITERATIONS = 5;
 
-const STUB_SYSTEM_PROMPT =
-  "You are Oto, a friendly and educational automotive assistant for Otopair users. Explain the why behind your recommendations in 1-2 sentences.";
+// System prompt body lives in ./system-prompt.ts (versioned artifact). The
+// SYSTEM_PROMPT_VERSION import is unused at runtime today but worth keeping
+// in scope so the next slice (telemetry / caching) can log it per turn.
+void SYSTEM_PROMPT_VERSION;
 
 // Subset of OTO_TOOLS to surface in this slice. Add tool names here as later
 // slices wire them; the dispatcher already covers the routing for the full
@@ -119,12 +122,7 @@ interface AnthropicMessage {
 // registers and runs normally. The `expect-error` variant (vs `ts-ignore`)
 // makes tsc complain if Convex ever ships a fix that eliminates the false
 // positive, so we know to remove the suppression rather than leave it.
-// NOTE: Waleed's branch had `@ts-expect-error TS2589` directives here to
-// suppress a circular-type quirk that surfaced in his api tree. In mobile's
-// api tree the suppression isn't needed (tsc reports the directive as
-// "Unused"), so it was removed per his own removal-criteria comment. If
-// TS2589 reappears after adding more `oto.*` modules, restore both
-// directives.
+// @ts-expect-error TS2589 — see comment block above.
 export const sendMessage = action({
   args: {
     conversationId: v.id("ai_conversations"),
@@ -134,6 +132,7 @@ export const sendMessage = action({
     // Wins over the (forward-compat) conversation.vehicle_id rule.
     vehicleVin: v.optional(v.string()),
   },
+  // @ts-expect-error TS2589 — same cause as above; documents return shape.
   // `quickReplies` typed loose (v.any()) so the shape can evolve as we add
   // render tools without churning the validator on every change.
   returns: v.object({
@@ -394,7 +393,7 @@ async function callAnthropic({
     body: JSON.stringify({
       model: MODEL,
       max_tokens: MAX_TOKENS,
-      system: STUB_SYSTEM_PROMPT,
+      system: SYSTEM_PROMPT,
       tools,
       messages,
     }),

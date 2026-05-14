@@ -2243,6 +2243,12 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       ? ctx.db
           .query("trim_specs")
           .withIndex("by_trim", (q: any) => q.eq("trim_id", vehicle.trim_id))
+          // Multiple trim_specs rows can exist for the same trim (enrichment
+          // sometimes writes duplicates). Pick the highest-confidence row,
+          // breaking ties by recency, instead of crashing on `.unique()` or
+          // arbitrarily picking with `.first()`. This is the canonical
+          // version from Temur's web work — supersedes the mobile `.first()`
+          // workaround.
           .collect()
           .then((rows: any[]) =>
             rows.length === 0
@@ -8298,6 +8304,12 @@ export const acceptTireQuote = mutation({
     // web side; service_ids drives the rest of the service-aware UI.
     await ctx.db.patch(args.booking_id, {
       shop_id: response.shop_id,
+      // Propagate the mechanic the shop picked at quote time so the
+      // booking lands in the right column on the web schedule and the
+      // "Open vehicle check" action can resolve a mechanic. Only set
+      // when the quote actually carried one — older quotes without
+      // mechanic_id stay "Any mechanic" until a manual reassign.
+      ...(response.mechanic_id ? { mechanic_id: response.mechanic_id } : {}),
       labor_cost: response.labor_cost,
       parts_cost: response.per_tire_price * response.quantity,
       total_cost: response.total,

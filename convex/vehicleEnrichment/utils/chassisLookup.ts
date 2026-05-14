@@ -134,7 +134,7 @@ export async function lookupChassisCode(
         const candidate = match[1].toUpperCase();
         // Filter out common false positives (numbers only, single chars, common words)
         const NOISE = new Set(["THE", "FOR", "AND", "OEM", "AMG", "BMW", "VIN", "ALL", "NOT", "YES"]);
-        if (candidate.length >= 2 && candidate.length <= 6 && !NOISE.has(candidate) && /[A-Z]/.test(candidate) && /\d/.test(candidate)) {
+        if (candidate.length >= 2 && candidate.length <= 6 && !NOISE.has(candidate) && /[A-Z]/.test(candidate)) {
           chassisCode = candidate;
           break;
         }
@@ -144,7 +144,7 @@ export async function lookupChassisCode(
     if (!chassisCode) {
       // Last resort: take the first line, first token
       const firstToken = raw.split(/[\s\n,.:;]+/)[0]?.toUpperCase() ?? "";
-      if (firstToken.length >= 2 && firstToken.length <= 6 && /[A-Z]/.test(firstToken) && /\d/.test(firstToken)) {
+      if (firstToken.length >= 2 && firstToken.length <= 6 && /[A-Z]/.test(firstToken)) {
         chassisCode = firstToken;
       }
     }

@@ -31,6 +31,8 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   // vehicle_at_shop is the sub-state between "confirmed" and "in_progress":
   // the shop has marked the customer's car as physically here but work
   // hasn't started yet. Set by bookings:markVehicleAtShop from web.
+  // `in_progress` also remains a direct target so legacy bookings that
+  // skip the at-shop check-in can still transition cleanly.
   vehicle_at_shop: [
     "in_progress",
     "cancelled",

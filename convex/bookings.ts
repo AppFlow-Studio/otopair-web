@@ -2075,7 +2075,7 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       ? ctx.db
           .query("trim_specs")
           .withIndex("by_trim", (q: any) => q.eq("trim_id", vehicle.trim_id))
-          .unique()
+          .first()
       : null,
     vehicle?.engine_id ? ctx.db.get(vehicle.engine_id) : null,
     vehicle?.transmission_id ? ctx.db.get(vehicle.transmission_id) : null,
@@ -5773,6 +5773,42 @@ export const attachRecommendedService = mutation({
     if (!note) throw new Error("Add a short note explaining the finding.");
     assertFlaggedItemsHaveNotes(booking);
 
+    // Validate proposed slot against blocked time on the mechanic's lane.
+    if (
+      args.scheduledDate &&
+      args.scheduledTime &&
+      booking.mechanic_id
+    ) {
+      const durationMin = Math.round(
+        ((service as any).default_labor_hours ?? 1) * 60,
+      );
+      const blocks = (
+        await getManualBlockedSlotsForShop(
+          ctx,
+          booking.shop_id,
+          args.scheduledDate,
+        )
+      ).filter(
+        (s: any) => String(s.mechanic_id) === String(booking.mechanic_id),
+      );
+      const toMin = (hhmm: string) => {
+        const [h, m] = hhmm.split(":").map(Number);
+        return h * 60 + m;
+      };
+      const ps = toMin(args.scheduledTime);
+      const pe = ps + durationMin;
+      const blocked = (blocks as any[]).some((blk) => {
+        const bs = toMin(blk.start_time);
+        const be = toMin(blk.end_time);
+        return bs < pe && be > ps;
+      });
+      if (blocked) {
+        throw new Error(
+          "Proposed slot overlaps blocked time on the mechanic's lane. Pick a different slot.",
+        );
+      }
+    }
+
     const now = Date.now();
     await ctx.db.patch(booking._id, {
       recommended_service_id: args.serviceId,
@@ -5835,12 +5871,73 @@ export const customerDecideRecommendation = mutation({
     const followUpDate = scheduledForLater
       ? booking.recommended_scheduled_date!
       : booking.scheduled_date;
-    const followUpStart = scheduledForLater
+
+    const toMinutes = (hhmm: string) => {
+      const [h, m] = hhmm.split(":").map(Number);
+      return h * 60 + m;
+    };
+
+    // Fetch blocks for the follow-up's date on this mechanic's lane (skip if no
+    // mechanic assigned — manual blocks always have a mechanic_id).
+    const blocksForDay = booking.mechanic_id
+      ? (
+          await getManualBlockedSlotsForShop(
+            ctx,
+            booking.shop_id,
+            followUpDate,
+          )
+        ).filter(
+          (s: any) =>
+            String(s.mechanic_id) === String(booking.mechanic_id),
+        )
+      : [];
+
+    // Advance a candidate start past any blocked windows it would overlap.
+    const advancePastBlocks = (startHHMM: string, durationMin: number) => {
+      let cursor = toMinutes(startHHMM);
+      let advanced = true;
+      while (advanced) {
+        advanced = false;
+        for (const blk of blocksForDay as any[]) {
+          const bs = toMinutes(blk.start_time);
+          const be = toMinutes(blk.end_time);
+          if (bs < cursor + durationMin && be > cursor) {
+            cursor = be;
+            advanced = true;
+          }
+        }
+      }
+      return addMinutesToHHMM("00:00", cursor);
+    };
+
+    const rawFollowUpStart = scheduledForLater
       ? booking.recommended_scheduled_time!
       : getBookingEndTime(
           booking.scheduled_time,
           booking.estimated_labor_minutes,
         );
+
+    // For schedule-for-later, hard-reject if the proposed slot overlaps a
+    // mechanic break / blocked window. For right-after, silently advance past
+    // any blocks so the follow-up lands on the first clear gap.
+    if (scheduledForLater) {
+      const proposalStart = toMinutes(rawFollowUpStart);
+      const proposalEnd = proposalStart + followUpMinutes;
+      const blocked = (blocksForDay as any[]).some((blk) => {
+        const bs = toMinutes(blk.start_time);
+        const be = toMinutes(blk.end_time);
+        return bs < proposalEnd && be > proposalStart;
+      });
+      if (blocked) {
+        throw new Error(
+          "Proposed slot overlaps blocked time on the mechanic's lane. Pick a different slot.",
+        );
+      }
+    }
+
+    const followUpStart = scheduledForLater
+      ? rawFollowUpStart
+      : advancePastBlocks(rawFollowUpStart, followUpMinutes);
 
     const followUpId = await ctx.db.insert("bookings", {
       user_id: booking.user_id,
@@ -5864,12 +5961,9 @@ export const customerDecideRecommendation = mutation({
       updated_at: now,
     });
 
-    // Right-after path: cascade-push later bookings on the same mechanic's lane
+    // Right-after path: cascade-push later bookings on the same mechanic's lane,
+    // hopping over any blocked windows / breaks.
     if (!scheduledForLater && booking.mechanic_id) {
-      const toMinutes = (hhmm: string) => {
-        const [h, m] = hhmm.split(":").map(Number);
-        return h * 60 + m;
-      };
       const shopBookings = await ctx.db
         .query("bookings")
         .withIndex("by_shop_id", (q: any) =>
@@ -5895,12 +5989,14 @@ export const customerDecideRecommendation = mutation({
 
       let cursor = addMinutesToHHMM(followUpStart, followUpMinutes);
       for (const b of laneBookings) {
-        if (toMinutes(b.scheduled_time) >= toMinutes(cursor)) break;
+        const duration = b.estimated_labor_minutes ?? 60;
+        const safeCursor = advancePastBlocks(cursor, duration);
+        if (toMinutes(b.scheduled_time) >= toMinutes(safeCursor)) break;
         await ctx.db.patch(b._id, {
-          scheduled_time: cursor,
+          scheduled_time: safeCursor,
           updated_at: now,
         });
-        cursor = addMinutesToHHMM(cursor, b.estimated_labor_minutes ?? 60);
+        cursor = addMinutesToHHMM(safeCursor, duration);
       }
     }
 
@@ -5908,7 +6004,6 @@ export const customerDecideRecommendation = mutation({
       recommendation_state: "confirmed",
       recommendation_decided_at_ms: now,
       status: "completed",
-      completed_at_ms: now,
       updated_at: now,
     });
 
@@ -8124,5 +8219,71 @@ export const listOpenTireQuoteRequestsForShop = query({
         };
       }),
     );
+  },
+});
+
+/**
+ * Customer-side fetch for the Pending Customer Acceptance overlay.
+ *
+ * Returns the raw `previous_*` and `schedule_change_*` fields the
+ * decision UI needs to render the before/after comparison. Auth-gated
+ * to the booking's owner. Joins shop name, current + previous mechanic
+ * names, and service names.
+ */
+export const getBookingByIdForCustomer = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    if (booking.user_id !== user._id) return null;
+
+    const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const currentMechanic = booking.mechanic_id
+      ? await ctx.db.get(booking.mechanic_id)
+      : null;
+    const previousMechanic = booking.previous_mechanic_id
+      ? await ctx.db.get(booking.previous_mechanic_id)
+      : null;
+
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+
+    const vehicle = booking.vin
+      ? await ctx.db
+          .query("vehicles")
+          .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
+          .first()
+      : null;
+    const meta = (vehicle?.metadata as
+      | { make?: string; model?: string; trim?: string }
+      | undefined) ?? undefined;
+    const vehicleDisplay = vehicle
+      ? [vehicle.year, meta?.make, meta?.model].filter(Boolean).join(" ") || null
+      : null;
+
+    const formatMechanic = (m: any) =>
+      m ? `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim() : null;
+
+    return {
+      id: booking._id,
+      status: booking.status,
+      scheduledDate: booking.scheduled_date,
+      scheduledTime: booking.scheduled_time,
+      previousScheduledDate: booking.previous_scheduled_date ?? null,
+      previousScheduledTime: booking.previous_scheduled_time ?? null,
+      previousStatus: booking.previous_status ?? null,
+      rescheduleProposedAt: booking.reschedule_proposed_at ?? null,
+      scheduleChangeMode: booking.schedule_change_mode ?? null,
+      customerCanRestoreOriginal: booking.customer_can_restore_original ?? null,
+      shopId: booking.shop_id ?? null,
+      shopName: (shop as any)?.name ?? null,
+      mechanicId: booking.mechanic_id ?? null,
+      mechanicName: formatMechanic(currentMechanic),
+      previousMechanicId: booking.previous_mechanic_id ?? null,
+      previousMechanicName: formatMechanic(previousMechanic),
+      serviceNames,
+      vehicleDisplay,
+      totalCost: booking.total_cost,
+    };
   },
 });

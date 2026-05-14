@@ -742,7 +742,7 @@ function PostJobSurveyDialogBody({
   }
 
   const showOneMore =
-    answeredCount === 3 || answeredCount === 6 || answeredCount === 9;
+    answeredCount === 6 || answeredCount === 9;
   const skipMoreVisible = answeredCount >= 5;
   // Required steps that cannot be skipped: mileage, parts used, parts accuracy,
   // vehicle passport updates, and flag-for-review. Everything else is optional.
@@ -1670,9 +1670,23 @@ function PartsStep({
                           <span className="text-muted-foreground">$</span>
                           <input
                             value={part.cost}
-                            onChange={(event) =>
-                              updatePart(index, { cost: event.target.value })
-                            }
+                            onChange={(event) => {
+                              const raw = event.target.value;
+                              // Allow empty, digits, optional single dot, max 2 decimals.
+                              if (raw === "" || /^\d*\.?\d{0,2}$/.test(raw)) {
+                                updatePart(index, { cost: raw });
+                              }
+                            }}
+                            onBlur={(event) => {
+                              const raw = event.target.value.trim();
+                              if (raw === "" || raw === ".") return;
+                              const n = Number(raw);
+                              if (Number.isFinite(n)) {
+                                updatePart(index, {
+                                  cost: (Math.round(n * 100) / 100).toFixed(2),
+                                });
+                              }
+                            }}
                             inputMode="decimal"
                             placeholder={avgPrice > 0 ? avgPrice.toFixed(2) : "0.00"}
                             title={

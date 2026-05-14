@@ -93,10 +93,11 @@ export async function summarizePartPrices(
   }
   if (prices.length === 0) return empty;
 
+  const round2 = (n: number) => Math.round(n * 100) / 100;
   const keepIdx = nonOutlierIndices(prices);
   const kept = keepIdx.map((i) => prices[i]);
   const sum = kept.reduce((acc, v) => acc + v, 0);
-  const average = sum / kept.length;
+  const average = round2(sum / kept.length);
 
   // Map kept indices back to original rows so we can report sources used.
   // The two arrays are aligned because we built `prices` in row order and
@@ -118,11 +119,11 @@ export async function summarizePartPrices(
     sample_size: prices.length,
     used_sample_size: kept.length,
     average,
-    median: median(prices),
-    min: Math.min(...prices),
-    max: Math.max(...prices),
+    median: round2(median(prices)),
+    min: round2(Math.min(...prices)),
+    max: round2(Math.max(...prices)),
     outliers_removed: prices.length - kept.length,
-    sources_used,
+    sources_used: sources_used.map((s) => ({ ...s, price: round2(s.price) })),
   };
 }
 

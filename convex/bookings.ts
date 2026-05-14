@@ -81,6 +81,7 @@ import {
   vehiclePassportUpdateValidator,
 } from "./lib/vehicle_passports";
 import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
+import { insertSnapshotImpl } from "./part_snapshots";
 import {
   templateForSystem,
   type DiagnosticSystem,
@@ -1019,7 +1020,15 @@ export const markVehicleAtShop = mutation({
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
-    if (booking.status === "vehicle_at_shop") {
+    // Idempotent: if the booking is already at-shop, in-progress, or completed,
+    // the vehicle has by definition arrived — treat as a no-op so flows that
+    // skip vehicle_at_shop (e.g. straight confirmed -> in_progress when no
+    // parts are needed) don't crash on a stale "mark arrived" call.
+    if (
+      booking.status === "vehicle_at_shop" ||
+      booking.status === "in_progress" ||
+      booking.status === "completed"
+    ) {
       return { success: true, oldStatus: booking.status, newStatus: booking.status };
     }
     if (booking.status !== "confirmed") {
@@ -1704,25 +1713,55 @@ async function getPrimaryAuthorizedShop(ctx: any, userId: any) {
 async function resolveVehicleLabel(
   ctx: any,
   vin: string
-): Promise<{ full: string; short: string }> {
+): Promise<{
+  full: string;
+  short: string;
+  spec_label: string | null;
+  chassis_label: string | null;
+}> {
   const vehicle = await ctx.db
     .query("vehicles")
     .withIndex("by_vin", (q: any) => q.eq("vin", vin))
     .first();
 
-  if (!vehicle) return { full: vin, short: vin };
+  if (!vehicle)
+    return { full: vin, short: vin, spec_label: null, chassis_label: null };
 
   let makeName = "";
   let modelName = "";
+  let trimName = "";
+  let yearValue: number | undefined =
+    typeof vehicle.year === "number" ? vehicle.year : undefined;
+  let chassisCode = "";
+  let engineIdForLookup: any = vehicle.engine_id ?? null;
 
-  if (vehicle.trim_id) {
+  const config = vehicle.vehicle_config_id
+    ? await ctx.db.get(vehicle.vehicle_config_id)
+    : null;
+
+  if (config) {
+    if (typeof config.year === "number") yearValue = config.year;
+    if (typeof config.trim_name === "string") trimName = config.trim_name;
+    if (typeof config.chassis_code === "string")
+      chassisCode = config.chassis_code.trim();
+    if (!engineIdForLookup && config.engine_id) engineIdForLookup = config.engine_id;
+    const [make, model] = await Promise.all([
+      config.make_id ? ctx.db.get(config.make_id) : null,
+      config.model_id ? ctx.db.get(config.model_id) : null,
+    ]);
+    if (make && typeof (make as any).name === "string") makeName = (make as any).name;
+    if (model && typeof (model as any).name === "string") modelName = (model as any).name;
+  }
+
+  if ((!makeName || !modelName || !trimName) && vehicle.trim_id) {
     const trim = await ctx.db.get(vehicle.trim_id);
     if (trim) {
+      if (!trimName) trimName = trim.name ?? "";
       const model = await ctx.db.get(trim.model_id);
       if (model) {
-        modelName = model.name;
+        if (!modelName) modelName = model.name;
         const make = await ctx.db.get(model.make_id);
-        if (make) makeName = make.name;
+        if (make && !makeName) makeName = make.name;
       }
     }
   }
@@ -1730,10 +1769,39 @@ async function resolveVehicleLabel(
   if (!makeName && vehicle.metadata?.make) makeName = String(vehicle.metadata.make);
   if (!modelName && vehicle.metadata?.model) modelName = String(vehicle.metadata.model);
 
-  const full = [vehicle.year, makeName, modelName].filter(Boolean).join(" ") || vin;
+  let engineLabel = "";
+  if (engineIdForLookup) {
+    const engine = await ctx.db.get(engineIdForLookup);
+    if (engine) {
+      const displacement =
+        typeof engine.displacement_l === "number"
+          ? `${engine.displacement_l}L`
+          : typeof engine.displacement_liters === "number"
+            ? `${engine.displacement_liters}L`
+            : typeof engine.displacement_liters === "string" &&
+                engine.displacement_liters.trim() !== ""
+              ? `${engine.displacement_liters}L`
+              : "";
+      const code =
+        typeof engine.engine_code === "string" && engine.engine_code.trim() !== ""
+          ? engine.engine_code.trim()
+          : "";
+      engineLabel = [displacement, code].filter(Boolean).join(" ");
+    }
+  }
+
+  const full = [yearValue, makeName, modelName].filter(Boolean).join(" ") || vin;
   const makeAbbr = makeName ? `${makeName[0]}.` : "";
-  const short = [vehicle.year, makeAbbr, modelName].filter(Boolean).join(" ") || vin;
-  return { full, short };
+  const short = [yearValue, makeAbbr, modelName].filter(Boolean).join(" ") || vin;
+
+  const specSegments: string[] = [];
+  if (engineLabel) specSegments.push(engineLabel);
+  if (trimName) specSegments.push(`${trimName} trim`);
+  if (chassisCode) specSegments.push(`${chassisCode} chassis`);
+  const spec_label = specSegments.length > 0 ? specSegments.join(" · ") : null;
+  const chassis_label = chassisCode ? `${chassisCode} chassis` : null;
+
+  return { full, short, spec_label, chassis_label };
 }
 
 async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
@@ -1802,25 +1870,125 @@ function normalizePartsUsed(parts: Array<{
   brand?: string | null;
   oem_number: string;
   cost: number;
+  quantity?: number | null;
+  supplied_by?: string | null;
+  part_tier?: string | null;
 }>) {
   return parts
-    .map((part) => ({
-      part_name: part.part_name.trim(),
-      brand: hasText(part.brand) ? part.brand.trim() : null,
-      oem_number: part.oem_number.trim(),
-      cost: Number.isFinite(part.cost) ? Number(part.cost) : 0,
-    }))
+    .map((part) => {
+      const suppliedBy = part.supplied_by === "customer" ? "customer" : "shop";
+      const rawCost = Number.isFinite(part.cost) ? Number(part.cost) : 0;
+      // Customer-supplied parts always log $0 — the customer brought it; the
+      // shop didn't charge for the part.
+      const cost = suppliedBy === "customer" ? 0 : rawCost;
+      const quantity =
+        typeof part.quantity === "number" && Number.isFinite(part.quantity)
+          ? Math.max(1, Math.round(part.quantity))
+          : 1;
+      return {
+        part_name: part.part_name.trim(),
+        brand: hasText(part.brand) ? (part.brand as string).trim() : null,
+        oem_number: part.oem_number.trim(),
+        cost,
+        quantity,
+        supplied_by: suppliedBy,
+        part_tier: hasText(part.part_tier) ? (part.part_tier as string).trim() : "oem",
+      };
+    })
     .filter(
       (part) =>
         hasText(part.part_name) ||
         hasText(part.oem_number) ||
         hasText(part.brand) ||
-        part.cost > 0
+        part.cost > 0 ||
+        part.supplied_by === "customer"
     );
 }
 
 function sumPartsCost(parts: Array<{ cost: number }>) {
   return parts.reduce((sum, part) => sum + (Number.isFinite(part.cost) ? part.cost : 0), 0);
+}
+
+/**
+ * Writes one part_snapshots row per normalized parts_used entry. Runs after
+ * job_actuals is persisted so we can link snapshots back to the job_actual.
+ * Resolves the vehicle FK chain (vehicle, vehicle_config, engine, chassis,
+ * trim) once and reuses it for every part on this job.
+ *
+ * Phase 1: dual-write. The embedded job_actuals.parts_used array stays as
+ * the source of truth for booking-detail reads; snapshots are the source of
+ * truth for aggregation queries.
+ *
+ * Current UI surfaces all parts as supplied_by="shop" part_tier="oem" —
+ * Otopair currently supplies OEM parts only. A future UI revision will let
+ * the mechanic flag customer-supplied parts per-row.
+ */
+async function recordPartSnapshotsForBooking(
+  ctx: any,
+  {
+    booking,
+    jobActualId,
+    mechanicId,
+    parts,
+    now,
+  }: {
+    booking: any;
+    jobActualId: Id<"job_actuals">;
+    mechanicId: Id<"users">;
+    parts: Array<{
+      part_name: string;
+      brand: string | null;
+      oem_number: string;
+      cost: number;
+      quantity?: number;
+      supplied_by?: string;
+      part_tier?: string;
+    }>;
+    now: number;
+  },
+) {
+  if (parts.length === 0) return;
+
+  const canonicalVin = toCanonicalVin(booking.vin);
+  const vehicle = await ctx.db
+    .query("vehicles")
+    .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+    .unique();
+  if (!vehicle) return;
+
+  const serviceId = booking.service_ids?.[0] as Id<"services"> | undefined;
+  if (!serviceId) return;
+
+  for (const part of parts) {
+    if (!hasText(part.part_name) && !hasText(part.oem_number)) continue;
+
+    await insertSnapshotImpl(ctx, {
+      booking_id: booking._id,
+      job_actual_id: jobActualId,
+      shop_id: booking.shop_id,
+      mechanic_id: mechanicId,
+
+      vehicle_id: vehicle._id,
+      vehicle_config_id: vehicle.vehicle_config_id ?? undefined,
+      engine_id: vehicle.engine_id ?? undefined,
+      chassis_id: vehicle.chassis_id ?? undefined,
+      trim_id: vehicle.trim_id ?? undefined,
+
+      service_id: serviceId,
+
+      part_name: part.part_name || part.oem_number,
+      oem_part_number: hasText(part.oem_number) ? part.oem_number : undefined,
+      brand: hasText(part.brand) ? (part.brand as string) : undefined,
+      part_tier: part.part_tier ?? "oem",
+
+      supplied_by: part.supplied_by === "customer" ? "customer" : "shop",
+      quantity: part.quantity ?? 1,
+      unit_cost: part.cost,
+      currency: "USD",
+
+      recorded_at: now,
+    });
+  }
 }
 
 function pickPreferredOwner(owners: any[]) {
@@ -2075,7 +2243,23 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       ? ctx.db
           .query("trim_specs")
           .withIndex("by_trim", (q: any) => q.eq("trim_id", vehicle.trim_id))
-          .first()
+          // Multiple trim_specs rows can exist for the same trim (enrichment
+          // sometimes writes duplicates). Pick the highest-confidence row,
+          // breaking ties by recency, instead of crashing on `.unique()` or
+          // arbitrarily picking with `.first()`. This is the canonical
+          // version from Temur's web work — supersedes the mobile `.first()`
+          // workaround.
+          .collect()
+          .then((rows: any[]) =>
+            rows.length === 0
+              ? null
+              : rows.reduce((best, row) => {
+                  const bc = best.confidence_score ?? 0;
+                  const rc = row.confidence_score ?? 0;
+                  if (rc !== bc) return rc > bc ? row : best;
+                  return (row.created_at ?? 0) > (best.created_at ?? 0) ? row : best;
+                })
+          )
       : null,
     vehicle?.engine_id ? ctx.db.get(vehicle.engine_id) : null,
     vehicle?.transmission_id ? ctx.db.get(vehicle.transmission_id) : null,
@@ -2295,6 +2479,8 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
     vin: canonicalVin,
     vehicle_label: vehicleLabels.full,
     vehicle_short_label: vehicleLabels.short,
+    vehicle_spec_label: vehicleLabels.spec_label,
+    chassis_label: vehicleLabels.chassis_label,
     service_name: service?.name ?? (await resolveServiceNames(ctx, booking.service_ids)).join(", "),
     service_slug: service?.slug ?? null,
     requires_parts: serviceRequiresParts(service),
@@ -5464,6 +5650,14 @@ export const completeWithPostjob = mutation({
       logged_at_ms: now,
     });
 
+    await recordPartSnapshotsForBooking(ctx, {
+      booking,
+      jobActualId: jobActual._id,
+      mechanicId: user._id,
+      parts: normalizedParts,
+      now,
+    });
+
     await upsertVehiclePassportRecord(ctx, {
       vin: booking.vin,
       patch: buildPassportPatchFromPostjob(args.postjob),
@@ -6618,7 +6812,7 @@ async function proposeRescheduleImpl(
       await releaseBookingSlot(ctx, booking.time_slot_id);
     }
 
-    if (customerCanRestoreOriginal) {
+    if (customerCanRestoreOriginal && originalMechanicId) {
       await reservePendingCustomerSlot(
         ctx,
         booking.shop_id,
@@ -6627,7 +6821,7 @@ async function proposeRescheduleImpl(
         originalTime,
         durationMinutes
       );
-    } else {
+    } else if (originalMechanicId) {
       const originalSlot = await findExactSlot(
         ctx,
         booking.shop_id,
@@ -6640,7 +6834,7 @@ async function proposeRescheduleImpl(
         await releaseBookingSlot(ctx, originalSlot._id);
       }
     }
-  } else if (customerCanRestoreOriginal) {
+  } else if (customerCanRestoreOriginal && currentMechanicId) {
     await reservePendingCustomerSlot(
       ctx,
       booking.shop_id,
@@ -8223,7 +8417,7 @@ export const listOpenTireQuoteRequestsForShop = query({
 });
 
 /**
- * Customer-side fetch for the Pending Customer Acceptance overlay.
+ * Customer-side fetch for the mobile Pending Customer Acceptance overlay.
  *
  * Returns the raw `previous_*` and `schedule_change_*` fields the
  * decision UI needs to render the before/after comparison. Auth-gated

@@ -606,6 +606,31 @@ export default function SchedulePage() {
     setRescheduleError("");
   }, []);
 
+  /**
+   * Focus the day-lane on a booking so the user can drag-reschedule it
+   * within the live schedule (respecting bookings, blocked time, and shop hours).
+   * Used by the manual-scheduling-review alert and the "Reschedule instead"
+   * action in the cancel-booking dialog.
+   */
+  const focusBookingForReschedule = useCallback((bookingId: string) => {
+    const target = (bookingsRef.current ?? []).find(
+      (b) => String(b._id) === String(bookingId),
+    );
+    if (!target) {
+      setToast({ msg: "We couldn't find that booking to reschedule.", key: Date.now() });
+      return;
+    }
+    const [y, mo, d] = target.scheduledDate.split("-").map(Number);
+    if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+    setCurrentView("day");
+    setMechanicFilter("all");
+    setSelectedBookingId(bookingId as Id<"bookings">);
+    setToast({
+      msg: "Drag the booking to a new time on the schedule, or pick a slot in the panel.",
+      key: Date.now(),
+    });
+  }, []);
+
   async function handleConfirmReschedule() {
     if (!rescheduleProposal) return;
     setIsRescheduling(true);
@@ -1486,6 +1511,15 @@ export default function SchedulePage() {
                     </button>
                   ) : null}
                 </div>
+                {alert.bookingId ? (
+                  <button
+                    type="button"
+                    onClick={() => focusBookingForReschedule(String(alert.bookingId))}
+                    className="shrink-0 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                  >
+                    Reschedule
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={async () => {
@@ -2096,6 +2130,23 @@ export default function SchedulePage() {
                 blockedSlots: blockedSlots ?? [],
               }}
               onRequestRescheduleConfirmation={handleProposeReschedule}
+              onRequestReschedule={
+                selectedBookingId
+                  ? () => focusBookingForReschedule(String(selectedBookingId))
+                  : undefined
+              }
+              onRequestNewBookingAfterCancel={({ mechanicId, scheduledDate }) => {
+                const [y, mo, d] = scheduledDate.split("-").map(Number);
+                if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+                setCurrentView("day");
+                setSelectedBookingId(null);
+                setCreateBookingDrawer({
+                  date: scheduledDate,
+                  time: "09:00",
+                  mechanicId: mechanicId ?? "",
+                  durationMinutes: 60,
+                });
+              }}
               onClose={() => setSelectedBookingId(null)}
               onSuccess={(msg) => setToast({ msg, key: Date.now() })}
               showBookingsLink

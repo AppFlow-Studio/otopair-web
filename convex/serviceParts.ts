@@ -141,6 +141,75 @@ export const getPartsForService = query({
   },
 });
 
+// ─── Booking-facing: OEM parts for each service on a booking ───────────────
+
+export type OemPartsForService = {
+  serviceId: Id<"services">;
+  serviceName: string;
+  serviceSlug: string;
+  parts: ResolvedFitment[];
+};
+
+export const getOemPartsForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args): Promise<OemPartsForService[]> => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return [];
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+      .first();
+    if (!vehicle?.vehicle_config_id) return [];
+
+    const configId = vehicle.vehicle_config_id;
+    const out: OemPartsForService[] = [];
+
+    for (const serviceId of booking.service_ids ?? []) {
+      const service = await ctx.db.get(serviceId);
+      if (!service?.slug) continue;
+
+      const fitments = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", configId).eq("service_type", service.slug),
+        )
+        .collect();
+
+      // Drop package-conditional fitments — pre-job is informational; we don't
+      // gate on owner package answers here, just show the universal base parts.
+      const base = fitments.filter((f) => f.package_code == null);
+
+      const resolved: ResolvedFitment[] = [];
+      for (const f of base) {
+        const part = await ctx.db.get(f.part_id);
+        if (!part) continue;
+        resolved.push({
+          fitment_id: f._id,
+          part_id: f.part_id,
+          oem_part_number: part.oem_part_number,
+          name: part.name,
+          category: part.category,
+          subcategory: part.subcategory,
+          position: f.position,
+          package_code: f.package_code,
+          quantity_needed: f.quantity_needed,
+          confidence: f.confidence,
+        });
+      }
+
+      out.push({
+        serviceId,
+        serviceName: service.name,
+        serviceSlug: service.slug,
+        parts: resolved,
+      });
+    }
+
+    return out;
+  },
+});
+
 // ─── Helper query: pending questions across ALL services for an owner ──────
 // Useful for proactive onboarding ("you'll save time later if you answer these now")
 // or for the cars screen to show a "questions remain" indicator.

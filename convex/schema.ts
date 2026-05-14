@@ -328,9 +328,17 @@ export default defineSchema({
   // ===== PARTS & FITMENTS =====
 
   // [W] 15 fields (A/D had 5). Replaces deprecated *_part_fitments tables.
+  // Canonical parts catalog. Conceptually "parts_catalog" — table name kept as
+  // oem_parts for backwards compatibility with existing data and call sites.
+  // Otopair currently supplies OEM parts only; part_tier exists for forward
+  // compatibility but new rows should default to "oem".
   oem_parts: defineTable({
     oem_part_number: v.string(),
     name: v.string(),
+    brand: v.optional(v.string()),
+    // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
+    // Legacy rows are implicitly OEM; new rows should set this explicitly.
+    part_tier: v.optional(v.string()),
     category: v.optional(v.string()),
     notes: v.optional(v.string()),
     created_at: v.optional(v.number()),
@@ -348,7 +356,8 @@ export default defineSchema({
     .index("by_part_number", ["oem_part_number"])
     .index("by_category", ["category"])
     .index("by_subcategory", ["subcategory"])
-    .index("by_make_category", ["make_id", "category"]),
+    .index("by_make_category", ["make_id", "category"])
+    .index("by_brand", ["brand"]),
 
   // [U-W] Unified part-to-vehicle-config fitment
   part_fitments: defineTable({
@@ -386,6 +395,94 @@ export default defineSchema({
   })
     .index("by_part", ["part_id"])
     .index("by_part_source", ["part_id", "source_domain"]),
+
+  // Materialized view of "which part does this shop reach for on this
+  // service+vehicle_config?" Built from observation: every shop-supplied
+  // part_snapshot bumps use_count via recordPartUsage. Once a (shop, service,
+  // config, part) tuple crosses the default threshold (3), is_default flips to
+  // true and any prior default for the same (shop, service, config) is reset.
+  // Mechanics never set this up — it accretes from usage.
+  shop_part_preferences: defineTable({
+    shop_id: v.id("shops"),
+    service_id: v.id("services"),
+    vehicle_config_id: v.id("vehicle_configs"),
+    part_id: v.id("oem_parts"),
+    use_count: v.number(),
+    last_used_at: v.number(),
+    is_default: v.boolean(),
+  })
+    .index("by_shop_service_config", ["shop_id", "service_id", "vehicle_config_id"])
+    .index("by_shop_service", ["shop_id", "service_id"])
+    .index("by_part", ["part_id"]),
+
+  // Append-only price snapshots. Every part used on every closed job lands
+  // here. The core mental model: a snapshot is a sensor reading — "on this
+  // date, this shop used this part on this vehicle for this service at this
+  // cost." Aggregations across thousands of these power eventual quote
+  // confidence intervals.
+  //
+  // Strict append-only with one exception: superseded_by_id can be patched
+  // when a correction snapshot lands (corrects_snapshot_id points back).
+  // Aggregations filter where superseded_by_id is undefined.
+  part_snapshots: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.optional(v.id("job_actuals")),
+    shop_id: v.id("shops"),
+    mechanic_id: v.id("users"),
+
+    // Vehicle context — denormalized so aggregations don't need joins.
+    vehicle_id: v.id("vehicles"),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    engine_id: v.optional(v.id("engines")),
+    chassis_id: v.optional(v.id("chassis_variants")),
+    trim_id: v.optional(v.id("trims")),
+
+    service_id: v.id("services"),
+
+    // Part identity. part_id is null when the mechanic typed a free-form part
+    // not yet in oem_parts; admin promotes frequent free-form entries into the
+    // catalog (flag_reason="missing_part_id" on those rows).
+    part_id: v.optional(v.id("oem_parts")),
+    part_name: v.string(),
+    oem_part_number: v.optional(v.string()),
+    brand: v.optional(v.string()),
+    // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
+    // Otopair-supplied parts default to "oem".
+    part_tier: v.string(),
+
+    // "shop" — Otopair-fulfilled. "customer" — driver brought their own part;
+    // unit_cost forced to 0 at the mutation, excluded from price aggregates
+    // and from shop_part_preferences (it's the customer's choice, not the
+    // shop's preference).
+    supplied_by: v.string(),
+    quantity: v.number(),
+    unit_cost: v.number(),
+    total_cost: v.number(),
+    currency: v.optional(v.string()),
+
+    // Reasonableness pipeline — never blocks. cost_outlier_low/high set when
+    // unit_cost is <50% or >200% of recent median for the same part on the
+    // same vehicle_config (min sample 5). missing_part_id set when the
+    // catalog has no match for the entered part_number/name.
+    flagged_for_review: v.optional(v.boolean()),
+    flag_reason: v.optional(v.string()),
+
+    // Two-pass correction model. Corrections are NEW rows pointing back via
+    // corrects_snapshot_id; the original gets its superseded_by_id patched.
+    corrects_snapshot_id: v.optional(v.id("part_snapshots")),
+    superseded_by_id: v.optional(v.id("part_snapshots")),
+
+    recorded_at: v.number(),
+    notes: v.optional(v.string()),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_shop_service", ["shop_id", "service_id"])
+    .index("by_shop_service_config", ["shop_id", "service_id", "vehicle_config_id"])
+    .index("by_service_config", ["service_id", "vehicle_config_id"])
+    .index("by_service_engine", ["service_id", "engine_id"])
+    .index("by_part", ["part_id"])
+    .index("by_flagged", ["flagged_for_review"])
+    .index("by_recorded_at", ["recorded_at"]),
 
   // ===== ENRICHMENT PIPELINE (all Waleed unique) =====
 

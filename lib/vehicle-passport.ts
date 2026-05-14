@@ -104,6 +104,8 @@ export type VehiclePassportData = {
   vin: string;
   vehicle_label: string;
   vehicle_short_label: string;
+  vehicle_spec_label?: string | null;
+  chassis_label?: string | null;
   service_name: string;
   service_slug: string | null;
   requires_parts: boolean;
@@ -134,6 +136,14 @@ export type JobActualPartPayload = {
   brand?: string | null;
   oem_number: string;
   cost: number;
+  // Whole-unit count of this part used on this job. Defaults to 1 server-side.
+  quantity?: number;
+  // "shop" — Otopair-fulfilled. "customer" — driver brought their own part;
+  // cost is $0, snapshot is logged but excluded from shop preferences.
+  supplied_by?: "shop" | "customer";
+  // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
+  // Otopair currently supplies OEM only; defaults to "oem".
+  part_tier?: string;
 };
 
 export type PreJobSurveyPayload = {
@@ -446,6 +456,10 @@ export function getVehicleUpdatePrompts(
 export function sumJobActualParts(parts: JobActualPartPayload[]) {
   return parts.reduce((sum, part) => {
     const cost = Number.isFinite(part.cost) ? part.cost : 0;
-    return sum + cost;
+    const qty =
+      typeof part.quantity === "number" && Number.isFinite(part.quantity) && part.quantity > 0
+        ? part.quantity
+        : 1;
+    return sum + cost * qty;
   }, 0);
 }

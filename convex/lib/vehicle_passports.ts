@@ -128,6 +128,14 @@ export const postjobPartValidator = v.object({
   brand: v.optional(nullableStringValidator),
   oem_number: v.string(),
   cost: v.float64(),
+  // Whole-unit count of this part used on this job. Defaults to 1.
+  quantity: v.optional(v.float64()),
+  // "shop" (default) or "customer" — customer-supplied parts are logged with
+  // cost=0 and skipped by shop_part_preferences in the snapshot path.
+  supplied_by: v.optional(v.string()),
+  // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
+  // Otopair currently supplies OEM only; defaults to "oem" downstream.
+  part_tier: v.optional(v.string()),
 });
 
 export const postjobPhotoValidator = v.object({

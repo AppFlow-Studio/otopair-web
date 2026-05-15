@@ -191,6 +191,19 @@ export type TimeVarianceReason =
   | "well_prepped"
   | "other";
 
+export type RecommendationUrgency =
+  | "next_visit"
+  | "within_3_months"
+  | "soon";
+
+export type JobRecommendationInput = {
+  recommended_service_id: string | null;
+  freeform_service_name: string | null;
+  urgency: RecommendationUrgency;
+  reason: string | null;
+  visible_to_driver: boolean;
+};
+
 export type PostjobPhotoInput = {
   storage_id: string;
   caption?: string | null;
@@ -215,6 +228,7 @@ export type PostJobSurveyPayload = {
   time_variance?: TimeVariance | null;
   time_variance_reason?: TimeVarianceReason | null;
   time_variance_note?: string | null;
+  recommendations?: JobRecommendationInput[];
 };
 
 type VehicleUpdatePrompt = {

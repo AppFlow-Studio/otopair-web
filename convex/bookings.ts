@@ -82,6 +82,7 @@ import {
 } from "./lib/vehicle_passports";
 import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
 import { insertSnapshotImpl } from "./part_snapshots";
+import { submitRecommendationsForBooking } from "./jobRecommendations";
 import {
   templateForSystem,
   type DiagnosticSystem,
@@ -5664,6 +5665,20 @@ export const completeWithPostjob = mutation({
       now,
       markConfirmed: true,
     });
+
+    if (
+      booking.mechanic_id &&
+      args.postjob.recommendations &&
+      args.postjob.recommendations.length > 0
+    ) {
+      await submitRecommendationsForBooking(ctx, {
+        booking,
+        jobActualId: jobActual._id,
+        mechanicId: booking.mechanic_id,
+        recommendations: args.postjob.recommendations,
+        now,
+      });
+    }
 
     if (booking.status !== "completed") {
       await applyBookingStatusTransition(ctx, {

@@ -1963,6 +1963,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
         <PreJobSurveyDialog
           open={showPrejobDialog}
+          bookingId={job?._id ?? null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job

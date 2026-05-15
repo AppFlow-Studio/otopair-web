@@ -10,6 +10,8 @@ import {
   type ReactNode,
 } from "react";
 import { Check, Loader2 } from "lucide-react";
+import { useMutation, useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import {
@@ -451,6 +453,7 @@ export type PreJobOemPartsForService = {
 
 export default function PreJobSurveyDialog({
   open,
+  bookingId,
   bookingLabel,
   bookingSubLabel,
   bookingServices = [],
@@ -462,6 +465,7 @@ export default function PreJobSurveyDialog({
   onSubmit,
 }: {
   open: boolean;
+  bookingId?: string | null;
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
@@ -476,6 +480,7 @@ export default function PreJobSurveyDialog({
     <PreJobSurveyDialogBody
       key={`${passportData?.vin ?? "no-vin"}-${bookingLabel}-${bookingSubLabel}`}
       open={open}
+      bookingId={bookingId ?? null}
       bookingLabel={bookingLabel}
       bookingSubLabel={bookingSubLabel}
       bookingServices={bookingServices}
@@ -491,6 +496,7 @@ export default function PreJobSurveyDialog({
 
 function PreJobSurveyDialogBody({
   open,
+  bookingId,
   bookingLabel,
   bookingSubLabel,
   bookingServices,
@@ -502,6 +508,7 @@ function PreJobSurveyDialogBody({
   onSubmit,
 }: {
   open: boolean;
+  bookingId: string | null;
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices: string[];
@@ -1214,6 +1221,13 @@ function PreJobSurveyDialogBody({
             specLabel={passportData?.vehicle_spec_label ?? null}
           />
 
+          {bookingId && passportData?.vin ? (
+            <PriorRecommendationsCard
+              bookingId={bookingId}
+              vin={passportData.vin}
+            />
+          ) : null}
+
           {oemPartsByService && oemPartsByService.length > 0 ? (
             <section className="rounded-lg border border-primary/15 bg-card p-3.5">
               <div className="mb-2 flex items-baseline justify-between gap-2">
@@ -1860,6 +1874,156 @@ function VehicleSummaryCard({
         <p className="mt-0.5 truncate text-[10px] text-muted-foreground">{subLabel}</p>
       </div>
     </div>
+  );
+}
+
+type RecOutcome = "completed" | "dismissed";
+const URGENCY_LABELS: Record<string, string> = {
+  soon: "Soon",
+  within_3_months: "Within 3 months",
+  next_visit: "Next visit",
+};
+
+/**
+ * Surfaces open recommendations carried over from the last visit for this VIN
+ * (same shop). Mechanic taps "Did it" or "Skip" per row; on Save we batch the
+ * outcomes to confirmFromPreJob.
+ */
+function PriorRecommendationsCard({
+  bookingId,
+  vin,
+}: {
+  bookingId: string;
+  vin: string;
+}) {
+  const recs = useQuery(api.jobRecommendations.getOpenForVehicle, {
+    vin,
+    limit: 10,
+  });
+  const confirm = useMutation(
+    api.jobRecommendations.confirmFromPreJob,
+  ) as unknown as (args: {
+    bookingId: string;
+    confirmations: Array<{
+      recommendation_id: string;
+      outcome: RecOutcome;
+    }>;
+  }) => Promise<unknown>;
+
+  const [resolved, setResolved] = useState<Record<string, RecOutcome>>({});
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  if (recs === undefined) {
+    return (
+      <section className="rounded-lg border border-primary/15 bg-card p-3.5">
+        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading prior recommendations…
+        </div>
+      </section>
+    );
+  }
+  if (recs.length === 0) return null;
+
+  async function pick(recId: string, outcome: RecOutcome) {
+    setBusyId(recId);
+    try {
+      await confirm({
+        bookingId,
+        confirmations: [{ recommendation_id: recId, outcome }],
+      });
+      setResolved((prev) => ({ ...prev, [recId]: outcome }));
+    } catch {
+      // Surface inline; the form-level error banner doesn't own this row.
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-primary/15 bg-card p-3.5">
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <h3 className="text-[13px] font-semibold uppercase tracking-wide text-foreground">
+          Last visit's recommendations
+        </h3>
+        <span className="text-[11px] text-muted-foreground">
+          Confirm or skip
+        </span>
+      </div>
+      <ul className="space-y-2">
+        {recs.map((rec) => {
+          const outcome = resolved[rec._id];
+          const isBusy = busyId === rec._id;
+          return (
+            <li
+              key={rec._id}
+              className={cn(
+                "flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5",
+                outcome === "completed"
+                  ? "border-success/30 bg-success/5"
+                  : outcome === "dismissed"
+                    ? "border-primary/10 bg-muted/30 opacity-70"
+                    : "border-primary/15 bg-background",
+              )}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-medium text-foreground">
+                  {rec.service_name}
+                  <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                    {URGENCY_LABELS[rec.urgency] ?? rec.urgency}
+                  </span>
+                </p>
+                {rec.reason ? (
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {rec.reason}
+                  </p>
+                ) : null}
+              </div>
+              {outcome ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                  {outcome === "completed" ? (
+                    <>
+                      <Check className="h-3 w-3" /> Done
+                    </>
+                  ) : (
+                    "Skipped"
+                  )}
+                </span>
+              ) : (
+                <div className="flex flex-shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => void pick(rec._id, "completed")}
+                    className={cn(
+                      drawerPrimaryButtonClassName,
+                      "h-7 rounded-md px-2.5 text-[11px]",
+                    )}
+                  >
+                    {isBusy ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      "Did it"
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => void pick(rec._id, "dismissed")}
+                    className={cn(
+                      drawerSecondaryButtonClassName,
+                      "h-7 rounded-md px-2.5 text-[11px]",
+                    )}
+                  >
+                    Skip
+                  </button>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 

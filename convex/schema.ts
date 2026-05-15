@@ -2083,4 +2083,78 @@ export default defineSchema({
     .index("by_shop_id", ["shop_id"])
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_and_status", ["shop_id", "status"]),
+
+  // Structured post-job recommendations. Replaces the free-text
+  // "additional_observations" prose with a per-row {service, urgency, reason}
+  // lifecycle (open → completed/dismissed/expired). Append-only; mistakes
+  // get dismissed rather than edited.
+  job_recommendations: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.id("job_actuals"),
+    shop_id: v.id("shops"),
+    mechanic_id: v.id("mechanics"),
+    vehicle_vin: v.string(),
+    // Canonical pick from the services catalog. Null only when the mechanic
+    // submitted a freeform name routed to pending_service_submissions.
+    recommended_service_id: v.optional(v.id("services")),
+    pending_service_submission_id: v.optional(
+      v.id("pending_service_submissions"),
+    ),
+    freeform_text: v.optional(v.string()),
+    urgency: v.union(
+      v.literal("next_visit"),
+      v.literal("within_3_months"),
+      v.literal("soon"),
+    ),
+    reason: v.optional(v.string()),
+    visible_to_driver: v.boolean(),
+    status: v.union(
+      v.literal("open"),
+      v.literal("acknowledged"),
+      v.literal("completed"),
+      v.literal("dismissed"),
+      v.literal("expired"),
+    ),
+    acknowledged_at: v.optional(v.number()),
+    completed_via_booking_id: v.optional(v.id("bookings")),
+    dismissed_reason: v.optional(
+      v.union(
+        v.literal("fixed"),
+        v.literal("not_needed"),
+        v.literal("mistake"),
+      ),
+    ),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_booking_id", ["booking_id"])
+    .index("by_vehicle_vin", ["vehicle_vin"])
+    .index("by_shop_id", ["shop_id"])
+    .index("by_status", ["status"])
+    .index("by_recommended_service_id", ["recommended_service_id"])
+    .index("by_vehicle_and_status", ["vehicle_vin", "status"]),
+
+  // Review queue for mechanic-proposed service names that didn't match the
+  // canonical services catalog. Mirrors the tire_brands.review_flagged
+  // pattern: dedupes by normalized name and bumps appearance_count.
+  pending_service_submissions: defineTable({
+    proposed_name: v.string(),               // raw input
+    normalized_name: v.string(),             // lowercase + trimmed for lookup
+    proposed_reason: v.optional(v.string()),
+    submitted_by_mechanic_id: v.id("mechanics"),
+    submitted_via_booking_id: v.id("bookings"),
+    vehicle_vin: v.string(),
+    appearance_count: v.number(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("approved"),
+      v.literal("rejected"),
+      v.literal("merged"),
+    ),
+    merged_into_service_id: v.optional(v.id("services")),
+    created_at: v.number(),
+    last_seen_at: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_normalized_name", ["normalized_name"]),
 });

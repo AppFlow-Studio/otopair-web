@@ -672,6 +672,7 @@ export default function MechanicDashboard() {
 
       <PreJobSurveyDialog
         open={workflowBookingId !== null && workflowMode === "prejob"}
+        bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking

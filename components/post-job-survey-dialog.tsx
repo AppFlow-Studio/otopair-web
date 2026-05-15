@@ -45,9 +45,11 @@ import {
   serviceLikelyUsesParts,
   sumJobActualParts,
   type JobActualPartPayload,
+  type JobRecommendationInput,
   type PartsAccuracyStatus,
   type PostjobPhotoInput,
   type PostJobSurveyPayload,
+  type RecommendationUrgency,
   type TimeVariance,
   type TimeVarianceReason,
   type VehiclePassportData,
@@ -73,6 +75,15 @@ type OemRecommendation = {
   parts: OemRecommendationPart[];
 };
 
+type PriorOpenRecommendation = {
+  _id: string;
+  service_name: string;
+  is_freeform: boolean;
+  urgency: RecommendationUrgency;
+  reason: string | null;
+  created_at: number;
+};
+
 type PostJobPrefillData = {
   vehicleLabel: string;
   serviceName: string;
@@ -82,10 +93,36 @@ type PostJobPrefillData = {
   // Server-side getPrefillData already returns engineCode; the others are
   // forward-compatible if/when we choose to surface them.
   engineCode?: string | null;
+  engineId?: string | null;
   chassisLabel?: string | null;
   trimLabel?: string | null;
   oemRecommendations?: OemRecommendation[];
+  priorOpenRecommendations?: PriorOpenRecommendation[];
 } | null;
+
+type RecRowState = {
+  id: string;
+  recommended_service_id: string | null;
+  service_label: string;
+  freeform_service_name: string;
+  urgency: RecommendationUrgency;
+  reason: string;
+  visible_to_driver: boolean;
+};
+
+function makeRecId() {
+  return `rec_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+}
+
+const URGENCY_CHOICES: { value: RecommendationUrgency; label: string }[] = [
+  { value: "soon", label: "Soon" },
+  { value: "within_3_months", label: "Within 3 months" },
+  { value: "next_visit", label: "Next visit" },
+];
+
+function urgencyLabel(value: RecommendationUrgency) {
+  return URGENCY_CHOICES.find((c) => c.value === value)?.label ?? value;
+}
 
 type PartRowState = {
   part_name: string;
@@ -115,7 +152,7 @@ type StepKey =
   | "vehicle_updates"
   | "photos"
   | "tip"
-  | "observations"
+  | "recommendations"
   | "flag"
   | "summary";
 
@@ -519,6 +556,7 @@ function PostJobSurveyDialogBody({
     useState<PartsAccuracyStatus | null>(null);
   const [partsAccuracyFeedback, setPartsAccuracyFeedback] = useState("");
   const [additionalObservations, setAdditionalObservations] = useState("");
+  const [recommendations, setRecommendations] = useState<RecRowState[]>([]);
   const [photos, setPhotos] = useState<PhotoState[]>([]);
   const [error, setError] = useState("");
 
@@ -543,7 +581,7 @@ function PostJobSurveyDialogBody({
     list.push("difficulty");
     list.push("photos");
     list.push("tip");
-    list.push("observations");
+    list.push("recommendations");
     list.push("summary");
     return list;
   }, [
@@ -687,6 +725,19 @@ function PostJobSurveyDialogBody({
       time_variance: timeVariance,
       time_variance_reason: timeReason,
       time_variance_note: timeReasonNote.trim() || null,
+      recommendations: recommendations
+        .filter(
+          (r) => r.recommended_service_id || r.freeform_service_name.trim() !== "",
+        )
+        .map<JobRecommendationInput>((r) => ({
+          recommended_service_id: r.recommended_service_id,
+          freeform_service_name: r.recommended_service_id
+            ? null
+            : r.freeform_service_name.trim() || null,
+          urgency: r.urgency,
+          reason: r.reason.trim() || null,
+          visible_to_driver: r.visible_to_driver,
+        })),
     });
   }
 
@@ -813,11 +864,18 @@ function PostJobSurveyDialogBody({
         {stepHeader}
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-6 sm:px-10 sm:py-10">
-          {passportData?.vehicle_spec_label ? (
+          {passportData?.vehicle_spec_label || prefillData?.serviceName ? (
             <div className="mx-auto mb-6 w-full max-w-xl rounded-xl border border-primary/10 bg-muted/40 px-3 py-2">
-              <p className="truncate text-center text-[12px] font-medium text-foreground/80">
-                {passportData.vehicle_spec_label}
-              </p>
+              {prefillData?.serviceName ? (
+                <p className="truncate text-center text-[10px] font-semibold uppercase tracking-[0.1em] text-primary">
+                  {prefillData.serviceName}
+                </p>
+              ) : null}
+              {passportData?.vehicle_spec_label ? (
+                <p className="truncate text-center text-[12px] font-medium text-foreground/80">
+                  {passportData.vehicle_spec_label}
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -887,6 +945,12 @@ function PostJobSurveyDialogBody({
             setTechnicianNotes={setTechnicianNotes}
             additionalObservations={additionalObservations}
             setAdditionalObservations={setAdditionalObservations}
+            recommendations={recommendations}
+            setRecommendations={setRecommendations}
+            engineId={prefillData?.engineId ?? null}
+            priorOpenRecommendations={
+              prefillData?.priorOpenRecommendations ?? []
+            }
             actualPartsCost={actualPartsCost}
             setActualPartsCost={setActualPartsCost}
             partsCostSum={sumJobActualParts(normalizeParts())}
@@ -1037,6 +1101,10 @@ function StepContent(props: {
   setTechnicianNotes: (value: string) => void;
   additionalObservations: string;
   setAdditionalObservations: (value: string) => void;
+  recommendations: RecRowState[];
+  setRecommendations: React.Dispatch<React.SetStateAction<RecRowState[]>>;
+  engineId: string | null;
+  priorOpenRecommendations: PriorOpenRecommendation[];
   actualPartsCost: string;
   setActualPartsCost: (value: string) => void;
   partsCostSum: number;
@@ -1334,22 +1402,16 @@ function StepContent(props: {
           />
         </QuestionScreen>
       );
-    case "observations":
+    case "recommendations":
       return (
-        <QuestionScreen
-          eyebrow="For the customer & the shop"
-          question="Anything else to note?"
-          hint='e.g. "Recommend brake inspection at next visit."'
-        >
-          <textarea
-            value={props.additionalObservations}
-            onChange={(event) =>
-              props.setAdditionalObservations(event.target.value)
-            }
-            placeholder="Optional."
-            className="min-h-[120px] w-full resize-y rounded-xl border border-primary/15 bg-background px-4 py-3 text-[14px] leading-relaxed outline-none focus:border-primary"
-          />
-        </QuestionScreen>
+        <RecommendationsStep
+          recommendations={props.recommendations}
+          setRecommendations={props.setRecommendations}
+          engineId={props.engineId}
+          priorOpenRecommendations={props.priorOpenRecommendations}
+          additionalObservations={props.additionalObservations}
+          setAdditionalObservations={props.setAdditionalObservations}
+        />
       );
     case "flag":
       return (
@@ -2087,6 +2149,404 @@ function PhotosStep({
         ) : null}
       </div>
     </QuestionScreen>
+  );
+}
+
+/**
+ * Replaces the old "Anything else to note?" textarea with structured
+ * recommendations. Each row captures {service, urgency, reason, visible}
+ * so the rec gets a real lifecycle on the backend. Mechanics who want to
+ * type unstructured prose still can — via the demoted private-note details
+ * block below the cards.
+ */
+function RecommendationsStep({
+  recommendations,
+  setRecommendations,
+  engineId,
+  priorOpenRecommendations,
+  additionalObservations,
+  setAdditionalObservations,
+}: {
+  recommendations: RecRowState[];
+  setRecommendations: React.Dispatch<React.SetStateAction<RecRowState[]>>;
+  engineId: string | null;
+  priorOpenRecommendations: PriorOpenRecommendation[];
+  additionalObservations: string;
+  setAdditionalObservations: (value: string) => void;
+}) {
+  const [pickerIndex, setPickerIndex] = useState<number | null>(null);
+
+  function updateRec(index: number, patch: Partial<RecRowState>) {
+    setRecommendations((current) =>
+      current.map((rec, idx) => (idx === index ? { ...rec, ...patch } : rec)),
+    );
+  }
+
+  function addRec() {
+    setRecommendations((current) => [
+      ...current,
+      {
+        id: makeRecId(),
+        recommended_service_id: null,
+        service_label: "",
+        freeform_service_name: "",
+        urgency: "within_3_months",
+        reason: "",
+        visible_to_driver: true,
+      },
+    ]);
+  }
+
+  function removeRec(index: number) {
+    setRecommendations((current) => current.filter((_, idx) => idx !== index));
+  }
+
+  return (
+    <QuestionScreen
+      eyebrow="Looking ahead"
+      question="Any recommendations for this car?"
+      hint="Each one becomes a tracked follow-up — you'll confirm or dismiss them on the next visit."
+    >
+      {priorOpenRecommendations.length > 0 ? (
+        <div className="mb-4 rounded-xl border border-primary/10 bg-muted/30 px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            Still open from last visit
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {priorOpenRecommendations.map((rec) => (
+              <li
+                key={rec._id}
+                className="flex items-start gap-2 text-[12px] text-foreground/80"
+              >
+                <span className="mt-1 inline-block h-1 w-1 flex-shrink-0 rounded-full bg-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="font-medium">{rec.service_name}</span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · {urgencyLabel(rec.urgency)}
+                  </span>
+                  {rec.reason ? (
+                    <span className="text-muted-foreground"> — {rec.reason}</span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            You'll confirm these on the next pre-job survey.
+          </p>
+        </div>
+      ) : null}
+
+      <div className="space-y-3">
+        {recommendations.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-primary/20 bg-muted/30 px-4 py-6 text-center text-[12px] text-muted-foreground">
+            No follow-ups yet. Skip is fine if there's nothing to flag.
+          </div>
+        ) : (
+          recommendations.map((rec, index) => {
+            const hasService =
+              !!rec.recommended_service_id || rec.service_label !== "";
+            return (
+              <div
+                key={rec.id}
+                className="rounded-2xl border border-primary/15 bg-background px-3 py-3"
+              >
+                <div className="flex items-start gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPickerIndex(index)}
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-[13px] transition-colors",
+                      hasService
+                        ? "border-primary/20 bg-background text-foreground"
+                        : "border-dashed border-primary/30 bg-primary/5 text-primary",
+                    )}
+                  >
+                    <span className="truncate">
+                      {hasService
+                        ? rec.service_label ||
+                          rec.freeform_service_name ||
+                          "Pick a service"
+                        : "Pick a service…"}
+                    </span>
+                    <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeRec(index)}
+                    aria-label="Remove recommendation"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  {URGENCY_CHOICES.map((opt) => {
+                    const active = rec.urgency === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => updateRec(index, { urgency: opt.value })}
+                        className={cn(
+                          "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all",
+                          active
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-primary/15 bg-background text-foreground hover:bg-primary/5",
+                        )}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <input
+                  value={rec.reason}
+                  onChange={(event) =>
+                    updateRec(index, { reason: event.target.value.slice(0, 60) })
+                  }
+                  placeholder='Why? (optional, e.g. "slight pull to the right")'
+                  maxLength={60}
+                  className="mt-2.5 h-9 w-full rounded-lg border border-primary/15 bg-background px-3 text-[12px] outline-none focus:border-primary"
+                />
+
+                <div className="mt-2.5 flex items-center justify-end gap-2 border-t border-primary/10 pt-2.5">
+                  <label className="inline-flex cursor-pointer items-center gap-2 select-none">
+                    <span className="text-[11px] text-muted-foreground">
+                      Visible to driver
+                    </span>
+                    <span
+                      role="switch"
+                      aria-checked={rec.visible_to_driver}
+                      tabIndex={0}
+                      onClick={() =>
+                        updateRec(index, {
+                          visible_to_driver: !rec.visible_to_driver,
+                        })
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === " " || e.key === "Enter") {
+                          e.preventDefault();
+                          updateRec(index, {
+                            visible_to_driver: !rec.visible_to_driver,
+                          });
+                        }
+                      }}
+                      className={cn(
+                        "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
+                        rec.visible_to_driver ? "bg-primary" : "bg-muted",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "inline-block h-4 w-4 transform rounded-full bg-background shadow-sm transition-transform",
+                          rec.visible_to_driver
+                            ? "translate-x-4"
+                            : "translate-x-0.5",
+                        )}
+                      />
+                    </span>
+                  </label>
+                </div>
+              </div>
+            );
+          })
+        )}
+
+        <button
+          type="button"
+          onClick={addRec}
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          Add recommendation
+        </button>
+
+        {/* Demoted private note. Collapsed by default so it doesn't compete
+            with the structured rec cards. Driver never sees this. */}
+        <details className="rounded-xl border border-primary/10 bg-muted/20 px-3 py-2 text-[12px]">
+          <summary className="cursor-pointer select-none text-muted-foreground hover:text-foreground">
+            Private note for the shop (not seen by the driver)
+          </summary>
+          <textarea
+            value={additionalObservations}
+            onChange={(event) =>
+              setAdditionalObservations(event.target.value)
+            }
+            placeholder="Optional internal note."
+            className="mt-2 min-h-[80px] w-full resize-y rounded-lg border border-primary/15 bg-background px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-primary"
+          />
+        </details>
+      </div>
+
+      {pickerIndex !== null ? (
+        <ServicePickerModal
+          engineId={engineId}
+          initialQuery={
+            recommendations[pickerIndex]?.service_label ||
+            recommendations[pickerIndex]?.freeform_service_name ||
+            ""
+          }
+          onClose={() => setPickerIndex(null)}
+          onPick={(picked) => {
+            if (pickerIndex === null) return;
+            if (picked.kind === "service") {
+              updateRec(pickerIndex, {
+                recommended_service_id: picked.id,
+                service_label: picked.name,
+                freeform_service_name: "",
+              });
+            } else {
+              updateRec(pickerIndex, {
+                recommended_service_id: null,
+                service_label: picked.name,
+                freeform_service_name: picked.name,
+              });
+            }
+            setPickerIndex(null);
+          }}
+        />
+      ) : null}
+    </QuestionScreen>
+  );
+}
+
+/**
+ * Modal service picker — engine-matched services float to the top, and the
+ * mechanic can submit a freeform name (routed to admin review server-side)
+ * when nothing in the canonical catalog fits.
+ */
+function ServicePickerModal({
+  engineId,
+  initialQuery,
+  onClose,
+  onPick,
+}: {
+  engineId: string | null;
+  initialQuery: string;
+  onClose: () => void;
+  onPick: (
+    picked:
+      | { kind: "service"; id: string; name: string }
+      | { kind: "freeform"; name: string },
+  ) => void;
+}) {
+  const [query, setQuery] = useState(initialQuery);
+  const results = useQuery(api.services.listForVehicle, {
+    engineId: (engineId ?? undefined) as never,
+    query,
+    limit: 25,
+  });
+  const trimmed = query.trim();
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Pick a service"
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-foreground/40 px-3 pb-3 sm:items-center sm:pb-0"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-primary/10 bg-background shadow-xl"
+      >
+        <div className="flex items-center justify-between border-b border-primary/10 px-4 py-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Pick a service
+            </p>
+            <p className="text-[13px] font-semibold">
+              Vehicle-matched first
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="border-b border-primary/10 px-4 py-2.5">
+          <div className="flex items-center gap-2 rounded-lg border border-primary/15 bg-background px-2.5 py-2 focus-within:border-primary">
+            <Search className="h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search the service catalog…"
+              autoFocus
+              className="flex-1 bg-transparent text-[13px] outline-none"
+            />
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-2 py-2">
+          {results === undefined ? (
+            <div className="flex items-center justify-center py-8 text-[12px] text-muted-foreground">
+              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              Searching…
+            </div>
+          ) : (
+            <>
+              {results.length === 0 ? (
+                <div className="py-6 text-center text-[12px] text-muted-foreground">
+                  No matching services.
+                </div>
+              ) : (
+                <ul className="space-y-1">
+                  {results.map((svc) => (
+                    <li key={svc._id}>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onPick({
+                            kind: "service",
+                            id: svc._id,
+                            name: svc.name,
+                          })
+                        }
+                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-primary/15 hover:bg-primary/5"
+                      >
+                        <span className="truncate text-[13px] font-medium text-foreground">
+                          {svc.name}
+                        </span>
+                        {svc.is_vehicle_match ? (
+                          <span className="inline-flex shrink-0 items-center rounded-md bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">
+                            Fits car
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {trimmed.length >= 2 ? (
+                <div className="mt-3 border-t border-primary/10 pt-3">
+                  <p className="px-3 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                    Can't find it?
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onPick({ kind: "freeform", name: trimmed })}
+                    className="mt-1 flex w-full items-center justify-between gap-2 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-left text-[12px] text-primary transition-colors hover:bg-primary/10"
+                  >
+                    <span>
+                      Submit "<span className="font-semibold">{trimmed}</span>"
+                      for review
+                    </span>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

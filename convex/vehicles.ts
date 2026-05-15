@@ -220,10 +220,13 @@ export const getMyVehicles = query({
           .withIndex("by_vin", (q) => q.eq("vin", ownership.vin))
           .unique();
 
+        const trim = vehicle?.trim_id ? await ctx.db.get(vehicle.trim_id) : null;
+
         return {
           vin: ownership.vin,
           vehicle,
           ownership,
+          trimName: trim?.name ?? null,
         };
       })
     );
@@ -285,6 +288,22 @@ export const listOwnedVINsByUser = query({
   },
 });
 
+
+/**
+ * Clear the cached image URL for a vehicle so the next app load re-fetches it.
+ */
+export const clearVehicleImageUrl = mutation({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin.toUpperCase().trim()))
+      .unique();
+    if (vehicle) {
+      await ctx.db.patch(vehicle._id, { image_url: undefined });
+    }
+  },
+});
 
 /**
  * Save a cached image URL for a vehicle so we don't re-fetch from the API.

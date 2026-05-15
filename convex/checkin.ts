@@ -62,6 +62,21 @@ export const getCheckinStatus = query({
 });
 
 /**
+ * Has this vehicle finished the post-add service-history quick-read
+ * (the 5-tile CarInfoStepper flow: Brakes/Tires/Oil/Battery/Warning
+ * Lights)? Used by the booking gate. Backed by
+ * `vehicle_owners.onboardingComplete`, which CarInfoStepper sets when
+ * the user taps "Complete" or "Finish for now".
+ */
+export const hasCompletedCheckin = query({
+  args: { vehicleOwnerId: v.id("vehicle_owners") },
+  handler: async (ctx, args) => {
+    const owner = await ctx.db.get(args.vehicleOwnerId);
+    return owner?.onboardingComplete === true;
+  },
+});
+
+/**
  * Get the questions for this vehicle's check-in.
  */
 export const getCheckinQuestionSet = query({

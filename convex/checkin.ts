@@ -8,6 +8,8 @@
 import { query, mutation, internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
+import { dismissRecsForReportedServices } from "./jobRecommendations";
 import {
   getCheckinQuestions,
   getCheckinQuestionIds,
@@ -325,6 +327,45 @@ export const completeCheckin = mutation({
             confidence,
             createdAt: now,
             updatedAt: now,
+          });
+        }
+      }
+
+      // If the driver said they had this work done (especially Q3="no" /
+      // external), close any matching open mechanic recommendations so we
+      // stop reminding them and lift the VHS penalty.
+      const Q2_TO_SLUGS: Record<string, string[]> = {
+        oil_change: ["oil-change"],
+        brakes: ["brake-pads", "brake-rotors", "brake-fluid-flush"],
+        tires: [
+          "tire-replacement",
+          "tire-rotation",
+          "tire-balance",
+          "wheel-alignment",
+        ],
+        battery: ["battery-replacement", "battery-test"],
+        inspection: ["state-inspection", "emissions-test"],
+      };
+      const owner = await ctx.db.get(args.vehicleOwnerId);
+      if (owner?.vin) {
+        const wantedSlugs = new Set<string>();
+        for (const svc of servicesReported) {
+          for (const slug of Q2_TO_SLUGS[svc] ?? []) {
+            wantedSlugs.add(slug);
+          }
+        }
+        const serviceIds: Id<"services">[] = [];
+        for (const slug of wantedSlugs) {
+          const svcRow = await ctx.db
+            .query("services")
+            .withIndex("by_slug", (q) => q.eq("slug", slug))
+            .first();
+          if (svcRow) serviceIds.push(svcRow._id);
+        }
+        if (serviceIds.length > 0) {
+          await dismissRecsForReportedServices(ctx, {
+            vin: owner.vin,
+            serviceIds,
           });
         }
       }

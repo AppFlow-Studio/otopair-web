@@ -815,9 +815,20 @@ export default defineSchema({
     next_checkin_due: v.optional(v.number()),
     health_score: v.optional(v.number()),
     health_score_is_estimated: v.optional(v.boolean()),
+    // Additive penalty from open mechanic recommendations. Final displayed
+    // score = clamp(health_score - health_score_rec_penalty, 0, 100). Kept
+    // separate so the maintenance pipeline stays auditable.
+    health_score_rec_penalty: v.optional(v.number()),
+    health_score_rec_penalty_updated_at: v.optional(v.number()),
     ownership_plan: v.optional(v.string()),
     lease_ending_soon: v.optional(v.boolean()),
     lease_mileage_pace: v.optional(v.string()),
+    // TEMPORARY: legacy Smartcar fields, retained as optional so the
+    // stripSmartcarFieldsFromVehicleOwners migration can clear them.
+    // Remove these (and the migration) once production data is cleared.
+    smartcarVehicleId: v.optional(v.string()),
+    connectionStatus: v.optional(v.string()),
+    connectedAt: v.optional(v.number()),
   })
     .index("by_vin", ["vin"])
     .index("by_user_id", ["user_id"])
@@ -1219,6 +1230,7 @@ export default defineSchema({
     no_show_threshold_minutes: v.optional(v.number()),
     overrun_default_extension_percent: v.optional(v.number()),
     overrun_extension_floor_minutes: v.optional(v.number()),
+    buffer_minutes: v.optional(v.number()),
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
@@ -1431,6 +1443,20 @@ export default defineSchema({
         quantity: v.number(),
       })
     ),
+    // Picked variants for services with has_options = true (e.g. brake pads
+    // front-vs-rear). Tires keep using tire_specs above. One entry per
+    // has_options service. option_label and option_type are snapshotted so
+    // the booking still reads correctly if the source row is later edited.
+    selected_service_options: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          option_id: v.id("service_options"),
+          option_label: v.string(),
+          option_type: v.optional(v.string()),
+        })
+      )
+    ),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
     previous_scheduled_date: v.optional(v.string()),
@@ -1454,6 +1480,9 @@ export default defineSchema({
         })
       )
     ),
+    // Set when the driver booked this directly from a mechanic recommendation
+    // card. Used to auto-close the rec on completion.
+    source_recommendation_id: v.optional(v.id("job_recommendations")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])
@@ -1462,7 +1491,8 @@ export default defineSchema({
     .index("by_user_and_status", ["user_id", "status"])
     .index("by_shop_and_date", ["shop_id", "scheduled_date"])
     .index("by_shop_and_status", ["shop_id", "status"])
-    .index("by_created_at", ["created_at"]),
+    .index("by_created_at", ["created_at"])
+    .index("by_source_recommendation", ["source_recommendation_id"]),
 
   // Tire quote responses — one row per shop response to a quote-stage
   // booking (status === "pending_quote"). The user picks one to accept,
@@ -1488,6 +1518,8 @@ export default defineSchema({
       date: v.string(), // "YYYY-MM-DD"
       time: v.string(), // "HH:MM" (24h)
     }),
+    /** How long the shop estimates the tire work will take (15/30/45 min). */
+    estimated_duration_minutes: v.optional(v.number()),
     created_at: v.number(),
     /** Optional expiration so stale quotes can be filtered out. */
     expires_at: v.optional(v.number()),
@@ -1666,11 +1698,17 @@ export default defineSchema({
     message: v.optional(v.string()),
     created_at: v.optional(v.number()),
     sent_at: v.optional(v.number()),
+    // Set when this follow-up was created by a mechanic recommendation.
+    // Null entries are algorithm-generated and may be superseded.
+    recommendation_id: v.optional(v.id("job_recommendations")),
+    dismissed_reason: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_vin", ["vin"])
     .index("by_status_and_scheduled", ["status", "scheduled_for"])
-    .index("by_booking_id", ["booking_id"]),
+    .index("by_booking_id", ["booking_id"])
+    .index("by_vin_and_recommendation", ["vin", "recommendation_id"])
+    .index("by_vin_and_service", ["vin", "service_id"]),
 
   // [I]
   job_actuals: defineTable({
@@ -2126,6 +2164,34 @@ export default defineSchema({
     ),
     reason: v.optional(v.string()),
     visible_to_driver: v.boolean(),
+    // Mileage milestone that should trigger this recommendation. When set,
+    // the mobile app uses it both to surface the rec near the threshold and
+    // to feed the vehicle health-score ramp.
+    target_mileage: v.optional(v.number()),
+    // Concrete date/time the shop pre-picked via the schedule day-lane.
+    // ms epoch. Customer still has to confirm in-app — this is not a booking.
+    scheduled_at: v.optional(v.number()),
+    scheduled_mechanic_id: v.optional(v.id("mechanics")),
+    // For has_options services (e.g. brake pads): which option the mechanic
+    // is recommending. Carries forward to the booking when the driver
+    // confirms in-app so they don't have to re-pick.
+    selected_service_option: v.optional(
+      v.object({
+        option_id: v.id("service_options"),
+        option_label: v.string(),
+        option_type: v.optional(v.string()),
+      })
+    ),
+    // For tire-replacement recs: which spec the mechanic suggests. Mirrors
+    // bookings.tire_specs so the confirm flow can pre-fill the tire picker.
+    tire_specs: v.optional(
+      v.object({
+        size: v.string(),
+        type: v.string(),
+        tier: v.string(),
+        quantity: v.number(),
+      })
+    ),
     status: v.union(
       v.literal("open"),
       v.literal("acknowledged"),
@@ -2140,8 +2206,13 @@ export default defineSchema({
         v.literal("fixed"),
         v.literal("not_needed"),
         v.literal("mistake"),
+        v.literal("completed_externally"),
+        v.literal("completed_via_booking"),
+        v.literal("hidden_by_driver"),
       ),
     ),
+    // Backlink to the scheduled reminder we created for this rec.
+    followup_id: v.optional(v.id("follow_ups")),
     created_at: v.number(),
     updated_at: v.optional(v.number()),
   })

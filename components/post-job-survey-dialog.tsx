@@ -20,6 +20,8 @@ import {
   Minus,
   Plus,
   Search,
+  CalendarClock,
+  Gauge,
   Trash2,
   X,
 } from "lucide-react";
@@ -27,6 +29,9 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { makeFunctionReference } from "convex/server";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
+import ScheduleSlotPicker from "@/components/booking/schedule-slot-picker";
+import ServiceOptionsPicker from "@/components/booking/service-options-picker";
+import TireSpecPicker from "@/components/booking/tire-spec-picker";
 import {
   Select,
   SelectItem,
@@ -104,10 +109,27 @@ type RecRowState = {
   id: string;
   recommended_service_id: string | null;
   service_label: string;
+  service_slug: string | null;
+  service_has_options: boolean;
   freeform_service_name: string;
   urgency: RecommendationUrgency;
   reason: string;
   visible_to_driver: boolean;
+  target_mileage: string;
+  scheduled_at: number | null;
+  scheduled_mechanic_id: string | null;
+  scheduled_mechanic_name: string | null;
+  selected_service_option: {
+    option_id: string;
+    option_label: string;
+    option_type?: string;
+  } | null;
+  tire_specs: {
+    size: string;
+    type: string;
+    tier: string;
+    quantity: number;
+  } | null;
 };
 
 function makeRecId() {
@@ -729,15 +751,32 @@ function PostJobSurveyDialogBody({
         .filter(
           (r) => r.recommended_service_id || r.freeform_service_name.trim() !== "",
         )
-        .map<JobRecommendationInput>((r) => ({
-          recommended_service_id: r.recommended_service_id,
-          freeform_service_name: r.recommended_service_id
-            ? null
-            : r.freeform_service_name.trim() || null,
-          urgency: r.urgency,
-          reason: r.reason.trim() || null,
-          visible_to_driver: r.visible_to_driver,
-        })),
+        .map<JobRecommendationInput>((r) => {
+          const mileage = Number(r.target_mileage);
+          return {
+            recommended_service_id: r.recommended_service_id,
+            freeform_service_name: r.recommended_service_id
+              ? null
+              : r.freeform_service_name.trim() || null,
+            urgency: r.urgency,
+            reason: r.reason.trim() || null,
+            visible_to_driver: r.visible_to_driver,
+            target_mileage:
+              r.target_mileage.trim() && Number.isFinite(mileage) && mileage > 0
+                ? mileage
+                : null,
+            scheduled_at: r.scheduled_at ?? null,
+            scheduled_mechanic_id: r.scheduled_mechanic_id ?? null,
+            selected_service_option: r.selected_service_option
+              ? {
+                  option_id: r.selected_service_option.option_id as any,
+                  option_label: r.selected_service_option.option_label,
+                  option_type: r.selected_service_option.option_type,
+                }
+              : null,
+            tire_specs: r.tire_specs ?? null,
+          };
+        }),
     });
   }
 
@@ -1010,6 +1049,7 @@ function PostJobSurveyDialogBody({
                   partsAccuracyFeedback,
                   requiresParts,
                   filledPartsCount: parts.filter((p) => p.part_name.trim() !== "").length,
+                  recommendations,
                 })}
                 className={cn(
                   drawerPrimaryButtonClassName,
@@ -1037,8 +1077,18 @@ function canAdvance(
     partsAccuracyFeedback: string;
     requiresParts: boolean;
     filledPartsCount: number;
+    recommendations: RecRowState[];
   }
 ) {
+  if (step === "recommendations") {
+    // Every rec for a has_options service must carry a pick.
+    return state.recommendations.every((r) => {
+      if (!r.recommended_service_id) return true;
+      if (r.service_slug === "tire-replacement") return r.tire_specs != null;
+      if (r.service_has_options) return r.selected_service_option != null;
+      return true;
+    });
+  }
   if (step === "mileage") return state.completionMileage.trim() !== "";
   if (step === "time_reason") {
     if (state.timeReason === "other") return state.timeReasonNote.trim() !== "";
@@ -1411,6 +1461,7 @@ function StepContent(props: {
           priorOpenRecommendations={props.priorOpenRecommendations}
           additionalObservations={props.additionalObservations}
           setAdditionalObservations={props.setAdditionalObservations}
+          completionMileage={props.completionMileage}
         />
       );
     case "flag":
@@ -2166,6 +2217,7 @@ function RecommendationsStep({
   priorOpenRecommendations,
   additionalObservations,
   setAdditionalObservations,
+  completionMileage,
 }: {
   recommendations: RecRowState[];
   setRecommendations: React.Dispatch<React.SetStateAction<RecRowState[]>>;
@@ -2173,8 +2225,17 @@ function RecommendationsStep({
   priorOpenRecommendations: PriorOpenRecommendation[];
   additionalObservations: string;
   setAdditionalObservations: (value: string) => void;
+  completionMileage: string;
 }) {
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
+  const [slotPickerIndex, setSlotPickerIndex] = useState<number | null>(null);
+  const [optionPickerIndex, setOptionPickerIndex] = useState<number | null>(null);
+  const [tirePickerIndex, setTirePickerIndex] = useState<number | null>(null);
+  const currentMileage = Number(completionMileage);
+  const mileageHint =
+    Number.isFinite(currentMileage) && currentMileage > 0
+      ? Math.round((currentMileage + 5000) / 1000) * 1000
+      : null;
 
   function updateRec(index: number, patch: Partial<RecRowState>) {
     setRecommendations((current) =>
@@ -2189,10 +2250,18 @@ function RecommendationsStep({
         id: makeRecId(),
         recommended_service_id: null,
         service_label: "",
+        service_slug: null,
+        service_has_options: false,
         freeform_service_name: "",
         urgency: "within_3_months",
         reason: "",
         visible_to_driver: true,
+        target_mileage: "",
+        scheduled_at: null,
+        scheduled_mechanic_id: null,
+        scheduled_mechanic_name: null,
+        selected_service_option: null,
+        tire_specs: null,
       },
     ]);
   }
@@ -2282,6 +2351,37 @@ function RecommendationsStep({
                   </button>
                 </div>
 
+                {rec.service_has_options || rec.service_slug === "tire-replacement" ? (
+                  <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50/60 px-2.5 py-1.5">
+                    <span className="text-[11px] text-amber-900">
+                      {rec.service_slug === "tire-replacement"
+                        ? rec.tire_specs
+                          ? `${rec.tire_specs.size} · ${rec.tire_specs.type} · ${rec.tire_specs.tier} · ${rec.tire_specs.quantity} tires`
+                          : "Tire specs required"
+                        : rec.selected_service_option
+                          ? rec.selected_service_option.option_label
+                          : "Option required"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (rec.service_slug === "tire-replacement") {
+                          setTirePickerIndex(index);
+                        } else {
+                          setOptionPickerIndex(index);
+                        }
+                      }}
+                      className="rounded-md border border-amber-300 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-900 hover:bg-amber-100"
+                    >
+                      {(rec.service_slug === "tire-replacement"
+                        ? rec.tire_specs
+                        : rec.selected_service_option)
+                        ? "Edit"
+                        : "Pick"}
+                    </button>
+                  </div>
+                ) : null}
+
                 <div className="mt-2.5 flex flex-wrap gap-1.5">
                   {URGENCY_CHOICES.map((opt) => {
                     const active = rec.urgency === opt.value;
@@ -2312,6 +2412,87 @@ function RecommendationsStep({
                   maxLength={60}
                   className="mt-2.5 h-9 w-full rounded-lg border border-primary/15 bg-background px-3 text-[12px] outline-none focus:border-primary"
                 />
+
+                <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Trigger at mileage
+                    </label>
+                    <div className="mt-1 flex items-center gap-1.5 rounded-lg border border-primary/15 bg-background px-2.5">
+                      <Gauge
+                        className="h-3.5 w-3.5 text-muted-foreground"
+                        aria-hidden
+                      />
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        step={1000}
+                        value={rec.target_mileage}
+                        onChange={(event) =>
+                          updateRec(index, {
+                            target_mileage: event.target.value,
+                          })
+                        }
+                        placeholder={
+                          mileageHint ? mileageHint.toLocaleString() : "e.g. 170000"
+                        }
+                        className="h-9 w-full bg-transparent text-[12px] outline-none"
+                      />
+                      <span className="text-[11px] text-muted-foreground">mi</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Schedule a specific time
+                    </label>
+                    {rec.scheduled_at ? (
+                      <div className="mt-1 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-[12px]">
+                        <CalendarClock className="h-3.5 w-3.5 text-primary" />
+                        <span className="min-w-0 flex-1 truncate">
+                          {new Date(rec.scheduled_at).toLocaleString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                          {rec.scheduled_mechanic_name
+                            ? ` · ${rec.scheduled_mechanic_name}`
+                            : ""}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setSlotPickerIndex(index)}
+                          className="text-[11px] font-medium text-primary hover:underline"
+                        >
+                          Change
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateRec(index, {
+                              scheduled_at: null,
+                              scheduled_mechanic_id: null,
+                              scheduled_mechanic_name: null,
+                            })
+                          }
+                          className="text-[11px] font-medium text-muted-foreground hover:text-destructive"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setSlotPickerIndex(index)}
+                        className="mt-1 inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
+                      >
+                        <CalendarClock className="h-3.5 w-3.5" />
+                        Pick date &amp; time
+                      </button>
+                    )}
+                  </div>
+                </div>
 
                 <div className="mt-2.5 flex items-center justify-end gap-2 border-t border-primary/10 pt-2.5">
                   <label className="inline-flex cursor-pointer items-center gap-2 select-none">
@@ -2382,6 +2563,89 @@ function RecommendationsStep({
         </details>
       </div>
 
+      <ServiceOptionsPicker
+        open={optionPickerIndex !== null}
+        serviceIds={
+          optionPickerIndex !== null &&
+          recommendations[optionPickerIndex]?.recommended_service_id
+            ? [recommendations[optionPickerIndex].recommended_service_id as any]
+            : ([] as any)
+        }
+        initialSelections={
+          optionPickerIndex !== null &&
+          recommendations[optionPickerIndex]?.selected_service_option &&
+          recommendations[optionPickerIndex]?.recommended_service_id
+            ? [
+                {
+                  service_id: recommendations[optionPickerIndex]
+                    .recommended_service_id as any,
+                  option_id: recommendations[optionPickerIndex]
+                    .selected_service_option!.option_id as any,
+                  option_label: recommendations[optionPickerIndex]
+                    .selected_service_option!.option_label,
+                  option_type:
+                    recommendations[optionPickerIndex].selected_service_option!
+                      .option_type,
+                },
+              ]
+            : []
+        }
+        onCancel={() => setOptionPickerIndex(null)}
+        onConfirm={(picks) => {
+          if (optionPickerIndex === null) return;
+          const pick = picks[0];
+          if (pick) {
+            updateRec(optionPickerIndex, {
+              selected_service_option: {
+                option_id: pick.option_id as unknown as string,
+                option_label: pick.option_label,
+                option_type: pick.option_type,
+              },
+            });
+          }
+          setOptionPickerIndex(null);
+        }}
+      />
+
+      <TireSpecPicker
+        open={tirePickerIndex !== null}
+        initial={
+          tirePickerIndex !== null
+            ? recommendations[tirePickerIndex]?.tire_specs ?? null
+            : null
+        }
+        onCancel={() => setTirePickerIndex(null)}
+        onConfirm={(specs) => {
+          if (tirePickerIndex === null) return;
+          updateRec(tirePickerIndex, { tire_specs: specs });
+          setTirePickerIndex(null);
+        }}
+      />
+
+      <ScheduleSlotPicker
+        open={slotPickerIndex !== null}
+        title="Schedule the follow-up visit"
+        initialDate={
+          slotPickerIndex !== null &&
+          recommendations[slotPickerIndex]?.scheduled_at
+            ? new Date(recommendations[slotPickerIndex].scheduled_at as number)
+            : undefined
+        }
+        onCancel={() => setSlotPickerIndex(null)}
+        onConfirm={(slot) => {
+          if (slotPickerIndex === null) return;
+          const [h, m] = slot.time.split(":").map(Number);
+          const [y, mo, d] = slot.date.split("-").map(Number);
+          const ts = new Date(y, mo - 1, d, h, m, 0, 0).getTime();
+          updateRec(slotPickerIndex, {
+            scheduled_at: ts,
+            scheduled_mechanic_id: slot.mechanicId,
+            scheduled_mechanic_name: slot.mechanicName,
+          });
+          setSlotPickerIndex(null);
+        }}
+      />
+
       {pickerIndex !== null ? (
         <ServicePickerModal
           engineId={engineId}
@@ -2393,20 +2657,36 @@ function RecommendationsStep({
           onClose={() => setPickerIndex(null)}
           onPick={(picked) => {
             if (pickerIndex === null) return;
+            const idx = pickerIndex;
             if (picked.kind === "service") {
-              updateRec(pickerIndex, {
+              updateRec(idx, {
                 recommended_service_id: picked.id,
                 service_label: picked.name,
+                service_slug: picked.slug,
+                service_has_options: picked.has_options,
                 freeform_service_name: "",
+                // Reset option state when service changes.
+                selected_service_option: null,
+                tire_specs: null,
               });
+              setPickerIndex(null);
+              if (picked.slug === "tire-replacement") {
+                setTirePickerIndex(idx);
+              } else if (picked.has_options) {
+                setOptionPickerIndex(idx);
+              }
             } else {
-              updateRec(pickerIndex, {
+              updateRec(idx, {
                 recommended_service_id: null,
                 service_label: picked.name,
+                service_slug: null,
+                service_has_options: false,
                 freeform_service_name: picked.name,
+                selected_service_option: null,
+                tire_specs: null,
               });
+              setPickerIndex(null);
             }
-            setPickerIndex(null);
           }}
         />
       ) : null}
@@ -2430,7 +2710,13 @@ function ServicePickerModal({
   onClose: () => void;
   onPick: (
     picked:
-      | { kind: "service"; id: string; name: string }
+      | {
+          kind: "service";
+          id: string;
+          name: string;
+          slug: string | null;
+          has_options: boolean;
+        }
       | { kind: "freeform"; name: string },
   ) => void;
 }) {
@@ -2507,6 +2793,8 @@ function ServicePickerModal({
                             kind: "service",
                             id: svc._id,
                             name: svc.name,
+                            slug: (svc as any).slug ?? null,
+                            has_options: Boolean((svc as any).has_options),
                           })
                         }
                         className="flex w-full items-center justify-between gap-2 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-primary/15 hover:bg-primary/5"

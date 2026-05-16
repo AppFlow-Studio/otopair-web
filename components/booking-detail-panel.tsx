@@ -15,7 +15,8 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Check, Clock, Copy, Ellipsis, History, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
-import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
+import PostjobReportSection from "@/components/booking/postjob-report-section";
+import type { JobActualsPayload } from "@/lib/job-actuals";
 import VehiclePassportSection from "@/components/vehicle-passport-section";
 import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
@@ -551,8 +552,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [recommendDrawerCtx, setRecommendDrawerCtx] = useState<
       import("@/components/recommend-service-drawer").RecommendServiceContext | null
     >(null);
-    const [showActualsDialog, setShowActualsDialog] = useState(false);
-    const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
+    const [isEditingActuals, setIsEditingActuals] = useState(false);
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
     const [createNewAfterCancel, setCreateNewAfterCancel] = useState(false);
     const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
@@ -590,6 +590,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     );
     const oemPartsByService = useQuery(
       api.serviceParts.getOemPartsForBooking,
+      job ? { bookingId: job._id } : "skip"
+    );
+    const postjobReport = useQuery(
+      api.job_actuals.getPostjobReportForBooking,
       job ? { bookingId: job._id } : "skip"
     );
 
@@ -637,8 +641,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setShowPrejobDialog(false);
       setShowPostjobDialog(false);
       setAssigningMechanicId(currentAssignmentKey);
-      setShowActualsDialog(false);
-      setActualsDialogMode("complete");
+      setIsEditingActuals(false);
       setCopiedField(null);
       if (copyEmailTimeoutRef.current !== null) {
         window.clearTimeout(copyEmailTimeoutRef.current);
@@ -975,10 +978,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
     }
 
-    function openActualsDialog(mode: "complete" | "edit") {
+    function openActualsEditor() {
       setActionError("");
-      setActualsDialogMode(mode);
-      setShowActualsDialog(true);
+      setIsEditingActuals(true);
     }
 
     function openPostjobDialog() {
@@ -1020,6 +1022,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingId: job._id,
           actuals: payload,
         });
+        setIsEditingActuals(false);
         onSuccess?.("Actuals draft saved");
       } catch (err: unknown) {
         setActionError(
@@ -1040,6 +1043,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingId: job._id,
           actuals: payload,
         });
+        setIsEditingActuals(false);
         onSuccess?.("Actuals finalized");
       } catch (err: unknown) {
         setActionError(
@@ -1057,8 +1061,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setIsActioning(true);
       try {
         await reopenActuals({ bookingId: job._id });
-        setActualsDialogMode("edit");
-        setShowActualsDialog(true);
+        setIsEditingActuals(true);
         onSuccess?.("Actuals reopened for editing");
       } catch (err: unknown) {
         setActionError(
@@ -1107,7 +1110,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         showDeclineModal ||
         showPrejobDialog ||
         showPostjobDialog ||
-        showActualsDialog ||
         showCancelConfirm ||
         showCancelRescheduleConfirm,
       handleEscape: (): boolean => {
@@ -1123,8 +1125,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           setShowPostjobDialog(false);
           return true;
         }
-        if (showActualsDialog) {
-          setShowActualsDialog(false);
+        if (isEditingActuals) {
+          setIsEditingActuals(false);
           return true;
         }
         if (showCancelConfirm) {
@@ -1168,7 +1170,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         if (showPrejobDialog || showPostjobDialog) {
           return true;
         }
-        if (showActualsDialog) {
+        if (isEditingActuals) {
           return true;
         }
         if (showCancelConfirm) {
@@ -1784,54 +1786,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 ) : null}
 
                 {job.status === "completed" && (
-                  <div className="rounded-2xl bg-muted/20 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <DrawerFieldLabel className="mb-1">Booking actuals</DrawerFieldLabel>
-                        <p className="text-sm text-muted-foreground">
-                          {job.jobActuals?.status === "finalized"
-                            ? "Finalized actuals saved for this booking."
-                            : job.status === "completed"
-                              ? "This booking can still be finalized with actual outcome data."
-                              : job.jobActuals
-                                ? "Draft actuals are tracking this booking and can be finalized after completion."
-                                : "Draft actuals will be created automatically when the booking starts."}
-                        </p>
-                        {job.jobActuals ? (
-                          <div className="mt-3 space-y-1 text-sm text-muted-foreground">
-                            <p>
-                              Labor: {job.jobActuals.actualLaborMinutes ?? "TBD"} min
-                            </p>
-                            <p>
-                              Parts cost: {job.jobActuals.actualPartsCost ?? "TBD"}
-                            </p>
-                          </div>
-                        ) : null}
-                      </div>
-
-                      {job.status === "completed" ? (
-                        job.jobActuals?.status === "finalized" ? (
-                          <button
-                            type="button"
-                            onClick={() => void handleReopenActuals()}
-                            disabled={isActioning}
-                            className={drawerSecondaryButtonClassName}
-                          >
-                            Reopen actuals
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => openActualsDialog("edit")}
-                            disabled={isActioning}
-                            className={drawerSecondaryButtonClassName}
-                          >
-                            {job.jobActuals ? "Edit draft actuals" : "Finalize actuals"}
-                          </button>
-                        )
-                      ) : null}
-                    </div>
-                  </div>
+                  <PostjobReportSection
+                    report={postjobReport?.postjobReport ?? null}
+                    submittedAt={postjobReport?.submittedAt ?? null}
+                    jobStatus={job.status}
+                    jobActuals={job.jobActuals ?? null}
+                    estimatedLaborMinutes={job.estimatedLaborMinutes ?? null}
+                    suggestedParts={actualsPrefill?.suggestedParts ?? []}
+                    canEdit
+                    isFinalized={job.jobActuals?.status === "finalized"}
+                    isReopening={isActioning}
+                    isEditing={isEditingActuals}
+                    onRequestEdit={openActualsEditor}
+                    onRequestReopen={() => void handleReopenActuals()}
+                    onCancelEdit={() => setIsEditingActuals(false)}
+                    onSaveDraft={handleSaveActualsDraft}
+                    onFinalize={handleFinalizeActuals}
+                  />
                 )}
 
                 {/* Status history */}
@@ -2062,17 +2033,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           isSubmitting={isSubmittingPostjob}
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
-        />
-
-        <JobActualsDialog
-          open={showActualsDialog}
-          mode={actualsDialogMode}
-          estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
-          jobActuals={job?.jobActuals ?? null}
-          prefillData={actualsPrefill ?? null}
-          onClose={() => setShowActualsDialog(false)}
-          onSaveDraft={handleSaveActualsDraft}
-          onFinalize={handleFinalizeActuals}
         />
 
         <ConfirmationDialog

@@ -196,12 +196,30 @@ export type RecommendationUrgency =
   | "within_3_months"
   | "soon";
 
+export type RecommendationServiceOption = {
+  option_id: string;
+  option_label: string;
+  option_type?: string;
+};
+
+export type RecommendationTireSpecs = {
+  size: string;
+  type: string;
+  tier: string;
+  quantity: number;
+};
+
 export type JobRecommendationInput = {
   recommended_service_id: string | null;
   freeform_service_name: string | null;
   urgency: RecommendationUrgency;
   reason: string | null;
   visible_to_driver: boolean;
+  target_mileage?: number | null;
+  scheduled_at?: number | null;
+  scheduled_mechanic_id?: string | null;
+  selected_service_option?: RecommendationServiceOption | null;
+  tire_specs?: RecommendationTireSpecs | null;
 };
 
 export type PostjobPhotoInput = {

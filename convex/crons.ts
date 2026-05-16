@@ -22,11 +22,11 @@
 // Health Points decay — 2 pts per 30-day window per vehicle. The
 // mutation is idempotent within a window so a daily run is fine
 // (decay only fires when a full 30-day chunk has elapsed for a row).
-crons.daily(
-  "health-points-decay",
-  { hourUTC: 8, minuteUTC: 0 },
-  internal.healthPoints.applyDecay,
-);
+// crons.daily(
+//   "health-points-decay",
+//   { hourUTC: 8, minuteUTC: 0 },
+//   internal.healthPoints.applyDecay,
+// );
 
 // // Scrape CarGurus for VINs — runs twice daily (8 AM and 6 PM UTC)
 // crons.daily(
@@ -81,6 +81,24 @@ crons.daily(
   "expire-stale-recommendations",
   { hourUTC: 6, minuteUTC: 0 },
   internal.jobRecommendations.expireOlderThan12Months,
+);
+
+// Penalty depends on rec age (30-day ramp), so refresh nightly even when
+// no rec lifecycle event fires. Runs 30 min after expiry so newly-expired
+// recs are out of the open set first.
+crons.daily(
+  "recompute-rec-penalties",
+  { hourUTC: 6, minuteUTC: 30 },
+  internal.jobRecommendations.recomputeAllRecPenalties,
+);
+
+// Health Points decay — 2 pts per 30-day window per vehicle. The
+// mutation is idempotent within a window so a daily run is fine
+// (decay only fires when a full 30-day chunk has elapsed for a row).
+crons.daily(
+  "health-points-decay",
+  { hourUTC: 8, minuteUTC: 0 },
+  internal.healthPoints.applyDecay,
 );
 
 export default crons;

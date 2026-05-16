@@ -174,6 +174,30 @@ export const jobRecommendationInputValidator = v.object({
   urgency: recommendationUrgencyValidator,
   reason: v.optional(nullableStringValidator),
   visible_to_driver: v.boolean(),
+  target_mileage: v.optional(v.union(v.number(), v.null())),
+  scheduled_at: v.optional(v.union(v.number(), v.null())),
+  scheduled_mechanic_id: v.optional(v.union(v.id("mechanics"), v.null())),
+  selected_service_option: v.optional(
+    v.union(
+      v.object({
+        option_id: v.id("service_options"),
+        option_label: v.string(),
+        option_type: v.optional(v.string()),
+      }),
+      v.null()
+    )
+  ),
+  tire_specs: v.optional(
+    v.union(
+      v.object({
+        size: v.string(),
+        type: v.string(),
+        tier: v.string(),
+        quantity: v.number(),
+      }),
+      v.null()
+    )
+  ),
 });
 
 export const postjobReportValidator = v.object({

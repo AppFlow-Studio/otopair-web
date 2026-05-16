@@ -3,12 +3,128 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Wrench } from "lucide-react";
-import { format } from "date-fns";
-import ConfirmationDialog from "@/components/confirmation-dialog";
+import { ChevronLeft, ChevronRight, Wrench } from "lucide-react";
+import { format, addDays, subDays } from "date-fns";
+import DaySwimLanes from "@/app/(portal)/schedule/day-swim-lanes";
+import type { CalendarEvent } from "@/app/(portal)/schedule/day-swim-lanes";
+import { getBookingEndTime } from "@/lib/schedule-overlap";
+import {
+  Select,
+  SelectItem,
+  SelectListBox,
+  SelectPopover,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+const TIRE_BRANDS = [
+  { value: "goodyear", label: "Goodyear" },
+  { value: "michelin", label: "Michelin" },
+  { value: "bridgestone", label: "Bridgestone" },
+  { value: "firestone", label: "Firestone" },
+  { value: "continental", label: "Continental" },
+  { value: "pirelli", label: "Pirelli" },
+  { value: "cooper", label: "Cooper" },
+  { value: "hankook", label: "Hankook" },
+  { value: "yokohama", label: "Yokohama" },
+  { value: "bfgoodrich", label: "BFGoodrich" },
+  { value: "toyo", label: "Toyo" },
+  { value: "falken", label: "Falken" },
+  { value: "general", label: "General" },
+  { value: "kumho", label: "Kumho" },
+  { value: "dunlop", label: "Dunlop" },
+  { value: "nitto", label: "Nitto" },
+  { value: "nexen", label: "Nexen" },
+  { value: "mastercraft", label: "Mastercraft" },
+  { value: "sumitomo", label: "Sumitomo" },
+];
+
+const OTHER_BRAND = "__other__";
+
+function TireBrandSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const matched = TIRE_BRANDS.find((b) => b.value === value);
+  const isOther = !!value && !matched;
+  const selectedKey = matched ? matched.value : isOther ? OTHER_BRAND : "none";
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = normalizedQuery
+    ? TIRE_BRANDS.filter((b) => b.label.toLowerCase().includes(normalizedQuery))
+    : TIRE_BRANDS;
+
+  return (
+    <div className="space-y-2">
+      <Select
+        selectedKey={selectedKey}
+        onSelectionChange={(key) => {
+          const k = String(key);
+          if (k === "none") onChange("");
+          else if (k === OTHER_BRAND) { if (matched) onChange(""); }
+          else onChange(k);
+          setQuery("");
+        }}
+      >
+        <SelectTrigger className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground justify-between">
+          <SelectValue>
+            {matched ? matched.label : isOther ? "Other…" : "Select brand…"}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectPopover className="rounded-md">
+          <div
+            className="border-b border-border p-1.5"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (!["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(e.key))
+                  e.stopPropagation();
+              }}
+              placeholder="Search…"
+              className="w-full rounded-sm border border-border bg-background px-2 py-1 text-xs"
+            />
+          </div>
+          <SelectListBox shouldFocusWrap className="p-1 max-h-56 overflow-y-auto text-sm">
+            <SelectItem id="none" textValue="Select brand…" className="min-h-0 rounded-sm px-2.5 py-1.5 text-xs text-muted-foreground">
+              Select brand…
+            </SelectItem>
+            {filtered.map((b) => (
+              <SelectItem key={b.value} id={b.value} textValue={b.label} className="min-h-0 rounded-sm px-2.5 py-1.5 text-xs">
+                {b.label}
+              </SelectItem>
+            ))}
+            {"other".includes(normalizedQuery) || !normalizedQuery ? (
+              <SelectItem id={OTHER_BRAND} textValue="Other…" className="min-h-0 rounded-sm px-2.5 py-1.5 text-xs">
+                Other…
+              </SelectItem>
+            ) : null}
+          </SelectListBox>
+        </SelectPopover>
+      </Select>
+      {isOther && (
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Brand name"
+          autoFocus
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+        />
+      )}
+    </div>
+  );
+}
 
 const todayIso = () => {
   const now = new Date();
@@ -164,6 +280,7 @@ export default function TireQuoteRequestsPage() {
           request={activeRequest}
           shopId={shopId}
           shopMechanics={context?.mechanics ?? []}
+          shopHours={context?.hours ?? []}
           onClose={() => setActiveRequest(null)}
         />
       )}
@@ -171,31 +288,145 @@ export default function TireQuoteRequestsPage() {
   );
 }
 
+function dateStringToDate(s: string): Date {
+  const [y, mo, d] = s.split("-").map(Number);
+  return new Date(y, mo - 1, d);
+}
+
+function dateToString(d: Date): string {
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${mo}-${day}`;
+}
+
+function formatDayHeading(d: Date): string {
+  return format(d, "EEEE, MMM d");
+}
+
+function formatTimeLabel(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 || 12;
+  return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
 function QuoteSubmissionDialog({
   request,
   shopId,
   shopMechanics,
+  shopHours,
   onClose,
 }: {
   request: OpenRequest;
   shopId: Id<"shops">;
-  shopMechanics: Array<{ _id: Id<"mechanics">; name: string }>;
+  shopMechanics: Array<{ _id: Id<"mechanics">; name: string; imageUrl?: string | null }>;
+  shopHours: Array<{ dayOfWeek: number; openTime: string; closeTime: string; isClosed: boolean }>;
   onClose: () => void;
 }) {
   const submit = useMutation(api.tire_quote_responses.create);
+
+  const [durationMinutes, setDurationMinutes] = useState(30);
 
   const [tireBrand, setTireBrand] = useState("");
   const [tireModel, setTireModel] = useState("");
   const [perTirePrice, setPerTirePrice] = useState("");
   const [laborCost, setLaborCost] = useState("");
-  const [availabilityDate, setAvailabilityDate] = useState("");
+  const [availabilityDate, setAvailabilityDate] = useState(todayIso());
   const [availabilityTime, setAvailabilityTime] = useState("");
   const [mechanicId, setMechanicId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Schedule lane state
+  const [laneDate, setLaneDate] = useState<Date>(new Date());
+
+  const laneDateStr = dateToString(laneDate);
+
+  const scheduleBookings = useQuery(api.schedule.getBookingsForRange, {
+    dateFrom: laneDateStr,
+    dateTo: laneDateStr,
+  });
+  const blockedSlots = useQuery(api.schedule.getBlockedSlots, {
+    dateFrom: laneDateStr,
+    dateTo: laneDateStr,
+  });
+
+  const laneEvents: CalendarEvent[] = useMemo(() => {
+    const bookingEvents: CalendarEvent[] = (scheduleBookings ?? []).map((b: any) => {
+      const [h, m] = b.scheduledTime.split(":").map(Number);
+      const endTime = getBookingEndTime(b.scheduledTime, b.estimatedMinutes);
+      const [eh, em] = endTime.split(":").map(Number);
+      const start = new Date(b.scheduledDate + "T00:00:00");
+      start.setHours(h, m, 0, 0);
+      const end = new Date(b.scheduledDate + "T00:00:00");
+      end.setHours(eh, em, 0, 0);
+      return {
+        id: b._id,
+        title: `${b.customerName} — ${(b.serviceNames ?? []).join(", ")}`,
+        start,
+        end,
+        resourceId: b.mechanicId ?? undefined,
+        type: "booking" as const,
+        status: b.status,
+        customerName: b.customerName,
+        mechanicName: b.mechanicName,
+        serviceNames: b.serviceNames,
+      };
+    });
+
+    const blockedEvents: CalendarEvent[] = (blockedSlots ?? []).map((s: any) => {
+      const [sh, sm] = s.startTime.split(":").map(Number);
+      const [eh, em] = s.endTime.split(":").map(Number);
+      const start = new Date(s.date + "T00:00:00");
+      start.setHours(sh, sm, 0, 0);
+      const end = new Date(s.date + "T00:00:00");
+      end.setHours(eh, em, 0, 0);
+      return {
+        id: `blocked-${s._id}`,
+        slotId: s._id,
+        title: "Blocked",
+        start,
+        end,
+        resourceId: s.mechanicId ?? undefined,
+        type: "blocked" as const,
+        status: "blocked",
+        blockTitle: s.title ?? null,
+        note: s.note ?? null,
+      };
+    });
+
+    return [...bookingEvents, ...blockedEvents];
+  }, [scheduleBookings, blockedSlots]);
+
+  const laneDayHours = useMemo(() => {
+    const dow = laneDate.getDay();
+    return shopHours.find((h) => h.dayOfWeek === dow) ?? null;
+  }, [laneDate, shopHours]);
+
+  const laneMinTime = useMemo(() => {
+    const d = new Date(laneDate);
+    if (laneDayHours && !laneDayHours.isClosed && laneDayHours.openTime) {
+      const [h, m] = laneDayHours.openTime.split(":").map(Number);
+      d.setHours(h, m, 0, 0);
+    } else {
+      d.setHours(7, 0, 0, 0);
+    }
+    return d;
+  }, [laneDate, laneDayHours]);
+
+  const laneMaxTime = useMemo(() => {
+    const d = new Date(laneDate);
+    if (laneDayHours && !laneDayHours.isClosed && laneDayHours.closeTime) {
+      const [h, m] = laneDayHours.closeTime.split(":").map(Number);
+      d.setHours(h, m, 0, 0);
+    } else {
+      d.setHours(20, 0, 0, 0);
+    }
+    return d;
+  }, [laneDate, laneDayHours]);
+
   const quantity = request.tire_specs?.quantity ?? 0;
-  const minDate = todayIso();
 
   const availabilityDateTime = useMemo(() => {
     if (!availabilityDate || !availabilityTime) return null;
@@ -237,13 +468,14 @@ function QuoteSubmissionDialog({
       await submit({
         booking_id: request._id,
         shop_id: shopId,
-        tire_brand: tireBrand.trim(),
+        tire_brand: (TIRE_BRANDS.find((b) => b.value === tireBrand)?.label ?? tireBrand).trim(),
         tire_model: tireModel.trim() ? tireModel.trim() : undefined,
         per_tire_price: Number(perTirePrice),
         quantity,
         labor_cost: Number(laborCost),
         total,
         availability: { date: availabilityDate, time: availabilityTime },
+        estimated_duration_minutes: durationMinutes,
         mechanic_id: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
       });
       onClose();
@@ -254,142 +486,231 @@ function QuoteSubmissionDialog({
     }
   };
 
-  return (
-    <ConfirmationDialog
-      open={true}
-      title="Submit tire quote"
-      description={`${formatVehicle(request.vehicle)} · ${request.tire_specs?.size ?? "—"} · qty ${quantity}`}
-      onClose={onClose}
-      secondaryAction={{
-        label: "Cancel",
-        onAction: onClose,
-        disabled: submitting,
-      }}
-      primaryAction={{
-        label: submitting ? "Submitting…" : "Submit quote",
-        onAction: handleSubmit,
-        disabled: !canSubmit,
-        variant: "primary",
-      }}
-      maxWidthClassName="max-w-lg"
-    >
-      <div className="space-y-4">
-        <Field label="Tire brand" required>
-          <input
-            type="text"
-            value={tireBrand}
-            onChange={(e) => setTireBrand(e.target.value)}
-            placeholder="e.g. Michelin"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-          />
-        </Field>
+  if (typeof document === "undefined") return null;
 
-        <Field label="Tire model (optional)">
-          <input
-            type="text"
-            value={tireModel}
-            onChange={(e) => setTireModel(e.target.value)}
-            placeholder="e.g. Pilot Sport 4S"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-          />
-        </Field>
-
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Per-tire price ($)" required>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={perTirePrice}
-              onChange={(e) => setPerTirePrice(e.target.value)}
-              placeholder="0.00"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-            />
-          </Field>
-          <Field label="Quantity">
-            <input
-              type="number"
-              value={quantity}
-              readOnly
-              className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
-            />
-          </Field>
-        </div>
-
-        <Field label="Labor cost ($)" required>
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={laborCost}
-            onChange={(e) => setLaborCost(e.target.value)}
-            placeholder="0.00"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-          />
-        </Field>
-
-        <Field label="Total ($)">
-          <input
-            type="text"
-            value={total !== null ? total.toFixed(2) : "—"}
-            readOnly
-            className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-foreground"
-          />
-        </Field>
-
-        <Field label="Assign mechanic" required>
-          <select
-            value={mechanicId}
-            onChange={(e) => setMechanicId(e.target.value)}
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-          >
-            <option value="" disabled>
-              Select a mechanic
-            </option>
-            {shopMechanics.map((m) => (
-              <option key={String(m._id)} value={String(m._id)}>
-                {m.name || "Unnamed"}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-muted-foreground">
-            Ready by<span className="ml-0.5 text-destructive">*</span>
-          </label>
-          <div className="grid grid-cols-2 gap-3">
-            <input
-              type="date"
-              min={minDate}
-              value={availabilityDate}
-              onChange={(e) => setAvailabilityDate(e.target.value)}
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-            />
-            <input
-              type="time"
-              value={availabilityTime}
-              onChange={(e) => setAvailabilityTime(e.target.value)}
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-            />
-          </div>
-          {availabilityDateTime && !availabilityIsFuture && (
-            <p className="text-xs text-destructive">Pick a date and time in the future.</p>
-          )}
-          {availabilityFormatted && availabilityIsFuture && (
-            <p className="text-xs text-muted-foreground">
-              Customer will see: <span className="text-foreground font-medium">{availabilityFormatted}</span>
+  return createPortal(
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-6xl h-[85vh] rounded-xl border border-border bg-card shadow-xl flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+          <div>
+            <h3 className="text-base font-semibold text-foreground">Submit tire quote</h3>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {formatVehicle(request.vehicle)} · {request.tire_specs?.size ?? "—"} · qty {quantity}
             </p>
-          )}
+          </div>
+          <button onClick={onClose} className="rounded-md p-1.5 hover:bg-muted text-muted-foreground">
+            ✕
+          </button>
         </div>
 
-        {error && (
-          <div className="rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive">
-            {error}
+        {/* Body: swim lanes + form */}
+        <div className="flex flex-1 min-h-0">
+          {/* Left: schedule swim lanes */}
+          <div className="flex-1 flex flex-col min-w-0 border-r border-border">
+            {/* Date nav */}
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
+              <button
+                onClick={() => setLaneDate((d) => subDays(d, 1))}
+                className="rounded-md p-1 hover:bg-muted text-muted-foreground"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="text-sm font-medium text-foreground">{formatDayHeading(laneDate)}</span>
+              <button
+                onClick={() => setLaneDate((d) => addDays(d, 1))}
+                className="rounded-md p-1 hover:bg-muted text-muted-foreground"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+              {availabilityDate && availabilityTime && mechanicId && (
+                <span className="ml-auto text-xs text-muted-foreground">
+                  Selected:{" "}
+                  <span className="font-medium text-foreground">
+                    {formatTimeLabel(availabilityTime)} on {format(dateStringToDate(availabilityDate), "MMM d")}
+                    {" · "}
+                    {shopMechanics.find((m) => String(m._id) === mechanicId)?.name ?? ""}
+                  </span>
+                </span>
+              )}
+            </div>
+            {laneDayHours?.isClosed && (
+              <div className="px-4 py-2.5 bg-muted/50 border-b border-border text-xs text-muted-foreground text-center">
+                Shop is closed on this day — pick another date.
+              </div>
+            )}
+            <div className="flex-1 overflow-auto">
+              <DaySwimLanes
+                mechanics={shopMechanics.map((m) => ({
+                  _id: String(m._id),
+                  name: m.name,
+                  imageUrl: (m as any).imageUrl ?? null,
+                }))}
+                events={laneEvents}
+                minTime={laneMinTime}
+                maxTime={laneMaxTime}
+                nowTimestamp={Date.now()}
+                onSelectEvent={() => {}}
+                currentDate={laneDate}
+                draftBooking={
+                  availabilityDate && availabilityTime && mechanicId
+                    ? {
+                        date: availabilityDate,
+                        time: availabilityTime,
+                        mechanicId,
+                        durationMinutes,
+                      }
+                    : null
+                }
+                onSelectEmptyCell={laneDayHours?.isClosed ? undefined : (info) => {
+                  setLaneDate(dateStringToDate(info.date));
+                  setAvailabilityDate(info.date);
+                  setAvailabilityTime(info.startTime);
+                  setMechanicId(info.mechanicId);
+                }}
+              />
+            </div>
+            <p className="px-4 py-2 text-xs text-muted-foreground border-t border-border shrink-0">
+              Click an empty slot to set the "Ready by" time and assign a mechanic.
+            </p>
           </div>
-        )}
+
+          {/* Right: quote form */}
+          <div className="w-80 shrink-0 flex flex-col overflow-y-auto">
+            <div className="p-5 space-y-4 flex-1">
+              <Field label="Tire brand" required>
+                <TireBrandSelect value={tireBrand} onChange={setTireBrand} />
+              </Field>
+
+              <Field label="Tire model (optional)">
+                <input
+                  type="text"
+                  value={tireModel}
+                  onChange={(e) => setTireModel(e.target.value)}
+                  placeholder="e.g. Pilot Sport 4S"
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                />
+              </Field>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Per-tire price ($)" required>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={perTirePrice}
+                    onChange={(e) => setPerTirePrice(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  />
+                </Field>
+                <Field label="Quantity">
+                  <input
+                    type="number"
+                    value={quantity}
+                    readOnly
+                    className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
+                  />
+                </Field>
+              </div>
+
+              <Field label="Labor cost ($)" required>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={laborCost}
+                  onChange={(e) => setLaborCost(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                />
+              </Field>
+
+              <Field label="Total ($)">
+                <input
+                  type="text"
+                  value={total !== null ? total.toFixed(2) : "—"}
+                  readOnly
+                  className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-foreground"
+                />
+              </Field>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Estimated duration</label>
+                <div className="flex gap-1.5">
+                  {[15, 30, 45].map((mins) => (
+                    <button
+                      key={mins}
+                      onClick={() => setDurationMinutes(mins)}
+                      className={`flex-1 rounded-md border py-1.5 text-xs font-medium transition-colors ${
+                        durationMinutes === mins
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border bg-background text-foreground hover:bg-muted"
+                      }`}
+                    >
+                      {mins} min
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Ready by<span className="ml-0.5 text-destructive">*</span>
+                </label>
+                {availabilityDate && availabilityTime && mechanicId ? (
+                  <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                    <p className="font-medium text-foreground">{availabilityFormatted}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {shopMechanics.find((m) => String(m._id) === mechanicId)?.name ?? ""}
+                    </p>
+                    <button
+                      onClick={() => { setAvailabilityDate(""); setAvailabilityTime(""); setMechanicId(""); }}
+                      className="mt-1.5 text-xs text-muted-foreground hover:text-foreground underline"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-3 text-xs text-muted-foreground text-center">
+                    Click a slot on the schedule to set the ready-by time
+                  </div>
+                )}
+                {availabilityDateTime && !availabilityIsFuture && (
+                  <p className="text-xs text-destructive">Pick a date and time in the future.</p>
+                )}
+              </div>
+
+              {error && (
+                <div className="rounded-md bg-destructive/10 border border-destructive/30 px-3 py-2 text-sm text-destructive">
+                  {error}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-5 py-4 border-t border-border flex gap-2 justify-end shrink-0">
+              <button
+                onClick={onClose}
+                disabled={submitting}
+                className="px-3 py-2 text-sm rounded-lg border border-border hover:bg-muted disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={!canSubmit}
+                className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                {submitting ? "Submitting…" : "Submit quote"}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
-    </ConfirmationDialog>
+    </div>,
+    document.body,
   );
 }
 

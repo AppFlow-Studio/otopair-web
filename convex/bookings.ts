@@ -82,7 +82,11 @@ import {
 } from "./lib/vehicle_passports";
 import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
 import { insertSnapshotImpl } from "./part_snapshots";
-import { submitRecommendationsForBooking } from "./jobRecommendations";
+import {
+  closeRecForCompletedBooking,
+  closeMatchingRecsForCompletedBooking,
+  submitRecommendationsForBooking,
+} from "./jobRecommendations";
 import {
   templateForSystem,
   type DiagnosticSystem,
@@ -507,6 +511,13 @@ export const cancelBooking = mutation({
       existing.user_id,
       args.reason ?? "user_cancelled",
     );
+    await syncBookingAssignments(ctx, [
+      {
+        shopId: existing.shop_id,
+        mechanicId: existing.mechanic_id ?? undefined,
+        date: existing.scheduled_date,
+      },
+    ]);
   },
 });
 
@@ -710,6 +721,7 @@ export const create = mutation({
     total_cost: v.float64(),
     session_id: v.optional(v.string()),
     funnel_id: v.optional(v.id("conversion_funnels")),
+    source_recommendation_id: v.optional(v.id("job_recommendations")),
   },
   handler: async (ctx, args) => {
     const normalizedVin = toCanonicalVin(args.vin);
@@ -768,6 +780,7 @@ export const create = mutation({
       assignment_preference: "any",
       created_at: now,
       updated_at: now,
+      source_recommendation_id: args.source_recommendation_id,
     });
 
     await logBookingStatusChange(
@@ -844,6 +857,18 @@ export const createBatch = mutation({
     platform_fee: v.optional(v.float64()),
     session_id: v.optional(v.string()),
     funnel_id: v.optional(v.id("conversion_funnels")),
+    source_recommendation_id: v.optional(v.id("job_recommendations")),
+    customer_notes: v.optional(v.string()),
+    selected_service_options: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          option_id: v.id("service_options"),
+          option_label: v.string(),
+          option_type: v.optional(v.string()),
+        })
+      )
+    ),
   },
   handler: async (ctx, args) => {
     if (args.services.length === 0) {
@@ -917,6 +942,12 @@ export const createBatch = mutation({
       assignment_preference: "any",
       created_at: now,
       updated_at: now,
+      source_recommendation_id: args.source_recommendation_id,
+      customer_notes: args.customer_notes?.trim() ? args.customer_notes.trim() : undefined,
+      selected_service_options:
+        args.selected_service_options && args.selected_service_options.length > 0
+          ? args.selected_service_options
+          : undefined,
     });
 
     await logBookingStatusChange(
@@ -1814,6 +1845,30 @@ async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
     })
   );
   return names;
+}
+
+/** Appends the selected option_label (e.g. "Front and rear", "AGM") onto
+ *  each service name so mechanic-facing views show the picked variant. */
+async function resolveServiceLabels(
+  ctx: any,
+  serviceIds: Array<any> | undefined,
+  selectedOptions:
+    | Array<{ service_id: any; option_label?: string }>
+    | undefined,
+): Promise<string[]> {
+  if (!serviceIds || serviceIds.length === 0) return [];
+  const byServiceId = new Map<string, string>();
+  for (const opt of selectedOptions ?? []) {
+    if (opt.option_label) byServiceId.set(String(opt.service_id), opt.option_label);
+  }
+  return await Promise.all(
+    serviceIds.map(async (serviceId: any) => {
+      const service = await ctx.db.get(serviceId);
+      const name = service?.name ?? "Unknown Service";
+      const label = byServiceId.get(String(serviceId));
+      return label ? `${name} — ${label}` : name;
+    }),
+  );
 }
 
 function firstDefinedNumber(...values: unknown[]) {
@@ -4404,6 +4459,23 @@ async function runCompletionSideEffects(ctx: any, booking: any) {
     }
   }
 
+  // If the driver booked this directly from a mechanic rec card, close the
+  // loop now: mark the rec completed, cancel its follow-up, refresh the
+  // vehicle's score penalty. Inline (not scheduled) so it stays in the
+  // same transaction.
+  if (booking.source_recommendation_id) {
+    await closeRecForCompletedBooking(ctx, {
+      recommendationId: booking.source_recommendation_id,
+      bookingId: booking._id,
+    });
+  }
+
+  // Cross-shop closure: any open / acknowledged / driver-hidden rec for this
+  // VIN whose service matches one delivered by this booking gets marked
+  // resolved here so the VHS penalty clears even when the driver booked at
+  // a different shop than the one that filed the rec.
+  await closeMatchingRecsForCompletedBooking(ctx, { bookingId: booking._id });
+
   await ctx.scheduler.runAfter(0, internal.rewards.addCreditForCompletedBooking, {
     bookingId: booking._id,
   });
@@ -4506,7 +4578,11 @@ export async function applyBookingStatusTransition(
 async function mapBookingListItem(ctx: any, booking: any) {
   const customer = await ctx.db.get(booking.user_id);
   const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
-  const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+  const serviceNames = await resolveServiceLabels(
+    ctx,
+    booking.service_ids,
+    booking.selected_service_options,
+  );
   const mechanic = booking.mechanic_id
     ? await ctx.db.get(booking.mechanic_id)
     : null;
@@ -4540,7 +4616,11 @@ async function mapBookingListItem(ctx: any, booking: any) {
 async function mapMechanicDashboardJob(ctx: any, booking: any) {
   const customer = await ctx.db.get(booking.user_id);
   const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
-  const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+  const serviceNames = await resolveServiceLabels(
+    ctx,
+    booking.service_ids,
+    booking.selected_service_options,
+  );
   const vehiclePassportComplete = await hasCompleteVehiclePassportForBooking(
     ctx,
     booking
@@ -6295,6 +6375,24 @@ export const createByShop = mutation({
         v.literal("not_sure"),
       ),
     ),
+    selectedServiceOptions: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          option_id: v.id("service_options"),
+          option_label: v.string(),
+          option_type: v.optional(v.string()),
+        })
+      )
+    ),
+    tireSpecs: v.optional(
+      v.object({
+        size: v.string(),
+        type: v.string(),
+        tier: v.string(),
+        quantity: v.number(),
+      })
+    ),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -6305,6 +6403,36 @@ export const createByShop = mutation({
 
     if (!args.customerEmail && !args.customerPhone) {
       throw new Error("Provide a customer email or phone number.");
+    }
+
+    // Guardrail: any selected service with has_options must arrive with
+    // a pick, and a tire-replacement booking must arrive with tire_specs.
+    // Web UI enforces this too, but server validation keeps integrity if
+    // a caller bypasses the drawer.
+    const servicesForOptionCheck = await Promise.all(
+      args.serviceIds.map((id: any) => ctx.db.get(id))
+    );
+    const optionMap = new Map(
+      (args.selectedServiceOptions ?? []).map((row: any) => [
+        String(row.service_id),
+        row,
+      ])
+    );
+    for (const svc of servicesForOptionCheck) {
+      if (!svc) continue;
+      if (svc.slug === "tire-replacement") {
+        if (!args.tireSpecs) {
+          throw new Error(
+            "Tire replacement requires tire_specs (size, type, tier, quantity).",
+          );
+        }
+        continue;
+      }
+      if (svc.has_options && !optionMap.has(String(svc._id))) {
+        throw new Error(
+          `Service "${svc.name}" requires an option selection.`,
+        );
+      }
     }
 
     let normalizedPhone: string | undefined;
@@ -6423,6 +6551,11 @@ export const createByShop = mutation({
       custom_services:
         customServicesNormalized && customServicesNormalized.length > 0
           ? customServicesNormalized
+          : undefined,
+      tire_specs: args.tireSpecs,
+      selected_service_options:
+        args.selectedServiceOptions && args.selectedServiceOptions.length > 0
+          ? args.selectedServiceOptions
           : undefined,
       shop_id: args.shopId,
       status,
@@ -8330,6 +8463,9 @@ export const acceptTireQuote = mutation({
       total_cost: response.total,
       scheduled_date: response.availability.date,
       scheduled_time: response.availability.time,
+      ...(response.estimated_duration_minutes
+        ? { estimated_labor_minutes: response.estimated_duration_minutes }
+        : {}),
       status: "confirmed",
       updated_at: now,
       ...(attachServiceId ? { service_ids: [attachServiceId] } : {}),

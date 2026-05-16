@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Ban, Car, Users } from "lucide-react";
+import { Ban, Car, CheckCircle2, Users } from "lucide-react";
 import {
   statusColors,
   dateToString,
@@ -59,6 +59,13 @@ interface DaySwimLanesProps {
   onProposeReschedule?: (proposal: RescheduleProposal) => void;
   onDragError?: (message: string) => void;
   onContextMenuCell?: (info: ContextMenuCellInfo) => void;
+  onSelectEmptyCell?: (info: {
+    mechanicId: string;
+    mechanicName: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+  }) => void;
   onContextMenuBlocked?: (info: ContextMenuBlockedInfo) => void;
   onSelectBlocked?: (info: { slotId: string; date: string; startTime: string; endTime: string; mechanicId: string | null; blockTitle: string | null; note: string | null }) => void;
   onBlockDayClick?: (mechanicId: string, mechanicName: string) => void;
@@ -139,6 +146,7 @@ export default function DaySwimLanes({
   onProposeReschedule,
   onDragError,
   onContextMenuCell,
+  onSelectEmptyCell,
   onContextMenuBlocked,
   onSelectBlocked,
   onBlockDayClick,
@@ -685,6 +693,38 @@ export default function DaySwimLanes({
               <div
                 className="relative bg-muted/30"
                 style={{ height: totalHeight }}
+                onClick={(e) => {
+                  if (!onSelectEmptyCell || col.id === "__unassigned__") return;
+                  if (
+                    (e.target as HTMLElement).closest("[data-event-block]") ||
+                    (e.target as HTMLElement).closest(".blocked-slot-pattern")
+                  )
+                    return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const relY = e.clientY - rect.top;
+                  const slotIndex = Math.min(
+                    Math.max(Math.floor(relY / ROW_HEIGHT), 0),
+                    slots.length - 1,
+                  );
+                  const slot = slots[slotIndex];
+                  const nextSlot = slots[Math.min(slotIndex + 1, slots.length - 1)];
+                  const startTime = formatHHMM(slot.hour, slot.minute);
+                  const endTime =
+                    slotIndex === slots.length - 1
+                      ? formatHHMM(slot.hour, slot.minute + STEP_MINUTES)
+                      : formatHHMM(nextSlot.hour, nextSlot.minute);
+                  const date = currentDate
+                    ? dateToString(currentDate)
+                    : dateToString(new Date());
+                  const mech = mechanics.find((m) => m._id === col.id);
+                  onSelectEmptyCell({
+                    mechanicId: col.id,
+                    mechanicName: mech?.name ?? col.label,
+                    date,
+                    startTime,
+                    endTime,
+                  });
+                }}
                 onContextMenu={(e) => {
                   // Only fire for empty cell clicks — ignore if target is an event block or blocked overlay
                   if ((e.target as HTMLElement).closest("[data-event-block]") || (e.target as HTMLElement).closest(".blocked-slot-pattern")) return;
@@ -889,7 +929,7 @@ export default function DaySwimLanes({
                         className="absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10"
                         style={{
                           top: slotTop,
-                          height: slotHeight,
+                          height: Math.max(ROW_HEIGHT * 0.5, slotHeight - 2),
                           backgroundColor: "transparent",
                           color: colors.text,
                           border: `2px dashed ${colors.border}`,
@@ -919,12 +959,13 @@ export default function DaySwimLanes({
                       } ${isSelected ? "ring-2 ring-primary ring-offset-1 shadow-md z-20" : ""}`}
                       style={{
                         top: slotTop,
-                        height: slotHeight,
+                        height: Math.max(ROW_HEIGHT * 0.5, slotHeight - 2),
                         backgroundColor: colors.bg,
                         color: colors.text,
                         borderLeft: isPendingCustomer
                           ? `3px dashed ${colors.border}`
                           : `3px solid ${colors.border}`,
+                        borderBottom: `2px solid ${colors.border}`,
                       }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = "0 1px 3px rgba(0,0,0,0.08)"; }}
                       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = ""; }}
@@ -940,19 +981,52 @@ export default function DaySwimLanes({
                       <span className="absolute top-0.5 right-1 text-[10px] opacity-50 font-medium">
                         {formatCompactTime(ev.start.getHours(), ev.start.getMinutes())}
                       </span>
-                      <p className="font-medium truncate">
-                        {ev.customerName}
-                      </p>
-                      <p className="truncate opacity-80">
-                        {ev.serviceNames?.join(", ")}
-                      </p>
-                      {(ev.vehicleDisplay || ev.licensePlate) && slotHeight > ROW_HEIGHT * 1.5 && (
-                        <p className="mt-0.5 flex items-center gap-1 truncate opacity-75 text-[10px]">
-                          <Car className="w-2.5 h-2.5 shrink-0" />
-                          <span className="truncate">
-                            {ev.vehicleDisplay}
-                            {ev.licensePlate ? ` · ${ev.licensePlate}` : ""}
-                          </span>
+                      {slotHeight <= ROW_HEIGHT * 2 && (ev.vehicleDisplay || ev.licensePlate) ? (
+                        <>
+                          <p className="font-medium truncate">
+                            {ev.customerName}
+                            {(ev.vehicleDisplay || ev.licensePlate) && (
+                              <span className="font-normal opacity-70">
+                                {" · "}
+                                {ev.vehicleDisplay ?? ev.licensePlate}
+                              </span>
+                            )}
+                          </p>
+                          <p className="truncate opacity-80">
+                            {ev.serviceNames?.join(", ")}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="font-medium truncate">
+                            {ev.customerName}
+                          </p>
+                          <p className="truncate opacity-80">
+                            {ev.serviceNames?.join(", ")}
+                          </p>
+                          {(ev.vehicleDisplay || ev.licensePlate) && (
+                            <p className="mt-0.5 flex items-center gap-1 truncate opacity-75 text-[10px]">
+                              <Car className="w-2.5 h-2.5 shrink-0" />
+                              <span className="truncate">
+                                {ev.vehicleDisplay}
+                                {ev.licensePlate ? ` · ${ev.licensePlate}` : ""}
+                              </span>
+                            </p>
+                          )}
+                        </>
+                      )}
+                      {ev.customerNote && slotHeight > ROW_HEIGHT * 2 && (
+                        <p
+                          className="mt-0.5 truncate italic opacity-80 text-[10px]"
+                          title={ev.customerNote}
+                        >
+                          “{ev.customerNote}”
+                        </p>
+                      )}
+                      {ev.status === "completed" && (
+                        <p className="mt-0.5 inline-flex items-center gap-1 truncate rounded-sm bg-green-100 px-1 text-[10px] font-semibold text-green-800">
+                          <CheckCircle2 className="w-2.5 h-2.5 shrink-0" />
+                          Completed
                         </p>
                       )}
                       {isPendingCustomer && (

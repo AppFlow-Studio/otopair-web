@@ -234,6 +234,26 @@ export const getByBookingId = query({
   },
 });
 
+export const getPostjobReportForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const actual = await getLatestJobActualForBooking(ctx, args.bookingId);
+    if (!actual) return null;
+
+    return {
+      postjobReport: actual.postjob_report ?? null,
+      submittedAt: actual.updated_at ?? actual._creationTime ?? null,
+      mechanicId: actual.mechanic_id ?? null,
+    };
+  },
+});
+
 export const getPrefillData = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {

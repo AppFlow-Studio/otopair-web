@@ -24,6 +24,10 @@ export interface CalendarEvent {
   totalCost?: number;
   blockTitle?: string | null;
   note?: string | null;
+  /** Free-text note the customer left for the mechanic on the Review &
+   *  Pay screen. Surfaced on booking cards / drawers so the mechanic can
+   *  read it before starting the job. */
+  customerNote?: string | null;
   scheduleChangeMode?: string;
   customerCanRestoreOriginal?: boolean;
   isDraft?: boolean;

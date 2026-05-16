@@ -35,6 +35,8 @@ export const create = mutation({
       date: v.string(), // "YYYY-MM-DD"
       time: v.string(), // "HH:MM" (24h)
     }),
+    /** Estimated job duration in minutes (15, 30, or 45). */
+    estimated_duration_minutes: v.optional(v.number()),
     expires_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -70,6 +72,7 @@ export const create = mutation({
       labor_cost: args.labor_cost,
       total: args.total,
       availability: args.availability,
+      estimated_duration_minutes: args.estimated_duration_minutes,
       created_at: now,
       expires_at: args.expires_at,
     });

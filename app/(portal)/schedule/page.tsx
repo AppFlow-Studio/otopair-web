@@ -958,6 +958,7 @@ export default function SchedulePage() {
           totalCost: b.totalCost,
           scheduleChangeMode: b.scheduleChangeMode,
           customerCanRestoreOriginal: b.customerCanRestoreOriginal,
+          customerNote: (b as any).customerNote ?? null,
           recommendationState: (b as any).recommendationState ?? null,
           diagnosticFollowupState: (b as any).diagnosticFollowupState ?? null,
         };
@@ -1346,24 +1347,32 @@ export default function SchedulePage() {
                 <Info className="w-5 h-5" />
               </button>
               {legendOpen && (
-                <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 min-w-[200px]">
-                  <p className="text-xs font-medium text-muted-foreground mb-2">Status Legend</p>
+                <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 min-w-[220px]">
+                  <p className="text-xs font-semibold text-muted-foreground mb-2.5 uppercase tracking-wide">Status Legend</p>
                   <div className="flex flex-col gap-1.5">
                     {BOOKING_STATUS_LEGEND_KEYS.map((key) => {
                         const colors = statusColors[key];
                         if (!colors) return null;
+                        const isPendingCustomer = key === "pending_customer_acceptance";
                         return (
-                          <div key={key} className="flex items-center gap-1.5">
+                          <div key={key} className="flex items-center gap-2">
                             <div
-                              className="w-3 h-3 rounded-sm shrink-0"
-                              style={{ backgroundColor: colors.border }}
+                              className="shrink-0 rounded-sm"
+                              style={{
+                                width: 32,
+                                height: 18,
+                                backgroundColor: colors.bg,
+                                borderLeft: isPendingCustomer
+                                  ? `3px dashed ${colors.border}`
+                                  : `3px solid ${colors.border}`,
+                              }}
                             />
                             <span className="text-xs text-foreground">{getBookingStatusLabel(key)}</span>
                           </div>
                         );
                       })}
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-3 rounded-sm blocked-slot-pattern shrink-0" />
+                    <div className="flex items-center gap-2">
+                      <div className="shrink-0 rounded-sm blocked-slot-pattern" style={{ width: 32, height: 18 }} />
                       <span className="text-xs text-foreground">Blocked</span>
                     </div>
                   </div>

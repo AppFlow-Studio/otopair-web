@@ -139,6 +139,7 @@ export const listForVehicle = query({
       name: s.name,
       slug: s.slug ?? null,
       service_category_id: s.service_category_id ?? null,
+      has_options: Boolean(s.has_options),
       is_vehicle_match: engineMatchedIds.has(String(s._id)),
     }));
   },

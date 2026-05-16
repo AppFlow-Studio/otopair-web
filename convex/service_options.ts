@@ -27,8 +27,11 @@ export const getByServiceIds = query({
         .withIndex("by_service_id", (q) => q.eq("service_id", serviceId))
         .collect();
       if (options.length > 0) {
+        const service = await ctx.db.get(serviceId);
         result.push({
           serviceId,
+          serviceName: service?.name ?? "Service",
+          serviceSlug: service?.slug ?? null,
           options: options.sort((a, b) => a.display_order - b.display_order),
         });
       }

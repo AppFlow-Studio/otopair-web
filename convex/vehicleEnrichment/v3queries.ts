@@ -238,7 +238,7 @@ export const getQuotableLaborTime = internalQuery({
   handler: async (ctx, args) => {
     const labor = await ctx.db
       .query("labor_times")
-      .withIndex("by_vehicle_config", (q) =>
+      .withIndex("by_vehicle_config_and_service", (q) =>
         q
           .eq("vehicle_config_id", args.vehicle_config_id)
           .eq("service_id", args.service_id),

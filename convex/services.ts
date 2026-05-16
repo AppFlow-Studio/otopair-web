@@ -86,6 +86,65 @@ export const list = query({
  *     serviceCategory: { icon_name, name, ... }
  *   }
  */
+/**
+ * QUERY: listForVehicle
+ * Surfaces services likely relevant to a specific vehicle engine, used by the
+ * post-job recommendation picker. When `engineId` is provided we prefer the
+ * services tagged in `service_vehicle_specs`; we always fall back to the full
+ * catalog so the mechanic can still find anything via substring search.
+ *
+ * The `query` filter does a case-insensitive substring match against name and
+ * slug. Returns at most `limit` rows (default 25), ranked engine-matches first.
+ */
+export const listForVehicle = query({
+  args: {
+    engineId: v.optional(v.id("engines")),
+    query: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 25;
+    const needle = (args.query ?? "").trim().toLowerCase();
+
+    const engineMatchedIds = new Set<string>();
+    if (args.engineId) {
+      const specs = await ctx.db
+        .query("service_vehicle_specs")
+        .withIndex("by_engine_id", (q) => q.eq("engine_id", args.engineId!))
+        .collect();
+      for (const spec of specs) {
+        if (spec.is_applicable === false) continue;
+        engineMatchedIds.add(String(spec.service_id));
+      }
+    }
+
+    const all = await ctx.db.query("services").collect();
+    const filtered = needle
+      ? all.filter((s) => {
+          const name = (s.name ?? "").toLowerCase();
+          const slug = (s.slug ?? "").toLowerCase();
+          return name.includes(needle) || slug.includes(needle);
+        })
+      : all;
+
+    const sorted = filtered.sort((a, b) => {
+      const aMatch = engineMatchedIds.has(String(a._id)) ? 0 : 1;
+      const bMatch = engineMatchedIds.has(String(b._id)) ? 0 : 1;
+      if (aMatch !== bMatch) return aMatch - bMatch;
+      return (a.display_order ?? 999) - (b.display_order ?? 999);
+    });
+
+    return sorted.slice(0, limit).map((s) => ({
+      _id: s._id,
+      name: s.name,
+      slug: s.slug ?? null,
+      service_category_id: s.service_category_id ?? null,
+      has_options: Boolean(s.has_options),
+      is_vehicle_match: engineMatchedIds.has(String(s._id)),
+    }));
+  },
+});
+
 export const getById = query({
   args: { id: v.id("services") },
   handler: async (ctx, args) => {

@@ -1,6 +1,5 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { getLateStartTimingConfig } from "./lib/late_start";
 import {
   getBookingEndTime,
   overlapsBlockedSlot,
@@ -54,6 +53,55 @@ async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
     })
   );
   return names;
+}
+
+/** Like `resolveServiceNames` but appends the per-service option label
+ *  (e.g. "Brake Pad Replacement — Front and rear", "Tire Rotation — Front 2 only")
+ *  when the booking has a selected_service_options entry for that service.
+ *  Used by the mechanic's schedule so the option is visible at a glance. */
+async function resolveServiceLabels(
+  ctx: any,
+  serviceIds: Array<any> | undefined,
+  selectedOptions:
+    | Array<{ service_id: any; option_label?: string }>
+    | undefined,
+): Promise<string[]> {
+  if (!serviceIds || serviceIds.length === 0) return [];
+  const byServiceId = new Map<string, string>();
+  for (const opt of selectedOptions ?? []) {
+    if (opt.option_label) byServiceId.set(String(opt.service_id), opt.option_label);
+  }
+  return await Promise.all(
+    serviceIds.map(async (serviceId: any) => {
+      const service = await ctx.db.get(serviceId);
+      const name = service?.name ?? "Unknown Service";
+      const label = byServiceId.get(String(serviceId));
+      return label ? `${name} — ${label}` : name;
+    }),
+  );
+}
+
+async function resolveVehicleDisplay(ctx: any, vin?: string | null): Promise<string | null> {
+  if (!vin) return null;
+  const vehicle = await ctx.db
+    .query("vehicles")
+    .withIndex("by_vin", (q: any) => q.eq("vin", vin))
+    .unique();
+  if (!vehicle) return null;
+  const parts: string[] = [];
+  if (vehicle.year != null) parts.push(String(vehicle.year));
+  if (vehicle.trim_id) {
+    const trim = await ctx.db.get(vehicle.trim_id);
+    if (trim) {
+      const model = await ctx.db.get(trim.model_id);
+      if (model) {
+        const make = await ctx.db.get(model.make_id);
+        if (make) parts.push(make.name);
+        parts.push(model.name);
+      }
+    }
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 async function resolveMechanicPhotoUrl(ctx: any, photo?: string | null) {
@@ -164,7 +212,6 @@ async function assertNoWindowConflicts(
 export const getScheduleContext = query({
   args: {},
   handler: async (ctx) => {
-    const lateStartTiming = getLateStartTimingConfig();
     const user = await getCurrentUserOrNull(ctx);
     if (!user) return null;
 
@@ -213,12 +260,6 @@ export const getScheduleContext = query({
     return {
       shopId: shop._id,
       shopName: shop.name,
-      lateStartTestMode: lateStartTiming.testMode,
-      lateStartTiming: {
-        warningLeadMinutes: lateStartTiming.warningLeadMinutes,
-        initialCycleMinutes: lateStartTiming.initialCycleMinutes,
-        cycleIncrementMinutes: lateStartTiming.cycleIncrementMinutes,
-      },
       hours: hours.map((hour: any) => ({
         _id: hour._id,
         dayOfWeek: hour.day_of_week,
@@ -241,30 +282,6 @@ export const getScheduleContext = query({
         })
       ),
     };
-  },
-});
-
-export const getMyShopHours = query({
-  args: {},
-  handler: async (ctx) => {
-    const user = await getCurrentUserOrNull(ctx);
-    if (!user) return [];
-
-    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
-    if (!primary) return [];
-
-    const hours = await ctx.db
-      .query("shops_hours")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
-    hours.sort((a: any, b: any) => a.day_of_week - b.day_of_week);
-
-    return hours.map((hour: any) => ({
-      dayOfWeek: hour.day_of_week,
-      openTime: hour.open_time ?? "09:00",
-      closeTime: hour.close_time ?? "17:00",
-      isClosed: hour.is_closed ?? false,
-    }));
   },
 });
 
@@ -310,8 +327,17 @@ export const getBookingsForRange = query({
           mechanicName: mechanic
             ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
             : null,
-          serviceNames: await resolveServiceNames(ctx, booking.service_ids),
+          serviceNames: await resolveServiceLabels(
+            ctx,
+            booking.service_ids,
+            booking.selected_service_options,
+          ),
+          vehicleDisplay: await resolveVehicleDisplay(ctx, booking.vin),
+          licensePlate: booking.vin ? String(booking.vin).slice(-4) : null,
           totalCost: booking.total_cost,
+          customerNote: booking.customer_notes ?? null,
+          recommendationState: booking.recommendation_state ?? null,
+          diagnosticFollowupState: booking.diagnostic_followup_state ?? null,
         };
       })
     );
@@ -340,14 +366,14 @@ export const deleteBlockTimeType = mutation({
   args: { typeId: v.id("block_time_types") },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const record = await ctx.db.get(args.typeId);
     if (!record) throw new Error("Block time type not found");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary || String(primary.shopId) !== String(record.shop_id)) {
-      throw new Error("Not authorized");
+      throw new Error("You don't have access to this shop's schedule.");
     }
 
     await ctx.db.delete(args.typeId);
@@ -358,10 +384,10 @@ export const saveBlockTimeType = mutation({
   args: { title: v.string() },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
-    if (!primary) throw new Error("Not authorized");
+    if (!primary) throw new Error("You don't have access to this shop's schedule.");
 
     const existing = await ctx.db
       .query("block_time_types")
@@ -416,14 +442,14 @@ export const updateShopHours = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const hoursRecord = await ctx.db.get(args.hoursId);
     if (!hoursRecord) throw new Error("Hours record not found");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary || String(primary.shopId) !== String(hoursRecord.shop_id)) {
-      throw new Error("Not authorized");
+      throw new Error("You don't have access to this shop's schedule.");
     }
 
     const patch: any = {};
@@ -447,14 +473,14 @@ export const blockSlot = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
-    if (!primary) throw new Error("Not authorized");
+    if (!primary) throw new Error("You don't have access to this shop's schedule.");
 
     const mechanicIds = await getMechanicIdsForBlock(ctx, primary.shopId, args.mechanicId);
     if (mechanicIds.length === 0) {
-      throw new Error("No active mechanics available for this shop");
+      throw new Error("No active mechanics yet. Add a team member in the Team page before scheduling.");
     }
 
     for (const mechanicId of mechanicIds) {
@@ -498,14 +524,14 @@ export const updateBlockedSlot = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const slot = await ctx.db.get(args.slotId);
     if (!slot) throw new Error("Slot not found");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary || String(primary.shopId) !== String(slot.shop_id)) {
-      throw new Error("Not authorized");
+      throw new Error("You don't have access to this shop's schedule.");
     }
 
     const nextMechanicId = args.mechanicId ?? slot.mechanic_id;
@@ -555,14 +581,14 @@ export const unblockSlot = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const slot = await ctx.db.get(args.slotId);
     if (!slot) throw new Error("Slot not found");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary || String(primary.shopId) !== String(slot.shop_id)) {
-      throw new Error("Not authorized");
+      throw new Error("You don't have access to this shop's schedule.");
     }
 
     const mechanicId = slot.mechanic_id;
@@ -584,10 +610,10 @@ export const blockMechanicDay = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
-    if (!primary) throw new Error("Not authorized");
+    if (!primary) throw new Error("You don't have access to this shop's schedule.");
 
     const dayDate = new Date(`${args.date}T00:00:00`);
     const dayOfWeek = dayDate.getDay();
@@ -689,10 +715,10 @@ export const copyBlockedSlotsToNextWeek = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Not authenticated");
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
-    if (!primary) throw new Error("Not authorized");
+    if (!primary) throw new Error("You don't have access to this shop's schedule.");
 
     const start = new Date(`${args.weekStartDate}T00:00:00`);
     const endDate = new Date(start);
@@ -789,6 +815,8 @@ export const getShopServicesWithCategories = query({
           return {
             _id: service._id as string,
             name: service.name as string,
+            slug: (service.slug ?? "") as string,
+            hasOptions: Boolean(service.has_options),
             defaultLaborHours: (service.default_labor_hours ?? 1) as number,
             displayOrder: (service.display_order ?? 0) as number,
             categoryId: service.service_category_id as string,
@@ -800,6 +828,8 @@ export const getShopServicesWithCategories = query({
     ).filter(Boolean) as Array<{
       _id: string;
       name: string;
+      slug: string;
+      hasOptions: boolean;
       defaultLaborHours: number;
       displayOrder: number;
       categoryId: string;

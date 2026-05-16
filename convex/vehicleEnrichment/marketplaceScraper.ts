@@ -26,9 +26,9 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const MIN_YEAR = 2018;
 const MAX_YEAR = new Date().getFullYear() + 1; // include next model year
-const ENRICHMENT_BATCH_SIZE = 10; // max VINs to enrich per processor run
-const MAX_CONCURRENT = 3; // max simultaneous enrichments (rate limit safety)
-const STAGGER_DELAY_MS = 30_000; // 30s between each enrichment start
+const ENRICHMENT_BATCH_SIZE = 1500; // daily cap on enrichments (1 car/min target × ~24h)
+const MAX_CONCURRENT = 10; // max simultaneous enrichments (rate limit safety)
+const STAGGER_DELAY_MS = 6_000; // 6s between each enrichment start (10 over 60s)
 const MODEL_HAIKU = "claude-haiku-4-5-20251001";
 
 // VIN regex: 17 alphanumeric chars, no I/O/Q
@@ -472,6 +472,13 @@ Return ONLY the JSON array, no other text.`,
 export const processVinQueue = internalAction({
   args: {},
   handler: async (ctx) => {
+    // Kill-switch: pause enrichment without redeploying.
+    // Toggle via: npx convex env set --prod ENRICHMENT_PAUSED true|false
+    if (process.env.ENRICHMENT_PAUSED === "true") {
+      console.log("[queue] ENRICHMENT_PAUSED — skipping run");
+      return { processed: 0, enriched: 0, skipped: 0, reason: "paused" };
+    }
+
     // Check daily budget
     const todayCount = await ctx.runQuery(
       internal.vehicleEnrichment.marketplaceScraper.countTodayEnrichments,
@@ -636,6 +643,7 @@ export const enrichAndTrack = internalAction({
             engineCode: decoded.engineCode,
             displacement: decoded.displacement ?? "",
             drivetrain: decoded.drivetrain ?? undefined,
+            nhtsaVinKey: decoded.nhtsaVinKey ?? undefined,
           }
         );
       }

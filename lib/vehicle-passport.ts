@@ -104,6 +104,8 @@ export type VehiclePassportData = {
   vin: string;
   vehicle_label: string;
   vehicle_short_label: string;
+  vehicle_spec_label?: string | null;
+  chassis_label?: string | null;
   service_name: string;
   service_slug: string | null;
   requires_parts: boolean;
@@ -134,6 +136,14 @@ export type JobActualPartPayload = {
   brand?: string | null;
   oem_number: string;
   cost: number;
+  // Whole-unit count of this part used on this job. Defaults to 1 server-side.
+  quantity?: number;
+  // "shop" — Otopair-fulfilled. "customer" — driver brought their own part;
+  // cost is $0, snapshot is logged but excluded from shop preferences.
+  supplied_by?: "shop" | "customer";
+  // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
+  // Otopair currently supplies OEM only; defaults to "oem".
+  part_tier?: string;
 };
 
 export type PreJobSurveyPayload = {
@@ -169,6 +179,55 @@ export type VehicleUpdateValues = {
   oil_filter_part_number?: string | null;
 };
 
+export type TimeVariance = "faster" | "on_time" | "slower";
+export type TimeVarianceReason =
+  | "vehicle_quirk"
+  | "parts_issue"
+  | "customer_info_wrong"
+  | "unexpected_complication"
+  | "easier_than_expected"
+  | "experienced_with_platform"
+  | "customer_info_accurate"
+  | "well_prepped"
+  | "other";
+
+export type RecommendationUrgency =
+  | "next_visit"
+  | "within_3_months"
+  | "soon";
+
+export type RecommendationServiceOption = {
+  option_id: string;
+  option_label: string;
+  option_type?: string;
+};
+
+export type RecommendationTireSpecs = {
+  size: string;
+  type: string;
+  tier: string;
+  quantity: number;
+};
+
+export type JobRecommendationInput = {
+  recommended_service_id: string | null;
+  freeform_service_name: string | null;
+  urgency: RecommendationUrgency;
+  reason: string | null;
+  visible_to_driver: boolean;
+  target_mileage?: number | null;
+  scheduled_at?: number | null;
+  scheduled_mechanic_id?: string | null;
+  selected_service_option?: RecommendationServiceOption | null;
+  tire_specs?: RecommendationTireSpecs | null;
+};
+
+export type PostjobPhotoInput = {
+  storage_id: string;
+  caption?: string | null;
+  taken_at: number;
+};
+
 export type PostJobSurveyPayload = {
   completion_mileage: number;
   parts_used: JobActualPartPayload[];
@@ -183,6 +242,11 @@ export type PostJobSurveyPayload = {
   parts_accuracy_feedback?: string | null;
   additional_observations?: string | null;
   skip_optional_survey?: boolean;
+  postjob_photos?: PostjobPhotoInput[];
+  time_variance?: TimeVariance | null;
+  time_variance_reason?: TimeVarianceReason | null;
+  time_variance_note?: string | null;
+  recommendations?: JobRecommendationInput[];
 };
 
 type VehicleUpdatePrompt = {
@@ -424,6 +488,10 @@ export function getVehicleUpdatePrompts(
 export function sumJobActualParts(parts: JobActualPartPayload[]) {
   return parts.reduce((sum, part) => {
     const cost = Number.isFinite(part.cost) ? part.cost : 0;
-    return sum + cost;
+    const qty =
+      typeof part.quantity === "number" && Number.isFinite(part.quantity) && part.quantity > 0
+        ? part.quantity
+        : 1;
+    return sum + cost * qty;
   }, 0);
 }

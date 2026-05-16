@@ -328,9 +328,17 @@ export default defineSchema({
   // ===== PARTS & FITMENTS =====
 
   // [W] 15 fields (A/D had 5). Replaces deprecated *_part_fitments tables.
+  // Canonical parts catalog. Conceptually "parts_catalog" — table name kept as
+  // oem_parts for backwards compatibility with existing data and call sites.
+  // Otopair currently supplies OEM parts only; part_tier exists for forward
+  // compatibility but new rows should default to "oem".
   oem_parts: defineTable({
     oem_part_number: v.string(),
     name: v.string(),
+    brand: v.optional(v.string()),
+    // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
+    // Legacy rows are implicitly OEM; new rows should set this explicitly.
+    part_tier: v.optional(v.string()),
     category: v.optional(v.string()),
     notes: v.optional(v.string()),
     created_at: v.optional(v.number()),
@@ -348,7 +356,8 @@ export default defineSchema({
     .index("by_part_number", ["oem_part_number"])
     .index("by_category", ["category"])
     .index("by_subcategory", ["subcategory"])
-    .index("by_make_category", ["make_id", "category"]),
+    .index("by_make_category", ["make_id", "category"])
+    .index("by_brand", ["brand"]),
 
   // [U-W] Unified part-to-vehicle-config fitment
   part_fitments: defineTable({
@@ -386,6 +395,94 @@ export default defineSchema({
   })
     .index("by_part", ["part_id"])
     .index("by_part_source", ["part_id", "source_domain"]),
+
+  // Materialized view of "which part does this shop reach for on this
+  // service+vehicle_config?" Built from observation: every shop-supplied
+  // part_snapshot bumps use_count via recordPartUsage. Once a (shop, service,
+  // config, part) tuple crosses the default threshold (3), is_default flips to
+  // true and any prior default for the same (shop, service, config) is reset.
+  // Mechanics never set this up — it accretes from usage.
+  shop_part_preferences: defineTable({
+    shop_id: v.id("shops"),
+    service_id: v.id("services"),
+    vehicle_config_id: v.id("vehicle_configs"),
+    part_id: v.id("oem_parts"),
+    use_count: v.number(),
+    last_used_at: v.number(),
+    is_default: v.boolean(),
+  })
+    .index("by_shop_service_config", ["shop_id", "service_id", "vehicle_config_id"])
+    .index("by_shop_service", ["shop_id", "service_id"])
+    .index("by_part", ["part_id"]),
+
+  // Append-only price snapshots. Every part used on every closed job lands
+  // here. The core mental model: a snapshot is a sensor reading — "on this
+  // date, this shop used this part on this vehicle for this service at this
+  // cost." Aggregations across thousands of these power eventual quote
+  // confidence intervals.
+  //
+  // Strict append-only with one exception: superseded_by_id can be patched
+  // when a correction snapshot lands (corrects_snapshot_id points back).
+  // Aggregations filter where superseded_by_id is undefined.
+  part_snapshots: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.optional(v.id("job_actuals")),
+    shop_id: v.id("shops"),
+    mechanic_id: v.id("users"),
+
+    // Vehicle context — denormalized so aggregations don't need joins.
+    vehicle_id: v.id("vehicles"),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    engine_id: v.optional(v.id("engines")),
+    chassis_id: v.optional(v.id("chassis_variants")),
+    trim_id: v.optional(v.id("trims")),
+
+    service_id: v.id("services"),
+
+    // Part identity. part_id is null when the mechanic typed a free-form part
+    // not yet in oem_parts; admin promotes frequent free-form entries into the
+    // catalog (flag_reason="missing_part_id" on those rows).
+    part_id: v.optional(v.id("oem_parts")),
+    part_name: v.string(),
+    oem_part_number: v.optional(v.string()),
+    brand: v.optional(v.string()),
+    // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
+    // Otopair-supplied parts default to "oem".
+    part_tier: v.string(),
+
+    // "shop" — Otopair-fulfilled. "customer" — driver brought their own part;
+    // unit_cost forced to 0 at the mutation, excluded from price aggregates
+    // and from shop_part_preferences (it's the customer's choice, not the
+    // shop's preference).
+    supplied_by: v.string(),
+    quantity: v.number(),
+    unit_cost: v.number(),
+    total_cost: v.number(),
+    currency: v.optional(v.string()),
+
+    // Reasonableness pipeline — never blocks. cost_outlier_low/high set when
+    // unit_cost is <50% or >200% of recent median for the same part on the
+    // same vehicle_config (min sample 5). missing_part_id set when the
+    // catalog has no match for the entered part_number/name.
+    flagged_for_review: v.optional(v.boolean()),
+    flag_reason: v.optional(v.string()),
+
+    // Two-pass correction model. Corrections are NEW rows pointing back via
+    // corrects_snapshot_id; the original gets its superseded_by_id patched.
+    corrects_snapshot_id: v.optional(v.id("part_snapshots")),
+    superseded_by_id: v.optional(v.id("part_snapshots")),
+
+    recorded_at: v.number(),
+    notes: v.optional(v.string()),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_shop_service", ["shop_id", "service_id"])
+    .index("by_shop_service_config", ["shop_id", "service_id", "vehicle_config_id"])
+    .index("by_service_config", ["service_id", "vehicle_config_id"])
+    .index("by_service_engine", ["service_id", "engine_id"])
+    .index("by_part", ["part_id"])
+    .index("by_flagged", ["flagged_for_review"])
+    .index("by_recorded_at", ["recorded_at"]),
 
   // ===== ENRICHMENT PIPELINE (all Waleed unique) =====
 
@@ -687,9 +784,6 @@ export default defineSchema({
     mileage: v.optional(v.number()),
     added_at: v.optional(v.number()),
     removed_at: v.optional(v.number()),
-    smartcarVehicleId: v.optional(v.string()),
-    connectionStatus: v.optional(v.string()),
-    connectedAt: v.optional(v.number()),
     ownershipType: v.optional(v.string()),
     ownedSinceNew: v.optional(v.boolean()),
     mileageAtPurchase: v.optional(v.number()),
@@ -721,6 +815,11 @@ export default defineSchema({
     next_checkin_due: v.optional(v.number()),
     health_score: v.optional(v.number()),
     health_score_is_estimated: v.optional(v.boolean()),
+    // Additive penalty from open mechanic recommendations. Final displayed
+    // score = clamp(health_score - health_score_rec_penalty, 0, 100). Kept
+    // separate so the maintenance pipeline stays auditable.
+    health_score_rec_penalty: v.optional(v.number()),
+    health_score_rec_penalty_updated_at: v.optional(v.number()),
     ownership_plan: v.optional(v.string()),
     lease_ending_soon: v.optional(v.boolean()),
     lease_mileage_pace: v.optional(v.string()),
@@ -728,8 +827,7 @@ export default defineSchema({
     .index("by_vin", ["vin"])
     .index("by_user_id", ["user_id"])
     .index("by_vin_user", ["vin", "user_id"])
-    .index("by_user_status", ["user_id", "status"])
-    .index("by_smartcar_vehicle_id", ["smartcarVehicleId"]),
+    .index("by_user_status", ["user_id", "status"]),
 
   // [U-W] Owner-specific hardware facts about THIS car.
   // Resolves which package-tagged part_fitments apply at booking time.
@@ -804,30 +902,6 @@ export default defineSchema({
     .index("by_vin", ["vin"])
     .index("by_updated_at", ["updated_at"]),
 
-  // [I]
-  odometer_history: defineTable({
-    vehicleOwnerId: v.id("vehicle_owners"),
-    distance: v.number(),
-    unit: v.string(),
-    recordedAt: v.number(),
-  }).index("by_vehicle_and_date", ["vehicleOwnerId", "recordedAt"]),
-
-  // [I]
-  smartcar_connections: defineTable({
-    vehicleOwnerId: v.id("vehicle_owners"),
-    smartcarVehicleId: v.string(),
-    accessToken: v.string(),
-    refreshToken: v.string(),
-    tokenExpiresAt: v.number(),
-    connectedAt: v.number(),
-    lastSyncedAt: v.optional(v.number()),
-    permissions: v.optional(v.any()),
-    status: v.string(),
-  })
-    .index("by_vehicle_owner", ["vehicleOwnerId"])
-    .index("by_smartcar_vehicle_id", ["smartcarVehicleId"])
-    .index("by_status", ["status"]),
-
   // [I] Daniel/Waleed
   vehicle_tiers: defineTable({
     vin: v.string(),
@@ -836,6 +910,24 @@ export default defineSchema({
     spend_12mo: v.optional(v.number()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
+  })
+    .index("by_vin_user", ["vin", "user_id"])
+    .index("by_user_id", ["user_id"]),
+
+  // Health Points per vehicle — motivation layer that buffers the
+  // Vehicle Health score (every 15 HP = +1, cap +3). Per Rewards
+  // Framework v3 §11.
+  vehicle_health_points: defineTable({
+    vin: v.string(),
+    user_id: v.id("users"),
+    points: v.number(),
+    // Dedupe key for the one-time "vehicle profile fully complete"
+    // award. Other earn events stack on `points` without flag tracking.
+    profile_complete_awarded: v.optional(v.boolean()),
+    // Tracks when decay was last applied so the daily cron is a
+    // no-op until the next 30-day window elapses for this row.
+    last_decay_at: v.optional(v.number()),
+    updated_at: v.number(),
   })
     .index("by_vin_user", ["vin", "user_id"])
     .index("by_user_id", ["user_id"]),
@@ -976,18 +1068,6 @@ export default defineSchema({
     .index("by_vehicle_owner", ["vehicleOwnerId"])
     .index("by_vehicle_and_type", ["vehicleOwnerId", "type"]),
 
-  // [I]
-  vehicle_health_snapshots: defineTable({
-    vehicleOwnerId: v.id("vehicle_owners"),
-    snapshotType: v.string(),
-    data: v.any(),
-    source: v.optional(v.string()),
-    recordedAt: v.number(),
-    createdAt: v.number(),
-  })
-    .index("by_vehicle_owner", ["vehicleOwnerId"])
-    .index("by_vehicle_and_type", ["vehicleOwnerId", "snapshotType"]),
-
   // ===== USERS & AUTH =====
 
   // [D] 25 fields (A had 15, W had 22)
@@ -1015,6 +1095,10 @@ export default defineSchema({
     deletionRequestedAt: v.optional(v.number()),
     deletionSurveyResponse: v.optional(v.string()),
     deletionSurveySkipped: v.optional(v.boolean()),
+    // Timestamp the user last opened the membership/loyalty surface.
+    // Compared against the latest `ownership_credit_transactions.created_at`
+    // to drive the trophy-icon red dot. Bumped by `rewards.markCreditsSeen`.
+    last_viewed_credits_at: v.optional(v.number()),
     createdAt: v.optional(v.number()),
     lastUpdated: v.optional(v.number()),
   })
@@ -1029,6 +1113,20 @@ export default defineSchema({
     language: v.optional(v.string()),
     units: v.optional(v.string()),
     last_updated: v.optional(v.number()),
+  }).index("by_user_id", ["user_id"]),
+
+  // Saved Addresses — UberEats-style list of user-saved Home/Work/Other
+  // addresses. Used by the settings page now; future booking flows
+  // can read `is_primary` to pre-fill the customer location.
+  user_saved_addresses: defineTable({
+    user_id: v.id("users"),
+    type: v.union(v.literal("home"), v.literal("work"), v.literal("other")),
+    label: v.string(),
+    address: v.string(),
+    notes: v.optional(v.string()),
+    is_primary: v.optional(v.boolean()),
+    created_at: v.number(),
+    updated_at: v.number(),
   }).index("by_user_id", ["user_id"]),
 
   // [U-D] User mechanic favorites/hidden
@@ -1051,6 +1149,28 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_action", ["user_id", "action_type"]),
+
+  // Referrals — referee enters referrer's code during onboarding,
+  // row inserted with status="pending". On the referee's first
+  // `completed` booking, status flips to "credited" and both sides
+  // are paid the $15 referral credit via claimContributionReward.
+  // Per Rewards Framework v3 §8.
+  referrals: defineTable({
+    referrer_user_id: v.id("users"),
+    referee_user_id: v.id("users"),
+    code_used: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("credited"),
+      v.literal("cancelled"),
+    ),
+    created_at: v.number(),
+    first_service_booking_id: v.optional(v.id("bookings")),
+    credited_at: v.optional(v.number()),
+  })
+    .index("by_referee", ["referee_user_id"])
+    .index("by_referrer", ["referrer_user_id"])
+    .index("by_status", ["status"]),
 
   // [I] Daniel/Waleed
   user_reward_wallets: defineTable({
@@ -1104,6 +1224,7 @@ export default defineSchema({
     no_show_threshold_minutes: v.optional(v.number()),
     overrun_default_extension_percent: v.optional(v.number()),
     overrun_extension_floor_minutes: v.optional(v.number()),
+    buffer_minutes: v.optional(v.number()),
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
@@ -1210,11 +1331,13 @@ export default defineSchema({
     is_available: v.boolean(),
     note: v.optional(v.string()),
     title: v.optional(v.string()),
+    series_id: v.optional(v.string()),
   })
     .index("by_shop_id", ["shop_id"])
     .index("by_mechanic_id", ["mechanic_id"])
     .index("by_shop_and_date", ["shop_id", "date"])
-    .index("by_availability", ["is_available"]),
+    .index("by_availability", ["is_available"])
+    .index("by_series_id", ["series_id"]),
 
   // ===== BOOKINGS & PAYMENTS =====
 
@@ -1227,13 +1350,73 @@ export default defineSchema({
     mechanic_id: v.optional(v.id("mechanics")),
     vin: v.string(),
     service_ids: v.array(v.id("services")),
-    custom_services: v.optional(
+    customer_notes: v.optional(v.string()),
+    diagnostic_system: v.optional(
+      v.union(
+        v.literal("brakes"),
+        v.literal("tires_wheels"),
+        v.literal("engine"),
+        v.literal("battery_electrical"),
+        v.literal("not_sure"),
+      ),
+    ),
+    diagnostic_checklist: v.optional(
       v.array(
         v.object({
-          name: v.string(),
-          duration_minutes: v.optional(v.number()),
-        })
-      )
+          label: v.string(),
+          status: v.union(
+            v.literal("pending"),
+            v.literal("checked"),
+            v.literal("flagged"),
+            v.literal("skipped"),
+          ),
+          mechanic_note: v.optional(v.string()),
+          skip_reason: v.optional(
+            v.union(
+              v.literal("not_applicable"),
+              v.literal("no_equipment"),
+              v.literal("customer_declined"),
+              v.literal("out_of_time"),
+            ),
+          ),
+        }),
+      ),
+    ),
+    diagnostic_checklist_completed_at_ms: v.optional(v.number()),
+    diagnostic_findings_note: v.optional(v.string()),
+    recommended_service_id: v.optional(v.id("services")),
+    recommended_service_note: v.optional(v.string()),
+    recommendation_state: v.optional(
+      v.union(
+        v.literal("none"),
+        v.literal("pending_customer"),
+        v.literal("confirmed"),
+        v.literal("declined"),
+        v.literal("out_of_scope"),
+      ),
+    ),
+    recommendation_sent_at_ms: v.optional(v.number()),
+    recommendation_decided_at_ms: v.optional(v.number()),
+    recommended_scheduled_date: v.optional(v.string()),
+    recommended_scheduled_time: v.optional(v.string()),
+    parent_job_id: v.optional(v.id("bookings")),
+    diagnostic_followup_state: v.optional(
+      v.union(
+        v.literal("pending"),
+        v.literal("awaiting_info"),
+        v.literal("resolved"),
+      ),
+    ),
+    awaiting_info_note: v.optional(v.string()),
+    awaiting_info_at_ms: v.optional(v.number()),
+    out_of_scope_note: v.optional(v.string()),
+    out_of_scope_category: v.optional(
+      v.union(
+        v.literal("bodywork"),
+        v.literal("transmission"),
+        v.literal("electrical_major"),
+        v.literal("other"),
+      ),
     ),
     time_slot_id: v.optional(v.id("time_slots")),
     scheduled_date: v.optional(v.string()),
@@ -1254,6 +1437,20 @@ export default defineSchema({
         quantity: v.number(),
       })
     ),
+    // Picked variants for services with has_options = true (e.g. brake pads
+    // front-vs-rear). Tires keep using tire_specs above. One entry per
+    // has_options service. option_label and option_type are snapshotted so
+    // the booking still reads correctly if the source row is later edited.
+    selected_service_options: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          option_id: v.id("service_options"),
+          option_label: v.string(),
+          option_type: v.optional(v.string()),
+        })
+      )
+    ),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
     previous_scheduled_date: v.optional(v.string()),
@@ -1263,11 +1460,23 @@ export default defineSchema({
     vehicle_arrived_at_ms: v.optional(v.number()),
     vehicle_arrived_by_user_id: v.optional(v.id("users")),
     assignment_preference: v.optional(v.string()),
+    completed_at_ms: v.optional(v.number()),
+    refund_reason: v.optional(v.string()),
     reschedule_proposed_at: v.optional(v.number()),
     schedule_change_mode: v.optional(v.string()),
     schedule_change_source_booking_id: v.optional(v.id("bookings")),
     customer_can_restore_original: v.optional(v.boolean()),
-    refund_reason: v.optional(v.string()),
+    custom_services: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          durationMinutes: v.optional(v.float64()),
+        })
+      )
+    ),
+    // Set when the driver booked this directly from a mechanic recommendation
+    // card. Used to auto-close the rec on completion.
+    source_recommendation_id: v.optional(v.id("job_recommendations")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])
@@ -1276,165 +1485,20 @@ export default defineSchema({
     .index("by_user_and_status", ["user_id", "status"])
     .index("by_shop_and_date", ["shop_id", "scheduled_date"])
     .index("by_shop_and_status", ["shop_id", "status"])
-    .index("by_created_at", ["created_at"]),
-
-  late_start_monitors: defineTable({
-    shop_id: v.id("shops"),
-    upstream_booking_id: v.id("bookings"),
-    cycle_minutes: v.number(),
-    warning_due_at_ms: v.number(),
-    auto_apply_at_ms: v.number(),
-    status: v.string(),
-    created_at: v.optional(v.number()),
-    updated_at: v.optional(v.number()),
-  })
-    .index("by_shop_id", ["shop_id"])
-    .index("by_upstream_booking_id", ["upstream_booking_id"])
-    .index("by_status", ["status"]),
-
-  late_start_reviews: defineTable({
-    shop_id: v.id("shops"),
-    upstream_booking_id: v.id("bookings"),
-    cycle_minutes: v.number(),
-    status: v.string(),
-    decision_due_at_ms: v.number(),
-    proposals: v.array(
-      v.object({
-        booking_id: v.id("bookings"),
-        original_scheduled_date: v.string(),
-        original_scheduled_time: v.string(),
-        original_mechanic_id: v.optional(v.id("mechanics")),
-        proposed_scheduled_date: v.optional(v.string()),
-        proposed_scheduled_time: v.optional(v.string()),
-        proposed_mechanic_id: v.optional(v.id("mechanics")),
-        used_alternate_mechanic: v.boolean(),
-        blocked_reason: v.optional(v.string()),
-      })
-    ),
-    blocking_reason: v.optional(v.string()),
-    resolved_at: v.optional(v.number()),
-    resolved_by_user_id: v.optional(v.id("users")),
-    created_at: v.optional(v.number()),
-    updated_at: v.optional(v.number()),
-  })
-    .index("by_shop_id", ["shop_id"])
-    .index("by_upstream_booking_id", ["upstream_booking_id"])
-    .index("by_status", ["status"]),
-
-  customer_late_alerts: defineTable({
-    shop_id: v.id("shops"),
-    booking_id: v.id("bookings"),
-    monitor_id: v.id("customer_late_monitors"),
-    status: v.string(),
-    threshold_due_at_ms: v.number(),
-    resolved_at_ms: v.optional(v.number()),
-    resolved_by_user_id: v.optional(v.id("users")),
-    resolution: v.optional(v.string()),
-    created_at: v.optional(v.number()),
-    updated_at: v.optional(v.number()),
-  })
-    .index("by_shop_id", ["shop_id"])
-    .index("by_booking_id", ["booking_id"])
-    .index("by_monitor_id", ["monitor_id"])
-    .index("by_status", ["status"]),
-
-  job_overrun_checkins: defineTable({
-    shop_id: v.id("shops"),
-    booking_id: v.id("bookings"),
-    mechanic_id: v.id("mechanics"),
-    status: v.string(),
-    prompt_due_at_ms: v.number(),
-    mechanic_response_due_at_ms: v.number(),
-    default_apply_at_ms: v.number(),
-    prompt_sent_at_ms: v.optional(v.number()),
-    front_desk_prompt_sent_at_ms: v.optional(v.number()),
-    on_track_answer: v.optional(v.string()),
-    extension_minutes: v.optional(v.number()),
-    response_source: v.optional(v.string()),
-    answered_by_user_id: v.optional(v.id("users")),
-    resolved_at_ms: v.optional(v.number()),
-    created_at: v.optional(v.number()),
-    updated_at: v.optional(v.number()),
-  })
-    .index("by_shop_id", ["shop_id"])
-    .index("by_booking_id", ["booking_id"])
-    .index("by_mechanic_id", ["mechanic_id"])
-    .index("by_status", ["status"]),
+    .index("by_created_at", ["created_at"])
+    .index("by_source_recommendation", ["source_recommendation_id"]),
 
   // Tire quote responses — one row per shop response to a quote-stage
   // booking (status === "pending_quote"). The user picks one to accept,
   // which fills in shop_id/labor_cost/etc on the booking and flips it to
   // "confirmed".
-  notification_outbox: defineTable({
-    shop_id: v.optional(v.id("shops")),
-    booking_id: v.optional(v.id("bookings")),
-    user_id: v.optional(v.id("users")),
-    mechanic_id: v.optional(v.id("mechanics")),
-    channel: v.string(),
-    category: v.string(),
-    status: v.string(),
-    dedupe_key: v.string(),
-    payload: v.any(),
-    scheduled_for_ms: v.optional(v.number()),
-    created_at: v.number(),
-    updated_at: v.optional(v.number()),
-    processed_at: v.optional(v.number()),
-  })
-    .index("by_dedupe_key", ["dedupe_key"])
-    .index("by_status", ["status"])
-    .index("by_shop_id", ["shop_id"])
-    .index("by_booking_id", ["booking_id"])
-    .index("by_shop_and_status", ["shop_id", "status"]),
-
-  customer_late_monitors: defineTable({
-    shop_id: v.id("shops"),
-    booking_id: v.id("bookings"),
-    status: v.string(),
-    scheduled_start_ms: v.number(),
-    push_due_at_ms: v.number(),
-    sms_due_at_ms: v.number(),
-    threshold_due_at_ms: v.number(),
-    push_enqueued_at_ms: v.optional(v.number()),
-    sms_enqueued_at_ms: v.optional(v.number()),
-    frontdesk_enqueued_at_ms: v.optional(v.number()),
-    resolved_at_ms: v.optional(v.number()),
-    resolved_by_user_id: v.optional(v.id("users")),
-    created_at: v.optional(v.number()),
-    updated_at: v.optional(v.number()),
-  })
-    .index("by_shop_id", ["shop_id"])
-    .index("by_booking_id", ["booking_id"])
-    .index("by_status", ["status"])
-    .index("by_shop_and_status", ["shop_id", "status"]),
-
-  overrun_checkins: defineTable({
-    shop_id: v.id("shops"),
-    booking_id: v.id("bookings"),
-    mechanic_id: v.optional(v.id("mechanics")),
-    status: v.string(),
-    due_at_ms: v.number(),
-    escalation_due_at_ms: v.number(),
-    auto_apply_at_ms: v.number(),
-    default_extension_minutes: v.number(),
-    mechanic_prompted_at_ms: v.optional(v.number()),
-    frontdesk_escalated_at_ms: v.optional(v.number()),
-    answered_at_ms: v.optional(v.number()),
-    answered_by_user_id: v.optional(v.id("users")),
-    answer_source: v.optional(v.string()),
-    is_complete: v.optional(v.boolean()),
-    extension_minutes: v.optional(v.number()),
-    resolved_at_ms: v.optional(v.number()),
-    created_at: v.optional(v.number()),
-    updated_at: v.optional(v.number()),
-  })
-    .index("by_shop_id", ["shop_id"])
-    .index("by_booking_id", ["booking_id"])
-    .index("by_status", ["status"])
-    .index("by_shop_and_status", ["shop_id", "status"]),
-
   tire_quote_responses: defineTable({
     booking_id: v.id("bookings"),
     shop_id: v.id("shops"),
+    /** Mechanic the shop assigned to do the job when submitting the quote.
+     *  Propagated onto the booking by `acceptTireQuote` so the schedule
+     *  page can resolve "Open vehicle check" without a separate reassign. */
+    mechanic_id: v.optional(v.id("mechanics")),
     tire_brand: v.string(),
     tire_model: v.optional(v.string()),
     per_tire_price: v.number(),
@@ -1448,6 +1512,8 @@ export default defineSchema({
       date: v.string(), // "YYYY-MM-DD"
       time: v.string(), // "HH:MM" (24h)
     }),
+    /** How long the shop estimates the tire work will take (15/30/45 min). */
+    estimated_duration_minutes: v.optional(v.number()),
     created_at: v.number(),
     /** Optional expiration so stale quotes can be filtered out. */
     expires_at: v.optional(v.number()),
@@ -1626,11 +1692,17 @@ export default defineSchema({
     message: v.optional(v.string()),
     created_at: v.optional(v.number()),
     sent_at: v.optional(v.number()),
+    // Set when this follow-up was created by a mechanic recommendation.
+    // Null entries are algorithm-generated and may be superseded.
+    recommendation_id: v.optional(v.id("job_recommendations")),
+    dismissed_reason: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_vin", ["vin"])
     .index("by_status_and_scheduled", ["status", "scheduled_for"])
-    .index("by_booking_id", ["booking_id"]),
+    .index("by_booking_id", ["booking_id"])
+    .index("by_vin_and_recommendation", ["vin", "recommendation_id"])
+    .index("by_vin_and_service", ["vin", "service_id"]),
 
   // [I]
   job_actuals: defineTable({
@@ -1800,8 +1872,26 @@ export default defineSchema({
     .index("by_source", ["source"])
     .index("by_tire_model_source", ["tire_model_id", "source"]),
 
-  // ─── Director Panel ───────────────────────────────────────────────────────
+  // ==========================================================================
+  // YMMT catalog caches (lazy NHTSA vPIC fill) — used by ymmtCatalog.ts.
+  // ==========================================================================
+  model_year_cache: defineTable({
+    make_id: v.id("makes"),
+    year: v.number(),
+    fetched_at: v.number(),
+  }).index("by_make_year", ["make_id", "year"]),
 
+  trim_year_cache: defineTable({
+    model_id: v.id("models"),
+    year: v.number(),
+    fetched_at: v.number(),
+  }).index("by_model_year", ["model_id", "year"]),
+
+  // ==========================================================================
+  // Director (admin) panel tables — used by director*.ts, audit_log.ts,
+  // bugs.ts, app_feedback.ts. Mobile doesn't render this surface, but the
+  // shared Convex deployment needs the tables to back web's admin UI.
+  // ==========================================================================
   bugs: defineTable({
     title: v.string(),
     source: v.union(
@@ -1886,4 +1976,268 @@ export default defineSchema({
   })
     .index("by_token", ["token"])
     .index("by_user_id", ["user_id"]),
+
+  // ==========================================================================
+  // Scheduling-overhaul tables — late-start monitoring, no-show monitoring,
+  // overrun check-ins, and the notification outbox queue. Backed by
+  // convex/bookings.ts late-start / customer-late / overrun mutations and
+  // queries (mobile doesn't render this surface yet, but the shared deployment
+  // needs the tables for the web shop dashboard).
+  // ==========================================================================
+  late_start_monitors: defineTable({
+    shop_id: v.id("shops"),
+    upstream_booking_id: v.id("bookings"),
+    cycle_minutes: v.number(),
+    warning_due_at_ms: v.number(),
+    auto_apply_at_ms: v.number(),
+    status: v.string(),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_upstream_booking_id", ["upstream_booking_id"])
+    .index("by_status", ["status"]),
+
+  late_start_reviews: defineTable({
+    shop_id: v.id("shops"),
+    upstream_booking_id: v.id("bookings"),
+    cycle_minutes: v.number(),
+    status: v.string(),
+    decision_due_at_ms: v.number(),
+    proposals: v.array(
+      v.object({
+        booking_id: v.id("bookings"),
+        original_scheduled_date: v.string(),
+        original_scheduled_time: v.string(),
+        original_mechanic_id: v.optional(v.id("mechanics")),
+        proposed_scheduled_date: v.optional(v.string()),
+        proposed_scheduled_time: v.optional(v.string()),
+        proposed_mechanic_id: v.optional(v.id("mechanics")),
+        used_alternate_mechanic: v.boolean(),
+        blocked_reason: v.optional(v.string()),
+      })
+    ),
+    blocking_reason: v.optional(v.string()),
+    resolved_at: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_upstream_booking_id", ["upstream_booking_id"])
+    .index("by_status", ["status"]),
+
+  customer_late_alerts: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    monitor_id: v.id("customer_late_monitors"),
+    status: v.string(),
+    threshold_due_at_ms: v.number(),
+    resolved_at_ms: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    resolution: v.optional(v.string()),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_monitor_id", ["monitor_id"])
+    .index("by_status", ["status"]),
+
+  customer_late_monitors: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    status: v.string(),
+    scheduled_start_ms: v.number(),
+    push_due_at_ms: v.number(),
+    sms_due_at_ms: v.number(),
+    threshold_due_at_ms: v.number(),
+    push_enqueued_at_ms: v.optional(v.number()),
+    sms_enqueued_at_ms: v.optional(v.number()),
+    frontdesk_enqueued_at_ms: v.optional(v.number()),
+    resolved_at_ms: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_status", ["status"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
+
+  job_overrun_checkins: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    mechanic_id: v.id("mechanics"),
+    status: v.string(),
+    prompt_due_at_ms: v.number(),
+    mechanic_response_due_at_ms: v.number(),
+    default_apply_at_ms: v.number(),
+    prompt_sent_at_ms: v.optional(v.number()),
+    front_desk_prompt_sent_at_ms: v.optional(v.number()),
+    on_track_answer: v.optional(v.string()),
+    extension_minutes: v.optional(v.number()),
+    response_source: v.optional(v.string()),
+    answered_by_user_id: v.optional(v.id("users")),
+    resolved_at_ms: v.optional(v.number()),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_mechanic_id", ["mechanic_id"])
+    .index("by_status", ["status"]),
+
+  overrun_checkins: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    mechanic_id: v.optional(v.id("mechanics")),
+    status: v.string(),
+    due_at_ms: v.number(),
+    escalation_due_at_ms: v.number(),
+    auto_apply_at_ms: v.number(),
+    default_extension_minutes: v.number(),
+    mechanic_prompted_at_ms: v.optional(v.number()),
+    frontdesk_escalated_at_ms: v.optional(v.number()),
+    answered_at_ms: v.optional(v.number()),
+    answered_by_user_id: v.optional(v.id("users")),
+    answer_source: v.optional(v.string()),
+    is_complete: v.optional(v.boolean()),
+    extension_minutes: v.optional(v.number()),
+    resolved_at_ms: v.optional(v.number()),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_status", ["status"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
+
+  notification_outbox: defineTable({
+    shop_id: v.optional(v.id("shops")),
+    booking_id: v.optional(v.id("bookings")),
+    user_id: v.optional(v.id("users")),
+    mechanic_id: v.optional(v.id("mechanics")),
+    channel: v.string(),
+    category: v.string(),
+    status: v.string(),
+    dedupe_key: v.string(),
+    payload: v.any(),
+    scheduled_for_ms: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+    processed_at: v.optional(v.number()),
+  })
+    .index("by_dedupe_key", ["dedupe_key"])
+    .index("by_status", ["status"])
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
+
+  // Structured post-job recommendations. Replaces the free-text
+  // "additional_observations" prose with a per-row {service, urgency, reason}
+  // lifecycle (open → completed/dismissed/expired). Append-only; mistakes
+  // get dismissed rather than edited.
+  job_recommendations: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.id("job_actuals"),
+    shop_id: v.id("shops"),
+    mechanic_id: v.id("mechanics"),
+    vehicle_vin: v.string(),
+    // Canonical pick from the services catalog. Null only when the mechanic
+    // submitted a freeform name routed to pending_service_submissions.
+    recommended_service_id: v.optional(v.id("services")),
+    pending_service_submission_id: v.optional(
+      v.id("pending_service_submissions"),
+    ),
+    freeform_text: v.optional(v.string()),
+    urgency: v.union(
+      v.literal("next_visit"),
+      v.literal("within_3_months"),
+      v.literal("soon"),
+    ),
+    reason: v.optional(v.string()),
+    visible_to_driver: v.boolean(),
+    // Mileage milestone that should trigger this recommendation. When set,
+    // the mobile app uses it both to surface the rec near the threshold and
+    // to feed the vehicle health-score ramp.
+    target_mileage: v.optional(v.number()),
+    // Concrete date/time the shop pre-picked via the schedule day-lane.
+    // ms epoch. Customer still has to confirm in-app — this is not a booking.
+    scheduled_at: v.optional(v.number()),
+    scheduled_mechanic_id: v.optional(v.id("mechanics")),
+    // For has_options services (e.g. brake pads): which option the mechanic
+    // is recommending. Carries forward to the booking when the driver
+    // confirms in-app so they don't have to re-pick.
+    selected_service_option: v.optional(
+      v.object({
+        option_id: v.id("service_options"),
+        option_label: v.string(),
+        option_type: v.optional(v.string()),
+      })
+    ),
+    // For tire-replacement recs: which spec the mechanic suggests. Mirrors
+    // bookings.tire_specs so the confirm flow can pre-fill the tire picker.
+    tire_specs: v.optional(
+      v.object({
+        size: v.string(),
+        type: v.string(),
+        tier: v.string(),
+        quantity: v.number(),
+      })
+    ),
+    status: v.union(
+      v.literal("open"),
+      v.literal("acknowledged"),
+      v.literal("completed"),
+      v.literal("dismissed"),
+      v.literal("expired"),
+    ),
+    acknowledged_at: v.optional(v.number()),
+    completed_via_booking_id: v.optional(v.id("bookings")),
+    dismissed_reason: v.optional(
+      v.union(
+        v.literal("fixed"),
+        v.literal("not_needed"),
+        v.literal("mistake"),
+        v.literal("completed_externally"),
+        v.literal("completed_via_booking"),
+        v.literal("hidden_by_driver"),
+      ),
+    ),
+    // Backlink to the scheduled reminder we created for this rec.
+    followup_id: v.optional(v.id("follow_ups")),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_booking_id", ["booking_id"])
+    .index("by_vehicle_vin", ["vehicle_vin"])
+    .index("by_shop_id", ["shop_id"])
+    .index("by_status", ["status"])
+    .index("by_recommended_service_id", ["recommended_service_id"])
+    .index("by_vehicle_and_status", ["vehicle_vin", "status"]),
+
+  // Review queue for mechanic-proposed service names that didn't match the
+  // canonical services catalog. Mirrors the tire_brands.review_flagged
+  // pattern: dedupes by normalized name and bumps appearance_count.
+  pending_service_submissions: defineTable({
+    proposed_name: v.string(),               // raw input
+    normalized_name: v.string(),             // lowercase + trimmed for lookup
+    proposed_reason: v.optional(v.string()),
+    submitted_by_mechanic_id: v.id("mechanics"),
+    submitted_via_booking_id: v.id("bookings"),
+    vehicle_vin: v.string(),
+    appearance_count: v.number(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("approved"),
+      v.literal("rejected"),
+      v.literal("merged"),
+    ),
+    merged_into_service_id: v.optional(v.id("services")),
+    created_at: v.number(),
+    last_seen_at: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_normalized_name", ["normalized_name"]),
 });

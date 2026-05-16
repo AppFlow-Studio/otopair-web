@@ -14,9 +14,11 @@ import {
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
 const TERMINAL_BOOKING_STATUSES = new Set(["completed", "cancelled", "no_show"]);
-const DEFAULT_NO_SHOW_THRESHOLD_MINUTES = 30;
-const DEFAULT_OVERRUN_EXTENSION_PERCENT = 25;
-const DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES = 15;
+// DEFAULT_NO_SHOW_THRESHOLD_MINUTES / DEFAULT_OVERRUN_EXTENSION_PERCENT /
+// DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES are imported from
+// `../lib/scheduling-overhaul` above — the local duplicates that lived
+// here pre-merge were leftover artefacts of the daniel-dev → temur-dev
+// merge and clashed with the imports.
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -219,6 +221,14 @@ async function assertOnboardingCanBeCompleted(ctx: any, shopId: any) {
     throw new Error("Complete your operating hours before finishing setup.");
   }
 
+  const mechanics = await ctx.db
+    .query("mechanics")
+    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
+    .filter((q: any) => q.eq(q.field("is_active"), true))
+    .collect();
+  if (mechanics.length === 0) {
+    throw new Error("Add at least one mechanic before finishing setup.");
+  }
 }
 
 async function finalizeOnboarding(ctx: any, args: { shopId: any; userId: any }) {
@@ -348,47 +358,6 @@ export const getMyShops = query({
   },
 });
 
-export const updateSchedulingSettings = mutation({
-  args: {
-    noShowThresholdMinutes: v.number(),
-    overrunDefaultExtensionPercent: v.number(),
-    overrunDefaultExtensionFloorMinutes: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const { user } = await getCurrentUser(ctx);
-    if (!user) throw new Error("Not authenticated");
-
-    const primary = await getPrimaryShopForUser(ctx, user._id);
-    if (!primary?.shop) throw new Error("Shop not found.");
-    if (!OWNER_ROLES.has(primary.membershipRole)) {
-      throw new Error("Only shop owners can update scheduling settings.");
-    }
-
-    const noShowThresholdMinutes = clampNumber(
-      Math.round(args.noShowThresholdMinutes),
-      15,
-      60
-    );
-    const overrunDefaultExtensionPercent = clampNumber(
-      Math.round(args.overrunDefaultExtensionPercent),
-      1,
-      100
-    );
-    const overrunDefaultExtensionFloorMinutes = Math.max(
-      1,
-      Math.round(args.overrunDefaultExtensionFloorMinutes)
-    );
-
-    await ctx.db.patch(primary.shop._id, {
-      no_show_threshold_minutes: noShowThresholdMinutes,
-      overrun_default_extension_percent: overrunDefaultExtensionPercent,
-      overrun_default_extension_floor_minutes: overrunDefaultExtensionFloorMinutes,
-    });
-
-    return primary.shop._id;
-  },
-});
-
 export const getMyPortalAccess = query({
   args: {},
   handler: async (ctx) => {
@@ -426,6 +395,7 @@ export const updateMySchedulingSettings = mutation({
     noShowThresholdMinutes: v.number(),
     overrunDefaultExtensionPercent: v.number(),
     overrunExtensionFloorMinutes: v.number(),
+    bufferMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await getCurrentUser(ctx);
@@ -444,6 +414,13 @@ export const updateMySchedulingSettings = mutation({
     if (!Number.isFinite(args.overrunExtensionFloorMinutes) || args.overrunExtensionFloorMinutes < 0) {
       throw new Error("Overrun extension floor must be 0 or greater.");
     }
+    const ALLOWED_BUFFERS = [10, 15, 20, 30];
+    if (
+      args.bufferMinutes != null &&
+      !ALLOWED_BUFFERS.includes(Math.round(args.bufferMinutes))
+    ) {
+      throw new Error("Buffer minutes must be one of 10, 15, 20, or 30.");
+    }
 
     await ctx.db.patch(primary.shop._id, {
       no_show_threshold_minutes: Number.isFinite(args.noShowThresholdMinutes)
@@ -459,6 +436,9 @@ export const updateMySchedulingSettings = mutation({
       )
         ? Math.round(args.overrunExtensionFloorMinutes)
         : DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
+      ...(args.bufferMinutes != null
+        ? { buffer_minutes: Math.round(args.bufferMinutes) }
+        : {}),
     });
 
     return primary.shop._id;
@@ -919,95 +899,6 @@ export const saveOnboardingLaborAndServices = mutation({
   },
 });
 
-export const updateShopHours = mutation({
-  args: {
-    hours: v.array(
-      v.object({
-        dayOfWeek: v.float64(),
-        dayName: v.string(),
-        isClosed: v.boolean(),
-        openTime: v.string(),
-        closeTime: v.string(),
-      })
-    ),
-  },
-  handler: async (ctx, args) => {
-    const user = await getOrCreateCurrentShopOwner(ctx);
-    const primary = await getPrimaryShopForUser(ctx, user._id);
-    if (!primary?.shop) throw new Error("Set up your shop details first.");
-    if (!OWNER_ROLES.has(primary.membershipRole)) {
-      throw new Error("Not authorized");
-    }
-
-    const existing = await ctx.db
-      .query("shops_hours")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
-      .collect();
-    const byDay = new Map(existing.map((row: any) => [row.day_of_week as number, row]));
-
-    for (const hour of args.hours) {
-      const patch = {
-        day_name: hour.dayName,
-        day_of_week: hour.dayOfWeek,
-        is_closed: hour.isClosed,
-        open_time: hour.isClosed ? undefined : hour.openTime,
-        close_time: hour.isClosed ? undefined : hour.closeTime,
-        shop_id: primary.shop._id,
-      };
-
-      const current = byDay.get(hour.dayOfWeek);
-      if (current) {
-        await ctx.db.patch(current._id, patch);
-      } else {
-        await ctx.db.insert("shops_hours", patch);
-      }
-    }
-
-    await syncShopAvailabilityWindow(ctx, { shopId: primary.shop._id });
-    return primary.shop._id;
-  },
-});
-
-export const updateShopOfferedServices = mutation({
-  args: {
-    serviceIds: v.array(v.id("services")),
-  },
-  handler: async (ctx, args) => {
-    const user = await getOrCreateCurrentShopOwner(ctx);
-    const primary = await getPrimaryShopForUser(ctx, user._id);
-    if (!primary?.shop) throw new Error("Set up your shop details first.");
-    if (!OWNER_ROLES.has(primary.membershipRole)) {
-      throw new Error("Not authorized");
-    }
-
-    const existing = await ctx.db
-      .query("shop_services")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
-      .collect();
-    const byServiceId = new Map(existing.map((row: any) => [String(row.service_id), row]));
-    const selectedIds = new Set(args.serviceIds.map((id) => String(id)));
-
-    for (const row of existing) {
-      const shouldOffer = selectedIds.has(String(row.service_id));
-      if (row.is_offered !== shouldOffer) {
-        await ctx.db.patch(row._id, { is_offered: shouldOffer });
-      }
-    }
-
-    for (const serviceId of args.serviceIds) {
-      if (!byServiceId.has(String(serviceId))) {
-        await ctx.db.insert("shop_services", {
-          shop_id: primary.shop._id,
-          service_id: serviceId,
-          is_offered: true,
-        });
-      }
-    }
-
-    return primary.shop._id;
-  },
-});
-
 export const addOnboardingMechanic = mutation({
   args: {
     firstName: v.string(),
@@ -1222,3 +1113,92 @@ export const deactivateMyAccount = mutation({
     });
   },
 });
+
+export const updateShopHours = mutation({
+  args: {
+    hours: v.array(
+      v.object({
+        dayOfWeek: v.float64(),
+        dayName: v.string(),
+        isClosed: v.boolean(),
+        openTime: v.string(),
+        closeTime: v.string(),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const user = await getOrCreateCurrentShopOwner(ctx);
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Set up your shop details first.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Not authorized");
+    }
+
+    const existing = await ctx.db
+      .query("shops_hours")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
+      .collect();
+    const byDay = new Map(existing.map((row: any) => [row.day_of_week as number, row]));
+
+    for (const hour of args.hours) {
+      const patch = {
+        day_name: hour.dayName,
+        day_of_week: hour.dayOfWeek,
+        is_closed: hour.isClosed,
+        open_time: hour.isClosed ? undefined : hour.openTime,
+        close_time: hour.isClosed ? undefined : hour.closeTime,
+        shop_id: primary.shop._id,
+      };
+
+      const current = byDay.get(hour.dayOfWeek);
+      if (current) {
+        await ctx.db.patch(current._id, patch);
+      } else {
+        await ctx.db.insert("shops_hours", patch);
+      }
+    }
+
+    await syncShopAvailabilityWindow(ctx, { shopId: primary.shop._id });
+    return primary.shop._id;
+  },
+});;
+
+export const updateShopOfferedServices = mutation({
+  args: {
+    serviceIds: v.array(v.id("services")),
+  },
+  handler: async (ctx, args) => {
+    const user = await getOrCreateCurrentShopOwner(ctx);
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Set up your shop details first.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Not authorized");
+    }
+
+    const existing = await ctx.db
+      .query("shop_services")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
+      .collect();
+    const byServiceId = new Map(existing.map((row: any) => [String(row.service_id), row]));
+    const selectedIds = new Set(args.serviceIds.map((id) => String(id)));
+
+    for (const row of existing) {
+      const shouldOffer = selectedIds.has(String(row.service_id));
+      if (row.is_offered !== shouldOffer) {
+        await ctx.db.patch(row._id, { is_offered: shouldOffer });
+      }
+    }
+
+    for (const serviceId of args.serviceIds) {
+      if (!byServiceId.has(String(serviceId))) {
+        await ctx.db.insert("shop_services", {
+          shop_id: primary.shop._id,
+          service_id: serviceId,
+          is_offered: true,
+        });
+      }
+    }
+
+    return primary.shop._id;
+  },
+});;

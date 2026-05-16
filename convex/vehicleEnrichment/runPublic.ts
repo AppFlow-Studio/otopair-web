@@ -86,6 +86,7 @@ export const go = action({
         engineCode: decoded.engineCode,
         displacement: decoded.displacement,
         drivetrain: (decoded as any).drivetrain ?? undefined,
+        nhtsaVinKey: (decoded as any).nhtsaVinKey ?? undefined,
       });
     }
 

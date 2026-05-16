@@ -1,6 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { awardPointsImpl } from "./healthPoints";
 import {
   deriveHistoryConfidence,
   ownershipDurationToMonths,
@@ -65,7 +66,7 @@ export const getVehicleWithOwners = query({
       .unique();
     
     if (!vehicle) {
-      throw new Error(`Vehicle not found: ${args.vin}`);
+      throw new Error("We couldn't find this vehicle. Double-check the VIN and try again.");
     }
     
     // Get active owners
@@ -104,6 +105,174 @@ export const getVehicleOwner = query({
 });
 
 /**
+ * Resolved human-readable display info for one vehicle by VIN.
+ *
+ * Walks the FK chain so callers don't have to:
+ *   vehicles.vehicle_config_id
+ *     → vehicle_configs.make_id  → makes.name
+ *     → vehicle_configs.model_id → models.name
+ *     → vehicle_configs.trim_name (denormalized) ?? trims.name
+ *
+ * Used by the Oto AI chat action (convex/oto/chat.ts) to build the
+ * <vehicle display: "..."> line of the uncached-zone envelope. No VIN is
+ * exposed in the return shape — only year/make/model/trim and the opaque
+ * vehicles document id.
+ *
+ * Returns null if no vehicle with that VIN exists.
+ *
+ * Note: this query does NOT enforce ownership. Callers should establish
+ * ownership before calling (e.g. via getMyVehicles). Year/make/model/trim
+ * is non-sensitive catalog metadata.
+ */
+export const getDisplayInfoForVin = query({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin))
+      .unique();
+    if (!vehicle) return null;
+
+    let make: string | null = null;
+    let model: string | null = null;
+    let trim: string | null = null;
+
+    if (vehicle.vehicle_config_id) {
+      const config = await ctx.db.get(vehicle.vehicle_config_id);
+      if (config) {
+        if (config.make_id) {
+          const makeRow = await ctx.db.get(config.make_id);
+          make = makeRow?.name ?? null;
+        }
+        if (config.model_id) {
+          const modelRow = await ctx.db.get(config.model_id);
+          model = modelRow?.name ?? null;
+        }
+        if (config.trim_name && config.trim_name.trim() !== "") {
+          trim = config.trim_name;
+        }
+      }
+    }
+
+    // Fallback: load trim from the trims table if config didn't carry it.
+    if (!trim && vehicle.trim_id) {
+      const trimRow = await ctx.db.get(vehicle.trim_id);
+      trim = trimRow?.name ?? null;
+    }
+
+    // Last-ditch fallback: NHTSA metadata snapshot on the vehicles row.
+    // Some partially-onboarded vehicles haven't been through the enrichment
+    // pipeline yet and only have raw vPIC fields cached here.
+    const meta = (vehicle.metadata ?? {}) as {
+      make?: string;
+      model?: string;
+      trim?: string;
+      year?: number | string;
+    };
+    if (!make && meta.make) make = String(meta.make);
+    if (!model && meta.model) model = String(meta.model);
+    if (!trim && meta.trim) trim = String(meta.trim);
+
+    const year =
+      vehicle.year ??
+      (typeof meta.year === "number"
+        ? meta.year
+        : typeof meta.year === "string"
+          ? Number.parseInt(meta.year, 10) || null
+          : null);
+
+    return {
+      id: vehicle._id,
+      year,
+      make,
+      model,
+      trim,
+    };
+  },
+});
+
+/**
+ * Combined lookup for the create-booking drawer.
+ * Returns vehicle YMMT + active owners with their user contact details.
+ * Returns null when the VIN isn't in the system yet (caller falls back to NHTSA).
+ */
+export const getVehicleBookingInfo = query({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    const normalizedVin = args.vin.toUpperCase().trim();
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", normalizedVin))
+      .unique();
+
+    if (!vehicle) return null;
+
+    // Resolve YMMT (same chain as getDisplayInfoForVin)
+    let make: string | null = null;
+    let model: string | null = null;
+    let trim: string | null = null;
+
+    if (vehicle.vehicle_config_id) {
+      const config = await ctx.db.get(vehicle.vehicle_config_id);
+      if (config) {
+        if (config.make_id) {
+          const makeRow = await ctx.db.get(config.make_id);
+          make = makeRow?.name ?? null;
+        }
+        if (config.model_id) {
+          const modelRow = await ctx.db.get(config.model_id);
+          model = modelRow?.name ?? null;
+        }
+        if (config.trim_name && config.trim_name.trim() !== "") {
+          trim = config.trim_name;
+        }
+      }
+    }
+    if (!trim && vehicle.trim_id) {
+      const trimRow = await ctx.db.get(vehicle.trim_id);
+      trim = trimRow?.name ?? null;
+    }
+    const meta = (vehicle.metadata ?? {}) as { make?: string; model?: string; trim?: string; year?: number | string };
+    if (!make && meta.make) make = String(meta.make);
+    if (!model && meta.model) model = String(meta.model);
+    if (!trim && meta.trim) trim = String(meta.trim);
+    const year =
+      vehicle.year ??
+      (typeof meta.year === "number"
+        ? meta.year
+        : typeof meta.year === "string"
+          ? Number.parseInt(meta.year, 10) || null
+          : null);
+
+    // Resolve active owners with user contact details
+    const ownerships = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin", (q) => q.eq("vin", normalizedVin))
+      .collect();
+    const activeOwnerships = ownerships.filter((o) => o.status === "active");
+
+    const owners = (
+      await Promise.all(
+        activeOwnerships.map(async (o) => {
+          const user = await ctx.db.get(o.user_id);
+          if (!user) return null;
+          return {
+            userId: o.user_id,
+            firstName: user.first_name ?? null,
+            lastName: user.last_name ?? null,
+            email: user.email ?? null,
+            phone: user.phone ?? null,
+          };
+        })
+      )
+    ).filter((o): o is NonNullable<typeof o> => o !== null);
+
+    return { year, make, model, trim, owners };
+  },
+});
+
+/**
  * List all active vehicles for the currently authenticated user.
  * Returns null if not authenticated, empty array if no vehicles.
  */
@@ -133,10 +302,13 @@ export const getMyVehicles = query({
           .withIndex("by_vin", (q) => q.eq("vin", ownership.vin))
           .unique();
 
+        const trim = vehicle?.trim_id ? await ctx.db.get(vehicle.trim_id) : null;
+
         return {
           vin: ownership.vin,
           vehicle,
           ownership,
+          trimName: trim?.name ?? null,
         };
       })
     );
@@ -171,8 +343,6 @@ export const listVehiclesByUser = query({
           vin: ownership.vin,
           vehicle,
           ownership,
-          connectionStatus: ownership.connectionStatus || "unconnected",
-          smartcarVehicleId: ownership.smartcarVehicleId || null,
         };
       })
     );
@@ -198,6 +368,22 @@ export const listOwnedVINsByUser = query({
   },
 });
 
+
+/**
+ * Clear the cached image URL for a vehicle so the next app load re-fetches it.
+ */
+export const clearVehicleImageUrl = mutation({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin.toUpperCase().trim()))
+      .unique();
+    if (vehicle) {
+      await ctx.db.patch(vehicle._id, { image_url: undefined });
+    }
+  },
+});
 
 /**
  * Save a cached image URL for a vehicle so we don't re-fetch from the API.
@@ -331,12 +517,11 @@ export const addOwner = mutation({
           status: "active",
           removed_at: undefined,
           added_at: now,
-          connectionStatus: existing.connectionStatus || "unconnected",
         };
         if (args.nickname !== undefined) updates.nickname = args.nickname;
         if (args.is_primary !== undefined) updates.is_primary = args.is_primary;
         if (args.mileage !== undefined) updates.mileage = args.mileage;
-        
+
         await ctx.db.patch(existing._id, updates);
         return existing._id;
       } else {
@@ -345,9 +530,7 @@ export const addOwner = mutation({
         if (args.nickname !== undefined) updates.nickname = args.nickname;
         if (args.is_primary !== undefined) updates.is_primary = args.is_primary;
         if (args.mileage !== undefined) updates.mileage = args.mileage;
-        // Ensure connectionStatus is set if missing
-        if (!existing.connectionStatus) updates.connectionStatus = "unconnected";
-        
+
         if (Object.keys(updates).length > 0) {
           await ctx.db.patch(existing._id, updates);
         }
@@ -363,7 +546,6 @@ export const addOwner = mutation({
         is_primary: args.is_primary ?? false,
         mileage: args.mileage,
         added_at: now,
-        connectionStatus: "unconnected",
       });
       
       return ownershipId;
@@ -394,36 +576,9 @@ export const removeOwner = mutation({
       .unique();
     
     if (!ownership) {
-      throw new Error(`No ownership found for VIN: ${args.vin}, User: ${args.userId}`);
+      throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
-    // Delete Smartcar connection rows for this ownership
-    const smartcarConnections = await ctx.db
-      .query("smartcar_connections")
-      .withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of smartcarConnections) {
-      await ctx.db.delete(row._id);
-    }
-
-    // Delete Smartcar snapshot rows for this ownership
-    const healthSnapshots = await ctx.db
-      .query("vehicle_health_snapshots")
-      .withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of healthSnapshots) {
-      await ctx.db.delete(row._id);
-    }
-
-    // Delete odometer history rows for this ownership
-    const odometerRows = await ctx.db
-      .query("odometer_history")
-      .withIndex("by_vehicle_and_date", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of odometerRows) {
-      await ctx.db.delete(row._id);
-    }
-
     // Delete maintenance records for this ownership
     const maintenanceRows = await ctx.db
       .query("maintenance_records")
@@ -450,31 +605,7 @@ export const removeOwnerById = mutation({
   handler: async (ctx, args) => {
     const ownership = await ctx.db.get(args.vehicleOwnerId);
     if (!ownership) {
-      throw new Error(`No ownership found for id: ${args.vehicleOwnerId}`);
-    }
-
-    const smartcarConnections = await ctx.db
-      .query("smartcar_connections")
-      .withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of smartcarConnections) {
-      await ctx.db.delete(row._id);
-    }
-
-    const healthSnapshots = await ctx.db
-      .query("vehicle_health_snapshots")
-      .withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of healthSnapshots) {
-      await ctx.db.delete(row._id);
-    }
-
-    const odometerRows = await ctx.db
-      .query("odometer_history")
-      .withIndex("by_vehicle_and_date", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of odometerRows) {
-      await ctx.db.delete(row._id);
+      throw new Error("We couldn't find that vehicle ownership record.");
     }
 
     const maintenanceRows = await ctx.db
@@ -514,7 +645,7 @@ export const updateOwnershipPrimary = mutation({
       .unique();
     
     if (!ownership) {
-      throw new Error(`No ownership found for VIN: ${args.vin}, User: ${args.userId}`);
+      throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
     if (args.is_primary) {
@@ -561,7 +692,7 @@ export const updateMileage = mutation({
       .unique();
     
     if (!ownership) {
-      throw new Error(`No ownership found for VIN: ${args.vin}, User: ${args.userId}`);
+      throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
     await ctx.db.patch(ownership._id, { mileage: args.mileage });
@@ -569,7 +700,7 @@ export const updateMileage = mutation({
 });
 
 // ============================================================================
-// VEHICLE ONBOARDING (Non-Smartcar)
+// VEHICLE ONBOARDING
 // ============================================================================
 
 /**
@@ -1068,6 +1199,16 @@ export const saveOnboardingField = mutation({
     if (isComplete && !owner.onboardingComplete) {
       await ctx.db.patch(vehicleOwnerId, { onboardingComplete: true });
 
+      // One-time +5 HP for fully completing the vehicle profile
+      // (Rewards Framework v3 §11). `oneTimeKey` makes the award
+      // idempotent against re-runs of this branch.
+      await awardPointsImpl(ctx, {
+        vin: owner.vin,
+        userId: owner.user_id,
+        delta: 5,
+        oneTimeKey: "profile_complete",
+      });
+
       // Create records for types the user said they serviced (from lastServiceWhat)
       // so skipped follow-up steps don't leave gaps as "unknown".
       const whenRecord = await ctx.db
@@ -1209,6 +1350,15 @@ export const autoCompleteNewVehicleOnboarding = mutation({
     await ctx.db.patch(vehicleOwnerId, {
       knownIssues: ["no_all_clear"],
       onboardingComplete: true,
+    });
+
+    // One-time +5 HP for the auto-complete path (same event as the
+    // organic completion in saveOnboardingField; `oneTimeKey` dedupes).
+    await awardPointsImpl(ctx, {
+      vin: owner.vin,
+      userId: owner.user_id,
+      delta: 5,
+      oneTimeKey: "profile_complete",
     });
 
     // Trigger the pipeline now that records exist

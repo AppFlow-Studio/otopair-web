@@ -109,3 +109,51 @@ export const list = query({
     return results.slice(0, limit);
   },
 });
+
+/**
+ * Catalog search for the post-job "Swap part" modal. Matches against
+ * oem_part_number, name, and brand (case-insensitive contains). Optional
+ * `category` filter narrows to a single category bucket up front.
+ *
+ * Returns up to `limit` rows, OEM-tier first since Otopair currently supplies
+ * OEM only. Designed for an interactive picker, not pagination — pass a tight
+ * `query` to keep the scan small.
+ */
+export const search = query({
+  args: {
+    query: v.string(),
+    category: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const needle = args.query.trim().toLowerCase();
+    const limit = args.limit ?? 25;
+
+    const rows = args.category
+      ? await ctx.db
+          .query("oem_parts")
+          .withIndex("by_category", (q) =>
+            q.eq("category", normalizeCategory(args.category) ?? args.category!.trim().toLowerCase()),
+          )
+          .collect()
+      : await ctx.db.query("oem_parts").collect();
+
+    const filtered = needle
+      ? rows.filter((row) => {
+          if (row.oem_part_number?.toLowerCase().includes(needle)) return true;
+          if (row.name?.toLowerCase().includes(needle)) return true;
+          if (row.brand?.toLowerCase().includes(needle)) return true;
+          return false;
+        })
+      : rows;
+
+    return filtered
+      .sort((a, b) => {
+        const aOem = (a.part_tier ?? "oem") === "oem" ? 0 : 1;
+        const bOem = (b.part_tier ?? "oem") === "oem" ? 0 : 1;
+        if (aOem !== bOem) return aOem - bOem;
+        return (a.name ?? "").localeCompare(b.name ?? "");
+      })
+      .slice(0, limit);
+  },
+});

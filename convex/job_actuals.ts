@@ -11,9 +11,154 @@ import {
   reopenJobActuals,
   saveJobActualDraft,
 } from "./lib/job_actuals";
+import { summarizePartPrices } from "./part_prices";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
+}
+
+type SuggestedPart = {
+  part_name: string;
+  oem_number: string;
+  cost: number;
+};
+
+function medianOf(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+/**
+ * Three-layer prefill cascade for the post-job parts step.
+ *
+ *   Layer 1 — Shop preferences: parts where this shop has crossed the
+ *             use-count default threshold for this (service, config).
+ *             Cost = median of this shop's recent unit_costs for that part.
+ *
+ *   Layer 2 — Cross-shop aggregate: top-N parts other shops use for the
+ *             same (service, config), ranked by use_count, with median
+ *             unit_cost. Only fires once sample crosses the min threshold.
+ *
+ * If both miss, returns []. The caller falls through to the legacy
+ * service_vehicle_specs slug-based suggestion as the catalog floor.
+ */
+async function resolveSuggestedPartsFromCascade(
+  ctx: any,
+  {
+    shopId,
+    serviceId,
+    vehicleConfigId,
+  }: {
+    shopId: Id<"shops">;
+    serviceId: Id<"services">;
+    vehicleConfigId: Id<"vehicle_configs">;
+  },
+): Promise<SuggestedPart[]> {
+  // Layer 1
+  const prefs = await ctx.db
+    .query("shop_part_preferences")
+    .withIndex("by_shop_service_config", (q: any) =>
+      q
+        .eq("shop_id", shopId)
+        .eq("service_id", serviceId)
+        .eq("vehicle_config_id", vehicleConfigId),
+    )
+    .collect();
+  const defaults = prefs.filter((p: any) => p.is_default);
+
+  if (defaults.length > 0) {
+    // Pull this shop's recent snapshots once and bucket by part_id so we can
+    // compute a realistic suggested cost for each preferred part.
+    const shopSnapshots = await ctx.db
+      .query("part_snapshots")
+      .withIndex("by_shop_service_config", (q: any) =>
+        q
+          .eq("shop_id", shopId)
+          .eq("service_id", serviceId)
+          .eq("vehicle_config_id", vehicleConfigId),
+      )
+      .order("desc")
+      .take(50);
+
+    const costsByPart = new Map<string, number[]>();
+    for (const snap of shopSnapshots as any[]) {
+      if (snap.superseded_by_id !== undefined) continue;
+      if (snap.supplied_by !== "shop") continue;
+      if (!snap.part_id) continue;
+      const key = snap.part_id as unknown as string;
+      const bucket = costsByPart.get(key) ?? [];
+      bucket.push(snap.unit_cost);
+      costsByPart.set(key, bucket);
+    }
+
+    const suggestions: SuggestedPart[] = [];
+    for (const pref of defaults) {
+      const part = await ctx.db.get(pref.part_id);
+      if (!part) continue;
+      const costs = costsByPart.get(pref.part_id as unknown as string) ?? [];
+      suggestions.push({
+        part_name: part.name,
+        oem_number: part.oem_part_number,
+        cost: medianOf(costs),
+      });
+    }
+    if (suggestions.length > 0) return suggestions;
+  }
+
+  // Layer 2 — cross-shop aggregate. Min sample of 5 to avoid noise.
+  const crossShop = await ctx.db
+    .query("part_snapshots")
+    .withIndex("by_service_config", (q: any) =>
+      q.eq("service_id", serviceId).eq("vehicle_config_id", vehicleConfigId),
+    )
+    .collect();
+
+  const eligible = (crossShop as any[]).filter(
+    (row) =>
+      row.superseded_by_id === undefined &&
+      row.supplied_by === "shop" &&
+      row.part_id !== undefined,
+  );
+  if (eligible.length < 5) return [];
+
+  const byPart = new Map<
+    string,
+    { part_id: Id<"oem_parts">; count: number; costs: number[] }
+  >();
+  for (const row of eligible) {
+    const key = row.part_id as unknown as string;
+    const bucket = byPart.get(key);
+    if (bucket) {
+      bucket.count += 1;
+      bucket.costs.push(row.unit_cost);
+    } else {
+      byPart.set(key, {
+        part_id: row.part_id as Id<"oem_parts">,
+        count: 1,
+        costs: [row.unit_cost],
+      });
+    }
+  }
+
+  const ranked = Array.from(byPart.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 2);
+
+  const suggestions: SuggestedPart[] = [];
+  for (const entry of ranked) {
+    const part = await ctx.db.get(entry.part_id);
+    if (!part) continue;
+    suggestions.push({
+      part_name: part.name,
+      oem_number: part.oem_part_number,
+      cost: medianOf(entry.costs),
+    });
+  }
+  return suggestions;
 }
 
 async function getCurrentUser(ctx: any) {
@@ -89,6 +234,26 @@ export const getByBookingId = query({
   },
 });
 
+export const getPostjobReportForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const actual = await getLatestJobActualForBooking(ctx, args.bookingId);
+    if (!actual) return null;
+
+    return {
+      postjobReport: actual.postjob_report ?? null,
+      submittedAt: actual.updated_at ?? actual._creationTime ?? null,
+      mechanicId: actual.mechanic_id ?? null,
+    };
+  },
+});
+
 export const getPrefillData = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -132,7 +297,23 @@ export const getPrefillData = query({
       cost: number;
     }> = [];
 
-    if (specs && service) {
+    // Layers 1 + 2 of the prefill cascade. If either lands a hit, use those
+    // suggestions and skip the legacy slug-based fallback below.
+    if (serviceId && vehicle.vehicle_config_id) {
+      const cascadeSuggestions = await resolveSuggestedPartsFromCascade(ctx, {
+        shopId: booking.shop_id,
+        serviceId,
+        vehicleConfigId: vehicle.vehicle_config_id,
+      });
+      if (cascadeSuggestions.length > 0) {
+        suggestedParts.push(...cascadeSuggestions);
+      }
+    }
+
+    // Layer 3 (catalog floor) — only fires if the cascade is empty. Uses the
+    // service_vehicle_specs OEM number columns indexed by engine to suggest
+    // canonical parts even when there's zero historical data yet.
+    if (suggestedParts.length === 0 && specs && service) {
       const slug = service.slug;
       if (slug === "oil-change") {
         suggestedParts.push({
@@ -204,6 +385,127 @@ export const getPrefillData = query({
       }
     }
 
+    // OEM catalog recommendations from part_fitments — one entry per service
+    // on the booking. Surfaced in the post-job UI as a confirm-or-swap
+    // checklist, so the mechanic can verify the catalog matches reality.
+    type OemRecommendationPart = {
+      part_id: Id<"oem_parts">;
+      oem_part_number: string;
+      part_name: string;
+      brand: string | null;
+      part_tier: string | null;
+      category: string | null;
+      quantity_needed: number | null;
+      position: string | null;
+      average_price: number;       // 0 when no price data
+      price_sample_size: number;
+      price_sources_used: number;
+    };
+    const oemRecommendations: Array<{
+      service_id: Id<"services">;
+      service_slug: string;
+      service_name: string;
+      parts: OemRecommendationPart[];
+    }> = [];
+
+    if (vehicle.vehicle_config_id) {
+      for (const sid of booking.service_ids ?? []) {
+        const svc = await ctx.db.get(sid);
+        if (!svc?.slug) continue;
+        const fitments = await ctx.db
+          .query("part_fitments")
+          .withIndex("by_config_service", (q) =>
+            q
+              .eq("vehicle_config_id", vehicle.vehicle_config_id!)
+              .eq("service_type", svc.slug!),
+          )
+          .collect();
+        const parts: OemRecommendationPart[] = [];
+        for (const f of fitments) {
+          if (f.package_code != null) continue;
+          const part = await ctx.db.get(f.part_id);
+          if (!part) continue;
+          const priceSummary = await summarizePartPrices(ctx, f.part_id);
+          parts.push({
+            part_id: f.part_id,
+            oem_part_number: part.oem_part_number,
+            part_name: part.name,
+            brand: part.brand ?? null,
+            part_tier: part.part_tier ?? null,
+            category: part.category ?? null,
+            quantity_needed: f.quantity_needed ?? null,
+            position: f.position ?? null,
+            average_price: priceSummary.average,
+            price_sample_size: priceSummary.sample_size,
+            price_sources_used: priceSummary.used_sample_size,
+          });
+        }
+        if (parts.length > 0) {
+          oemRecommendations.push({
+            service_id: sid,
+            service_slug: svc.slug,
+            service_name: svc.name,
+            parts,
+          });
+        }
+      }
+    }
+
+    // Merge any OEM-recommended parts that aren't already represented in
+    // suggestedParts (by normalized oem_number) so they appear as
+    // pre-listed rows in the post-job parts step ready to confirm.
+    const normalize = (n: string) => n.trim().toUpperCase().replace(/\s+/g, "");
+    const existingOemNumbers = new Set(
+      suggestedParts
+        .map((p) => p.oem_number)
+        .filter(Boolean)
+        .map(normalize),
+    );
+    for (const rec of oemRecommendations) {
+      for (const part of rec.parts) {
+        const key = normalize(part.oem_part_number);
+        if (!key || existingOemNumbers.has(key)) continue;
+        suggestedParts.push({
+          part_name: part.part_name,
+          oem_number: part.oem_part_number,
+          cost: part.average_price,
+        });
+        existingOemNumbers.add(key);
+      }
+    }
+
+    // Prior open recommendations for the same VIN (shop-scoped). Surfaced as
+    // a muted "last visit said…" strip at the top of the post-job step so
+    // the mechanic has memory aids — actual confirmation happens in pre-job.
+    const priorRecRows = booking.shop_id
+      ? (
+          await ctx.db
+            .query("job_recommendations")
+            .withIndex("by_vehicle_and_status", (q) =>
+              q.eq("vehicle_vin", booking.vin).eq("status", "open"),
+            )
+            .collect()
+        )
+          .filter((r) => String(r.shop_id) === String(booking.shop_id))
+          .sort((a, b) => b.created_at - a.created_at)
+          .slice(0, 5)
+      : [];
+    const priorOpenRecommendations = await Promise.all(
+      priorRecRows.map(async (rec) => {
+        const svc = rec.recommended_service_id
+          ? await ctx.db.get(rec.recommended_service_id)
+          : null;
+        return {
+          _id: rec._id,
+          service_name: svc?.name ?? rec.freeform_text ?? "Unspecified",
+          is_freeform: !rec.recommended_service_id,
+          urgency: rec.urgency,
+          reason: rec.reason ?? null,
+          created_at: rec.created_at,
+        };
+      }),
+    );
+
     return {
       vehicleLabel,
       serviceName: service?.name ?? "",
@@ -213,6 +515,9 @@ export const getPrefillData = query({
       serviceId,
       mechanicName,
       suggestedParts,
+      oemRecommendations,
+      vehicleConfigId: vehicle.vehicle_config_id ?? null,
+      priorOpenRecommendations,
     };
   },
 });

@@ -1,7 +1,12 @@
 import {
+  addMinutesToHHMM,
+  ceilToQuarterHour,
+  floorToQuarterHour,
   getBookingEndTime,
+  normalizeBufferMinutes,
   overlapsBlockedSlot,
   overlapsMechanicBooking,
+  SLOT_GRID_MINUTES,
   type ScheduleBlockedSlot,
   type ScheduleBooking,
 } from "./schedule_overlap";
@@ -25,26 +30,17 @@ function addDays(date: Date, days: number) {
   return next;
 }
 
-function roundOpenTimeToHour(hhmm: string) {
-  const [hours, minutes] = hhmm.split(":").map(Number);
-  const rounded = minutes > 0 ? hours + 1 : hours;
-  return Math.max(0, Math.min(23, rounded));
-}
-
-function roundCloseTimeToHour(hhmm: string) {
-  const [hours] = hhmm.split(":").map(Number);
-  return Math.max(0, Math.min(24, hours));
-}
-
 function buildDesiredWindows(openTime: string, closeTime: string) {
-  const startHour = roundOpenTimeToHour(openTime);
-  const endHour = roundCloseTimeToHour(closeTime);
+  const start = ceilToQuarterHour(openTime);
+  const end = floorToQuarterHour(closeTime);
   const windows: Array<{ start: string; end: string }> = [];
 
-  for (let hour = startHour; hour < endHour; hour += 1) {
-    const start = `${String(hour).padStart(2, "0")}:00`;
-    const end = `${String(hour + 1).padStart(2, "0")}:00`;
-    windows.push({ start, end });
+  let cursor = start;
+  while (cursor < end) {
+    const next = addMinutesToHHMM(cursor, SLOT_GRID_MINUTES);
+    if (next > end) break;
+    windows.push({ start: cursor, end: next });
+    cursor = next;
   }
 
   return windows;
@@ -156,6 +152,9 @@ export async function syncMechanicDayAvailability(
     return { created: 0, deleted: existingAvailable.length };
   }
 
+  const shop = await ctx.db.get(shopId);
+  const bufferMinutes = normalizeBufferMinutes(shop?.buffer_minutes);
+
   const blockedSlots = toBlockedIntervals(existingSlots);
   const bookings = await getBookingsForMechanicDay(ctx, shopId, mechanicId, date);
   const desiredWindows = buildDesiredWindows(hours.open_time, hours.close_time).filter(
@@ -164,7 +163,17 @@ export async function syncMechanicDayAvailability(
       if (overlapsBlockedSlot(mechanicKey, date, start, end, blockedSlots)) {
         return false;
       }
-      if (overlapsMechanicBooking(mechanicKey, date, start, end, bookings)) {
+      if (
+        overlapsMechanicBooking(
+          mechanicKey,
+          date,
+          start,
+          end,
+          bookings,
+          undefined,
+          bufferMinutes
+        )
+      ) {
         return false;
       }
       return true;

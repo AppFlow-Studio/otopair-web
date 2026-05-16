@@ -31,7 +31,7 @@
  * OWNER: User Management Team
  */
 
-import { mutation, query } from "./_generated/server";
+import { action, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
 /**
@@ -527,5 +527,97 @@ export const hasActiveShopMembership = query({
       .first();
 
     return !!shopUser;
+  },
+});
+
+/**
+ * ACTION: revokeMyActiveClerkSessions
+ * Revokes every active Clerk session for the current user.
+ *
+ * This is intentionally separate from requestAccountDeletion because Convex
+ * mutations cannot call external APIs. The client calls this immediately after
+ * marking the account as pending deletion.
+ */
+export const revokeMyActiveClerkSessions = action({
+  args: {
+    excludeSessionId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const clerkSecretKey = process.env.CLERK_SECRET_KEY;
+    if (!clerkSecretKey) {
+      throw new Error("CLERK_SECRET_KEY is not configured in Convex.");
+    }
+
+    const headers = {
+      Authorization: `Bearer ${clerkSecretKey}`,
+      "Content-Type": "application/json",
+    };
+    const clerkUserId = identity.subject;
+    const limit = 500;
+    let offset = 0;
+    let totalCount = 0;
+    const sessionIds: string[] = [];
+
+    do {
+      const params = new URLSearchParams({
+        user_id: clerkUserId,
+        status: "active",
+        limit: String(limit),
+        offset: String(offset),
+      });
+      const response = await fetch(`https://api.clerk.com/v1/sessions?${params.toString()}`, {
+        method: "GET",
+        headers,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to list Clerk sessions: ${response.status} ${errorText}`);
+      }
+
+      const body = await response.json();
+      const sessions = Array.isArray(body?.data) ? body.data : [];
+      totalCount = Number(body?.total_count ?? body?.totalCount ?? sessions.length);
+      sessionIds.push(
+        ...sessions
+          .map((session: any) => session?.id)
+          .filter((id: unknown): id is string =>
+            typeof id === "string" &&
+            id.length > 0 &&
+            id !== args.excludeSessionId,
+          ),
+      );
+
+      offset += sessions.length;
+    } while (offset < totalCount && offset > 0);
+
+    const results = await Promise.allSettled(
+      sessionIds.map(async (sessionId) => {
+        const response = await fetch(`https://api.clerk.com/v1/sessions/${sessionId}/revoke`, {
+          method: "POST",
+          headers,
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Failed to revoke Clerk session ${sessionId}: ${response.status} ${errorText}`);
+        }
+
+        return sessionId;
+      }),
+    );
+
+    const failed = results.filter((result) => result.status === "rejected");
+    if (failed.length > 0) {
+      console.error("Some Clerk sessions failed to revoke", failed);
+      throw new Error(`Failed to revoke ${failed.length} Clerk session(s).`);
+    }
+
+    return {
+      revoked: sessionIds.length,
+    };
   },
 });

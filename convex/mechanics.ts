@@ -200,7 +200,18 @@ export const list = query({
       mechanics.map(async (mechanic) => {
         const shop = await ctx.db.get(mechanic.shop_id);
         const photoUrl = await resolveMechanicPhotoUrl(ctx, mechanic.photo);
-        return { ...mechanic, shop, photoUrl };
+        // Surface the parent shop's aggregate rating/review-count on
+        // each mechanic row so the booking sheet's per-shop grouping
+        // (MechanicSelectionContent → groupMechanicsByShop) can read
+        // the actual shop rating instead of deriving it from the max
+        // mechanic rating in the group.
+        return {
+          ...mechanic,
+          shop,
+          photoUrl,
+          shopRating: shop?.rating ?? 0,
+          shopReviewCount: shop?.review_count ?? 0,
+        };
       }),
     );
   },

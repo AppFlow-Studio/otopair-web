@@ -1,6 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { awardPointsImpl } from "./healthPoints";
 import {
   deriveHistoryConfidence,
   ownershipDurationToMonths,
@@ -261,8 +262,6 @@ export const listVehiclesByUser = query({
           vin: ownership.vin,
           vehicle,
           ownership,
-          connectionStatus: ownership.connectionStatus || "unconnected",
-          smartcarVehicleId: ownership.smartcarVehicleId || null,
         };
       })
     );
@@ -437,12 +436,11 @@ export const addOwner = mutation({
           status: "active",
           removed_at: undefined,
           added_at: now,
-          connectionStatus: existing.connectionStatus || "unconnected",
         };
         if (args.nickname !== undefined) updates.nickname = args.nickname;
         if (args.is_primary !== undefined) updates.is_primary = args.is_primary;
         if (args.mileage !== undefined) updates.mileage = args.mileage;
-        
+
         await ctx.db.patch(existing._id, updates);
         return existing._id;
       } else {
@@ -451,9 +449,7 @@ export const addOwner = mutation({
         if (args.nickname !== undefined) updates.nickname = args.nickname;
         if (args.is_primary !== undefined) updates.is_primary = args.is_primary;
         if (args.mileage !== undefined) updates.mileage = args.mileage;
-        // Ensure connectionStatus is set if missing
-        if (!existing.connectionStatus) updates.connectionStatus = "unconnected";
-        
+
         if (Object.keys(updates).length > 0) {
           await ctx.db.patch(existing._id, updates);
         }
@@ -469,7 +465,6 @@ export const addOwner = mutation({
         is_primary: args.is_primary ?? false,
         mileage: args.mileage,
         added_at: now,
-        connectionStatus: "unconnected",
       });
       
       return ownershipId;
@@ -503,33 +498,6 @@ export const removeOwner = mutation({
       throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
-    // Delete Smartcar connection rows for this ownership
-    const smartcarConnections = await ctx.db
-      .query("smartcar_connections")
-      .withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of smartcarConnections) {
-      await ctx.db.delete(row._id);
-    }
-
-    // Delete Smartcar snapshot rows for this ownership
-    const healthSnapshots = await ctx.db
-      .query("vehicle_health_snapshots")
-      .withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of healthSnapshots) {
-      await ctx.db.delete(row._id);
-    }
-
-    // Delete odometer history rows for this ownership
-    const odometerRows = await ctx.db
-      .query("odometer_history")
-      .withIndex("by_vehicle_and_date", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of odometerRows) {
-      await ctx.db.delete(row._id);
-    }
-
     // Delete maintenance records for this ownership
     const maintenanceRows = await ctx.db
       .query("maintenance_records")
@@ -557,30 +525,6 @@ export const removeOwnerById = mutation({
     const ownership = await ctx.db.get(args.vehicleOwnerId);
     if (!ownership) {
       throw new Error("We couldn't find that vehicle ownership record.");
-    }
-
-    const smartcarConnections = await ctx.db
-      .query("smartcar_connections")
-      .withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of smartcarConnections) {
-      await ctx.db.delete(row._id);
-    }
-
-    const healthSnapshots = await ctx.db
-      .query("vehicle_health_snapshots")
-      .withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of healthSnapshots) {
-      await ctx.db.delete(row._id);
-    }
-
-    const odometerRows = await ctx.db
-      .query("odometer_history")
-      .withIndex("by_vehicle_and_date", (q) => q.eq("vehicleOwnerId", ownership._id))
-      .collect();
-    for (const row of odometerRows) {
-      await ctx.db.delete(row._id);
     }
 
     const maintenanceRows = await ctx.db
@@ -675,7 +619,7 @@ export const updateMileage = mutation({
 });
 
 // ============================================================================
-// VEHICLE ONBOARDING (Non-Smartcar)
+// VEHICLE ONBOARDING
 // ============================================================================
 
 /**
@@ -1174,6 +1118,16 @@ export const saveOnboardingField = mutation({
     if (isComplete && !owner.onboardingComplete) {
       await ctx.db.patch(vehicleOwnerId, { onboardingComplete: true });
 
+      // One-time +5 HP for fully completing the vehicle profile
+      // (Rewards Framework v3 §11). `oneTimeKey` makes the award
+      // idempotent against re-runs of this branch.
+      await awardPointsImpl(ctx, {
+        vin: owner.vin,
+        userId: owner.user_id,
+        delta: 5,
+        oneTimeKey: "profile_complete",
+      });
+
       // Create records for types the user said they serviced (from lastServiceWhat)
       // so skipped follow-up steps don't leave gaps as "unknown".
       const whenRecord = await ctx.db
@@ -1315,6 +1269,15 @@ export const autoCompleteNewVehicleOnboarding = mutation({
     await ctx.db.patch(vehicleOwnerId, {
       knownIssues: ["no_all_clear"],
       onboardingComplete: true,
+    });
+
+    // One-time +5 HP for the auto-complete path (same event as the
+    // organic completion in saveOnboardingField; `oneTimeKey` dedupes).
+    await awardPointsImpl(ctx, {
+      vin: owner.vin,
+      userId: owner.user_id,
+      delta: 5,
+      oneTimeKey: "profile_complete",
     });
 
     // Trigger the pipeline now that records exist

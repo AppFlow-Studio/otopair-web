@@ -3,7 +3,7 @@
  *
  * DESCRIPTION:
  * CRUD operations for maintenance records that users manually provide
- * for items Smartcar doesn't cover (brakes, inspection, battery, etc.).
+ * for items not covered by automated tracking (brakes, inspection, battery, etc.).
  *
  * TABLE: maintenance_records
  *   - One record per vehicle + type (upsert pattern)
@@ -15,6 +15,8 @@
 import { query, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { claimContributionRewardImpl } from "./rewards";
+import { awardPointsImpl } from "./healthPoints";
 
 /**
  * QUERY: getRecordsByVehicle
@@ -80,6 +82,7 @@ export const upsertRecord = mutation({
       .unique();
 
     let recordId;
+    const isNewRecord = !existing;
     if (existing) {
       await ctx.db.patch(existing._id, {
         lastServiceDate: args.lastServiceDate,
@@ -108,6 +111,25 @@ export const upsertRecord = mutation({
         internal.maintenance_pipeline.runPipeline,
         { vehicleOwnerId: args.vehicleOwnerId, triggeredBy: "quick_read" }
       );
+    }
+
+    // Award the $10 "upload external service records" contribution
+    // credit per Rewards Framework v3 §8 — only on FIRST insert of a
+    // record for this (vehicle, type) pair. Subsequent edits of the
+    // same record don't re-pay. Silent so a duplicate claim attempt
+    // can never block a record write. Also +3 HP per §11.
+    if (isNewRecord && owner) {
+      await claimContributionRewardImpl(ctx, {
+        userId: owner.user_id,
+        actionType: "upload",
+        referenceId: String(recordId),
+        silent: true,
+      });
+      await awardPointsImpl(ctx, {
+        vin: owner.vin,
+        userId: owner.user_id,
+        delta: 3,
+      });
     }
 
     return recordId;

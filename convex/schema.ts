@@ -784,9 +784,6 @@ export default defineSchema({
     mileage: v.optional(v.number()),
     added_at: v.optional(v.number()),
     removed_at: v.optional(v.number()),
-    smartcarVehicleId: v.optional(v.string()),
-    connectionStatus: v.optional(v.string()),
-    connectedAt: v.optional(v.number()),
     ownershipType: v.optional(v.string()),
     ownedSinceNew: v.optional(v.boolean()),
     mileageAtPurchase: v.optional(v.number()),
@@ -825,8 +822,7 @@ export default defineSchema({
     .index("by_vin", ["vin"])
     .index("by_user_id", ["user_id"])
     .index("by_vin_user", ["vin", "user_id"])
-    .index("by_user_status", ["user_id", "status"])
-    .index("by_smartcar_vehicle_id", ["smartcarVehicleId"]),
+    .index("by_user_status", ["user_id", "status"]),
 
   // [U-W] Owner-specific hardware facts about THIS car.
   // Resolves which package-tagged part_fitments apply at booking time.
@@ -901,30 +897,6 @@ export default defineSchema({
     .index("by_vin", ["vin"])
     .index("by_updated_at", ["updated_at"]),
 
-  // [I]
-  odometer_history: defineTable({
-    vehicleOwnerId: v.id("vehicle_owners"),
-    distance: v.number(),
-    unit: v.string(),
-    recordedAt: v.number(),
-  }).index("by_vehicle_and_date", ["vehicleOwnerId", "recordedAt"]),
-
-  // [I]
-  smartcar_connections: defineTable({
-    vehicleOwnerId: v.id("vehicle_owners"),
-    smartcarVehicleId: v.string(),
-    accessToken: v.string(),
-    refreshToken: v.string(),
-    tokenExpiresAt: v.number(),
-    connectedAt: v.number(),
-    lastSyncedAt: v.optional(v.number()),
-    permissions: v.optional(v.any()),
-    status: v.string(),
-  })
-    .index("by_vehicle_owner", ["vehicleOwnerId"])
-    .index("by_smartcar_vehicle_id", ["smartcarVehicleId"])
-    .index("by_status", ["status"]),
-
   // [I] Daniel/Waleed
   vehicle_tiers: defineTable({
     vin: v.string(),
@@ -933,6 +905,24 @@ export default defineSchema({
     spend_12mo: v.optional(v.number()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
+  })
+    .index("by_vin_user", ["vin", "user_id"])
+    .index("by_user_id", ["user_id"]),
+
+  // Health Points per vehicle — motivation layer that buffers the
+  // Vehicle Health score (every 15 HP = +1, cap +3). Per Rewards
+  // Framework v3 §11.
+  vehicle_health_points: defineTable({
+    vin: v.string(),
+    user_id: v.id("users"),
+    points: v.number(),
+    // Dedupe key for the one-time "vehicle profile fully complete"
+    // award. Other earn events stack on `points` without flag tracking.
+    profile_complete_awarded: v.optional(v.boolean()),
+    // Tracks when decay was last applied so the daily cron is a
+    // no-op until the next 30-day window elapses for this row.
+    last_decay_at: v.optional(v.number()),
+    updated_at: v.number(),
   })
     .index("by_vin_user", ["vin", "user_id"])
     .index("by_user_id", ["user_id"]),
@@ -1073,18 +1063,6 @@ export default defineSchema({
     .index("by_vehicle_owner", ["vehicleOwnerId"])
     .index("by_vehicle_and_type", ["vehicleOwnerId", "type"]),
 
-  // [I]
-  vehicle_health_snapshots: defineTable({
-    vehicleOwnerId: v.id("vehicle_owners"),
-    snapshotType: v.string(),
-    data: v.any(),
-    source: v.optional(v.string()),
-    recordedAt: v.number(),
-    createdAt: v.number(),
-  })
-    .index("by_vehicle_owner", ["vehicleOwnerId"])
-    .index("by_vehicle_and_type", ["vehicleOwnerId", "snapshotType"]),
-
   // ===== USERS & AUTH =====
 
   // [D] 25 fields (A had 15, W had 22)
@@ -1112,6 +1090,10 @@ export default defineSchema({
     deletionRequestedAt: v.optional(v.number()),
     deletionSurveyResponse: v.optional(v.string()),
     deletionSurveySkipped: v.optional(v.boolean()),
+    // Timestamp the user last opened the membership/loyalty surface.
+    // Compared against the latest `ownership_credit_transactions.created_at`
+    // to drive the trophy-icon red dot. Bumped by `rewards.markCreditsSeen`.
+    last_viewed_credits_at: v.optional(v.number()),
     createdAt: v.optional(v.number()),
     lastUpdated: v.optional(v.number()),
   })
@@ -1126,6 +1108,20 @@ export default defineSchema({
     language: v.optional(v.string()),
     units: v.optional(v.string()),
     last_updated: v.optional(v.number()),
+  }).index("by_user_id", ["user_id"]),
+
+  // Saved Addresses — UberEats-style list of user-saved Home/Work/Other
+  // addresses. Used by the settings page now; future booking flows
+  // can read `is_primary` to pre-fill the customer location.
+  user_saved_addresses: defineTable({
+    user_id: v.id("users"),
+    type: v.union(v.literal("home"), v.literal("work"), v.literal("other")),
+    label: v.string(),
+    address: v.string(),
+    notes: v.optional(v.string()),
+    is_primary: v.optional(v.boolean()),
+    created_at: v.number(),
+    updated_at: v.number(),
   }).index("by_user_id", ["user_id"]),
 
   // [U-D] User mechanic favorites/hidden
@@ -1148,6 +1144,28 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_action", ["user_id", "action_type"]),
+
+  // Referrals — referee enters referrer's code during onboarding,
+  // row inserted with status="pending". On the referee's first
+  // `completed` booking, status flips to "credited" and both sides
+  // are paid the $15 referral credit via claimContributionReward.
+  // Per Rewards Framework v3 §8.
+  referrals: defineTable({
+    referrer_user_id: v.id("users"),
+    referee_user_id: v.id("users"),
+    code_used: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("credited"),
+      v.literal("cancelled"),
+    ),
+    created_at: v.number(),
+    first_service_booking_id: v.optional(v.id("bookings")),
+    credited_at: v.optional(v.number()),
+  })
+    .index("by_referee", ["referee_user_id"])
+    .index("by_referrer", ["referrer_user_id"])
+    .index("by_status", ["status"]),
 
   // [I] Daniel/Waleed
   user_reward_wallets: defineTable({

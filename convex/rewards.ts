@@ -13,8 +13,11 @@
  *   - api.rewards.getCreditHistory(userId)
  */
 
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
+import { awardPointsImpl } from "./healthPoints";
+import { isWithinRecommendedWindow } from "./lib/serviceWindow";
 
 // ============================================================================
 // QUERIES
@@ -72,6 +75,39 @@ export const getCreditHistory = query({
       .withIndex("by_user_id_created_at", (q) => q.eq("user_id", args.userId))
       .order("desc")
       .take(limit);
+  },
+});
+
+/**
+ * Drives the red dot on the home-screen trophy icon. Returns true
+ * when the user has earned any ownership credit (service, review,
+ * upload, referral — anything) more recently than their last visit
+ * to the membership/loyalty surface.
+ */
+export const hasUnseenCredits = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const latest = await ctx.db
+      .query("ownership_credit_transactions")
+      .withIndex("by_user_id_created_at", (q) => q.eq("user_id", args.userId))
+      .order("desc")
+      .first();
+    if (!latest?.created_at) return false;
+    const user = await ctx.db.get(args.userId);
+    const lastSeen = user?.last_viewed_credits_at ?? 0;
+    return latest.created_at > lastSeen;
+  },
+});
+
+/**
+ * Mark credits as seen — clears the trophy dot. Called when the
+ * user opens the loyalty card popover OR navigates to the
+ * membership page.
+ */
+export const markCreditsSeen = mutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.userId, { last_viewed_credits_at: Date.now() });
   },
 });
 
@@ -312,7 +348,9 @@ export const addCreditForCompletedBooking = internalMutation({
       description: "Maintenance rewards",
       reference_id: args.bookingId.toString(),
       // Elite credits never expire; Driver/Preferred expire in 6 months
-      ...(tier === "elite" ? {} : { expires_at: now + 180 * 24 * 60 * 60 * 1000 }),
+      // Credit expiry per Rewards Framework v3 §4: 12 months for
+      // Driver/Preferred, non-expiring at Elite.
+      ...(tier === "elite" ? {} : { expires_at: now + 365 * 24 * 60 * 60 * 1000 }),
       created_at: now,
     });
 
@@ -359,9 +397,77 @@ export const addCreditForCompletedBooking = internalMutation({
       });
     }
 
+    // Award Health Points: +10 for completing a recommended service,
+    // +5 bonus if the booking was within the recommended window
+    // (per Rewards Framework v3 §11).
+    const withinWindow = await isWithinRecommendedWindow(ctx, booking);
+    await awardPointsImpl(ctx, {
+      vin: booking.vin,
+      userId,
+      delta: withinWindow ? 15 : 10,
+    });
+
+    // Referral first-service trigger — if this is the user's first
+    // completed booking AND they signed up with a pending referral,
+    // pay both sides $15 and mark the referral credited.
+    await maybeFulfillReferralOnFirstService(ctx, {
+      userId,
+      bookingId: args.bookingId,
+      now,
+    });
+
     return { credited: creditAmount, tier: newTier, spend12mo };
   },
 });
+
+/**
+ * Internal: only fires the referral payout once per referee, gated on
+ * their first `completed` booking. No-op when no `pending` referral
+ * row exists for the referee. Implementation lives here (rather than
+ * inside referrals.ts) so it runs in the same transaction as the
+ * booking-complete credit insert.
+ */
+async function maybeFulfillReferralOnFirstService(
+  ctx: MutationCtx,
+  args: { userId: Id<"users">; bookingId: Id<"bookings">; now: number },
+): Promise<void> {
+  // Is this their first completed booking? Count earlier completions.
+  const completedBookings = await ctx.db
+    .query("bookings")
+    .withIndex("by_user_and_status", (q) =>
+      q.eq("user_id", args.userId).eq("status", "completed"),
+    )
+    .collect();
+  // The current booking is already `completed` when this fn fires, so
+  // "first" means exactly 1 completed booking (this one).
+  if (completedBookings.length !== 1) return;
+
+  const referral = await ctx.db
+    .query("referrals")
+    .withIndex("by_referee", (q) => q.eq("referee_user_id", args.userId))
+    .filter((q) => q.eq(q.field("status"), "pending"))
+    .first();
+  if (!referral) return;
+
+  await ctx.db.patch(referral._id, {
+    status: "credited",
+    first_service_booking_id: args.bookingId,
+    credited_at: args.now,
+  });
+
+  await claimContributionRewardImpl(ctx, {
+    userId: referral.referrer_user_id,
+    actionType: "referral",
+    referenceId: referral._id.toString(),
+    silent: true,
+  });
+  await claimContributionRewardImpl(ctx, {
+    userId: referral.referee_user_id,
+    actionType: "referral",
+    referenceId: referral._id.toString(),
+    silent: true,
+  });
+}
 
 /**
  * Ensure wallet exists for user. Call from getOrCreateMe or on first wallet access.
@@ -532,6 +638,125 @@ export const redeemSelected = mutation({
  * Claim contribution reward (review $3, upload $5, referral $15).
  * Call when user completes the action.
  */
+/**
+ * Internal helper used by both the public `claimContributionReward`
+ * mutation (UI-driven) and other Convex mutations that need to award
+ * a credit in the same transaction (e.g. `reviews.submit` calls this
+ * directly after the review row is inserted, so the credit lands
+ * atomically with the review). Callers that want to swallow duplicate
+ * claims silently (because they detect duplicates at a higher level)
+ * can pass `silent: true`.
+ */
+export async function claimContributionRewardImpl(
+  ctx: MutationCtx,
+  args: {
+    userId: Id<"users">;
+    actionType: "review" | "upload" | "referral";
+    referenceId?: string;
+    silent?: boolean;
+  },
+): Promise<{ success: boolean; amount: number } | null> {
+  // MVP amounts per Otopair Rewards Framework v3 §8. V1 bumps
+  // referral to $25; review/upload stay the same.
+  const amounts: Record<string, number> = {
+    review: 5,
+    upload: 10,
+    referral: 15,
+  };
+  const amount = amounts[args.actionType];
+
+  // Check if already claimed (for review/upload with referenceId)
+  if (args.referenceId) {
+    const existing = await ctx.db
+      .query("user_contribution_claims")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.userId))
+      .filter((q) =>
+        q.and(q.eq(q.field("action_type"), args.actionType), q.eq(q.field("reference_id"), args.referenceId))
+      )
+      .first();
+    if (existing) {
+      if (args.silent) return null;
+      throw new Error("This reward has already been claimed.");
+    }
+  }
+
+  // Referral cap: 5 max
+  if (args.actionType === "referral") {
+    const referrals = await ctx.db
+      .query("user_contribution_claims")
+      .withIndex("by_user_action", (q) => q.eq("user_id", args.userId).eq("action_type", "referral"))
+      .collect();
+    if (referrals.length >= 5) {
+      if (args.silent) return null;
+      throw new Error("You've reached the maximum of 5 referral credits.");
+    }
+  }
+
+  const now = Date.now();
+
+  // Ensure wallet
+  let wallet = await ctx.db
+    .query("user_reward_wallets")
+    .withIndex("by_user_id", (q) => q.eq("user_id", args.userId))
+    .unique();
+
+  if (!wallet) {
+    await ctx.db.insert("user_reward_wallets", {
+      user_id: args.userId,
+      balance: amount,
+      auto_apply_to_booking: true,
+      created_at: now,
+      updated_at: now,
+    });
+  } else {
+    await ctx.db.patch(wallet._id, {
+      balance: wallet.balance + amount,
+      updated_at: now,
+    });
+  }
+
+  await ctx.db.insert("user_contribution_claims", {
+    user_id: args.userId,
+    action_type: args.actionType,
+    reference_id: args.referenceId,
+    created_at: now,
+  });
+
+  const desc =
+    args.actionType === "review"
+      ? "Verified review"
+      : args.actionType === "upload"
+        ? "Service records upload"
+        : "Referral reward";
+
+  await ctx.db.insert("ownership_credit_transactions", {
+    user_id: args.userId,
+    amount,
+    type: `earn_${args.actionType}`,
+    description: desc,
+    reference_id: args.referenceId,
+    // Contribution credits expire in 12 months per Rewards
+    // Framework v3 §4 (Elite-only non-expiring applies to earn_service
+    // credits in addCreditForCompletedBooking).
+    expires_at: now + 365 * 24 * 60 * 60 * 1000,
+    created_at: now,
+  });
+
+  await ctx.db.insert("transactions", {
+    user_id: args.userId,
+    created_at: now,
+    description: "Ownership credits",
+    sub_description: desc,
+    amount,
+    currency: "USD",
+    status: "completed",
+    transaction_type: "credit",
+    icon_type: "leaf",
+  });
+
+  return { success: true, amount };
+}
+
 export const claimContributionReward = mutation({
   args: {
     userId: v.id("users"),
@@ -539,95 +764,7 @@ export const claimContributionReward = mutation({
     referenceId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const amounts: Record<string, number> = {
-      review: 3,
-      upload: 5,
-      referral: 15,
-    };
-    const amount = amounts[args.actionType];
-
-    // Check if already claimed (for review/upload with referenceId)
-    if (args.referenceId) {
-      const existing = await ctx.db
-        .query("user_contribution_claims")
-        .withIndex("by_user_id", (q) => q.eq("user_id", args.userId))
-        .filter((q) =>
-          q.and(q.eq(q.field("action_type"), args.actionType), q.eq(q.field("reference_id"), args.referenceId))
-        )
-        .first();
-      if (existing) throw new Error("This reward has already been claimed.");
-    }
-
-    // Referral cap: 5 max
-    if (args.actionType === "referral") {
-      const referrals = await ctx.db
-        .query("user_contribution_claims")
-        .withIndex("by_user_action", (q) => q.eq("user_id", args.userId).eq("action_type", "referral"))
-        .collect();
-      if (referrals.length >= 5) throw new Error("You've reached the maximum of 5 referral credits.");
-    }
-
-    const now = Date.now();
-
-    // Ensure wallet
-    let wallet = await ctx.db
-      .query("user_reward_wallets")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.userId))
-      .unique();
-
-    if (!wallet) {
-      await ctx.db.insert("user_reward_wallets", {
-        user_id: args.userId,
-        balance: amount,
-        auto_apply_to_booking: true,
-        created_at: now,
-        updated_at: now,
-      });
-    } else {
-      await ctx.db.patch(wallet._id, {
-        balance: wallet.balance + amount,
-        updated_at: now,
-      });
-    }
-
-    await ctx.db.insert("user_contribution_claims", {
-      user_id: args.userId,
-      action_type: args.actionType,
-      reference_id: args.referenceId,
-      created_at: now,
-    });
-
-    const desc =
-      args.actionType === "review"
-        ? "Verified review"
-        : args.actionType === "upload"
-          ? "Service records upload"
-          : "Referral reward";
-
-    await ctx.db.insert("ownership_credit_transactions", {
-      user_id: args.userId,
-      amount,
-      type: `earn_${args.actionType}`,
-      description: desc,
-      reference_id: args.referenceId,
-      // Contribution credits expire in 6 months for all tiers
-      // (Elite non-expiring applies to earn_service credits in addCreditForCompletedBooking)
-      expires_at: now + 180 * 24 * 60 * 60 * 1000,
-      created_at: now,
-    });
-
-    await ctx.db.insert("transactions", {
-      user_id: args.userId,
-      created_at: now,
-      description: "Ownership credits",
-      sub_description: desc,
-      amount,
-      currency: "USD",
-      status: "completed",
-      transaction_type: "credit",
-      icon_type: "leaf",
-    });
-
-    return { success: true, amount };
+    const result = await claimContributionRewardImpl(ctx, args);
+    return result ?? { success: false, amount: 0 };
   },
 });

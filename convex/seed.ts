@@ -3763,7 +3763,6 @@ export const seedVehiclesForUser = mutation({
           is_primary: false,
           mileage: v.mileage,
           added_at: now,
-          connectionStatus: "unconnected",
         });
         created++;
       }

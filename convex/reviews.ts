@@ -1,5 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { claimContributionRewardImpl } from "./rewards";
+import { awardPointsImpl } from "./healthPoints";
 
 export const list = query({
   args: {},
@@ -115,6 +117,55 @@ export const submit = mutation({
       comment: args.comment,
       created_at: Date.now(),
     });
+
+    // Recompute aggregate over the shop's full review set. We re-scan
+    // instead of running mean = (oldMean*oldCount + newRating)/(oldCount+1)
+    // because the cached aggregate isn't always present (existing data
+    // from before this code path landed), and the scan is cheap given
+    // realistic review counts per shop.
+    const shopReviews = await ctx.db
+      .query("reviews")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shop_id))
+      .collect();
+    const shopMean =
+      shopReviews.reduce((sum, r) => sum + r.rating, 0) / shopReviews.length;
+    await ctx.db.patch(args.shop_id, {
+      rating: shopMean,
+      review_count: shopReviews.length,
+    });
+
+    if (args.mechanic_id) {
+      const mechanicReviews = await ctx.db
+        .query("reviews")
+        .withIndex("by_mechanic_id", (q) => q.eq("mechanic_id", args.mechanic_id))
+        .collect();
+      const mechanicMean =
+        mechanicReviews.reduce((sum, r) => sum + r.rating, 0) / mechanicReviews.length;
+      await ctx.db.patch(args.mechanic_id, {
+        rating: mechanicMean,
+        review_count: mechanicReviews.length,
+      });
+    }
+
+    // Award the $5 contribution credit. `silent: true` so a duplicate
+    // claim (which shouldn't happen — `reviews.submit` already enforces
+    // one review per booking above) doesn't bubble up and undo the
+    // review itself. Keyed on booking_id so each booking can only
+    // pay out once.
+    await claimContributionRewardImpl(ctx, {
+      userId: args.user_id,
+      actionType: "review",
+      referenceId: args.booking_id.toString(),
+      silent: true,
+    });
+
+    // +2 HP for the verified review (Rewards Framework v3 §11).
+    await awardPointsImpl(ctx, {
+      vin: booking.vin,
+      userId: args.user_id,
+      delta: 2,
+    });
+
     return await ctx.db.get(reviewId);
   },
 });

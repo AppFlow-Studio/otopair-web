@@ -19,6 +19,15 @@
 
 // // ─── Marketplace VIN Discovery Pipeline ─────────────────────────
 
+// Health Points decay — 2 pts per 30-day window per vehicle. The
+// mutation is idempotent within a window so a daily run is fine
+// (decay only fires when a full 30-day chunk has elapsed for a row).
+crons.daily(
+  "health-points-decay",
+  { hourUTC: 8, minuteUTC: 0 },
+  internal.healthPoints.applyDecay,
+);
+
 // // Scrape CarGurus for VINs — runs twice daily (8 AM and 6 PM UTC)
 // crons.daily(
 //   "marketplace-scrape-cargurus-morning",

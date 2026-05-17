@@ -2,7 +2,9 @@ import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 
 // Fills missing engine_id / chassis_id / trim_id / vehicle_config_id on
-// snapshots written before the vehicle was fully enriched.
+// snapshots written before the vehicle was fully enriched. Called by the
+// enrichment pipeline once it resolves a vehicle's IDs so historical
+// observations are queryable by the new dimensions without re-collecting.
 export const backfillVehicleIds = internalMutation({
   args: { vehicleId: v.id("vehicles") },
   handler: async (ctx, args) => {

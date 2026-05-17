@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     const eventType = evt.type;
 
     if (eventType === "user.created" || eventType === "user.updated") {
-      const { id, email_addresses, first_name, last_name, image_url, public_metadata, primary_email_address_id } = evt.data;
+      const { id, email_addresses, phone_numbers, first_name, last_name, image_url, public_metadata, primary_email_address_id, primary_phone_number_id } = evt.data;
 
       // Find the primary email address (not just the first one in the array).
       // When a user changes their email in Clerk and sets a new primary,
@@ -36,9 +36,15 @@ export async function POST(req: NextRequest) {
 
       const role = meta.role;
 
+      const primaryPhoneObj = phone_numbers?.find(
+        (p: { id: string }) => p.id === primary_phone_number_id
+      ) ?? phone_numbers?.[0];
+      const primaryPhone = primaryPhoneObj?.phone_number;
+
       await fetchMutation(api.users.upsertFromClerk, {
         clerkUserId: id,
         email: primaryEmail,
+        phone: primaryPhone ?? undefined,
         first_name: first_name ?? undefined,
         last_name: last_name ?? undefined,
         profile_photo_url: image_url ?? undefined,

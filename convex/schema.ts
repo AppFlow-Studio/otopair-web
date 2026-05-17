@@ -484,9 +484,11 @@ export default defineSchema({
     .index("by_flagged", ["flagged_for_review"])
     .index("by_recorded_at", ["recorded_at"]),
 
-  // Per-service observation rows for mechanic-quoted time and price, plus
-  // catalog baselines at submit time. Mirrors part_snapshots' denormalized
-  // shop/service/engine/chassis shape so aggregations do not need joins.
+  // Per-service observation rows for mechanic-quoted time + price (and the
+  // catalog baselines at submit time). Mirrors part_snapshots' denormalized
+  // shop+service+engine+chassis shape so aggregations don't need joins.
+  // One row per service on the booking; custom services use
+  // custom_service_name with service_id undefined.
   labor_quote_snapshots: defineTable({
     booking_id: v.id("bookings"),
     shop_id: v.id("shops"),
@@ -1136,6 +1138,8 @@ export default defineSchema({
     lastUpdated: v.optional(v.number()),
     // Set when a Clerk user.created webhook claimed a pre-existing
     // "shop-created-*" walk-in stub user by matching email or phone.
+    // Drives the post-onboarding "welcome back, we've seen your car
+    // before" recap surface.
     walkInClaimedAt: v.optional(v.number()),
   })
     .index("by_clerkUserId", ["clerkUserId"])
@@ -1368,8 +1372,13 @@ export default defineSchema({
     note: v.optional(v.string()),
     title: v.optional(v.string()),
     series_id: v.optional(v.string()),
-    // Discriminator so manual block checks ignore booking-owned and orphaned
-    // unavailable slots.
+    // Discriminator so getManualBlockedSlotsForShop only counts slots that
+    // were *explicitly* marked as blocks. Booking-owned slots and any
+    // orphaned slots (e.g. from a deleted booking) leave this unset and
+    // are no longer treated as manual blocks.
+    //  - "manual": user-created via schedule UI (createBlockedSlot)
+    //  - "auto_day_block": gap inserts from blockMechanicDay
+    //  - "reserved_pending": RESERVED_PENDING_CUSTOMER_TITLE reservation
     block_kind: v.optional(
       v.union(
         v.literal("manual"),
@@ -1522,10 +1531,16 @@ export default defineSchema({
     // Set when the driver booked this directly from a mechanic recommendation
     // card. Used to auto-close the rec on completion.
     source_recommendation_id: v.optional(v.id("job_recommendations")),
-    // Booking origin and quote baselines for mechanic-created walk-ins.
+    // Booking origin — distinguishes mechanic-created walk-ins (where the
+    // mechanic supplies their own time + price estimates) from regular
+    // customer-self bookings. Powers downstream analytics on quote quality.
     source: v.optional(v.string()),
+    // Mechanic's free-form time estimate (minutes) for walk-ins; persisted
+    // alongside the catalog sum so we can compare predicted vs. actual.
     mechanic_estimated_minutes: v.optional(v.number()),
     catalog_estimated_minutes: v.optional(v.number()),
+    // Mechanic's verbally-quoted price to the walk-in customer; persisted
+    // alongside the catalog labor+parts sum at submit time.
     mechanic_quoted_price: v.optional(v.number()),
     catalog_quoted_price: v.optional(v.number()),
   })

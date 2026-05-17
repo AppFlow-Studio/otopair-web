@@ -382,8 +382,11 @@ export const upsertFromClerk = mutation({
       return existing._id;
     }
 
-    // If a shop previously created a walk-in stub user, claim it when the real
-    // Clerk identity arrives so bookings and vehicle ownership stay linked.
+    // Walk-in claim — when a shop previously created a stub user for this
+    // person during a walk-in booking (clerkUserId prefix "shop-created-"),
+    // match it by email or normalized phone and migrate it onto the real
+    // Clerk identity. All bookings + vehicle_owners stay linked because
+    // they reference the Convex user _id, not the clerkUserId string.
     const normalizedIncomingPhone = normalizePhoneE164(args.phone);
     let claimable = await ctx.db
       .query("users")

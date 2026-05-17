@@ -87,9 +87,11 @@ export const submit = mutation({
     booking_id: v.id("bookings"),
     user_id: v.id("users"),
     shop_id: v.id("shops"),
+    shop_rating: v.float64(),
+    shop_comment: v.string(),
     mechanic_id: v.optional(v.id("mechanics")),
-    rating: v.float64(),
-    comment: v.string(),
+    mechanic_rating: v.optional(v.float64()),
+    mechanic_comment: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Verify booking exists and is completed
@@ -99,29 +101,53 @@ export const submit = mutation({
       throw new Error("You can leave a review once this booking has been completed.");
     }
 
-    // Invariant: Ensure only one review per booking
-    const existing = await ctx.db
+    // Two-row pattern: allow up to one shop review (mechanic_id
+    // undefined) + one mechanic review (mechanic_id set) per booking.
+    const existingForBooking = await ctx.db
       .query("reviews")
       .withIndex("by_booking_id", (q) => q.eq("booking_id", args.booking_id))
-      .unique();
-    if (existing) {
+      .collect();
+    const hasShopReview = existingForBooking.some((r) => r.mechanic_id === undefined);
+    if (hasShopReview) {
       throw new Error("Booking has already been reviewed");
     }
+    if (args.mechanic_rating !== undefined && args.mechanic_id) {
+      const hasMechReview = existingForBooking.some(
+        (r) => r.mechanic_id === args.mechanic_id,
+      );
+      if (hasMechReview) {
+        throw new Error("This mechanic has already been reviewed for this booking");
+      }
+    }
 
-    const reviewId = await ctx.db.insert("reviews", {
+    // 1. Shop review (always written)
+    const shopReviewId = await ctx.db.insert("reviews", {
       booking_id: args.booking_id,
       user_id: args.user_id,
       shop_id: args.shop_id,
-      mechanic_id: args.mechanic_id ?? undefined,
-      rating: args.rating,
-      comment: args.comment,
+      mechanic_id: undefined,
+      rating: args.shop_rating,
+      comment: args.shop_comment,
       created_at: Date.now(),
     });
 
-    // Recompute aggregate over the shop's full review set. We re-scan
-    // instead of running mean = (oldMean*oldCount + newRating)/(oldCount+1)
-    // because the cached aggregate isn't always present (existing data
-    // from before this code path landed), and the scan is cheap given
+    // 2. Optional mechanic review
+    if (args.mechanic_id && args.mechanic_rating !== undefined) {
+      await ctx.db.insert("reviews", {
+        booking_id: args.booking_id,
+        user_id: args.user_id,
+        shop_id: args.shop_id,
+        mechanic_id: args.mechanic_id,
+        rating: args.mechanic_rating,
+        comment: args.mechanic_comment ?? "",
+        created_at: Date.now(),
+      });
+    }
+
+    // Recompute aggregate over the shop's full review set (both pure
+    // shop reviews + mechanic-tagged reviews count toward shop mean).
+    // Re-scan instead of incremental because the cached aggregate
+    // isn't always present (legacy data) and the scan is cheap given
     // realistic review counts per shop.
     const shopReviews = await ctx.db
       .query("reviews")
@@ -134,7 +160,7 @@ export const submit = mutation({
       review_count: shopReviews.length,
     });
 
-    if (args.mechanic_id) {
+    if (args.mechanic_id && args.mechanic_rating !== undefined) {
       const mechanicReviews = await ctx.db
         .query("reviews")
         .withIndex("by_mechanic_id", (q) => q.eq("mechanic_id", args.mechanic_id))
@@ -147,25 +173,23 @@ export const submit = mutation({
       });
     }
 
-    // Award the $5 contribution credit. `silent: true` so a duplicate
-    // claim (which shouldn't happen — `reviews.submit` already enforces
-    // one review per booking above) doesn't bubble up and undo the
-    // review itself. Keyed on booking_id so each booking can only
-    // pay out once.
+    // Award the $3 contribution credit + 2 HP once per booking,
+    // keyed on booking_id so a follow-up mechanic-only submit can't
+    // double-pay. `silent: true` swallows a duplicate claim error
+    // since the per-booking uniqueness check above already prevents
+    // that path in practice.
     await claimContributionRewardImpl(ctx, {
       userId: args.user_id,
       actionType: "review",
       referenceId: args.booking_id.toString(),
       silent: true,
     });
-
-    // +2 HP for the verified review (Rewards Framework v3 §11).
     await awardPointsImpl(ctx, {
       vin: booking.vin,
       userId: args.user_id,
       delta: 2,
     });
 
-    return await ctx.db.get(reviewId);
+    return await ctx.db.get(shopReviewId);
   },
 });

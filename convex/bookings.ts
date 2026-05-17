@@ -2995,10 +2995,8 @@ async function getManualBlockedSlotsForShop(ctx: any, shopId: any, date?: string
     (slot: any) =>
       !slot.is_available &&
       !bookingSlotIds.has(String(slot._id)) &&
-      // Only count slots that were explicitly marked as a block. Orphaned
-      // slots (from a deleted booking, or any pre-block_kind row that was
-      // never tied to a booking) have no block_kind and are ignored —
-      // they used to cause false-positive "time is blocked" rejections.
+      // Only count slots explicitly marked as blocks. Orphaned unavailable
+      // slots from deleted bookings are ignored.
       slot.block_kind !== undefined &&
       (date ? slot.date === date : true)
   );
@@ -6876,9 +6874,8 @@ export const createByShop = mutation({
       existingVehicle = await ctx.db.get(newVehicleId);
     }
 
-    // Fire-and-forget enrichment for any VIN whose vehicles row doesn't yet
-    // have a resolved vehicle_config_id. Walk-in events are the freshest VIN
-    // signal we get, so we always want full passport data ready by next visit.
+    // Fire-and-forget enrichment for any VIN whose vehicles row does not yet
+    // have a resolved vehicle_config_id.
     if (existingVehicle && !existingVehicle.vehicle_config_id) {
       await ctx.scheduler.runAfter(
         0,
@@ -6969,12 +6966,8 @@ export const createByShop = mutation({
       catalog_quoted_price: args.catalogQuotedPrice,
     });
 
-    // ── Per-service labor_quote_snapshots — denormalized aggregation rows
-    //    so analytics can ask "for service X at shop Y on engine Z, what's
-    //    the price/time distribution?" without joining through bookings →
-    //    vehicles → vehicle_configs every query. Mirrors part_snapshots.
-    //    Mechanic + catalog totals are split per service proportionally to
-    //    each service's catalog weight (defaultLaborHours / labor catalog).
+    // Per-service labor quote snapshots support analytics without joining
+    // bookings through vehicles and vehicle configs on every query.
     if (existingVehicle) {
       const catalogServiceMinutes = servicesForOptionCheck.map((svc: any) =>
         svc && svc.default_labor_hours

@@ -14,6 +14,9 @@ export default function SurveyDialogShell({
   footer,
   maxWidthClassName = "max-w-lg",
   headerBadge,
+  mobileFullBleed = false,
+  contentClassName,
+  hideHeader = false,
 }: {
   open: boolean;
   title: string;
@@ -24,6 +27,9 @@ export default function SurveyDialogShell({
   footer?: ReactNode;
   maxWidthClassName?: string;
   headerBadge?: ReactNode;
+  mobileFullBleed?: boolean;
+  contentClassName?: string;
+  hideHeader?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -41,15 +47,21 @@ export default function SurveyDialogShell({
 
   if (!open || typeof document === "undefined") return null;
 
+  const outerClass = mobileFullBleed
+    ? "fixed inset-0 z-[75] flex items-stretch justify-center overscroll-contain sm:items-center sm:p-4"
+    : "fixed inset-0 z-[75] flex items-start justify-center overscroll-contain p-3 sm:items-center sm:p-4";
+  const cardClass = mobileFullBleed
+    ? `relative flex h-full w-full ${maxWidthClassName} flex-col overflow-hidden border border-primary/10 bg-card shadow-[0_24px_60px_-12px_rgba(15,23,42,0.22)] sm:h-auto sm:max-h-[min(94vh,920px)] sm:rounded-2xl`
+    : `relative flex max-h-[min(94vh,920px)] w-full ${maxWidthClassName} flex-col overflow-hidden rounded-2xl border border-primary/10 bg-card shadow-[0_24px_60px_-12px_rgba(15,23,42,0.22)]`;
+
   return createPortal(
-    <div className="fixed inset-0 z-[75] flex items-start justify-center overscroll-contain p-3 sm:items-center sm:p-4">
+    <div className={outerClass}>
       <div
         className="absolute inset-0 bg-[rgba(17,24,28,0.32)] backdrop-blur-[3px]"
         onClick={onClose}
       />
-      <div
-        className={`relative flex max-h-[min(94vh,920px)] w-full ${maxWidthClassName} flex-col overflow-hidden rounded-2xl border border-primary/10 bg-card shadow-[0_24px_60px_-12px_rgba(15,23,42,0.22)]`}
-      >
+      <div className={cardClass}>
+        {hideHeader ? null : (
         <div className="flex items-start justify-between gap-3 border-b border-primary/10 px-5 py-3.5 sm:px-6">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -76,8 +88,9 @@ export default function SurveyDialogShell({
             <X className="h-4 w-4" />
           </button>
         </div>
+        )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6 sm:py-5">
+        <div className={contentClassName ?? "min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6 sm:py-5"}>
           {children}
         </div>
 

@@ -40,11 +40,15 @@ const ownerManagerLinks = [
 
 const frontDeskLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
+  { href: "/team", label: "Team", icon: Users },
 ];
 
 const mechanicLinks = [
   { href: "/my-bookings", label: "My Bookings", icon: Briefcase },
+  { href: "/schedule", label: "Schedule", icon: Calendar },
 ];
+
+const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
 
 const bookingSubLinks = [
   { href: "/schedule?action=newBooking", label: "Create Booking", icon: PlusCircle },
@@ -145,6 +149,9 @@ export default function PortalLayout({
   const isFrontDesk =
     portalAccess?.status === "active" &&
     portalAccess.role === "front_desk";
+  const isMechanic =
+    portalAccess?.status === "active" &&
+    MECHANIC_ROLES.includes(portalAccess.role);
   const isOnboarding =
     pathname.startsWith("/shop/setup") ||
     portalAccess?.status === "no_shop" ||
@@ -334,7 +341,8 @@ export default function PortalLayout({
               <NavText>Dashboard</NavText>
             </Link>
 
-            {/* Bookings accordion — always the same DOM structure; chevron fades with text */}
+            {/* Bookings accordion — hidden for mechanics (they use My Bookings) */}
+            {!isMechanic && (
             <div className={onboardingDisabledClass}>
               <button
                 onClick={() => {
@@ -387,6 +395,7 @@ export default function PortalLayout({
                 </div>
               </div>
             </div>
+            )}
 
             {/* Role-specific links */}
             {sidebarLinks.map((link) => {
@@ -536,7 +545,7 @@ export default function PortalLayout({
             </div>
           </header>
 
-          <main className="flex-1 p-6">{children}</main>
+          <main className="flex-1 px-6 pt-6 pb-0">{children}</main>
         </div>
       </div>
       <KeyboardShortcutsModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />

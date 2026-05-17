@@ -184,3 +184,32 @@ export const regenerateSlotsFifteenMinGrid = mutation({
   },
 });
 
+/**
+ * One-shot: strip legacy Smartcar fields from vehicle_owners rows.
+ * Run once after deploy, then remove smartcarVehicleId/connectionStatus/
+ * connectedAt from the schema validator and re-deploy.
+ *
+ * Run: npx convex run migrations:stripSmartcarFieldsFromVehicleOwners
+ */
+export const stripSmartcarFieldsFromVehicleOwners = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("vehicle_owners").collect();
+    let cleared = 0;
+    for (const row of rows) {
+      const r = row as Record<string, unknown>;
+      if (
+        r.smartcarVehicleId === undefined &&
+        r.connectionStatus === undefined &&
+        r.connectedAt === undefined
+      ) continue;
+      await ctx.db.patch(row._id, {
+        smartcarVehicleId: undefined,
+        connectionStatus: undefined,
+        connectedAt: undefined,
+      });
+      cleared += 1;
+    }
+    return { cleared, total: rows.length };
+  },
+});

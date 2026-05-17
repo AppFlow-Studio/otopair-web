@@ -647,13 +647,15 @@ function OwnerDashboardPage({
             }
             href="/bookings?filter=pending"
           />
-          <DashboardStatCard
-            icon={BadgeDollarSign}
-            label="This week's revenue"
-            value={formatCurrency(dashboard.stats.weekRevenue)}
-            sublabel="Captured payments this week"
-            accentClassName="text-success"
-          />
+          {context?.userRole !== "front_desk" && (
+            <DashboardStatCard
+              icon={BadgeDollarSign}
+              label="This week's revenue"
+              value={formatCurrency(dashboard.stats.weekRevenue)}
+              sublabel="Captured payments this week"
+              accentClassName="text-success"
+            />
+          )}
           <DashboardStatCard
             icon={Star}
             label="Shop rating"
@@ -945,6 +947,11 @@ function OwnerDashboardPage({
                           {booking.customerDisplayName}
                         </p>
                         <p className="truncate text-sm text-muted-foreground">{booking.vehicle}</p>
+                        {booking.vin ? (
+                          <p className="truncate font-mono text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                            VIN {booking.vin}
+                          </p>
+                        ) : null}
                         {booking.serviceSummary ? (
                           <p className="truncate text-xs text-muted-foreground">
                             {booking.serviceSummary}

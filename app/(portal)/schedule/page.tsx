@@ -310,6 +310,8 @@ export default function SchedulePage() {
   const [btMechanicId, setBtMechanicId] = useState("");
   const [btDescription, setBtDescription] = useState("");
   const [btType, setBtType] = useState("custom");
+  const [btFrequency, setBtFrequency] = useState<"none" | "daily" | "weekly" | "biweekly" | "monthly">("none");
+  const [btUntil, setBtUntil] = useState("");
   const [saveAsType, setSaveAsType] = useState(false);
   const savedBlockTypesQuery = useQuery(api.schedule.getBlockTimeTypes);
   const [btSaving, setBtSaving] = useState(false);
@@ -323,6 +325,7 @@ export default function SchedulePage() {
 
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
   const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+  const dismissManualSchedulingAlert = useMutation(api.bookings.dismissManualSchedulingAlert);
   const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
   const rescheduleFromNoShowAlert = useMutation(api.bookings.rescheduleFromNoShowAlert);
   const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
@@ -337,6 +340,20 @@ export default function SchedulePage() {
   const [legendOpen, setLegendOpen] = useState(false);
   const legendRef = useRef<HTMLDivElement>(null);
   const context = useQuery(api.schedule.getScheduleContext);
+  const portalAccess = useQuery(api.shops.getMyPortalAccess);
+  const viewerMechanicId =
+    portalAccess && portalAccess.status === "active"
+      ? (portalAccess.mechanicId ?? null)
+      : null;
+  const isMechanicViewer =
+    portalAccess?.status === "active" &&
+    (portalAccess.role === "shop_mechanic" || portalAccess.role === "mechanic");
+
+  useEffect(() => {
+    if (isMechanicViewer && viewerMechanicId && mechanicFilter !== viewerMechanicId) {
+      setMechanicFilter(viewerMechanicId);
+    }
+  }, [isMechanicViewer, viewerMechanicId, mechanicFilter]);
   const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
   const customerLateAlerts = useQuery(api.bookings.getOpenCustomerLateAlerts);
   const frontDeskOverrunAlerts = useQuery(api.bookings.getOpenFrontDeskOverrunAlerts);
@@ -374,6 +391,8 @@ export default function SchedulePage() {
         setBtType(matched ? matched._id : "custom");
       }
       setSaveAsType(false);
+      setBtFrequency("none");
+      setBtUntil("");
     }
   }, [blockTimeDrawer]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -567,7 +586,7 @@ export default function SchedulePage() {
       setToast({ msg: `Blocked full day for ${mechanicName}`, key: Date.now() });
       setBlockDayConfirm(null);
     } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Failed to block day", key: Date.now() });
+      setToast({ msg: err instanceof Error ? err.message : "Couldn't block the day. Please try again.", key: Date.now() });
     }
   }, [blockMechanicDay]);
 
@@ -577,7 +596,7 @@ export default function SchedulePage() {
       await unblockSlot({ slotId: slotId as Id<"time_slots"> });
       setToast({ msg: "Slot unblocked", key: Date.now() });
     } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Failed to unblock slot", key: Date.now() });
+      setToast({ msg: err instanceof Error ? err.message : "Couldn't unblock this time. Please try again.", key: Date.now() });
     }
   }, [unblockSlot]);
 
@@ -585,6 +604,31 @@ export default function SchedulePage() {
   const handleProposeReschedule = useCallback((proposal: RescheduleProposal) => {
     setRescheduleProposal(proposal);
     setRescheduleError("");
+  }, []);
+
+  /**
+   * Focus the day-lane on a booking so the user can drag-reschedule it
+   * within the live schedule (respecting bookings, blocked time, and shop hours).
+   * Used by the manual-scheduling-review alert and the "Reschedule instead"
+   * action in the cancel-booking dialog.
+   */
+  const focusBookingForReschedule = useCallback((bookingId: string) => {
+    const target = (bookingsRef.current ?? []).find(
+      (b) => String(b._id) === String(bookingId),
+    );
+    if (!target) {
+      setToast({ msg: "We couldn't find that booking to reschedule.", key: Date.now() });
+      return;
+    }
+    const [y, mo, d] = target.scheduledDate.split("-").map(Number);
+    if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+    setCurrentView("day");
+    setMechanicFilter("all");
+    setSelectedBookingId(bookingId as Id<"bookings">);
+    setToast({
+      msg: "Drag the booking to a new time on the schedule, or pick a slot in the panel.",
+      key: Date.now(),
+    });
   }, []);
 
   async function handleConfirmReschedule() {
@@ -909,9 +953,14 @@ export default function SchedulePage() {
           customerName: b.customerName,
           mechanicName: b.mechanicName,
           serviceNames: b.serviceNames,
+          vehicleDisplay: (b as any).vehicleDisplay ?? null,
+          licensePlate: (b as any).licensePlate ?? null,
           totalCost: b.totalCost,
           scheduleChangeMode: b.scheduleChangeMode,
           customerCanRestoreOriginal: b.customerCanRestoreOriginal,
+          customerNote: (b as any).customerNote ?? null,
+          recommendationState: (b as any).recommendationState ?? null,
+          diagnosticFollowupState: (b as any).diagnosticFollowupState ?? null,
         };
       });
 
@@ -939,8 +988,88 @@ export default function SchedulePage() {
         };
       });
 
-    return [...bookingEvents, ...blockedEvents];
-  }, [bookings, blockedSlots, mechanicFilter]);
+    // Draft preview while the Add blocked time drawer is open
+    const draftEvents: CalendarEvent[] = [];
+    const draftValid =
+      blockTimeDrawer &&
+      !blockTimeDrawer.editingSlotId &&
+      btDate &&
+      btFrom &&
+      btTo &&
+      btTo > btFrom &&
+      btMechanicId &&
+      (mechanicFilter === "all" || mechanicFilter === btMechanicId);
+    if (draftValid) {
+      const draftDates: string[] = [btDate];
+      if (btFrequency !== "none" && btUntil && btUntil >= btDate) {
+        const [sy, sm, sd] = btDate.split("-").map(Number);
+        const [uy, um, ud] = btUntil.split("-").map(Number);
+        if (sy && sm && sd && uy && um && ud) {
+          const endUtc = Date.UTC(uy, um - 1, ud);
+          let y = sy, m = sm - 1, d = sd;
+          let count = 0;
+          while (count < 366) {
+            const cur = Date.UTC(y, m, d);
+            if (cur > endUtc) break;
+            const iso = new Date(cur);
+            const ds = `${iso.getUTCFullYear()}-${String(iso.getUTCMonth() + 1).padStart(2, "0")}-${String(iso.getUTCDate()).padStart(2, "0")}`;
+            if (ds !== btDate) draftDates.push(ds);
+            if (btFrequency === "daily") d += 1;
+            else if (btFrequency === "weekly") d += 7;
+            else if (btFrequency === "biweekly") d += 14;
+            else m += 1;
+            const norm = new Date(Date.UTC(y, m, d));
+            y = norm.getUTCFullYear();
+            m = norm.getUTCMonth();
+            d = norm.getUTCDate();
+            count++;
+          }
+        }
+      }
+      const [sh, sm] = btFrom.split(":").map(Number);
+      const [eh, em] = btTo.split(":").map(Number);
+      const fallbackTitle =
+        btTitle.trim() ||
+        BUILT_IN_TYPES.find((t) => t.id === btType)?.label ||
+        savedBlockTypes.find((t) => t._id === btType)?.title ||
+        "Blocked";
+      for (const ds of draftDates) {
+        const start = new Date(`${ds}T00:00:00`);
+        start.setHours(sh, sm, 0, 0);
+        const end = new Date(`${ds}T00:00:00`);
+        end.setHours(eh, em, 0, 0);
+        draftEvents.push({
+          id: `blocked-draft-${ds}`,
+          title: fallbackTitle,
+          start,
+          end,
+          resourceId: btMechanicId,
+          type: "blocked",
+          status: "blocked",
+          blockTitle: fallbackTitle,
+          note: btDescription.trim() || null,
+          isDraft: true,
+        });
+      }
+    }
+
+    return [...bookingEvents, ...blockedEvents, ...draftEvents];
+  }, [
+    bookings,
+    blockedSlots,
+    mechanicFilter,
+    blockTimeDrawer,
+    btDate,
+    btFrom,
+    btTo,
+    btMechanicId,
+    btFrequency,
+    btUntil,
+    btTitle,
+    btDescription,
+    btType,
+    savedBlockTypes,
+  ]);
 
   // For month view: collapse individual bookings into one chip per status per day
   const calendarEvents = useMemo(() => {
@@ -1171,13 +1300,16 @@ export default function SchedulePage() {
               <Select
                 selectedKey={mechanicFilter}
                 onSelectionChange={(key) => setMechanicFilter(String(key))}
+                isDisabled={isMechanicViewer}
               >
                 <SelectTrigger className="h-9 rounded-lg border-border bg-card text-sm px-3 min-w-40">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectPopover placement="bottom end">
                   <SelectListBox shouldFocusWrap>
-                    <SelectItem id="all" textValue="All Mechanics">All Mechanics</SelectItem>
+                    {!isMechanicViewer && (
+                      <SelectItem id="all" textValue="All Mechanics">All Mechanics</SelectItem>
+                    )}
                     {context.mechanics.map((m) => (
                       <SelectItem key={m._id} id={m._id} textValue={m.name}>
                         {m.name}
@@ -1215,24 +1347,32 @@ export default function SchedulePage() {
                 <Info className="w-5 h-5" />
               </button>
               {legendOpen && (
-                <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 min-w-[200px]">
-                  <p className="text-xs font-medium text-muted-foreground mb-2">Status Legend</p>
+                <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 min-w-[220px]">
+                  <p className="text-xs font-semibold text-muted-foreground mb-2.5 uppercase tracking-wide">Status Legend</p>
                   <div className="flex flex-col gap-1.5">
                     {BOOKING_STATUS_LEGEND_KEYS.map((key) => {
                         const colors = statusColors[key];
                         if (!colors) return null;
+                        const isPendingCustomer = key === "pending_customer_acceptance";
                         return (
-                          <div key={key} className="flex items-center gap-1.5">
+                          <div key={key} className="flex items-center gap-2">
                             <div
-                              className="w-3 h-3 rounded-sm shrink-0"
-                              style={{ backgroundColor: colors.border }}
+                              className="shrink-0 rounded-sm"
+                              style={{
+                                width: 32,
+                                height: 18,
+                                backgroundColor: colors.bg,
+                                borderLeft: isPendingCustomer
+                                  ? `3px dashed ${colors.border}`
+                                  : `3px solid ${colors.border}`,
+                              }}
                             />
                             <span className="text-xs text-foreground">{getBookingStatusLabel(key)}</span>
                           </div>
                         );
                       })}
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-3 h-3 rounded-sm blocked-slot-pattern shrink-0" />
+                    <div className="flex items-center gap-2">
+                      <div className="shrink-0 rounded-sm blocked-slot-pattern" style={{ width: 32, height: 18 }} />
                       <span className="text-xs text-foreground">Blocked</span>
                     </div>
                   </div>
@@ -1364,8 +1504,48 @@ export default function SchedulePage() {
           </div>
           <div className="mt-3 space-y-2">
             {manualSchedulingAlerts.map((alert) => (
-              <div key={String(alert._id)} className="rounded-xl bg-white/90 px-4 py-3 text-sm text-red-900">
-                {alert.reason}
+              <div
+                key={String(alert._id)}
+                className="flex items-start justify-between gap-3 rounded-xl bg-white/90 px-4 py-3 text-sm text-red-900"
+              >
+                <div className="flex-1 min-w-0">
+                  <p>{alert.reason}</p>
+                  {alert.bookingId ? (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
+                      className="mt-1.5 text-xs font-medium text-red-700 underline-offset-2 hover:underline"
+                    >
+                      Open booking
+                    </button>
+                  ) : null}
+                </div>
+                {alert.bookingId ? (
+                  <button
+                    type="button"
+                    onClick={() => focusBookingForReschedule(String(alert.bookingId))}
+                    className="shrink-0 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                  >
+                    Reschedule
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await dismissManualSchedulingAlert({ alertId: alert._id as Id<"notification_outbox"> });
+                      setToast({ msg: "Alert dismissed", key: Date.now() });
+                    } catch (err) {
+                      setToast({
+                        msg: err instanceof Error ? err.message : "Couldn't dismiss alert",
+                        key: Date.now(),
+                      });
+                    }
+                  }}
+                  className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50"
+                >
+                  Dismiss
+                </button>
               </div>
             ))}
           </div>
@@ -1455,7 +1635,7 @@ export default function SchedulePage() {
       {/* Calendar */}
       <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar relative">
         {bookings === undefined ? (
-          <div className="flex items-center justify-center" style={{ height: "calc(100vh - 320px)", minHeight: 500 }}>
+          <div className="flex items-center justify-center" style={{ height: "calc(100vh - 180px)", minHeight: 500 }}>
             <Loader2 className="w-6 h-6 text-primary animate-spin" />
           </div>
         ) : null}
@@ -1468,6 +1648,7 @@ export default function SchedulePage() {
             nowTimestamp={nowTimestamp}
             currentDate={currentDate}
             onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
+            selectedEventId={selectedBookingId ?? null}
             onProposeReschedule={handleProposeReschedule}
             onDragError={(msg) => setToast({ msg, key: Date.now() })}
             onContextMenuCell={(info) => {
@@ -1564,7 +1745,7 @@ export default function SchedulePage() {
             getNow={() => new Date(nowTimestamp)}
             step={30}
             timeslots={2}
-            style={{ height: "calc(100vh - 320px)", minHeight: 500 }}
+            style={{ height: "calc(100vh - 180px)", minHeight: 500 }}
             onSelectEvent={(event) => {
               const ev = event as CalendarEvent;
               if (ev.id.startsWith("month-summary-")) {
@@ -1607,7 +1788,7 @@ export default function SchedulePage() {
           drawerOpen ? "w-[552px]" : "w-0"
         }`}
       >
-        <div className="w-[528px] ml-6 flex h-[calc(100vh-320px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
+        <div className="w-[528px] ml-6 flex h-[calc(100vh-180px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
           {blockTimeDrawer && (
             <div className="flex flex-col h-full">
               {/* Header */}
@@ -1720,16 +1901,22 @@ export default function SchedulePage() {
                     <DrawerFieldLabel>From</DrawerFieldLabel>
                     <Select
                       selectedKey={btFrom}
-                      onSelectionChange={(key) => setBtFrom(String(key))}
+                      onSelectionChange={(key) => {
+                        const next = String(key);
+                        setBtFrom(next);
+                        if (btTo && btTo <= next) setBtTo("");
+                      }}
                     >
                       <SelectTrigger className={drawerSelectTriggerClassName}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectPopover placement="bottom start">
                         <SelectListBox shouldFocusWrap>
-                          {generateTimeOptions().map((t) => (
-                            <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
-                          ))}
+                          {generateTimeOptions()
+                            .filter((t) => t.value !== "23:45")
+                            .map((t) => (
+                              <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
+                            ))}
                         </SelectListBox>
                       </SelectPopover>
                     </Select>
@@ -1737,6 +1924,7 @@ export default function SchedulePage() {
                   <div className="flex-1">
                     <DrawerFieldLabel>To</DrawerFieldLabel>
                     <Select
+                      isDisabled={!btFrom}
                       selectedKey={btTo}
                       onSelectionChange={(key) => setBtTo(String(key))}
                     >
@@ -1745,14 +1933,21 @@ export default function SchedulePage() {
                       </SelectTrigger>
                       <SelectPopover placement="bottom start">
                         <SelectListBox shouldFocusWrap>
-                          {generateTimeOptions().map((t) => (
-                            <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
-                          ))}
+                          {generateTimeOptions()
+                            .filter((t) => !btFrom || t.value > btFrom)
+                            .map((t) => (
+                              <SelectItem key={t.value} id={t.value} textValue={t.label}>{t.label}</SelectItem>
+                            ))}
                         </SelectListBox>
                       </SelectPopover>
                     </Select>
                   </div>
                 </div>
+                {btFrom && btTo && btTo <= btFrom && (
+                  <p className="text-xs text-destructive">
+                    End time must be after the start time.
+                  </p>
+                )}
                 {btFrom && btTo && btMechanicId && btDate && bookings &&
                   overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings) && (
                   <p className="text-xs text-destructive">
@@ -1791,19 +1986,53 @@ export default function SchedulePage() {
                 </div>
 
                 {/* Frequency */}
-                <div>
-                  <DrawerFieldLabel>Frequency</DrawerFieldLabel>
-                  <Select isDisabled selectedKey="none">
-                    <SelectTrigger className={drawerSelectTriggerClassName}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectPopover placement="bottom start">
-                      <SelectListBox>
-                        <SelectItem id="none" textValue="Doesn't repeat">Doesn&apos;t repeat</SelectItem>
-                      </SelectListBox>
-                    </SelectPopover>
-                  </Select>
-                </div>
+                {!blockTimeDrawer.editingSlotId && (
+                  <div>
+                    <DrawerFieldLabel>Frequency</DrawerFieldLabel>
+                    <Select
+                      selectedKey={btFrequency}
+                      onSelectionChange={(key) => {
+                        const next = String(key) as typeof btFrequency;
+                        setBtFrequency(next);
+                        if (next !== "none" && !btUntil && btDate) {
+                          const [y, m, d] = btDate.split("-").map(Number);
+                          if (y && m && d) {
+                            const dt = new Date(Date.UTC(y, m - 1, d + 30));
+                            setBtUntil(
+                              `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`,
+                            );
+                          }
+                        }
+                      }}
+                    >
+                      <SelectTrigger className={drawerSelectTriggerClassName}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectPopover placement="bottom start">
+                        <SelectListBox>
+                          <SelectItem id="none" textValue="Doesn't repeat">Doesn&apos;t repeat</SelectItem>
+                          <SelectItem id="daily" textValue="Daily">Daily</SelectItem>
+                          <SelectItem id="weekly" textValue="Weekly">Weekly</SelectItem>
+                          <SelectItem id="biweekly" textValue="Every 2 weeks">Every 2 weeks</SelectItem>
+                          <SelectItem id="monthly" textValue="Monthly">Monthly</SelectItem>
+                        </SelectListBox>
+                      </SelectPopover>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Ends on */}
+                {!blockTimeDrawer.editingSlotId && btFrequency !== "none" && (
+                  <div>
+                    <DrawerFieldLabel>Ends on</DrawerFieldLabel>
+                    <DatePicker value={btUntil} onChange={setBtUntil} />
+                    {btUntil && btDate && btUntil < btDate && (
+                      <p className="mt-1 text-xs text-destructive">
+                        End date must be on or after the start date.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Description */}
                 <div>
@@ -1832,6 +2061,8 @@ export default function SchedulePage() {
                 <button
                   disabled={
                     btSaving || !btDate || !btFrom || !btTo || !btMechanicId ||
+                    btTo <= btFrom ||
+                    (btFrequency !== "none" && (!btUntil || btUntil < btDate)) ||
                     !!(bookings && overlapsMechanicBooking(btMechanicId, btDate, btFrom, btTo, bookings)) ||
                     !!(blockedSlots && overlapsBlockedSlot(btMechanicId, btDate, btFrom, btTo, blockedSlots, blockTimeDrawer?.editingSlotId))
                   }
@@ -1850,6 +2081,7 @@ export default function SchedulePage() {
                         });
                         setToast({ msg: "Blocked time updated", key: Date.now() });
                       } else {
+                        const recurring = btFrequency !== "none" && !!btUntil;
                         await blockSlot({
                           mechanicId: btMechanicId as Id<"mechanics">,
                           date: btDate,
@@ -1857,8 +2089,14 @@ export default function SchedulePage() {
                           endTime: btTo,
                           ...(btTitle.trim() ? { title: btTitle.trim() } : {}),
                           ...(btDescription.trim() ? { note: btDescription.trim() } : {}),
+                          ...(recurring ? { frequency: btFrequency as "daily" | "weekly" | "biweekly" | "monthly", until: btUntil } : {}),
                         });
-                        setToast({ msg: `Blocked ${formatTimeLabel(btFrom)}–${formatTimeLabel(btTo)} for ${blockTimeDrawer.mechanicName}`, key: Date.now() });
+                        setToast({
+                          msg: recurring
+                            ? `Blocked time set to repeat ${btFrequency} until ${btUntil}`
+                            : `Blocked ${formatTimeLabel(btFrom)}–${formatTimeLabel(btTo)} for ${blockTimeDrawer.mechanicName}`,
+                          key: Date.now(),
+                        });
                       }
                       // Persist as a new saved type if the toggle is on and the title isn't already a known type
                       if (saveAsType && btTitle.trim() && btType === "custom") {
@@ -1872,7 +2110,7 @@ export default function SchedulePage() {
                       }
                       setBlockTimeDrawer(null);
                     } catch (err: unknown) {
-                      setToast({ msg: err instanceof Error ? err.message : "Failed to save blocked time", key: Date.now() });
+                      setToast({ msg: err instanceof Error ? err.message : "Couldn't save the blocked time. Please try again.", key: Date.now() });
                     } finally {
                       setBtSaving(false);
                     }
@@ -1890,7 +2128,7 @@ export default function SchedulePage() {
 
       {/* Job detail drawer */}
       <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[552px]" : "w-0"}`}>
-        <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-320px)] min-h-[500px]">
+        <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-180px)] min-h-[500px]">
           {selectedBookingId && (
             <BookingDetailPanel
               ref={jobDetailRef}
@@ -1901,6 +2139,23 @@ export default function SchedulePage() {
                 blockedSlots: blockedSlots ?? [],
               }}
               onRequestRescheduleConfirmation={handleProposeReschedule}
+              onRequestReschedule={
+                selectedBookingId
+                  ? () => focusBookingForReschedule(String(selectedBookingId))
+                  : undefined
+              }
+              onRequestNewBookingAfterCancel={({ mechanicId, scheduledDate }) => {
+                const [y, mo, d] = scheduledDate.split("-").map(Number);
+                if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+                setCurrentView("day");
+                setSelectedBookingId(null);
+                setCreateBookingDrawer({
+                  date: scheduledDate,
+                  time: "09:00",
+                  mechanicId: mechanicId ?? "",
+                  durationMinutes: 60,
+                });
+              }}
               onClose={() => setSelectedBookingId(null)}
               onSuccess={(msg) => setToast({ msg, key: Date.now() })}
               showBookingsLink
@@ -1911,7 +2166,7 @@ export default function SchedulePage() {
 
       {/* Create booking drawer */}
       {createBookingDrawer && (
-        <div className="flex-shrink-0 w-[552px] h-[calc(100vh-320px)] min-h-[500px]">
+        <div className="flex-shrink-0 w-[552px] h-[calc(100vh-180px)] min-h-[500px]">
           <div className="w-[528px] ml-6 flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card">
             <CreateBookingDrawer
               date={createBookingDrawer.date}
@@ -2180,7 +2435,7 @@ export default function SchedulePage() {
                     try {
                       await deleteBlockTimeType({ typeId: contextMenu.typeId as Id<"block_time_types"> });
                     } catch (err: unknown) {
-                      setToast({ msg: err instanceof Error ? err.message : "Failed to delete type", key: Date.now() });
+                      setToast({ msg: err instanceof Error ? err.message : "Couldn't delete that block type. Please try again.", key: Date.now() });
                     }
                   }}
                 >

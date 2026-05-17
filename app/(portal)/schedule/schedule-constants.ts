@@ -19,11 +19,26 @@ export interface CalendarEvent {
   customerName?: string;
   mechanicName?: string | null;
   serviceNames?: string[];
+  vehicleDisplay?: string | null;
+  licensePlate?: string | null;
   totalCost?: number;
   blockTitle?: string | null;
   note?: string | null;
+  /** Free-text note the customer left for the mechanic on the Review &
+   *  Pay screen. Surfaced on booking cards / drawers so the mechanic can
+   *  read it before starting the job. */
+  customerNote?: string | null;
   scheduleChangeMode?: string;
   customerCanRestoreOriginal?: boolean;
+  isDraft?: boolean;
+  recommendationState?:
+    | "none"
+    | "pending_customer"
+    | "confirmed"
+    | "declined"
+    | "out_of_scope"
+    | null;
+  diagnosticFollowupState?: "pending" | "awaiting_info" | "resolved" | null;
 }
 
 export const statusColors: Record<string, { bg: string; text: string; border: string }> = {

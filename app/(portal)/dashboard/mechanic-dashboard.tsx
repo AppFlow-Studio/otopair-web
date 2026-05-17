@@ -17,6 +17,8 @@ import { StatusPill } from "@/components/status-pill";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
+import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
 import type {
   PostJobSurveyPayload,
   PreJobSurveyPayload,
@@ -95,6 +97,9 @@ function DashboardCard({
 
 export default function MechanicDashboard() {
   const dashboard = useQuery(api.bookings.getMyMechanicDashboard);
+  const diagnosticsNeedingFollowUp = useQuery(
+    api.bookings.getDiagnosticsNeedingFollowUp,
+  );
   const savePrejob = useMutation(api.bookings.savePrejob);
   const startWithPrejob = useMutation(api.bookings.startWithPrejob);
   const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
@@ -347,6 +352,55 @@ export default function MechanicDashboard() {
         />
       </div>
 
+      {diagnosticsNeedingFollowUp && diagnosticsNeedingFollowUp.length > 0 ? (
+        <section className="rounded-2xl border border-amber-200 bg-amber-50/40 p-6">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold text-amber-900">
+              Diagnostics needing follow-up
+            </h2>
+            <p className="text-sm text-amber-900/80">
+              {diagnosticsNeedingFollowUp.length} diagnostic
+              {diagnosticsNeedingFollowUp.length === 1 ? "" : "s"} still waiting on a
+              recommendation or more info.
+            </p>
+          </div>
+          <div className="space-y-2">
+            {diagnosticsNeedingFollowUp.map((job: any) => (
+              <button
+                key={String(job._id)}
+                type="button"
+                onClick={() => openWorkflowDialog(String(job._id), "postjob")}
+                className="flex w-full items-start justify-between gap-3 rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-left hover:bg-amber-50"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-foreground">
+                    {job.customerName} · {job.vehicle}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {job.serviceNames.join(", ")}
+                    {job.diagnosticSystem ? ` · ${job.diagnosticSystem}` : ""}
+                  </div>
+                  {job.followupState === "awaiting_info" && job.awaitingInfoNote ? (
+                    <div className="mt-1 text-xs text-cyan-800">
+                      Waiting on: {job.awaitingInfoNote}
+                    </div>
+                  ) : null}
+                </div>
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${
+                    job.followupState === "awaiting_info"
+                      ? "bg-cyan-100 text-cyan-900"
+                      : "bg-amber-100 text-amber-900"
+                  }`}
+                >
+                  {job.followupState === "awaiting_info" ? "Awaiting info" : "Pending"}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="rounded-2xl border border-border bg-card p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)]">
         <div className="flex items-center justify-between gap-4">
           <div>
@@ -480,14 +534,20 @@ export default function MechanicDashboard() {
                       <button
                         onClick={() => openWorkflowDialog(String(job._id), "postjob")}
                         disabled={busyAction === actionKeyComplete}
-                        className="inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                        className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
+                          (job as any).diagnosticSystem
+                            ? "border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                            : "border border-border text-foreground hover:bg-muted"
+                        }`}
                       >
                         {busyAction === actionKeyComplete ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
                         ) : (
                           <Wrench className="w-4 h-4" />
                         )}
-                        Complete Booking
+                        {(job as any).diagnosticSystem
+                          ? "Run diagnostic checklist"
+                          : "Complete Booking"}
                       </button>
                     ) : null}
 
@@ -612,6 +672,7 @@ export default function MechanicDashboard() {
 
       <PreJobSurveyDialog
         open={workflowBookingId !== null && workflowMode === "prejob"}
+        bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
@@ -631,8 +692,52 @@ export default function MechanicDashboard() {
         onSubmit={handleStartAction}
       />
 
+      <DiagnosticChecklistDialog
+        open={
+          workflowBookingId !== null &&
+          workflowMode === "postjob" &&
+          !!selectedWorkflowBooking?.diagnosticSystem
+        }
+        bookingId={workflowBookingId}
+        bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
+        bookingSubLabel={
+          selectedWorkflowBooking
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+                selectedWorkflowBooking.scheduledDate,
+              )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
+            : ""
+        }
+        system={(selectedWorkflowBooking?.diagnosticSystem ?? "not_sure") as any}
+        checklist={
+          selectedWorkflowBooking?.diagnosticChecklist &&
+          selectedWorkflowBooking.diagnosticChecklist.length > 0
+            ? selectedWorkflowBooking.diagnosticChecklist
+            : selectedWorkflowBooking?.diagnosticSystem
+              ? templateForSystem(selectedWorkflowBooking.diagnosticSystem as any)
+              : []
+        }
+        customerNotes={selectedWorkflowBooking?.customerNotes ?? null}
+        findingsNote={(selectedWorkflowBooking as any)?.diagnosticFindingsNote ?? null}
+        recommendationState={selectedWorkflowBooking?.recommendationState ?? null}
+        recommendedServiceName={selectedWorkflowBooking?.recommendedServiceName ?? null}
+        recommendedServiceNote={selectedWorkflowBooking?.recommendedServiceNote ?? null}
+        followupState={selectedWorkflowBooking?.diagnosticFollowupState ?? null}
+        awaitingInfoNote={selectedWorkflowBooking?.awaitingInfoNote ?? null}
+        onClose={closeWorkflowDialog}
+        onCompleted={() => {
+          setToast("Diagnostic completed");
+          closeWorkflowDialog();
+        }}
+        onError={(msg) => setToast(msg)}
+      />
+
       <PostJobSurveyDialog
-        open={workflowBookingId !== null && workflowMode === "postjob"}
+        open={
+          workflowBookingId !== null &&
+          workflowMode === "postjob" &&
+          !selectedWorkflowBooking?.diagnosticSystem
+        }
+        bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking

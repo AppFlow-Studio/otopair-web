@@ -5,7 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/phone";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, Plus, Search, User, Wrench, X } from "lucide-react";
+import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, MessageSquare, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
 import {
   Select,
   SelectItem,
@@ -21,8 +21,11 @@ import {
   DrawerSectionHeader,
 } from "@/components/drawer-panel-styles";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
+import ServiceOptionsPicker, { type SelectedServiceOption } from "@/components/booking/service-options-picker";
+import TireSpecPicker, { type TireSpecs } from "@/components/booking/tire-spec-picker";
 import DatePicker from "@/components/ui/date-picker";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
+import VehicleYMMTPicker from "./vehicle-ymmt-picker";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -80,6 +83,14 @@ function buildTimeOptions(): Array<{ value: string; label: string }> {
 
 const TIME_OPTIONS = buildTimeOptions();
 
+const DIAGNOSTIC_TIME_BAND: Record<string, string> = {
+  brakes: "30–60 min",
+  tires_wheels: "30–60 min",
+  engine: "45–90 min",
+  battery_electrical: "45–90 min",
+  not_sure: "45–90 min",
+};
+
 function toMins(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
   return h * 60 + m;
@@ -133,9 +144,13 @@ export default function CreateBookingDrawer({
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [make, setMake] = useState("");
   const [model, setModel] = useState("");
+  const [trim, setTrim] = useState("");
 
-  /* ---- VIN decode (NHTSA) ---- */
+  /* ---- VIN decode ---- */
+  const VIN_REGEX = /^[A-HJ-NPR-Z0-9]{17}$/i;
+  const [validVin, setValidVin] = useState("");
   const [vinLookupState, setVinLookupState] = useState<"idle" | "loading" | "error">("idle");
+  const [vinSource, setVinSource] = useState<"convex" | "nhtsa" | null>(null);
   const [vinSuggestion, setVinSuggestion] = useState<{
     vin: string;
     year?: string;
@@ -148,24 +163,74 @@ export default function CreateBookingDrawer({
   const [vinConfirmOpen, setVinConfirmOpen] = useState(false);
   const lastDecodedVinRef = useRef<string>("");
 
-  const VIN_REGEX = /^[A-HJ-NPR-Z0-9]{17}$/i;
+  type OwnerInfo = { userId: string; firstName: string | null; lastName: string | null; email: string | null; phone: string | null };
+  const [pendingOwners, setPendingOwners] = useState<OwnerInfo[]>([]);
+  const [ownerPickerOpen, setOwnerPickerOpen] = useState(false);
 
+  // Convex lookup — skipped until a valid 17-char VIN is entered
+  const convexVehicleInfo = useQuery(
+    api.vehicles.getVehicleBookingInfo,
+    validVin ? { vin: validVin } : "skip"
+  );
+
+  // Sync validVin from raw vin input
   useEffect(() => {
     const trimmed = vin.trim().toUpperCase();
-    if (trimmed.length !== 17 || !VIN_REGEX.test(trimmed)) {
+    if (trimmed.length === 17 && VIN_REGEX.test(trimmed)) {
+      setValidVin(trimmed);
+    } else {
+      setValidVin("");
       setVinLookupState("idle");
+      setVinSource(null);
+    }
+  }, [vin]);
+
+  // React to Convex result — prefill from DB or fall back to NHTSA
+  useEffect(() => {
+    if (!validVin) return;
+    if (validVin === lastDecodedVinRef.current) return;
+
+    if (convexVehicleInfo === undefined) {
+      setVinLookupState("loading");
       return;
     }
-    if (trimmed === lastDecodedVinRef.current) return;
 
-    let cancelled = false;
+    if (convexVehicleInfo !== null) {
+      lastDecodedVinRef.current = validVin;
+      setVinLookupState("idle");
+      setVinSource("convex");
+      setVinSuggestion({
+        vin: validVin,
+        year: convexVehicleInfo.year != null ? String(convexVehicleInfo.year) : undefined,
+        make: convexVehicleInfo.make ?? undefined,
+        model: convexVehicleInfo.model ?? undefined,
+        trim: convexVehicleInfo.trim ?? undefined,
+      });
+      setVinImageUrl(null);
+      setVinImageLoading(true);
+      setVinConfirmOpen(true);
+      setPendingOwners((convexVehicleInfo.owners ?? []) as OwnerInfo[]);
+
+      const imgParams = new URLSearchParams({ vin: validVin });
+      if (convexVehicleInfo.year) imgParams.set("year", String(convexVehicleInfo.year));
+      if (convexVehicleInfo.make) imgParams.set("make", convexVehicleInfo.make);
+      if (convexVehicleInfo.model) imgParams.set("model", convexVehicleInfo.model);
+      if (convexVehicleInfo.trim) imgParams.set("trim", convexVehicleInfo.trim);
+      fetch(`/api/vehicle-image?${imgParams.toString()}`)
+        .then((r) => (r.ok ? r.json() : Promise.resolve({ imageUrl: null })))
+        .then((d) => setVinImageUrl(d?.imageUrl ?? null))
+        .catch(() => setVinImageUrl(null))
+        .finally(() => setVinImageLoading(false));
+      return;
+    }
+
+    // Not in Convex — fall back to NHTSA
     setVinLookupState("loading");
+    let cancelled = false;
     const handle = window.setTimeout(async () => {
       try {
         const res = await fetch(
-          `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValuesExtended/${encodeURIComponent(
-            trimmed
-          )}?format=json`
+          `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValuesExtended/${encodeURIComponent(validVin)}?format=json`
         );
         if (!res.ok) throw new Error("NHTSA request failed");
         const data = await res.json();
@@ -175,9 +240,10 @@ export default function CreateBookingDrawer({
           setVinLookupState("error");
           return;
         }
-        lastDecodedVinRef.current = trimmed;
+        lastDecodedVinRef.current = validVin;
+        setVinSource("nhtsa");
         setVinSuggestion({
-          vin: trimmed,
+          vin: validVin,
           year: row.ModelYear || undefined,
           make: row.Make || undefined,
           model: row.Model || undefined,
@@ -187,24 +253,18 @@ export default function CreateBookingDrawer({
         setVinImageLoading(true);
         setVinConfirmOpen(true);
         setVinLookupState("idle");
+        setPendingOwners([]);
 
-        const imgParams = new URLSearchParams({ vin: trimmed });
+        const imgParams = new URLSearchParams({ vin: validVin });
         if (row.ModelYear) imgParams.set("year", String(row.ModelYear));
         if (row.Make) imgParams.set("make", String(row.Make));
         if (row.Model) imgParams.set("model", String(row.Model));
         if (row.Trim) imgParams.set("trim", String(row.Trim));
         fetch(`/api/vehicle-image?${imgParams.toString()}`)
           .then((r) => (r.ok ? r.json() : Promise.resolve({ imageUrl: null })))
-          .then((data) => {
-            if (cancelled) return;
-            setVinImageUrl(data?.imageUrl ?? null);
-          })
-          .catch(() => {
-            if (!cancelled) setVinImageUrl(null);
-          })
-          .finally(() => {
-            if (!cancelled) setVinImageLoading(false);
-          });
+          .then((d) => { if (!cancelled) setVinImageUrl(d?.imageUrl ?? null); })
+          .catch(() => { if (!cancelled) setVinImageUrl(null); })
+          .finally(() => { if (!cancelled) setVinImageLoading(false); });
       } catch {
         if (!cancelled) setVinLookupState("error");
       }
@@ -214,14 +274,35 @@ export default function CreateBookingDrawer({
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [vin]);
+  }, [validVin, convexVehicleInfo]);
 
-  function applyVinSuggestion() {
+  function applyOwner(owner: OwnerInfo) {
+    if (owner.firstName) setFirstName(owner.firstName);
+    if (owner.lastName) setLastName(owner.lastName);
+    if (owner.email) setEmail(owner.email);
+    if (owner.phone) {
+      const digits = owner.phone.replace(/\D/g, "").slice(-10);
+      if (digits.length === 10) setPhone(formatPhoneInput(digits));
+    }
+    setOwnerPickerOpen(false);
+  }
+
+  function applyVehicleOnly() {
     if (!vinSuggestion) return;
     if (vinSuggestion.year) setYear(vinSuggestion.year);
     if (vinSuggestion.make) setMake(vinSuggestion.make);
     if (vinSuggestion.model) setModel(vinSuggestion.model);
+    if (vinSuggestion.trim) setTrim(vinSuggestion.trim);
     setVinConfirmOpen(false);
+  }
+
+  function applyVinSuggestion() {
+    applyVehicleOnly();
+    if (pendingOwners.length === 1) {
+      applyOwner(pendingOwners[0]);
+    } else if (pendingOwners.length > 1) {
+      setOwnerPickerOpen(true);
+    }
   }
 
   /* ---- Services ---- */
@@ -234,6 +315,18 @@ export default function CreateBookingDrawer({
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [customDraftName, setCustomDraftName] = useState("");
   const [customDraftMinutes, setCustomDraftMinutes] = useState("");
+
+  /* ---- Customer states / notes ---- */
+  const [customerNotes, setCustomerNotes] = useState("");
+
+  /* ---- Diagnostic system ---- */
+  type DiagnosticSystem =
+    | "brakes"
+    | "tires_wheels"
+    | "engine"
+    | "battery_electrical"
+    | "not_sure";
+  const [diagnosticSystem, setDiagnosticSystem] = useState<DiagnosticSystem | null>(null);
 
   /* ---- Scheduling (controlled by parent) ---- */
   const setDate = (next: string) => onDraftChange({ date: next, time, mechanicId });
@@ -272,11 +365,84 @@ export default function CreateBookingDrawer({
 
   const [isSaving, setIsSaving] = useState(false);
   const [outsideHoursConfirmOpen, setOutsideHoursConfirmOpen] = useState(false);
+  const [selectedServiceOptions, setSelectedServiceOptions] = useState<SelectedServiceOption[]>([]);
+  const [tireSpecs, setTireSpecs] = useState<TireSpecs | null>(null);
+  const [showOptionsPicker, setShowOptionsPicker] = useState(false);
+  const [showTirePicker, setShowTirePicker] = useState(false);
+  const [pendingSubmitOutsideHours, setPendingSubmitOutsideHours] = useState<boolean | null>(null);
 
   const shopData = useQuery(api.schedule.getShopServicesWithCategories);
   const createBooking = useMutation(api.bookings.createByShop);
 
   const categories = useMemo(() => shopData?.categories ?? [], [shopData?.categories]);
+
+  const isDiagnostic = useMemo(() => {
+    const matchesDiagnostic = (text: string | undefined | null) =>
+      typeof text === "string" && /diagnost/i.test(text);
+    for (const cat of categories as any[]) {
+      const catLooksDiagnostic = matchesDiagnostic(cat.name);
+      for (const s of cat.services) {
+        if (!selectedIds.has(s._id)) continue;
+        if (
+          catLooksDiagnostic ||
+          matchesDiagnostic(s.slug) ||
+          matchesDiagnostic(s.name)
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }, [categories, selectedIds]);
+
+  useEffect(() => {
+    if (!isDiagnostic && diagnosticSystem !== null) setDiagnosticSystem(null);
+  }, [isDiagnostic, diagnosticSystem]);
+
+  /* ---- Option-bearing services ---- */
+  const isTireReplacementService = (s: { slug?: string | null; name?: string | null }) => {
+    const slug = (s.slug ?? "").toLowerCase();
+    const name = (s.name ?? "").toLowerCase();
+    return (
+      slug === "tire-replacement" ||
+      slug === "tire_replacement" ||
+      slug === "tires" ||
+      /tire.*(replac|change)/.test(slug) ||
+      /tire.*(replac|change)/.test(name)
+    );
+  };
+  const { optionServices, tireService } = useMemo(() => {
+    const all = categories.flatMap((c: any) => c.services as any[]);
+    const selected = all.filter((s) => selectedIds.has(s._id));
+    return {
+      optionServices: selected.filter(
+        (s) => s.hasOptions && !isTireReplacementService(s),
+      ),
+      tireService: selected.find((s) => isTireReplacementService(s)) ?? null,
+    };
+  }, [categories, selectedIds]);
+
+  // Drop stale picks when a service is deselected.
+  useEffect(() => {
+    setSelectedServiceOptions((current) =>
+      current.filter((p) =>
+        optionServices.some((s: any) => String(s._id) === String(p.service_id)),
+      ),
+    );
+    if (!tireService && tireSpecs) setTireSpecs(null);
+  }, [optionServices, tireService, tireSpecs]);
+
+  const missingOptionServices = useMemo(
+    () =>
+      optionServices.filter(
+        (s: any) =>
+          !selectedServiceOptions.some(
+            (p) => String(p.service_id) === String(s._id),
+          ),
+      ),
+    [optionServices, selectedServiceOptions],
+  );
+  const needsTireSpecs = tireService != null && tireSpecs == null;
 
   /* ---- Overlap check ---- */
   const overlapError = useMemo(() => {
@@ -320,6 +486,20 @@ export default function CreateBookingDrawer({
 
     return null;
   }, [date, time, shopHours]);
+
+  const computedEndLabel = useMemo(() => {
+    if (!time) return null;
+    const allServices = categories.flatMap((c) => c.services);
+    const selected = allServices.filter((s) => selectedIds.has(s._id));
+    const customMins = customServices.reduce((sum, c) => sum + (c.durationMinutes ?? 0), 0);
+    const estMins =
+      (selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) + customMins) || 60;
+    const endHHMM = getBookingEndTime(time, estMins);
+    const [h, m] = endHHMM.split(":").map(Number);
+    const ampm = h >= 12 ? "pm" : "am";
+    const hour = h % 12 || 12;
+    return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+  }, [time, selectedIds, customServices, categories]);
 
   const outsideHoursWarning = useMemo(() => {
     if (!date || !time) return null;
@@ -391,10 +571,13 @@ export default function CreateBookingDrawer({
         vehicleYear: year ? Number(year) : undefined,
         vehicleMake: make.trim() || undefined,
         vehicleModel: model.trim() || undefined,
+        vehicleTrim: trim.trim() || undefined,
         scheduledDate: date,
         scheduledTime: time,
         serviceIds: Array.from(selectedIds) as Id<"services">[],
         customServices: customServices.length > 0 ? customServices : undefined,
+        customerNotes: customerNotes.trim() || undefined,
+        diagnosticSystem: isDiagnostic && diagnosticSystem ? diagnosticSystem : undefined,
         mechanicId: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
         assignmentPreference,
         laborCost: 0,
@@ -402,6 +585,16 @@ export default function CreateBookingDrawer({
         estimatedLaborMinutes: estMinutes,
         status: "confirmed",
         allowOutsideShopHours: allowOutsideShopHours || undefined,
+        selectedServiceOptions:
+          selectedServiceOptions.length > 0
+            ? selectedServiceOptions.map((p) => ({
+                service_id: p.service_id,
+                option_id: p.option_id,
+                option_label: p.option_label,
+                option_type: p.option_type,
+              }))
+            : undefined,
+        tireSpecs: tireSpecs ?? undefined,
       });
 
       onToast("Booking created");
@@ -428,6 +621,16 @@ export default function CreateBookingDrawer({
     const preflightError = overlapError ?? blockingHoursError;
     if (preflightError) {
       onToast(preflightError);
+      return;
+    }
+
+    if (missingOptionServices.length > 0) {
+      setShowOptionsPicker(true);
+      return;
+    }
+
+    if (needsTireSpecs) {
+      setShowTirePicker(true);
       return;
     }
 
@@ -517,20 +720,18 @@ export default function CreateBookingDrawer({
                   </p>
                 )}
             </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <DrawerFieldLabel>Year</DrawerFieldLabel>
-                <input type="number" value={year} onChange={(e) => setYear(e.target.value)} className={drawerInputClassName} />
-              </div>
-              <div className="col-span-2">
-                <DrawerFieldLabel>Make</DrawerFieldLabel>
-                <input type="text" placeholder="Toyota" value={make} onChange={(e) => setMake(e.target.value)} className={drawerInputClassName} />
-              </div>
-            </div>
-            <div>
-              <DrawerFieldLabel>Model</DrawerFieldLabel>
-              <input type="text" placeholder="Camry" value={model} onChange={(e) => setModel(e.target.value)} className={drawerInputClassName} />
-            </div>
+            <VehicleYMMTPicker
+              year={year}
+              make={make}
+              model={model}
+              trim={trim}
+              onChange={(next) => {
+                if (next.year !== undefined) setYear(next.year);
+                if (next.make !== undefined) setMake(next.make);
+                if (next.model !== undefined) setModel(next.model);
+                if (next.trim !== undefined) setTrim(next.trim);
+              }}
+            />
           </div>
         </section>
 
@@ -568,6 +769,54 @@ export default function CreateBookingDrawer({
                   <X className="w-3 h-3" />
                 </button>
               ))}
+            </div>
+          )}
+
+          {(optionServices.length > 0 || tireService) && (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5 text-xs text-amber-900">
+              <div className="flex items-start justify-between gap-2">
+                <div className="space-y-1">
+                  {optionServices.map((s: any) => {
+                    const pick = selectedServiceOptions.find(
+                      (p) => String(p.service_id) === String(s._id),
+                    );
+                    return (
+                      <div key={s._id} className="flex items-center gap-1.5">
+                        <span className="font-medium">{s.name}:</span>
+                        {pick ? (
+                          <span>{pick.option_label}</span>
+                        ) : (
+                          <span className="italic">option required</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {tireService && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium">{tireService.name}:</span>
+                      {tireSpecs ? (
+                        <span>
+                          {tireSpecs.size} · {tireSpecs.type} · {tireSpecs.tier} · {tireSpecs.quantity} tires
+                        </span>
+                      ) : (
+                        <span className="italic">specs required</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (optionServices.length > 0) setShowOptionsPicker(true);
+                    else if (tireService) setShowTirePicker(true);
+                  }}
+                  className="shrink-0 rounded-md border border-amber-300 bg-white px-2 py-1 text-[11px] font-medium text-amber-900 hover:bg-amber-100"
+                >
+                  {selectedServiceOptions.length === optionServices.length && (tireService ? tireSpecs : true)
+                    ? "Edit options"
+                    : "Pick options"}
+                </button>
+              </div>
             </div>
           )}
 
@@ -716,6 +965,81 @@ export default function CreateBookingDrawer({
           </div>
         </section>
 
+        {/* ── Diagnostic system (only when a diagnostic service is selected) ── */}
+        {isDiagnostic && (
+          <section>
+            <DrawerSectionHeader icon={Stethoscope} label="Diagnostic system" />
+            <DrawerFieldLabel>What&apos;s bothering the customer?</DrawerFieldLabel>
+            <div className="space-y-1.5">
+              {([
+                { value: "brakes", label: "Brakes", hint: "Squealing, grinding, soft pedal" },
+                { value: "tires_wheels", label: "Tires & Wheels", hint: "Vibration, thudding, pulling" },
+                { value: "engine", label: "Engine", hint: "Rattle, rough idle, warning light" },
+                { value: "battery_electrical", label: "Battery & Electrical", hint: "Won't start, dim lights" },
+                { value: "not_sure", label: "Not sure", hint: "Let the mechanic look around" },
+              ] as Array<{ value: DiagnosticSystem; label: string; hint: string }>).map((opt) => {
+                const selected = diagnosticSystem === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setDiagnosticSystem(opt.value)}
+                    className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${
+                      selected
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted/40"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-foreground">{opt.label}</div>
+                      <div className="text-xs text-muted-foreground truncate">{opt.hint}</div>
+                    </div>
+                    <div
+                      className={`w-4 h-4 rounded-full border-2 shrink-0 ${
+                        selected ? "border-primary bg-primary" : "border-border"
+                      }`}
+                    />
+                  </button>
+                );
+              })}
+            </div>
+
+            {diagnosticSystem && (
+              <div className="mt-3 rounded-xl border border-border bg-muted/30 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="text-muted-foreground">Time at shop</span>
+                  <span className="font-semibold text-foreground tabular-nums">
+                    {DIAGNOSTIC_TIME_BAND[diagnosticSystem]}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="text-muted-foreground">Diagnostic fee</span>
+                  <span className="font-semibold text-foreground tabular-nums">
+                    $120–180
+                    <span className="ml-1 font-normal text-muted-foreground">· captured on completion</span>
+                  </span>
+                </div>
+                <p className="rounded-md bg-background/70 px-2.5 py-2 text-[11px] font-medium text-foreground border border-border">
+                  🛡 No repair is booked or charged without the customer&apos;s confirmation.
+                </p>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* ── Customer states ── */}
+        <section>
+          <DrawerSectionHeader icon={MessageSquare} label="Customer states" />
+          <DrawerFieldLabel>Notes from the customer (optional)</DrawerFieldLabel>
+          <textarea
+            value={customerNotes}
+            onChange={(e) => setCustomerNotes(e.target.value.slice(0, 1000))}
+            placeholder="Thudding from the front, gets worse around 50 mph. Started a week ago."
+            rows={3}
+            className={`${drawerInputClassName} resize-none leading-relaxed`}
+          />
+        </section>
+
         {/* ── Scheduling ── */}
         <section>
           <DrawerSectionHeader icon={Calendar} label="Scheduling" />
@@ -739,6 +1063,9 @@ export default function CreateBookingDrawer({
                     </SelectListBox>
                   </SelectPopover>
                 </Select>
+                {computedEndLabel ? (
+                  <p className="mt-1 text-xs text-gray-500">Ends ~ {computedEndLabel}</p>
+                ) : null}
               </div>
             </div>
             {mechanics.length > 0 && (
@@ -818,7 +1145,7 @@ export default function CreateBookingDrawer({
           vinSuggestion
             ? `${[vinSuggestion.year, vinSuggestion.make, vinSuggestion.model, vinSuggestion.trim]
                 .filter(Boolean)
-                .join(" ")} — decoded from VIN ${vinSuggestion.vin}.`
+                .join(" ")} — VIN ${vinSuggestion.vin}.`
             : ""
         }
         onClose={() => setVinConfirmOpen(false)}
@@ -834,7 +1161,7 @@ export default function CreateBookingDrawer({
           variant: "primary",
         }}
       >
-        <div className="mb-5 flex items-center justify-center rounded-xl bg-muted/40 border border-border overflow-hidden" style={{ minHeight: 160 }}>
+        <div className="mb-4 flex items-center justify-center rounded-xl bg-muted/40 border border-border overflow-hidden" style={{ minHeight: 140 }}>
           {vinImageLoading ? (
             <Loader2 className="w-6 h-6 text-muted-foreground animate-spin" />
           ) : vinImageUrl ? (
@@ -851,6 +1178,78 @@ export default function CreateBookingDrawer({
           ) : (
             <p className="text-xs text-muted-foreground py-8">No image available for this VIN.</p>
           )}
+        </div>
+        {vinSource && (
+          <p className="mb-3 text-center text-[11px] text-muted-foreground">
+            {vinSource === "convex" ? "✓ Found in Otopair records" : "Decoded via NHTSA"}
+          </p>
+        )}
+        {pendingOwners.length > 0 && (
+          <div className="rounded-xl border border-border bg-muted/30 p-3">
+            <p className="mb-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+              {pendingOwners.length === 1 ? "Customer linked to this vehicle" : "Select customer"}
+            </p>
+            <div className="space-y-1.5">
+              {pendingOwners.map((o) => (
+                <button
+                  key={o.userId}
+                  type="button"
+                  onClick={() => {
+                    applyVehicleOnly();
+                    applyOwner(o);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-background hover:bg-muted/50 text-left transition-colors"
+                >
+                  <User className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-foreground truncate">
+                      {[o.firstName, o.lastName].filter(Boolean).join(" ") || "Unknown"}
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate">{o.phone ?? o.email ?? ""}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </ConfirmationDialog>
+
+      {/* Owner picker — shown after vehicle confirm when multiple owners exist */}
+      <ConfirmationDialog
+        open={ownerPickerOpen}
+        title="Who's the customer?"
+        description="This vehicle has multiple registered owners. Select the customer for this booking."
+        onClose={() => setOwnerPickerOpen(false)}
+        secondaryAction={{
+          label: <ShortcutLabel text="Skip" shortcutKey="s" />,
+          onAction: () => setOwnerPickerOpen(false),
+          shortcutKey: "s",
+        }}
+        primaryAction={{
+          label: <ShortcutLabel text="Enter manually" shortcutKey="m" />,
+          onAction: () => setOwnerPickerOpen(false),
+          shortcutKey: "m",
+          variant: "primary",
+        }}
+      >
+        <div className="space-y-1.5 mb-2">
+          {pendingOwners.map((o) => (
+            <button
+              key={o.userId}
+              type="button"
+              onClick={() => applyOwner(o)}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-border bg-background hover:bg-primary/5 hover:border-primary/40 text-left transition-colors"
+            >
+              <User className="w-4 h-4 text-muted-foreground shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-foreground truncate">
+                  {[o.firstName, o.lastName].filter(Boolean).join(" ") || "Unknown"}
+                </div>
+                <div className="text-xs text-muted-foreground truncate">{o.phone ?? o.email ?? ""}</div>
+              </div>
+              <ArrowRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            </button>
+          ))}
         </div>
       </ConfirmationDialog>
 
@@ -873,6 +1272,43 @@ export default function CreateBookingDrawer({
           shortcutKey: "b",
           variant: "primary",
           disabled: isSaving,
+        }}
+      />
+
+      <ServiceOptionsPicker
+        open={showOptionsPicker}
+        serviceIds={optionServices.map((s: any) => s._id as Id<"services">)}
+        initialSelections={selectedServiceOptions}
+        onCancel={() => setShowOptionsPicker(false)}
+        onConfirm={(picks) => {
+          setSelectedServiceOptions(picks);
+          setShowOptionsPicker(false);
+          if (needsTireSpecs) {
+            setShowTirePicker(true);
+          } else if (outsideHoursWarning) {
+            setOutsideHoursConfirmOpen(true);
+          } else {
+            void submitBooking();
+          }
+        }}
+      />
+
+      <TireSpecPicker
+        open={showTirePicker}
+        initial={tireSpecs}
+        vehicleMake={make.trim() || null}
+        vehicleLabel={
+          [year, make, model, trim].filter(Boolean).join(" ").trim() || null
+        }
+        onCancel={() => setShowTirePicker(false)}
+        onConfirm={(specs) => {
+          setTireSpecs(specs);
+          setShowTirePicker(false);
+          if (outsideHoursWarning) {
+            setOutsideHoursConfirmOpen(true);
+          } else {
+            void submitBooking();
+          }
         }}
       />
     </div>

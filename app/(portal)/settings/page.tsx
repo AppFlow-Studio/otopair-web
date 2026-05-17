@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { LogOut, MapPin, Phone, Globe, Mail, ExternalLink } from "lucide-react";
+import { LogOut, MapPin, Phone, Globe, Mail, ExternalLink, Loader2, Save } from "lucide-react";
 import {
   DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
@@ -25,6 +25,7 @@ export default function SettingsPage() {
   const [noShowThreshold, setNoShowThreshold] = useState(DEFAULT_NO_SHOW_THRESHOLD_MINUTES);
   const [overrunPercent, setOverrunPercent] = useState(DEFAULT_OVERRUN_EXTENSION_PERCENT);
   const [overrunFloor, setOverrunFloor] = useState(DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
+  const [bufferMinutes, setBufferMinutes] = useState(10);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -33,6 +34,7 @@ export default function SettingsPage() {
     setNoShowThreshold(shop.no_show_threshold_minutes ?? DEFAULT_NO_SHOW_THRESHOLD_MINUTES);
     setOverrunPercent(shop.overrun_default_extension_percent ?? DEFAULT_OVERRUN_EXTENSION_PERCENT);
     setOverrunFloor(shop.overrun_extension_floor_minutes ?? DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
+    setBufferMinutes(shop.buffer_minutes ?? 10);
   }, [shop]);
 
   async function handleSignOut() {
@@ -48,6 +50,7 @@ export default function SettingsPage() {
         noShowThresholdMinutes: noShowThreshold,
         overrunDefaultExtensionPercent: overrunPercent,
         overrunExtensionFloorMinutes: overrunFloor,
+        bufferMinutes,
       });
       setSettingsMessage("Scheduling settings saved.");
     } catch (error: unknown) {
@@ -165,6 +168,90 @@ export default function SettingsPage() {
 
         {shop && <HoursEditor />}
         {shop && <ServicesEditor />}
+        {shop ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="text-sm font-semibold text-gray-900 mb-4 uppercase tracking-wide">
+              Scheduling Automation
+            </h2>
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-4">
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Buffer after job</span>
+                <select
+                  value={bufferMinutes}
+                  onChange={(event) => setBufferMinutes(Number(event.target.value))}
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                >
+                  {[10, 15, 20, 30].map((value) => (
+                    <option key={value} value={value}>
+                      {value} minutes
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-1 block text-xs text-gray-500">
+                  Time reserved between jobs; next slot rounds up to the 15-minute grid.
+                </span>
+              </label>
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">No-show threshold</span>
+                <select
+                  value={noShowThreshold}
+                  onChange={(event) => setNoShowThreshold(Number(event.target.value))}
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                >
+                  {[15, 30, 45, 60].map((value) => (
+                    <option key={value} value={value}>
+                      {value} minutes
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Default extension</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={overrunPercent}
+                  onChange={(event) => setOverrunPercent(Number(event.target.value))}
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                />
+                <span className="mt-1 block text-xs text-gray-500">Percent of estimated job duration</span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Extension floor</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={overrunFloor}
+                  onChange={(event) => setOverrunFloor(Number(event.target.value))}
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                />
+                <span className="mt-1 block text-xs text-gray-500">Minimum minutes applied by system default</span>
+              </label>
+            </div>
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void handleSaveSchedulingSettings()}
+                disabled={isSavingSettings}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
+              >
+                {isSavingSettings ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                Save scheduling
+              </button>
+              {settingsMessage ? (
+                <p className="text-sm text-gray-600">{settingsMessage}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <div className="bg-white rounded-xl border border-gray-200">
           <div className="px-6 pt-5 pb-2">
@@ -191,62 +278,6 @@ export default function SettingsPage() {
             </p>
           </div>
         </div>
-
-        {shop && (
-          <div className="bg-white rounded-xl border border-gray-200 p-6">
-            <h2 className="text-sm font-semibold text-gray-900 mb-4 uppercase tracking-wide">
-              Scheduling
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <label className="block">
-                <span className="text-sm font-medium text-gray-700">No-show threshold</span>
-                <input
-                  type="number"
-                  min={15}
-                  max={60}
-                  value={noShowThreshold}
-                  onChange={(event) => setNoShowThreshold(Number(event.target.value))}
-                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
-                />
-                <span className="mt-1 block text-xs text-gray-500">15-60 minutes</span>
-              </label>
-              <label className="block">
-                <span className="text-sm font-medium text-gray-700">Default extension</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={overrunPercent}
-                  onChange={(event) => setOverrunPercent(Number(event.target.value))}
-                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
-                />
-                <span className="mt-1 block text-xs text-gray-500">Percent of estimate</span>
-              </label>
-              <label className="block">
-                <span className="text-sm font-medium text-gray-700">Extension floor</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={overrunFloor}
-                  onChange={(event) => setOverrunFloor(Number(event.target.value))}
-                  className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
-                />
-                <span className="mt-1 block text-xs text-gray-500">Minutes</span>
-              </label>
-            </div>
-            <div className="mt-5 flex items-center gap-3">
-              <button
-                onClick={handleSaveSchedulingSettings}
-                disabled={isSavingSettings}
-                className="inline-flex items-center px-4 py-2.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60 transition-colors"
-              >
-                {isSavingSettings ? "Saving..." : "Save scheduling settings"}
-              </button>
-              {settingsMessage && (
-                <p className="text-sm text-gray-600">{settingsMessage}</p>
-              )}
-            </div>
-          </div>
-        )}
 
       </div>
     </div>

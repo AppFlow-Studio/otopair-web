@@ -941,7 +941,11 @@ export default function DaySwimLanes({
                             {ev.customerName}
                           </p>
                           <span className="shrink-0 rounded border border-current/30 bg-white/70 px-1 py-px font-mono text-[10px] font-bold leading-none tracking-tight">
-                            #{String(ev.id).slice(-6).toUpperCase()}
+                            {(ev as any).invoiceNumber
+                              ? String((ev as any).invoiceNumber).startsWith("#")
+                                ? (ev as any).invoiceNumber
+                                : `#${(ev as any).invoiceNumber}`
+                              : `#${String(ev.id).slice(-6).toUpperCase()}`}
                           </span>
                         </div>
                         <p className="truncate opacity-80">
@@ -1002,7 +1006,11 @@ export default function DaySwimLanes({
                               className="shrink-0 rounded border border-current/30 bg-white/70 px-1 py-px font-mono text-[10px] font-bold leading-none tracking-tight"
                               title={String(ev.id)}
                             >
-                              #{String(ev.id).slice(-6).toUpperCase()}
+                              {(ev as any).invoiceNumber
+                              ? String((ev as any).invoiceNumber).startsWith("#")
+                                ? (ev as any).invoiceNumber
+                                : `#${(ev as any).invoiceNumber}`
+                              : `#${String(ev.id).slice(-6).toUpperCase()}`}
                             </span>
                           </div>
                           <p className="truncate opacity-80">
@@ -1019,7 +1027,11 @@ export default function DaySwimLanes({
                               className="shrink-0 rounded border border-current/30 bg-white/70 px-1 py-px font-mono text-[10px] font-bold leading-none tracking-tight"
                               title={String(ev.id)}
                             >
-                              #{String(ev.id).slice(-6).toUpperCase()}
+                              {(ev as any).invoiceNumber
+                              ? String((ev as any).invoiceNumber).startsWith("#")
+                                ? (ev as any).invoiceNumber
+                                : `#${(ev as any).invoiceNumber}`
+                              : `#${String(ev.id).slice(-6).toUpperCase()}`}
                             </span>
                           </div>
                           <p className="truncate opacity-80">

@@ -1484,6 +1484,10 @@ export default defineSchema({
     parts_cost: v.optional(v.number()),
     total_cost: v.optional(v.number()),
     estimated_labor_minutes: v.optional(v.number()),
+    // Shop-assigned invoice / work-order number. When set, this is the
+    // identifier surfaced on schedule cards and scheduling notifications
+    // instead of the auto-generated last-6 booking id.
+    invoice_number: v.optional(v.string()),
     // Structured tire request specs — populated for tire-quote bookings so the
     // shop portal can display what was requested without parsing notes.
     tire_specs: v.optional(

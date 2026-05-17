@@ -315,6 +315,7 @@ export const getBookingsForRange = query({
 
         return {
           _id: booking._id,
+          invoiceNumber: (booking as any).invoice_number ?? null,
           scheduledDate: booking.scheduled_date,
           scheduledTime: booking.scheduled_time,
           estimatedMinutes: booking.estimated_labor_minutes ?? 60,

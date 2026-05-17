@@ -18,7 +18,9 @@ import {
   AlertTriangle,
   ArrowUpRight,
   BadgeDollarSign,
+  Bell,
   CalendarClock,
+  Car,
   ClipboardList,
   Loader2,
   Star,
@@ -297,6 +299,8 @@ function OwnerDashboardPage({
     actualsBookingId ? { bookingId: actualsBookingId } : "skip",
   );
   const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
+  const customerLateNotificationSent = useQuery(api.bookings.getCustomerLateNotificationSentMonitors);
+  const customerOnMyWay = useQuery(api.bookings.getCustomerOnMyWayMonitors);
   const mechanics = useMemo(() => context?.mechanics ?? [], [context?.mechanics]);
   const selectedLateStartReview = useMemo<LateStartReviewView | null>(() => {
     if (!lateStartReviews || !selectedLateStartReviewId) return null;
@@ -310,6 +314,7 @@ function OwnerDashboardPage({
   const acceptLateStartReview = useMutation(api.bookings.acceptLateStartReview);
   const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
   const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
+  const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
 
   useEffect(() => {
     setSidebarCompact(drawerOpen);
@@ -735,6 +740,98 @@ function OwnerDashboardPage({
                 <ArrowUpRight className="h-4 w-4" />
               </Link>
             </div>
+
+            {customerOnMyWay && customerOnMyWay.length > 0 ? (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+                <div className="flex items-center gap-2 text-emerald-700">
+                  <Car className="h-4 w-4" />
+                  <span className="text-xs font-semibold uppercase tracking-[0.2em]">Customer en route</span>
+                </div>
+                <div className="mt-4 grid gap-3 xl:grid-cols-2">
+                  {customerOnMyWay.map((alert: any) => (
+                    <div key={String(alert._id)} className="rounded-2xl border border-emerald-200 bg-white/90 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-foreground">{alert.customerName}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
+                            {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
+                          </p>
+                          <p className="mt-1 text-xs text-emerald-700 font-medium">
+                            Said "on my way" {Math.round((Date.now() - alert.acknowledgedAtMs) / 60_000)}m ago
+                          </p>
+                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                            {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedJobId(alert.bookingId as Id<"bookings">)}
+                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                        >
+                          Open
+                        </button>
+                      </div>
+                      <div className="mt-4">
+                        <button
+                          type="button"
+                          onClick={() => void markVehicleAtShop({ bookingId: alert.bookingId as Id<"bookings"> })}
+                          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                        >
+                          Vehicle here
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {customerLateNotificationSent && customerLateNotificationSent.length > 0 ? (
+              <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-4 shadow-sm">
+                <div className="flex items-center gap-2 text-yellow-700">
+                  <Bell className="h-4 w-4" />
+                  <span className="text-xs font-semibold uppercase tracking-[0.2em]">Late notification sent</span>
+                </div>
+                <div className="mt-4 grid gap-3 xl:grid-cols-2">
+                  {customerLateNotificationSent.map((alert: any) => (
+                    <div key={String(alert._id)} className="rounded-2xl border border-yellow-200 bg-white/90 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-foreground">{alert.customerName}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
+                            {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
+                          </p>
+                          <p className="mt-1 text-xs text-yellow-700 font-medium">
+                            Notified via {alert.notifiedVia} · Awaiting response
+                          </p>
+                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                            {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedJobId(alert.bookingId as Id<"bookings">)}
+                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                        >
+                          Open
+                        </button>
+                      </div>
+                      <div className="mt-4">
+                        <button
+                          type="button"
+                          onClick={() => void markVehicleAtShop({ bookingId: alert.bookingId as Id<"bookings"> })}
+                          className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                        >
+                          Vehicle here
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="flex max-h-[32rem] flex-col rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
               <div className="flex items-center justify-between gap-3">

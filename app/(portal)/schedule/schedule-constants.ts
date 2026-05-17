@@ -9,6 +9,8 @@ import {
 
 export interface CalendarEvent {
   id: string;
+  /** Shop-assigned invoice / work-order number. Surfaced on the day card. */
+  invoiceNumber?: string | null;
   slotId?: string;
   title: string;
   start: Date;

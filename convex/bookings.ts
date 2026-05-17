@@ -1402,7 +1402,7 @@ export const getRecentNoShows = query({
         bookingId: booking._id,
         customerName,
         vehicleLabel,
-        shortHandle: `#${String(booking._id).slice(-6).toUpperCase()}`,
+        shortHandle: bookingDisplayHandle(booking),
         scheduledTime: booking.scheduled_time,
         scheduledDate: booking.scheduled_date,
         markedAtMs: (row as any).changed_at,
@@ -3882,6 +3882,36 @@ async function buildLateStartReviewPlan(
   return { proposals, blockingReason: undefined as string | undefined };
 }
 
+// Resolves any pending manual_scheduling_required alert attached to a
+// booking. Called from `applyBookingStatusTransition` whenever the booking
+// reaches a state that makes the manual review moot (rescheduled to a new
+// confirmed slot, cancelled, declined, marked no-show, or completed).
+async function resolveManualSchedulingAlertsForBooking(
+  ctx: any,
+  bookingId: any,
+) {
+  if (!bookingId) return;
+  const rows = await ctx.db
+    .query("notification_outbox")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
+    .collect();
+  const now = Date.now();
+  for (const row of rows) {
+    if (
+      (row as any).channel !== "front_desk" ||
+      (row as any).category !== "manual_scheduling_required" ||
+      ((row as any).status !== "pending" && (row as any).status !== "dispatching")
+    ) {
+      continue;
+    }
+    await ctx.db.patch(row._id, {
+      status: "resolved",
+      processed_at: now,
+      updated_at: now,
+    } as any);
+  }
+}
+
 function formatHHMMto12h(hhmm: string | null | undefined): string {
   if (!hhmm) return "";
   const [hStr, mStr] = hhmm.split(":");
@@ -3896,6 +3926,34 @@ function formatHHMMto12h(hhmm: string | null | undefined): string {
 function shortBookingHandle(id: any): string {
   return `#${String(id).slice(-6).toUpperCase()}`;
 }
+
+// Display identifier for a booking — prefers the shop-assigned invoice
+// number, falls back to the auto-generated last-6 booking id pill.
+function bookingDisplayHandle(booking: any): string {
+  const raw = (booking?.invoice_number ?? "").trim();
+  if (raw) return raw.startsWith("#") ? raw : `#${raw}`;
+  return shortBookingHandle(booking?._id);
+}
+
+export const setBookingInvoiceNumber = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    invoiceNumber: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const trimmed = args.invoiceNumber.trim().slice(0, 32);
+    await ctx.db.patch(args.bookingId, {
+      invoice_number: trimmed.length > 0 ? trimmed : undefined,
+      updated_at: Date.now(),
+    } as any);
+    return { invoiceNumber: trimmed.length > 0 ? trimmed : null };
+  },
+});
 
 async function createManualSchedulingAlert(
   ctx: any,
@@ -4908,7 +4966,20 @@ export async function applyBookingStatusTransition(
 
   if (["completed", "cancelled", "no_show"].includes(newStatus)) {
     await resolveOpenOverrunCheckinsForBooking(ctx, booking._id, changedBy);
-  } else if (newStatus === "in_progress") {
+  }
+
+  // Auto-resolve manual scheduling alerts on terminal-ish transitions and on
+  // a fresh `confirmed` (which is what `proposeReschedule`/`acceptReschedule`
+  // lands on after a successful manual reschedule).
+  if (
+    ["confirmed", "cancelled", "declined", "no_show", "completed"].includes(
+      newStatus,
+    )
+  ) {
+    await resolveManualSchedulingAlertsForBooking(ctx, booking._id);
+  }
+
+  if (newStatus === "in_progress") {
     await applyCustomerLateDownstreamMovementIfNeeded(
       ctx,
       booking,
@@ -5742,6 +5813,7 @@ export const getJobDetail = query({
       ? await ctx.db.get(booking.mechanic_id)
       : null;
     const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
+    const lateMonitor = await getCustomerLateMonitorByBookingId(ctx, booking._id);
 
     const history = await ctx.db
       .query("booking_status_history")
@@ -5829,6 +5901,15 @@ export const getJobDetail = query({
       previousMechanicId: booking.previous_mechanic_id ?? null,
       previousMechanicName,
       rescheduleProposedAt: booking.reschedule_proposed_at ?? null,
+      invoiceNumber: (booking as any).invoice_number ?? null,
+      customerLateMonitor: lateMonitor && lateMonitor.status === "active" ? {
+        pushEnqueuedAtMs: lateMonitor.push_enqueued_at_ms ?? null,
+        smsEnqueuedAtMs: lateMonitor.sms_enqueued_at_ms ?? null,
+        frontdeskEnqueuedAtMs: lateMonitor.frontdesk_enqueued_at_ms ?? null,
+        customerAcknowledgedAtMs: lateMonitor.customer_acknowledged_at_ms ?? null,
+        thresholdDueAtMs: lateMonitor.threshold_due_at_ms,
+        scheduledStartMs: lateMonitor.scheduled_start_ms,
+      } : null,
     };
   },
 });
@@ -7428,6 +7509,10 @@ async function proposeRescheduleImpl(
 
   await ctx.db.patch(booking._id, patch);
 
+  // Front-desk has proposed a manual reschedule — the corresponding
+  // manual_scheduling_required alert (if any) is now stale.
+  await resolveManualSchedulingAlertsForBooking(ctx, booking._id);
+
   if (booking.status === "pending_customer_acceptance") {
     if (String(booking.time_slot_id) !== String(targetSlotId)) {
       await releaseBookingSlot(ctx, booking.time_slot_id);
@@ -7954,6 +8039,103 @@ export const getOpenCustomerLateAlerts = query({
   },
 });
 
+export const getCustomerLateNotificationSentMonitors = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return [];
+
+    const now = Date.now();
+    const rows = await ctx.db
+      .query("customer_late_monitors")
+      .withIndex("by_shop_and_status", (q: any) =>
+        q.eq("shop_id", primary.shopId).eq("status", "active"),
+      )
+      .collect();
+
+    const notifiedRows = rows.filter(
+      (row: any) =>
+        (row.push_enqueued_at_ms || row.sms_enqueued_at_ms || row.frontdesk_enqueued_at_ms) &&
+        !row.customer_acknowledged_at_ms &&
+        now < row.threshold_due_at_ms,
+    );
+    notifiedRows.sort((a: any, b: any) => a.scheduled_start_ms - b.scheduled_start_ms);
+
+    const items = await Promise.all(
+      notifiedRows.map(async (row: any) => {
+        const booking = await ctx.db.get(row.booking_id);
+        if (!booking || !isCustomerLateMonitorEligible(booking)) return null;
+        const customer = await ctx.db.get(booking.user_id);
+        const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
+        const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+        return {
+          _id: row._id,
+          bookingId: booking._id,
+          customerName: formatCustomerName(customer),
+          mechanicId: booking.mechanic_id ?? null,
+          mechanicName: mechanic ? `${mechanic.first_name} ${mechanic.last_name}`.trim() : null,
+          scheduledDate: booking.scheduled_date,
+          scheduledTime: booking.scheduled_time,
+          minutesLate: Math.max(0, Math.floor((now - row.scheduled_start_ms) / 60_000)),
+          vehicle: (await resolveVehicleLabel(ctx, booking.vin)).full,
+          serviceSummary: serviceNames.join(", "),
+          notifiedVia: row.push_enqueued_at_ms ? "push" : row.sms_enqueued_at_ms ? "sms" : "frontdesk",
+        };
+      }),
+    );
+
+    return items.filter(Boolean);
+  },
+});
+
+export const getCustomerOnMyWayMonitors = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return [];
+
+    const now = Date.now();
+    const rows = await ctx.db
+      .query("customer_late_monitors")
+      .withIndex("by_shop_and_status", (q: any) =>
+        q.eq("shop_id", primary.shopId).eq("status", "active"),
+      )
+      .collect();
+
+    const onMyWayRows = rows.filter((row: any) => !!row.customer_acknowledged_at_ms);
+    onMyWayRows.sort((a: any, b: any) => a.customer_acknowledged_at_ms - b.customer_acknowledged_at_ms);
+
+    const items = await Promise.all(
+      onMyWayRows.map(async (row: any) => {
+        const booking = await ctx.db.get(row.booking_id);
+        if (!booking || booking.vehicle_arrived_at_ms) return null;
+        const customer = await ctx.db.get(booking.user_id);
+        const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
+        const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+        return {
+          _id: row._id,
+          bookingId: booking._id,
+          customerName: formatCustomerName(customer),
+          mechanicId: booking.mechanic_id ?? null,
+          mechanicName: mechanic ? `${mechanic.first_name} ${mechanic.last_name}`.trim() : null,
+          scheduledDate: booking.scheduled_date,
+          scheduledTime: booking.scheduled_time,
+          minutesLate: Math.max(0, Math.floor((now - row.scheduled_start_ms) / 60_000)),
+          acknowledgedAtMs: row.customer_acknowledged_at_ms,
+          vehicle: (await resolveVehicleLabel(ctx, booking.vin)).full,
+          serviceSummary: serviceNames.join(", "),
+        };
+      }),
+    );
+
+    return items.filter(Boolean);
+  },
+});
+
 export const getOpenFrontDeskOverrunAlerts = query({
   args: {},
   handler: async (ctx) => {
@@ -8115,8 +8297,9 @@ export const getOpenManualSchedulingAlerts = query({
         let scheduledTime: string | null = null;
         let scheduledDate: string | null = null;
         let vehicleLabel: string | null = null;
+        let booking: any = null;
         if (row.booking_id) {
-          const booking: any = await ctx.db.get(row.booking_id);
+          booking = await ctx.db.get(row.booking_id);
           if (booking) {
             scheduledTime = booking.scheduled_time ?? null;
             scheduledDate = booking.scheduled_date ?? null;
@@ -8150,9 +8333,9 @@ export const getOpenManualSchedulingAlerts = query({
             }
           }
         }
-        // Short human-readable handle (last 6 of the booking id, uppercase).
+        // Prefer the shop-assigned invoice number; fall back to last-6 id.
         const shortHandle = row.booking_id
-          ? `#${String(row.booking_id).slice(-6).toUpperCase()}`
+          ? bookingDisplayHandle(booking ?? { _id: row.booking_id })
           : null;
         return {
           _id: row._id,

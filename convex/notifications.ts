@@ -54,7 +54,12 @@ export const getMyNotifications = query({
           if (booking) {
             scheduledDate = booking.scheduled_date ?? null;
             scheduledTime = booking.scheduled_time ?? null;
-            shortHandle = `#${String(booking._id).slice(-6).toUpperCase()}`;
+            const inv = (booking.invoice_number ?? "").trim();
+            shortHandle = inv
+              ? inv.startsWith("#")
+                ? inv
+                : `#${inv}`
+              : `#${String(booking._id).slice(-6).toUpperCase()}`;
             if (booking.user_id) {
               const cust: any = await ctx.db.get(booking.user_id);
               const composed = [cust?.first_name, cust?.last_name]

@@ -16,6 +16,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Check, Clock, Copy, Ellipsis, History, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import OverrunCheckInCard from "@/components/overrun-checkin-card";
+import InvoiceNumberField from "@/components/invoice-number-field";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import PostjobReportSection from "@/components/booking/postjob-report-section";
 import type { JobActualsPayload } from "@/lib/job-actuals";
@@ -472,6 +473,14 @@ export interface JobDetailData {
       oem_number: string;
       cost: number;
     }>;
+  } | null;
+  customerLateMonitor?: {
+    pushEnqueuedAtMs: number | null;
+    smsEnqueuedAtMs: number | null;
+    frontdeskEnqueuedAtMs: number | null;
+    customerAcknowledgedAtMs: number | null;
+    thresholdDueAtMs: number;
+    scheduledStartMs: number;
   } | null;
 }
 
@@ -1442,6 +1451,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   <OverrunCheckInCard bookingId={job._id as Id<"bookings">} />
                 )}
 
+                <InvoiceNumberField
+                  bookingId={job._id as Id<"bookings">}
+                  initialValue={(job as any).invoiceNumber ?? null}
+                />
+
                 {job.recommendationState &&
                   job.recommendationState !== "none" &&
                   job.recommendationState !== "out_of_scope" && (
@@ -1589,6 +1603,34 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     )}
                   </div>
                 )}
+
+                {/* Customer late monitor banner */}
+                {job.customerLateMonitor && !job.vehicleArrivedAtMs ? (
+                  job.customerLateMonitor.customerAcknowledgedAtMs ? (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-emerald-800">Customer says they&apos;re on their way</p>
+                          <p className="mt-1 text-xs text-emerald-700">
+                            Acknowledged {Math.round((Date.now() - job.customerLateMonitor.customerAcknowledgedAtMs) / 60_000)}m ago
+                            {" · "}{Math.max(0, Math.floor((Date.now() - job.customerLateMonitor.scheduledStartMs) / 60_000))}m late overall
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (job.customerLateMonitor.pushEnqueuedAtMs || job.customerLateMonitor.smsEnqueuedAtMs || job.customerLateMonitor.frontdeskEnqueuedAtMs) ? (
+                    <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-yellow-800">Late notification sent to customer</p>
+                          <p className="mt-1 text-xs text-yellow-700">
+                            {Math.max(0, Math.floor((Date.now() - job.customerLateMonitor.scheduledStartMs) / 60_000))}m late · Awaiting response
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null
+                ) : null}
 
                 {/* Status transitions */}
                 {(() => {

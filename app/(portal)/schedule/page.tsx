@@ -7,6 +7,7 @@ import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
+  Bell,
   Calendar as CalendarIcon,
   CalendarOff,
   CalendarPlus,
@@ -64,7 +65,6 @@ import WeekSwimLanes from "./week-swim-lanes";
 import WeekSingleMechanicLanes from "./week-single-mechanic-lanes";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import NoShowNotificationBanner from "@/components/no-show-notification-banner";
-import ManualSchedulingAlertsBanner from "@/components/manual-scheduling-alerts-banner";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import {
@@ -364,6 +364,8 @@ export default function SchedulePage() {
   }, [isMechanicViewer, viewerMechanicId, mechanicFilter]);
   const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
   const customerLateAlerts = useQuery(api.bookings.getOpenCustomerLateAlerts);
+  const customerLateNotificationSent = useQuery(api.bookings.getCustomerLateNotificationSentMonitors);
+  const customerOnMyWay = useQuery(api.bookings.getCustomerOnMyWayMonitors);
   const frontDeskOverrunAlerts = useQuery(api.bookings.getOpenFrontDeskOverrunAlerts);
   const manualSchedulingAlerts = useQuery(api.bookings.getOpenManualSchedulingAlerts);
 
@@ -620,24 +622,35 @@ export default function SchedulePage() {
    * Used by the manual-scheduling-review alert and the "Reschedule instead"
    * action in the cancel-booking dialog.
    */
-  const focusBookingForReschedule = useCallback((bookingId: string) => {
-    const target = (bookingsRef.current ?? []).find(
-      (b) => String(b._id) === String(bookingId),
-    );
-    if (!target) {
-      setToast({ msg: "We couldn't find that booking to reschedule.", key: Date.now() });
-      return;
-    }
-    const [y, mo, d] = target.scheduledDate.split("-").map(Number);
-    if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
-    setCurrentView("day");
-    setMechanicFilter("all");
-    setSelectedBookingId(bookingId as Id<"bookings">);
-    setToast({
-      msg: "Drag the booking to a new time on the schedule, or pick a slot in the panel.",
-      key: Date.now(),
-    });
-  }, []);
+  const focusBookingForReschedule = useCallback(
+    (bookingId: string, fallbackDate?: string | null) => {
+      const target = (bookingsRef.current ?? []).find(
+        (b) => String(b._id) === String(bookingId),
+      );
+      // Prefer the date from the loaded booking; fall back to the explicit
+      // date the caller passes (e.g. manual-scheduling alerts on a different
+      // day than the currently-loaded range). Either way, we still navigate
+      // and open the detail panel — no more "couldn't find booking" dead-end.
+      const scheduledDate = target?.scheduledDate ?? fallbackDate ?? null;
+      if (!scheduledDate) {
+        setToast({
+          msg: "We couldn't find that booking to reschedule.",
+          key: Date.now(),
+        });
+        return;
+      }
+      const [y, mo, d] = scheduledDate.split("-").map(Number);
+      if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+      setCurrentView("day");
+      setMechanicFilter("all");
+      setSelectedBookingId(bookingId as Id<"bookings">);
+      setToast({
+        msg: "Drag the booking to a new time on the schedule, or pick a slot in the panel.",
+        key: Date.now(),
+      });
+    },
+    [],
+  );
 
   async function handleConfirmReschedule() {
     if (!rescheduleProposal) return;
@@ -952,6 +965,7 @@ export default function SchedulePage() {
 
         return {
           id: b._id,
+          invoiceNumber: (b as any).invoiceNumber ?? null,
           title: `${b.customerName} — ${b.serviceNames.join(", ")}`,
           start,
           end,
@@ -1257,17 +1271,6 @@ export default function SchedulePage() {
   return (
     <div className="space-y-6">
       <NoShowNotificationBanner />
-      <ManualSchedulingAlertsBanner
-        onOpenBooking={(id, info) => {
-          if (info.scheduledDate) {
-            const [y, mo, d] = info.scheduledDate.split("-").map(Number);
-            if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
-          }
-          setCurrentView("day");
-          setMechanicFilter("all");
-          setSelectedBookingId(id);
-        }}
-      />
       {/* Page header */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -1402,6 +1405,112 @@ export default function SchedulePage() {
           </div>
         </div>
       </div>
+
+      {customerOnMyWay && customerOnMyWay.length > 0 ? (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+          <div className="flex items-center gap-2 text-emerald-700">
+            <Car className="h-4 w-4" />
+            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+              Customer en route
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {customerOnMyWay.map((alert: any) => (
+              <div
+                key={String(alert._id)}
+                className="rounded-2xl border border-emerald-200 bg-white/90 p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground">
+                      {alert.customerName}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
+                      {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
+                    </p>
+                    <p className="mt-1 text-xs text-emerald-700 font-medium">
+                      Said "on my way" {Math.round((Date.now() - alert.acknowledgedAtMs) / 60_000)}m ago
+                    </p>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                      {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
+                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                  >
+                    Open
+                  </button>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleMarkVehicleHereFromAlert(String(alert.bookingId))}
+                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                  >
+                    Vehicle here
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {customerLateNotificationSent && customerLateNotificationSent.length > 0 ? (
+        <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-4 shadow-sm">
+          <div className="flex items-center gap-2 text-yellow-700">
+            <Bell className="h-4 w-4" />
+            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+              Late notification sent
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {customerLateNotificationSent.map((alert: any) => (
+              <div
+                key={String(alert._id)}
+                className="rounded-2xl border border-yellow-200 bg-white/90 p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground">
+                      {alert.customerName}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
+                      {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
+                    </p>
+                    <p className="mt-1 text-xs text-yellow-700 font-medium">
+                      Notified via {alert.notifiedVia} · Awaiting response
+                    </p>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                      {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
+                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                  >
+                    Open
+                  </button>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleMarkVehicleHereFromAlert(String(alert.bookingId))}
+                    className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
+                  >
+                    Vehicle here
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {customerLateAlerts && customerLateAlerts.length > 0 ? (
         <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
@@ -1607,7 +1716,9 @@ export default function SchedulePage() {
                   {a.bookingId ? (
                     <button
                       type="button"
-                      onClick={() => focusBookingForReschedule(String(a.bookingId))}
+                      onClick={() =>
+                        focusBookingForReschedule(String(a.bookingId), a.scheduledDate)
+                      }
                       className="shrink-0 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
                     >
                       Reschedule

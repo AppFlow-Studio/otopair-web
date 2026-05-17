@@ -112,7 +112,6 @@ import type * as shop_portfolio from "../shop_portfolio.js";
 import type * as shop_services from "../shop_services.js";
 import type * as shops from "../shops.js";
 import type * as shops_hours from "../shops_hours.js";
-import type * as smartcar from "../smartcar.js";
 import type * as spec_confirmations from "../spec_confirmations.js";
 import type * as spec_variances from "../spec_variances.js";
 import type * as specs from "../specs.js";
@@ -293,7 +292,6 @@ declare const fullApi: ApiFromModules<{
   shop_services: typeof shop_services;
   shops: typeof shops;
   shops_hours: typeof shops_hours;
-  smartcar: typeof smartcar;
   spec_confirmations: typeof spec_confirmations;
   spec_variances: typeof spec_variances;
   specs: typeof specs;

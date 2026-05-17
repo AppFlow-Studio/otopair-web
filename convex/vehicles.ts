@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { internalMutation, query, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { awardPointsImpl } from "./healthPoints";
@@ -1417,5 +1417,39 @@ export const updateWarningLight = mutation({
     }
 
     return { success: true };
+  },
+});
+
+/**
+ * One-time cleanup: strips the legacy Smartcar fields
+ * (smartcarVehicleId, connectionStatus, connectedAt) from every
+ * vehicle_owners row. Run via:
+ *
+ *   npx convex run vehicles:scrubLegacySmartcarFields
+ *
+ * After this returns successfully, the corresponding `v.optional(...)`
+ * lines in convex/schema.ts (vehicle_owners) can be removed in a
+ * follow-up commit.
+ */
+export const scrubLegacySmartcarFields = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("vehicle_owners").collect();
+    let cleaned = 0;
+    for (const row of rows) {
+      const r = row as Record<string, unknown>;
+      const hasLegacy =
+        r.smartcarVehicleId !== undefined ||
+        r.connectionStatus !== undefined ||
+        r.connectedAt !== undefined;
+      if (!hasLegacy) continue;
+      await ctx.db.patch(row._id, {
+        smartcarVehicleId: undefined,
+        connectionStatus: undefined,
+        connectedAt: undefined,
+      });
+      cleaned += 1;
+    }
+    return { scanned: rows.length, cleaned };
   },
 });

@@ -2166,6 +2166,26 @@ export const _pollBatch2V3 = internalAction({
       console.warn("[v8] Adversarial verification trigger failed (non-fatal):", e);
     }
 
+    // Post-enrichment: backfill engine_id / transmission_id onto the vehicles row,
+    // propagate engine_id + chassis_id to labor_quote_snapshots (chassis_id comes
+    // from whatever the vehicle already has), and seed the vehicle_passport with
+    // OEM fluid specs. Walk-in bookings create vehicle rows without these IDs;
+    // this closes the gap once enrichment resolves them.
+    try {
+      await ctx.runMutation(
+        internal.vehicleEnrichment.v3mutations.backfillVehicleEngineIds,
+        {
+          vehicle_id: args.vehicleId,
+          engine_id: args.engineId,
+          vehicle_config_id: args.vehicleConfigId,
+          ...(args.transmissionId ? { transmission_id: args.transmissionId } : {}),
+        },
+      );
+      console.log(`[v8] Engine IDs + snapshot backfill complete for vehicle ${args.vehicleId}`);
+    } catch (e) {
+      console.warn("[v8] Vehicle engine ID backfill failed (non-fatal):", e);
+    }
+
     console.log(
       `[v8] COMPLETE: ${buildEngineKey(vehicle)} — fillRate=${fillRate}% (flat=${flatFillRate}%), ` +
       `tokens=${totalTokensIn}in/${totalTokensOut}out, ` +

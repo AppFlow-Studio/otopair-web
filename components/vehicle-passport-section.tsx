@@ -2,6 +2,7 @@
 
 import { useId, useState, type ReactNode } from "react";
 import { AlertCircle, ChevronDown, ChevronRight, Info } from "lucide-react";
+import EnrichmentStatusBanner from "@/components/enrichment-status-banner";
 import {
   formatDateLabel,
   formatMileage,
@@ -337,6 +338,10 @@ function VehiclePassportSectionBody({
 
       {isOpen ? (
         <div id={contentId} className="space-y-3 bg-muted/40 p-3 sm:p-4">
+          <EnrichmentStatusBanner
+            status={data.enrichment_status}
+            fillRate={data.enrichment_fill_rate}
+          />
           {!data.is_complete ? (
             <FirstVisitNotice />
           ) : (

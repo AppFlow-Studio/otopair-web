@@ -1819,3 +1819,107 @@ export const patchEngineCode = internalMutation({
     });
   },
 });
+
+// ============================================================================
+// backfillVehicleEngineIds — after enrichment completes, patch vehicles rows
+// that were created via mechanic walk-in (no engine_id / transmission_id /
+// chassis_id yet) with the resolved IDs from the enriched config.
+// Also:
+//   • Seeds the vehicle_passport with OEM fluid specs
+//   • Backfills engine_id + chassis_id onto any labor_quote_snapshots rows
+//     for this vehicle that were written at booking time when IDs were still null
+// ============================================================================
+
+export const backfillVehicleEngineIds = internalMutation({
+  args: {
+    vehicle_id: v.id("vehicles"),
+    engine_id: v.id("engines"),
+    transmission_id: v.optional(v.id("transmissions")),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+  },
+  handler: async (ctx, args) => {
+    const vehicle = await ctx.db.get(args.vehicle_id) as any;
+    if (!vehicle) return { patched: false, reason: "vehicle_not_found" };
+
+    // ── 1. Patch vehicles row ──────────────────────────────────────────────
+    const vehicleUpdates: Record<string, unknown> = { updated_at: Date.now() };
+    if (!vehicle.engine_id) vehicleUpdates.engine_id = args.engine_id;
+    if (!vehicle.transmission_id && args.transmission_id)
+      vehicleUpdates.transmission_id = args.transmission_id;
+    if (!vehicle.vehicle_config_id && args.vehicle_config_id)
+      vehicleUpdates.vehicle_config_id = args.vehicle_config_id;
+
+    if (Object.keys(vehicleUpdates).length > 1) {
+      await ctx.db.patch(args.vehicle_id, vehicleUpdates as any);
+    }
+
+    // ── 2. Backfill labor_quote_snapshots ──────────────────────────────────
+    // Snapshots written at walk-in booking time have null engine_id / chassis_id /
+    // vehicle_config_id because enrichment hadn't run yet. Patch them now so all
+    // analytics indexes (by_service_engine, by_service_chassis, by_shop_service_config)
+    // are populated. Use args-supplied IDs first so we don't race with attachVehicleConfig.
+    const freshVehicle = await ctx.db.get(args.vehicle_id) as any;
+    const vehicleChassisId = freshVehicle?.chassis_id ?? null;
+    const vehicleConfigId = args.vehicle_config_id ?? freshVehicle?.vehicle_config_id ?? null;
+    const vehicleTrimId = freshVehicle?.trim_id ?? null;
+
+    const snapshots = await ctx.db
+      .query("labor_quote_snapshots")
+      .withIndex("by_vehicle", (q) => q.eq("vehicle_id", args.vehicle_id))
+      .collect();
+
+    let snapshotsPatched = 0;
+    for (const snap of snapshots) {
+      const s = snap as any;
+      const needsEngine = !s.engine_id;
+      const needsChassis = !s.chassis_id && vehicleChassisId;
+      const needsConfig = !s.vehicle_config_id && vehicleConfigId;
+      const needsTrim = !s.trim_id && vehicleTrimId;
+      if (!needsEngine && !needsChassis && !needsConfig && !needsTrim) continue;
+
+      const snapUpdates: Record<string, unknown> = {};
+      if (needsEngine) snapUpdates.engine_id = args.engine_id;
+      if (needsChassis) snapUpdates.chassis_id = vehicleChassisId;
+      if (needsConfig) snapUpdates.vehicle_config_id = vehicleConfigId;
+      if (needsTrim) snapUpdates.trim_id = vehicleTrimId;
+
+      await ctx.db.patch(snap._id, snapUpdates as any);
+      snapshotsPatched++;
+    }
+
+    // ── 3. Seed vehicle_passport with OEM fluid defaults ───────────────────
+    const engine = await ctx.db.get(args.engine_id) as any;
+    const trans = args.transmission_id ? await ctx.db.get(args.transmission_id) as any : null;
+
+    const fluidPatch: Record<string, unknown> = {};
+    if (engine?.oil_viscosity) fluidPatch.oil_viscosity = engine.oil_viscosity;
+    if (engine?.oil_capacity_qts) fluidPatch.oil_capacity_qts = engine.oil_capacity_qts;
+    if (engine?.coolant_type) fluidPatch.coolant_type = engine.coolant_type;
+    if (trans?.fluid_type) fluidPatch.transmission_fluid_type = trans.fluid_type;
+
+    if (Object.keys(fluidPatch).length > 0 && vehicle.vin) {
+      const existing = await ctx.db
+        .query("vehicle_passports")
+        .withIndex("by_vin", (q) => q.eq("vin", vehicle.vin as string))
+        .unique();
+
+      const now = Date.now();
+      if (existing) {
+        const mergedFluids: Record<string, unknown> = { ...existing.fluids };
+        for (const [k, v2] of Object.entries(fluidPatch)) {
+          if (mergedFluids[k] == null) mergedFluids[k] = v2;
+        }
+        await ctx.db.patch(existing._id, { fluids: mergedFluids as any, updated_at: now });
+      } else {
+        await ctx.db.insert("vehicle_passports", {
+          vin: vehicle.vin as string,
+          fluids: fluidPatch as any,
+          created_at: now,
+          updated_at: now,
+        });
+      }
+    }
+
+    return { patched: true, snapshotsPatched };
+  },
+});

@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/phone";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { useEntityLabel } from "@/lib/use-entity-label";
 import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, MessageSquare, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
 import {
   Select,
@@ -81,6 +82,15 @@ function buildTimeOptions(): Array<{ value: string; label: string }> {
 }
 
 const TIME_OPTIONS = buildTimeOptions();
+
+const ESTIMATE_MINUTE_OPTIONS: number[] = Array.from({ length: 32 }, (_, i) => (i + 1) * 15);
+
+function formatMinutesLabel(mins: number): string {
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m === 0 ? `${h} hr` : `${h} hr ${m} min`;
+}
 
 function toMins(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
@@ -169,6 +179,8 @@ export default function CreateBookingDrawer({
   onClose,
   onToast,
 }: CreateBookingDrawerProps) {
+  const entityLabel = useEntityLabel();
+
   /* ---- Customer ---- */
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -559,6 +571,38 @@ export default function CreateBookingDrawer({
     });
     return conflict ? "This time slot overlaps an existing booking for this mechanic." : null;
   }, [mechanicId, date, time, effectiveEstimateMinutes, bookings]);
+
+  /* ---- Per-mechanic rolling-hour capacity (E1) ---- */
+  const capacityArgs = useMemo(() => {
+    if (
+      !shopData?.shopId ||
+      !mechanicId ||
+      !date ||
+      !time ||
+      assignmentPreference !== "specific_mechanic"
+    ) {
+      return "skip" as const;
+    }
+    const [y, m, d] = date.split("-").map(Number);
+    const [hh, mm] = time.split(":").map(Number);
+    const startMs = new Date(y, (m ?? 1) - 1, d ?? 1, hh ?? 0, mm ?? 0).getTime();
+    return {
+      shopId: shopData.shopId as Id<"shops">,
+      mechanicId: mechanicId as Id<"mechanics">,
+      startTimeMs: startMs,
+      durationMinutes: effectiveEstimateMinutes || 60,
+    };
+  }, [shopData?.shopId, mechanicId, date, time, effectiveEstimateMinutes, assignmentPreference]);
+
+  const capacity = useQuery(
+    (api as any).bookings.checkMechanicCapacity,
+    capacityArgs === "skip" ? "skip" : capacityArgs,
+  ) as { existingCount: number; cap: number; exceedsCap: boolean } | undefined;
+
+  const capacityWarning =
+    capacity?.exceedsCap
+      ? `Heads up — this mechanic already has ${capacity.existingCount} job${capacity.existingCount === 1 ? "" : "s"} in the same rolling hour (cap is ${capacity.cap}).`
+      : null;
 
   const blockingHoursError = useMemo(() => {
     if (!date || !time) return null;
@@ -1036,15 +1080,24 @@ export default function CreateBookingDrawer({
                     onChange={(e) => setCustomDraftName(e.target.value)}
                     className={drawerInputClassName}
                   />
-                  <input
-                    type="number"
-                    min="0"
-                    step="15"
+                  <Select
+                    selectedKey={customDraftMinutes || null}
+                    onSelectionChange={(key) => setCustomDraftMinutes(key == null ? "" : String(key))}
                     placeholder="min"
-                    value={customDraftMinutes}
-                    onChange={(e) => setCustomDraftMinutes(e.target.value)}
-                    className={drawerInputClassName}
-                  />
+                  >
+                    <SelectTrigger className={drawerSelectTriggerClassName}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopover placement="bottom start">
+                      <SelectListBox shouldFocusWrap>
+                        {ESTIMATE_MINUTE_OPTIONS.map((m) => (
+                          <SelectItem key={m} id={String(m)} textValue={formatMinutesLabel(m)}>
+                            {formatMinutesLabel(m)}
+                          </SelectItem>
+                        ))}
+                      </SelectListBox>
+                    </SelectPopover>
+                  </Select>
                 </div>
                 <div className="flex gap-2 justify-end">
                   <button
@@ -1109,28 +1162,35 @@ export default function CreateBookingDrawer({
                   *
                 </span>
               </DrawerFieldLabel>
-              <input
-                type="number"
-                min={0}
-                step={5}
-                inputMode="numeric"
-                placeholder={
-                  catalogEstimateMinutes > 0
-                    ? String(catalogEstimateMinutes)
-                    : "e.g. 60"
-                }
-                value={mechanicEstimateMinutes ?? ""}
-                onChange={(e) => {
-                  const raw = e.target.value;
-                  if (raw === "") {
+              <Select
+                selectedKey={mechanicEstimateMinutes != null ? String(mechanicEstimateMinutes) : null}
+                onSelectionChange={(key) => {
+                  if (key == null) {
                     setMechanicEstimateMinutes(null);
                     return;
                   }
-                  const n = Number(raw);
+                  const n = Number(key);
                   setMechanicEstimateMinutes(Number.isFinite(n) && n >= 0 ? n : null);
                 }}
-                className={drawerInputClassName}
-              />
+                placeholder={
+                  catalogEstimateMinutes > 0
+                    ? formatMinutesLabel(catalogEstimateMinutes)
+                    : "Select duration"
+                }
+              >
+                <SelectTrigger className={drawerSelectTriggerClassName}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopover placement="bottom start">
+                  <SelectListBox shouldFocusWrap>
+                    {ESTIMATE_MINUTE_OPTIONS.map((m) => (
+                      <SelectItem key={m} id={String(m)} textValue={formatMinutesLabel(m)}>
+                        {formatMinutesLabel(m)}
+                      </SelectItem>
+                    ))}
+                  </SelectListBox>
+                </SelectPopover>
+              </Select>
               <p className="mt-1 text-xs text-muted-foreground">
                 Your estimate for total job time.
               </p>
@@ -1300,8 +1360,8 @@ export default function CreateBookingDrawer({
                   </SelectTrigger>
                   <SelectPopover placement="bottom start">
                     <SelectListBox shouldFocusWrap>
-                      <SelectItem id="any" textValue="Any mechanic">
-                        <span className="text-muted-foreground">Any mechanic</span>
+                      <SelectItem id="any" textValue={entityLabel.anyLabel}>
+                        <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
                       </SelectItem>
                       {mechanics.map((m) => (
                         <SelectItem key={m._id} id={m._id} textValue={m.name}>{m.name}</SelectItem>
@@ -1316,6 +1376,9 @@ export default function CreateBookingDrawer({
             )}
             {blockingHoursError && (
               <p className="form-error-text text-xs">{blockingHoursError}</p>
+            )}
+            {capacityWarning && (
+              <p className="text-xs text-amber-700">{capacityWarning}</p>
             )}
             {outsideHoursWarning && (
               <p className="form-error-text text-xs">

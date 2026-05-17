@@ -14,6 +14,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Check, Clock, Copy, Ellipsis, History, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
+import { useEntityLabel } from "@/lib/use-entity-label";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import PostjobReportSection from "@/components/booking/postjob-report-section";
 import type { JobActualsPayload } from "@/lib/job-actuals";
@@ -539,6 +540,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     },
     ref,
   ) {
+    const entityLabel = useEntityLabel();
     const [assigningMechanicId, setAssigningMechanicId] = useState("");
     const [showMechanicPicker, setShowMechanicPicker] = useState(false);
     const [isActioning, setIsActioning] = useState(false);
@@ -1507,9 +1509,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           data-assign-dropdown
                         >
                           <SelectListBox shouldFocusWrap>
-                            <SelectItem id="any" textValue="Any mechanic">
+                            <SelectItem id="any" textValue={entityLabel.anyLabel}>
                               <span className="text-muted-foreground">
-                                Any mechanic
+                                {entityLabel.anyLabel}
                               </span>
                             </SelectItem>
                             {mechanics.map((m) => (

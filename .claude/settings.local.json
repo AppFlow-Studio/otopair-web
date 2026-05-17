@@ -4,7 +4,10 @@
       "Bash(ls \"g:\\\\GitHub\\\\otopair-web\\\\app\\\\\\(portal\\)\\\\jobs\"\")",
       "Bash(ls \"g:/GitHub/otopair-web/app/\\(portal\\)/schedule/\")",
       "Bash(npx tsc:*)",
-      "Bash(bunx tsc *)"
+      "Bash(bunx tsc *)",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3 *)",
+      "Bash(npx convex *)"
     ]
   }
 }

@@ -1271,6 +1271,8 @@ export default defineSchema({
     overrun_default_extension_percent: v.optional(v.number()),
     overrun_extension_floor_minutes: v.optional(v.number()),
     buffer_minutes: v.optional(v.number()),
+    max_bookings_per_mechanic_rolling_hour: v.optional(v.number()),
+    entity_label_mode: v.optional(v.string()),
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
@@ -1483,6 +1485,7 @@ export default defineSchema({
     scheduled_time: v.optional(v.string()),
     status: v.string(),
     live_stage: v.optional(v.string()),
+    stripe_authorization_voided_at_ms: v.optional(v.number()),
     labor_cost: v.optional(v.number()),
     parts_cost: v.optional(v.number()),
     total_cost: v.optional(v.number()),
@@ -2127,6 +2130,7 @@ export default defineSchema({
     push_enqueued_at_ms: v.optional(v.number()),
     sms_enqueued_at_ms: v.optional(v.number()),
     frontdesk_enqueued_at_ms: v.optional(v.number()),
+    customer_acknowledged_at_ms: v.optional(v.number()),
     resolved_at_ms: v.optional(v.number()),
     resolved_by_user_id: v.optional(v.id("users")),
     created_at: v.optional(v.number()),
@@ -2176,6 +2180,7 @@ export default defineSchema({
     answer_source: v.optional(v.string()),
     is_complete: v.optional(v.boolean()),
     extension_minutes: v.optional(v.number()),
+    cascade_depth: v.optional(v.number()),
     resolved_at_ms: v.optional(v.number()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
@@ -2205,6 +2210,20 @@ export default defineSchema({
     .index("by_shop_id", ["shop_id"])
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_and_status", ["shop_id", "status"]),
+
+  sms_delivery_log: defineTable({
+    outbox_id: v.optional(v.id("notification_outbox")),
+    booking_id: v.optional(v.id("bookings")),
+    shop_id: v.optional(v.id("shops")),
+    to_phone: v.string(),
+    body: v.string(),
+    status: v.string(),
+    provider_message_id: v.optional(v.string()),
+    attempted_at_ms: v.number(),
+    error: v.optional(v.string()),
+  })
+    .index("by_booking_id", ["booking_id"])
+    .index("by_status", ["status"]),
 
   // Structured post-job recommendations. Replaces the free-text
   // "additional_observations" prose with a per-row {service, urgency, reason}

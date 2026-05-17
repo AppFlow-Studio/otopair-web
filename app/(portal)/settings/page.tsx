@@ -26,6 +26,8 @@ export default function SettingsPage() {
   const [overrunPercent, setOverrunPercent] = useState(DEFAULT_OVERRUN_EXTENSION_PERCENT);
   const [overrunFloor, setOverrunFloor] = useState(DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
   const [bufferMinutes, setBufferMinutes] = useState(10);
+  const [maxPerMechanic, setMaxPerMechanic] = useState(2);
+  const [entityLabelMode, setEntityLabelMode] = useState<"mechanic" | "bay">("mechanic");
   const [settingsMessage, setSettingsMessage] = useState("");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -35,6 +37,8 @@ export default function SettingsPage() {
     setOverrunPercent(shop.overrun_default_extension_percent ?? DEFAULT_OVERRUN_EXTENSION_PERCENT);
     setOverrunFloor(shop.overrun_extension_floor_minutes ?? DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
     setBufferMinutes(shop.buffer_minutes ?? 10);
+    setMaxPerMechanic((shop as any).max_bookings_per_mechanic_rolling_hour ?? 2);
+    setEntityLabelMode(((shop as any).entity_label_mode ?? "mechanic") as "mechanic" | "bay");
   }, [shop]);
 
   async function handleSignOut() {
@@ -51,6 +55,8 @@ export default function SettingsPage() {
         overrunDefaultExtensionPercent: overrunPercent,
         overrunExtensionFloorMinutes: overrunFloor,
         bufferMinutes,
+        maxBookingsPerMechanicRollingHour: maxPerMechanic,
+        entityLabelMode,
       });
       setSettingsMessage("Scheduling settings saved.");
     } catch (error: unknown) {
@@ -230,6 +236,38 @@ export default function SettingsPage() {
                   className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
                 />
                 <span className="mt-1 block text-xs text-gray-500">Minimum minutes applied by system default</span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Max bookings per mechanic / hour</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={maxPerMechanic}
+                  onChange={(event) => setMaxPerMechanic(Number(event.target.value))}
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                />
+                <span className="mt-1 block text-xs text-gray-500">
+                  Soft cap on jobs per mechanic in any rolling 60-minute window.
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Booking entity label</span>
+                <select
+                  value={entityLabelMode}
+                  onChange={(event) =>
+                    setEntityLabelMode(event.target.value as "mechanic" | "bay")
+                  }
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                >
+                  <option value="mechanic">Mechanic (John, Mike, Sarah)</option>
+                  <option value="bay">Bay (Bay 1, Bay 2, Bay 3)</option>
+                </select>
+                <span className="mt-1 block text-xs text-gray-500">
+                  How customer-visible UI refers to bookable slots.
+                </span>
               </label>
             </div>
             <div className="mt-5 flex flex-wrap items-center gap-3">

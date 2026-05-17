@@ -396,6 +396,8 @@ export const updateMySchedulingSettings = mutation({
     overrunDefaultExtensionPercent: v.number(),
     overrunExtensionFloorMinutes: v.number(),
     bufferMinutes: v.optional(v.number()),
+    maxBookingsPerMechanicRollingHour: v.optional(v.number()),
+    entityLabelMode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await getCurrentUser(ctx);
@@ -438,6 +440,17 @@ export const updateMySchedulingSettings = mutation({
         : DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
       ...(args.bufferMinutes != null
         ? { buffer_minutes: Math.round(args.bufferMinutes) }
+        : {}),
+      ...(args.maxBookingsPerMechanicRollingHour != null
+        ? {
+            max_bookings_per_mechanic_rolling_hour: Math.max(
+              1,
+              Math.round(args.maxBookingsPerMechanicRollingHour),
+            ),
+          }
+        : {}),
+      ...(args.entityLabelMode === "bay" || args.entityLabelMode === "mechanic"
+        ? { entity_label_mode: args.entityLabelMode }
         : {}),
     });
 

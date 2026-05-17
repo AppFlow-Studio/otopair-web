@@ -1,9 +1,34 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import {
   syncShopAvailabilityWindow,
   DEFAULT_AVAILABILITY_DAYS,
 } from "./lib/timeSlotAvailability";
+
+// One-shot backfill: any job_actuals row that already has a postjob_report
+// submitted but never got finalized_at_ms stamped (because completeWithPostjob
+// used to skip the finalize step) gets retroactively closed. Clears the
+// historical "Needs Attention" backlog without rewriting any data values.
+export const backfillFinalizePostjobActuals = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("job_actuals").collect();
+    let patched = 0;
+    for (const row of rows) {
+      if (row.finalized_at_ms != null) continue;
+      if (!row.postjob_report) continue;
+      const stamp =
+        row.logged_at_ms ??
+        row.completed_at_ms ??
+        row.updated_at ??
+        Date.now();
+      await ctx.db.patch(row._id, { finalized_at_ms: stamp });
+      patched++;
+    }
+    return { patched, scanned: rows.length };
+  },
+});
 
 // One-shot backfill for the new time_slots.block_kind discriminator. Any
 // existing row that was a legitimate manual block (has title or note set)
@@ -240,5 +265,55 @@ export const stripSmartcarFieldsFromVehicleOwners = mutation({
       cleared += 1;
     }
     return { cleared, total: rows.length };
+  },
+});
+
+/**
+ * One-shot backfill: for every vehicle that has a vehicle_config_id but is
+ * missing engine_id or transmission_id (typical of mechanic walk-in created rows),
+ * copy those IDs from the linked vehicle_config and seed the vehicle_passport
+ * with OEM fluid specs.
+ *
+ * Run: npx convex run migrations:backfillWalkInVehicleEngineIds
+ */
+export const backfillWalkInVehicleEngineIds = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const vehicles = await ctx.db.query("vehicles").collect();
+    let patched = 0;
+    let skipped = 0;
+
+    for (const vehicle of vehicles) {
+      // Resolve engine_id: prefer vehicle.engine_id, fall back to vehicle_config.engine_id
+      let engineId = vehicle.engine_id ?? null;
+      let transmissionId = vehicle.transmission_id ?? null;
+
+      let configId = vehicle.vehicle_config_id ?? null;
+
+      if (!engineId && vehicle.vehicle_config_id) {
+        const config = await ctx.db.get(vehicle.vehicle_config_id as any) as any;
+        if (config?.engine_id) {
+          engineId = config.engine_id;
+          transmissionId = transmissionId ?? config.transmission_id ?? null;
+        }
+      }
+
+      // Nothing to backfill with if we still have no engine_id
+      if (!engineId) { skipped++; continue; }
+
+      await ctx.scheduler.runAfter(
+        0,
+        internal.vehicleEnrichment.v3mutations.backfillVehicleEngineIds,
+        {
+          vehicle_id: vehicle._id,
+          engine_id: engineId,
+          ...(transmissionId ? { transmission_id: transmissionId } : {}),
+          ...(configId ? { vehicle_config_id: configId as any } : {}),
+        },
+      );
+      patched++;
+    }
+
+    return { patched, skipped, total: vehicles.length };
   },
 });

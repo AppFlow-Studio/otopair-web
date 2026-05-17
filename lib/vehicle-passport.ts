@@ -129,6 +129,8 @@ export type VehiclePassportData = {
     date_label: string;
   }>;
   sources: Record<string, PassportSource>;
+  enrichment_status?: string | null;
+  enrichment_fill_rate?: number | null;
 };
 
 export type JobActualPartPayload = {

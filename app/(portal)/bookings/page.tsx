@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { useEntityLabel } from "@/lib/use-entity-label";
 import { Calendar, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Search, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { usePortalSidebar } from "../portal-context";
@@ -43,6 +44,7 @@ function shiftIsoDate(isoDate: string, offsetDays: number): string {
 /* ------------------------------------------------------------------ */
 
 export default function BookingsPage() {
+  const entityLabel = useEntityLabel();
   const searchParams = useSearchParams();
   const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("all");
   const [customerFilter, setCustomerFilter] = useState("");
@@ -435,7 +437,7 @@ export default function BookingsPage() {
                         <th className="px-3 py-3">Vehicle</th>
                         <th className="px-3 py-3">Service</th>
                         <th className="px-3 py-3">Status</th>
-                        <th className="px-3 py-3">Mechanic</th>
+                        <th className="px-3 py-3">{entityLabel.singular}</th>
                         <th className="px-3 py-3">Date</th>
                         <th className="px-3 py-3 text-right pr-5">Total</th>
                       </tr>

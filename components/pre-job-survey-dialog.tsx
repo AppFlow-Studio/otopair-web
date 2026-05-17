@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { FirstVisitNotice, SourceBadge } from "@/components/vehicle-passport-section";
+import EnrichmentStatusBanner from "@/components/enrichment-status-banner";
 import {
   type PassportSource,
   type RotorCondition,
@@ -1221,6 +1222,11 @@ function PreJobSurveyDialogBody({
             specLabel={passportData?.vehicle_spec_label ?? null}
           />
 
+          <EnrichmentStatusBanner
+            status={passportData?.enrichment_status}
+            fillRate={passportData?.enrichment_fill_rate}
+          />
+
           {bookingId && passportData?.vin ? (
             <PriorRecommendationsCard
               bookingId={bookingId}
@@ -1354,6 +1360,8 @@ function PreJobSurveyDialogBody({
               }}
               sectionId="prejob-section-mileage"
               eyebrow="Mileage"
+              badge="Required"
+              accent="required"
             >
               <FieldRow
                 label={
@@ -1566,8 +1574,8 @@ function PreJobSurveyDialogBody({
               }}
               sectionId="prejob-section-fluids"
               eyebrow="Fluids"
-              badge="Optional"
-              accent="muted"
+              badge={serviceFlags.hasOilChange ? "Required" : "Optional"}
+              accent={serviceFlags.hasOilChange ? "required" : "muted"}
             >
               <div className="grid gap-2 sm:grid-cols-2">
                 <SelectableFieldCard

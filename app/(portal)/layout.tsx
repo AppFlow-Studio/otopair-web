@@ -30,6 +30,7 @@ import { UserSupportPage } from "./user-support-page";
 import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
 import { useEffect, useRef, useState } from "react";
 import { PortalSidebarContext } from "./portal-context";
+import CustomerSchedulingAlerts from "@/components/customer-scheduling-alerts";
 
 const ownerManagerLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
@@ -545,7 +546,10 @@ export default function PortalLayout({
             </div>
           </header>
 
-          <main className="flex-1 px-6 pt-6 pb-0">{children}</main>
+          <main className="flex-1 px-6 pt-6 pb-0">
+            <CustomerSchedulingAlerts />
+            {children}
+          </main>
         </div>
       </div>
       <KeyboardShortcutsModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />

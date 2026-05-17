@@ -61,6 +61,8 @@ import type { RescheduleProposal, ContextMenuCellInfo } from "./day-swim-lanes";
 import WeekSwimLanes from "./week-swim-lanes";
 import WeekSingleMechanicLanes from "./week-single-mechanic-lanes";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
+import NoShowNotificationBanner from "@/components/no-show-notification-banner";
+import { useEntityLabel } from "@/lib/use-entity-label";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import {
   drawerInputClassName,
@@ -233,6 +235,7 @@ const BUILT_IN_TYPES = [
 /* ------------------------------------------------------------------ */
 
 export default function SchedulePage() {
+  const entityLabel = useEntityLabel();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("day");
@@ -1248,6 +1251,7 @@ export default function SchedulePage() {
 
   return (
     <div className="space-y-6">
+      <NoShowNotificationBanner />
       {/* Page header */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -2283,8 +2287,8 @@ export default function SchedulePage() {
                   </SelectTrigger>
                   <SelectPopover>
                     <SelectListBox shouldFocusWrap>
-                      <SelectItem id="any" textValue="Any mechanic">
-                        <span className="text-muted-foreground">Any mechanic</span>
+                      <SelectItem id="any" textValue={entityLabel.anyLabel}>
+                        <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
                       </SelectItem>
                       {mechanics.map((mechanic) => (
                         <SelectItem key={mechanic._id} id={mechanic._id} textValue={mechanic.name}>

@@ -54,6 +54,7 @@ import {
   getLatestJobActualForBooking,
   jobActualInputValidator,
   saveJobActualDraft,
+  syncJobActualDerivedData,
 } from "./lib/job_actuals";
 import {
   getLateStartTimingConfig,
@@ -1111,12 +1112,67 @@ export const markPostThresholdNoShow = mutation({
     await requireShopStaff(ctx, user._id, booking.shop_id);
     await assertCustomerLateThresholdReached(ctx, booking);
 
-    return await applyBookingStatusTransition(ctx, {
+    const result = await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "no_show",
       changedBy: user._id,
       reason: "post_threshold_customer_no_show",
     });
+
+    await ctx.scheduler.runAfter(
+      0,
+      (internal as any).lib.stripe_void.voidBookingAuthorization,
+      { bookingId: booking._id },
+    );
+
+    return result;
+  },
+});
+
+// Customer-facing "On my way" acknowledgement. Cancels the queued SMS
+// reminder but leaves the no-show threshold timer running — late arrival
+// still gets caught if they never actually show up.
+export const acknowledgeCustomerLate = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    if ((booking as any).user_id !== user._id) {
+      throw new Error("Not your booking.");
+    }
+
+    const monitor = await getCustomerLateMonitorByBookingId(ctx, booking._id);
+    if (!monitor) return { acknowledged: false };
+
+    const now = Date.now();
+    await ctx.db.patch(monitor._id, {
+      customer_acknowledged_at_ms: now,
+      updated_at: now,
+    } as any);
+
+    // Cancel any pending SMS outbox row for this monitor.
+    const pendingSms = await ctx.db
+      .query("notification_outbox")
+      .withIndex("by_booking_id", (q: any) =>
+        q.eq("booking_id", booking._id),
+      )
+      .collect();
+    for (const row of pendingSms) {
+      if (
+        (row as any).channel === "sms" &&
+        (row as any).category === "customer_late_sms_reminder" &&
+        (row as any).status === "pending"
+      ) {
+        await ctx.db.patch(row._id, {
+          status: "superseded",
+          processed_at: now,
+          updated_at: now,
+        } as any);
+      }
+    }
+
+    return { acknowledged: true, monitorId: monitor._id };
   },
 });
 
@@ -1283,6 +1339,114 @@ function getOverrunAnswerSource(shopUser: any): "mechanic" | "front_desk" {
     ? "mechanic"
     : "front_desk";
 }
+
+// E4 — Passive no-show feed. Returns booking_status_history rows where
+// new_status = "no_show" within the last `lookbackMinutes` for the user's
+// shop. Front-desk header subscribes for a non-blocking banner.
+export const getRecentNoShows = query({
+  args: { lookbackMinutes: v.optional(v.number()) },
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary?.shopId) return [];
+    const shopIds = [primary.shopId];
+
+    const lookbackMs = 30 * 60 * 1000;
+    const cutoff = Date.now() - lookbackMs;
+
+    const rows = await ctx.db
+      .query("booking_status_history")
+      .withIndex("by_changed_at", (q: any) => q.gte("changed_at", cutoff))
+      .collect();
+
+    const noShows = rows.filter(
+      (r: any) => r.new_status === "no_show",
+    );
+
+    const results: any[] = [];
+    for (const row of noShows) {
+      const booking: any = await ctx.db.get((row as any).booking_id);
+      if (!booking || !shopIds.includes(booking.shop_id)) continue;
+      const customer: any = booking.user_id
+        ? await ctx.db.get(booking.user_id)
+        : null;
+      results.push({
+        bookingId: booking._id,
+        customerName: customer?.name ?? customer?.email ?? "Customer",
+        scheduledTime: booking.scheduled_time,
+        scheduledDate: booking.scheduled_date,
+        markedAtMs: (row as any).changed_at,
+      });
+    }
+
+    return results.sort((a, b) => b.markedAtMs - a.markedAtMs).slice(0, 5);
+  },
+});
+
+// E1 — Per-mechanic capacity cap. Returns existing booking count in the
+// rolling-hour window around the proposed start, plus the shop's cap.
+// Client uses this to surface a soft warning in create-booking-drawer.
+export const checkMechanicCapacity = query({
+  args: {
+    shopId: v.id("shops"),
+    mechanicId: v.optional(v.id("mechanics")),
+    startTimeMs: v.number(),
+    durationMinutes: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const shop: any = await ctx.db.get(args.shopId);
+    const cap = shop?.max_bookings_per_mechanic_rolling_hour ?? 2;
+    if (!args.mechanicId) {
+      return { existingCount: 0, cap, exceedsCap: false };
+    }
+
+    const rangeStart = args.startTimeMs - 60 * 60 * 1000;
+    const rangeEnd = args.startTimeMs + args.durationMinutes * 60 * 1000;
+
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", args.shopId))
+      .collect();
+
+    let count = 0;
+    for (const b of bookings) {
+      if ((b as any).mechanic_id !== args.mechanicId) continue;
+      const status = (b as any).status;
+      if (status === "cancelled" || status === "no_show") continue;
+      const date = (b as any).scheduled_date;
+      const time = (b as any).scheduled_time;
+      if (!date || !time) continue;
+      const [y, m, d] = date.split("-").map(Number);
+      const [hh, mm] = time.split(":").map(Number);
+      const startMs = new Date(y, m - 1, d, hh, mm).getTime();
+      if (startMs >= rangeStart && startMs <= rangeEnd) count += 1;
+    }
+
+    return {
+      existingCount: count,
+      cap,
+      exceedsCap: count >= cap,
+    };
+  },
+});
+
+// Returns the active overrun check-in for a booking, or null. Mechanic
+// UI subscribes to this to render the binary Yes/No card inline.
+export const getActiveOverrunCheckinForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const checkin = await getOpenOverrunCheckinForBooking(ctx, args.bookingId);
+    if (!checkin) return null;
+    return {
+      _id: checkin._id,
+      status: checkin.status,
+      due_at_ms: checkin.due_at_ms,
+      escalation_due_at_ms: checkin.escalation_due_at_ms,
+      auto_apply_at_ms: checkin.auto_apply_at_ms,
+      default_extension_minutes: checkin.default_extension_minutes,
+    };
+  },
+});
 
 export const answerOverrunCheckIn = mutation({
   args: {
@@ -2555,6 +2719,8 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       date_label: entry.date_label,
     })),
     sources,
+    enrichment_status: vehicleConfig?.enrichment_status ?? (vehicle?.vehicle_config_id ? null : "pending"),
+    enrichment_fill_rate: vehicleConfig?.fill_rate ?? null,
   };
 }
 
@@ -4062,6 +4228,50 @@ async function applyOverrunExtension(
     resolved_at_ms: now,
     updated_at: now,
   });
+
+  // D2 — customer resolution push (single, one-tap reschedule).
+  await enqueueNotificationOutbox(ctx, {
+    shopId: booking.shop_id,
+    bookingId: booking._id,
+    userId: booking.user_id,
+    channel: "push",
+    category: "overrun_customer_resolution",
+    dedupeKey: `overrun-customer-resolution:${String(checkin._id)}:${now}`,
+    scheduledForMs: now,
+    payload: {
+      extensionMinutes,
+      cascadeDepth: (checkin.cascade_depth ?? 0) + 1,
+      message: `Your appointment is running ~${extensionMinutes} min behind. Tap reschedule if the new time doesn't work.`,
+    },
+  });
+
+  // D1 — cascade re-arm. If the booking is still in_progress past the new
+  // estimated end, queue another check-in. Capped at depth 4 to avoid runaway.
+  const cascadeDepth = (checkin.cascade_depth ?? 0) + 1;
+  const MAX_CASCADE_DEPTH = 4;
+  if (cascadeDepth >= MAX_CASCADE_DEPTH) return;
+
+  const freshBooking = await ctx.db.get(booking._id);
+  if (!freshBooking || (freshBooking as any).status !== "in_progress") return;
+
+  const nextDueAtMs = now + Math.max(
+    5 * 60 * 1000,
+    Math.floor(extensionMinutes * 0.75 * 60 * 1000),
+  );
+  await ctx.db.insert("overrun_checkins", {
+    shop_id: checkin.shop_id,
+    booking_id: checkin.booking_id,
+    mechanic_id: checkin.mechanic_id,
+    status: "scheduled",
+    due_at_ms: nextDueAtMs,
+    escalation_due_at_ms: nextDueAtMs + 3 * 60 * 1000,
+    auto_apply_at_ms: nextDueAtMs + 6 * 60 * 1000,
+    default_extension_minutes: checkin.default_extension_minutes,
+    cascade_depth: cascadeDepth,
+    created_at: now,
+    updated_at: now,
+  } as any);
+  await scheduleOverrunCheckinProcessing(ctx, nextDueAtMs);
 }
 
 async function applyCustomerLateDownstreamMovementIfNeeded(
@@ -5779,6 +5989,30 @@ export const completeWithPostjob = mutation({
         newStatus: "completed",
         changedBy: user._id,
         reason: "completed_by_shop",
+      });
+    }
+
+    // Submitting the post-job survey IS the close-out for the mechanic —
+    // there is no separate "finalize" step they're deferring. Stamp
+    // finalized_at_ms directly on the row we just saved so the values from
+    // the post-job form are preserved exactly (don't re-route through
+    // finalizeJobActuals → saveJobActualDraft, which would re-run the
+    // auto-labor compute with no actuals input and could stomp on the
+    // mechanic's submitted minutes). Then run the same derived-data sync
+    // finalize would have triggered.
+    await ctx.db.patch(jobActual._id, {
+      completed_at_ms: jobActual.completed_at_ms ?? now,
+      finalized_at_ms: now,
+      finalized_by_user_id: user._id,
+      updated_at: now,
+    });
+    const finalized = await ctx.db.get(jobActual._id);
+    const completedBooking = (await ctx.db.get(args.bookingId)) ?? booking;
+    if (finalized) {
+      await syncJobActualDerivedData(ctx, {
+        booking: completedBooking,
+        jobActual: finalized,
+        now,
       });
     }
 

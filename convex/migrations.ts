@@ -240,8 +240,9 @@ export const regenerateSlotsFifteenMinGrid = mutation({
 
 /**
  * One-shot: strip legacy Smartcar fields from vehicle_owners rows.
- * Run once after deploy, then remove smartcarVehicleId/connectionStatus/
- * connectedAt from the schema validator and re-deploy.
+ *
+ * This intentionally does not re-add Smartcar fields to the schema; it only
+ * removes old persisted fields so rows conform to the current validator.
  *
  * Run: npx convex run migrations:stripSmartcarFieldsFromVehicleOwners
  */
@@ -261,7 +262,7 @@ export const stripSmartcarFieldsFromVehicleOwners = mutation({
         smartcarVehicleId: undefined,
         connectionStatus: undefined,
         connectedAt: undefined,
-      });
+      } as any);
       cleared += 1;
     }
     return { cleared, total: rows.length };

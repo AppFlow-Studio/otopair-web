@@ -1312,7 +1312,7 @@ export default function SchedulePage() {
                 <SelectPopover placement="bottom end">
                   <SelectListBox shouldFocusWrap>
                     {!isMechanicViewer && (
-                      <SelectItem id="all" textValue="All Mechanics">All Mechanics</SelectItem>
+                      <SelectItem id="all" textValue={`All ${entityLabel.plural}`}>{`All ${entityLabel.plural}`}</SelectItem>
                     )}
                     {context.mechanics.map((m) => (
                       <SelectItem key={m._id} id={m._id} textValue={m.name}>

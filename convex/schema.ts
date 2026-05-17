@@ -858,12 +858,6 @@ export default defineSchema({
     ownership_plan: v.optional(v.string()),
     lease_ending_soon: v.optional(v.boolean()),
     lease_mileage_pace: v.optional(v.string()),
-    // TEMPORARY: legacy Smartcar fields, retained as optional so the
-    // stripSmartcarFieldsFromVehicleOwners migration can clear them.
-    // Remove these (and the migration) once production data is cleared.
-    smartcarVehicleId: v.optional(v.string()),
-    connectionStatus: v.optional(v.string()),
-    connectedAt: v.optional(v.number()),
   })
     .index("by_vin", ["vin"])
     .index("by_user_id", ["user_id"])

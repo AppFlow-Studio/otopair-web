@@ -573,36 +573,25 @@ export default function CreateBookingDrawer({
   }, [mechanicId, date, time, effectiveEstimateMinutes, bookings]);
 
   /* ---- Per-mechanic rolling-hour capacity (E1) ---- */
-  const capacityArgs = useMemo(() => {
-    if (
-      !shopData?.shopId ||
-      !mechanicId ||
-      !date ||
-      !time ||
-      assignmentPreference !== "specific_mechanic"
-    ) {
-      return "skip" as const;
+  const shopMeta = useQuery(api.shops.getMyShops, {} as any) as any[] | undefined;
+  const capacityCap = (shopMeta?.[0] as any)?.max_bookings_per_mechanic_rolling_hour ?? 2;
+  const capacityWarning = useMemo(() => {
+    if (!mechanicId || !date || !time) return null;
+    const startMins = toMins(time);
+    const windowStart = startMins - 60;
+    const windowEnd = startMins + (effectiveEstimateMinutes || 60);
+    const sameWindow = bookings.filter((b) => {
+      if (b.scheduledDate !== date) return false;
+      if (b.status === "cancelled" || b.status === "declined" || b.status === "no_show") return false;
+      if (b.mechanicId !== mechanicId) return false;
+      const bStart = toMins(b.scheduledTime);
+      return bStart >= windowStart && bStart <= windowEnd;
+    });
+    if (sameWindow.length >= capacityCap) {
+      return `Heads up — this mechanic already has ${sameWindow.length} job${sameWindow.length === 1 ? "" : "s"} in the same rolling hour (cap is ${capacityCap}).`;
     }
-    const [y, m, d] = date.split("-").map(Number);
-    const [hh, mm] = time.split(":").map(Number);
-    const startMs = new Date(y, (m ?? 1) - 1, d ?? 1, hh ?? 0, mm ?? 0).getTime();
-    return {
-      shopId: shopData.shopId as Id<"shops">,
-      mechanicId: mechanicId as Id<"mechanics">,
-      startTimeMs: startMs,
-      durationMinutes: effectiveEstimateMinutes || 60,
-    };
-  }, [shopData?.shopId, mechanicId, date, time, effectiveEstimateMinutes, assignmentPreference]);
-
-  const capacity = useQuery(
-    (api as any).bookings.checkMechanicCapacity,
-    capacityArgs === "skip" ? "skip" : capacityArgs,
-  ) as { existingCount: number; cap: number; exceedsCap: boolean } | undefined;
-
-  const capacityWarning =
-    capacity?.exceedsCap
-      ? `Heads up — this mechanic already has ${capacity.existingCount} job${capacity.existingCount === 1 ? "" : "s"} in the same rolling hour (cap is ${capacity.cap}).`
-      : null;
+    return null;
+  }, [mechanicId, date, time, effectiveEstimateMinutes, bookings, assignmentPreference, capacityCap]);
 
   const blockingHoursError = useMemo(() => {
     if (!date || !time) return null;

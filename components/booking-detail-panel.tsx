@@ -15,6 +15,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Check, Clock, Copy, Ellipsis, History, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
+import OverrunCheckInCard from "@/components/overrun-checkin-card";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import PostjobReportSection from "@/components/booking/postjob-report-section";
 import type { JobActualsPayload } from "@/lib/job-actuals";
@@ -1436,6 +1437,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     </div>
                   </div>
                 </div>
+
+                {job.status === "in_progress" && (
+                  <OverrunCheckInCard bookingId={job._id as Id<"bookings">} />
+                )}
 
                 {job.recommendationState &&
                   job.recommendationState !== "none" &&

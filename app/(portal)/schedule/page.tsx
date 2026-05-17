@@ -12,6 +12,7 @@ import {
   CalendarPlus,
   Car,
   AlertTriangle,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -21,6 +22,7 @@ import {
   Pen,
   Tag,
   Trash2,
+  User,
   Utensils,
   Wrench,
   X,
@@ -62,6 +64,7 @@ import WeekSwimLanes from "./week-swim-lanes";
 import WeekSingleMechanicLanes from "./week-single-mechanic-lanes";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import NoShowNotificationBanner from "@/components/no-show-notification-banner";
+import ManualSchedulingAlertsBanner from "@/components/manual-scheduling-alerts-banner";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import {
@@ -241,6 +244,8 @@ export default function SchedulePage() {
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("day");
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
   const [selectedBookingId, setSelectedBookingId] = useState<Id<"bookings"> | null>(null);
+  const [manualReviewExpanded, setManualReviewExpanded] = useState(true);
+  const [lateStartExpanded, setLateStartExpanded] = useState(true);
   const [toast, setToast] = useState<{ msg: string; key: number } | null>(null);
   const [rescheduleProposal, setRescheduleProposal] = useState<RescheduleProposal | null>(null);
   const [rescheduleError, setRescheduleError] = useState("");
@@ -1252,6 +1257,17 @@ export default function SchedulePage() {
   return (
     <div className="space-y-6">
       <NoShowNotificationBanner />
+      <ManualSchedulingAlertsBanner
+        onOpenBooking={(id, info) => {
+          if (info.scheduledDate) {
+            const [y, mo, d] = info.scheduledDate.split("-").map(Number);
+            if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+          }
+          setCurrentView("day");
+          setMechanicFilter("all");
+          setSelectedBookingId(id);
+        }}
+      />
       {/* Page header */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -1500,73 +1516,152 @@ export default function SchedulePage() {
 
       {manualSchedulingAlerts && manualSchedulingAlerts.length > 0 ? (
         <div className="rounded-2xl border border-red-200 bg-red-50 p-4 shadow-sm">
-          <div className="flex items-center gap-2 text-red-700">
-            <AlertTriangle className="h-4 w-4" />
-            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-              Manual scheduling review
-            </span>
-          </div>
-          <div className="mt-3 space-y-2">
-            {manualSchedulingAlerts.map((alert) => (
-              <div
-                key={String(alert._id)}
-                className="flex items-start justify-between gap-3 rounded-xl bg-white/90 px-4 py-3 text-sm text-red-900"
-              >
-                <div className="flex-1 min-w-0">
-                  <p>{alert.reason}</p>
-                  {alert.bookingId ? (
+          <button
+            type="button"
+            onClick={() => setManualReviewExpanded((v) => !v)}
+            className="flex w-full items-center justify-between gap-2 text-red-700"
+            aria-expanded={manualReviewExpanded}
+          >
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4" />
+              <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+                Manual scheduling review
+              </span>
+              <span className="rounded-full bg-red-700 px-2 py-0.5 text-[10px] font-semibold text-white leading-none">
+                {manualSchedulingAlerts.length}
+              </span>
+            </div>
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${manualReviewExpanded ? "rotate-180" : ""}`}
+            />
+          </button>
+          <div className={`mt-3 space-y-2 ${manualReviewExpanded ? "" : "hidden"}`}>
+            {manualSchedulingAlerts.map((alert) => {
+              const a: any = alert;
+              const time12h = (() => {
+                const hhmm: string | null = a.scheduledTime ?? null;
+                if (!hhmm) return "";
+                const [hStr, mStr] = hhmm.split(":");
+                const h = Number(hStr);
+                const m = Number(mStr);
+                if (!Number.isFinite(h) || !Number.isFinite(m)) return hhmm;
+                const ampm = h >= 12 ? "PM" : "AM";
+                const hr = h % 12 || 12;
+                return `${hr}:${String(m).padStart(2, "0")} ${ampm}`;
+              })();
+              return (
+                <div
+                  key={String(a._id)}
+                  className="flex items-start justify-between gap-3 rounded-xl bg-white/90 px-4 py-3 text-sm text-red-900"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold">Booking</span>
+                      {a.shortHandle ? (
+                        <span className="rounded border border-red-700 bg-white px-1.5 py-0.5 font-mono text-xs font-bold leading-none text-red-900">
+                          {a.shortHandle}
+                        </span>
+                      ) : null}
+                      {time12h ? (
+                        <span className="font-semibold">at {time12h}</span>
+                      ) : null}
+                      <span className="text-red-800">needs manual rescheduling.</span>
+                    </div>
+                    {(a.customerName || a.vehicleLabel) ? (
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-red-800">
+                        {a.customerName ? (
+                          <span className="inline-flex items-center gap-1">
+                            <User className="h-3.5 w-3.5" />
+                            {a.customerName}
+                          </span>
+                        ) : null}
+                        {a.vehicleLabel ? (
+                          <span className="inline-flex items-center gap-1">
+                            <Car className="h-3.5 w-3.5" />
+                            {a.vehicleLabel}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {a.reason ? (
+                      <p className="mt-1 text-xs italic text-red-700/90">{a.reason}</p>
+                    ) : null}
+                    {a.bookingId ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (a.scheduledDate) {
+                            const [y, mo, d] = a.scheduledDate.split("-").map(Number);
+                            if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+                          }
+                          setCurrentView("day");
+                          setMechanicFilter("all");
+                          setSelectedBookingId(a.bookingId as Id<"bookings">);
+                        }}
+                        className="mt-2 text-xs font-medium text-red-700 underline-offset-2 hover:underline"
+                      >
+                        Open booking
+                      </button>
+                    ) : null}
+                  </div>
+                  {a.bookingId ? (
                     <button
                       type="button"
-                      onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
-                      className="mt-1.5 text-xs font-medium text-red-700 underline-offset-2 hover:underline"
+                      onClick={() => focusBookingForReschedule(String(a.bookingId))}
+                      className="shrink-0 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
                     >
-                      Open booking
+                      Reschedule
                     </button>
                   ) : null}
-                </div>
-                {alert.bookingId ? (
                   <button
                     type="button"
-                    onClick={() => focusBookingForReschedule(String(alert.bookingId))}
-                    className="shrink-0 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                    onClick={async () => {
+                      try {
+                        await dismissManualSchedulingAlert({ alertId: a._id as Id<"notification_outbox"> });
+                        setToast({ msg: "Alert dismissed", key: Date.now() });
+                      } catch (err) {
+                        setToast({
+                          msg: err instanceof Error ? err.message : "Couldn't dismiss alert",
+                          key: Date.now(),
+                        });
+                      }
+                    }}
+                    className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50"
                   >
-                    Reschedule
+                    Dismiss
                   </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await dismissManualSchedulingAlert({ alertId: alert._id as Id<"notification_outbox"> });
-                      setToast({ msg: "Alert dismissed", key: Date.now() });
-                    } catch (err) {
-                      setToast({
-                        msg: err instanceof Error ? err.message : "Couldn't dismiss alert",
-                        key: Date.now(),
-                      });
-                    }
-                  }}
-                  className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50"
-                >
-                  Dismiss
-                </button>
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         </div>
       ) : null}
 
       {lateStartReviews && lateStartReviews.length > 0 ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <button
+            type="button"
+            onClick={() => setLateStartExpanded((v) => !v)}
+            className="flex w-full items-center justify-between gap-2 text-amber-700"
+            aria-expanded={lateStartExpanded}
+          >
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4" />
+              <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+                Late Start Decisions
+              </span>
+              <span className="rounded-full bg-amber-700 px-2 py-0.5 text-[10px] font-semibold text-white leading-none">
+                {lateStartReviews.length}
+              </span>
+            </div>
+            <ChevronDown
+              className={`h-4 w-4 transition-transform ${lateStartExpanded ? "rotate-180" : ""}`}
+            />
+          </button>
+          <div className={lateStartExpanded ? "" : "hidden"}>
+          <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-amber-700">
-                <AlertTriangle className="h-4 w-4" />
-                <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-                  Late Start Decisions
-                </span>
-              </div>
-              <h2 className="mt-2 text-lg font-semibold text-amber-950">
+              <h2 className="text-lg font-semibold text-amber-950">
                 {lateStartReviews.length === 1
                   ? "1 booking chain needs a delay decision"
                   : `${lateStartReviews.length} booking chains need delay decisions`}
@@ -1627,6 +1722,7 @@ export default function SchedulePage() {
                 </button>
               );
             })}
+          </div>
           </div>
         </div>
       ) : null}

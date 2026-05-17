@@ -936,9 +936,14 @@ export default function DaySwimLanes({
                           opacity: 0.4,
                         }}
                       >
-                        <p className="font-medium truncate">
-                          {ev.customerName}
-                        </p>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <p className="font-medium truncate flex-1 min-w-0">
+                            {ev.customerName}
+                          </p>
+                          <span className="shrink-0 rounded border border-current/30 bg-white/70 px-1 py-px font-mono text-[10px] font-bold leading-none tracking-tight">
+                            #{String(ev.id).slice(-6).toUpperCase()}
+                          </span>
+                        </div>
                         <p className="truncate opacity-80">
                           {ev.serviceNames?.join(", ")}
                         </p>
@@ -978,29 +983,45 @@ export default function DaySwimLanes({
                         !isDraggable ? () => onSelectEvent(ev) : undefined
                       }
                     >
-                      <span className="absolute top-0.5 right-1 text-[10px] opacity-50 font-medium">
+                      <span className="absolute bottom-0.5 right-1 text-[10px] opacity-50 font-medium">
                         {formatCompactTime(ev.start.getHours(), ev.start.getMinutes())}
                       </span>
                       {slotHeight <= ROW_HEIGHT * 2 && (ev.vehicleDisplay || ev.licensePlate) ? (
                         <>
-                          <p className="font-medium truncate">
-                            {ev.customerName}
-                            {(ev.vehicleDisplay || ev.licensePlate) && (
-                              <span className="font-normal opacity-70">
-                                {" · "}
-                                {ev.vehicleDisplay ?? ev.licensePlate}
-                              </span>
-                            )}
-                          </p>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <p className="font-medium truncate flex-1 min-w-0">
+                              {ev.customerName}
+                              {(ev.vehicleDisplay || ev.licensePlate) && (
+                                <span className="font-normal opacity-70">
+                                  {" · "}
+                                  {ev.vehicleDisplay ?? ev.licensePlate}
+                                </span>
+                              )}
+                            </p>
+                            <span
+                              className="shrink-0 rounded border border-current/30 bg-white/70 px-1 py-px font-mono text-[10px] font-bold leading-none tracking-tight"
+                              title={String(ev.id)}
+                            >
+                              #{String(ev.id).slice(-6).toUpperCase()}
+                            </span>
+                          </div>
                           <p className="truncate opacity-80">
                             {ev.serviceNames?.join(", ")}
                           </p>
                         </>
                       ) : (
                         <>
-                          <p className="font-medium truncate">
-                            {ev.customerName}
-                          </p>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <p className="font-medium truncate flex-1 min-w-0">
+                              {ev.customerName}
+                            </p>
+                            <span
+                              className="shrink-0 rounded border border-current/30 bg-white/70 px-1 py-px font-mono text-[10px] font-bold leading-none tracking-tight"
+                              title={String(ev.id)}
+                            >
+                              #{String(ev.id).slice(-6).toUpperCase()}
+                            </span>
+                          </div>
                           <p className="truncate opacity-80">
                             {ev.serviceNames?.join(", ")}
                           </p>

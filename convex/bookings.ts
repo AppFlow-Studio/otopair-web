@@ -1364,15 +1364,45 @@ export const getRecentNoShows = query({
     );
 
     const results: any[] = [];
+    const seenBookings = new Set<string>();
     for (const row of noShows) {
+      const bid = String((row as any).booking_id);
+      if (seenBookings.has(bid)) continue;
+      seenBookings.add(bid);
       const booking: any = await ctx.db.get((row as any).booking_id);
       if (!booking || !shopIds.includes(booking.shop_id)) continue;
       const customer: any = booking.user_id
         ? await ctx.db.get(booking.user_id)
         : null;
+      const composed = [customer?.first_name, customer?.last_name]
+        .filter(Boolean)
+        .join(" ");
+      const customerName =
+        customer?.name ||
+        (composed.length > 0 ? composed : null) ||
+        customer?.email ||
+        "Customer";
+      let vehicleLabel: string | null = null;
+      if (booking.vehicle_id) {
+        const vehicle: any = await ctx.db.get(booking.vehicle_id);
+        if (vehicle) {
+          const meta = vehicle.metadata ?? {};
+          const parts = [vehicle.year ?? meta.year, meta.make, meta.model].filter(
+            Boolean,
+          );
+          vehicleLabel =
+            parts.length > 0
+              ? parts.join(" ")
+              : vehicle.vin
+                ? `VIN …${String(vehicle.vin).slice(-6)}`
+                : null;
+        }
+      }
       results.push({
         bookingId: booking._id,
-        customerName: customer?.name ?? customer?.email ?? "Customer",
+        customerName,
+        vehicleLabel,
+        shortHandle: `#${String(booking._id).slice(-6).toUpperCase()}`,
         scheduledTime: booking.scheduled_time,
         scheduledDate: booking.scheduled_date,
         markedAtMs: (row as any).changed_at,
@@ -1783,11 +1813,20 @@ async function enqueueNotificationOutbox(
     scheduledForMs?: number;
   },
 ) {
+  // Dedupe only against still-actionable rows. Once a row has been
+  // resolved/superseded/failed, a fresh event with the same key should
+  // produce a new row.
   const existing = await ctx.db
     .query("notification_outbox")
     .withIndex("by_dedupe_key", (q: any) => q.eq("dedupe_key", dedupeKey))
     .first();
-  if (existing) return existing._id;
+  if (
+    existing &&
+    ((existing as any).status === "pending" ||
+      (existing as any).status === "dispatching")
+  ) {
+    return existing._id;
+  }
 
   const now = Date.now();
   return await ctx.db.insert("notification_outbox", {
@@ -3845,6 +3884,21 @@ async function buildLateStartReviewPlan(
   return { proposals, blockingReason: undefined as string | undefined };
 }
 
+function formatHHMMto12h(hhmm: string | null | undefined): string {
+  if (!hhmm) return "";
+  const [hStr, mStr] = hhmm.split(":");
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return hhmm;
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hr = h % 12 || 12;
+  return `${hr}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function shortBookingHandle(id: any): string {
+  return `#${String(id).slice(-6).toUpperCase()}`;
+}
+
 async function createManualSchedulingAlert(
   ctx: any,
   {
@@ -3866,7 +3920,9 @@ async function createManualSchedulingAlert(
     bookingId,
     channel: "front_desk",
     category: "manual_scheduling_required",
-    dedupeKey: `manual-scheduling:${String(bookingId)}:${source}:${Date.now()}`,
+    // Stable dedupe per booking+source so repeated cascade-blocked attempts
+    // collapse into one open alert. The front desk dismisses it explicitly.
+    dedupeKey: `manual-scheduling:${String(bookingId)}:${source}`,
     payload: {
       source,
       reason,
@@ -4037,13 +4093,33 @@ async function applyDownstreamMovement(
   });
 
   if (plan.blockingReason) {
+    // Prefer the actually-blocked downstream booking as the alert subject so
+    // the front-desk banner identifies the booking that needs manual review.
+    const blockedProposal =
+      plan.proposals.find((p: any) => p.blocked_reason) ?? null;
+    const subjectBookingId =
+      blockedProposal?.booking_id ?? upstreamBooking._id;
+    const subjectBooking: any = blockedProposal
+      ? await ctx.db.get(blockedProposal.booking_id)
+      : upstreamBooking;
+    const subjectTime12h = formatHHMMto12h(
+      subjectBooking?.scheduled_time ?? null,
+    );
+    const upstreamHandle = shortBookingHandle(upstreamBooking._id);
+    const subjectHandle = shortBookingHandle(subjectBookingId);
+    const reasonPrefix = blockedProposal
+      ? `Booking ${subjectHandle}${subjectTime12h ? ` (${subjectTime12h})` : ""} couldn't be auto-rescheduled after overrun on ${upstreamHandle}.`
+      : `Cascade from ${upstreamHandle} blocked.`;
     await createManualSchedulingAlert(ctx, {
       shopId: upstreamBooking.shop_id,
-      bookingId: upstreamBooking._id,
+      bookingId: subjectBookingId,
       source,
-      reason: plan.blockingReason,
+      reason: `${reasonPrefix} ${plan.blockingReason}`,
       payload: {
         upstreamBookingId: String(upstreamBooking._id),
+        upstreamHandle,
+        subjectHandle,
+        subjectTime12h: subjectTime12h || null,
         affectedCount: plan.proposals.length,
       },
     });
@@ -4075,6 +4151,20 @@ async function applyDownstreamMovement(
     ) {
       await releaseBookingSlot(ctx, proposal.booking.time_slot_id);
     }
+
+    // R1.4 — audit each pushed downstream booking so the chain back to
+    // the triggering upstream job is queryable from booking history.
+    const minutesShifted =
+      hhmmToMinutes(proposal.proposedTime) -
+      hhmmToMinutes(proposal.originalTime ?? proposal.proposedTime);
+    await ctx.db.insert("booking_status_history", {
+      booking_id: proposal.booking._id,
+      old_status: proposal.booking.status ?? "confirmed",
+      new_status: proposal.booking.status ?? "confirmed",
+      changed_by: "system",
+      reason: `pushed_by_upstream_${source}:${String(upstreamBooking._id)}:${minutesShifted}min`,
+      changed_at: Date.now(),
+    } as any);
 
     await enqueueNotificationOutbox(ctx, {
       shopId: proposal.booking.shop_id,
@@ -4205,18 +4295,48 @@ async function applyOverrunExtension(
   },
 ) {
   const now = Date.now();
-  const projectedEndMinutes = hhmmToMinutes(
-    getBookingEndTime(
-      booking.scheduled_time,
-      (booking.estimated_labor_minutes ?? 60) + extensionMinutes,
-    ),
-  );
+  const originalEstimate = booking.estimated_labor_minutes ?? 60;
+  const newEstimate = originalEstimate + extensionMinutes;
+  const newEndTimeHHMM = getBookingEndTime(booking.scheduled_time, newEstimate);
+  const projectedEndMinutes = hhmmToMinutes(newEndTimeHHMM);
 
   await applyDownstreamMovement(ctx, {
     upstreamBooking: booking,
     projectedEndMinutes,
     source: "job_overrun",
   });
+
+  // R1.1 — persist the extension on the upstream booking so future
+  // re-arms, downstream re-cascades, and analytics see the new estimate.
+  await ctx.db.patch(booking._id, {
+    estimated_labor_minutes: newEstimate,
+    updated_at: now,
+  } as any);
+
+  // R1.2 — mirror the cumulative extension into job_actuals so post-job
+  // billing/reporting reflects real time consumed, not the stale quote.
+  try {
+    const jobActual = await ensureJobActualRecord(ctx, { booking, now });
+    if (jobActual?._id) {
+      await ctx.db.patch(jobActual._id, {
+        actual_labor_minutes: newEstimate,
+        updated_at: now,
+      } as any);
+    }
+  } catch (_err) {
+    // ensureJobActualRecord throws if mechanic_id is missing; safe to skip.
+  }
+
+  // R1.3 — audit the extension in booking_status_history so the chain
+  // of overrun events is visible from the booking detail panel.
+  await ctx.db.insert("booking_status_history", {
+    booking_id: booking._id,
+    old_status: "in_progress",
+    new_status: "in_progress",
+    changed_by: userId ? String(userId) : "system",
+    reason: `overrun_extension_${extensionMinutes}min_${source}`,
+    changed_at: now,
+  } as any);
 
   await ctx.db.patch(checkin._id, {
     status: source === "system" ? "system_applied" : "answered",
@@ -4229,7 +4349,9 @@ async function applyOverrunExtension(
     updated_at: now,
   });
 
-  // D2 — customer resolution push (single, one-tap reschedule).
+  // D2 + R1.5 — customer resolution push with the new end time so the
+  // mobile banner can read "finishing around 4:00 PM" instead of a
+  // generic delta.
   await enqueueNotificationOutbox(ctx, {
     shopId: booking.shop_id,
     bookingId: booking._id,
@@ -4240,8 +4362,10 @@ async function applyOverrunExtension(
     scheduledForMs: now,
     payload: {
       extensionMinutes,
+      newEstimatedLaborMinutes: newEstimate,
+      newEndTime: newEndTimeHHMM,
       cascadeDepth: (checkin.cascade_depth ?? 0) + 1,
-      message: `Your appointment is running ~${extensionMinutes} min behind. Tap reschedule if the new time doesn't work.`,
+      message: `Your appointment is now estimated to finish around ${newEndTimeHHMM}. Tap reschedule if the new time doesn't work.`,
     },
   });
 
@@ -7880,6 +8004,57 @@ export const getOpenFrontDeskOverrunAlerts = query({
   },
 });
 
+// One-shot cleanup: resolves all but the newest pending
+// manual_scheduling_required row per booking for the current user's shop.
+// Useful to clear historical dupes after the dedupe-key fix.
+export const cleanupStaleManualSchedulingAlerts = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) throw new Error("You're not linked to an active shop yet.");
+
+    const rows = await ctx.db
+      .query("notification_outbox")
+      .withIndex("by_shop_and_status", (q: any) =>
+        q.eq("shop_id", primary.shopId).eq("status", "pending"),
+      )
+      .collect();
+
+    const groups = new Map<string, any[]>();
+    for (const row of rows) {
+      if (
+        (row as any).channel !== "front_desk" ||
+        (row as any).category !== "manual_scheduling_required"
+      )
+        continue;
+      const key = (row as any).booking_id
+        ? String((row as any).booking_id)
+        : `nb-${String(row._id)}`;
+      const list = groups.get(key) ?? [];
+      list.push(row);
+      groups.set(key, list);
+    }
+
+    const now = Date.now();
+    let resolved = 0;
+    for (const list of groups.values()) {
+      if (list.length <= 1) continue;
+      list.sort((a, b) => ((b as any).created_at ?? 0) - ((a as any).created_at ?? 0));
+      for (const dupe of list.slice(1)) {
+        await ctx.db.patch(dupe._id, {
+          status: "superseded",
+          processed_at: now,
+          updated_at: now,
+        } as any);
+        resolved += 1;
+      }
+    }
+    return { resolved };
+  },
+});
+
 export const dismissManualSchedulingAlert = mutation({
   args: { alertId: v.id("notification_outbox") },
   handler: async (ctx, args) => {
@@ -7917,20 +8092,90 @@ export const getOpenManualSchedulingAlerts = query({
       )
       .collect();
 
-    return rows
+    // Sort newest-first so the dedupe-by-booking step below keeps the
+    // most recent row per booking.
+    const filtered = rows
       .filter(
         (row: any) =>
           row.channel === "front_desk" &&
           row.category === "manual_scheduling_required",
       )
-      .sort((a: any, b: any) => (a.created_at ?? 0) - (b.created_at ?? 0))
-      .map((row: any) => ({
-        _id: row._id,
-        bookingId: row.booking_id ?? null,
-        createdAt: row.created_at,
-        reason: row.payload?.reason ?? "Manual scheduling review required.",
-        source: row.payload?.source ?? "scheduling",
-      }));
+      .sort((a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0));
+
+    // Defensive dedupe: collapse legacy rows that share the same booking_id
+    // (older versions used a unique-per-fire dedupe key, so a single blocked
+    // booking could have N rows). Read-only — the cleanup mutation
+    // `cleanupStaleManualSchedulingAlerts` actually resolves the dupes.
+    const seenBookings = new Set<string>();
+    const deduped: any[] = [];
+    for (const row of filtered) {
+      const key = row.booking_id ? String(row.booking_id) : `nb-${String(row._id)}`;
+      if (seenBookings.has(key)) continue;
+      seenBookings.add(key);
+      deduped.push(row);
+    }
+    deduped.sort((a: any, b: any) => (a.created_at ?? 0) - (b.created_at ?? 0));
+
+    const enriched = await Promise.all(
+      deduped.map(async (row: any) => {
+        let customerName: string | null = null;
+        let scheduledTime: string | null = null;
+        let scheduledDate: string | null = null;
+        let vehicleLabel: string | null = null;
+        if (row.booking_id) {
+          const booking: any = await ctx.db.get(row.booking_id);
+          if (booking) {
+            scheduledTime = booking.scheduled_time ?? null;
+            scheduledDate = booking.scheduled_date ?? null;
+            if (booking.user_id) {
+              const customer: any = await ctx.db.get(booking.user_id);
+              const composed = [customer?.first_name, customer?.last_name]
+                .filter(Boolean)
+                .join(" ");
+              customerName =
+                customer?.name ||
+                (composed.length > 0 ? composed : null) ||
+                customer?.email ||
+                null;
+            }
+            if (booking.vehicle_id) {
+              const vehicle: any = await ctx.db.get(booking.vehicle_id);
+              if (vehicle) {
+                const meta = vehicle.metadata ?? {};
+                const parts = [
+                  vehicle.year ?? meta.year,
+                  meta.make,
+                  meta.model,
+                ].filter(Boolean);
+                vehicleLabel =
+                  parts.length > 0
+                    ? parts.join(" ")
+                    : vehicle.vin
+                      ? `VIN …${String(vehicle.vin).slice(-6)}`
+                      : null;
+              }
+            }
+          }
+        }
+        // Short human-readable handle (last 6 of the booking id, uppercase).
+        const shortHandle = row.booking_id
+          ? `#${String(row.booking_id).slice(-6).toUpperCase()}`
+          : null;
+        return {
+          _id: row._id,
+          bookingId: row.booking_id ?? null,
+          createdAt: row.created_at,
+          reason: row.payload?.reason ?? "Manual scheduling review required.",
+          source: row.payload?.source ?? "scheduling",
+          customerName,
+          scheduledTime,
+          scheduledDate,
+          vehicleLabel,
+          shortHandle,
+        };
+      }),
+    );
+    return enriched;
   },
 });
 

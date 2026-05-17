@@ -18,7 +18,6 @@ import {
   drawerInputClassName,
   drawerSelectTriggerClassName,
   DrawerFieldLabel,
-  DrawerSectionHeader,
 } from "@/components/drawer-panel-styles";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import ServiceOptionsPicker, { type SelectedServiceOption } from "@/components/booking/service-options-picker";
@@ -83,14 +82,6 @@ function buildTimeOptions(): Array<{ value: string; label: string }> {
 
 const TIME_OPTIONS = buildTimeOptions();
 
-const DIAGNOSTIC_TIME_BAND: Record<string, string> = {
-  brakes: "30–60 min",
-  tires_wheels: "30–60 min",
-  engine: "45–90 min",
-  battery_electrical: "45–90 min",
-  not_sure: "45–90 min",
-};
-
 function toMins(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
   return h * 60 + m;
@@ -116,6 +107,51 @@ function getUserFacingErrorMessage(err: unknown): string {
   }
 
   return message || "Failed to create booking";
+}
+
+function CollapsibleSection({
+  sectionKey,
+  icon: Icon,
+  label,
+  open,
+  onToggle,
+  required,
+  children,
+}: {
+  sectionKey: string;
+  icon: React.ElementType<{ className?: string }>;
+  label: string;
+  open: boolean;
+  onToggle: (key: string) => void;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={() => onToggle(sectionKey)}
+        aria-expanded={open}
+        className="mb-4 flex w-full items-center justify-between gap-2 text-left"
+      >
+        <span className="flex items-center gap-2">
+          <Icon className="h-4 w-4 text-primary" />
+          <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground">
+            {label}
+            {required ? (
+              <span className="ml-1 text-destructive normal-case tracking-normal font-normal">
+                *
+              </span>
+            ) : null}
+          </h3>
+        </span>
+        <ChevronDown
+          className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open ? children : null}
+    </section>
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -319,6 +355,44 @@ export default function CreateBookingDrawer({
   /* ---- Customer states / notes ---- */
   const [customerNotes, setCustomerNotes] = useState("");
 
+  /* ---- Collapsible sections ---- */
+  const SECTION_KEYS = [
+    "customer",
+    "vehicle",
+    "services",
+    "mechanic_estimate",
+    "diagnostic",
+    "notes",
+    "scheduling",
+  ] as const;
+  type SectionKey = (typeof SECTION_KEYS)[number];
+  const [openSections, setOpenSections] = useState<Set<SectionKey>>(
+    () => new Set(SECTION_KEYS),
+  );
+  const toggleSection = (key: string) =>
+    setOpenSections((current) => {
+      const next = new Set(current);
+      const k = key as SectionKey;
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  const openSection = (key: SectionKey) =>
+    setOpenSections((current) => {
+      if (current.has(key)) return current;
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+
+  /* ---- Mechanic estimate (walk-in data capture) ---- */
+  // Free-form mechanic overrides for time + price. Both `null` means "use the
+  // catalog sum". Captured even when matching catalog so analytics can build
+  // mechanic-quote vs. catalog vs. actual price/time distributions per
+  // (shop, service, engine, chassis).
+  const [mechanicEstimateMinutes, setMechanicEstimateMinutes] = useState<number | null>(null);
+  const [mechanicQuotedPrice, setMechanicQuotedPrice] = useState<number | null>(null);
+
   /* ---- Diagnostic system ---- */
   type DiagnosticSystem =
     | "brakes"
@@ -444,13 +518,32 @@ export default function CreateBookingDrawer({
   );
   const needsTireSpecs = tireService != null && tireSpecs == null;
 
+  /* ---- Catalog-derived estimate (used as fallback + comparison baseline) ---- */
+  const catalogEstimateMinutes = useMemo(() => {
+    const allServices = categories.flatMap((c: any) => c.services as any[]);
+    const selected = allServices.filter((s: any) => selectedIds.has(s._id));
+    const customMins = customServices.reduce(
+      (sum: number, c) => sum + (c.durationMinutes ?? 0),
+      0,
+    );
+    return (
+      selected.reduce(
+        (sum: number, s: any) => sum + (s.defaultLaborHours ?? 0) * 60,
+        0,
+      ) + customMins
+    );
+  }, [categories, selectedIds, customServices]);
+
+  // Mechanic override wins when present; otherwise fall back to catalog sum.
+  const effectiveEstimateMinutes = useMemo(
+    () => mechanicEstimateMinutes ?? catalogEstimateMinutes,
+    [mechanicEstimateMinutes, catalogEstimateMinutes],
+  );
+
   /* ---- Overlap check ---- */
   const overlapError = useMemo(() => {
     if (!mechanicId || !date || !time) return null;
-    const allServices = categories.flatMap((c) => c.services);
-    const selected = allServices.filter((s) => selectedIds.has(s._id));
-    const customMins = customServices.reduce((sum, c) => sum + (c.durationMinutes ?? 0), 0);
-    const estMins = (selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) + customMins) || 60;
+    const estMins = effectiveEstimateMinutes || 60;
     const endTime = getBookingEndTime(time, estMins);
     const startMins = toMins(time);
     const endMins = toMins(endTime);
@@ -465,7 +558,7 @@ export default function CreateBookingDrawer({
       return bStart < endMins && bEnd > startMins;
     });
     return conflict ? "This time slot overlaps an existing booking for this mechanic." : null;
-  }, [mechanicId, date, time, selectedIds, customServices, categories, bookings]);
+  }, [mechanicId, date, time, effectiveEstimateMinutes, bookings]);
 
   const blockingHoursError = useMemo(() => {
     if (!date || !time) return null;
@@ -489,25 +582,17 @@ export default function CreateBookingDrawer({
 
   const computedEndLabel = useMemo(() => {
     if (!time) return null;
-    const allServices = categories.flatMap((c) => c.services);
-    const selected = allServices.filter((s) => selectedIds.has(s._id));
-    const customMins = customServices.reduce((sum, c) => sum + (c.durationMinutes ?? 0), 0);
-    const estMins =
-      (selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) + customMins) || 60;
+    const estMins = effectiveEstimateMinutes || 60;
     const endHHMM = getBookingEndTime(time, estMins);
     const [h, m] = endHHMM.split(":").map(Number);
     const ampm = h >= 12 ? "pm" : "am";
     const hour = h % 12 || 12;
     return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
-  }, [time, selectedIds, customServices, categories]);
+  }, [time, effectiveEstimateMinutes]);
 
   const outsideHoursWarning = useMemo(() => {
     if (!date || !time) return null;
-
-    const allServices = categories.flatMap((c) => c.services);
-    const selected = allServices.filter((s) => selectedIds.has(s._id));
-    const customMins = customServices.reduce((sum, c) => sum + (c.durationMinutes ?? 0), 0);
-    const estMins = (selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0) + customMins) || 60;
+    const estMins = effectiveEstimateMinutes || 60;
     const endTime = getBookingEndTime(time, estMins);
     const dayHours = getShopHoursForDate(shopHours, date);
     if (!dayHours || dayHours.isClosed) return null;
@@ -515,7 +600,7 @@ export default function CreateBookingDrawer({
     return toMins(endTime) > toMins(dayHours.closeTime)
       ? "This booking would end after the shop closes."
       : null;
-  }, [date, time, selectedIds, customServices, categories, shopHours]);
+  }, [date, time, effectiveEstimateMinutes, shopHours]);
 
   /* ---- Filter categories/services by search ---- */
   const filteredCats = useMemo(() => {
@@ -551,14 +636,23 @@ export default function CreateBookingDrawer({
   };
 
   /* ---- Submit ---- */
-  async function submitBooking(allowOutsideShopHours = false) {
+  async function submitBooking(
+    allowOutsideShopHours = false,
+    optionsOverride?: SelectedServiceOption[],
+    tireSpecsOverride?: TireSpecs | null,
+  ) {
+    // React state updates are async — when a picker confirms and immediately
+    // calls submitBooking(), the parent state still holds the pre-confirm
+    // value in this closure. Callers pass fresh picks through overrides so
+    // the request carries the actual selections.
+    const effectiveSelectedOptions = optionsOverride ?? selectedServiceOptions;
+    const effectiveTireSpecs =
+      tireSpecsOverride !== undefined ? tireSpecsOverride : tireSpecs;
     setIsSaving(true);
     try {
-      const allServices = categories.flatMap((c) => c.services);
-      const selected = allServices.filter((s) => selectedIds.has(s._id));
-      const customMinutes = customServices.reduce((sum, c) => sum + (c.durationMinutes ?? 0), 0);
-      const baseMinutes = selected.reduce((sum, s) => sum + s.defaultLaborHours * 60, 0);
-      const estMinutes = baseMinutes + customMinutes || undefined;
+      const catalogMinutes = catalogEstimateMinutes || undefined;
+      const estMinutes =
+        (mechanicEstimateMinutes ?? catalogEstimateMinutes) || undefined;
       const finalVin = vin.trim() || `SHOP${Date.now()}`;
 
       await createBooking({
@@ -586,15 +680,20 @@ export default function CreateBookingDrawer({
         status: "confirmed",
         allowOutsideShopHours: allowOutsideShopHours || undefined,
         selectedServiceOptions:
-          selectedServiceOptions.length > 0
-            ? selectedServiceOptions.map((p) => ({
+          effectiveSelectedOptions.length > 0
+            ? effectiveSelectedOptions.map((p) => ({
                 service_id: p.service_id,
                 option_id: p.option_id,
                 option_label: p.option_label,
                 option_type: p.option_type,
               }))
             : undefined,
-        tireSpecs: tireSpecs ?? undefined,
+        tireSpecs: effectiveTireSpecs ?? undefined,
+        source: "mechanic_walk_in",
+        mechanicEstimatedMinutes: mechanicEstimateMinutes ?? undefined,
+        catalogEstimatedMinutes: catalogMinutes,
+        mechanicQuotedPrice: mechanicQuotedPrice ?? undefined,
+        catalogQuotedPrice: 0,
       });
 
       onToast("Booking created");
@@ -615,6 +714,17 @@ export default function CreateBookingDrawer({
 
     if (date < todayISO || (isToday && time < minTimeToday)) {
       onToast("Pick a time from now onward.");
+      return;
+    }
+
+    if (mechanicEstimateMinutes == null || mechanicEstimateMinutes <= 0) {
+      openSection("mechanic_estimate");
+      onToast("Enter the mechanic's time estimate.");
+      return;
+    }
+    if (mechanicQuotedPrice == null || mechanicQuotedPrice <= 0) {
+      openSection("mechanic_estimate");
+      onToast("Enter the quoted price.");
       return;
     }
 
@@ -660,8 +770,14 @@ export default function CreateBookingDrawer({
       <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
 
         {/* ── Customer Info ── */}
-        <section>
-          <DrawerSectionHeader icon={User} label="Customer Info" />
+        <CollapsibleSection
+          sectionKey="customer"
+          icon={User}
+          label="Customer Info"
+          open={openSections.has("customer")}
+          onToggle={toggleSection}
+          required
+        >
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -682,11 +798,16 @@ export default function CreateBookingDrawer({
               <input type="email" placeholder="customer@example.com" value={email} onChange={(e) => setEmail(e.target.value)} className={drawerInputClassName} />
             </div>
           </div>
-        </section>
+        </CollapsibleSection>
 
         {/* ── Vehicle Info ── */}
-        <section>
-          <DrawerSectionHeader icon={Car} label="Vehicle Info" />
+        <CollapsibleSection
+          sectionKey="vehicle"
+          icon={Car}
+          label="Vehicle Info"
+          open={openSections.has("vehicle")}
+          onToggle={toggleSection}
+        >
           <div className="space-y-3">
             <div>
               <DrawerFieldLabel>VIN <span className="normal-case tracking-normal font-normal text-muted-foreground/60">(Optional)</span></DrawerFieldLabel>
@@ -733,11 +854,17 @@ export default function CreateBookingDrawer({
               }}
             />
           </div>
-        </section>
+        </CollapsibleSection>
 
         {/* ── Service Selection ── */}
-        <section>
-          <DrawerSectionHeader icon={Wrench} label="Service Selection" />
+        <CollapsibleSection
+          sectionKey="services"
+          icon={Wrench}
+          label="Service Selection"
+          open={openSections.has("services")}
+          onToggle={toggleSection}
+          required
+        >
 
           {/* Selected chips */}
           {(selectedIds.size > 0 || customServices.length > 0) && (
@@ -963,12 +1090,92 @@ export default function CreateBookingDrawer({
               </button>
             )}
           </div>
-        </section>
+        </CollapsibleSection>
+
+        {/* ── Mechanic estimate (walk-in data capture) — mandatory ── */}
+        <CollapsibleSection
+          sectionKey="mechanic_estimate"
+          icon={Clock}
+          label="Mechanic estimate"
+          open={openSections.has("mechanic_estimate")}
+          onToggle={toggleSection}
+          required
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <DrawerFieldLabel>
+                Time (minutes){" "}
+                <span className="text-destructive normal-case tracking-normal font-normal">
+                  *
+                </span>
+              </DrawerFieldLabel>
+              <input
+                type="number"
+                min={0}
+                step={5}
+                inputMode="numeric"
+                placeholder={
+                  catalogEstimateMinutes > 0
+                    ? String(catalogEstimateMinutes)
+                    : "e.g. 60"
+                }
+                value={mechanicEstimateMinutes ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === "") {
+                    setMechanicEstimateMinutes(null);
+                    return;
+                  }
+                  const n = Number(raw);
+                  setMechanicEstimateMinutes(Number.isFinite(n) && n >= 0 ? n : null);
+                }}
+                className={drawerInputClassName}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Your estimate for total job time.
+              </p>
+            </div>
+            <div>
+              <DrawerFieldLabel>
+                Quoted price ($){" "}
+                <span className="text-destructive normal-case tracking-normal font-normal">
+                  *
+                </span>
+              </DrawerFieldLabel>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                inputMode="decimal"
+                placeholder="e.g. 250"
+                value={mechanicQuotedPrice ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === "") {
+                    setMechanicQuotedPrice(null);
+                    return;
+                  }
+                  const n = Number(raw);
+                  setMechanicQuotedPrice(Number.isFinite(n) && n >= 0 ? n : null);
+                }}
+                className={drawerInputClassName}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                What you quoted this walk-in.
+              </p>
+            </div>
+          </div>
+        </CollapsibleSection>
 
         {/* ── Diagnostic system (only when a diagnostic service is selected) ── */}
         {isDiagnostic && (
-          <section>
-            <DrawerSectionHeader icon={Stethoscope} label="Diagnostic system" />
+          <CollapsibleSection
+            sectionKey="diagnostic"
+            icon={Stethoscope}
+            label="Diagnostic system"
+            open={openSections.has("diagnostic")}
+            onToggle={toggleSection}
+          >
             <DrawerFieldLabel>What&apos;s bothering the customer?</DrawerFieldLabel>
             <div className="space-y-1.5">
               {([
@@ -1007,12 +1214,6 @@ export default function CreateBookingDrawer({
             {diagnosticSystem && (
               <div className="mt-3 rounded-xl border border-border bg-muted/30 p-3 space-y-2">
                 <div className="flex items-center justify-between gap-3 text-xs">
-                  <span className="text-muted-foreground">Time at shop</span>
-                  <span className="font-semibold text-foreground tabular-nums">
-                    {DIAGNOSTIC_TIME_BAND[diagnosticSystem]}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between gap-3 text-xs">
                   <span className="text-muted-foreground">Diagnostic fee</span>
                   <span className="font-semibold text-foreground tabular-nums">
                     $120–180
@@ -1024,12 +1225,17 @@ export default function CreateBookingDrawer({
                 </p>
               </div>
             )}
-          </section>
+          </CollapsibleSection>
         )}
 
         {/* ── Customer states ── */}
-        <section>
-          <DrawerSectionHeader icon={MessageSquare} label="Customer states" />
+        <CollapsibleSection
+          sectionKey="notes"
+          icon={MessageSquare}
+          label="Customer states"
+          open={openSections.has("notes")}
+          onToggle={toggleSection}
+        >
           <DrawerFieldLabel>Notes from the customer (optional)</DrawerFieldLabel>
           <textarea
             value={customerNotes}
@@ -1038,11 +1244,17 @@ export default function CreateBookingDrawer({
             rows={3}
             className={`${drawerInputClassName} resize-none leading-relaxed`}
           />
-        </section>
+        </CollapsibleSection>
 
         {/* ── Scheduling ── */}
-        <section>
-          <DrawerSectionHeader icon={Calendar} label="Scheduling" />
+        <CollapsibleSection
+          sectionKey="scheduling"
+          icon={Calendar}
+          label="Scheduling"
+          open={openSections.has("scheduling")}
+          onToggle={toggleSection}
+          required
+        >
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -1111,7 +1323,7 @@ export default function CreateBookingDrawer({
               </p>
             )}
           </div>
-        </section>
+        </CollapsibleSection>
 
       </div>
 
@@ -1288,7 +1500,7 @@ export default function CreateBookingDrawer({
           } else if (outsideHoursWarning) {
             setOutsideHoursConfirmOpen(true);
           } else {
-            void submitBooking();
+            void submitBooking(false, picks);
           }
         }}
       />
@@ -1307,7 +1519,7 @@ export default function CreateBookingDrawer({
           if (outsideHoursWarning) {
             setOutsideHoursConfirmOpen(true);
           } else {
-            void submitBooking();
+            void submitBooking(false, undefined, specs);
           }
         }}
       />

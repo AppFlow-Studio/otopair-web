@@ -484,6 +484,39 @@ export default defineSchema({
     .index("by_flagged", ["flagged_for_review"])
     .index("by_recorded_at", ["recorded_at"]),
 
+  // Per-service observation rows for mechanic-quoted time and price, plus
+  // catalog baselines at submit time. Mirrors part_snapshots' denormalized
+  // shop/service/engine/chassis shape so aggregations do not need joins.
+  labor_quote_snapshots: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    mechanic_id: v.optional(v.id("mechanics")),
+
+    vehicle_id: v.id("vehicles"),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    engine_id: v.optional(v.id("engines")),
+    chassis_id: v.optional(v.id("chassis_variants")),
+    trim_id: v.optional(v.id("trims")),
+
+    service_id: v.optional(v.id("services")),
+    custom_service_name: v.optional(v.string()),
+
+    mechanic_estimated_minutes: v.optional(v.number()),
+    catalog_estimated_minutes: v.optional(v.number()),
+    mechanic_quoted_price: v.optional(v.number()),
+    catalog_quoted_price: v.optional(v.number()),
+
+    source: v.string(),
+    recorded_at: v.number(),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_vehicle", ["vehicle_id"])
+    .index("by_shop_service", ["shop_id", "service_id"])
+    .index("by_shop_service_config", ["shop_id", "service_id", "vehicle_config_id"])
+    .index("by_service_engine", ["service_id", "engine_id"])
+    .index("by_service_chassis", ["service_id", "chassis_id"])
+    .index("by_recorded_at", ["recorded_at"]),
+
   // ===== ENRICHMENT PIPELINE (all Waleed unique) =====
 
   enrichment_evidence: defineTable({
@@ -823,12 +856,6 @@ export default defineSchema({
     ownership_plan: v.optional(v.string()),
     lease_ending_soon: v.optional(v.boolean()),
     lease_mileage_pace: v.optional(v.string()),
-    // TEMPORARY: legacy Smartcar fields, retained as optional so the
-    // stripSmartcarFieldsFromVehicleOwners migration can clear them.
-    // Remove these (and the migration) once production data is cleared.
-    smartcarVehicleId: v.optional(v.string()),
-    connectionStatus: v.optional(v.string()),
-    connectedAt: v.optional(v.number()),
   })
     .index("by_vin", ["vin"])
     .index("by_user_id", ["user_id"])
@@ -1107,6 +1134,9 @@ export default defineSchema({
     last_viewed_credits_at: v.optional(v.number()),
     createdAt: v.optional(v.number()),
     lastUpdated: v.optional(v.number()),
+    // Set when a Clerk user.created webhook claimed a pre-existing
+    // "shop-created-*" walk-in stub user by matching email or phone.
+    walkInClaimedAt: v.optional(v.number()),
   })
     .index("by_clerkUserId", ["clerkUserId"])
     .index("by_isPendingDeletion", ["isPendingDeletion"])
@@ -1338,6 +1368,15 @@ export default defineSchema({
     note: v.optional(v.string()),
     title: v.optional(v.string()),
     series_id: v.optional(v.string()),
+    // Discriminator so manual block checks ignore booking-owned and orphaned
+    // unavailable slots.
+    block_kind: v.optional(
+      v.union(
+        v.literal("manual"),
+        v.literal("auto_day_block"),
+        v.literal("reserved_pending"),
+      ),
+    ),
   })
     .index("by_shop_id", ["shop_id"])
     .index("by_mechanic_id", ["mechanic_id"])
@@ -1483,6 +1522,12 @@ export default defineSchema({
     // Set when the driver booked this directly from a mechanic recommendation
     // card. Used to auto-close the rec on completion.
     source_recommendation_id: v.optional(v.id("job_recommendations")),
+    // Booking origin and quote baselines for mechanic-created walk-ins.
+    source: v.optional(v.string()),
+    mechanic_estimated_minutes: v.optional(v.number()),
+    catalog_estimated_minutes: v.optional(v.number()),
+    mechanic_quoted_price: v.optional(v.number()),
+    catalog_quoted_price: v.optional(v.number()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])

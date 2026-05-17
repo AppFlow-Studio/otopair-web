@@ -499,6 +499,7 @@ export const blockSlot = mutation({
         start_time: args.startTime,
         end_time: args.endTime,
         is_available: false,
+        block_kind: "manual",
         ...(args.title ? { title: args.title } : {}),
         ...(args.note ? { note: args.note } : {}),
       });
@@ -664,6 +665,7 @@ export const blockMechanicDay = mutation({
         start_time: openTime,
         end_time: closeTime,
         is_available: false,
+        block_kind: "auto_day_block",
       });
     } else {
       const bookedIntervals = mechanicBookings.map((booking: any) => ({
@@ -697,6 +699,7 @@ export const blockMechanicDay = mutation({
           start_time: gap.start,
           end_time: gap.end,
           is_available: false,
+          block_kind: "auto_day_block",
         });
       }
     }
@@ -764,6 +767,7 @@ export const copyBlockedSlotsToNextWeek = mutation({
         start_time: slot.start_time,
         end_time: slot.end_time,
         is_available: false,
+        block_kind: slot.block_kind ?? "manual",
         title: slot.title ?? undefined,
         note: slot.note ?? undefined,
       });

@@ -355,6 +355,7 @@ export const upsertFromClerk = mutation({
   args: {
     clerkUserId: v.string(),
     email: v.string(),
+    phone: v.optional(v.string()),
     first_name: v.optional(v.string()),
     last_name: v.optional(v.string()),
     profile_photo_url: v.optional(v.string()),
@@ -374,15 +375,56 @@ export const upsertFromClerk = mutation({
         first_name: args.first_name,
         last_name: args.last_name,
         profile_photo_url: args.profile_photo_url ?? undefined,
+        ...(args.phone ? { phone: args.phone } : {}),
         ...(args.role ? { role: args.role } : {}),
         lastUpdated: now,
       });
       return existing._id;
     }
 
+    // If a shop previously created a walk-in stub user, claim it when the real
+    // Clerk identity arrives so bookings and vehicle ownership stay linked.
+    const normalizedIncomingPhone = normalizePhoneE164(args.phone);
+    let claimable = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .first();
+    if (
+      claimable &&
+      !String(claimable.clerkUserId ?? "").startsWith("shop-created-")
+    ) {
+      claimable = null;
+    }
+    if (!claimable && normalizedIncomingPhone) {
+      const all = await ctx.db.query("users").collect();
+      claimable =
+        all.find(
+          (u) =>
+            String(u.clerkUserId ?? "").startsWith("shop-created-") &&
+            u.phone === normalizedIncomingPhone,
+        ) ?? null;
+    }
+
+    if (claimable) {
+      await ctx.db.patch(claimable._id, {
+        clerkUserId: args.clerkUserId,
+        email: args.email,
+        first_name: args.first_name ?? claimable.first_name,
+        last_name: args.last_name ?? claimable.last_name,
+        profile_photo_url: args.profile_photo_url ?? undefined,
+        phone: normalizedIncomingPhone ?? claimable.phone,
+        role: args.role ?? claimable.role ?? "user",
+        onboardingCompleted: true,
+        lastUpdated: now,
+        walkInClaimedAt: now,
+      });
+      return claimable._id;
+    }
+
     return await ctx.db.insert("users", {
       clerkUserId: args.clerkUserId,
       email: args.email,
+      phone: normalizedIncomingPhone,
       first_name: args.first_name,
       last_name: args.last_name,
       profile_photo_url: args.profile_photo_url ?? undefined,
@@ -392,6 +434,15 @@ export const upsertFromClerk = mutation({
     });
   },
 });
+
+function normalizePhoneE164(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  if (raw.startsWith("+")) return raw;
+  return undefined;
+}
 
 export const deleteFromClerk = mutation({
   args: {

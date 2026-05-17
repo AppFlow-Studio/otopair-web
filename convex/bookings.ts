@@ -34,7 +34,7 @@
 import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
+import { internal, api } from "./_generated/api";
 import { isTerminal, validateTransition } from "./booking_status_history";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import {
@@ -2790,6 +2790,9 @@ async function getManualBlockedSlotsForShop(ctx: any, shopId: any, date?: string
     (slot: any) =>
       !slot.is_available &&
       !bookingSlotIds.has(String(slot._id)) &&
+      // Only count slots explicitly marked as blocks. Orphaned unavailable
+      // slots from deleted bookings are ignored.
+      slot.block_kind !== undefined &&
       (date ? slot.date === date : true)
   );
 }
@@ -2848,11 +2851,17 @@ async function getOrCreateSlot(
   );
 
   if (existing) {
-    if (existing.is_available || existing.title !== undefined || existing.note !== undefined) {
+    if (
+      existing.is_available ||
+      existing.title !== undefined ||
+      existing.note !== undefined ||
+      existing.block_kind !== undefined
+    ) {
       await ctx.db.patch(existing._id, {
         is_available: false,
         note: undefined,
         title: undefined,
+        block_kind: undefined,
       });
     }
     return existing._id;
@@ -2887,6 +2896,7 @@ async function reservePendingCustomerSlot(
       is_available: false,
       note: undefined,
       title: RESERVED_PENDING_CUSTOMER_TITLE,
+      block_kind: "reserved_pending",
     });
     return slot._id;
   }
@@ -2900,6 +2910,7 @@ async function reservePendingCustomerSlot(
     shop_id: shopId,
     start_time: startTime,
     title: RESERVED_PENDING_CUSTOMER_TITLE,
+    block_kind: "reserved_pending",
   });
 }
 
@@ -6393,6 +6404,19 @@ export const createByShop = mutation({
         quantity: v.number(),
       })
     ),
+    // Walk-in / external customer data capture. Defaults to "mechanic_walk_in"
+    // when called from the schedule create-booking drawer.
+    source: v.optional(
+      v.union(
+        v.literal("mechanic_walk_in"),
+        v.literal("customer_self"),
+        v.literal("shop_admin"),
+      ),
+    ),
+    mechanicEstimatedMinutes: v.optional(v.float64()),
+    catalogEstimatedMinutes: v.optional(v.float64()),
+    mechanicQuotedPrice: v.optional(v.float64()),
+    catalogQuotedPrice: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -6472,13 +6496,13 @@ export const createByShop = mutation({
 
     if (!customer) throw new Error("Could not create customer");
 
-    const existingVehicle = await ctx.db
+    let existingVehicle = await ctx.db
       .query("vehicles")
       .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
       .first();
 
     if (!existingVehicle) {
-      await ctx.db.insert("vehicles", {
+      const newVehicleId = await ctx.db.insert("vehicles", {
         vin: canonicalVin,
         year: args.vehicleYear,
         metadata: {
@@ -6489,6 +6513,17 @@ export const createByShop = mutation({
         created_at: now,
         updated_at: now,
       });
+      existingVehicle = await ctx.db.get(newVehicleId);
+    }
+
+    // Fire-and-forget enrichment for any VIN whose vehicles row does not yet
+    // have a resolved vehicle_config_id.
+    if (existingVehicle && !existingVehicle.vehicle_config_id) {
+      await ctx.scheduler.runAfter(
+        0,
+        api.vehicleEnrichment.runPublic.go,
+        { vin: canonicalVin },
+      );
     }
 
     const ownerLink = await ctx.db
@@ -6537,6 +6572,7 @@ export const createByShop = mutation({
         duration_minutes: c.durationMinutes,
       }))
       .filter((c: any) => c.name.length > 0);
+    const bookingSource = args.source ?? "mechanic_walk_in";
     const bookingId = await ctx.db.insert("bookings", {
       labor_cost: args.laborCost,
       parts_cost: args.partsCost,
@@ -6565,7 +6601,86 @@ export const createByShop = mutation({
       vin: canonicalVin,
       created_at: now,
       updated_at: now,
+      source: bookingSource,
+      mechanic_estimated_minutes: args.mechanicEstimatedMinutes,
+      catalog_estimated_minutes: args.catalogEstimatedMinutes,
+      mechanic_quoted_price: args.mechanicQuotedPrice,
+      catalog_quoted_price: args.catalogQuotedPrice,
     });
+
+    // Per-service labor quote snapshots support analytics without joining
+    // bookings through vehicles and vehicle configs on every query.
+    if (existingVehicle) {
+      const catalogServiceMinutes = servicesForOptionCheck.map((svc: any) =>
+        svc && svc.default_labor_hours
+          ? svc.default_labor_hours * 60
+          : 0,
+      );
+      const customMinutesList = (customServicesNormalized ?? []).map(
+        (c: any) => c.duration_minutes ?? 0,
+      );
+      const totalCatalogMinutes =
+        catalogServiceMinutes.reduce((s: number, n: number) => s + n, 0) +
+        customMinutesList.reduce((s: number, n: number) => s + n, 0);
+
+      const allocate = (
+        total: number | undefined,
+        share: number,
+      ): number | undefined => {
+        if (total === undefined || total === null) return undefined;
+        if (totalCatalogMinutes <= 0) {
+          const denom =
+            servicesForOptionCheck.length + customMinutesList.length;
+          return denom > 0 ? total / denom : total;
+        }
+        return total * (share / totalCatalogMinutes);
+      };
+
+      const snapshotBase = {
+        booking_id: bookingId,
+        shop_id: args.shopId,
+        mechanic_id: resolvedMechanicId ?? undefined,
+        vehicle_id: existingVehicle._id,
+        vehicle_config_id: existingVehicle.vehicle_config_id ?? undefined,
+        engine_id: existingVehicle.engine_id ?? undefined,
+        chassis_id: existingVehicle.chassis_id ?? undefined,
+        trim_id: existingVehicle.trim_id ?? undefined,
+        source: bookingSource,
+        recorded_at: now,
+      };
+
+      for (let i = 0; i < args.serviceIds.length; i++) {
+        const catMins = catalogServiceMinutes[i] ?? 0;
+        await ctx.db.insert("labor_quote_snapshots", {
+          ...snapshotBase,
+          service_id: args.serviceIds[i],
+          mechanic_estimated_minutes: allocate(
+            args.mechanicEstimatedMinutes,
+            catMins,
+          ),
+          catalog_estimated_minutes: catMins > 0 ? catMins : undefined,
+          mechanic_quoted_price: allocate(args.mechanicQuotedPrice, catMins),
+          catalog_quoted_price: allocate(args.catalogQuotedPrice, catMins),
+        });
+      }
+      if (customServicesNormalized) {
+        for (let i = 0; i < customServicesNormalized.length; i++) {
+          const c = customServicesNormalized[i];
+          const catMins = c.duration_minutes ?? 0;
+          await ctx.db.insert("labor_quote_snapshots", {
+            ...snapshotBase,
+            custom_service_name: c.name,
+            mechanic_estimated_minutes: allocate(
+              args.mechanicEstimatedMinutes,
+              catMins,
+            ),
+            catalog_estimated_minutes: catMins > 0 ? catMins : undefined,
+            mechanic_quoted_price: allocate(args.mechanicQuotedPrice, catMins),
+            catalog_quoted_price: allocate(args.catalogQuotedPrice, catMins),
+          });
+        }
+      }
+    }
 
     await logBookingStatusChange(
       ctx,

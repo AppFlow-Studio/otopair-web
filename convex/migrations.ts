@@ -5,6 +5,35 @@ import {
   DEFAULT_AVAILABILITY_DAYS,
 } from "./lib/timeSlotAvailability";
 
+// One-shot backfill for the new time_slots.block_kind discriminator. Any
+// existing row that was a legitimate manual block (has title or note set)
+// gets classified so the tightened getManualBlockedSlotsForShop predicate
+// still recognises it. Rows with no title/note and no booking link are
+// treated as orphans and left unflagged.
+export const backfillTimeSlotBlockKind = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const slots = await ctx.db.query("time_slots").collect();
+    let manual = 0;
+    let reserved = 0;
+    for (const slot of slots) {
+      if (slot.is_available) continue;
+      if (slot.block_kind !== undefined) continue;
+      const hasTitle = slot.title !== undefined && slot.title !== null && slot.title !== "";
+      const hasNote = slot.note !== undefined && slot.note !== null && slot.note !== "";
+      if (!hasTitle && !hasNote) continue;
+      if (slot.title === "Reserved pending customer approval") {
+        await ctx.db.patch(slot._id, { block_kind: "reserved_pending" });
+        reserved += 1;
+      } else {
+        await ctx.db.patch(slot._id, { block_kind: "manual" });
+        manual += 1;
+      }
+    }
+    return { manual, reserved, scanned: slots.length };
+  },
+});
+
 export const backfillModelMakeId = mutation({
   args: { makeId: v.id("makes") },
   handler: async (ctx, args) => {
@@ -186,8 +215,9 @@ export const regenerateSlotsFifteenMinGrid = mutation({
 
 /**
  * One-shot: strip legacy Smartcar fields from vehicle_owners rows.
- * Run once after deploy, then remove smartcarVehicleId/connectionStatus/
- * connectedAt from the schema validator and re-deploy.
+ *
+ * This intentionally does not re-add Smartcar fields to the schema; it only
+ * removes old persisted fields so rows conform to the current validator.
  *
  * Run: npx convex run migrations:stripSmartcarFieldsFromVehicleOwners
  */
@@ -207,9 +237,10 @@ export const stripSmartcarFieldsFromVehicleOwners = mutation({
         smartcarVehicleId: undefined,
         connectionStatus: undefined,
         connectedAt: undefined,
-      });
+      } as any);
       cleared += 1;
     }
     return { cleared, total: rows.length };
   },
 });
+

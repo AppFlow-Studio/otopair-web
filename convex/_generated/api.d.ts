@@ -11,6 +11,7 @@
 import type * as adminCleanupMechanics from "../adminCleanupMechanics.js";
 import type * as ai_conversations from "../ai_conversations.js";
 import type * as ai_enrichment_logs from "../ai_enrichment_logs.js";
+import type * as ai_feedback from "../ai_feedback.js";
 import type * as ai_messages from "../ai_messages.js";
 import type * as analytics_events from "../analytics_events.js";
 import type * as app_feedback from "../app_feedback.js";
@@ -68,6 +69,7 @@ import type * as models from "../models.js";
 import type * as notifications from "../notifications.js";
 import type * as oemParts from "../oemParts.js";
 import type * as onboarding_questions_answers from "../onboarding_questions_answers.js";
+import type * as oto_bookings from "../oto/bookings.js";
 import type * as oto_chat from "../oto/chat.js";
 import type * as oto_dispatcher from "../oto/dispatcher.js";
 import type * as oto_envelope from "../oto/envelope.js";
@@ -196,6 +198,7 @@ declare const fullApi: ApiFromModules<{
   adminCleanupMechanics: typeof adminCleanupMechanics;
   ai_conversations: typeof ai_conversations;
   ai_enrichment_logs: typeof ai_enrichment_logs;
+  ai_feedback: typeof ai_feedback;
   ai_messages: typeof ai_messages;
   analytics_events: typeof analytics_events;
   app_feedback: typeof app_feedback;
@@ -253,6 +256,7 @@ declare const fullApi: ApiFromModules<{
   notifications: typeof notifications;
   oemParts: typeof oemParts;
   onboarding_questions_answers: typeof onboarding_questions_answers;
+  "oto/bookings": typeof oto_bookings;
   "oto/chat": typeof oto_chat;
   "oto/dispatcher": typeof oto_dispatcher;
   "oto/envelope": typeof oto_envelope;

@@ -78,6 +78,7 @@ import {
   hasText,
   isTireCondition,
   mergePassportSection,
+  postjobPhotoValidator,
   postjobReportValidator,
   prejobReportValidator,
   serviceRequiresParts,
@@ -3408,8 +3409,10 @@ async function getManualBlockedSlotsForShop(ctx: any, shopId: any, date?: string
     (slot: any) =>
       !slot.is_available &&
       !bookingSlotIds.has(String(slot._id)) &&
-      // Only count slots explicitly marked as blocks. Orphaned unavailable
-      // slots from deleted bookings are ignored.
+      // Only count slots that were explicitly marked as a block. Orphaned
+      // slots (from a deleted booking, or any pre-block_kind row that was
+      // never tied to a booking) have no block_kind and are ignored —
+      // they used to cause false-positive "time is blocked" rejections.
       slot.block_kind !== undefined &&
       (date ? slot.date === date : true)
   );
@@ -6399,6 +6402,19 @@ export const getJobDetail = query({
     const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
     const lateMonitor = await getCustomerLateMonitorByBookingId(ctx, booking._id);
 
+    const inProgressPhotosResolved = jobActual?.in_progress_photos
+      ? (
+          await Promise.all(
+            jobActual.in_progress_photos.map(async (photo: any) => ({
+              storageId: photo.storage_id,
+              caption: photo.caption ?? null,
+              takenAt: photo.taken_at,
+              url: await ctx.storage.getUrl(photo.storage_id),
+            })),
+          )
+        ).filter((entry) => entry.url !== null)
+      : [];
+
     const history = await ctx.db
       .query("booking_status_history")
       .withIndex("by_booking_id", (q: any) => q.eq("booking_id", booking._id))
@@ -6457,6 +6473,7 @@ export const getJobDetail = query({
       outOfScopeCategory: booking.out_of_scope_category ?? null,
       customerName: formatCustomerName(customer),
       customerEmail: customer?.email ?? "",
+      customerPhone: customer?.phone ?? null,
       vehicle: vehicleLabels.full,
       vehicleShort: vehicleLabels.short,
       serviceNames,
@@ -6477,6 +6494,8 @@ export const getJobDetail = query({
             technicianNotes: jobActual.technician_notes ?? "",
             prejobReport: jobActual.prejob_report ?? null,
             partsUsed: jobActual.parts_used ?? [],
+            inProgressNotes: jobActual.in_progress_notes ?? "",
+            inProgressPhotos: inProgressPhotosResolved,
           }
         : null,
       history,
@@ -6755,6 +6774,8 @@ export const completeWithPostjob = mutation({
       postjob_report: args.postjob,
       updated_at: now,
       logged_at_ms: now,
+      in_progress_notes: undefined,
+      in_progress_photos: undefined,
     });
 
     await recordPartSnapshotsForBooking(ctx, {
@@ -7361,6 +7382,41 @@ export const generatePostjobPhotoUploadUrl = mutation({
   },
 });
 
+/**
+ * Persist the mechanic's in-progress draft (notes and/or photos) captured in
+ * the "Now working" overlay. Only fields provided are patched; pass an empty
+ * string / empty array to clear. The post-job dialog seeds itself from these
+ * on open and `completeWithPostjob` clears them once the report supersedes.
+ */
+export const saveInProgressDraft = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    notes: v.optional(v.string()),
+    photos: v.optional(v.array(postjobPhotoValidator)),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) {
+      throw new Error(
+        "We couldn't find that booking. It may have been cancelled or removed.",
+      );
+    }
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
+    if (!jobActual) {
+      throw new Error("Start the job before saving working notes.");
+    }
+
+    const patch: Record<string, unknown> = { updated_at: Date.now() };
+    if (args.notes !== undefined) patch.in_progress_notes = args.notes;
+    if (args.photos !== undefined) patch.in_progress_photos = args.photos;
+    await ctx.db.patch(jobActual._id, patch);
+    return { ok: true };
+  },
+});
+
 export const getPostjobPhotoUrls = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -7555,8 +7611,9 @@ export const createByShop = mutation({
       existingVehicle = await ctx.db.get(newVehicleId);
     }
 
-    // Fire-and-forget enrichment for any VIN whose vehicles row does not yet
-    // have a resolved vehicle_config_id.
+    // Fire-and-forget enrichment for any VIN whose vehicles row doesn't yet
+    // have a resolved vehicle_config_id. Walk-in events are the freshest VIN
+    // signal we get, so we always want full passport data ready by next visit.
     if (existingVehicle && !existingVehicle.vehicle_config_id) {
       await ctx.scheduler.runAfter(
         0,
@@ -8055,6 +8112,8 @@ export const backfillCompletedBooking = mutation({
       sumPartsCost(normalizedPartsPreview);
     const laborCost = Math.max(0, args.actualPriceCharged - partsCost);
 
+    const bookingSource = args.source ?? "mechanic_backfill";
+
     // Insert at in_progress so the next transition is the canonical
     // in_progress → completed path, firing runCompletionSideEffects once.
     const bookingId = await ctx.db.insert("bookings", {
@@ -8088,8 +8147,90 @@ export const backfillCompletedBooking = mutation({
       vin: canonicalVin,
       created_at: now,
       updated_at: now,
-      source: "mechanic_backfill",
+      source: bookingSource,
+      mechanic_estimated_minutes: args.mechanicEstimatedMinutes,
+      catalog_estimated_minutes: args.catalogEstimatedMinutes,
+      mechanic_quoted_price: args.mechanicQuotedPrice,
+      catalog_quoted_price: args.catalogQuotedPrice,
     });
+
+    // ── Per-service labor_quote_snapshots — denormalized aggregation rows
+    //    so analytics can ask "for service X at shop Y on engine Z, what's
+    //    the price/time distribution?" without joining through bookings →
+    //    vehicles → vehicle_configs every query. Mirrors part_snapshots.
+    //    Mechanic + catalog totals are split per service proportionally to
+    //    each service's catalog weight (defaultLaborHours / labor catalog).
+    if (existingVehicle) {
+      const catalogServiceMinutes = servicesForOptionCheck.map((svc: any) =>
+        svc && svc.default_labor_hours
+          ? svc.default_labor_hours * 60
+          : 0,
+      );
+      const customMinutesList = (customServicesNormalized ?? []).map(
+        (c: any) => c.duration_minutes ?? 0,
+      );
+      const totalCatalogMinutes =
+        catalogServiceMinutes.reduce((s: number, n: number) => s + n, 0) +
+        customMinutesList.reduce((s: number, n: number) => s + n, 0);
+
+      const allocate = (
+        total: number | undefined,
+        share: number,
+      ): number | undefined => {
+        if (total === undefined || total === null) return undefined;
+        if (totalCatalogMinutes <= 0) {
+          const denom =
+            servicesForOptionCheck.length + customMinutesList.length;
+          return denom > 0 ? total / denom : total;
+        }
+        return total * (share / totalCatalogMinutes);
+      };
+
+      const snapshotBase = {
+        booking_id: bookingId,
+        shop_id: args.shopId,
+        mechanic_id: resolvedMechanicId ?? undefined,
+        vehicle_id: existingVehicle._id,
+        vehicle_config_id: existingVehicle.vehicle_config_id ?? undefined,
+        engine_id: existingVehicle.engine_id ?? undefined,
+        chassis_id: existingVehicle.chassis_id ?? undefined,
+        trim_id: existingVehicle.trim_id ?? undefined,
+        source: bookingSource,
+        recorded_at: now,
+      };
+
+      for (let i = 0; i < args.serviceIds.length; i++) {
+        const catMins = catalogServiceMinutes[i] ?? 0;
+        await ctx.db.insert("labor_quote_snapshots", {
+          ...snapshotBase,
+          service_id: args.serviceIds[i],
+          mechanic_estimated_minutes: allocate(
+            args.mechanicEstimatedMinutes,
+            catMins,
+          ),
+          catalog_estimated_minutes: catMins > 0 ? catMins : undefined,
+          mechanic_quoted_price: allocate(args.mechanicQuotedPrice, catMins),
+          catalog_quoted_price: allocate(args.catalogQuotedPrice, catMins),
+        });
+      }
+      if (customServicesNormalized) {
+        for (let i = 0; i < customServicesNormalized.length; i++) {
+          const c = customServicesNormalized[i];
+          const catMins = c.duration_minutes ?? 0;
+          await ctx.db.insert("labor_quote_snapshots", {
+            ...snapshotBase,
+            custom_service_name: c.name,
+            mechanic_estimated_minutes: allocate(
+              args.mechanicEstimatedMinutes,
+              catMins,
+            ),
+            catalog_estimated_minutes: catMins > 0 ? catMins : undefined,
+            mechanic_quoted_price: allocate(args.mechanicQuotedPrice, catMins),
+            catalog_quoted_price: allocate(args.catalogQuotedPrice, catMins),
+          });
+        }
+      }
+    }
 
     await logBookingStatusChange(
       ctx,
@@ -10396,7 +10537,6 @@ export const listOpenTireQuoteRequestsForShop = query({
  * decision UI needs to render the before/after comparison. Auth-gated
  * to the booking's owner. Joins shop name, current + previous mechanic
  * names, and service names.
- */
 export const getBookingByIdForCustomer = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -10417,8 +10557,6 @@ export const getBookingByIdForCustomer = query({
 
     const vehicle = booking.vin
       ? await ctx.db
-          .query("vehicles")
-          .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
           .first()
       : null;
     const meta = (vehicle?.metadata as

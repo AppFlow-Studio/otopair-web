@@ -6,8 +6,11 @@
 // under TS2589. Pure functions only — no Convex ctx, no api refs.
 //
 // State Contract §2.4: this builds the `<user>` / `<vehicle>` /
-// `<conversation_history>` / `<user_message>` envelope that goes into the
-// uncached zone of every Anthropic call.
+// `<conversation_history>` / `<untrusted_user_input>` envelope that goes
+// into the uncached zone of every Anthropic call. The current user's
+// message is wrapped in `<untrusted_user_input>` (Wave 7.1, Day 7) for
+// structural separation — Day 8's prompt rule will reference that exact
+// tag name as the "treat-as-data" anchor.
 // =============================================================================
 
 export interface OwnedVehicleRow {
@@ -39,12 +42,48 @@ export interface HistoryTurn {
   content: string;
 }
 
+export interface ConversationStateBlock {
+  mood: string | null;
+  arc_summary: string | null;
+  established_facts: string[];
+  last_user_intent: string | null;
+  updated_at: number | null;
+}
+
+// Wave 3 integration step 4 (§3.4) — one fact pulled from a PRIOR
+// conversation of the same user. The flattened payload_text + fact_type +
+// created_at are all the envelope needs to render a one-line bullet under
+// the new <recent_context> block.
+//
+// Sourced by `memoryEditing.getCrossConversationMemory`. The query has already
+// sorted newest-first, capped at top_K, and truncated over-long payload_text;
+// the envelope builder just renders.
+export interface PriorConversationFact {
+  conversation_id: string;
+  fact_type: string;
+  payload_text: string;
+  written_by: string;
+  created_at: number;
+}
+
 interface BuildEnvelopeArgs {
   userFirstName: string | null;
   vehicle: ResolvedVehicle | null;
   history: HistoryTurn[];
   userMessage: string;
+  conversationState?: ConversationStateBlock | null;
+  diagnosticTurnCount?: number;
+  // Wave 3 integration step 4 — facts established in this user's OTHER
+  // conversations, top_K most-recent first. Optional; skipped from the
+  // envelope when empty or omitted. See PriorConversationFact above.
+  priorConversationFacts?: PriorConversationFact[];
+  // Reference "now" for relative-time formatting under <recent_context>.
+  // Defaults to Date.now() at call time when omitted (production path);
+  // tests pin it explicitly so format output is deterministic.
+  now?: number;
 }
+
+const POLITE_EXIT_THRESHOLD = 6;
 
 // -----------------------------------------------------------------------------
 // Pick the active vehicle for this conversation. Precedence:
@@ -139,8 +178,13 @@ export function buildEnvelope({
   vehicle,
   history,
   userMessage,
+  conversationState,
+  diagnosticTurnCount = 0,
+  priorConversationFacts,
+  now,
 }: BuildEnvelopeArgs): string {
   const blocks: string[] = [];
+  const nowMs = typeof now === "number" ? now : Date.now();
 
   blocks.push(
     [`<user>`, `  name: ${userFirstName ?? "(unknown)"}`, `</user>`].join("\n"),
@@ -157,6 +201,58 @@ export function buildEnvelope({
     );
   }
 
+  // Conversation state replay (v0.7). Skip the block entirely when there's
+  // nothing useful to say — don't tell Haiku to think about empty fields.
+  if (conversationState && hasUsefulState(conversationState)) {
+    const lines = [`<conversation_state>`];
+    if (conversationState.mood) lines.push(`  mood: ${conversationState.mood}`);
+    if (conversationState.last_user_intent) {
+      lines.push(`  last_intent: ${conversationState.last_user_intent}`);
+    }
+    if (conversationState.arc_summary) {
+      lines.push(`  arc: ${conversationState.arc_summary}`);
+    }
+    if (conversationState.established_facts.length > 0) {
+      lines.push(`  established_facts:`);
+      for (const fact of conversationState.established_facts) {
+        lines.push(`    - ${fact}`);
+      }
+    }
+    lines.push(`</conversation_state>`);
+    blocks.push(lines.join("\n"));
+  }
+
+  // Wave 3 integration step 4 — cross-conversation memory.
+  // Render facts from PRIOR conversations under <recent_context> so the AI
+  // sees what was established earlier with this user, not just within the
+  // current conversation. Skip the block entirely if no prior facts (matches
+  // the <conversation_state> "no useful state → no block" pattern).
+  if (priorConversationFacts && priorConversationFacts.length > 0) {
+    const lines = [
+      `<recent_context>`,
+      `  facts_from_prior_conversations:`,
+    ];
+    for (const fact of priorConversationFacts) {
+      const rel = formatRelativeTime(fact.created_at, nowMs);
+      lines.push(
+        `    - [${fact.fact_type}] ${fact.payload_text}  (${rel})`,
+      );
+    }
+    lines.push(`</recent_context>`);
+    blocks.push(lines.join("\n"));
+  }
+
+  if (diagnosticTurnCount >= POLITE_EXIT_THRESHOLD) {
+    blocks.push(
+      [
+        `<polite_exit_required>`,
+        `  diagnostic_turn_count: ${diagnosticTurnCount}`,
+        `  rule: This conversation has narrowed for ${diagnosticTurnCount} turns without converging. Stop narrowing now. Call render_book_service with service_slugs=["diagnostic_scan"], diagnostic_system="not_sure", and customer_notes summarizing everything the user has mentioned across the conversation. The mechanic can see what you couldn't.`,
+        `</polite_exit_required>`,
+      ].join("\n"),
+    );
+  }
+
   if (history.length > 0) {
     const lines = history
       .filter((m) => m.role === "user" || m.role === "assistant")
@@ -168,9 +264,53 @@ export function buildEnvelope({
     }
   }
 
+  // Wave 7.1 (Day 7) — untrusted-input structural separation. The CURRENT
+  // user's message is the primary prompt-injection surface. Wrap it in a
+  // distinct, named tag so a subsequent prompt rule (Day 8 — Wave 1.5
+  // protocol pair) can refer to "text inside <untrusted_user_input>" by
+  // name and treat it as data, not instructions. The tag rename is purely
+  // structural; the inner content is byte-identical to v0.7 envelope.
   blocks.push(
-    [`<user_message>`, `  ${userMessage}`, `</user_message>`].join("\n"),
+    [
+      `<untrusted_user_input>`,
+      `  ${userMessage}`,
+      `</untrusted_user_input>`,
+    ].join("\n"),
   );
 
   return blocks.join("\n\n");
+}
+
+function hasUsefulState(s: ConversationStateBlock): boolean {
+  return Boolean(
+    s.mood ||
+      s.arc_summary ||
+      (s.established_facts && s.established_facts.length > 0) ||
+      s.last_user_intent,
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Human-readable relative time for <recent_context> bullets. Buckets chosen
+// to convey freshness without leaking precise timestamps into the prompt:
+//   < 60s            → "just now"
+//   < 60m            → "N min ago"   (1 min ago / 5 min ago / 59 min ago)
+//   < 24h            → "N hours ago" (1 hour ago / 2 hours ago / ...)
+//   1 day            → "yesterday"
+//   < 30 days        → "N days ago"
+//   >= 30 days       → "N+ days ago" (cap; we don't need month/year resolution
+//                                     for memory-relevance signals)
+// Negative deltas (future timestamp — clock skew) bucket as "just now".
+// -----------------------------------------------------------------------------
+export function formatRelativeTime(timestampMs: number, nowMs: number): string {
+  const deltaMs = nowMs - timestampMs;
+  if (deltaMs < 60_000) return "just now";
+  const minutes = Math.floor(deltaMs / 60_000);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(deltaMs / 3_600_000);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(deltaMs / 86_400_000);
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days} days ago`;
+  return `30+ days ago`;
 }

@@ -244,6 +244,111 @@ export const getPrimaryVehicleTier = query({
 });
 
 /**
+ * Get OtoPair loyalty program rules: tier breakpoints, earning rates, expiry policy.
+ *
+ * Backs the Oto AI `get_loyalty_program_info` tool (Sprint 3 §14.2). Returns
+ * program-level constants — NOT user-specific state. Sourced from the same
+ * constants used by `addCreditForCompletedBooking` (earn rates, tier thresholds,
+ * expiry days), so this query stays in lockstep with actual credit-issuance
+ * behavior. Optional `scope` narrows the response to one section.
+ *
+ * Source of truth: the per-tier constants below MUST match the inline
+ * constants in `addCreditForCompletedBooking` (earnRates, thresholds,
+ * 180-day expiry). If those constants change, update this query in the
+ * same commit.
+ */
+export const getProgramInfo = query({
+  args: {
+    scope: v.optional(
+      v.union(
+        v.literal("overview"),
+        v.literal("tiers"),
+        v.literal("earning_rules"),
+        v.literal("expiry_rules"),
+      ),
+    ),
+  },
+  handler: async (_ctx, args) => {
+    const scope = args.scope ?? "overview";
+
+    // Tier breakpoints — must match addCreditForCompletedBooking thresholds.
+    // Spend is computed on a rolling 12-month window per vehicle.
+    const tiers = [
+      {
+        tier: "driver" as const,
+        label: "Driver",
+        spend_12mo_min: 0,
+        spend_12mo_max: 749,
+        description: "Default tier for every OtoPair member.",
+      },
+      {
+        tier: "preferred" as const,
+        label: "Preferred",
+        spend_12mo_min: 750,
+        spend_12mo_max: 1499,
+        description: "Unlocks at $750 of completed-service spend per vehicle in the last 12 months.",
+      },
+      {
+        tier: "elite" as const,
+        label: "Elite",
+        spend_12mo_min: 1500,
+        spend_12mo_max: null,
+        description: "Unlocks at $1,500 of completed-service spend per vehicle in the last 12 months. Service credits never expire.",
+      },
+    ];
+
+    // Earning rates — must match addCreditForCompletedBooking earnRates.
+    // Rate is fraction of total_cost on completed bookings.
+    const earning_rules = {
+      description:
+        "Earn ownership credits on every completed booking. Rate scales with your vehicle's tier.",
+      rates: [
+        { tier: "driver" as const, rate_pct: 1.0, note: "1% back on completed services." },
+        { tier: "preferred" as const, rate_pct: 1.5, note: "1.5% back on completed services." },
+        { tier: "elite" as const, rate_pct: 2.0, note: "2% back on completed services." },
+      ],
+      contribution_rewards: [
+        { action: "review" as const, amount: 3, note: "$3 for a verified shop or mechanic review." },
+        { action: "upload" as const, amount: 5, note: "$5 for uploading a service record." },
+        {
+          action: "referral" as const,
+          amount: 15,
+          note: "$15 per successful referral; capped at 5 referral credits per user.",
+        },
+      ],
+    };
+
+    // Expiry policy — must match addCreditForCompletedBooking expiry math
+    // (180 days for driver/preferred service credits; never for elite; 180
+    // days for contribution credits across all tiers).
+    const expiry_rules = {
+      service_credits: [
+        { tier: "driver" as const, expires_after_days: 180 },
+        { tier: "preferred" as const, expires_after_days: 180 },
+        { tier: "elite" as const, expires_after_days: null, note: "Elite service credits never expire." },
+      ],
+      contribution_credits: {
+        expires_after_days: 180,
+        note: "Review / upload / referral credits expire 180 days after issue, regardless of tier.",
+      },
+    };
+
+    if (scope === "tiers") return { scope, tiers };
+    if (scope === "earning_rules") return { scope, earning_rules };
+    if (scope === "expiry_rules") return { scope, expiry_rules };
+
+    return {
+      scope: "overview" as const,
+      summary:
+        "OtoPair loyalty has three tiers (Driver / Preferred / Elite) determined by your last-12-months service spend per vehicle. Higher tiers earn credits at higher rates on completed services and unlock longer credit shelf-life at the Elite tier.",
+      tiers,
+      earning_rules,
+      expiry_rules,
+    };
+  },
+});
+
+/**
  * Check if user has claimed a contribution reward (review/upload/referral).
  */
 export const hasClaimedContribution = query({

@@ -676,6 +676,13 @@ export const runScheduledScrape = internalAction({
     source: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Kill-switch: pause marketplace scraping without redeploying.
+    // Toggle via: npx convex env set --prod ENRICHMENT_PAUSED true|false
+    if (process.env.ENRICHMENT_PAUSED === "true") {
+      console.log("[scraper] ENRICHMENT_PAUSED — skipping scheduled scrape");
+      return { skipped: true, reason: "paused" };
+    }
+
     const source = args.source ?? "cargurus";
 
     const makes = await ctx.runQuery(

@@ -16,7 +16,7 @@ export default function EnrichmentStatusBanner({ status, fillRate }: Props) {
         <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
         <div className="min-w-0">
           <p className="text-xs font-medium text-primary">
-            Building vehicle profile
+            Building vehicle profile ~ 5 mins
           </p>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             {fillRate != null && fillRate > 0

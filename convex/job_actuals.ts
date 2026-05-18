@@ -402,6 +402,11 @@ export const getPrefillData = query({
         )
         .filter((q: any) => q.eq(q.field("superseded_at"), undefined))
         .first();
+      // Sentinel-prefix tire identifiers so downstream consumers that key on
+      // oem_number (part_snapshots, shop_part_preferences) don't get bare
+      // size codes treated as OEM numbers.
+      const tireOem = (size: string | null | undefined) =>
+        size ? `TIRE-${size}` : "";
       if (acceptedQuote) {
         const qty = acceptedQuote.quantity ?? 4;
         const brandModel = [acceptedQuote.tire_brand, acceptedQuote.tire_model]
@@ -411,14 +416,14 @@ export const getPrefillData = query({
           part_name: brandModel
             ? `Tires — ${brandModel} (x${qty})`
             : `Tires (x${qty})`,
-          oem_number: booking.tire_specs?.size ?? "",
+          oem_number: tireOem(booking.tire_specs?.size),
           cost: (acceptedQuote.per_tire_price ?? 0) * qty,
         });
       } else if (booking.tire_specs) {
         const qty = booking.tire_specs.quantity ?? 4;
         suggestedParts.push({
           part_name: `Tires — ${booking.tire_specs.tier} ${booking.tire_specs.type} (x${qty})`,
-          oem_number: booking.tire_specs.size,
+          oem_number: tireOem(booking.tire_specs.size),
           cost: 0,
         });
       }
@@ -574,6 +579,25 @@ export const startJob = mutation({
     await requireShopStaff(ctx, user._id, booking.shop_id);
     if (!["vehicle_at_shop", "in_progress"].includes(booking.status)) {
       throw new Error("Mark the vehicle as here before starting this booking.");
+    }
+
+    // One-active-job-per-mechanic invariant. Mirrors startWithPrejob.
+    if (booking.status === "vehicle_at_shop") {
+      const inProgress = await ctx.db
+        .query("bookings")
+        .withIndex("by_shop_and_status", (q: any) =>
+          q.eq("shop_id", booking.shop_id).eq("status", "in_progress"),
+        )
+        .collect();
+      const conflict = inProgress.find(
+        (b: any) =>
+          b.mechanic_id &&
+          String(b.mechanic_id) === String(args.mechanicId) &&
+          String(b._id) !== String(args.bookingId),
+      );
+      if (conflict) {
+        throw new Error(`MECHANIC_HAS_ACTIVE_JOB:${String(conflict._id)}`);
+      }
     }
 
     const now = Date.now();

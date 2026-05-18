@@ -32,16 +32,18 @@
  */
 
 import { query, mutation, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { isTerminal, validateTransition } from "./booking_status_history";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import {
+  EARLY_PUSH_THRESHOLD_MS,
   addMinutesToHHMM,
   getBookingEndTime,
   overlapsBlockedSlot,
   overlapsMechanicBooking,
+  roundDownToFiveMinutes,
 } from "./lib/schedule_overlap";
 import {
   getActiveMechanicsForShop,
@@ -1106,6 +1108,333 @@ export const markVehicleAtShop = mutation({
   },
 });
 
+/**
+ * Computes the proposed early-push window for a confirmed booking when the
+ * customer arrives more than EARLY_PUSH_THRESHOLD_MS before scheduled_time.
+ * Returns the proposed slot plus any conflict so the dialog can preview
+ * before the front desk commits.
+ */
+async function computeEarlyPushPreview(ctx: any, booking: any) {
+  const durationMinutes = booking.estimated_labor_minutes ?? 60;
+  const timezone = await getShopTimezone(ctx, booking.shop_id);
+  const scheduledStartMs = toBookingDateTimeMs(
+    booking.scheduled_date,
+    booking.scheduled_time,
+    timezone,
+  );
+  const now = Date.now();
+  const minutesEarly = Math.max(0, Math.floor((scheduledStartMs - now) / 60_000));
+  const eligible =
+    booking.status === "confirmed" &&
+    !!booking.mechanic_id &&
+    now <= scheduledStartMs - EARLY_PUSH_THRESHOLD_MS;
+
+  if (!eligible) {
+    return {
+      eligible: false as const,
+      minutesEarly,
+      scheduledStartMs,
+      proposedScheduledDate: booking.scheduled_date,
+      proposedScheduledTime: booking.scheduled_time,
+      proposedEndTime: getBookingEndTime(booking.scheduled_time, durationMinutes),
+      conflict: null,
+      conflictingBookingId: null,
+    };
+  }
+
+  const nowParts = getShopLocalDateTimeParts(timezone, new Date(now));
+  const proposedScheduledTime = roundDownToFiveMinutes(nowParts.time);
+  // If "now" rolled into a different calendar day than the original booking
+  // (rare — customer "early" across midnight), fall back to scheduled_date
+  // so the booking doesn't jump days. Same-day is the expected case.
+  const proposedScheduledDate =
+    nowParts.date === booking.scheduled_date ? nowParts.date : booking.scheduled_date;
+  const proposedEndTime = getBookingEndTime(proposedScheduledTime, durationMinutes);
+
+  let conflict: "booking" | "blocked" | "outside_shop_hours" | null = null;
+  let conflictingBookingId: string | null = null;
+
+  try {
+    await assertBookingWithinShopHours(ctx, {
+      shopId: booking.shop_id,
+      date: proposedScheduledDate,
+      startTime: proposedScheduledTime,
+      durationMinutes,
+    });
+  } catch {
+    conflict = "outside_shop_hours";
+  }
+
+  if (!conflict) {
+    const dayBookings = await getBlockingBookingsForShopDate(
+      ctx,
+      booking.shop_id,
+      proposedScheduledDate,
+    );
+    const conflictBooking = dayBookings.find((other: any) => {
+      if (String(other._id) === String(booking._id)) return false;
+      if (!other.mechanic_id) return false;
+      if (String(other.mechanic_id) !== String(booking.mechanic_id)) return false;
+      if (["cancelled", "declined", "no_show"].includes(other.status)) return false;
+      const otherStart = hhmmToMinutes(other.scheduled_time);
+      const otherEnd = otherStart + (other.estimated_labor_minutes ?? 60);
+      const newStart = hhmmToMinutes(proposedScheduledTime);
+      const newEnd = hhmmToMinutes(proposedEndTime);
+      return otherStart < newEnd && otherEnd > newStart;
+    });
+    if (conflictBooking) {
+      conflict = "booking";
+      conflictingBookingId = String(conflictBooking._id);
+    } else {
+      const blocked = await getManualBlockedSlotsForShop(
+        ctx,
+        booking.shop_id,
+        proposedScheduledDate,
+      );
+      const blockedConflict = blocked.find((slot: any) => {
+        if (slot.mechanic_id && String(slot.mechanic_id) !== String(booking.mechanic_id)) {
+          return false;
+        }
+        const sStart = hhmmToMinutes(slot.start_time);
+        const sEnd = hhmmToMinutes(slot.end_time);
+        const newStart = hhmmToMinutes(proposedScheduledTime);
+        const newEnd = hhmmToMinutes(proposedEndTime);
+        return sStart < newEnd && sEnd > newStart;
+      });
+      if (blockedConflict) {
+        conflict = "blocked";
+      }
+    }
+  }
+
+  return {
+    eligible: true as const,
+    minutesEarly,
+    scheduledStartMs,
+    proposedScheduledDate,
+    proposedScheduledTime,
+    proposedEndTime,
+    conflict,
+    conflictingBookingId,
+  };
+}
+
+/**
+ * Returns the booking, if any, that a mechanic is currently working on
+ * (status = "in_progress"). Used to enforce the "one active job per mechanic"
+ * invariant: callers query first, surface a confirmation if a different
+ * booking is active, then proceed to start the new one once the active job
+ * has been completed.
+ *
+ * Excludes the optional `excludeBookingId` so the caller can ask "is anyone
+ * else's job blocking THIS booking from starting" without matching itself.
+ */
+async function findMechanicActiveBooking(
+  ctx: any,
+  shopId: any,
+  mechanicId: any,
+  excludeBookingId?: any,
+) {
+  const inProgress = await ctx.db
+    .query("bookings")
+    .withIndex("by_shop_and_status", (q: any) =>
+      q.eq("shop_id", shopId).eq("status", "in_progress"),
+    )
+    .collect();
+  return inProgress.find(
+    (b: any) =>
+      b.mechanic_id &&
+      String(b.mechanic_id) === String(mechanicId) &&
+      (!excludeBookingId || String(b._id) !== String(excludeBookingId)),
+  );
+}
+
+async function buildActiveJobSummary(
+  ctx: any,
+  active: any,
+  mechanicId: any,
+) {
+  const customer = active.user_id ? await ctx.db.get(active.user_id) : null;
+  const vehicle = active.vin ? await resolveVehicleLabel(ctx, active.vin) : null;
+  const serviceNames = await resolveServiceNames(ctx, active.service_ids);
+  const mechanic = await ctx.db.get(mechanicId);
+  return {
+    bookingId: active._id,
+    customerName: customer ? formatCustomerName(customer) : null,
+    vehicleLabel: vehicle?.full ?? vehicle?.short ?? null,
+    serviceSummary: serviceNames.length > 0 ? serviceNames.join(" + ") : null,
+    scheduledDate: active.scheduled_date,
+    scheduledTime: active.scheduled_time,
+    mechanicName: mechanic
+      ? `${(mechanic as any).first_name ?? ""} ${(mechanic as any).last_name ?? ""}`.trim() ||
+        "Mechanic"
+      : "Mechanic",
+  };
+}
+
+export const getMechanicActiveJob = query({
+  args: {
+    mechanicId: v.id("mechanics"),
+    shopId: v.id("shops"),
+    excludeBookingId: v.optional(v.id("bookings")),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    await requireShopStaff(ctx, user._id, args.shopId);
+
+    const active = await findMechanicActiveBooking(
+      ctx,
+      args.shopId,
+      args.mechanicId,
+      args.excludeBookingId,
+    );
+    if (!active) return null;
+    return await buildActiveJobSummary(ctx, active, args.mechanicId);
+  },
+});
+
+/**
+ * Booking-centric variant: returns the active in_progress booking blocking
+ * THIS booking from starting (same mechanic, different booking). Returns
+ * null if the booking has no mechanic, or if the mechanic is free.
+ */
+export const getActiveJobConflictForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (!booking.mechanic_id) return null;
+
+    const active = await findMechanicActiveBooking(
+      ctx,
+      booking.shop_id,
+      booking.mechanic_id,
+      booking._id,
+    );
+    if (!active) return null;
+    return await buildActiveJobSummary(ctx, active, booking.mechanic_id);
+  },
+});
+
+export const getEarlyPushPreview = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    return await computeEarlyPushPreview(ctx, booking);
+  },
+});
+
+export const pushBookingEarlierAndArrive = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    if (booking.status !== "confirmed") {
+      throw new Error("Only confirmed bookings can be pushed earlier.");
+    }
+    if (!booking.mechanic_id) {
+      throw new Error("Assign a mechanic before pushing this booking earlier.");
+    }
+
+    const preview = await computeEarlyPushPreview(ctx, booking);
+    if (!preview.eligible) {
+      throw new Error(
+        "Customer isn't early enough to push the booking — must be at least 10 minutes before scheduled start.",
+      );
+    }
+    if (preview.conflict === "outside_shop_hours") {
+      throw new Error("The proposed earlier start is outside the shop's operating hours.");
+    }
+    if (preview.conflict === "booking") {
+      throw new Error("Cannot push earlier — the mechanic has another booking in that window.");
+    }
+    if (preview.conflict === "blocked") {
+      throw new Error("Cannot push earlier — the mechanic has a blocked slot in that window.");
+    }
+
+    const durationMinutes = booking.estimated_labor_minutes ?? 60;
+    // Defense-in-depth: re-validate via the canonical helper so we get the
+    // same errors any other reschedule path would surface.
+    await resolveMechanicForWindow(ctx, {
+      shopId: booking.shop_id,
+      date: preview.proposedScheduledDate,
+      startTime: preview.proposedScheduledTime,
+      durationMinutes,
+      preferredMechanicId: booking.mechanic_id,
+      excludeBookingId: String(booking._id),
+      allowAfterClose: false,
+    });
+
+    const slotId = await getOrCreateSlot(
+      ctx,
+      booking.shop_id,
+      booking.mechanic_id,
+      preview.proposedScheduledDate,
+      preview.proposedScheduledTime,
+      durationMinutes,
+    );
+
+    const oldSlotId = booking.time_slot_id;
+    const oldScheduledDate = booking.scheduled_date;
+    const now = Date.now();
+
+    await ctx.db.patch(booking._id, {
+      scheduled_date: preview.proposedScheduledDate,
+      scheduled_time: preview.proposedScheduledTime,
+      time_slot_id: slotId,
+      vehicle_arrived_at_ms: now,
+      vehicle_arrived_by_user_id: user._id,
+      updated_at: now,
+    });
+
+    if (oldSlotId && String(oldSlotId) !== String(slotId)) {
+      await releaseBookingSlot(ctx, oldSlotId);
+    }
+
+    const movedBooking = {
+      ...booking,
+      scheduled_date: preview.proposedScheduledDate,
+      scheduled_time: preview.proposedScheduledTime,
+      time_slot_id: slotId,
+      vehicle_arrived_at_ms: now,
+      vehicle_arrived_by_user_id: user._id,
+    };
+
+    const result = await applyBookingStatusTransition(ctx, {
+      booking: movedBooking,
+      newStatus: "vehicle_at_shop",
+      changedBy: user._id,
+      reason: "customer_early_push",
+    });
+
+    await syncBookingAssignments(ctx, [
+      {
+        shopId: booking.shop_id,
+        mechanicId: booking.mechanic_id,
+        date: oldScheduledDate,
+      },
+      {
+        shopId: booking.shop_id,
+        mechanicId: booking.mechanic_id,
+        date: preview.proposedScheduledDate,
+      },
+    ]);
+
+    await resolveCustomerLateMonitorForBooking(ctx, movedBooking, user._id);
+
+    return result;
+  },
+});
+
 async function assertCustomerLateThresholdReached(ctx: any, booking: any) {
   if (booking.status !== "confirmed") {
     throw new Error("Only confirmed bookings can use no-show threshold actions.");
@@ -1699,6 +2028,29 @@ function getTimeZoneOffsetMs(timeZone: string, date: Date) {
       values.second ?? 0
     ) - date.getTime()
   );
+}
+
+function getShopLocalDateTimeParts(timeZone: string, date: Date) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = formatter.formatToParts(date);
+  const values = Object.fromEntries(
+    parts
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, Number(part.value)])
+  );
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${values.year}-${pad(values.month ?? 1)}-${pad(values.day ?? 1)}`,
+    time: `${pad(values.hour ?? 0)}:${pad(values.minute ?? 0)}`,
+  };
 }
 
 function toBookingDateTimeMs(date: string, time: string, timeZone: string) {
@@ -6043,6 +6395,22 @@ export const startWithPrejob = mutation({
       throw new Error("Mark the vehicle as here before saving the pre-job check.");
     }
 
+    // Enforce one-active-job-per-mechanic. If a different booking for this
+    // mechanic is already in_progress, the caller must complete that one
+    // first. Error code lets the client recognise the conflict and route
+    // through the EndCurrentJobConfirmDialog.
+    if (booking.status === "vehicle_at_shop" && booking.mechanic_id) {
+      const conflict = await findMechanicActiveBooking(
+        ctx,
+        booking.shop_id,
+        booking.mechanic_id,
+        booking._id,
+      );
+      if (conflict) {
+        throw new Error(`MECHANIC_HAS_ACTIVE_JOB:${String(conflict._id)}`);
+      }
+    }
+
     const passportView = await buildVehiclePassportForBooking(ctx, booking);
     const serviceFlags = getBookingServiceFlags(
       await resolveServiceNames(ctx, booking.service_ids)
@@ -7218,7 +7586,9 @@ export const findBackfillCollision = query({
       .collect();
 
     for (const row of rows) {
-      if (row.vin !== canonicalVin) continue;
+      // Defend against historical rows that may have non-canonical VINs —
+      // re-canonicalize on the comparison side rather than trusting storage.
+      if (toCanonicalVin(row.vin) !== canonicalVin) continue;
       if (row.status === "cancelled" || row.status === "declined") continue;
       const t = row.scheduled_time as string | undefined;
       if (!t) continue;
@@ -7349,7 +7719,7 @@ export const backfillCompletedBooking = mutation({
         )
         .collect();
       const collision = sameDay.find((row: any) => {
-        if (row.vin !== canonicalVin) return false;
+        if (toCanonicalVin(row.vin) !== canonicalVin) return false;
         if (row.status === "cancelled" || row.status === "declined") return false;
         const t = row.scheduled_time as string | undefined;
         if (!t) return false;
@@ -7357,9 +7727,11 @@ export const backfillCompletedBooking = mutation({
         return Math.abs((rh ?? 0) * 60 + (rm ?? 0) - target) <= 30;
       });
       if (collision) {
-        throw new Error(
-          `DUPLICATE_BACKFILL:${collision._id}:${collision.scheduled_time}`,
-        );
+        throw new ConvexError({
+          code: "DUPLICATE_BACKFILL",
+          existingBookingId: String(collision._id),
+          scheduledTime: collision.scheduled_time,
+        });
       }
     }
 
@@ -7440,16 +7812,32 @@ export const backfillCompletedBooking = mutation({
       });
     }
 
-    const mechanicId =
-      args.mechanicId ??
-      (
-        await ctx.db
-          .query("mechanics")
-          .withIndex("by_user_and_shop", (q: any) =>
-            q.eq("user_id", user._id).eq("shop_id", args.shopId),
-          )
-          .first()
-      )?._id;
+    // Resolve mechanic. Order: explicit arg → caller's own mechanic row in
+    // this shop → any active mechanic at the shop. Completed bookings with
+    // no mechanic_id break utilization, payroll, and rewards attribution,
+    // so we refuse rather than silently land an orphan.
+    let mechanicId: Id<"mechanics"> | undefined = args.mechanicId;
+    if (!mechanicId) {
+      const callerMech = await ctx.db
+        .query("mechanics")
+        .withIndex("by_user_and_shop", (q: any) =>
+          q.eq("user_id", user._id).eq("shop_id", args.shopId),
+        )
+        .first();
+      mechanicId = callerMech?._id;
+    }
+    if (!mechanicId) {
+      const fallbackMech = await ctx.db
+        .query("mechanics")
+        .withIndex("by_shop_id", (q: any) => q.eq("shop_id", args.shopId))
+        .first();
+      mechanicId = fallbackMech?._id;
+    }
+    if (!mechanicId) {
+      throw new Error(
+        "No mechanic on this shop to attribute the backfill to. Pick a mechanic in the drawer.",
+      );
+    }
 
     const customServicesNormalized = args.customServices
       ?.map((c: any) => ({
@@ -7462,7 +7850,15 @@ export const backfillCompletedBooking = mutation({
       now,
       scheduledStartMs + args.actualDurationMinutes * 60_000,
     );
-    const partsCost = args.actualPartsCost ?? 0;
+    // Single source of truth for parts cost: derive from postjob.parts_used.
+    // The drawer can still pass actualPartsCost as a hint, but the postjob
+    // payload wins so booking.parts_cost and jobActual.actual_parts_cost
+    // can never diverge.
+    const normalizedPartsPreview = normalizePartsUsed(args.postjob.parts_used ?? []);
+    const partsCost =
+      args.postjob.actual_parts_cost ??
+      args.actualPartsCost ??
+      sumPartsCost(normalizedPartsPreview);
     const laborCost = Math.max(0, args.actualPriceCharged - partsCost);
 
     // Insert at in_progress so the next transition is the canonical
@@ -7513,14 +7909,13 @@ export const backfillCompletedBooking = mutation({
     const booking = await ctx.db.get(bookingId);
     if (!booking) throw new Error("Backfill booking was lost during insert.");
 
-    const normalizedParts = normalizePartsUsed(args.postjob.parts_used ?? []);
+    const normalizedParts = normalizedPartsPreview;
 
     const jobActual = await saveJobActualDraft(ctx, {
       booking,
       actuals: {
         actual_labor_minutes: args.actualDurationMinutes,
-        actual_parts_cost:
-          args.postjob.actual_parts_cost ?? sumPartsCost(normalizedParts),
+        actual_parts_cost: partsCost,
         difficulty_rating: args.postjob.difficulty_rating ?? null,
         technician_notes: args.postjob.technician_notes ?? "",
         parts_used: normalizedParts,
@@ -7561,20 +7956,28 @@ export const backfillCompletedBooking = mutation({
       markConfirmed: true,
     });
 
+    // Stamp completed_at_ms BEFORE the transition so the status-history log
+    // and any side-effect read of the booking see the correct past time,
+    // not now() or null.
+    await ctx.db.patch(bookingId, { completed_at_ms: completedAtMs });
+
+    // Refetch so applyBookingStatusTransition (and runCompletionSideEffects
+    // it calls) operate on a current snapshot. The helper reads booking
+    // fields; stale data here would silently regress future side-effects.
+    const bookingForTransition = await ctx.db.get(bookingId);
+    if (!bookingForTransition) {
+      throw new Error("Backfill booking disappeared before completion.");
+    }
+
     // Drive the in_progress → completed transition through the canonical
     // helper so status history, slot release (no-op here), assignment sync,
     // and runCompletionSideEffects all run the same way as a live close-out.
     await applyBookingStatusTransition(ctx, {
-      booking,
+      booking: bookingForTransition,
       newStatus: "completed",
       changedBy: user._id,
       reason: "mechanic_backfill",
     });
-
-    // Force completed_at_ms to the past-date stamp so revenue-by-day and
-    // mechanic-utilization reports attribute the work to the day it happened,
-    // not the day the mechanic logged it.
-    await ctx.db.patch(bookingId, { completed_at_ms: completedAtMs });
 
     const finalized = await ctx.db.get(jobActual._id);
     const completedBooking = (await ctx.db.get(bookingId)) ?? booking;

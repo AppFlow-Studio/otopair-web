@@ -530,7 +530,11 @@ export default function CreateBookingDrawer({
     if (!isBackfill) return;
     if (!tireSpecs) return;
     const label = `${TIRE_PART_PREFIX}${tireSpecs.tier} ${tireSpecs.type}`.trim();
-    const oem = tireSpecs.size;
+    // Size is NOT an OEM number — downstream part_snapshots and
+    // shop_part_preferences key off oem_number. Use a sentinel-prefixed
+    // identifier so size-based grouping still works without polluting the
+    // OEM-number namespace with bare size codes like "225/55R17".
+    const oem = `TIRE-${tireSpecs.size}`;
     setBackfillParts((rows) => {
       const existingIdx = rows.findIndex((r) =>
         r.part_name.startsWith(TIRE_PART_PREFIX),
@@ -940,8 +944,12 @@ export default function CreateBookingDrawer({
       );
       onClose();
     } catch (err: unknown) {
+      // ConvexError surfaces structured data on `err.data` on the client.
+      // Fall back to substring on `err.message` for safety in case the
+      // payload is missing (older builds, transport quirks).
+      const data = (err as { data?: { code?: string } } | undefined)?.data;
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("DUPLICATE_BACKFILL")) {
+      if (data?.code === "DUPLICATE_BACKFILL" || msg.includes("DUPLICATE_BACKFILL")) {
         setBackfillDuplicateConfirmOpen(true);
       } else {
         onToast(getUserFacingErrorMessage(err));

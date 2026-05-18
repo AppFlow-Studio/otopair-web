@@ -41,6 +41,20 @@ export function addMinutesToHHMM(hhmm: string, deltaMinutes: number): string {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+export const EARLY_PUSH_THRESHOLD_MS = 10 * 60_000;
+
+export function roundDownToFiveMinutes(hhmm: string): string {
+  const total = toMinutes(hhmm);
+  const rounded = Math.floor(total / 5) * 5;
+  const hours = Math.floor(rounded / 60);
+  const minutes = rounded % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+export function hhmmFromDate(date: Date): string {
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 export function getBookingEndTime(
   scheduledTime: string,
   estimatedMinutes?: number | null

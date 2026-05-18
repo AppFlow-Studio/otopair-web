@@ -25,8 +25,11 @@ import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import RecommendServiceDrawer from "@/components/recommend-service-drawer";
+import EarlyArrivalConfirmDialog from "@/components/early-arrival-confirm-dialog";
+import EndCurrentJobConfirmDialog from "@/components/end-current-job-confirm-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
 import {
+  EARLY_PUSH_THRESHOLD_MS,
   getMechanicAssignmentConflict,
   type ScheduleBlockedSlot,
   type ScheduleBooking,
@@ -529,6 +532,11 @@ interface JobDetailPanelProps {
   onClose: () => void;
   onSuccess?: (message: string) => void;
   showBookingsLink?: boolean;
+  /** Optional parent-supplied callback that switches the panel/route to a
+   *  different booking. Used by the EndCurrentJobConfirmDialog to take the
+   *  user to the mechanic's currently in-progress booking so they can fill
+   *  out the post-job report before starting the new one. */
+  onSwitchToBooking?: (bookingId: Id<"bookings">) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -547,6 +555,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       onClose,
       onSuccess,
       showBookingsLink,
+      onSwitchToBooking,
     },
     ref,
   ) {
@@ -570,6 +579,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
     const [cancelOtherText, setCancelOtherText] = useState("");
     const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
+    const [showEarlyArrivalDialog, setShowEarlyArrivalDialog] = useState(false);
+    const [showEndCurrentJobDialog, setShowEndCurrentJobDialog] = useState(false);
     const [isSubmittingPrejob, setIsSubmittingPrejob] = useState(false);
     const [isSubmittingPostjob, setIsSubmittingPostjob] = useState(false);
     const [copiedField, setCopiedField] = useState<"email" | "vin" | null>(null);
@@ -610,6 +621,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const postjobReport = useQuery(
       api.job_actuals.getPostjobReportForBooking,
       job ? { bookingId: job._id } : "skip"
+    );
+    // Pre-flight check for the start-job flow: if the mechanic already has
+    // another booking in_progress, we route through EndCurrentJobConfirmDialog
+    // instead of opening the prejob survey directly.
+    const activeJobConflict = useQuery(
+      api.bookings.getActiveJobConflictForBooking,
+      job && job.mechanicId && job.status === "vehicle_at_shop"
+        ? { bookingId: job._id }
+        : "skip"
     );
 
     const selectedMechanicId = useMemo(
@@ -661,6 +681,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setActionError("");
       setShowPrejobDialog(false);
       setShowPostjobDialog(false);
+      setShowEarlyArrivalDialog(false);
+      setShowEndCurrentJobDialog(false);
       setAssigningMechanicId(currentAssignmentKey);
       setIsEditingActuals(false);
       setCopiedField(null);
@@ -907,12 +929,32 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         return;
       }
       setActionError("");
+      if (activeJobConflict) {
+        setShowEndCurrentJobDialog(true);
+        return;
+      }
       setShowPrejobDialog(true);
     }
 
     async function handleVehicleAtShop() {
       if (!job?._id) return;
       setActionError("");
+      // If the customer is at least EARLY_PUSH_THRESHOLD_MS before the
+      // scheduled start, prompt to push the booking earlier instead of
+      // committing to the original time. The dialog itself runs either
+      // `pushBookingEarlierAndArrive` or falls back to `markVehicleAtShop`.
+      if (job.status === "confirmed" && job.mechanicId) {
+        const scheduledStartMs =
+          job.customerLateMonitor?.scheduledStartMs ??
+          Date.parse(`${job.scheduledDate}T${job.scheduledTime}:00`);
+        if (
+          Number.isFinite(scheduledStartMs) &&
+          Date.now() <= scheduledStartMs - EARLY_PUSH_THRESHOLD_MS
+        ) {
+          setShowEarlyArrivalDialog(true);
+          return;
+        }
+      }
       setIsActioning(true);
       try {
         await markVehicleAtShop({ bookingId: job._id });
@@ -987,13 +1029,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         setShowPrejobDialog(false);
         onSuccess?.(action === "close" ? "Pre-job vehicle check saved" : "Booking started");
       } catch (err: unknown) {
-        setActionError(
-          err instanceof Error
-            ? err.message
-            : action === "close"
-              ? "Could not save the pre-job vehicle check."
-              : "Could not start booking.",
-        );
+        const message = err instanceof Error ? err.message : "";
+        if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+          // Race: another booking became in_progress for this mechanic
+          // between when we opened the prejob and when we hit submit. Route
+          // back through the confirm dialog so the user can complete the
+          // active job first.
+          setShowPrejobDialog(false);
+          setShowEndCurrentJobDialog(true);
+          setActionError("");
+        } else {
+          setActionError(
+            message ||
+              (action === "close"
+                ? "Could not save the pre-job vehicle check."
+                : "Could not start booking."),
+          );
+        }
       } finally {
         setIsSubmittingPrejob(false);
       }
@@ -1132,10 +1184,20 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         showPrejobDialog ||
         showPostjobDialog ||
         showCancelConfirm ||
-        showCancelRescheduleConfirm,
+        showCancelRescheduleConfirm ||
+        showEarlyArrivalDialog ||
+        showEndCurrentJobDialog,
       handleEscape: (): boolean => {
         if (showDeclineModal) {
           setShowDeclineModal(false);
+          return true;
+        }
+        if (showEarlyArrivalDialog) {
+          setShowEarlyArrivalDialog(false);
+          return true;
+        }
+        if (showEndCurrentJobDialog) {
+          setShowEndCurrentJobDialog(false);
           return true;
         }
         if (showPrejobDialog) {
@@ -2055,6 +2117,35 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             )}
           </div>
         </div>
+
+        {job ? (
+          <EarlyArrivalConfirmDialog
+            open={showEarlyArrivalDialog}
+            bookingId={job._id}
+            mechanicId={job.mechanicId ?? null}
+            mechanicName={(job as any).mechanicName ?? null}
+            scheduledDate={job.scheduledDate}
+            scheduledTime={job.scheduledTime}
+            estimatedLaborMinutes={job.estimatedLaborMinutes ?? null}
+            dayBookings={scheduleConflicts?.bookings ?? []}
+            onClose={() => setShowEarlyArrivalDialog(false)}
+            onPushed={() => onSuccess?.("Booking pushed earlier · vehicle here")}
+            onKept={() => onSuccess?.("Vehicle marked here")}
+          />
+        ) : null}
+
+        <EndCurrentJobConfirmDialog
+          open={showEndCurrentJobDialog}
+          activeJob={activeJobConflict ?? null}
+          onClose={() => setShowEndCurrentJobDialog(false)}
+          onCompleteCurrent={() => {
+            const target = activeJobConflict?.bookingId;
+            setShowEndCurrentJobDialog(false);
+            if (target && onSwitchToBooking) {
+              onSwitchToBooking(target);
+            }
+          }}
+        />
 
         <PreJobSurveyDialog
           open={showPrejobDialog}

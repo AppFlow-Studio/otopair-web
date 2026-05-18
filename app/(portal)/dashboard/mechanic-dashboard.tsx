@@ -20,6 +20,7 @@ import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actua
 import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
+import ConfirmationDialog from "@/components/confirmation-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
 import type {
   PostJobSurveyPayload,
@@ -118,6 +119,11 @@ export default function MechanicDashboard() {
   const [toast, setToast] = useState<string>("");
   const [workflowBookingId, setWorkflowBookingId] = useState<Id<"bookings"> | null>(null);
   const [workflowMode, setWorkflowMode] = useState<"prejob" | "postjob" | null>(null);
+  const [pendingActiveBlock, setPendingActiveBlock] = useState<{
+    activeBookingId: string;
+    activeVehicle: string;
+    activeCustomer: string;
+  } | null>(null);
   const [actualsBookingId, setActualsBookingId] = useState<Id<"bookings"> | null>(null);
   const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
   const selectedWorkflowBooking = useQuery(
@@ -166,6 +172,26 @@ export default function MechanicDashboard() {
     setWorkflowMode(mode);
   }
 
+  /**
+   * Pre-flight for the mechanic's Start button. If the mechanic already has
+   * another booking in_progress today, route through a confirmation dialog
+   * so they finish that one first (server enforces this same invariant).
+   */
+  function tryStartBooking(bookingId: string) {
+    const active = dashboard?.todaysJobs.find(
+      (j: any) => j.status === "in_progress" && String(j._id) !== bookingId,
+    );
+    if (active) {
+      setPendingActiveBlock({
+        activeBookingId: String(active._id),
+        activeVehicle: active.vehicle,
+        activeCustomer: active.customerDisplayName,
+      });
+      return;
+    }
+    openWorkflowDialog(bookingId, "prejob");
+  }
+
   function closeWorkflowDialog() {
     setWorkflowBookingId(null);
     setWorkflowMode(null);
@@ -204,13 +230,20 @@ export default function MechanicDashboard() {
       }
       closeWorkflowDialog();
     } catch (error: unknown) {
-      setToast(
-        error instanceof Error
-          ? error.message
-          : action === "close"
-            ? "Could not save the pre-job vehicle check"
-            : "Could not start booking"
-      );
+      const message = error instanceof Error ? error.message : "";
+      if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+        closeWorkflowDialog();
+        setToast(
+          "Finish your current in-progress job first — then start this one.",
+        );
+      } else {
+        setToast(
+          message ||
+            (action === "close"
+              ? "Could not save the pre-job vehicle check"
+              : "Could not start booking"),
+        );
+      }
     } finally {
       setBusyAction(null);
     }
@@ -507,7 +540,7 @@ export default function MechanicDashboard() {
 
                     {job.status === "vehicle_at_shop" ? (
                       <button
-                        onClick={() => openWorkflowDialog(String(job._id), "prejob")}
+                        onClick={() => tryStartBooking(String(job._id))}
                         disabled={
                           busyAction === actionKeyStart ||
                           job.vehiclePassportComplete === false
@@ -696,6 +729,28 @@ export default function MechanicDashboard() {
           )}
         </section>
       </div>
+
+      <ConfirmationDialog
+        open={pendingActiveBlock !== null}
+        title="Finish your current job first"
+        onClose={() => setPendingActiveBlock(null)}
+        primaryAction={{
+          label: "Got it",
+          onAction: () => setPendingActiveBlock(null),
+          variant: "primary",
+        }}
+      >
+        {pendingActiveBlock ? (
+          <p className="text-sm text-foreground">
+            You&apos;re already working on{" "}
+            <span className="font-medium">{pendingActiveBlock.activeVehicle}</span>{" "}
+            for{" "}
+            <span className="font-medium">{pendingActiveBlock.activeCustomer}</span>
+            . Complete that booking — including the post-job report — before
+            starting a new one.
+          </p>
+        ) : null}
+      </ConfirmationDialog>
 
       <PreJobSurveyDialog
         open={workflowBookingId !== null && workflowMode === "prejob"}

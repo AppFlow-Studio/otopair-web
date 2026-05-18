@@ -9386,6 +9386,26 @@ export const getBookingByIdForCustomer = query({
     const formatMechanic = (m: any) =>
       m ? `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim() : null;
 
+    const rawHistory = await ctx.db
+      .query("booking_status_history")
+      .withIndex("by_booking_id", (q: any) => q.eq("booking_id", booking._id))
+      .collect();
+    rawHistory.sort((a: any, b: any) => a.changed_at - b.changed_at);
+    const statusHistory = rawHistory.map((h: any) => ({
+      status: h.new_status as string,
+      changedAt: h.changed_at as number,
+    }));
+
+    const lateMonitorDoc = await getCustomerLateMonitorByBookingId(ctx, booking._id);
+    const lateMonitor = lateMonitorDoc
+      ? {
+          pushEnqueuedAtMs: lateMonitorDoc.push_enqueued_at_ms ?? null,
+          smsEnqueuedAtMs: lateMonitorDoc.sms_enqueued_at_ms ?? null,
+          frontdeskEnqueuedAtMs: lateMonitorDoc.frontdesk_enqueued_at_ms ?? null,
+          customerAcknowledgedAtMs: lateMonitorDoc.customer_acknowledged_at_ms ?? null,
+        }
+      : null;
+
     return {
       id: booking._id,
       status: booking.status,
@@ -9406,6 +9426,8 @@ export const getBookingByIdForCustomer = query({
       serviceNames,
       vehicleDisplay,
       totalCost: booking.total_cost,
+      statusHistory,
+      lateMonitor,
     };
   },
 });

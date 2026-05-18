@@ -113,6 +113,16 @@ export default function BookingsPage() {
     return counts;
   }, [allJobs]);
 
+  const onMyWayBookingIds = useMemo(() => {
+    if (!customerOnMyWay) return new Set<string>();
+    return new Set(customerOnMyWay.map((a: any) => String(a.bookingId)));
+  }, [customerOnMyWay]);
+
+  const notifiedBookingIds = useMemo(() => {
+    if (!customerLateNotificationSent) return new Set<string>();
+    return new Set(customerLateNotificationSent.map((a: any) => String(a.bookingId)));
+  }, [customerLateNotificationSent]);
+
   const filteredJobs = useMemo(() => {
     if (!allJobs) return undefined;
     return allJobs.filter((j) => {
@@ -625,6 +635,18 @@ export default function BookingsPage() {
                                   {countdown && !drawerCompact && (
                                     <span className="text-amber-600 text-[11px] whitespace-nowrap">
                                       {countdown}
+                                    </span>
+                                  )}
+                                  {onMyWayBookingIds.has(String(job._id)) && (
+                                    <span title="Customer en route" className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                      <Car className="h-2.5 w-2.5" />
+                                      En route
+                                    </span>
+                                  )}
+                                  {!onMyWayBookingIds.has(String(job._id)) && notifiedBookingIds.has(String(job._id)) && (
+                                    <span title="Late notification sent" className="inline-flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-semibold text-yellow-700">
+                                      <Bell className="h-2.5 w-2.5" />
+                                      Notified
                                     </span>
                                   )}
                                 </div>

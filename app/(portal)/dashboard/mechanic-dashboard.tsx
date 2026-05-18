@@ -8,6 +8,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import {
   AlertCircle,
   ArrowRight,
+  Bell,
+  Car,
   Loader2,
   PlayCircle,
   Star,
@@ -97,6 +99,11 @@ function DashboardCard({
 
 export default function MechanicDashboard() {
   const dashboard = useQuery(api.bookings.getMyMechanicDashboard);
+  const customerOnMyWay = useQuery(api.bookings.getCustomerOnMyWayMonitors);
+  const customerLateNotificationSent = useQuery(api.bookings.getCustomerLateNotificationSentMonitors);
+
+  const onMyWayIds = useMemo(() => new Set((customerOnMyWay ?? []).map((a: any) => String(a.bookingId))), [customerOnMyWay]);
+  const notifiedIds = useMemo(() => new Set((customerLateNotificationSent ?? []).map((a: any) => String(a.bookingId))), [customerLateNotificationSent]);
   const diagnosticsNeedingFollowUp = useQuery(
     api.bookings.getDiagnosticsNeedingFollowUp,
   );
@@ -451,6 +458,18 @@ export default function MechanicDashboard() {
                             {formatTime(job.scheduledTime)}
                           </p>
                           <StatusPill status={job.status} />
+                          {onMyWayIds.has(String(job._id)) && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                              <Car className="h-2.5 w-2.5" />
+                              En route
+                            </span>
+                          )}
+                          {!onMyWayIds.has(String(job._id)) && notifiedIds.has(String(job._id)) && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-semibold text-yellow-700">
+                              <Bell className="h-2.5 w-2.5" />
+                              Notified
+                            </span>
+                          )}
                         </div>
                         <p className="mt-1 truncate text-sm font-medium text-foreground">
                           {job.customerDisplayName}
@@ -472,9 +491,17 @@ export default function MechanicDashboard() {
                     {job.status === "confirmed" ? (
                       <button
                         disabled
-                        className="inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-muted-foreground opacity-70"
+                        className={`inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-medium opacity-70 ${
+                          onMyWayIds.has(String(job._id))
+                            ? "border-emerald-200 text-emerald-700"
+                            : "border-border text-muted-foreground"
+                        }`}
                       >
-                        Awaiting vehicle
+                        {onMyWayIds.has(String(job._id)) ? (
+                          <><Car className="h-3.5 w-3.5" />Customer en route</>
+                        ) : (
+                          "Awaiting vehicle"
+                        )}
                       </button>
                     ) : null}
 

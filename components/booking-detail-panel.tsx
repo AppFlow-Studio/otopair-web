@@ -13,7 +13,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Check, Clock, Copy, Ellipsis, History, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
+import { Bell, Car, Check, Clock, Copy, Ellipsis, History, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import OverrunCheckInCard from "@/components/overrun-checkin-card";
 import InvoiceNumberField from "@/components/invoice-number-field";
@@ -1958,6 +1958,72 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     )}
                   </div>
                 </div>
+
+                {/* Customer arrival tracking */}
+                {job.customerLateMonitor && (() => {
+                  const m = job.customerLateMonitor!;
+                  const events: Array<{ icon: "bell" | "car"; label: string; sub: string; atMs: number }> = [];
+                  const firstNotifMs = m.pushEnqueuedAtMs ?? m.smsEnqueuedAtMs ?? m.frontdeskEnqueuedAtMs;
+                  if (firstNotifMs) {
+                    const channel = m.pushEnqueuedAtMs ? "push" : m.smsEnqueuedAtMs ? "SMS" : "front desk";
+                    events.push({
+                      icon: "bell",
+                      label: "Late notification sent",
+                      sub: `Sent via ${channel}`,
+                      atMs: firstNotifMs,
+                    });
+                  }
+                  if (m.customerAcknowledgedAtMs) {
+                    events.push({
+                      icon: "car",
+                      label: "Customer said \"on my way\"",
+                      sub: "Acknowledged in app",
+                      atMs: m.customerAcknowledgedAtMs,
+                    });
+                  }
+                  if (events.length === 0) return null;
+                  return (
+                    <div className="rounded-2xl bg-muted/20 p-4">
+                      <div className="mb-3 flex items-center gap-1.5">
+                        <Car className="w-3.5 h-3.5 text-muted-foreground" />
+                        <DrawerFieldLabel className="mb-0">Arrival Tracking</DrawerFieldLabel>
+                      </div>
+                      <div className="rounded-xl bg-background px-3 py-2">
+                        {events.map((ev, i) => (
+                          <div key={i} className="relative flex gap-3 pb-4 last:pb-0">
+                            {i < events.length - 1 && (
+                              <div className="absolute left-[11px] top-6 bottom-0 w-px bg-border" />
+                            )}
+                            <div className="relative z-10 shrink-0">
+                              {ev.icon === "bell" ? (
+                                <div className="w-6 h-6 rounded-full border-2 border-yellow-400 bg-card flex items-center justify-center">
+                                  <Bell className="w-3 h-3 text-yellow-500" strokeWidth={2.5} />
+                                </div>
+                              ) : (
+                                <div className="w-6 h-6 rounded-full border-2 border-emerald-500 bg-card flex items-center justify-center">
+                                  <Car className="w-3 h-3 text-emerald-600" strokeWidth={2.5} />
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex justify-between items-center gap-2">
+                                <span className={`text-xs font-semibold leading-6 ${ev.icon === "car" ? "text-emerald-700" : "text-yellow-700"}`}>
+                                  {ev.label}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground shrink-0 leading-6">
+                                  {new Date(ev.atMs).toLocaleString("en-US", {
+                                    month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true,
+                                  })}
+                                </span>
+                              </div>
+                              <p className="text-xs text-muted-foreground -mt-1">{ev.sub}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* View in Bookings link (schedule page only) */}
                 {showBookingsLink && (

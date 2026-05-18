@@ -10537,6 +10537,7 @@ export const listOpenTireQuoteRequestsForShop = query({
  * decision UI needs to render the before/after comparison. Auth-gated
  * to the booking's owner. Joins shop name, current + previous mechanic
  * names, and service names.
+ */
 export const getBookingByIdForCustomer = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -10557,6 +10558,8 @@ export const getBookingByIdForCustomer = query({
 
     const vehicle = booking.vin
       ? await ctx.db
+          .query("vehicles")
+          .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
           .first()
       : null;
     const meta = (vehicle?.metadata as

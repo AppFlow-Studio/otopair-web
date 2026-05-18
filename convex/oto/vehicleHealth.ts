@@ -1,0 +1,454 @@
+// =============================================================================
+// Oto AI — Vehicle Health queries
+// =============================================================================
+//
+// Backs the get_vehicle_health and get_projected_health_score AI tools.
+// Reads user-records-only data (Smartcar is deprecated and intentionally not
+// considered in this server-side path). Reuses the same pure helpers the
+// mobile My Cars page uses so AI answers stay in lockstep with the UI.
+//
+// The mobile UI continues to consume the camelCase MaintenanceItem shape via
+// useMaintenanceData; this file emits the snake_case AI-tool shape locked in
+// the Implementation Directive. They are separate consumers — never mix.
+//
+// Companions:
+//   • utils/maintenanceEnrichment.ts — URGENT_DETAILS + buildMaintenanceItems
+//   • utils/maintenanceStatus.ts     — computeMaintenanceStatus + per-type config
+//   • utils/healthScore.ts           — computeVehicleHealthScore + projected variant
+// =============================================================================
+
+import { query } from "../_generated/server";
+import { v } from "convex/values";
+import type { Doc, Id } from "../_generated/dataModel";
+import { isEvalTestMake } from "./evalTestFilter";
+import {
+  ALL_MAINTENANCE_TYPES,
+  MAINTENANCE_LABELS,
+  type MaintenanceType,
+} from "../../utils/maintenanceStatus";
+import {
+  buildMaintenanceItems,
+  enrichUrgentItem,
+  type MaintenanceRecordInput,
+} from "../../utils/maintenanceEnrichment";
+import {
+  computeVehicleHealthScore,
+  computeProjectedHealthScore,
+} from "../../utils/healthScore";
+import type { MaintenanceItem, MaintenanceStatus } from "../../components/cars/MaintenanceTracker";
+
+// -----------------------------------------------------------------------------
+// Warning-light identifier → human label.
+// Mirrors WARNING_LIGHT_TYPE_OPTIONS in app/quarterly-checkin.tsx (UI
+// source-of-truth). The check-in flow writes `vehicle_owners.knownIssues` as
+// a sentinel-prefixed array: ["no_all_clear"] | ["not_sure"] |
+// ["check_engine"] | ["other", ...lights] | ["different_light", ...lights].
+// Without translation, Haiku reads raw identifiers and parrots them — e.g.
+// "temperature and something else under 'other'" (real iter trace, 2026-05-14).
+// -----------------------------------------------------------------------------
+
+const WARNING_LIGHT_LABELS: Record<string, string> = {
+  tpms: "Tire pressure (TPMS) warning light",
+  battery_charging: "Battery / charging warning light",
+  temperature: "Temperature / overheating warning light",
+  oil_pressure: "Oil pressure warning light",
+  abs: "ABS / brake warning light",
+  airbag_srs: "Airbag / SRS warning light",
+  transmission: "Transmission warning light",
+  check_engine: "Check engine light",
+  not_sure_which: "Unspecified warning light (driver wasn't sure which)",
+};
+
+function describeKnownIssues(knownIssues?: string[]): string[] | undefined {
+  if (!knownIssues || knownIssues.length === 0) return undefined;
+  const sentinel = knownIssues[0];
+  if (sentinel === "no_all_clear") return undefined;
+  if (sentinel === "not_sure") return ["Driver isn't sure which warning light was on"];
+  if (sentinel === "check_engine") return [WARNING_LIGHT_LABELS.check_engine];
+  // "other" / "different_light" — sentinel followed by individual light ids.
+  const lights = knownIssues.slice(1);
+  if (lights.length === 0) return ["Driver reported a warning light but didn't specify which"];
+  return lights.map((id) => WARNING_LIGHT_LABELS[id] ?? `Unrecognized warning light: ${id}`);
+}
+
+// -----------------------------------------------------------------------------
+// AI-tool response shape (snake_case, locked by Implementation Directive 1)
+// -----------------------------------------------------------------------------
+
+/**
+ * Trust signal for a maintenance item. Tells Oto how much to weight the
+ * record's stated status against contradicting symptoms reported by the user.
+ *
+ * - "verified"      → backed by third-party evidence the service actually
+ *                     happened. Sources include: a completed booking through
+ *                     OtoPair, a user-uploaded service record (receipt /
+ *                     work order from an outside shop), or mechanic-onboarded
+ *                     vehicle data. Treat status as truth.
+ * - "self_reported" → user provided via onboarding or quarterly check-in
+ *                     without a backing document or booking. Soft data —
+ *                     may be stale or inaccurate ("data form
+ *                     hallucination"). If symptoms contradict, surface the
+ *                     record to the user before acting on its status.
+ * - "inferred"      → no maintenance_record exists for this type. Status
+ *                     was derived from a fallback path (warning-light
+ *                     mapping, vehicle-age heuristic, per-type default).
+ *
+ * Mapping from the underlying schema fields:
+ *   maintenance_records.confidence === "verified"  → "verified"
+ *     (set by the booking-completion path, the service-record-upload path,
+ *      and any other writer that has third-party evidence)
+ *   maintenance_records.confidence is anything else (incl. "self_reported",
+ *     "unverified", undefined) AND a record exists                → "self_reported"
+ *   no maintenance_record for this type (item.id starts with "unknown-") → "inferred"
+ *
+ * NOTE: confirmedHealthyAt does NOT promote an item to "verified" — that's
+ * still the user attesting via the check-in, which is exactly the
+ * data-form-hallucination-prone path we're guarding against.
+ */
+export type RecordProvenance = "verified" | "self_reported" | "inferred";
+
+export interface VehicleHealthItem {
+  id: string;
+  type: MaintenanceType;
+  label: string;
+  status: MaintenanceStatus;
+  description: string;
+  detail: string;
+  last_service?: string;
+  urgency_label?: string;
+  recommendation?: string;
+  /**
+   * Trust signal — see RecordProvenance docstring above. Always present.
+   * Use this to gate the symptom-vs-record protocol: when a user-described
+   * symptom contradicts an item with provenance "self_reported", the record
+   * itself is suspect; when it contradicts a "verified" item, the symptom
+   * is the surprise and warrants narrowing questions.
+   */
+  record_provenance: RecordProvenance;
+}
+
+export interface VehicleHealthResponse {
+  score: number;
+  score_is_estimated: boolean;
+  items: VehicleHealthItem[];
+  known_issues?: string[];
+}
+
+export interface ProjectedHealthResponse {
+  current_score: number;
+  projected_score: number;
+  lift: number;
+}
+
+// -----------------------------------------------------------------------------
+// Shared loader — resolves auth + vehicle + records + merged maintenance items.
+// Both queries hit this; the only divergence is what they do with the items.
+// -----------------------------------------------------------------------------
+
+interface LoadedContext {
+  owner: Doc<"vehicle_owners">;
+  records: Doc<"maintenance_records">[];
+  enrichedItems: MaintenanceItem[];
+  odometerMiles: number;
+  knownIssues: string[] | undefined;
+  /**
+   * Provenance keyed by MaintenanceType for items that DO have a record.
+   * Items without a record (unknown-* fallbacks) get "inferred" downstream
+   * in toAiShape based on the id prefix — they're not in this map.
+   */
+  provenanceByType: Map<MaintenanceType, RecordProvenance>;
+}
+
+async function loadVehicleContext(
+  ctx: any,
+  vehicleId: string,
+): Promise<LoadedContext> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("unauthenticated");
+
+  const user: Doc<"users"> | null = await ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", identity.subject))
+    .unique();
+  if (!user) throw new Error("user not found in Convex");
+
+  // The chat envelope's <vehicle> id field is a Convex `vehicles._id` (see
+  // chat.ts buildEnvelope). Resolve it directly with ctx.db.get, then look up
+  // the per-user owner row via the (vin, user_id) index. Querying
+  // `by_vin_user` with the raw _id (the previous behavior) always missed.
+  const vehicle: Doc<"vehicles"> | null = await ctx.db.get(
+    vehicleId as Id<"vehicles">,
+  );
+  if (!vehicle) throw new Error(`vehicle not found: ${vehicleId}`);
+
+  const owner: Doc<"vehicle_owners"> | null = await ctx.db
+    .query("vehicle_owners")
+    .withIndex("by_vin_user", (q: any) =>
+      q.eq("vin", vehicle.vin).eq("user_id", user._id),
+    )
+    .unique();
+  if (!owner) throw new Error(`vehicle_owner not found for vehicle ${vehicleId}`);
+
+  const records: Doc<"maintenance_records">[] = await ctx.db
+    .query("maintenance_records")
+    .withIndex("by_vehicle_owner", (q: any) => q.eq("vehicleOwnerId", owner._id))
+    .collect();
+
+  // Make + year for per-make intervals. We already have the vehicle from the
+  // db.get above — no second `vehicles.by_vin` query needed.
+
+  let make: string | undefined;
+  let vehicleYear: number | undefined;
+  if (vehicle) {
+    if (vehicle.year != null) vehicleYear = vehicle.year;
+    if (vehicle.vehicle_config_id) {
+      const config = await ctx.db.get(vehicle.vehicle_config_id);
+      if (config?.make_id) {
+        const makeRow = await ctx.db.get(config.make_id);
+        if (isEvalTestMake(makeRow)) {
+          throw new Error("vehicle not found");
+        }
+        if (makeRow?.name) make = makeRow.name;
+      }
+    }
+    if (!make || !vehicleYear) {
+      const meta = (vehicle.metadata ?? {}) as { make?: string; year?: number | string };
+      if (!make && meta.make) make = String(meta.make);
+      if (!vehicleYear && meta.year != null) {
+        const y = typeof meta.year === "number" ? meta.year : Number.parseInt(meta.year, 10);
+        if (Number.isFinite(y)) vehicleYear = y;
+      }
+    }
+  }
+
+  const odometerMiles = owner.mileage ?? 0;
+  const knownIssues = Array.isArray(owner.knownIssues) ? (owner.knownIssues as string[]) : undefined;
+  const drivingConditions = owner.drivingConditions ?? undefined;
+  const avgMonthlyDriving = owner.avgMonthlyDriving ?? undefined;
+
+  // Normalize raw records into the builder's input shape. lastServiceDate is
+  // stored as union(string|number); we only feed numeric values forward.
+  const recordInputs: MaintenanceRecordInput[] = records.map((rec) => ({
+    type: rec.type,
+    lastServiceDate:
+      typeof rec.lastServiceDate === "number" ? rec.lastServiceDate : undefined,
+    lastServiceMileage: rec.lastServiceMileage ?? undefined,
+    customInputs: (rec.customInputs ?? undefined) as Record<string, unknown> | undefined,
+    confirmedHealthyAt: rec.confirmedHealthyAt ?? undefined,
+  }));
+
+  // Provenance map — built from the SAME records, in parallel to recordInputs,
+  // so we don't perturb the existing pure builder. Per the schema comment on
+  // maintenance_records.confidence the canonical labels are
+  // "verified" | "unverified" | "self_reported" (with undefined treated as
+  // self_reported). Only "verified" promotes to verified provenance — anything
+  // else is treated as soft data the user may need to confirm.
+  //
+  // Future enhancement: also check vehicle_service_states.last_service_booking_id
+  // for an extra verified signal (booking-backed even if confidence label is
+  // missing). Skipped for v1 — keeps this query pure-additive on the read path
+  // without an extra DB join.
+  const provenanceByType = new Map<MaintenanceType, RecordProvenance>();
+  for (const rec of records) {
+    const conf = rec.confidence;
+    const provenance: RecordProvenance =
+      conf === "verified" ? "verified" : "self_reported";
+    provenanceByType.set(rec.type as MaintenanceType, provenance);
+  }
+
+  const userItems = buildMaintenanceItems(
+    recordInputs,
+    odometerMiles > 0 ? odometerMiles : null,
+    make,
+    drivingConditions,
+    avgMonthlyDriving,
+    knownIssues,
+  );
+
+  // Server-side merge: user record > warning-light fallback > young-battery
+  // inference > per-type default. Smartcar branches from useMergedMaintenance
+  // are intentionally omitted (deprecated per Implementation Directive 1).
+  const merged: MaintenanceItem[] = [];
+  for (const type of ALL_MAINTENANCE_TYPES) {
+    const userItem = userItems.get(type);
+    const userRecord = recordInputs.find((r) => r.type === type);
+    const userConfirmedHealthy =
+      userRecord?.confirmedHealthyAt != null &&
+      Date.now() - userRecord.confirmedHealthyAt < 90 * 24 * 60 * 60 * 1000;
+
+    if (userItem) {
+      if (userConfirmedHealthy && userItem.status !== "on_time") {
+        merged.push({
+          ...userItem,
+          status: "on_time",
+          description: "Confirmed in good shape",
+          detail: "On time",
+        });
+      } else {
+        merged.push(userItem);
+      }
+      continue;
+    }
+
+    const WARNING_LIGHT_FOR_TYPE: Partial<Record<MaintenanceType, { lightId: string; label: string }>> = {
+      oil: { lightId: "oil_pressure", label: "Oil pressure warning light active — service urgently needed" },
+      battery: { lightId: "battery_charging", label: "Battery/charging warning light active — have it tested soon" },
+      brakes: { lightId: "abs", label: "ABS / brake warning light active — have brakes inspected soon" },
+      tires: { lightId: "tpms", label: "Tire pressure (TPMS) warning light active — check tires soon" },
+    };
+
+    const lightInfo = WARNING_LIGHT_FOR_TYPE[type];
+    if (lightInfo && knownIssues?.includes(lightInfo.lightId)) {
+      merged.push({
+        id: `unknown-${type}`,
+        serviceName: MAINTENANCE_LABELS[type] || type,
+        description: lightInfo.label,
+        detail: "Warning light",
+        status: "needs_attention",
+      });
+      continue;
+    }
+
+    if (type === "battery") {
+      const age = vehicleYear ? new Date().getFullYear() - vehicleYear : 0;
+      if (age < 3) {
+        merged.push({
+          id: `unknown-${type}`,
+          serviceName: MAINTENANCE_LABELS[type] || type,
+          description: `Battery is ~${age || "<1"} year${age !== 1 ? "s" : ""} old — healthy`,
+          detail: "On time",
+          status: "on_time",
+        });
+        continue;
+      }
+    }
+
+    // F1 fix (2026-05-18): when no record exists, default to "unknown" for
+    // ALL types. The previous defaults lied in two directions — oil claimed
+    // "due_soon" (fabricated urgency), and brakes/tires/battery claimed "on
+    // time" (fabricated confirmation). Both were absence-of-input being
+    // re-interpreted as evidence. The new contract: absence → "unknown" →
+    // prompt rule pushes the user to add the record via render_record_confirmation.
+    const fallback: Record<string, { status: MaintenanceStatus; description: string; detail: string }> = {
+      oil:    { status: "unknown", description: "No oil change history on file",      detail: "Not on file" },
+      brakes: { status: "unknown", description: "No brake service history on file",   detail: "Not on file" },
+      tires:  { status: "unknown", description: "No tire service history on file",    detail: "Not on file" },
+      battery:{ status: "unknown", description: "No battery service history on file", detail: "Not on file" },
+    };
+    const fb = fallback[type] ?? { status: "unknown" as MaintenanceStatus, description: "No service history on file", detail: "Not on file" };
+    merged.push({
+      id: `unknown-${type}`,
+      serviceName: MAINTENANCE_LABELS[type] || type,
+      description: fb.description,
+      detail: fb.detail,
+      status: fb.status,
+    });
+  }
+
+  const inspectionItem = userItems.get("inspection");
+  if (inspectionItem) merged.push(inspectionItem);
+
+  const enrichedItems = merged.map(enrichUrgentItem);
+
+  return { owner, records, enrichedItems, odometerMiles, knownIssues, provenanceByType };
+}
+
+// -----------------------------------------------------------------------------
+// Shape translator: camelCase MaintenanceItem → snake_case AI-tool shape.
+// -----------------------------------------------------------------------------
+
+function toAiShape(
+  item: MaintenanceItem,
+  provenanceByType: Map<MaintenanceType, RecordProvenance>,
+): VehicleHealthItem {
+  const rawType = item.id.replace(/^(unknown-|user-|smartcar-)/, "") as MaintenanceType;
+
+  // Provenance derivation:
+  //   - id starts with "user-"     → backed by a maintenance_record. Look up
+  //                                  in provenanceByType (verified | self_reported).
+  //                                  Default to "self_reported" if the type
+  //                                  isn't in the map for any reason — it's
+  //                                  safer to under-trust than over-trust.
+  //   - id starts with "unknown-"  → fallback path (warning light, age, default).
+  //                                  No record exists → "inferred".
+  //   - id starts with "smartcar-" → deprecated path; treat as "inferred".
+  const isUserBacked = item.id.startsWith("user-");
+  const record_provenance: RecordProvenance = isUserBacked
+    ? (provenanceByType.get(rawType) ?? "self_reported")
+    : "inferred";
+
+  // F1 fix (2026-05-18) — defense-in-depth against fabrication.
+  // When an item has no real anchor (status === "unknown" OR provenance ===
+  // "inferred"), strip the fields that the URGENT_DETAILS enrichment fills
+  // with canned strings ("~5 months ago", "Service within 2 weeks", canned
+  // recommendation). Even if an upstream path slipped fabricated copy
+  // through, Haiku can't misread fields that aren't there.
+  const isUnsourced = record_provenance === "inferred" || item.status === "unknown";
+
+  return {
+    id: item.id,
+    type: rawType,
+    label: item.serviceName,
+    status: item.status,
+    description: item.description,
+    detail: item.detail,
+    last_service: isUnsourced ? undefined : item.lastService,
+    urgency_label: isUnsourced ? undefined : item.urgency,
+    recommendation: isUnsourced ? undefined : item.recommendation,
+    record_provenance,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// QUERY: getVehicleHealth
+// -----------------------------------------------------------------------------
+
+export const getVehicleHealth = query({
+  args: { vehicle_id: v.string() },
+  handler: async (ctx, args): Promise<VehicleHealthResponse> => {
+    const { owner, enrichedItems, odometerMiles, knownIssues, provenanceByType } =
+      await loadVehicleContext(ctx, args.vehicle_id);
+
+    const score = computeVehicleHealthScore({
+      maintenanceItems: enrichedItems,
+      odometerMiles,
+      knownIssues,
+    });
+
+    return {
+      score,
+      score_is_estimated: owner.health_score_is_estimated ?? false,
+      items: enrichedItems.map((item) => toAiShape(item, provenanceByType)),
+      known_issues: describeKnownIssues(knownIssues),
+    };
+  },
+});
+
+// -----------------------------------------------------------------------------
+// QUERY: getProjectedHealthScore
+// -----------------------------------------------------------------------------
+
+export const getProjectedHealthScore = query({
+  args: { vehicle_id: v.string(), item_id: v.string() },
+  handler: async (ctx, args): Promise<ProjectedHealthResponse> => {
+    const { enrichedItems, odometerMiles, knownIssues } =
+      await loadVehicleContext(ctx, args.vehicle_id);
+
+    const input = {
+      maintenanceItems: enrichedItems,
+      odometerMiles,
+      knownIssues,
+    };
+
+    const current = computeVehicleHealthScore(input);
+    const projected = computeProjectedHealthScore(input, args.item_id);
+    const lift = Math.max(0, projected - current);
+
+    return {
+      current_score: current,
+      projected_score: projected,
+      lift,
+    };
+  },
+});
+

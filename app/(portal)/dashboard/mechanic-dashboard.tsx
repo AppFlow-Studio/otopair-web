@@ -21,6 +21,8 @@ import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import ConfirmationDialog from "@/components/confirmation-dialog";
+import NowWorkingBanner from "@/components/mechanic/now-working-banner";
+import NowWorkingOverlay from "@/components/mechanic/now-working-overlay";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
 import type {
   PostJobSurveyPayload,
@@ -126,6 +128,7 @@ export default function MechanicDashboard() {
   } | null>(null);
   const [actualsBookingId, setActualsBookingId] = useState<Id<"bookings"> | null>(null);
   const [actualsDialogMode, setActualsDialogMode] = useState<"complete" | "edit">("complete");
+  const [nowWorkingOpen, setNowWorkingOpen] = useState(false);
   const selectedWorkflowBooking = useQuery(
     api.bookings.getJobDetail,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"
@@ -166,6 +169,21 @@ export default function MechanicDashboard() {
     }
     return Array.from(groups.entries());
   }, [dashboard]);
+
+  const activeJob = useMemo(
+    () =>
+      dashboard?.todaysJobs.find(
+        (job: any) => job.status === "in_progress",
+      ) ?? null,
+    [dashboard],
+  );
+
+  // Auto-close the overlay once the active job leaves in_progress.
+  useEffect(() => {
+    if (!activeJob && nowWorkingOpen) {
+      setNowWorkingOpen(false);
+    }
+  }, [activeJob, nowWorkingOpen]);
 
   function openWorkflowDialog(bookingId: string, mode: "prejob" | "postjob") {
     setWorkflowBookingId(bookingId as Id<"bookings">);
@@ -373,6 +391,13 @@ export default function MechanicDashboard() {
           <ArrowRight className="w-4 h-4" />
         </Link>
       </div>
+
+      {activeJob ? (
+        <NowWorkingBanner
+          bookingId={activeJob._id as Id<"bookings">}
+          onExpand={() => setNowWorkingOpen(true)}
+        />
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-3">
         <DashboardCard
@@ -837,6 +862,20 @@ export default function MechanicDashboard() {
         }
         onClose={closeWorkflowDialog}
         onSubmit={handleCompleteAction}
+        initialTechnicianNotes={
+          (selectedWorkflowBooking?.jobActuals as any)?.inProgressNotes ?? ""
+        }
+        initialPhotos={
+          ((selectedWorkflowBooking?.jobActuals as any)?.inProgressPhotos ?? []).map(
+            (p: any) => ({
+              id: p.storageId,
+              storageId: p.storageId,
+              previewUrl: p.url ?? "",
+              caption: p.caption ?? "",
+              status: "ready" as const,
+            }),
+          )
+        }
       />
 
       <JobActualsDialog
@@ -848,6 +887,17 @@ export default function MechanicDashboard() {
         onClose={closeActualsDialog}
         onSaveDraft={handleSaveActualsDraft}
         onFinalize={handleFinalizeActuals}
+      />
+
+      <NowWorkingOverlay
+        open={nowWorkingOpen && activeJob !== null}
+        bookingId={activeJob ? (activeJob._id as Id<"bookings">) : null}
+        onClose={() => setNowWorkingOpen(false)}
+        onMarkComplete={(id) => {
+          setNowWorkingOpen(false);
+          openWorkflowDialog(String(id), "postjob");
+        }}
+        onToast={setToast}
       />
 
       {toast ? (

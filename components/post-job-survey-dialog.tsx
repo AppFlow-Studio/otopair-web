@@ -161,7 +161,7 @@ type PartRowState = {
   service_id?: string | null;
 };
 
-type PhotoState = {
+export type PhotoState = {
   id: string;
   storageId: string;
   previewUrl: string;
@@ -705,6 +705,8 @@ export default function PostJobSurveyDialog({
   isSubmitting,
   onClose,
   onSubmit,
+  initialTechnicianNotes,
+  initialPhotos,
 }: {
   open: boolean;
   bookingId?: string | null;
@@ -716,6 +718,8 @@ export default function PostJobSurveyDialog({
   isSubmitting: boolean;
   onClose: () => void;
   onSubmit: (payload: PostJobSurveyPayload) => Promise<void>;
+  initialTechnicianNotes?: string;
+  initialPhotos?: PhotoState[];
 }) {
   return (
     <PostJobSurveyDialogBody
@@ -730,6 +734,8 @@ export default function PostJobSurveyDialog({
       isSubmitting={isSubmitting}
       onClose={onClose}
       onSubmit={onSubmit}
+      initialTechnicianNotes={initialTechnicianNotes ?? ""}
+      initialPhotos={initialPhotos ?? []}
     />
   );
 }
@@ -745,6 +751,8 @@ function PostJobSurveyDialogBody({
   isSubmitting,
   onClose,
   onSubmit,
+  initialTechnicianNotes,
+  initialPhotos,
 }: {
   open: boolean;
   bookingId: string | null;
@@ -756,6 +764,8 @@ function PostJobSurveyDialogBody({
   isSubmitting: boolean;
   onClose: () => void;
   onSubmit: (payload: PostJobSurveyPayload) => Promise<void>;
+  initialTechnicianNotes: string;
+  initialPhotos: PhotoState[];
 }) {
   const serviceSlug =
     passportData?.service_slug ?? prefillData?.serviceSlug ?? null;
@@ -787,7 +797,7 @@ function PostJobSurveyDialogBody({
       updatePrompts.map((prompt) => [prompt.key, prompt.value ?? ""])
     )
   );
-  const [technicianNotes, setTechnicianNotes] = useState("");
+  const [technicianNotes, setTechnicianNotes] = useState(initialTechnicianNotes);
   const [flaggedVehicleSpecs, setFlaggedVehicleSpecs] = useState(false);
   const [flaggedReason, setFlaggedReason] = useState("");
   const [actualLaborMinutes, setActualLaborMinutes] = useState(
@@ -802,7 +812,7 @@ function PostJobSurveyDialogBody({
   const [partsAccuracyFeedback, setPartsAccuracyFeedback] = useState("");
   const [additionalObservations, setAdditionalObservations] = useState("");
   const [recommendations, setRecommendations] = useState<RecRowState[]>([]);
-  const [photos, setPhotos] = useState<PhotoState[]>([]);
+  const [photos, setPhotos] = useState<PhotoState[]>(initialPhotos);
   const [error, setError] = useState("");
 
   const generateUploadUrl = useMutation(generateUploadUrlRef) as (args: {

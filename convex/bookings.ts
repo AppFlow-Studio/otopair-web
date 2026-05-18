@@ -8161,6 +8161,9 @@ export const backfillCompletedBooking = mutation({
     //    Mechanic + catalog totals are split per service proportionally to
     //    each service's catalog weight (defaultLaborHours / labor catalog).
     if (vehicle) {
+      const servicesForOptionCheck = await Promise.all(
+        args.serviceIds.map((id: any) => ctx.db.get(id))
+      );
       const catalogServiceMinutes = servicesForOptionCheck.map((svc: any) =>
         svc && svc.default_labor_hours
           ? svc.default_labor_hours * 60

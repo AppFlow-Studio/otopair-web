@@ -2093,6 +2093,10 @@ export default function CreateBookingDrawer({
         open={showTirePicker}
         initial={tireSpecs}
         vehicleMake={make.trim() || null}
+        passportTireSizes={[
+          convexVehicleInfo?.tire_size_front ?? null,
+          convexVehicleInfo?.tire_size_rear ?? null,
+        ]}
         vehicleLabel={
           [year, make, model, trim].filter(Boolean).join(" ").trim() || null
         }

@@ -268,7 +268,25 @@ export const getVehicleBookingInfo = query({
       )
     ).filter((o): o is NonNullable<typeof o> => o !== null);
 
-    return { year, make, model, trim, owners };
+    // Passport-derived tire sizes so the customer booking flow can offer
+    // the actual sizes a mechanic recorded (pre-job/post-job) instead of
+    // generic OEM defaults.
+    const passport = await ctx.db
+      .query("vehicle_passports")
+      .withIndex("by_vin", (q) => q.eq("vin", normalizedVin))
+      .unique();
+    const tireSizeFront = passport?.tires?.size_front ?? null;
+    const tireSizeRear = passport?.tires?.size_rear ?? null;
+
+    return {
+      year,
+      make,
+      model,
+      trim,
+      owners,
+      tire_size_front: tireSizeFront,
+      tire_size_rear: tireSizeRear,
+    };
   },
 });
 

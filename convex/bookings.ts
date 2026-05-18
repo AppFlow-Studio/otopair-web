@@ -5214,7 +5214,206 @@ async function applyDynamicDelayPlan(
   }
 }
 
+/**
+ * Returns the wall-clock duration to persist as `actual_duration_minutes`
+ * for an early-completed booking — or null when the booking shouldn't be
+ * shrunk (insufficient timing data, or actual ≈ estimate). Rounds UP to
+ * the next 5-min grid so the schedule lane snaps cleanly.
+ */
+function deriveActualDurationMinutes(args: {
+  startedAtMs: number | null | undefined;
+  endAtMs: number | null | undefined;
+  estimatedMinutes: number | null | undefined;
+}): number | null {
+  if (!args.estimatedMinutes || args.estimatedMinutes <= 5) return null;
+  if (!args.startedAtMs || !args.endAtMs) return null;
+  const rawMinutes = (args.endAtMs - args.startedAtMs) / 60_000;
+  if (!Number.isFinite(rawMinutes) || rawMinutes <= 0) return null;
+  const actualMinutes = Math.ceil(rawMinutes / 5) * 5;
+  if (actualMinutes >= args.estimatedMinutes - 4) return null;
+  return actualMinutes;
+}
+
+/**
+ * Persists actual wall-clock duration on the booking when a job finishes
+ * meaningfully earlier than its upfront estimate. This is what the schedule
+ * lane mapper reads to shrink the booking block — opening up the freed
+ * window for new bookings without touching the original `estimated_labor_minutes`
+ * (preserved for reporting).
+ *
+ * Skips when:
+ *   - actual_duration_minutes is already set (backfill path computes its own)
+ *   - we can't find a started_at timestamp to anchor wall-clock from
+ *   - the actual time was within 5 min of the estimate (avoid micro-shrinks)
+ */
+async function maybePersistEarlyCompletionDuration(ctx: any, booking: any) {
+  if (booking.actual_duration_minutes != null) return;
+
+  const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
+  const startedAtMs =
+    jobActual?.started_at ??
+    booking.vehicle_arrived_at_ms ??
+    null;
+  const endAtMs =
+    jobActual?.completed_at_ms ??
+    booking.completed_at_ms ??
+    Date.now();
+
+  const actualMinutes = deriveActualDurationMinutes({
+    startedAtMs,
+    endAtMs,
+    estimatedMinutes: booking.estimated_labor_minutes,
+  });
+  if (actualMinutes == null) return;
+
+  await ctx.db.patch(booking._id, {
+    actual_duration_minutes: actualMinutes,
+    updated_at: Date.now(),
+  });
+}
+
+/**
+ * Diagnostic dump for completed bookings — used to debug schedule-lane
+ * sizing. Returns the timing-relevant fields for each completed booking.
+ *
+ * Invoke via: npx convex run bookings:debugCompletedBookings
+ */
+export const debugScheduleBookingsForRange = internalMutation({
+  args: { dateFrom: v.string(), dateTo: v.string() },
+  handler: async (ctx, args) => {
+    const bookings = await ctx.db.query("bookings").collect();
+    return bookings
+      .filter(
+        (b: any) =>
+          b.scheduled_date >= args.dateFrom &&
+          b.scheduled_date <= args.dateTo,
+      )
+      .map((b: any) => ({
+        id: String(b._id),
+        date: b.scheduled_date,
+        time: b.scheduled_time,
+        status: b.status,
+        estimated: b.estimated_labor_minutes ?? null,
+        actual: b.actual_duration_minutes ?? null,
+      }));
+  },
+});
+
+export const debugCompletedBookings = internalMutation({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 50;
+    const completed = await ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q: any) => q.eq("status", "completed"))
+      .take(limit);
+    const rows = [];
+    for (const b of completed) {
+      const ja = await getLatestJobActualForBooking(ctx, b._id);
+      rows.push({
+        bookingId: String(b._id),
+        scheduled_date: (b as any).scheduled_date,
+        scheduled_time: (b as any).scheduled_time,
+        estimated_labor_minutes: (b as any).estimated_labor_minutes ?? null,
+        actual_duration_minutes: (b as any).actual_duration_minutes ?? null,
+        booking_completed_at_ms: (b as any).completed_at_ms ?? null,
+        vehicle_arrived_at_ms: (b as any).vehicle_arrived_at_ms ?? null,
+        jobActual_started_at: ja?.started_at ?? null,
+        jobActual_completed_at_ms: ja?.completed_at_ms ?? null,
+      });
+    }
+    return rows;
+  },
+});
+
+/**
+ * One-shot data migration: walks completed bookings that pre-date the
+ * early-completion logic and backfills `actual_duration_minutes` from
+ * existing job_actual timestamps. Idempotent — re-running is a no-op
+ * because the live helper skips bookings that already have the field.
+ *
+ * Invoke via:
+ *   npx convex run bookings:backfillEarlyCompletionDurations
+ *   npx convex run bookings:backfillEarlyCompletionDurations '{"shopId":"<id>"}'
+ */
+export const backfillEarlyCompletionDurations = internalMutation({
+  args: {
+    shopId: v.optional(v.id("shops")),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 500;
+
+    const completedBookings = args.shopId
+      ? await ctx.db
+          .query("bookings")
+          .withIndex("by_shop_and_status", (q: any) =>
+            q.eq("shop_id", args.shopId).eq("status", "completed"),
+          )
+          .take(limit)
+      : await ctx.db
+          .query("bookings")
+          .withIndex("by_status", (q: any) => q.eq("status", "completed"))
+          .take(limit);
+
+    let scanned = 0;
+    let patched = 0;
+    let skippedAlreadySet = 0;
+    let skippedNoTiming = 0;
+    let skippedNotEarly = 0;
+
+    for (const booking of completedBookings) {
+      scanned += 1;
+      if ((booking as any).actual_duration_minutes != null) {
+        skippedAlreadySet += 1;
+        continue;
+      }
+
+      const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
+      const startedAtMs =
+        jobActual?.started_at ??
+        (booking as any).vehicle_arrived_at_ms ??
+        null;
+      const endAtMs =
+        jobActual?.completed_at_ms ??
+        (booking as any).completed_at_ms ??
+        null;
+
+      if (startedAtMs == null || endAtMs == null) {
+        skippedNoTiming += 1;
+        continue;
+      }
+
+      const actualMinutes = deriveActualDurationMinutes({
+        startedAtMs,
+        endAtMs,
+        estimatedMinutes: (booking as any).estimated_labor_minutes,
+      });
+      if (actualMinutes == null) {
+        skippedNotEarly += 1;
+        continue;
+      }
+
+      await ctx.db.patch(booking._id, {
+        actual_duration_minutes: actualMinutes,
+        updated_at: Date.now(),
+      });
+      patched += 1;
+    }
+
+    return {
+      scanned,
+      patched,
+      skippedAlreadySet,
+      skippedNoTiming,
+      skippedNotEarly,
+    };
+  },
+});
+
 async function runCompletionSideEffects(ctx: any, booking: any) {
+  await maybePersistEarlyCompletionDuration(ctx, booking);
+
   if (booking.vin) {
     const vehicleOwner = await ctx.db
       .query("vehicle_owners")

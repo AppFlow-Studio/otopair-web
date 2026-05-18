@@ -285,6 +285,42 @@ export const getScheduleContext = query({
   },
 });
 
+export const debugBookingsForRangeNoAuth = query({
+  args: { dateFrom: v.string(), dateTo: v.string() },
+  handler: async (ctx, args) => {
+    const allBookings = await ctx.db.query("bookings").collect();
+    const filtered = allBookings.filter(
+      (b: any) =>
+        b.scheduled_date >= args.dateFrom &&
+        b.scheduled_date <= args.dateTo &&
+        b.status !== "cancelled" &&
+        b.status !== "declined",
+    );
+    return filtered.map((booking: any) => {
+      const SCHEDULE_BLOCK_MIN_MINUTES = 15;
+      const estimatedFallback = booking.estimated_labor_minutes ?? 60;
+      const isCompletedWithActual =
+        booking.status === "completed" &&
+        typeof booking.actual_duration_minutes === "number" &&
+        booking.actual_duration_minutes > 0;
+      const effectiveMinutes = isCompletedWithActual
+        ? Math.max(
+            Math.min(SCHEDULE_BLOCK_MIN_MINUTES, estimatedFallback),
+            Math.min(booking.actual_duration_minutes, estimatedFallback),
+          )
+        : estimatedFallback;
+      return {
+        id: String(booking._id),
+        time: booking.scheduled_time,
+        status: booking.status,
+        estimated: booking.estimated_labor_minutes ?? null,
+        actual: booking.actual_duration_minutes ?? null,
+        effectiveMinutes,
+      };
+    });
+  },
+});
+
 export const getBookingsForRange = query({
   args: {
     dateFrom: v.string(),
@@ -313,6 +349,27 @@ export const getBookingsForRange = query({
           ? await ctx.db.get(booking.mechanic_id)
           : null;
 
+        // Completed bookings honor actual_duration_minutes when shorter than
+        // the original estimate — that's how early-finished jobs free up
+        // their tail-end on the schedule lane. estimated_labor_minutes stays
+        // the source of truth for upcoming/in-progress bookings.
+        //
+        // UI floor: even a 1-min job renders as a 15-min block so the lane
+        // stays scannable, but never larger than the original estimate
+        // (a 10-min estimate keeps its 10-min block).
+        const SCHEDULE_BLOCK_MIN_MINUTES = 15;
+        const estimatedFallback = booking.estimated_labor_minutes ?? 60;
+        const isCompletedWithActual =
+          booking.status === "completed" &&
+          typeof booking.actual_duration_minutes === "number" &&
+          booking.actual_duration_minutes > 0;
+        const effectiveMinutes = isCompletedWithActual
+          ? Math.max(
+              Math.min(SCHEDULE_BLOCK_MIN_MINUTES, estimatedFallback),
+              Math.min(booking.actual_duration_minutes, estimatedFallback),
+            )
+          : estimatedFallback;
+
         return {
           _id: booking._id,
           source: booking.source ?? null,
@@ -320,7 +377,7 @@ export const getBookingsForRange = query({
           invoiceNumber: (booking as any).invoice_number ?? null,
           scheduledDate: booking.scheduled_date,
           scheduledTime: booking.scheduled_time,
-          estimatedMinutes: booking.estimated_labor_minutes ?? 60,
+          estimatedMinutes: effectiveMinutes,
           status: booking.status,
           customerName:
             `${customer?.first_name ?? ""} ${customer?.last_name ?? ""}`.trim() ||

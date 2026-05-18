@@ -9,6 +9,7 @@ function sortSlotsBySchedule<T extends { date: string; start_time: string }>(slo
   });
 }
 
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
@@ -88,10 +89,18 @@ export const getNextAvailableByShop = query({
     shopId: v.id("shops"),
     limit: v.optional(v.number()),
     mechanicId: v.optional(v.id("mechanics")),
+    // Client-supplied "now" in the user's local timezone. The server runs
+    // in UTC, so deriving today/minBookableTime here would drift around
+    // midnight (e.g., 11 PM Hawaii looks like tomorrow in UTC and we'd
+    // skip the whole day). When omitted we fall back to UTC for back-compat
+    // with older app builds.
+    cutoffDate: v.optional(v.string()),
+    cutoffTime: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 12;
-    const today = new Date().toISOString().slice(0, 10);
+    const cutoffDate = args.cutoffDate ?? new Date().toISOString().slice(0, 10);
+    const cutoffTime = args.cutoffTime ?? "00:00";
 
     const slots = await ctx.db
       .query("time_slots")
@@ -101,7 +110,12 @@ export const getNextAvailableByShop = query({
     const filtered = sortSlotsBySchedule(
       slots.filter((slot) => {
         if (!slot.is_available) return false;
-        if (slot.date < today) return false;
+        if (slot.date < cutoffDate) return false;
+        // Within today, drop slots that already started — otherwise a
+        // shop with long hours returns morning slots first and small
+        // limits leave the customer with nothing bookable after the
+        // client's past-time filter runs.
+        if (slot.date === cutoffDate && slot.start_time < cutoffTime) return false;
         if (args.mechanicId !== undefined) {
           return slot.mechanic_id === args.mechanicId;
         }
@@ -134,10 +148,15 @@ export const getNextAvailableByShopPerMechanic = query({
   args: {
     shopId: v.id("shops"),
     limitPerMechanic: v.optional(v.number()),
+    // See `getNextAvailableByShop` for why these are passed from the
+    // client — same drift problem, same fix.
+    cutoffDate: v.optional(v.string()),
+    cutoffTime: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const limitPerMechanic = args.limitPerMechanic ?? 12;
-    const today = new Date().toISOString().slice(0, 10);
+    const cutoffDate = args.cutoffDate ?? new Date().toISOString().slice(0, 10);
+    const cutoffTime = args.cutoffTime ?? "00:00";
 
     const mechanics = await ctx.db
       .query("mechanics")
@@ -153,12 +172,12 @@ export const getNextAvailableByShopPerMechanic = query({
     return mechanics.map((mechanic) => ({
       mechanicId: mechanic._id,
       slots: sortSlotsBySchedule(
-        slots.filter(
-          (slot) =>
-            slot.is_available &&
-            slot.date >= today &&
-            slot.mechanic_id === mechanic._id
-        )
+        slots.filter((slot) => {
+          if (!slot.is_available) return false;
+          if (slot.date < cutoffDate) return false;
+          if (slot.date === cutoffDate && slot.start_time < cutoffTime) return false;
+          return slot.mechanic_id === mechanic._id;
+        })
       ).slice(0, limitPerMechanic),
     }));
   },
@@ -180,7 +199,6 @@ export const getAvailabilityByShopAndMonth = query({
     const end = new Date(args.year, args.month + 1, 0);
     const startStr = start.toISOString().slice(0, 10);
     const endStr = end.toISOString().slice(0, 10);
-
     const slots = await ctx.db
       .query("time_slots")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
@@ -203,6 +221,11 @@ export const getAvailabilityByShopAndMonth = query({
       } else {
         bookedDates.add(slot.date);
       }
+    }
+
+    // A date is only "booked" if it has no available slots at all
+    for (const date of availableDates) {
+      bookedDates.delete(date);
     }
 
     return {

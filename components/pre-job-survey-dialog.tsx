@@ -29,6 +29,9 @@ import {
 import { FirstVisitNotice, SourceBadge } from "@/components/vehicle-passport-section";
 import EnrichmentStatusBanner from "@/components/enrichment-status-banner";
 import {
+  hasText,
+  isTireCondition,
+  tireConditionLabel,
   type PassportSource,
   type RotorCondition,
   type PreJobSurveyPayload,
@@ -639,6 +642,24 @@ function PreJobSurveyDialogBody({
   const [activeSubmitAction, setActiveSubmitAction] = useState<SubmitIntent | null>(null);
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionTabId>("mileage");
+  // If the passport already has the full tire profile (sizes + both
+  // conditions + brand), collapse the tire-condition section to a
+  // "Already on file — looks the same?" snapshot so the mechanic isn't
+  // re-answering the same questions every booking. Expanding restores
+  // the full editor.
+  const passportTireProfileComplete = useMemo(() => {
+    const t = passportData?.passport.tires;
+    if (!t) return false;
+    const hasFront = hasText(t.size_front);
+    const hasRear = hasText(t.size_rear) || hasText(t.size_front);
+    const hasFrontCond = isTireCondition(t.front_condition);
+    const hasRearCond = isTireCondition(t.rear_condition);
+    const hasBrand = hasText(t.brand);
+    return hasFront && hasRear && hasFrontCond && hasRearCond && hasBrand;
+  }, [passportData]);
+  const [tireSectionExpanded, setTireSectionExpanded] = useState(
+    !passportTireProfileComplete,
+  );
   const activeSectionRef = useRef<SectionTabId>("mileage");
   const navRef = useRef<HTMLDivElement | null>(null);
   const scrollStripRef = useRef<HTMLDivElement | null>(null);
@@ -1389,9 +1410,34 @@ function PreJobSurveyDialogBody({
               }}
               sectionId="prejob-section-tire-condition"
               eyebrow="Tire condition"
-              badge="Required"
+              badge={passportTireProfileComplete && !tireSectionExpanded ? "On file" : "Required"}
               accent="required"
             >
+              {passportTireProfileComplete && !tireSectionExpanded ? (
+                <div className="rounded-lg border border-primary/15 bg-muted/40 p-3 text-[12px]">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <p className="font-medium text-foreground">Already on file from last service</p>
+                      <p className="text-muted-foreground">
+                        {tireBrand ? `${tireBrand} · ` : ""}
+                        {frontTireSize}
+                        {rearMatchesFront || !rearTireSize
+                          ? ""
+                          : ` front / ${rearTireSize} rear`}
+                        {" · "}
+                        Front {tireConditionLabel(frontCondition).toLowerCase()}, rear {tireConditionLabel(rearCondition).toLowerCase()}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setTireSectionExpanded(true)}
+                      className="shrink-0 rounded-md border border-primary/20 bg-background px-2.5 py-1 text-[11px] font-medium text-primary hover:bg-primary/5"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                </div>
+              ) : (
               <div className="space-y-2">
                 <div className="rounded-lg border border-primary/10 bg-muted/40 px-3 py-2.5">
                   <label className="flex items-center gap-2 text-[12px] font-medium text-foreground">
@@ -1479,6 +1525,7 @@ function PreJobSurveyDialogBody({
                   />
                 </div>
               </div>
+              )}
             </SectionBlock>
 
             <SectionBlock

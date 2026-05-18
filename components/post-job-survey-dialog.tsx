@@ -277,12 +277,161 @@ const TRANSMISSION_FLUID_DROPDOWN: FluidOption[] = [
   { value: "manual_75w90_gl5", label: "Manual 75W-90 GL-5", aliases: ["75w90 gl-5", "gl-5"] },
 ];
 
+// keep in sync with pre-job-survey-dialog.tsx TIRE_BRAND_OPTIONS — same slugs so pre-job and post-job round-trip
+const TIRE_BRAND_DROPDOWN: FluidOption[] = [
+  { value: "goodyear", label: "Goodyear" },
+  { value: "michelin", label: "Michelin" },
+  { value: "bridgestone", label: "Bridgestone" },
+  { value: "firestone", label: "Firestone" },
+  { value: "continental", label: "Continental" },
+  { value: "pirelli", label: "Pirelli" },
+  { value: "cooper", label: "Cooper" },
+  { value: "hankook", label: "Hankook" },
+  { value: "yokohama", label: "Yokohama" },
+  { value: "bfgoodrich", label: "BFGoodrich", aliases: ["bf goodrich", "b.f. goodrich"] },
+  { value: "toyo", label: "Toyo" },
+  { value: "falken", label: "Falken" },
+  { value: "general", label: "General" },
+  { value: "kumho", label: "Kumho" },
+  { value: "dunlop", label: "Dunlop" },
+  { value: "nitto", label: "Nitto" },
+  { value: "nexen", label: "Nexen" },
+  { value: "mastercraft", label: "Mastercraft" },
+  { value: "sumitomo", label: "Sumitomo" },
+];
+
+// keep in sync with pre-job — pre-job does not yet curate tire model, so post-job defines the canonical slugs
+const TIRE_MODEL_DROPDOWN: FluidOption[] = [
+  // Michelin
+  { value: "michelin_defender", label: "Michelin Defender", aliases: ["defender", "defender t+h", "defender ltx m/s"] },
+  { value: "michelin_crossclimate2", label: "Michelin CrossClimate2", aliases: ["crossclimate", "crossclimate 2", "cc2"] },
+  { value: "michelin_pilot_sport_4s", label: "Michelin Pilot Sport 4S", aliases: ["ps4s", "pilot sport 4s"] },
+  { value: "michelin_pilot_sport_as", label: "Michelin Pilot Sport A/S", aliases: ["pilot sport as", "ps as"] },
+  { value: "michelin_primacy", label: "Michelin Primacy", aliases: ["primacy", "primacy mxm4", "primacy tour"] },
+  // Continental
+  { value: "continental_truecontact", label: "Continental TrueContact Tour", aliases: ["truecontact", "true contact"] },
+  { value: "continental_extremecontact_dws06", label: "Continental ExtremeContact DWS06+", aliases: ["dws06", "extremecontact dws"] },
+  { value: "continental_purecontact_ls", label: "Continental PureContact LS", aliases: ["purecontact"] },
+  { value: "continental_procontact", label: "Continental ProContact", aliases: ["procontact"] },
+  // Bridgestone
+  { value: "bridgestone_turanza", label: "Bridgestone Turanza", aliases: ["turanza"] },
+  { value: "bridgestone_potenza", label: "Bridgestone Potenza", aliases: ["potenza", "potenza re980", "potenza s007"] },
+  { value: "bridgestone_blizzak", label: "Bridgestone Blizzak", aliases: ["blizzak", "blizzak ws90"] },
+  { value: "bridgestone_dueler", label: "Bridgestone Dueler", aliases: ["dueler", "dueler h/l"] },
+  // Goodyear
+  { value: "goodyear_assurance_weatherready", label: "Goodyear Assurance WeatherReady", aliases: ["assurance weatherready", "weatherready"] },
+  { value: "goodyear_eagle_sport", label: "Goodyear Eagle Sport", aliases: ["eagle sport", "eagle f1"] },
+  { value: "goodyear_wrangler", label: "Goodyear Wrangler", aliases: ["wrangler", "wrangler trailrunner"] },
+  // Pirelli
+  { value: "pirelli_pzero", label: "Pirelli P Zero", aliases: ["pzero", "p zero"] },
+  { value: "pirelli_cinturato_p7", label: "Pirelli Cinturato P7", aliases: ["cinturato", "cinturato p7"] },
+  { value: "pirelli_scorpion", label: "Pirelli Scorpion", aliases: ["scorpion", "scorpion verde"] },
+  // Hankook
+  { value: "hankook_kinergy", label: "Hankook Kinergy", aliases: ["kinergy", "kinergy gt", "kinergy pt"] },
+  { value: "hankook_ventus", label: "Hankook Ventus", aliases: ["ventus", "ventus v12"] },
+  { value: "hankook_dynapro", label: "Hankook Dynapro", aliases: ["dynapro"] },
+  // Yokohama
+  { value: "yokohama_avid_ascend", label: "Yokohama Avid Ascend", aliases: ["avid ascend", "avid ascend gt"] },
+  { value: "yokohama_geolandar", label: "Yokohama Geolandar", aliases: ["geolandar"] },
+  { value: "yokohama_advan", label: "Yokohama Advan", aliases: ["advan", "advan sport"] },
+  // Toyo
+  { value: "toyo_proxes", label: "Toyo Proxes", aliases: ["proxes", "proxes sport"] },
+  { value: "toyo_open_country", label: "Toyo Open Country", aliases: ["open country", "open country at"] },
+  // Falken
+  { value: "falken_azenis", label: "Falken Azenis", aliases: ["azenis", "azenis fk510"] },
+  { value: "falken_wildpeak", label: "Falken Wildpeak", aliases: ["wildpeak", "wildpeak at3w"] },
+  // BFGoodrich
+  { value: "bfg_advantage_ta", label: "BFGoodrich Advantage T/A", aliases: ["advantage ta", "advantage t/a"] },
+  { value: "bfg_at_ko2", label: "BFGoodrich All-Terrain T/A KO2", aliases: ["ko2", "at ko2", "all terrain ko2"] },
+  // Cooper / General
+  { value: "cooper_discoverer", label: "Cooper Discoverer", aliases: ["discoverer", "discoverer at3"] },
+  { value: "general_altimax", label: "General AltiMAX", aliases: ["altimax", "altimax rt43"] },
+];
+
+// keep in sync with pre-job — normalized form (e.g. "225/45R18") matches normalizeTireSizeValue() in pre-job-survey-dialog.tsx
+const TIRE_SIZE_DROPDOWN: FluidOption[] = [
+  "195/65R15",
+  "205/55R16",
+  "215/55R17",
+  "215/60R16",
+  "225/45R17",
+  "225/45R18",
+  "225/50R17",
+  "225/55R17",
+  "225/60R17",
+  "235/45R18",
+  "235/55R18",
+  "235/60R18",
+  "245/40R18",
+  "245/40R19",
+  "245/45R18",
+  "245/45R19",
+  "255/35R19",
+  "255/40R19",
+  "255/45R20",
+  "265/70R17",
+  "275/35R19",
+  "275/35R20",
+  "275/40R19",
+  "275/40R20",
+  "275/45R20",
+  "285/45R22",
+  "295/35R21",
+].map((size) => ({
+  value: size,
+  label: size,
+  aliases: [size.replace(/(\d+)\/(\d+)R(\d+)/i, "$1 / $2 R $3"), size.toLowerCase()],
+}));
+
+// keep in sync with pre-job — pre-job does not yet curate pad brand, so post-job defines the canonical slugs
+const BRAKE_PAD_BRAND_DROPDOWN: FluidOption[] = [
+  { value: "akebono", label: "Akebono" },
+  { value: "brembo", label: "Brembo" },
+  { value: "ebc", label: "EBC" },
+  { value: "wagner", label: "Wagner" },
+  { value: "bosch", label: "Bosch" },
+  { value: "raybestos", label: "Raybestos" },
+  { value: "power_stop", label: "Power Stop", aliases: ["powerstop"] },
+  { value: "hawk", label: "Hawk" },
+  { value: "nrs_galvanized", label: "NRS Galvanized", aliases: ["nrs"] },
+  { value: "acdelco", label: "ACDelco", aliases: ["ac delco", "ac-delco"] },
+  { value: "motorcraft", label: "Motorcraft" },
+  { value: "mopar", label: "Mopar" },
+  { value: "stoptech", label: "StopTech", aliases: ["stop tech"] },
+  { value: "centric", label: "Centric" },
+  { value: "carquest", label: "Carquest" },
+  { value: "napa", label: "NAPA" },
+  { value: "oem", label: "OEM (vehicle brand)", aliases: ["oe", "factory"] },
+];
+
+// keep in sync with pre-job — pre-job does not yet curate oil filter brand, so post-job defines the canonical slugs
+const OIL_FILTER_BRAND_DROPDOWN: FluidOption[] = [
+  { value: "mobil_1", label: "Mobil 1", aliases: ["mobil1", "mobil-1"] },
+  { value: "fram", label: "Fram" },
+  { value: "wix", label: "Wix" },
+  { value: "k_n", label: "K&N", aliases: ["kn", "k and n"] },
+  { value: "bosch", label: "Bosch" },
+  { value: "mann", label: "Mann", aliases: ["mann filter", "mann-filter"] },
+  { value: "mahle", label: "Mahle" },
+  { value: "acdelco", label: "ACDelco", aliases: ["ac delco"] },
+  { value: "motorcraft", label: "Motorcraft" },
+  { value: "denso", label: "Denso" },
+  { value: "purolator", label: "Purolator" },
+  { value: "hengst", label: "Hengst" },
+  { value: "oem", label: "OEM (vehicle brand)", aliases: ["oe", "factory"] },
+];
+
 const FLUID_OPTIONS_BY_KEY: Record<string, FluidOption[]> = {
   oil_viscosity: OIL_VISCOSITY_DROPDOWN,
   oil_type: OIL_TYPE_DROPDOWN,
   coolant_type: COOLANT_TYPE_DROPDOWN,
   brake_fluid_type: BRAKE_FLUID_DROPDOWN,
   transmission_fluid_type: TRANSMISSION_FLUID_DROPDOWN,
+  pad_brand: BRAKE_PAD_BRAND_DROPDOWN,
+  tire_brand: TIRE_BRAND_DROPDOWN,
+  tire_model: TIRE_MODEL_DROPDOWN,
+  tire_size_front: TIRE_SIZE_DROPDOWN,
+  tire_size_rear: TIRE_SIZE_DROPDOWN,
 };
 
 const FLUID_PLACEHOLDERS: Record<string, { placeholder: string; otherPlaceholder: string }> = {
@@ -291,6 +440,11 @@ const FLUID_PLACEHOLDERS: Record<string, { placeholder: string; otherPlaceholder
   coolant_type: { placeholder: "Select coolant chemistry…", otherPlaceholder: "Coolant type" },
   brake_fluid_type: { placeholder: "Select DOT spec…", otherPlaceholder: "Brake fluid type" },
   transmission_fluid_type: { placeholder: "Select ATF spec…", otherPlaceholder: "Transmission fluid type" },
+  pad_brand: { placeholder: "Select pad brand…", otherPlaceholder: "Pad brand" },
+  tire_brand: { placeholder: "Select tire brand…", otherPlaceholder: "Tire brand" },
+  tire_model: { placeholder: "Select tire model…", otherPlaceholder: "Tire model" },
+  tire_size_front: { placeholder: "Select size (e.g. 225/45R18)…", otherPlaceholder: "Front tire size" },
+  tire_size_rear: { placeholder: "Select size (e.g. 225/45R18)…", otherPlaceholder: "Rear tire size" },
 };
 
 const OTHER_OPTION_ID = "__other__";
@@ -453,6 +607,69 @@ function FluidSelectField({
           className={fluidOtherInput}
         />
       ) : null}
+    </div>
+  );
+}
+
+function parseOilFilterValue(value: string): { brand: string; code: string } {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return { brand: "", code: "" };
+
+  // Try matching against full multi-word brand labels first, longest-first.
+  const candidates = [...OIL_FILTER_BRAND_DROPDOWN].sort(
+    (a, b) => b.label.length - a.label.length,
+  );
+  const lower = trimmed.toLowerCase();
+  for (const opt of candidates) {
+    const tokens = [opt.label, opt.value.replace(/_/g, " "), ...(opt.aliases ?? [])];
+    for (const token of tokens) {
+      const t = token.toLowerCase();
+      if (lower === t) return { brand: opt.value, code: "" };
+      if (lower.startsWith(t + " ")) {
+        return { brand: opt.value, code: trimmed.slice(t.length).trim() };
+      }
+    }
+  }
+  // Unparseable legacy value — keep it in the code field so it remains visible.
+  return { brand: "", code: trimmed };
+}
+
+function composeOilFilterValue(brand: string, code: string): string {
+  const brandLabel = brand
+    ? OIL_FILTER_BRAND_DROPDOWN.find((o) => o.value === brand)?.label ?? brand
+    : "";
+  return [brandLabel, code.trim()].filter(Boolean).join(" ").trim();
+}
+
+function OilFilterField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const parsed = parseOilFilterValue(value);
+  return (
+    <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+      <FluidSelectField
+        value={parsed.brand}
+        onChange={(nextBrand) =>
+          onChange(composeOilFilterValue(nextBrand, parsed.code))
+        }
+        options={OIL_FILTER_BRAND_DROPDOWN}
+        placeholder="Select filter brand…"
+        otherPlaceholder="Filter brand"
+      />
+      <input
+        value={parsed.code}
+        onChange={(event) =>
+          onChange(composeOilFilterValue(parsed.brand, event.target.value))
+        }
+        placeholder="Part #"
+        inputMode="text"
+        maxLength={24}
+        className="h-10 rounded-lg border border-primary/15 bg-background px-3 text-[13px] outline-none focus:border-primary sm:w-40"
+      />
     </div>
   );
 }
@@ -1416,7 +1633,17 @@ function StepContent(props: {
                       <option value="yes">Yes</option>
                       <option value="no">No</option>
                     </select>
-                  ) : FLUID_OPTIONS_BY_KEY[prompt.key as string] ? (
+                  ) : prompt.key === "oil_filter_part_number" ? (
+                    <OilFilterField
+                      value={String(props.vehicleUpdates[prompt.key] ?? "")}
+                      onChange={(next) =>
+                        props.setVehicleUpdates((current) => ({
+                          ...current,
+                          [prompt.key]: next,
+                        }))
+                      }
+                    />
+                  ) : (
                     <FluidSelectField
                       value={String(props.vehicleUpdates[prompt.key] ?? "")}
                       onChange={(next) =>
@@ -1425,7 +1652,7 @@ function StepContent(props: {
                           [prompt.key]: next,
                         }))
                       }
-                      options={FLUID_OPTIONS_BY_KEY[prompt.key as string]}
+                      options={FLUID_OPTIONS_BY_KEY[prompt.key as string] ?? []}
                       placeholder={
                         FLUID_PLACEHOLDERS[prompt.key as string]?.placeholder ??
                         "Select…"
@@ -1434,18 +1661,6 @@ function StepContent(props: {
                         FLUID_PLACEHOLDERS[prompt.key as string]
                           ?.otherPlaceholder ?? "Other"
                       }
-                    />
-                  ) : (
-                    <input
-                      value={String(props.vehicleUpdates[prompt.key] ?? "")}
-                      onChange={(event) =>
-                        props.setVehicleUpdates((current) => ({
-                          ...current,
-                          [prompt.key]: event.target.value,
-                        }))
-                      }
-                      placeholder="Update"
-                      className="w-full rounded-lg border border-primary/15 bg-background px-3 py-2 text-[13px] outline-none focus:border-primary sm:w-48"
                     />
                   )}
                 </div>

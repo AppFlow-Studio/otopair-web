@@ -22,6 +22,13 @@ export interface TireSpecPickerProps {
   open: boolean;
   initial?: TireSpecs | null;
   vehicleMake?: string | null;
+  /**
+   * Sizes recorded on the vehicle passport by a mechanic (pre-job/post-job).
+   * Tuple [front, rear]. When present, these are surfaced as the first
+   * chips and take precedence over the hardcoded OEM-by-make fallback so
+   * customers see the actual sizes their car was last serviced with.
+   */
+  passportTireSizes?: Array<string | null | undefined>;
   vehicleLabel?: string | null;
   onCancel: () => void;
   onConfirm: (specs: TireSpecs) => void;
@@ -210,16 +217,22 @@ export default function TireSpecPicker({
   open,
   initial,
   vehicleMake,
+  passportTireSizes,
   vehicleLabel,
   onCancel,
   onConfirm,
 }: TireSpecPickerProps) {
   const sizes = useMemo(() => {
+    const fromPassport = (passportTireSizes ?? [])
+      .map((s) => normalizeTireSizeValue(s ?? ""))
+      .filter((s) => s && isValidTireSize(s));
+    const dedupedPassport = Array.from(new Set(fromPassport));
+    if (dedupedPassport.length > 0) return dedupedPassport;
     if (vehicleMake && OEM_SIZES_BY_MAKE[vehicleMake]) {
       return OEM_SIZES_BY_MAKE[vehicleMake];
     }
     return DEFAULT_OEM_SIZES;
-  }, [vehicleMake]);
+  }, [passportTireSizes, vehicleMake]);
 
   const [size, setSize] = useState("");
   const [type, setType] = useState<string | null>(null);

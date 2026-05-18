@@ -8160,7 +8160,7 @@ export const backfillCompletedBooking = mutation({
     //    vehicles → vehicle_configs every query. Mirrors part_snapshots.
     //    Mechanic + catalog totals are split per service proportionally to
     //    each service's catalog weight (defaultLaborHours / labor catalog).
-    if (existingVehicle) {
+    if (vehicle) {
       const catalogServiceMinutes = servicesForOptionCheck.map((svc: any) =>
         svc && svc.default_labor_hours
           ? svc.default_labor_hours * 60
@@ -8189,12 +8189,12 @@ export const backfillCompletedBooking = mutation({
       const snapshotBase = {
         booking_id: bookingId,
         shop_id: args.shopId,
-        mechanic_id: resolvedMechanicId ?? undefined,
-        vehicle_id: existingVehicle._id,
-        vehicle_config_id: existingVehicle.vehicle_config_id ?? undefined,
-        engine_id: existingVehicle.engine_id ?? undefined,
-        chassis_id: existingVehicle.chassis_id ?? undefined,
-        trim_id: existingVehicle.trim_id ?? undefined,
+        mechanic_id: mechanicId ?? undefined,
+        vehicle_id: vehicle._id,
+        vehicle_config_id: vehicle.vehicle_config_id ?? undefined,
+        engine_id: vehicle.engine_id ?? undefined,
+        chassis_id: vehicle.chassis_id ?? undefined,
+        trim_id: vehicle.trim_id ?? undefined,
         source: bookingSource,
         recorded_at: now,
       };

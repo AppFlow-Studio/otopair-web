@@ -315,6 +315,8 @@ export const getBookingsForRange = query({
 
         return {
           _id: booking._id,
+          source: booking.source ?? null,
+          backfilledAtMs: booking.backfilled_at_ms ?? null,
           invoiceNumber: (booking as any).invoice_number ?? null,
           scheduledDate: booking.scheduled_date,
           scheduledTime: booking.scheduled_time,
@@ -822,6 +824,7 @@ export const getShopServicesWithCategories = query({
             name: service.name as string,
             slug: (service.slug ?? "") as string,
             hasOptions: Boolean(service.has_options),
+            requiresParts: Boolean(service.requires_parts),
             defaultLaborHours: (service.default_labor_hours ?? 1) as number,
             displayOrder: (service.display_order ?? 0) as number,
             categoryId: service.service_category_id as string,
@@ -835,6 +838,7 @@ export const getShopServicesWithCategories = query({
       name: string;
       slug: string;
       hasOptions: boolean;
+      requiresParts: boolean;
       defaultLaborHours: number;
       displayOrder: number;
       categoryId: string;

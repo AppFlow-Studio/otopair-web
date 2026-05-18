@@ -439,15 +439,24 @@ export default function CreateBookingDrawer({
   const isToday = date === todayISO;
   const filteredTimeOptions = useMemo(() => {
     const dayHours = getShopHoursForDate(shopHours, date);
+    // Backfill (past date OR earlier-today) should be allowed without
+    // narrowing the time picker — the mechanic is logging history, not
+    // scheduling work, so shop-hours / now-floor filtering doesn't apply.
+    const pastDay = date < todayISO;
     return TIME_OPTIONS.filter((o) => {
-      if (isToday && o.value < minTimeToday) return false;
-      if (dayHours && !dayHours.isClosed) {
-        const m = toMins(o.value);
-        if (m < toMins(dayHours.openTime) || m >= toMins(dayHours.closeTime)) return false;
+      if (!pastDay) {
+        if (isToday && o.value < minTimeToday) {
+          // Allow earlier-today selections for backfill but flag visually via banner.
+          // (Skipping filter — `isBackfill` derived from date+time gates the flow.)
+        }
+        if (dayHours && !dayHours.isClosed) {
+          const m = toMins(o.value);
+          if (m < toMins(dayHours.openTime) || m >= toMins(dayHours.closeTime)) return false;
+        }
       }
       return true;
     });
-  }, [isToday, minTimeToday, shopHours, date]);
+  }, [isToday, minTimeToday, shopHours, date, todayISO]);
 
   const [isSaving, setIsSaving] = useState(false);
   const [outsideHoursConfirmOpen, setOutsideHoursConfirmOpen] = useState(false);
@@ -459,6 +468,87 @@ export default function CreateBookingDrawer({
 
   const shopData = useQuery(api.schedule.getShopServicesWithCategories);
   const createBooking = useMutation(api.bookings.createByShop);
+  const backfillBooking = useMutation((api as any).bookings.backfillCompletedBooking);
+
+  /* ---- Backfill mode: scheduled start is in the past. ---- */
+  // Mechanics use the same drawer to retroactively log finished jobs so the
+  // schedule stays in sync. When `isBackfill` is true the form skips capacity
+  // / overlap / hours validation, swaps "estimate" labels to "actual",
+  // requires completion mileage, and submits via backfillCompletedBooking.
+  const [backfillCompletionMileage, setBackfillCompletionMileage] = useState<number | null>(null);
+  const [backfillTechNotes, setBackfillTechNotes] = useState("");
+  type BackfillPart = {
+    part_name: string;
+    oem_number: string;
+    cost: string;
+    quantity: string;
+  };
+  const [backfillParts, setBackfillParts] = useState<BackfillPart[]>([]);
+  const [backfillSendReceipt, setBackfillSendReceipt] = useState(false);
+  const [backfillDuplicateAcknowledged, setBackfillDuplicateAcknowledged] = useState(false);
+  const [backfillDuplicateConfirmOpen, setBackfillDuplicateConfirmOpen] = useState(false);
+
+  const isBackfill = useMemo(() => {
+    if (!date || !time) return false;
+    const ms = new Date(`${date}T${time}:00`).getTime();
+    return Number.isFinite(ms) && ms < Date.now();
+  }, [date, time]);
+
+  const isRecentBackfill = useMemo(() => {
+    if (!isBackfill || !date || !time) return false;
+    const ms = new Date(`${date}T${time}:00`).getTime();
+    return Date.now() - ms < 24 * 60 * 60 * 1000;
+  }, [isBackfill, date, time]);
+
+  const isStaleBackfill = useMemo(() => {
+    if (!isBackfill || !date || !time) return false;
+    const ms = new Date(`${date}T${time}:00`).getTime();
+    return Date.now() - ms > 30 * 24 * 60 * 60 * 1000;
+  }, [isBackfill, date, time]);
+
+  // Reset receipt toggle when we leave the recent window so it can't be
+  // sent for a job logged a week later (UX from review).
+  useEffect(() => {
+    if (!isRecentBackfill && backfillSendReceipt) setBackfillSendReceipt(false);
+  }, [isRecentBackfill, backfillSendReceipt]);
+
+  // Any time the past-time inputs change, drop a previous duplicate ack so the
+  // server check runs fresh against the new slot.
+  useEffect(() => {
+    setBackfillDuplicateAcknowledged(false);
+  }, [date, time, vin]);
+
+  // For tire-replacement backfills, prefill (or refresh) a parts row built
+  // from the tire spec the mechanic picked. We can't know brand / per-tire
+  // price (those live on tire_quote_responses, which a walk-in tire job
+  // never had), so the synthetic row carries everything we DO know
+  // (size as OEM #, tier+type as the name, quantity) and leaves cost blank
+  // for the mechanic to fill in. A sentinel name prefix prevents duplicates
+  // when the spec is re-edited.
+  const TIRE_PART_PREFIX = "Tires — ";
+  useEffect(() => {
+    if (!isBackfill) return;
+    if (!tireSpecs) return;
+    const label = `${TIRE_PART_PREFIX}${tireSpecs.tier} ${tireSpecs.type}`.trim();
+    const oem = tireSpecs.size;
+    setBackfillParts((rows) => {
+      const existingIdx = rows.findIndex((r) =>
+        r.part_name.startsWith(TIRE_PART_PREFIX),
+      );
+      const next = {
+        part_name: label,
+        oem_number: oem,
+        cost: existingIdx >= 0 ? rows[existingIdx].cost : "",
+        quantity: String(tireSpecs.quantity),
+      };
+      if (existingIdx >= 0) {
+        const copy = [...rows];
+        copy[existingIdx] = next;
+        return copy;
+      }
+      return [next, ...rows];
+    });
+  }, [isBackfill, tireSpecs]);
 
   const categories = useMemo(() => shopData?.categories ?? [], [shopData?.categories]);
 
@@ -518,6 +608,17 @@ export default function CreateBookingDrawer({
     if (!tireService && tireSpecs) setTireSpecs(null);
   }, [optionServices, tireService, tireSpecs]);
 
+  // Any selected service that mandates parts entry in the post-job flow.
+  // For backfill we surface a parts editor up-front since the mechanic is
+  // closing out the job in a single step.
+  const requiresPartsForBackfill = useMemo(() => {
+    if (!isBackfill) return false;
+    const all = categories.flatMap((c: any) => c.services as any[]);
+    return all.some(
+      (s: any) => selectedIds.has(s._id) && Boolean(s.requiresParts),
+    );
+  }, [isBackfill, categories, selectedIds]);
+
   const missingOptionServices = useMemo(
     () =>
       optionServices.filter(
@@ -554,6 +655,7 @@ export default function CreateBookingDrawer({
 
   /* ---- Overlap check ---- */
   const overlapError = useMemo(() => {
+    if (isBackfill) return null;
     if (!mechanicId || !date || !time) return null;
     const estMins = effectiveEstimateMinutes || 60;
     const endTime = getBookingEndTime(time, estMins);
@@ -576,6 +678,7 @@ export default function CreateBookingDrawer({
   const shopMeta = useQuery(api.shops.getMyShops, {} as any) as any[] | undefined;
   const capacityCap = (shopMeta?.[0] as any)?.max_bookings_per_mechanic_rolling_hour ?? 2;
   const capacityWarning = useMemo(() => {
+    if (isBackfill) return null;
     if (!mechanicId || !date || !time) return null;
     const startMins = toMins(time);
     const windowStart = startMins - 60;
@@ -594,6 +697,7 @@ export default function CreateBookingDrawer({
   }, [mechanicId, date, time, effectiveEstimateMinutes, bookings, assignmentPreference, capacityCap]);
 
   const blockingHoursError = useMemo(() => {
+    if (isBackfill) return null;
     if (!date || !time) return null;
 
     const dayHours = getShopHoursForDate(shopHours, date);
@@ -624,6 +728,7 @@ export default function CreateBookingDrawer({
   }, [time, effectiveEstimateMinutes]);
 
   const outsideHoursWarning = useMemo(() => {
+    if (isBackfill) return null;
     if (!date || !time) return null;
     const estMins = effectiveEstimateMinutes || 60;
     const endTime = getBookingEndTime(time, estMins);
@@ -738,10 +843,150 @@ export default function CreateBookingDrawer({
     }
   }
 
+  async function submitBackfill(ackDuplicate = false) {
+    if (!shopData?.shopId) return;
+    // Defense in depth: pickers' onConfirm callbacks call submitBackfill
+    // directly, bypassing handleSubmit's guards. Re-check the required
+    // numeric inputs here so a null never reaches the server validator.
+    if (mechanicEstimateMinutes == null || mechanicEstimateMinutes <= 0) {
+      openSection("mechanic_estimate");
+      onToast("Enter the actual time the job took.");
+      return;
+    }
+    if (mechanicQuotedPrice == null || mechanicQuotedPrice <= 0) {
+      openSection("mechanic_estimate");
+      onToast("Enter the price charged.");
+      return;
+    }
+    if (
+      backfillCompletionMileage == null ||
+      !Number.isFinite(backfillCompletionMileage) ||
+      backfillCompletionMileage < 0
+    ) {
+      openSection("mechanic_estimate");
+      onToast("Enter the completion mileage.");
+      return;
+    }
+    const normalizedParts = backfillParts
+      .map((p) => ({
+        part_name: p.part_name.trim(),
+        oem_number: p.oem_number.trim(),
+        cost: Number(p.cost),
+        quantity: p.quantity.trim() === "" ? 1 : Number(p.quantity),
+      }))
+      .filter(
+        (p) =>
+          p.part_name.length > 0 &&
+          p.oem_number.length > 0 &&
+          Number.isFinite(p.cost) &&
+          Number.isFinite(p.quantity),
+      );
+    if (requiresPartsForBackfill && normalizedParts.length === 0) {
+      openSection("mechanic_estimate");
+      onToast("Add at least one part used for this job.");
+      return;
+    }
+    const partsCost = normalizedParts.reduce(
+      (sum, p) => sum + p.cost * (p.quantity || 1),
+      0,
+    );
+    setIsSaving(true);
+    try {
+      const finalVin = vin.trim() || `SHOP${Date.now()}`;
+      const result = await backfillBooking({
+        shopId: shopData.shopId as Id<"shops">,
+        customerEmail: email.trim() || undefined,
+        customerPhone: normalizePhoneToE164(phone) ?? undefined,
+        customerFirstName: firstName.trim() || undefined,
+        customerLastName: lastName.trim() || undefined,
+        vin: finalVin,
+        vehicleYear: year ? Number(year) : undefined,
+        vehicleMake: make.trim() || undefined,
+        vehicleModel: model.trim() || undefined,
+        vehicleTrim: trim.trim() || undefined,
+        scheduledDate: date,
+        scheduledTime: time,
+        serviceIds: Array.from(selectedIds) as Id<"services">[],
+        customServices: customServices.length > 0 ? customServices : undefined,
+        customerNotes: customerNotes.trim() || undefined,
+        diagnosticSystem:
+          isDiagnostic && diagnosticSystem ? diagnosticSystem : undefined,
+        mechanicId: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
+        selectedServiceOptions:
+          selectedServiceOptions.length > 0
+            ? selectedServiceOptions.map((p) => ({
+                service_id: p.service_id,
+                option_id: p.option_id,
+                option_label: p.option_label,
+                option_type: p.option_type,
+              }))
+            : undefined,
+        tireSpecs: tireSpecs ?? undefined,
+        actualDurationMinutes: mechanicEstimateMinutes,
+        actualPriceCharged: mechanicQuotedPrice,
+        actualPartsCost: partsCost,
+        postjob: {
+          completion_mileage: backfillCompletionMileage,
+          parts_used: normalizedParts,
+          actual_labor_minutes: mechanicEstimateMinutes,
+          actual_parts_cost: partsCost,
+          technician_notes: backfillTechNotes.trim() || undefined,
+        },
+        sendCustomerReceipt: isRecentBackfill ? backfillSendReceipt : false,
+        acknowledgedDuplicate: ackDuplicate || undefined,
+      });
+      onToast(
+        `Backfill logged for ${date}${result?.bookingId ? "" : ""}`,
+      );
+      onClose();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("DUPLICATE_BACKFILL")) {
+        setBackfillDuplicateConfirmOpen(true);
+      } else {
+        onToast(getUserFacingErrorMessage(err));
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function handleSubmit() {
     if (!firstName.trim() || !shopData?.shopId) return;
     if (!isValidUsPhone(phone)) {
       onToast("Enter a valid 10-digit US phone number.");
+      return;
+    }
+
+    if (isBackfill) {
+      if (mechanicEstimateMinutes == null || mechanicEstimateMinutes <= 0) {
+        openSection("mechanic_estimate");
+        onToast("Enter the actual time the job took.");
+        return;
+      }
+      if (mechanicQuotedPrice == null || mechanicQuotedPrice <= 0) {
+        openSection("mechanic_estimate");
+        onToast("Enter the price charged.");
+        return;
+      }
+      if (
+        backfillCompletionMileage == null ||
+        !Number.isFinite(backfillCompletionMileage) ||
+        backfillCompletionMileage < 0
+      ) {
+        openSection("mechanic_estimate");
+        onToast("Enter the completion mileage.");
+        return;
+      }
+      if (missingOptionServices.length > 0) {
+        setShowOptionsPicker(true);
+        return;
+      }
+      if (needsTireSpecs) {
+        setShowTirePicker(true);
+        return;
+      }
+      await submitBackfill(backfillDuplicateAcknowledged);
       return;
     }
 
@@ -801,6 +1046,22 @@ export default function CreateBookingDrawer({
 
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+
+        {isBackfill && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div className="font-semibold">Logging a past job — backfill mode</div>
+            <p className="mt-1 text-xs text-amber-800/90">
+              Capacity, overlap, and shop-hours checks are skipped. Enter the
+              actual time, price charged, and completion mileage. The job will
+              be recorded as completed.
+              {isStaleBackfill && (
+                <span className="block mt-1 font-medium">
+                  Heads up — this is more than 30 days old.
+                </span>
+              )}
+            </p>
+          </div>
+        )}
 
         {/* ── Customer Info ── */}
         <CollapsibleSection
@@ -1134,11 +1395,15 @@ export default function CreateBookingDrawer({
           </div>
         </CollapsibleSection>
 
-        {/* ── Mechanic estimate (walk-in data capture) — mandatory ── */}
+        {/* ── Mechanic estimate (walk-in data capture) — mandatory ──
+            In backfill mode the same two inputs capture ACTUALS instead of
+            estimates: time becomes actual duration, quoted price becomes
+            price charged. The values land in actual_duration_minutes /
+            actual_price_charged on the booking row. */}
         <CollapsibleSection
           sectionKey="mechanic_estimate"
           icon={Clock}
-          label="Mechanic estimate"
+          label={isBackfill ? "Actuals" : "Mechanic estimate"}
           open={openSections.has("mechanic_estimate")}
           onToggle={toggleSection}
           required
@@ -1146,7 +1411,7 @@ export default function CreateBookingDrawer({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <DrawerFieldLabel>
-                Time (minutes){" "}
+                {isBackfill ? "Actual time (minutes)" : "Time (minutes)"}{" "}
                 <span className="text-destructive normal-case tracking-normal font-normal">
                   *
                 </span>
@@ -1181,12 +1446,14 @@ export default function CreateBookingDrawer({
                 </SelectPopover>
               </Select>
               <p className="mt-1 text-xs text-muted-foreground">
-                Your estimate for total job time.
+                {isBackfill
+                  ? "How long the job actually took."
+                  : "Your estimate for total job time."}
               </p>
             </div>
             <div>
               <DrawerFieldLabel>
-                Quoted price ($){" "}
+                {isBackfill ? "Price charged ($)" : "Quoted price ($)"}{" "}
                 <span className="text-destructive normal-case tracking-normal font-normal">
                   *
                 </span>
@@ -1210,10 +1477,191 @@ export default function CreateBookingDrawer({
                 className={drawerInputClassName}
               />
               <p className="mt-1 text-xs text-muted-foreground">
-                What you quoted this walk-in.
+                {isBackfill
+                  ? "What you actually charged the customer."
+                  : "What you quoted this walk-in."}
               </p>
             </div>
           </div>
+
+          {isBackfill && (
+            <div className="mt-4 space-y-3 rounded-xl border border-border bg-muted/20 p-3">
+              <div>
+                <DrawerFieldLabel>
+                  Completion mileage{" "}
+                  <span className="text-destructive normal-case tracking-normal font-normal">
+                    *
+                  </span>
+                </DrawerFieldLabel>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  placeholder="e.g. 84210"
+                  value={backfillCompletionMileage ?? ""}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === "") {
+                      setBackfillCompletionMileage(null);
+                      return;
+                    }
+                    const n = Number(raw);
+                    setBackfillCompletionMileage(
+                      Number.isFinite(n) && n >= 0 ? n : null,
+                    );
+                  }}
+                  className={drawerInputClassName}
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Odometer reading when the job finished.
+                </p>
+              </div>
+              <div>
+                <DrawerFieldLabel>
+                  Parts used{" "}
+                  {requiresPartsForBackfill ? (
+                    <span className="text-destructive normal-case tracking-normal font-normal">
+                      *
+                    </span>
+                  ) : (
+                    <span className="normal-case tracking-normal font-normal text-muted-foreground/60">
+                      (Optional)
+                    </span>
+                  )}
+                </DrawerFieldLabel>
+                <div className="space-y-2">
+                  {backfillParts.map((p, idx) => (
+                    <div
+                      key={idx}
+                      className="grid grid-cols-12 gap-2 items-start"
+                    >
+                      <input
+                        type="text"
+                        placeholder="Part name"
+                        value={p.part_name}
+                        onChange={(e) =>
+                          setBackfillParts((rows) =>
+                            rows.map((r, i) =>
+                              i === idx
+                                ? { ...r, part_name: e.target.value }
+                                : r,
+                            ),
+                          )
+                        }
+                        className={`${drawerInputClassName} col-span-4`}
+                      />
+                      <input
+                        type="text"
+                        placeholder="OEM #"
+                        value={p.oem_number}
+                        onChange={(e) =>
+                          setBackfillParts((rows) =>
+                            rows.map((r, i) =>
+                              i === idx
+                                ? { ...r, oem_number: e.target.value }
+                                : r,
+                            ),
+                          )
+                        }
+                        className={`${drawerInputClassName} col-span-3 font-mono uppercase`}
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        placeholder="Qty"
+                        value={p.quantity}
+                        onChange={(e) =>
+                          setBackfillParts((rows) =>
+                            rows.map((r, i) =>
+                              i === idx
+                                ? { ...r, quantity: e.target.value }
+                                : r,
+                            ),
+                          )
+                        }
+                        className={`${drawerInputClassName} col-span-2`}
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        placeholder="Cost"
+                        value={p.cost}
+                        onChange={(e) =>
+                          setBackfillParts((rows) =>
+                            rows.map((r, i) =>
+                              i === idx ? { ...r, cost: e.target.value } : r,
+                            ),
+                          )
+                        }
+                        className={`${drawerInputClassName} col-span-2`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBackfillParts((rows) =>
+                            rows.filter((_, i) => i !== idx),
+                          )
+                        }
+                        className="col-span-1 text-xs text-muted-foreground hover:text-destructive py-2"
+                        aria-label="Remove part"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setBackfillParts((rows) => [
+                        ...rows,
+                        { part_name: "", oem_number: "", cost: "", quantity: "1" },
+                      ])
+                    }
+                    className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add part
+                  </button>
+                </div>
+                {requiresPartsForBackfill && backfillParts.length === 0 && (
+                  <p className="mt-1 text-xs text-amber-700">
+                    At least one selected service requires parts.
+                  </p>
+                )}
+              </div>
+              <div>
+                <DrawerFieldLabel>What was done</DrawerFieldLabel>
+                <textarea
+                  value={backfillTechNotes}
+                  onChange={(e) =>
+                    setBackfillTechNotes(e.target.value.slice(0, 2000))
+                  }
+                  placeholder="Replaced front pads, resurfaced rotors, road test OK."
+                  rows={3}
+                  className={`${drawerInputClassName} resize-none leading-relaxed`}
+                />
+              </div>
+              {isRecentBackfill && (
+                <label className="flex items-start gap-2 text-xs text-foreground/90">
+                  <input
+                    type="checkbox"
+                    checked={backfillSendReceipt}
+                    onChange={(e) => setBackfillSendReceipt(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    Send completion receipt to customer
+                    <span className="block text-muted-foreground">
+                      Only available for jobs within the last 24 hours.
+                    </span>
+                  </span>
+                </label>
+              )}
+            </div>
+          )}
         </CollapsibleSection>
 
         {/* ── Diagnostic system (only when a diagnostic service is selected) ── */}
@@ -1308,7 +1756,7 @@ export default function CreateBookingDrawer({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <DrawerFieldLabel>Date</DrawerFieldLabel>
-                <DatePicker value={date} min={todayISO} onChange={(next) => next && setDate(next)} />
+                <DatePicker value={date} onChange={(next) => next && setDate(next)} />
               </div>
               <div>
                 <DrawerFieldLabel>Time</DrawerFieldLabel>
@@ -1391,11 +1839,11 @@ export default function CreateBookingDrawer({
           {isSaving ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Creating…</span>
+              <span>{isBackfill ? "Logging…" : "Creating…"}</span>
             </>
           ) : (
             <>
-              <span>Create Booking</span>
+              <span>{isBackfill ? "Log Completed Job" : "Create Booking"}</span>
               <ArrowRight className="w-4 h-4" />
             </>
           )}
@@ -1518,6 +1966,29 @@ export default function CreateBookingDrawer({
       </ConfirmationDialog>
 
       <ConfirmationDialog
+        open={backfillDuplicateConfirmOpen}
+        title="Existing booking found at this time"
+        description="A booking for this vehicle already sits within 30 minutes of the time you picked. Log this backfill anyway, or edit the existing record?"
+        onClose={() => setBackfillDuplicateConfirmOpen(false)}
+        secondaryAction={{
+          label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
+          onAction: () => setBackfillDuplicateConfirmOpen(false),
+          shortcutKey: "c",
+        }}
+        primaryAction={{
+          label: <ShortcutLabel text="Log anyway" shortcutKey="l" />,
+          onAction: () => {
+            setBackfillDuplicateConfirmOpen(false);
+            setBackfillDuplicateAcknowledged(true);
+            void submitBackfill(true);
+          },
+          shortcutKey: "l",
+          variant: "primary",
+          disabled: isSaving,
+        }}
+      />
+
+      <ConfirmationDialog
         open={outsideHoursConfirmOpen}
         title="Book Outside Shop Hours?"
         description="This booking would end after the shop closes. Would you like to create it anyway?"
@@ -1549,6 +2020,8 @@ export default function CreateBookingDrawer({
           setShowOptionsPicker(false);
           if (needsTireSpecs) {
             setShowTirePicker(true);
+          } else if (isBackfill) {
+            void submitBackfill(backfillDuplicateAcknowledged);
           } else if (outsideHoursWarning) {
             setOutsideHoursConfirmOpen(true);
           } else {
@@ -1568,7 +2041,9 @@ export default function CreateBookingDrawer({
         onConfirm={(specs) => {
           setTireSpecs(specs);
           setShowTirePicker(false);
-          if (outsideHoursWarning) {
+          if (isBackfill) {
+            void submitBackfill(backfillDuplicateAcknowledged);
+          } else if (outsideHoursWarning) {
             setOutsideHoursConfirmOpen(true);
           } else {
             void submitBooking(false, undefined, specs);

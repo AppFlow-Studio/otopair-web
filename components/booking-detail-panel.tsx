@@ -580,6 +580,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const cancelTextareaRef = useRef<HTMLTextAreaElement>(null);
     const copyEmailTimeoutRef = useRef<number | null>(null);
 
+    const markNotificationsRead = useMutation(
+      api.notifications.markShopNotificationsReadForBooking,
+    );
     const acceptJob = useMutation(api.bookings.accept);
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
@@ -645,6 +648,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       job?.status === "pending_customer_acceptance" &&
       !isForcedDelayPending &&
       job.customerCanRestoreOriginal !== false;
+
+    // Auto-resolve new_booking / new_quote_request notifications when panel opens
+    useEffect(() => {
+      if (!jobId) return;
+      markNotificationsRead({ bookingId: jobId }).catch(() => {});
+    }, [jobId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Sync assign dropdown with job's current mechanic
     useEffect(() => {

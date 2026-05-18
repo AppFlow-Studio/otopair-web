@@ -819,6 +819,15 @@ export const create = mutation({
       { shopId: args.shop_id, mechanicId, date: args.scheduled_date },
     ]);
 
+    await enqueueNotificationOutbox(ctx, {
+      shopId: args.shop_id,
+      bookingId,
+      channel: "front_desk",
+      category: "new_booking",
+      dedupeKey: `new-booking:${String(bookingId)}`,
+      payload: { source: "customer_self_serve" },
+    });
+
     return bookingId;
   },
 });
@@ -985,6 +994,15 @@ export const createBatch = mutation({
     await syncBookingAssignments(ctx, [
       { shopId: args.shop_id, mechanicId, date: args.scheduled_date },
     ]);
+
+    await enqueueNotificationOutbox(ctx, {
+      shopId: args.shop_id,
+      bookingId,
+      channel: "front_desk",
+      category: "new_booking",
+      dedupeKey: `new-booking:${String(bookingId)}`,
+      payload: { source: "customer_self_serve" },
+    });
 
     return [bookingId];
   },
@@ -3459,6 +3477,25 @@ async function upsertCustomerLateMonitorForBooking(ctx: any, booking: any) {
   await scheduleCustomerLateMonitorProcessing(ctx, window.pushDueAtMs);
 }
 
+async function resolveNeverStartedBellNotificationsForBooking(ctx: any, bookingId: any) {
+  const rows = await ctx.db
+    .query("notification_outbox")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
+    .collect();
+  const now = Date.now();
+  await Promise.all(
+    rows
+      .filter(
+        (r: any) =>
+          r.category === "booking_never_started" &&
+          (r.status === "pending" || r.status === "dispatching"),
+      )
+      .map((r: any) =>
+        ctx.db.patch(r._id, { status: "resolved", processed_at: now, updated_at: now }),
+      ),
+  );
+}
+
 async function upsertLateStartMonitorForBooking(
   ctx: any,
   booking: any,
@@ -4962,6 +4999,7 @@ export async function applyBookingStatusTransition(
   } else {
     await resolveCustomerLateMonitorForBooking(ctx, nextBooking, changedBy);
     await resolveLateStartMonitorForBooking(ctx, nextBooking, changedBy);
+    await resolveNeverStartedBellNotificationsForBooking(ctx, booking._id);
   }
 
   if (["completed", "cancelled", "no_show"].includes(newStatus)) {
@@ -7154,6 +7192,404 @@ export const createByShop = mutation({
   },
 });
 
+// Look up an existing booking at roughly the same slot for the same VIN so the
+// drawer can warn before logging a duplicate backfill. "Roughly" = same shop,
+// same VIN, same scheduled_date, within ±30 minutes of scheduled_time.
+export const findBackfillCollision = query({
+  args: {
+    shopId: v.id("shops"),
+    vin: v.string(),
+    scheduledDate: v.string(),
+    scheduledTime: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    await requireShopStaff(ctx, user._id, args.shopId);
+    const canonicalVin = toCanonicalVin(args.vin);
+    const [h, m] = args.scheduledTime.split(":").map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    const target = h * 60 + m;
+
+    const rows = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_date", (q: any) =>
+        q.eq("shop_id", args.shopId).eq("scheduled_date", args.scheduledDate),
+      )
+      .collect();
+
+    for (const row of rows) {
+      if (row.vin !== canonicalVin) continue;
+      if (row.status === "cancelled" || row.status === "declined") continue;
+      const t = row.scheduled_time as string | undefined;
+      if (!t) continue;
+      const [rh, rm] = t.split(":").map(Number);
+      if (!Number.isFinite(rh) || !Number.isFinite(rm)) continue;
+      if (Math.abs(rh * 60 + rm - target) <= 30) {
+        return {
+          _id: row._id,
+          status: row.status,
+          scheduled_time: row.scheduled_time,
+          backfilled: !!row.backfilled_at_ms,
+        };
+      }
+    }
+    return null;
+  },
+});
+
+// Retroactively log a job that has already been completed.
+// See plan: /Users/temurbeksayfutdinov/.claude/plans/handling-back-fills-before-sparkling-grove.md
+// Differences from createByShop:
+//  - No capacity/overlap/hours validation — the past can't conflict.
+//  - No time_slot creation (would skew mechanic utilization on past dates).
+//  - No labor_quote_snapshots (those track quoted-vs-actual; backfill has no quote).
+//  - No customer_late_monitor (no future threshold).
+//  - No staff `new_booking` notification (mechanic logged their own past work).
+//  - Inserts at status="in_progress" then transitions to "completed" so
+//    runCompletionSideEffects fires exactly once.
+//  - Stores actual_duration_minutes / actual_price_charged on the booking row.
+//  - completed_at_ms = scheduledStart + actualDuration so revenue-by-day reports
+//    attribute revenue to the day the work actually happened.
+export const backfillCompletedBooking = mutation({
+  args: {
+    shopId: v.id("shops"),
+    customerEmail: v.optional(v.string()),
+    customerPhone: v.optional(v.string()),
+    customerFirstName: v.optional(v.string()),
+    customerLastName: v.optional(v.string()),
+    vin: v.string(),
+    vehicleYear: v.optional(v.float64()),
+    vehicleMake: v.optional(v.string()),
+    vehicleModel: v.optional(v.string()),
+    vehicleTrim: v.optional(v.string()),
+    scheduledDate: v.string(),
+    scheduledTime: v.string(),
+    serviceIds: v.array(v.id("services")),
+    customServices: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          durationMinutes: v.optional(v.float64()),
+        }),
+      ),
+    ),
+    mechanicId: v.optional(v.id("mechanics")),
+    customerNotes: v.optional(v.string()),
+    diagnosticSystem: v.optional(
+      v.union(
+        v.literal("brakes"),
+        v.literal("tires_wheels"),
+        v.literal("engine"),
+        v.literal("battery_electrical"),
+        v.literal("not_sure"),
+      ),
+    ),
+    selectedServiceOptions: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          option_id: v.id("service_options"),
+          option_label: v.string(),
+          option_type: v.optional(v.string()),
+        }),
+      ),
+    ),
+    tireSpecs: v.optional(
+      v.object({
+        size: v.string(),
+        type: v.string(),
+        tier: v.string(),
+        quantity: v.number(),
+      }),
+    ),
+    actualDurationMinutes: v.float64(),
+    actualPriceCharged: v.float64(),
+    actualPartsCost: v.optional(v.float64()),
+    postjob: postjobReportValidator,
+    sendCustomerReceipt: v.optional(v.boolean()),
+    acknowledgedDuplicate: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    await requireShopStaff(ctx, user._id, args.shopId);
+
+    const now = Date.now();
+    const canonicalVin = toCanonicalVin(args.vin);
+    const timezone = await getShopTimezone(ctx, args.shopId);
+    const scheduledStartMs = toBookingDateTimeMs(
+      args.scheduledDate,
+      args.scheduledTime,
+      timezone,
+    );
+
+    if (scheduledStartMs >= now) {
+      throw new Error(
+        "Backfill is only for jobs whose scheduled time is in the past.",
+      );
+    }
+
+    if (!args.customerEmail && !args.customerPhone) {
+      throw new Error("Provide a customer email or phone number.");
+    }
+
+    if (args.actualDurationMinutes <= 0) {
+      throw new Error("Actual duration must be greater than zero.");
+    }
+    if (args.actualPriceCharged < 0) {
+      throw new Error("Actual price charged cannot be negative.");
+    }
+
+    if (!args.acknowledgedDuplicate) {
+      const [h, m] = args.scheduledTime.split(":").map(Number);
+      const target = (h ?? 0) * 60 + (m ?? 0);
+      const sameDay = await ctx.db
+        .query("bookings")
+        .withIndex("by_shop_and_date", (q: any) =>
+          q.eq("shop_id", args.shopId).eq("scheduled_date", args.scheduledDate),
+        )
+        .collect();
+      const collision = sameDay.find((row: any) => {
+        if (row.vin !== canonicalVin) return false;
+        if (row.status === "cancelled" || row.status === "declined") return false;
+        const t = row.scheduled_time as string | undefined;
+        if (!t) return false;
+        const [rh, rm] = t.split(":").map(Number);
+        return Math.abs((rh ?? 0) * 60 + (rm ?? 0) - target) <= 30;
+      });
+      if (collision) {
+        throw new Error(
+          `DUPLICATE_BACKFILL:${collision._id}:${collision.scheduled_time}`,
+        );
+      }
+    }
+
+    let normalizedPhone: string | undefined;
+    if (args.customerPhone) {
+      const digits = args.customerPhone.replace(/\D/g, "");
+      if (digits.length === 10) normalizedPhone = `+1${digits}`;
+      else if (digits.length === 11 && digits.startsWith("1"))
+        normalizedPhone = `+${digits}`;
+      else throw new Error("Phone number must be a valid 10-digit US number.");
+    }
+
+    let customer = args.customerEmail
+      ? await ctx.db
+          .query("users")
+          .withIndex("by_email", (q: any) =>
+            q.eq("email", args.customerEmail),
+          )
+          .first()
+      : null;
+    if (!customer && normalizedPhone) {
+      const all = await ctx.db.query("users").collect();
+      customer =
+        all.find((u: any) => u.phone && u.phone === normalizedPhone) ?? null;
+    }
+    if (!customer) {
+      const randomSuffix = Math.random().toString(36).slice(2, 8);
+      const customerId = await ctx.db.insert("users", {
+        clerkUserId: `shop-created-${now}-${randomSuffix}`,
+        createdAt: now,
+        onboardingCompleted: false,
+        email: args.customerEmail,
+        phone: normalizedPhone,
+        first_name: args.customerFirstName,
+        last_name: args.customerLastName,
+      });
+      customer = await ctx.db.get(customerId);
+    }
+    if (!customer) throw new Error("Could not create customer");
+
+    let vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+      .first();
+    if (!vehicle) {
+      const newVehicleId = await ctx.db.insert("vehicles", {
+        vin: canonicalVin,
+        year: args.vehicleYear,
+        metadata: {
+          make: args.vehicleMake,
+          model: args.vehicleModel,
+          trim: args.vehicleTrim,
+        },
+        created_at: now,
+        updated_at: now,
+      });
+      vehicle = await ctx.db.get(newVehicleId);
+    }
+    if (vehicle && !vehicle.vehicle_config_id) {
+      await ctx.scheduler.runAfter(0, api.vehicleEnrichment.runPublic.go, {
+        vin: canonicalVin,
+      });
+    }
+
+    const ownerLink = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin_user", (q: any) =>
+        q.eq("vin", canonicalVin).eq("user_id", customer._id),
+      )
+      .first();
+    if (!ownerLink) {
+      await ctx.db.insert("vehicle_owners", {
+        vin: canonicalVin,
+        user_id: customer._id,
+        status: "active",
+        is_primary: true,
+        added_at: now,
+      });
+    }
+
+    const mechanicId =
+      args.mechanicId ??
+      (
+        await ctx.db
+          .query("mechanics")
+          .withIndex("by_user_and_shop", (q: any) =>
+            q.eq("user_id", user._id).eq("shop_id", args.shopId),
+          )
+          .first()
+      )?._id;
+
+    const customServicesNormalized = args.customServices
+      ?.map((c: any) => ({
+        name: String(c.name).trim(),
+        duration_minutes: c.durationMinutes,
+      }))
+      .filter((c: any) => c.name.length > 0);
+
+    const completedAtMs = Math.min(
+      now,
+      scheduledStartMs + args.actualDurationMinutes * 60_000,
+    );
+    const partsCost = args.actualPartsCost ?? 0;
+    const laborCost = Math.max(0, args.actualPriceCharged - partsCost);
+
+    // Insert at in_progress so the next transition is the canonical
+    // in_progress → completed path, firing runCompletionSideEffects once.
+    const bookingId = await ctx.db.insert("bookings", {
+      labor_cost: laborCost,
+      parts_cost: partsCost,
+      total_cost: args.actualPriceCharged,
+      estimated_labor_minutes: args.actualDurationMinutes,
+      actual_duration_minutes: args.actualDurationMinutes,
+      actual_price_charged: args.actualPriceCharged,
+      backfilled_at_ms: now,
+      mechanic_id: mechanicId,
+      scheduled_date: args.scheduledDate,
+      scheduled_time: args.scheduledTime,
+      service_ids: args.serviceIds,
+      customer_notes: args.customerNotes?.trim() || undefined,
+      diagnostic_system: args.diagnosticSystem,
+      custom_services:
+        customServicesNormalized && customServicesNormalized.length > 0
+          ? customServicesNormalized
+          : undefined,
+      tire_specs: args.tireSpecs,
+      selected_service_options:
+        args.selectedServiceOptions && args.selectedServiceOptions.length > 0
+          ? args.selectedServiceOptions
+          : undefined,
+      shop_id: args.shopId,
+      status: "in_progress",
+      live_stage: "service_in_progress",
+      assignment_preference: args.mechanicId ? "specific_mechanic" : "any",
+      user_id: customer._id,
+      vin: canonicalVin,
+      created_at: now,
+      updated_at: now,
+      source: "mechanic_backfill",
+    });
+
+    await logBookingStatusChange(
+      ctx,
+      bookingId,
+      undefined,
+      "in_progress",
+      user._id,
+      "mechanic_backfill_created",
+    );
+
+    const booking = await ctx.db.get(bookingId);
+    if (!booking) throw new Error("Backfill booking was lost during insert.");
+
+    const normalizedParts = normalizePartsUsed(args.postjob.parts_used ?? []);
+
+    const jobActual = await saveJobActualDraft(ctx, {
+      booking,
+      actuals: {
+        actual_labor_minutes: args.actualDurationMinutes,
+        actual_parts_cost:
+          args.postjob.actual_parts_cost ?? sumPartsCost(normalizedParts),
+        difficulty_rating: args.postjob.difficulty_rating ?? null,
+        technician_notes: args.postjob.technician_notes ?? "",
+        parts_used: normalizedParts,
+        completion_mileage: args.postjob.completion_mileage,
+        vehicle_updates: args.postjob.vehicle_updates ?? undefined,
+        parts_accuracy_status: args.postjob.parts_accuracy_status ?? null,
+        parts_accuracy_feedback: args.postjob.parts_accuracy_feedback ?? null,
+        additional_observations: args.postjob.additional_observations ?? null,
+        flagged_vehicle_specs: args.postjob.flagged_vehicle_specs ?? false,
+        flagged_vehicle_specs_reason:
+          args.postjob.flagged_vehicle_specs_reason ?? null,
+      },
+      now,
+      completedAtMs,
+    });
+
+    await ctx.db.patch(jobActual._id, {
+      postjob_report: args.postjob,
+      completed_at_ms: completedAtMs,
+      finalized_at_ms: now,
+      finalized_by_user_id: user._id,
+      logged_at_ms: now,
+      updated_at: now,
+    });
+
+    await recordPartSnapshotsForBooking(ctx, {
+      booking,
+      jobActualId: jobActual._id,
+      mechanicId: user._id,
+      parts: normalizedParts,
+      now,
+    });
+
+    await upsertVehiclePassportRecord(ctx, {
+      vin: canonicalVin,
+      patch: buildPassportPatchFromPostjob(args.postjob),
+      now,
+      markConfirmed: true,
+    });
+
+    // Drive the in_progress → completed transition through the canonical
+    // helper so status history, slot release (no-op here), assignment sync,
+    // and runCompletionSideEffects all run the same way as a live close-out.
+    await applyBookingStatusTransition(ctx, {
+      booking,
+      newStatus: "completed",
+      changedBy: user._id,
+      reason: "mechanic_backfill",
+    });
+
+    // Force completed_at_ms to the past-date stamp so revenue-by-day and
+    // mechanic-utilization reports attribute the work to the day it happened,
+    // not the day the mechanic logged it.
+    await ctx.db.patch(bookingId, { completed_at_ms: completedAtMs });
+
+    const finalized = await ctx.db.get(jobActual._id);
+    const completedBooking = (await ctx.db.get(bookingId)) ?? booking;
+    if (finalized) {
+      await syncJobActualDerivedData(ctx, {
+        booking: completedBooking,
+        jobActual: finalized,
+        now,
+      });
+    }
+
+    return { bookingId, completedAtMs };
+  },
+});
+
 export const update = mutation({
   args: {
     bookingId: v.id("bookings"),
@@ -8685,6 +9121,18 @@ export const processCustomerLateMonitors = internalMutation({
             scheduledDate: booking.scheduled_date,
             scheduledTime: booking.scheduled_time,
             thresholdDueAtMs: monitor.threshold_due_at_ms,
+          },
+        });
+        await enqueueNotificationOutbox(ctx, {
+          shopId: booking.shop_id,
+          bookingId: booking._id,
+          channel: "front_desk",
+          category: "booking_never_started",
+          dedupeKey: `booking-never-started:${String(booking._id)}:${monitor.threshold_due_at_ms}`,
+          scheduledForMs: monitor.threshold_due_at_ms,
+          payload: {
+            scheduledDate: booking.scheduled_date,
+            scheduledTime: booking.scheduled_time,
           },
         });
         await ctx.db.patch(monitor._id, {

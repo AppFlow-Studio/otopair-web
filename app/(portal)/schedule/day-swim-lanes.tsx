@@ -987,9 +987,11 @@ export default function DaySwimLanes({
                         !isDraggable ? () => onSelectEvent(ev) : undefined
                       }
                     >
-                      <span className="absolute bottom-0.5 right-1 text-[10px] opacity-50 font-medium">
-                        {formatCompactTime(ev.start.getHours(), ev.start.getMinutes())}
-                      </span>
+                      {slotHeight > ROW_HEIGHT * 1.5 && (
+                        <span className="absolute bottom-0.5 right-1 text-[10px] opacity-50 font-medium">
+                          {formatCompactTime(ev.start.getHours(), ev.start.getMinutes())}
+                        </span>
+                      )}
                       {slotHeight <= ROW_HEIGHT * 2 && (ev.vehicleDisplay || ev.licensePlate) ? (
                         <>
                           <div className="flex items-center gap-1.5 min-w-0">
@@ -1059,7 +1061,7 @@ export default function DaySwimLanes({
                       {ev.status === "completed" && (
                         <p className="mt-0.5 inline-flex items-center gap-1 truncate rounded-sm bg-green-100 px-1 text-[10px] font-semibold text-green-800">
                           <CheckCircle2 className="w-2.5 h-2.5 shrink-0" />
-                          Completed
+                          {(ev as any).backfilledAtMs ? "Backfilled" : "Completed"}
                         </p>
                       )}
                       {isPendingCustomer && (

@@ -31,6 +31,7 @@ import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
 import { useEffect, useRef, useState } from "react";
 import { PortalSidebarContext } from "./portal-context";
 import CustomerSchedulingAlerts from "@/components/customer-scheduling-alerts";
+import NotificationBell from "@/components/notification-bell";
 
 const ownerManagerLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
@@ -476,6 +477,9 @@ export default function PortalLayout({
                 </UserButton.UserProfilePage>
               </UserButton>
             </div>
+            {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
+              <NotificationBell />
+            )}
             {displayName && <NavText>{displayName}</NavText>}
           </div>
         </aside>
@@ -492,6 +496,9 @@ export default function PortalLayout({
             </button>
             <Image src="/logo.png" alt="Otopair" width={28} height={28} />
             <span className="text-base font-semibold text-gray-900">Otopair</span>
+            {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
+              <NotificationBell />
+            )}
             <div className="ml-auto">
               <UserButton
                 userProfileProps={{

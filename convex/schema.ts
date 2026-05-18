@@ -1544,6 +1544,13 @@ export default defineSchema({
     catalog_estimated_minutes: v.optional(v.number()),
     mechanic_quoted_price: v.optional(v.number()),
     catalog_quoted_price: v.optional(v.number()),
+    // Backfill: set when the booking was retroactively logged for a job that
+    // already happened. `actual_*` are the mechanic-reported truth, distinct
+    // from the upfront estimates above. `backfilled_at_ms` doubles as both a
+    // boolean marker and the audit timestamp of when the backfill was logged.
+    backfilled_at_ms: v.optional(v.number()),
+    actual_duration_minutes: v.optional(v.number()),
+    actual_price_charged: v.optional(v.number()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])

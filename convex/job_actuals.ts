@@ -385,6 +385,45 @@ export const getPrefillData = query({
       }
     }
 
+    // Tire-replacement prefill — independent of service_vehicle_specs since
+    // tire data isn't engine-keyed. For in-app bookings the accepted
+    // tire_quote_responses row carries brand, model, per-tire price, and qty.
+    // For walk-in / backfilled jobs that row won't exist; fall back to the
+    // booking's tire_specs (size, type, tier, qty) and leave cost at 0 for
+    // the mechanic to fill.
+    if (
+      suggestedParts.length === 0 &&
+      service?.slug === "tire-replacement"
+    ) {
+      const acceptedQuote = await ctx.db
+        .query("tire_quote_responses")
+        .withIndex("by_booking_id", (q: any) =>
+          q.eq("booking_id", booking._id),
+        )
+        .filter((q: any) => q.eq(q.field("superseded_at"), undefined))
+        .first();
+      if (acceptedQuote) {
+        const qty = acceptedQuote.quantity ?? 4;
+        const brandModel = [acceptedQuote.tire_brand, acceptedQuote.tire_model]
+          .filter(Boolean)
+          .join(" ");
+        suggestedParts.push({
+          part_name: brandModel
+            ? `Tires — ${brandModel} (x${qty})`
+            : `Tires (x${qty})`,
+          oem_number: booking.tire_specs?.size ?? "",
+          cost: (acceptedQuote.per_tire_price ?? 0) * qty,
+        });
+      } else if (booking.tire_specs) {
+        const qty = booking.tire_specs.quantity ?? 4;
+        suggestedParts.push({
+          part_name: `Tires — ${booking.tire_specs.tier} ${booking.tire_specs.type} (x${qty})`,
+          oem_number: booking.tire_specs.size,
+          cost: 0,
+        });
+      }
+    }
+
     // OEM catalog recommendations from part_fitments — one entry per service
     // on the booking. Surfaced in the post-job UI as a confirm-or-swap
     // checklist, so the mechanic can verify the catalog matches reality.

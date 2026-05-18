@@ -983,6 +983,7 @@ export default function SchedulePage() {
           customerNote: (b as any).customerNote ?? null,
           recommendationState: (b as any).recommendationState ?? null,
           diagnosticFollowupState: (b as any).diagnosticFollowupState ?? null,
+          backfilledAtMs: (b as any).backfilledAtMs ?? null,
         };
       });
 

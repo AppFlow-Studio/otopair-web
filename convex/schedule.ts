@@ -285,42 +285,6 @@ export const getScheduleContext = query({
   },
 });
 
-export const debugBookingsForRangeNoAuth = query({
-  args: { dateFrom: v.string(), dateTo: v.string() },
-  handler: async (ctx, args) => {
-    const allBookings = await ctx.db.query("bookings").collect();
-    const filtered = allBookings.filter(
-      (b: any) =>
-        b.scheduled_date >= args.dateFrom &&
-        b.scheduled_date <= args.dateTo &&
-        b.status !== "cancelled" &&
-        b.status !== "declined",
-    );
-    return filtered.map((booking: any) => {
-      const SCHEDULE_BLOCK_MIN_MINUTES = 15;
-      const estimatedFallback = booking.estimated_labor_minutes ?? 60;
-      const isCompletedWithActual =
-        booking.status === "completed" &&
-        typeof booking.actual_duration_minutes === "number" &&
-        booking.actual_duration_minutes > 0;
-      const effectiveMinutes = isCompletedWithActual
-        ? Math.max(
-            Math.min(SCHEDULE_BLOCK_MIN_MINUTES, estimatedFallback),
-            Math.min(booking.actual_duration_minutes, estimatedFallback),
-          )
-        : estimatedFallback;
-      return {
-        id: String(booking._id),
-        time: booking.scheduled_time,
-        status: booking.status,
-        estimated: booking.estimated_labor_minutes ?? null,
-        actual: booking.actual_duration_minutes ?? null,
-        effectiveMinutes,
-      };
-    });
-  },
-});
-
 export const getBookingsForRange = query({
   args: {
     dateFrom: v.string(),

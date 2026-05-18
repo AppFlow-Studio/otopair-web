@@ -5278,54 +5278,6 @@ async function maybePersistEarlyCompletionDuration(ctx: any, booking: any) {
  *
  * Invoke via: npx convex run bookings:debugCompletedBookings
  */
-export const debugScheduleBookingsForRange = internalMutation({
-  args: { dateFrom: v.string(), dateTo: v.string() },
-  handler: async (ctx, args) => {
-    const bookings = await ctx.db.query("bookings").collect();
-    return bookings
-      .filter(
-        (b: any) =>
-          b.scheduled_date >= args.dateFrom &&
-          b.scheduled_date <= args.dateTo,
-      )
-      .map((b: any) => ({
-        id: String(b._id),
-        date: b.scheduled_date,
-        time: b.scheduled_time,
-        status: b.status,
-        estimated: b.estimated_labor_minutes ?? null,
-        actual: b.actual_duration_minutes ?? null,
-      }));
-  },
-});
-
-export const debugCompletedBookings = internalMutation({
-  args: { limit: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const limit = args.limit ?? 50;
-    const completed = await ctx.db
-      .query("bookings")
-      .withIndex("by_status", (q: any) => q.eq("status", "completed"))
-      .take(limit);
-    const rows = [];
-    for (const b of completed) {
-      const ja = await getLatestJobActualForBooking(ctx, b._id);
-      rows.push({
-        bookingId: String(b._id),
-        scheduled_date: (b as any).scheduled_date,
-        scheduled_time: (b as any).scheduled_time,
-        estimated_labor_minutes: (b as any).estimated_labor_minutes ?? null,
-        actual_duration_minutes: (b as any).actual_duration_minutes ?? null,
-        booking_completed_at_ms: (b as any).completed_at_ms ?? null,
-        vehicle_arrived_at_ms: (b as any).vehicle_arrived_at_ms ?? null,
-        jobActual_started_at: ja?.started_at ?? null,
-        jobActual_completed_at_ms: ja?.completed_at_ms ?? null,
-      });
-    }
-    return rows;
-  },
-});
-
 /**
  * One-shot data migration: walks completed bookings that pre-date the
  * early-completion logic and backfills `actual_duration_minutes` from

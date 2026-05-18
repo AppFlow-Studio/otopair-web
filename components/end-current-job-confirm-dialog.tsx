@@ -14,13 +14,22 @@ type ActiveJob = {
 type EndCurrentJobConfirmDialogProps = {
   open: boolean;
   activeJob: ActiveJob | null;
+  /** Label for the primary action. Defaults to "Open current job".
+   *  Pass "Got it" or similar when the dialog is informational only. */
+  primaryLabel?: string;
+  /** When false, hides the primary action — used by surfaces that only
+   *  want to acknowledge the conflict (e.g. mechanic dashboard, where the
+   *  in-progress card is already on screen). */
+  showPrimaryAction?: boolean;
   onClose: () => void;
-  onCompleteCurrent: () => void;
+  onCompleteCurrent?: () => void;
 };
 
 export default function EndCurrentJobConfirmDialog({
   open,
   activeJob,
+  primaryLabel = "Open current job",
+  showPrimaryAction = true,
   onClose,
   onCompleteCurrent,
 }: EndCurrentJobConfirmDialogProps) {
@@ -35,14 +44,18 @@ export default function EndCurrentJobConfirmDialog({
       onClose={onClose}
       title={`End current job for ${mechanicName}?`}
       maxWidthClassName="max-w-md"
-      primaryAction={{
-        label: "Complete current & continue",
-        onAction: onCompleteCurrent,
-        variant: "primary",
-        disabled: !activeJob,
-      }}
+      primaryAction={
+        showPrimaryAction
+          ? {
+              label: primaryLabel,
+              onAction: () => onCompleteCurrent?.(),
+              variant: "primary",
+              disabled: !activeJob || !onCompleteCurrent,
+            }
+          : undefined
+      }
       secondaryAction={{
-        label: "Cancel",
+        label: showPrimaryAction ? "Cancel" : "Close",
         onAction: onClose,
         variant: "outline",
       }}
@@ -61,7 +74,8 @@ export default function EndCurrentJobConfirmDialog({
           .
         </p>
         <p className="text-muted-foreground">
-          Please be prepared to fill out the post-job report before starting the new job.
+          Finish that booking — including the post-job report — before starting
+          the new one.
         </p>
       </div>
     </ConfirmationDialog>

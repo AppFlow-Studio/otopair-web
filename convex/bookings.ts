@@ -1318,6 +1318,24 @@ export const getActiveJobConflictForBooking = query({
   },
 });
 
+/**
+ * Fallback for the MECHANIC_HAS_ACTIVE_JOB race path: builds the same
+ * active-job summary directly from a known conflicting booking id, so the
+ * client can render the dialog immediately instead of waiting for
+ * `getActiveJobConflictForBooking` to refresh reactively.
+ */
+export const getActiveJobSummaryById = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (!booking.mechanic_id) return null;
+    return await buildActiveJobSummary(ctx, booking, booking.mechanic_id);
+  },
+});
+
 export const getEarlyPushPreview = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -2502,6 +2520,7 @@ function normalizePartsUsed(parts: Array<{
   quantity?: number | null;
   supplied_by?: string | null;
   part_tier?: string | null;
+  service_id?: Id<"services"> | null;
 }>) {
   return parts
     .map((part) => {
@@ -2522,6 +2541,7 @@ function normalizePartsUsed(parts: Array<{
         quantity,
         supplied_by: suppliedBy,
         part_tier: hasText(part.part_tier) ? (part.part_tier as string).trim() : "oem",
+        service_id: part.service_id ?? undefined,
       };
     })
     .filter(
@@ -2572,6 +2592,10 @@ async function recordPartSnapshotsForBooking(
       quantity?: number;
       supplied_by?: string;
       part_tier?: string;
+      // New: per-part service attribution. Optional so legacy rows (written
+      // before this field existed) keep working — caller falls back to
+      // booking.service_ids[0] for those.
+      service_id?: Id<"services">;
     }>;
     now: number;
   },
@@ -2585,11 +2609,16 @@ async function recordPartSnapshotsForBooking(
     .unique();
   if (!vehicle) return;
 
-  const serviceId = booking.service_ids?.[0] as Id<"services"> | undefined;
-  if (!serviceId) return;
+  const fallbackServiceId = booking.service_ids?.[0] as Id<"services"> | undefined;
 
   for (const part of parts) {
     if (!hasText(part.part_name) && !hasText(part.oem_number)) continue;
+
+    // Per-part service_id wins; fall back to the booking's primary service
+    // for legacy rows. Skip rather than throw if neither is present so a
+    // missing FK doesn't take down the whole batch.
+    const serviceId = part.service_id ?? fallbackServiceId;
+    if (!serviceId) continue;
 
     await insertSnapshotImpl(ctx, {
       booking_id: booking._id,
@@ -3113,6 +3142,20 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
     service_name: service?.name ?? (await resolveServiceNames(ctx, booking.service_ids)).join(", "),
     service_slug: service?.slug ?? null,
     requires_parts: serviceRequiresParts(service),
+    // Per-service variant for the post-job dialog so it can render one parts
+    // block per service that requires parts. `requires_parts` above stays
+    // as the primary-service boolean for legacy callers.
+    parts_required_services: await (async () => {
+      const out: Array<{ _id: Id<"services">; name: string }> = [];
+      for (const sid of booking.service_ids ?? []) {
+        const svc: any = await ctx.db.get(sid);
+        if (!svc) continue;
+        if (serviceRequiresParts(svc)) {
+          out.push({ _id: sid, name: svc.name });
+        }
+      }
+      return out;
+    })(),
     is_complete: missing_fields.length === 0,
     completion_percent: getPassportCompletionPercent(passport),
     missing_fields,

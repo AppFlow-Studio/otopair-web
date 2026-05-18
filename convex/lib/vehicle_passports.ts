@@ -136,6 +136,12 @@ export const postjobPartValidator = v.object({
   // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
   // Otopair currently supplies OEM only; defaults to "oem" downstream.
   part_tier: v.optional(v.string()),
+  // The booking service this part belongs to. Optional for backward compat:
+  // legacy rows leave it unset and downstream snapshot attribution falls
+  // back to booking.service_ids[0]. New rows from the post-job and backfill
+  // flows stamp it so multi-service bookings get accurate per-service
+  // analytics (shop_part_preferences, cost-by-service).
+  service_id: v.optional(v.id("services")),
 });
 
 export const postjobPhotoValidator = v.object({

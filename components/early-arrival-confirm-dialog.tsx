@@ -300,9 +300,12 @@ export default function EarlyArrivalConfirmDialog({
             ) : null}
           </>
         )}
-        <p className="text-xs text-muted-foreground">
-          Scheduled date stays {scheduledDate} so customer-facing references don&apos;t shift days.
-        </p>
+        {preview && preview.proposedScheduledDate !== scheduledDate ? (
+          <p className="text-xs text-muted-foreground">
+            Scheduled date stays {scheduledDate} so customer-facing references
+            don&apos;t shift days.
+          </p>
+        ) : null}
       </div>
     </ConfirmationDialog>
   );

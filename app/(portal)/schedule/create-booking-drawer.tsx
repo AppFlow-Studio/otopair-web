@@ -482,6 +482,10 @@ export default function CreateBookingDrawer({
     oem_number: string;
     cost: string;
     quantity: string;
+    // Which booking service this row belongs to. Drives per-service render
+    // blocks and lets the server stamp service_id on each parts_used entry
+    // so multi-service jobs get accurate downstream attribution.
+    service_id: string;
   };
   const [backfillParts, setBackfillParts] = useState<BackfillPart[]>([]);
   const [backfillSendReceipt, setBackfillSendReceipt] = useState(false);
@@ -518,41 +522,10 @@ export default function CreateBookingDrawer({
     setBackfillDuplicateAcknowledged(false);
   }, [date, time, vin]);
 
-  // For tire-replacement backfills, prefill (or refresh) a parts row built
-  // from the tire spec the mechanic picked. We can't know brand / per-tire
-  // price (those live on tire_quote_responses, which a walk-in tire job
-  // never had), so the synthetic row carries everything we DO know
-  // (size as OEM #, tier+type as the name, quantity) and leaves cost blank
-  // for the mechanic to fill in. A sentinel name prefix prevents duplicates
-  // when the spec is re-edited.
+  // Sentinel prefix for the auto-generated tire-replacement parts row.
+  // Used by the prefill effect (declared after `tireService` is in scope)
+  // and by the per-service prune effect to keep tire rows alive.
   const TIRE_PART_PREFIX = "Tires — ";
-  useEffect(() => {
-    if (!isBackfill) return;
-    if (!tireSpecs) return;
-    const label = `${TIRE_PART_PREFIX}${tireSpecs.tier} ${tireSpecs.type}`.trim();
-    // Size is NOT an OEM number — downstream part_snapshots and
-    // shop_part_preferences key off oem_number. Use a sentinel-prefixed
-    // identifier so size-based grouping still works without polluting the
-    // OEM-number namespace with bare size codes like "225/55R17".
-    const oem = `TIRE-${tireSpecs.size}`;
-    setBackfillParts((rows) => {
-      const existingIdx = rows.findIndex((r) =>
-        r.part_name.startsWith(TIRE_PART_PREFIX),
-      );
-      const next = {
-        part_name: label,
-        oem_number: oem,
-        cost: existingIdx >= 0 ? rows[existingIdx].cost : "",
-        quantity: String(tireSpecs.quantity),
-      };
-      if (existingIdx >= 0) {
-        const copy = [...rows];
-        copy[existingIdx] = next;
-        return copy;
-      }
-      return [next, ...rows];
-    });
-  }, [isBackfill, tireSpecs]);
 
   const categories = useMemo(() => shopData?.categories ?? [], [shopData?.categories]);
 
@@ -612,16 +585,70 @@ export default function CreateBookingDrawer({
     if (!tireService && tireSpecs) setTireSpecs(null);
   }, [optionServices, tireService, tireSpecs]);
 
-  // Any selected service that mandates parts entry in the post-job flow.
-  // For backfill we surface a parts editor up-front since the mechanic is
-  // closing out the job in a single step.
-  const requiresPartsForBackfill = useMemo(() => {
-    if (!isBackfill) return false;
+  // For tire-replacement backfills, prefill (or refresh) a parts row built
+  // from the tire spec the mechanic picked. Walk-in/backfill tire jobs don't
+  // have a tire_quote_responses row, so brand/per-tire price stay blank for
+  // the mechanic to fill. The sentinel TIRE_PART_PREFIX keeps the row from
+  // duplicating when specs are re-edited.
+  useEffect(() => {
+    if (!isBackfill) return;
+    if (!tireSpecs || !tireService) return;
+    const label = `${TIRE_PART_PREFIX}${tireSpecs.tier} ${tireSpecs.type}`.trim();
+    const oem = `TIRE-${tireSpecs.size}`;
+    const tireServiceId = String(tireService._id);
+    setBackfillParts((rows) => {
+      const existingIdx = rows.findIndex((r) =>
+        r.part_name.startsWith(TIRE_PART_PREFIX),
+      );
+      const next: BackfillPart = {
+        part_name: label,
+        oem_number: oem,
+        cost: existingIdx >= 0 ? rows[existingIdx].cost : "",
+        quantity: String(tireSpecs.quantity),
+        service_id: tireServiceId,
+      };
+      if (existingIdx >= 0) {
+        const copy = [...rows];
+        copy[existingIdx] = next;
+        return copy;
+      }
+      return [next, ...rows];
+    });
+  }, [isBackfill, tireSpecs, tireService]);
+
+  // Selected services that mandate parts entry. Surfaced in backfill mode
+  // as one parts block per service so each is attributable downstream.
+  // Tire-replacement is always included when selected — it always uses
+  // parts (the tires themselves) even if the catalog row doesn't flag
+  // requires_parts.
+  const partsRequiredServicesForBackfill = useMemo(() => {
+    if (!isBackfill) return [] as Array<{ _id: string; name: string }>;
     const all = categories.flatMap((c: any) => c.services as any[]);
-    return all.some(
-      (s: any) => selectedIds.has(s._id) && Boolean(s.requiresParts),
-    );
+    return all
+      .filter(
+        (s: any) =>
+          selectedIds.has(s._id) &&
+          (Boolean(s.requiresParts) || isTireReplacementService(s)),
+      )
+      .map((s: any) => ({ _id: String(s._id), name: String(s.name) }));
   }, [isBackfill, categories, selectedIds]);
+  const requiresPartsForBackfill = partsRequiredServicesForBackfill.length > 0;
+
+  // Drop any backfill part rows whose owning service has been deselected
+  // (so the per-service blocks accurately reflect what's selected). Tire
+  // sentinel rows are pruned via tireSpecs=null when the tire service is
+  // removed, handled in the picker cleanup effect above.
+  useEffect(() => {
+    if (!isBackfill) return;
+    const validIds = new Set(partsRequiredServicesForBackfill.map((s) => s._id));
+    setBackfillParts((rows) => {
+      const next = rows.filter(
+        (r) =>
+          r.part_name.startsWith(TIRE_PART_PREFIX) || validIds.has(r.service_id),
+      );
+      return next.length === rows.length ? rows : next;
+    });
+  }, [isBackfill, partsRequiredServicesForBackfill]);
 
   const missingOptionServices = useMemo(
     () =>
@@ -877,6 +904,7 @@ export default function CreateBookingDrawer({
         oem_number: p.oem_number.trim(),
         cost: Number(p.cost),
         quantity: p.quantity.trim() === "" ? 1 : Number(p.quantity),
+        service_id: p.service_id as Id<"services">,
       }))
       .filter(
         (p) =>
@@ -885,9 +913,15 @@ export default function CreateBookingDrawer({
           Number.isFinite(p.cost) &&
           Number.isFinite(p.quantity),
       );
-    if (requiresPartsForBackfill && normalizedParts.length === 0) {
+    // Each parts-required service must contribute ≥1 row. The flat-list
+    // check ("at least one part used") was wrong on multi-service jobs.
+    const missingPartsForServiceName = partsRequiredServicesForBackfill.find(
+      (svc) =>
+        !normalizedParts.some((p) => String(p.service_id) === svc._id),
+    )?.name;
+    if (missingPartsForServiceName) {
       openSection("mechanic_estimate");
-      onToast("Add at least one part used for this job.");
+      onToast(`Add at least one part for ${missingPartsForServiceName}.`);
       return;
     }
     const partsCost = normalizedParts.reduce(
@@ -1525,121 +1559,138 @@ export default function CreateBookingDrawer({
                   Odometer reading when the job finished.
                 </p>
               </div>
-              <div>
-                <DrawerFieldLabel>
-                  Parts used{" "}
-                  {requiresPartsForBackfill ? (
-                    <span className="text-destructive normal-case tracking-normal font-normal">
-                      *
-                    </span>
-                  ) : (
-                    <span className="normal-case tracking-normal font-normal text-muted-foreground/60">
-                      (Optional)
-                    </span>
-                  )}
-                </DrawerFieldLabel>
-                <div className="space-y-2">
-                  {backfillParts.map((p, idx) => (
-                    <div
-                      key={idx}
-                      className="grid grid-cols-12 gap-2 items-start"
-                    >
-                      <input
-                        type="text"
-                        placeholder="Part name"
-                        value={p.part_name}
-                        onChange={(e) =>
-                          setBackfillParts((rows) =>
-                            rows.map((r, i) =>
-                              i === idx
-                                ? { ...r, part_name: e.target.value }
-                                : r,
-                            ),
-                          )
-                        }
-                        className={`${drawerInputClassName} col-span-4`}
-                      />
-                      <input
-                        type="text"
-                        placeholder="OEM #"
-                        value={p.oem_number}
-                        onChange={(e) =>
-                          setBackfillParts((rows) =>
-                            rows.map((r, i) =>
-                              i === idx
-                                ? { ...r, oem_number: e.target.value }
-                                : r,
-                            ),
-                          )
-                        }
-                        className={`${drawerInputClassName} col-span-3 font-mono uppercase`}
-                      />
-                      <input
-                        type="number"
-                        min={0}
-                        step={1}
-                        placeholder="Qty"
-                        value={p.quantity}
-                        onChange={(e) =>
-                          setBackfillParts((rows) =>
-                            rows.map((r, i) =>
-                              i === idx
-                                ? { ...r, quantity: e.target.value }
-                                : r,
-                            ),
-                          )
-                        }
-                        className={`${drawerInputClassName} col-span-2`}
-                      />
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        placeholder="Cost"
-                        value={p.cost}
-                        onChange={(e) =>
-                          setBackfillParts((rows) =>
-                            rows.map((r, i) =>
-                              i === idx ? { ...r, cost: e.target.value } : r,
-                            ),
-                          )
-                        }
-                        className={`${drawerInputClassName} col-span-2`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setBackfillParts((rows) =>
-                            rows.filter((_, i) => i !== idx),
-                          )
-                        }
-                        className="col-span-1 text-xs text-muted-foreground hover:text-destructive py-2"
-                        aria-label="Remove part"
+              {requiresPartsForBackfill && (
+                <div className="space-y-4">
+                  {partsRequiredServicesForBackfill.map((svc) => {
+                    const rowsForService = backfillParts
+                      .map((p, originalIdx) => ({ p, originalIdx }))
+                      .filter(({ p }) => p.service_id === svc._id);
+                    const hasAny = rowsForService.length > 0;
+                    return (
+                      <div
+                        key={svc._id}
+                        className="rounded-lg border border-border bg-background/40 p-3"
                       >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setBackfillParts((rows) => [
-                        ...rows,
-                        { part_name: "", oem_number: "", cost: "", quantity: "1" },
-                      ])
-                    }
-                    className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    Add part
-                  </button>
+                        <DrawerFieldLabel>
+                          {svc.name} — parts used{" "}
+                          <span className="text-destructive normal-case tracking-normal font-normal">
+                            *
+                          </span>
+                        </DrawerFieldLabel>
+                        <div className="space-y-2">
+                          {rowsForService.map(({ p, originalIdx }) => (
+                            <div
+                              key={originalIdx}
+                              className="grid grid-cols-12 gap-2 items-start"
+                            >
+                              <input
+                                type="text"
+                                placeholder="Part name"
+                                value={p.part_name}
+                                onChange={(e) =>
+                                  setBackfillParts((rows) =>
+                                    rows.map((r, i) =>
+                                      i === originalIdx
+                                        ? { ...r, part_name: e.target.value }
+                                        : r,
+                                    ),
+                                  )
+                                }
+                                className={`${drawerInputClassName} col-span-4`}
+                              />
+                              <input
+                                type="text"
+                                placeholder="OEM #"
+                                value={p.oem_number}
+                                onChange={(e) =>
+                                  setBackfillParts((rows) =>
+                                    rows.map((r, i) =>
+                                      i === originalIdx
+                                        ? { ...r, oem_number: e.target.value }
+                                        : r,
+                                    ),
+                                  )
+                                }
+                                className={`${drawerInputClassName} col-span-3 font-mono uppercase`}
+                              />
+                              <input
+                                type="number"
+                                min={0}
+                                step={1}
+                                placeholder="Qty"
+                                value={p.quantity}
+                                onChange={(e) =>
+                                  setBackfillParts((rows) =>
+                                    rows.map((r, i) =>
+                                      i === originalIdx
+                                        ? { ...r, quantity: e.target.value }
+                                        : r,
+                                    ),
+                                  )
+                                }
+                                className={`${drawerInputClassName} col-span-2`}
+                              />
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.01}
+                                placeholder="Cost"
+                                value={p.cost}
+                                onChange={(e) =>
+                                  setBackfillParts((rows) =>
+                                    rows.map((r, i) =>
+                                      i === originalIdx
+                                        ? { ...r, cost: e.target.value }
+                                        : r,
+                                    ),
+                                  )
+                                }
+                                className={`${drawerInputClassName} col-span-2`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setBackfillParts((rows) =>
+                                    rows.filter((_, i) => i !== originalIdx),
+                                  )
+                                }
+                                className="col-span-1 text-xs text-muted-foreground hover:text-destructive py-2"
+                                aria-label="Remove part"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setBackfillParts((rows) => [
+                                ...rows,
+                                {
+                                  part_name: "",
+                                  oem_number: "",
+                                  cost: "",
+                                  quantity: "1",
+                                  service_id: svc._id,
+                                },
+                              ])
+                            }
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Add part
+                          </button>
+                        </div>
+                        {!hasAny && (
+                          <p className="mt-1 text-xs text-amber-700">
+                            Required — add at least one part for {svc.name}.
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-                {requiresPartsForBackfill && backfillParts.length === 0 && (
-                  <p className="mt-1 text-xs text-amber-700">
-                    At least one selected service requires parts.
-                  </p>
-                )}
-              </div>
+              )}
               <div>
                 <DrawerFieldLabel>What was done</DrawerFieldLabel>
                 <textarea

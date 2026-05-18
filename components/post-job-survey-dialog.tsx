@@ -154,6 +154,11 @@ type PartRowState = {
   quantity: number;
   supplied_by: "shop" | "customer";
   part_tier: string;
+  // Optional: which booking service this part belongs to. Stamped by suggestions
+  // and by per-service "Add part" buttons so multi-service jobs attribute
+  // correctly downstream. Legacy rows leave it unset; snapshot path falls
+  // back to booking.service_ids[0].
+  service_id?: string | null;
 };
 
 type PhotoState = {
@@ -464,6 +469,7 @@ function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
         : 1,
     supplied_by: part.supplied_by === "customer" ? "customer" : "shop",
     part_tier: part.part_tier ?? "oem",
+    service_id: part.service_id ?? null,
   }));
 }
 
@@ -662,6 +668,7 @@ function PostJobSurveyDialogBody({
           quantity,
           supplied_by: suppliedBy,
           part_tier: part.part_tier || "oem",
+          service_id: part.service_id ?? null,
         };
       })
       .filter(
@@ -684,7 +691,22 @@ function PostJobSurveyDialogBody({
     }
 
     const normalizedParts = normalizeParts();
-    if (requiresParts && normalizedParts.length === 0) {
+    const partsRequiredList = passportData?.parts_required_services ?? [];
+    if (partsRequiredList.length > 1) {
+      // Multi-service: each parts-required service must contribute ≥1 row.
+      const missing = partsRequiredList.find(
+        (svc) =>
+          !normalizedParts.some(
+            (p) => p.service_id != null && p.service_id === svc._id,
+          ),
+      );
+      if (missing) {
+        setError(`Add at least one part for ${missing.name}.`);
+        const partsIdx = visibleSteps.indexOf("parts");
+        if (partsIdx >= 0) setStepIndex(partsIdx);
+        return;
+      }
+    } else if (requiresParts && normalizedParts.length === 0) {
       setError(
         "This service requires parts — please add at least one part used before submitting."
       );
@@ -947,6 +969,7 @@ function PostJobSurveyDialogBody({
             parts={parts}
             setParts={setParts}
             requiresParts={requiresParts}
+            partsRequiredServices={passportData?.parts_required_services ?? []}
             suggestedParts={prefillData?.suggestedParts ?? []}
             oemRecommendations={prefillData?.oemRecommendations ?? []}
             difficultyRating={difficultyRating}
@@ -1130,6 +1153,9 @@ function StepContent(props: {
   parts: PartRowState[];
   setParts: React.Dispatch<React.SetStateAction<PartRowState[]>>;
   requiresParts: boolean;
+  // List of services on this booking whose catalog row sets requires_parts.
+  // Used by PartsStep to render one parts block per service when length > 1.
+  partsRequiredServices: Array<{ _id: string; name: string }>;
   suggestedParts: JobActualPartPayload[];
   oemRecommendations: OemRecommendation[];
   difficultyRating: string;
@@ -1270,6 +1296,7 @@ function StepContent(props: {
           parts={props.parts}
           setParts={props.setParts}
           requiresParts={props.requiresParts}
+          partsRequiredServices={props.partsRequiredServices}
           suggestedParts={props.suggestedParts}
           oemRecommendations={props.oemRecommendations}
           actualPartsCost={props.actualPartsCost}
@@ -1596,6 +1623,7 @@ function PartsStep({
   parts,
   setParts,
   requiresParts,
+  partsRequiredServices,
   suggestedParts,
   oemRecommendations,
   actualPartsCost,
@@ -1607,6 +1635,9 @@ function PartsStep({
   parts: PartRowState[];
   setParts: React.Dispatch<React.SetStateAction<PartRowState[]>>;
   requiresParts: boolean;
+  // List of services on this booking whose catalog row sets requires_parts.
+  // Used by PartsStep to render one parts block per service when length > 1.
+  partsRequiredServices: Array<{ _id: string; name: string }>;
   suggestedParts: JobActualPartPayload[];
   oemRecommendations: OemRecommendation[];
   actualPartsCost: string;
@@ -1749,6 +1780,16 @@ function PartsStep({
                       {tierLabel ? (
                         <span className="inline-flex shrink-0 items-center rounded-md bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                           {tierLabel}
+                        </span>
+                      ) : null}
+                      {partsRequiredServices.length > 1 && part.service_id ? (
+                        <span
+                          className="inline-flex shrink-0 items-center rounded-md bg-primary/8 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.06em] text-primary/80"
+                          title="Service this part is attributed to"
+                        >
+                          {partsRequiredServices.find(
+                            (s) => s._id === part.service_id,
+                          )?.name ?? ""}
                         </span>
                       ) : null}
                     </div>
@@ -1904,27 +1945,63 @@ function PartsStep({
           })
         )}
 
-        <button
-          type="button"
-          onClick={() =>
-            setParts((current) => [
-              ...current,
-              {
-                part_name: "",
-                brand: "",
-                oem_number: "",
-                cost: "",
-                quantity: 1,
-                supplied_by: "shop",
-                part_tier: "oem",
-              },
-            ])
-          }
-          className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add another part
-        </button>
+        {/*
+          Add-row controls. For multi-service bookings each parts-required
+          service gets its own button so the new row is stamped with the
+          right service_id and snapshots attribute correctly downstream.
+        */}
+        {partsRequiredServices.length > 1 ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {partsRequiredServices.map((svc) => (
+              <button
+                key={svc._id}
+                type="button"
+                onClick={() =>
+                  setParts((current) => [
+                    ...current,
+                    {
+                      part_name: "",
+                      brand: "",
+                      oem_number: "",
+                      cost: "",
+                      quantity: 1,
+                      supplied_by: "shop",
+                      part_tier: "oem",
+                      service_id: svc._id,
+                    },
+                  ])
+                }
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add part for {svc.name}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() =>
+              setParts((current) => [
+                ...current,
+                {
+                  part_name: "",
+                  brand: "",
+                  oem_number: "",
+                  cost: "",
+                  quantity: 1,
+                  supplied_by: "shop",
+                  part_tier: "oem",
+                  service_id: partsRequiredServices[0]?._id ?? null,
+                },
+              ])
+            }
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add another part
+          </button>
+        )}
 
         {totalRecommended > 0 ? (
           <div className="rounded-xl border border-primary/15 bg-primary/5 px-3 py-2 text-[11px] text-foreground">

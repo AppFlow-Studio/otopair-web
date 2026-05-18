@@ -581,6 +581,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
     const [showEarlyArrivalDialog, setShowEarlyArrivalDialog] = useState(false);
     const [showEndCurrentJobDialog, setShowEndCurrentJobDialog] = useState(false);
+    // Holds the conflicting booking id parsed from a server-side race error
+    // (`MECHANIC_HAS_ACTIVE_JOB:<id>`). Used to render the dialog with the
+    // right active-job summary during the small window before reactive
+    // `activeJobConflict` catches up.
+    const [raceConflictBookingId, setRaceConflictBookingId] = useState<
+      Id<"bookings"> | null
+    >(null);
     const [isSubmittingPrejob, setIsSubmittingPrejob] = useState(false);
     const [isSubmittingPostjob, setIsSubmittingPostjob] = useState(false);
     const [copiedField, setCopiedField] = useState<"email" | "vin" | null>(null);
@@ -630,6 +637,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       job && job.mechanicId && job.status === "vehicle_at_shop"
         ? { bookingId: job._id }
         : "skip"
+    );
+    // Race-path fallback: when the server throws MECHANIC_HAS_ACTIVE_JOB:<id>
+    // we know the conflicting id immediately. Fetch its summary directly so
+    // the dialog renders accurate copy without waiting for the reactive
+    // `activeJobConflict` query to catch up.
+    const raceConflictSummary = useQuery(
+      api.bookings.getActiveJobSummaryById,
+      raceConflictBookingId ? { bookingId: raceConflictBookingId } : "skip"
     );
 
     const selectedMechanicId = useMemo(
@@ -683,6 +698,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setShowPostjobDialog(false);
       setShowEarlyArrivalDialog(false);
       setShowEndCurrentJobDialog(false);
+      setRaceConflictBookingId(null);
       setAssigningMechanicId(currentAssignmentKey);
       setIsEditingActuals(false);
       setCopiedField(null);
@@ -943,12 +959,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       // scheduled start, prompt to push the booking earlier instead of
       // committing to the original time. The dialog itself runs either
       // `pushBookingEarlierAndArrive` or falls back to `markVehicleAtShop`.
+      //
+      // We trigger off `customerLateMonitor.scheduledStartMs` because it is
+      // shop-timezone-aware. Computing locally from scheduled_date/_time
+      // would misfire for staff viewing a shop in a different tz. If the
+      // monitor isn't present we skip the prompt — the server preview is the
+      // safety net for eligibility either way.
       if (job.status === "confirmed" && job.mechanicId) {
-        const scheduledStartMs =
-          job.customerLateMonitor?.scheduledStartMs ??
-          Date.parse(`${job.scheduledDate}T${job.scheduledTime}:00`);
+        const scheduledStartMs = job.customerLateMonitor?.scheduledStartMs;
         if (
-          Number.isFinite(scheduledStartMs) &&
+          scheduledStartMs != null &&
           Date.now() <= scheduledStartMs - EARLY_PUSH_THRESHOLD_MS
         ) {
           setShowEarlyArrivalDialog(true);
@@ -1034,7 +1054,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           // Race: another booking became in_progress for this mechanic
           // between when we opened the prejob and when we hit submit. Route
           // back through the confirm dialog so the user can complete the
-          // active job first.
+          // active job first. Parse the conflicting id so the dialog can
+          // render the right summary without waiting on reactive refresh.
+          const parsedId = message.split(":", 2)[1] as Id<"bookings"> | undefined;
+          if (parsedId) setRaceConflictBookingId(parsedId);
           setShowPrejobDialog(false);
           setShowEndCurrentJobDialog(true);
           setActionError("");
@@ -2136,15 +2159,25 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
         <EndCurrentJobConfirmDialog
           open={showEndCurrentJobDialog}
-          activeJob={activeJobConflict ?? null}
-          onClose={() => setShowEndCurrentJobDialog(false)}
-          onCompleteCurrent={() => {
-            const target = activeJobConflict?.bookingId;
+          activeJob={activeJobConflict ?? raceConflictSummary ?? null}
+          primaryLabel={onSwitchToBooking ? "Open current job" : "Got it"}
+          showPrimaryAction={!!onSwitchToBooking}
+          onClose={() => {
             setShowEndCurrentJobDialog(false);
-            if (target && onSwitchToBooking) {
-              onSwitchToBooking(target);
-            }
+            setRaceConflictBookingId(null);
           }}
+          onCompleteCurrent={
+            onSwitchToBooking
+              ? () => {
+                  const target =
+                    activeJobConflict?.bookingId ??
+                    raceConflictSummary?.bookingId;
+                  setShowEndCurrentJobDialog(false);
+                  setRaceConflictBookingId(null);
+                  if (target) onSwitchToBooking(target);
+                }
+              : undefined
+          }
         />
 
         <PreJobSurveyDialog

@@ -21,6 +21,10 @@ type SuggestedPart = {
   part_name: string;
   oem_number: string;
   cost: number;
+  // The booking service this suggestion belongs to. Lets the post-job and
+  // backfill flows render per-service parts blocks and lets snapshot
+  // attribution stay accurate on multi-service jobs.
+  service_id?: Id<"services">;
 };
 
 function medianOf(values: number[]): number {
@@ -291,141 +295,155 @@ export const getPrefillData = query({
     const allSpecs = await ctx.db.query("service_vehicle_specs").collect();
     const specs = allSpecs.find((row: any) => row.engine_id === engine._id);
 
-    const suggestedParts: Array<{
-      part_name: string;
-      oem_number: string;
-      cost: number;
-    }> = [];
+    const suggestedParts: SuggestedPart[] = [];
 
-    // Layers 1 + 2 of the prefill cascade. If either lands a hit, use those
-    // suggestions and skip the legacy slug-based fallback below.
-    if (serviceId && vehicle.vehicle_config_id) {
-      const cascadeSuggestions = await resolveSuggestedPartsFromCascade(ctx, {
-        shopId: booking.shop_id,
-        serviceId,
-        vehicleConfigId: vehicle.vehicle_config_id,
-      });
-      if (cascadeSuggestions.length > 0) {
-        suggestedParts.push(...cascadeSuggestions);
-      }
-    }
+    // Sentinel-prefix tire identifiers so downstream consumers that key on
+    // oem_number (part_snapshots, shop_part_preferences) don't get bare
+    // size codes treated as OEM numbers.
+    const tireOem = (size: string | null | undefined) =>
+      size ? `TIRE-${size}` : "";
 
-    // Layer 3 (catalog floor) — only fires if the cascade is empty. Uses the
-    // service_vehicle_specs OEM number columns indexed by engine to suggest
-    // canonical parts even when there's zero historical data yet.
-    if (suggestedParts.length === 0 && specs && service) {
-      const slug = service.slug;
-      if (slug === "oil-change") {
-        suggestedParts.push({
-          part_name: "Oil Filter",
-          oem_number: specs.oil_filter_oem ?? "",
-          cost: 12,
+    // Per-service suggestion build. Each service in the booking gets its own
+    // shot at: layers 1+2 (cascade) → layer 3 (catalog floor) → tire-specific
+    // prefill. Stamping service_id on every push keeps multi-service jobs
+    // correctly attributed downstream (snapshots, per-service analytics).
+    for (const sid of booking.service_ids ?? []) {
+      const svc: any = await ctx.db.get(sid);
+      if (!svc) continue;
+
+      const before = suggestedParts.length;
+
+      if (vehicle.vehicle_config_id) {
+        const cascadeSuggestions = await resolveSuggestedPartsFromCascade(ctx, {
+          shopId: booking.shop_id,
+          serviceId: sid,
+          vehicleConfigId: vehicle.vehicle_config_id,
         });
-        suggestedParts.push({
-          part_name: `Synthetic Oil ${specs.oil_capacity_qts ?? "-"}qt`,
-          oem_number: specs.oil_viscocity ?? "",
-          cost: 35,
-        });
-        if (specs.oil_drain_plug_gasket_oem) {
-          suggestedParts.push({
-            part_name: "Drain Plug Gasket",
-            oem_number: specs.oil_drain_plug_gasket_oem,
-            cost: 2,
-          });
-        }
-      } else if (slug === "brake-pads") {
-        suggestedParts.push({
-          part_name: "Front Brake Pads",
-          oem_number: specs.front_brake_pad_oem ?? "",
-          cost: 45,
-        });
-        suggestedParts.push({
-          part_name: "Rear Brake Pads",
-          oem_number: specs.rear_brake_pad_oem ?? "",
-          cost: 40,
-        });
-      } else if (slug === "engine-air-filter" && specs.engine_air_filter_oem) {
-        suggestedParts.push({
-          part_name: "Engine Air Filter",
-          oem_number: specs.engine_air_filter_oem,
-          cost: 25,
-        });
-      } else if (slug === "cabin-air-filter" && specs.cabin_air_filter_oem) {
-        suggestedParts.push({
-          part_name: "Cabin Air Filter",
-          oem_number: specs.cabin_air_filter_oem,
-          cost: 22,
-        });
-      } else if (slug === "spark-plugs" && specs.spark_plug_oem) {
-        const qty = specs.spark_plug_quantity ?? 4;
-        suggestedParts.push({
-          part_name: `Spark Plugs (x${qty})`,
-          oem_number: specs.spark_plug_oem,
-          cost: 12 * qty,
-        });
-      } else if (slug === "serpentine-belt" && specs.serpentine_belt_oem) {
-        suggestedParts.push({
-          part_name: "Serpentine Belt",
-          oem_number: specs.serpentine_belt_oem,
-          cost: 45,
-        });
-      } else if (slug === "brake-rotors" && specs.front_brake_rotor_oem) {
-        suggestedParts.push({
-          part_name: "Front Brake Rotors",
-          oem_number: specs.front_brake_rotor_oem ?? "",
-          cost: 85,
-        });
-        if (specs.rear_brake_rotor_oem) {
-          suggestedParts.push({
-            part_name: "Rear Brake Rotors",
-            oem_number: specs.rear_brake_rotor_oem,
-            cost: 75,
-          });
+        for (const s of cascadeSuggestions) {
+          suggestedParts.push({ ...s, service_id: sid });
         }
       }
-    }
 
-    // Tire-replacement prefill — independent of service_vehicle_specs since
-    // tire data isn't engine-keyed. For in-app bookings the accepted
-    // tire_quote_responses row carries brand, model, per-tire price, and qty.
-    // For walk-in / backfilled jobs that row won't exist; fall back to the
-    // booking's tire_specs (size, type, tier, qty) and leave cost at 0 for
-    // the mechanic to fill.
-    if (
-      suggestedParts.length === 0 &&
-      service?.slug === "tire-replacement"
-    ) {
-      const acceptedQuote = await ctx.db
-        .query("tire_quote_responses")
-        .withIndex("by_booking_id", (q: any) =>
-          q.eq("booking_id", booking._id),
-        )
-        .filter((q: any) => q.eq(q.field("superseded_at"), undefined))
-        .first();
-      // Sentinel-prefix tire identifiers so downstream consumers that key on
-      // oem_number (part_snapshots, shop_part_preferences) don't get bare
-      // size codes treated as OEM numbers.
-      const tireOem = (size: string | null | undefined) =>
-        size ? `TIRE-${size}` : "";
-      if (acceptedQuote) {
-        const qty = acceptedQuote.quantity ?? 4;
-        const brandModel = [acceptedQuote.tire_brand, acceptedQuote.tire_model]
-          .filter(Boolean)
-          .join(" ");
-        suggestedParts.push({
-          part_name: brandModel
-            ? `Tires — ${brandModel} (x${qty})`
-            : `Tires (x${qty})`,
-          oem_number: tireOem(booking.tire_specs?.size),
-          cost: (acceptedQuote.per_tire_price ?? 0) * qty,
-        });
-      } else if (booking.tire_specs) {
-        const qty = booking.tire_specs.quantity ?? 4;
-        suggestedParts.push({
-          part_name: `Tires — ${booking.tire_specs.tier} ${booking.tire_specs.type} (x${qty})`,
-          oem_number: tireOem(booking.tire_specs.size),
-          cost: 0,
-        });
+      // Layer 3 catalog floor — only when the cascade produced nothing for
+      // this service. Uses service_vehicle_specs OEM columns indexed by
+      // engine to suggest canonical parts even with zero historical data.
+      if (suggestedParts.length === before && specs) {
+        const slug = svc.slug;
+        if (slug === "oil-change") {
+          suggestedParts.push({
+            part_name: "Oil Filter",
+            oem_number: specs.oil_filter_oem ?? "",
+            cost: 12,
+            service_id: sid,
+          });
+          suggestedParts.push({
+            part_name: `Synthetic Oil ${specs.oil_capacity_qts ?? "-"}qt`,
+            oem_number: specs.oil_viscocity ?? "",
+            cost: 35,
+            service_id: sid,
+          });
+          if (specs.oil_drain_plug_gasket_oem) {
+            suggestedParts.push({
+              part_name: "Drain Plug Gasket",
+              oem_number: specs.oil_drain_plug_gasket_oem,
+              cost: 2,
+              service_id: sid,
+            });
+          }
+        } else if (slug === "brake-pads") {
+          suggestedParts.push({
+            part_name: "Front Brake Pads",
+            oem_number: specs.front_brake_pad_oem ?? "",
+            cost: 45,
+            service_id: sid,
+          });
+          suggestedParts.push({
+            part_name: "Rear Brake Pads",
+            oem_number: specs.rear_brake_pad_oem ?? "",
+            cost: 40,
+            service_id: sid,
+          });
+        } else if (slug === "engine-air-filter" && specs.engine_air_filter_oem) {
+          suggestedParts.push({
+            part_name: "Engine Air Filter",
+            oem_number: specs.engine_air_filter_oem,
+            cost: 25,
+            service_id: sid,
+          });
+        } else if (slug === "cabin-air-filter" && specs.cabin_air_filter_oem) {
+          suggestedParts.push({
+            part_name: "Cabin Air Filter",
+            oem_number: specs.cabin_air_filter_oem,
+            cost: 22,
+            service_id: sid,
+          });
+        } else if (slug === "spark-plugs" && specs.spark_plug_oem) {
+          const qty = specs.spark_plug_quantity ?? 4;
+          suggestedParts.push({
+            part_name: `Spark Plugs (x${qty})`,
+            oem_number: specs.spark_plug_oem,
+            cost: 12 * qty,
+            service_id: sid,
+          });
+        } else if (slug === "serpentine-belt" && specs.serpentine_belt_oem) {
+          suggestedParts.push({
+            part_name: "Serpentine Belt",
+            oem_number: specs.serpentine_belt_oem,
+            cost: 45,
+            service_id: sid,
+          });
+        } else if (slug === "brake-rotors" && specs.front_brake_rotor_oem) {
+          suggestedParts.push({
+            part_name: "Front Brake Rotors",
+            oem_number: specs.front_brake_rotor_oem ?? "",
+            cost: 85,
+            service_id: sid,
+          });
+          if (specs.rear_brake_rotor_oem) {
+            suggestedParts.push({
+              part_name: "Rear Brake Rotors",
+              oem_number: specs.rear_brake_rotor_oem,
+              cost: 75,
+              service_id: sid,
+            });
+          }
+        }
+      }
+
+      // Tire-replacement — independent of service_vehicle_specs. For in-app
+      // bookings the accepted tire_quote_responses row has brand / model /
+      // per-tire price / qty; for walk-in / backfilled jobs fall back to
+      // booking.tire_specs and leave cost 0 for the mechanic to fill.
+      if (suggestedParts.length === before && svc.slug === "tire-replacement") {
+        const acceptedQuote = await ctx.db
+          .query("tire_quote_responses")
+          .withIndex("by_booking_id", (q: any) =>
+            q.eq("booking_id", booking._id),
+          )
+          .filter((q: any) => q.eq(q.field("superseded_at"), undefined))
+          .first();
+        if (acceptedQuote) {
+          const qty = acceptedQuote.quantity ?? 4;
+          const brandModel = [acceptedQuote.tire_brand, acceptedQuote.tire_model]
+            .filter(Boolean)
+            .join(" ");
+          suggestedParts.push({
+            part_name: brandModel
+              ? `Tires — ${brandModel} (x${qty})`
+              : `Tires (x${qty})`,
+            oem_number: tireOem(booking.tire_specs?.size),
+            cost: (acceptedQuote.per_tire_price ?? 0) * qty,
+            service_id: sid,
+          });
+        } else if (booking.tire_specs) {
+          const qty = booking.tire_specs.quantity ?? 4;
+          suggestedParts.push({
+            part_name: `Tires — ${booking.tire_specs.tier} ${booking.tire_specs.type} (x${qty})`,
+            oem_number: tireOem(booking.tire_specs.size),
+            cost: 0,
+            service_id: sid,
+          });
+        }
       }
     }
 
@@ -513,6 +531,7 @@ export const getPrefillData = query({
           part_name: part.part_name,
           oem_number: part.oem_part_number,
           cost: part.average_price,
+          service_id: rec.service_id,
         });
         existingOemNumbers.add(key);
       }

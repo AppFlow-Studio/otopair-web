@@ -109,6 +109,10 @@ export type VehiclePassportData = {
   service_name: string;
   service_slug: string | null;
   requires_parts: boolean;
+  // Per-service variant: every booking service whose catalog row has
+  // requires_parts === true. Drives the per-service parts blocks in the
+  // post-job dialog so multi-service jobs can attribute parts correctly.
+  parts_required_services?: Array<{ _id: string; name: string }>;
   is_complete: boolean;
   completion_percent: number;
   missing_fields: string[];
@@ -146,6 +150,9 @@ export type JobActualPartPayload = {
   // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
   // Otopair currently supplies OEM only; defaults to "oem".
   part_tier?: string;
+  // Which booking service this part belongs to. Optional for backward compat
+  // with legacy rows; snapshot path falls back to booking.service_ids[0].
+  service_id?: string | null;
 };
 
 export type PreJobSurveyPayload = {

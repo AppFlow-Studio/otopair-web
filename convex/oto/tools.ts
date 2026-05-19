@@ -60,7 +60,8 @@ const DATA_TOOLS: OtoToolSchema[] = [
   {
     name: "get_bookings",
     description:
-      "Get the user's bookings filtered by status. Use `status_filter: 'active'` for upcoming/in-progress (statuses: pending, confirmed, in_progress). Use `'completed'` before recommending a new service so you don't duplicate recent work. Use `'all'` only when explicitly asked. Returns most recent first; default limit 5.",
+      "Get the user's bookings filtered by status. Use `status_filter: 'active'` for upcoming/in-progress (statuses: pending, confirmed, in_progress). Use `'completed'` before recommending a new service so you don't duplicate recent work. Use `'all'` only when explicitly asked. Returns most recent first; default limit 5. " +
+      "VEHICLE SCOPING: when the user's question is scoped to a specific car (\"do I have any bookings for this car\", \"on my MKX\", \"my X\"), you MUST pass `vehicle_vin` from the <vehicle> block so the result only includes that vehicle's bookings. Omit `vehicle_vin` only when the user explicitly asks about ALL their cars (\"across all my vehicles\", \"every car\"). Failing to pass the VIN on a car-scoped question is a bug — Haiku will conflate bookings from other vehicles into the response.",
     input_schema: {
       type: "object",
       properties: {
@@ -70,6 +71,11 @@ const DATA_TOOLS: OtoToolSchema[] = [
           description: "Which bookings to return.",
         },
         limit: { type: "integer", minimum: 1, maximum: 20, description: "Default 5." },
+        vehicle_vin: {
+          type: "string",
+          description:
+            "VIN of the active vehicle (read from <vehicle> block). Filters results to that car only. Required for any car-scoped question. Omit only for cross-vehicle queries.",
+        },
       },
       required: ["status_filter"],
     },
@@ -78,11 +84,17 @@ const DATA_TOOLS: OtoToolSchema[] = [
   {
     name: "get_pending_bookings",
     description:
-      "Get the user's PENDING bookings only — bookings that have been created but NOT yet confirmed by the shop (status === 'pending'). Use when the user asks specifically about pending / unconfirmed bookings: \"what's pending?\", \"do I have any pending bookings?\", \"what bookings haven't been confirmed yet?\", \"anything still waiting?\". This is a STRICT SUBSET of get_bookings(status_filter: 'active') — that broader call includes pending + confirmed + in_progress. If the user wants ALL upcoming/active work (including confirmed appointments), call get_bookings(status_filter: 'active') instead. Returns most recent first; default limit 5; max 20. Same OtoBookingSummary shape as get_bookings.",
+      "Get the user's PENDING bookings only — bookings that have been created but NOT yet confirmed by the shop (status === 'pending'). Use when the user asks specifically about pending / unconfirmed bookings: \"what's pending?\", \"do I have any pending bookings?\", \"what bookings haven't been confirmed yet?\", \"anything still waiting?\". This is a STRICT SUBSET of get_bookings(status_filter: 'active') — that broader call includes pending + confirmed + in_progress. If the user wants ALL upcoming/active work (including confirmed appointments), call get_bookings(status_filter: 'active') instead. Returns most recent first; default limit 5; max 20. Same OtoBookingSummary shape as get_bookings. " +
+      "VEHICLE SCOPING: same rule as get_bookings — pass `vehicle_vin` from the <vehicle> block whenever the question is scoped to a specific car. Omit only for cross-vehicle queries.",
     input_schema: {
       type: "object",
       properties: {
         limit: { type: "integer", minimum: 1, maximum: 20, description: "Default 5." },
+        vehicle_vin: {
+          type: "string",
+          description:
+            "VIN of the active vehicle (read from <vehicle> block). Filters results to that car only. Required for any car-scoped question. Omit only for cross-vehicle queries.",
+        },
       },
     },
   },

@@ -675,7 +675,11 @@ async function sendMessageHandlerCore(
       activeRow.ownership?.nickname ?? null,
     );
     if (activeRow.vehicle?._id) {
-      activeVehicle = { id: activeRow.vehicle._id, display };
+      activeVehicle = {
+        id: activeRow.vehicle._id,
+        display,
+        vin: activeRow.vin ?? null,
+      };
     }
   }
 
@@ -2071,9 +2075,17 @@ function buildCallables(
         typeof input.limit === "number" && Number.isFinite(input.limit)
           ? (input.limit as number)
           : undefined;
+      // Vehicle-scoped questions: Haiku passes `vehicle_vin` from the
+      // <vehicle> block to filter to the active car. Cross-vehicle
+      // questions omit it and get every row.
+      const vehicleVinArg =
+        typeof input.vehicle_vin === "string" && input.vehicle_vin.trim().length > 0
+          ? (input.vehicle_vin as string)
+          : undefined;
       return await ctx.runQuery(api.oto.bookings.getBookings, {
         status_filter: statusFilter,
         ...(limit !== undefined ? { limit } : {}),
+        ...(vehicleVinArg !== undefined ? { vehicle_vin: vehicleVinArg } : {}),
       });
     },
 
@@ -2089,8 +2101,13 @@ function buildCallables(
         typeof input.limit === "number" && Number.isFinite(input.limit)
           ? (input.limit as number)
           : undefined;
+      const vehicleVinArg =
+        typeof input.vehicle_vin === "string" && input.vehicle_vin.trim().length > 0
+          ? (input.vehicle_vin as string)
+          : undefined;
       return await ctx.runQuery(api.oto.bookings.getPendingBookings, {
         ...(limit !== undefined ? { limit } : {}),
+        ...(vehicleVinArg !== undefined ? { vehicle_vin: vehicleVinArg } : {}),
       });
     },
 

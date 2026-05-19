@@ -35,6 +35,9 @@ export interface ResolvedVehicle {
   id: string;
   /** "2020 BMW M550i xDrive" — what the AI sees and uses in phrasing. */
   display: string;
+  /** Real VIN. Exposed in the <vehicle> envelope block so Haiku can
+   *  pass it to vehicle-scoped tools like `get_bookings`. */
+  vin: string | null;
 }
 
 export interface HistoryTurn {
@@ -191,14 +194,16 @@ export function buildEnvelope({
   );
 
   if (vehicle) {
-    blocks.push(
-      [
-        `<vehicle>`,
-        `  display: ${vehicle.display}`,
-        `  id: ${vehicle.id}`,
-        `</vehicle>`,
-      ].join("\n"),
-    );
+    const vehicleLines = [
+      `<vehicle>`,
+      `  display: ${vehicle.display}`,
+      `  id: ${vehicle.id}`,
+    ];
+    // Expose VIN so vehicle-scoped tools (get_bookings, etc.) can be
+    // filtered to the active car when the user's question is car-scoped.
+    if (vehicle.vin) vehicleLines.push(`  vin: ${vehicle.vin}`);
+    vehicleLines.push(`</vehicle>`);
+    blocks.push(vehicleLines.join("\n"));
   }
 
   // Conversation state replay (v0.7). Skip the block entirely when there's

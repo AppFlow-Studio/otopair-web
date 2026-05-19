@@ -32,6 +32,7 @@ import { useEffect, useRef, useState } from "react";
 import { PortalSidebarContext } from "./portal-context";
 import CustomerSchedulingAlerts from "@/components/customer-scheduling-alerts";
 import NotificationBell from "@/components/notification-bell";
+import ActiveJobStrip from "@/components/active-job-strip";
 
 const ownerManagerLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
@@ -554,6 +555,7 @@ export default function PortalLayout({
           </header>
 
           <main className="flex-1 px-6 pt-6 pb-0">
+            <ActiveJobStrip />
             <CustomerSchedulingAlerts />
             {children}
           </main>

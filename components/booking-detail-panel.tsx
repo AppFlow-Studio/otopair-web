@@ -960,13 +960,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       // committing to the original time. The dialog itself runs either
       // `pushBookingEarlierAndArrive` or falls back to `markVehicleAtShop`.
       //
-      // We trigger off `customerLateMonitor.scheduledStartMs` because it is
-      // shop-timezone-aware. Computing locally from scheduled_date/_time
-      // would misfire for staff viewing a shop in a different tz. If the
-      // monitor isn't present we skip the prompt — the server preview is the
-      // safety net for eligibility either way.
+      // Prefer the late monitor's scheduledStartMs when present (always
+      // shop-timezone-aware), and fall back to job.scheduledStartMs — also
+      // computed server-side in `getJobDetail` with the shop's tz. The
+      // monitor row can be absent on bookings created before the late-monitor
+      // wiring, or once it has been resolved, so the fallback keeps the
+      // early-push prompt firing for those.
       if (job.status === "confirmed" && job.mechanicId) {
-        const scheduledStartMs = job.customerLateMonitor?.scheduledStartMs;
+        const scheduledStartMs =
+          job.customerLateMonitor?.scheduledStartMs ?? job.scheduledStartMs;
         if (
           scheduledStartMs != null &&
           Date.now() <= scheduledStartMs - EARLY_PUSH_THRESHOLD_MS

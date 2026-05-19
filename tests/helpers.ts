@@ -31,13 +31,32 @@ const SERVICE_DEFAULTS = {
  * Seed a confirmed booking with: a shop owned by `owner`, a customer, one
  * service, and a booking already in `confirmed` status. Returns the ids you
  * need plus the Clerk subject strings so callers can `withIdentity`.
+ *
+ * Options:
+ *   - scheduledDate / scheduledTime — override the booking slot
+ *   - status — override booking status (e.g. "in_progress" for active-job tests)
+ *   - estimatedLaborMinutes — override duration
  */
-export async function seedConfirmedBooking(t: TestCtx): Promise<SeedResult> {
-  return await t.run(async (ctx) => {
+export async function seedConfirmedBooking(
+  t: TestCtx,
+  opts: {
+    scheduledDate?: string;
+    scheduledTime?: string;
+    status?: string;
+    estimatedLaborMinutes?: number;
+    /**
+     * When true, seed wide-open shop_hours rows for all 7 days so reschedule /
+     * scheduling-validation flows don't trip "shop is closed". Off by default
+     * to preserve existing customer_late.test.ts seeds.
+     */
+    seedWideOpenHours?: boolean;
+  } = {},
+): Promise<SeedResult> {
+  const result = await t.run(async (ctx) => {
     const now = Date.now();
 
-    const ownerClerkId = `clerk_owner_${now}`;
-    const customerClerkId = `clerk_customer_${now}`;
+    const ownerClerkId = `clerk_owner_${now}_${Math.random().toString(36).slice(2)}`;
+    const customerClerkId = `clerk_customer_${now}_${Math.random().toString(36).slice(2)}`;
 
     const ownerId = await ctx.db.insert("users", {
       clerkUserId: ownerClerkId,
@@ -88,10 +107,10 @@ export async function seedConfirmedBooking(t: TestCtx): Promise<SeedResult> {
       mechanic_id: mechanicId,
       vin: "1HGCM82633A004352",
       service_ids: [serviceId],
-      scheduled_date: "2026-05-17",
-      scheduled_time: "14:00",
-      status: "confirmed",
-      estimated_labor_minutes: 30,
+      scheduled_date: opts.scheduledDate ?? "2026-05-17",
+      scheduled_time: opts.scheduledTime ?? "14:00",
+      status: opts.status ?? "confirmed",
+      estimated_labor_minutes: opts.estimatedLaborMinutes ?? 30,
       created_at: now,
       updated_at: now,
     } as any);
@@ -106,6 +125,55 @@ export async function seedConfirmedBooking(t: TestCtx): Promise<SeedResult> {
       bookingId,
     };
   });
+
+  if (opts.seedWideOpenHours) {
+    await t.run(async (ctx) => {
+      const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      for (let day = 0; day < 7; day++) {
+        await ctx.db.insert("shops_hours", {
+          shop_id: result.shopId,
+          day_of_week: day,
+          day_name: dayNames[day],
+          open_time: "08:00",
+          close_time: "20:00",
+          is_closed: false,
+        } as any);
+      }
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Like `seedConfirmedBooking` but the booking is already in `in_progress`
+ * with a paired job_actuals row (started_at = now by default). Use for
+ * active-job-flow tests where the booking must already be running.
+ */
+export async function seedInProgressBooking(
+  t: TestCtx,
+  opts: {
+    scheduledDate?: string;
+    scheduledTime?: string;
+    startedAtMs?: number;
+  } = {},
+): Promise<SeedResult> {
+  const seed = await seedConfirmedBooking(t, {
+    scheduledDate: opts.scheduledDate,
+    scheduledTime: opts.scheduledTime,
+    status: "in_progress",
+  });
+  await t.run(async (ctx) => {
+    const now = Date.now();
+    await ctx.db.insert("job_actuals", {
+      booking_id: seed.bookingId,
+      mechanic_id: seed.mechanicId,
+      started_at: opts.startedAtMs ?? now,
+      created_at: now,
+      updated_at: now,
+    } as any);
+  });
+  return seed;
 }
 
 /** Convenience: build an identity object accepted by t.withIdentity. */

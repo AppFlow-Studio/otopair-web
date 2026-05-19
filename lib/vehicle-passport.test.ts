@@ -112,6 +112,13 @@ test("serviceLikelyUsesParts respects explicit flag", () => {
   assert.equal(serviceLikelyUsesParts("oil-change", false), false);
 });
 
+test("serviceLikelyUsesParts treats tire-replacement as parts-using", () => {
+  assert.equal(serviceLikelyUsesParts("tire-replacement"), true);
+  assert.equal(serviceLikelyUsesParts("tire_replacement"), true);
+  assert.equal(serviceLikelyUsesParts("tire-rotation"), false);
+  assert.equal(serviceLikelyUsesParts("wheel-alignment"), false);
+});
+
 test("oil-change prompts include oil filter and oil fluid confirmations", () => {
   const prompts = getVehicleUpdatePrompts("oil-change", basePassport);
 

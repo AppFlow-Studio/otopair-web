@@ -189,6 +189,7 @@ const SERVICES = [
     has_options: true,
     is_labor_only: false,
     name: "Tire Replacement",
+    requires_parts: true,
     slug: "tire-replacement",
   },
   {
@@ -778,6 +779,7 @@ export const seedServicesCatalog = mutation({
         is_labor_only: svc.is_labor_only,
         has_options: svc.has_options,
         display_order: svc.display_order,
+        ...("requires_parts" in svc ? { requires_parts: svc.requires_parts } : {}),
       });
       serviceIdBySlug[svc.slug] = id;
     }

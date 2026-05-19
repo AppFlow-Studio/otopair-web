@@ -1295,6 +1295,72 @@ export const getMechanicActiveJob = query({
 });
 
 /**
+ * Role-aware: returns whatever the persistent header strip should show.
+ *  - mechanic: their single in_progress booking (or null)
+ *  - owner / manager / front_desk: the list of all in_progress bookings
+ *    across all mechanics in their primary shop
+ *  - anyone else (no shop access): null
+ *
+ * Cheap to subscribe to; cached by Convex. Mounted globally in the portal
+ * layout so the strip shows on every page.
+ */
+export const getActiveJobsForHeader = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return null;
+
+    const mechanicContext = await getMechanicMembershipForUser(
+      ctx,
+      user._id,
+      primary.shopId,
+    );
+
+    if (mechanicContext) {
+      const active = await findMechanicActiveBooking(
+        ctx,
+        primary.shopId,
+        mechanicContext.mechanic._id,
+      );
+      if (!active) return { kind: "mechanic" as const, job: null };
+      const jobActual = await getLatestJobActualForBooking(ctx, active._id);
+      const vehicle = active.vin ? await resolveVehicleLabel(ctx, active.vin) : null;
+      const serviceNames = await resolveServiceNames(ctx, active.service_ids);
+      return {
+        kind: "mechanic" as const,
+        job: {
+          bookingId: active._id,
+          vehicleLabel: vehicle?.full ?? vehicle?.short ?? "Vehicle",
+          serviceSummary: serviceNames.join(" · "),
+          startedAtMs: jobActual?.started_at ?? null,
+        },
+      };
+    }
+
+    const inProgress = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_status", (q: any) =>
+        q.eq("shop_id", primary.shopId).eq("status", "in_progress"),
+      )
+      .collect();
+
+    if (inProgress.length === 0) {
+      return { kind: "owner" as const, count: 0, firstBookingId: null };
+    }
+
+    inProgress.sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+    return {
+      kind: "owner" as const,
+      count: inProgress.length,
+      firstBookingId: inProgress[0]._id,
+    };
+  },
+});
+
+/**
  * Booking-centric variant: returns the active in_progress booking blocking
  * THIS booking from starting (same mechanic, different booking). Returns
  * null if the booking has no mechanic, or if the mechanic is free.
@@ -6401,6 +6467,12 @@ export const getJobDetail = query({
       : null;
     const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
     const lateMonitor = await getCustomerLateMonitorByBookingId(ctx, booking._id);
+    const shopTimezone = await getShopTimezone(ctx, booking.shop_id);
+    const scheduledStartMs = toBookingDateTimeMs(
+      booking.scheduled_date,
+      booking.scheduled_time,
+      shopTimezone,
+    );
 
     const inProgressPhotosResolved = jobActual?.in_progress_photos
       ? (
@@ -6437,6 +6509,7 @@ export const getJobDetail = query({
       liveStage: booking.live_stage ?? null,
       scheduledDate: booking.scheduled_date,
       scheduledTime: booking.scheduled_time,
+      scheduledStartMs,
       laborCost: booking.labor_cost,
       partsCost: booking.parts_cost,
       totalCost: booking.total_cost,

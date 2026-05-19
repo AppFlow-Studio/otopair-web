@@ -320,6 +320,8 @@ export function serviceRequiresParts(service: {
     slug.includes("filter") ||
     slug.includes("spark") ||
     slug.includes("belt") ||
-    slug.includes("battery")
+    slug.includes("battery") ||
+    slug.includes("tire-replacement") ||
+    slug.includes("tire_replacement")
   );
 }

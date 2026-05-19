@@ -14,6 +14,7 @@ import {
 } from "@/lib/scheduling-overhaul";
 import HoursEditor from "./hours-editor";
 import ServicesEditor from "./services-editor";
+import DevTestTools from "./dev-test-tools";
 
 export default function SettingsPage() {
   const { signOut } = useClerk();
@@ -290,6 +291,10 @@ export default function SettingsPage() {
             </div>
           </div>
         ) : null}
+
+        {shop && process.env.NODE_ENV === "development" && (
+          <DevTestTools shopId={shop._id} />
+        )}
 
         <div className="bg-white rounded-xl border border-gray-200">
           <div className="px-6 pt-5 pb-2">

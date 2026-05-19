@@ -23,13 +23,16 @@ import {
   Car,
   ClipboardList,
   Loader2,
+  Maximize2,
   Star,
   Store,
+  Wrench,
 } from "lucide-react";
 import MechanicDashboard from "./mechanic-dashboard";
 import LateStartReviewDialog, {
   type LateStartReviewView,
 } from "@/components/late-start-review-dialog";
+import NowWorkingOverlay from "@/components/mechanic/now-working-overlay";
 
 const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
 
@@ -267,6 +270,9 @@ function OwnerDashboardPage({
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [actualsBookingId, setActualsBookingId] = useState<Id<"bookings"> | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
+  const [nowWorkingOverlayBookingId, setNowWorkingOverlayBookingId] =
+    useState<Id<"bookings"> | null>(null);
+  const [pendingMarkCompleteFor, setPendingMarkCompleteFor] = useState<string | null>(null);
   const [rescheduleProposal, setRescheduleProposal] =
     useState<RescheduleConfirmationProposal | null>(null);
   const [rescheduleError, setRescheduleError] = useState("");
@@ -332,6 +338,18 @@ function OwnerDashboardPage({
     setSelectedLateStartReviewId(null);
     setLateStartReviewError("");
   }, [selectedLateStartReviewId, selectedLateStartReview]);
+
+  // Pop the post-job dialog inside BookingDetailPanel once it's mounted
+  // for the booking the owner just hit Mark complete on from the overlay.
+  useEffect(() => {
+    if (!pendingMarkCompleteFor) return;
+    if (!selectedJob || String(selectedJob._id) !== pendingMarkCompleteFor) return;
+    const frame = requestAnimationFrame(() => {
+      jobDetailRef.current?.showMarkCompleted();
+      setPendingMarkCompleteFor(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pendingMarkCompleteFor, selectedJob]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -586,6 +604,9 @@ function OwnerDashboardPage({
       const rightTime = right.booking.scheduledTime ?? "";
       return String(leftTime).localeCompare(String(rightTime));
     });
+  const activeJobs = todayScheduleRows.filter(
+    (row: any) => (row.booking as { status?: string }).status === "in_progress",
+  );
 
   return (
     <>
@@ -678,6 +699,67 @@ function OwnerDashboardPage({
           />
         </div>
       </section>
+
+      {activeJobs.length > 0 ? (
+        <section
+          id="active-jobs"
+          aria-label="Active jobs"
+          className="scroll-mt-6 rounded-2xl border border-emerald-400/30 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_60%),linear-gradient(180deg,_#0f172a,_#0b1220)] p-5 text-slate-50 shadow-[0_10px_30px_rgba(15,23,42,0.18)]"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+              <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
+                Active jobs · {activeJobs.length}
+              </h2>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Jump in to monitor, take notes, or mark complete.
+            </p>
+          </div>
+          <ul className="mt-4 space-y-2">
+            {activeJobs.map((row: any) => {
+              const b = row.booking as {
+                _id: string;
+                vehicle?: string;
+                vehicleShort?: string;
+                serviceNames?: string[];
+              };
+              return (
+                <li
+                  key={String(b._id)}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
+                      <Wrench className="h-3.5 w-3.5" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-slate-100">
+                        {b.vehicle ?? b.vehicleShort ?? "Vehicle"}
+                      </p>
+                      <p className="truncate text-xs text-slate-400">
+                        {row.mechanicName} ·{" "}
+                        {(b.serviceNames ?? []).join(" · ")}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setNowWorkingOverlayBookingId(b._id as Id<"bookings">)
+                    }
+                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    Jump in
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
 
       {hasPendingActions ? (
         <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
@@ -1158,6 +1240,18 @@ function OwnerDashboardPage({
             ? void handleApplyManualLateStartReview(selectedLateStartReview._id, targets)
             : undefined
         }
+      />
+
+      <NowWorkingOverlay
+        open={nowWorkingOverlayBookingId !== null}
+        bookingId={nowWorkingOverlayBookingId}
+        onClose={() => setNowWorkingOverlayBookingId(null)}
+        onMarkComplete={(id) => {
+          setNowWorkingOverlayBookingId(null);
+          setSelectedJobId(id);
+          setPendingMarkCompleteFor(String(id));
+        }}
+        onToast={setSuccessMessage}
       />
 
       {successMessage && !rescheduleProposal ? (

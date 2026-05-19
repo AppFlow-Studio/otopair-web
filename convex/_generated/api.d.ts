@@ -39,6 +39,7 @@ import type * as invitations from "../invitations.js";
 import type * as jobRecommendations from "../jobRecommendations.js";
 import type * as job_actuals from "../job_actuals.js";
 import type * as labor_quote_snapshots from "../labor_quote_snapshots.js";
+import type * as lib_appleMapsGeocode from "../lib/appleMapsGeocode.js";
 import type * as lib_checkin_questions from "../lib/checkin_questions.js";
 import type * as lib_classifier from "../lib/classifier.js";
 import type * as lib_intervals from "../lib/intervals.js";
@@ -254,6 +255,7 @@ declare const fullApi: ApiFromModules<{
   jobRecommendations: typeof jobRecommendations;
   job_actuals: typeof job_actuals;
   labor_quote_snapshots: typeof labor_quote_snapshots;
+  "lib/appleMapsGeocode": typeof lib_appleMapsGeocode;
   "lib/checkin_questions": typeof lib_checkin_questions;
   "lib/classifier": typeof lib_classifier;
   "lib/intervals": typeof lib_intervals;

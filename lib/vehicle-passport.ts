@@ -384,7 +384,9 @@ export function serviceLikelyUsesParts(
     serviceSlug.includes("filter") ||
     serviceSlug.includes("spark") ||
     serviceSlug.includes("belt") ||
-    serviceSlug.includes("battery")
+    serviceSlug.includes("battery") ||
+    serviceSlug.includes("tire-replacement") ||
+    serviceSlug.includes("tire_replacement")
   );
 }
 

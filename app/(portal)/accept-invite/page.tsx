@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { useSession, useUser, useClerk } from "@clerk/nextjs";
@@ -9,6 +9,30 @@ import { CheckCircle2, XCircle, Loader2, AlertTriangle } from "lucide-react";
 import Image from "next/image";
 
 export default function AcceptInvitePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-background flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-10 w-full max-w-md text-center">
+            <div className="flex justify-center mb-6">
+              <div className="relative w-12 h-12">
+                <Image src="/logo.png" alt="Otopair" fill className="object-cover" />
+              </div>
+            </div>
+            <Loader2 className="w-10 h-10 text-primary animate-spin mx-auto mb-4" />
+            <h1 className="text-xl font-semibold text-gray-900 mb-2">
+              Loading…
+            </h1>
+          </div>
+        </div>
+      }
+    >
+      <AcceptInviteContent />
+    </Suspense>
+  );
+}
+
+function AcceptInviteContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";

@@ -64,6 +64,7 @@ import type * as maintenance_pipeline from "../maintenance_pipeline.js";
 import type * as makes from "../makes.js";
 import type * as manual_review_queue from "../manual_review_queue.js";
 import type * as mcp_api from "../mcp_api.js";
+import type * as mechanicNotifications from "../mechanicNotifications.js";
 import type * as mechanics from "../mechanics.js";
 import type * as migrations from "../migrations.js";
 import type * as models from "../models.js";
@@ -280,6 +281,7 @@ declare const fullApi: ApiFromModules<{
   makes: typeof makes;
   manual_review_queue: typeof manual_review_queue;
   mcp_api: typeof mcp_api;
+  mechanicNotifications: typeof mechanicNotifications;
   mechanics: typeof mechanics;
   migrations: typeof migrations;
   models: typeof models;

@@ -1334,6 +1334,9 @@ export default defineSchema({
     deletionSurveyReason: v.optional(v.string()),
     deletionSurveyResponse: v.optional(v.string()),
     deletionSurveyImprovement: v.optional(v.string()),
+    // Per-staff "Mark all read" timestamp for the notification-bell feed.
+    // Anything with created_at > this value is shown as unread.
+    notifications_last_seen_at: v.optional(v.number()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])

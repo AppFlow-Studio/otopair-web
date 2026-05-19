@@ -478,9 +478,6 @@ export default function PortalLayout({
                 </UserButton.UserProfilePage>
               </UserButton>
             </div>
-            {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
-              <NotificationBell />
-            )}
             {displayName && <NavText>{displayName}</NavText>}
           </div>
         </aside>
@@ -552,6 +549,13 @@ export default function PortalLayout({
                 </UserButton.UserProfilePage>
               </UserButton>
             </div>
+          </header>
+
+          {/* Desktop top header */}
+          <header className="sticky top-0 z-30 hidden lg:flex items-center justify-end gap-3 px-6 py-3 bg-white border-b border-gray-200">
+            {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
+              <NotificationBell />
+            )}
           </header>
 
           <main className="flex-1 px-6 pt-6 pb-0">

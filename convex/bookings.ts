@@ -36,6 +36,7 @@ import { v, ConvexError } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { isTerminal, validateTransition } from "./booking_status_history";
+import { mintClaimToken } from "./walkin_claims";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import {
   EARLY_PUSH_THRESHOLD_MS,
@@ -2261,7 +2262,7 @@ async function enqueueNotificationOutbox(
     bookingId?: any;
     userId?: any;
     mechanicId?: any;
-    channel: "push" | "sms" | "front_desk";
+    channel: "push" | "sms" | "front_desk" | "email";
     category: string;
     dedupeKey: string;
     payload: any;
@@ -2298,6 +2299,211 @@ async function enqueueNotificationOutbox(
     created_at: now,
     updated_at: now,
   });
+}
+
+type WalkinUpdateCategory =
+  | "walkin_booking_confirmed"
+  | "walkin_vehicle_at_shop"
+  | "walkin_prejob_complete"
+  | "walkin_completed_claim";
+
+/**
+ * Enqueues a mid-job or post-job message to a mechanic-created walk-in
+ * client. Idempotent via the outbox dedupe key. Skips backfills and
+ * non-walk-in sources. For the final category, mints a claim_token and
+ * embeds the /claim/[token] URL in the payload (suppressed if the user
+ * has already claimed).
+ */
+async function enqueueWalkinClientUpdate(
+  ctx: any,
+  booking: any,
+  category: WalkinUpdateCategory,
+) {
+  if (!booking) return;
+  if (booking.source !== "mechanic_walk_in") return;
+  if (booking.backfilled_at_ms != null) return;
+  if (!booking.user_id) return;
+
+  const user = await ctx.db.get(booking.user_id);
+  if (!user) return;
+
+  const hasPhone = !!(user as any).phone;
+  const hasEmail = !!(user as any).email;
+  if (!hasPhone && !hasEmail) return;
+
+  // Channel rules:
+  //   • Mid-job touchpoints (booking_confirmed / vehicle_at_shop /
+  //     prejob_complete) are SMS-only — they're short, time-sensitive
+  //     pings and we don't want to spam inboxes. If no phone is on
+  //     file, we silently skip.
+  //   • The final post-job message goes to both channels when both are
+  //     available so the receipt + claim link arrive in the inbox AND
+  //     the claim URL is tappable from the SMS the client just got.
+  const isFinal = category === "walkin_completed_claim";
+  const channels: Array<"sms" | "email"> = [];
+  if (isFinal) {
+    if (hasPhone) channels.push("sms");
+    if (hasEmail) channels.push("email");
+  } else {
+    if (hasPhone) channels.push("sms");
+  }
+  if (channels.length === 0) return;
+
+  let shopName: string | null = null;
+  if (booking.shop_id) {
+    const shop = await ctx.db.get(booking.shop_id);
+    shopName = (shop as any)?.name ?? null;
+  }
+
+  let primaryService: string | null = null;
+  if (Array.isArray(booking.service_ids) && booking.service_ids.length > 0) {
+    const svc = await ctx.db.get(booking.service_ids[0]);
+    primaryService = (svc as any)?.name ?? null;
+  } else if (Array.isArray(booking.custom_services) && booking.custom_services.length > 0) {
+    primaryService = booking.custom_services[0]?.name ?? null;
+  }
+
+  let claimUrl: string | null = null;
+  if (isFinal && !(user as any).walkInClaimedAt) {
+    const token = await mintClaimToken(ctx, booking.user_id);
+    if (token) {
+      const base = process.env.NEXT_PUBLIC_APP_URL ?? "https://otopair.com";
+      claimUrl = `${base.replace(/\/$/, "")}/claim/${token}`;
+    }
+  }
+
+  // Final-category payload is a full receipt; mid-job payloads stay
+  // lean since they only feed short SMS strings.
+  let extras: Record<string, unknown> = {};
+  if (isFinal) {
+    let vehicleYear: number | null = null;
+    let vehicleMake: string | null = null;
+    let vehicleModel: string | null = null;
+    let vehicleTrim: string | null = null;
+    let vehicleImageUrl: string | null = null;
+    if (booking.vin) {
+      const vehicle = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
+        .first();
+      if (vehicle) {
+        const veh: any = vehicle;
+        vehicleYear = veh.year ?? null;
+        vehicleMake = veh.metadata?.make ?? null;
+        vehicleModel = veh.metadata?.model ?? null;
+        vehicleTrim = veh.metadata?.trim ?? null;
+        vehicleImageUrl = veh.image_url ?? null;
+      }
+    }
+
+    let mechanicName: string | null = null;
+    if (booking.mechanic_id) {
+      const mech: any = await ctx.db.get(booking.mechanic_id);
+      if (mech) {
+        const full = `${mech.first_name ?? ""} ${mech.last_name ?? ""}`.trim();
+        mechanicName = full || null;
+      }
+    }
+
+    const services: Array<{ name: string }> = [];
+    if (Array.isArray(booking.service_ids)) {
+      for (const sid of booking.service_ids) {
+        const svc: any = await ctx.db.get(sid);
+        if (svc?.name) services.push({ name: svc.name });
+      }
+    }
+    if (Array.isArray(booking.custom_services)) {
+      for (const c of booking.custom_services) {
+        if (c?.name) services.push({ name: c.name });
+      }
+    }
+
+    const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
+    const partsUsed = Array.isArray(jobActual?.parts_used)
+      ? jobActual.parts_used.map((p: any) => ({
+          part_name: p.part_name ?? null,
+          brand: p.brand ?? null,
+          oem_number: p.oem_number ?? null,
+          cost: typeof p.cost === "number" ? p.cost : null,
+        }))
+      : [];
+
+    const partsCost =
+      typeof jobActual?.actual_parts_cost === "number"
+        ? jobActual.actual_parts_cost
+        : (booking.parts_cost ?? null);
+    const laborCost = booking.labor_cost ?? null;
+    const totalCost =
+      partsCost != null && laborCost != null
+        ? Number(partsCost) + Number(laborCost)
+        : (booking.total_cost ?? null);
+    const actualDurationMinutes =
+      typeof jobActual?.actual_labor_minutes === "number"
+        ? jobActual.actual_labor_minutes
+        : (booking.estimated_labor_minutes ?? null);
+    const completedAtMs = booking.completed_at_ms ?? Date.now();
+
+    extras = {
+      vin: booking.vin ?? null,
+      vehicleYear,
+      vehicleMake,
+      vehicleModel,
+      vehicleTrim,
+      vehicleImageUrl,
+      mechanicName,
+      services,
+      partsUsed,
+      laborCost,
+      partsCost,
+      totalCost,
+      actualDurationMinutes,
+      completedDate: new Date(completedAtMs).toISOString().slice(0, 10),
+    };
+  }
+
+  const payload = {
+    shopName,
+    scheduledDate: booking.scheduled_date ?? null,
+    scheduledTime: booking.scheduled_time ?? null,
+    primaryService,
+    totalCost: booking.total_cost ?? null,
+    firstName: (user as any).first_name ?? null,
+    claimUrl,
+    ...extras,
+  };
+
+  const enqueuedChannels = new Set<"sms" | "email">();
+  for (const channel of channels) {
+    await enqueueNotificationOutbox(ctx, {
+      shopId: booking.shop_id,
+      bookingId: booking._id,
+      userId: booking.user_id,
+      channel,
+      category,
+      dedupeKey: `${category}:${channel}:${String(booking._id)}`,
+      payload,
+    });
+    enqueuedChannels.add(channel);
+  }
+
+  // Kick the relevant dispatcher right now so the message goes out on
+  // the status transition rather than waiting for the 1-minute cron.
+  // The dispatcher claims rows by flipping pending→dispatching first,
+  // so a concurrent cron tick will not double-send.
+  if (enqueuedChannels.has("sms")) {
+    await ctx.scheduler.runAfter(
+      0,
+      (internal as any).sms_dispatcher.dispatchPendingSms,
+      {},
+    );
+  }
+  if (enqueuedChannels.has("email")) {
+    await ctx.scheduler.runAfter(
+      0,
+      (internal as any).email_dispatcher.dispatchPendingEmails,
+      {},
+    );
+  }
 }
 
 function getScheduleChangeMode(booking: any): ScheduleChangeMode {
@@ -5600,6 +5806,23 @@ export async function applyBookingStatusTransition(
     await runCompletionSideEffects(ctx, booking);
   }
 
+  // Walk-in client status-driven updates. The helper guards source +
+  // backfill, and the outbox dedupe key prevents double-send.
+  const walkinCategory: WalkinUpdateCategory | null =
+    newStatus === "confirmed"
+      ? "walkin_booking_confirmed"
+      : newStatus === "vehicle_at_shop"
+        ? "walkin_vehicle_at_shop"
+        : newStatus === "in_progress"
+          ? "walkin_prejob_complete"
+          : newStatus === "completed"
+            ? "walkin_completed_claim"
+            : null;
+  if (walkinCategory) {
+    const fresh = await ctx.db.get(booking._id);
+    if (fresh) await enqueueWalkinClientUpdate(ctx, fresh, walkinCategory);
+  }
+
   await syncBookingAssignments(ctx, [
     {
       shopId: booking.shop_id,
@@ -7860,6 +8083,17 @@ export const createByShop = mutation({
           assignment_preference: assignmentPreference,
         },
       );
+
+      // Mechanic-created walk-in confirmation → SMS/email the client. The
+      // helper no-ops for non-walk-in sources and backfills.
+      const freshBooking = await ctx.db.get(bookingId);
+      if (freshBooking) {
+        await enqueueWalkinClientUpdate(
+          ctx,
+          freshBooking,
+          "walkin_booking_confirmed",
+        );
+      }
     }
 
     return bookingId;

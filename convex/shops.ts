@@ -378,6 +378,10 @@ export const getMyPortalAccess = query({
         status: "active" as const,
         role: activeMembership.role,
         shopId: activeMembership.shop_id,
+        // Mechanic membership rows carry a mechanic_id pointer back to the
+        // `mechanics` table — surfaced here so the schedule page can highlight
+        // the viewer's own swim lane and lock edits to other lanes.
+        mechanicId: activeMembership.mechanic_id ?? null,
         onboardingComplete: shop?.onboarding_complete === true,
       };
     }

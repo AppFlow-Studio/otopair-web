@@ -1149,6 +1149,10 @@ export default defineSchema({
     // Set when a Clerk user.created webhook claimed a pre-existing
     // "shop-created-*" walk-in stub user by matching email or phone.
     walkInClaimedAt: v.optional(v.number()),
+    // URL-safe token embedded in the post-job claim deep link sent to
+    // mechanic-created walk-in clients. Resolved by /claim/[token].
+    claim_token: v.optional(v.string()),
+    claim_token_expires_at: v.optional(v.number()),
     // -------------------------------------------------------------------
     // [RESTORED post-merge — Sprint 2 Wave 7.3 rate-limiting fields]
     // Wave 7.3 — per-user moat-read counter (queryMoat.ts enforcement).
@@ -1162,7 +1166,8 @@ export default defineSchema({
   })
     .index("by_clerkUserId", ["clerkUserId"])
     .index("by_isPendingDeletion", ["isPendingDeletion"])
-    .index("by_email", ["email"]),
+    .index("by_email", ["email"])
+    .index("by_claim_token", ["claim_token"]),
 
   // [I] Daniel/Waleed
   user_settings_preferences: defineTable({

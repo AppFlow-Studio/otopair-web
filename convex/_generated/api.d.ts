@@ -30,6 +30,7 @@ import type * as director from "../director.js";
 import type * as director_auth from "../director_auth.js";
 import type * as director_mechanic_verifications from "../director_mechanic_verifications.js";
 import type * as director_notes from "../director_notes.js";
+import type * as email_dispatcher from "../email_dispatcher.js";
 import type * as engines from "../engines.js";
 import type * as fitments from "../fitments.js";
 import type * as follow_ups from "../follow_ups.js";
@@ -42,6 +43,7 @@ import type * as labor_quote_snapshots from "../labor_quote_snapshots.js";
 import type * as lib_appleMapsGeocode from "../lib/appleMapsGeocode.js";
 import type * as lib_checkin_questions from "../lib/checkin_questions.js";
 import type * as lib_classifier from "../lib/classifier.js";
+import type * as lib_email_provider from "../lib/email_provider.js";
 import type * as lib_intervals from "../lib/intervals.js";
 import type * as lib_job_actuals from "../lib/job_actuals.js";
 import type * as lib_late_start from "../lib/late_start.js";
@@ -58,6 +60,7 @@ import type * as lib_tireBrands from "../lib/tireBrands.js";
 import type * as lib_tireRackScraper from "../lib/tireRackScraper.js";
 import type * as lib_vdbCache from "../lib/vdbCache.js";
 import type * as lib_vehicleDatabases from "../lib/vehicleDatabases.js";
+import type * as lib_vehicle_image from "../lib/vehicle_image.js";
 import type * as lib_vehicle_passports from "../lib/vehicle_passports.js";
 import type * as lib_walmartTireScraper from "../lib/walmartTireScraper.js";
 import type * as maintenance from "../maintenance.js";
@@ -218,6 +221,7 @@ import type * as vehicle_owners from "../vehicle_owners.js";
 import type * as vehicle_pipeline from "../vehicle_pipeline.js";
 import type * as vehicle_specs from "../vehicle_specs.js";
 import type * as vehicles from "../vehicles.js";
+import type * as walkin_claims from "../walkin_claims.js";
 import type * as ymmtCatalog from "../ymmtCatalog.js";
 
 import type {
@@ -249,6 +253,7 @@ declare const fullApi: ApiFromModules<{
   director_auth: typeof director_auth;
   director_mechanic_verifications: typeof director_mechanic_verifications;
   director_notes: typeof director_notes;
+  email_dispatcher: typeof email_dispatcher;
   engines: typeof engines;
   fitments: typeof fitments;
   follow_ups: typeof follow_ups;
@@ -261,6 +266,7 @@ declare const fullApi: ApiFromModules<{
   "lib/appleMapsGeocode": typeof lib_appleMapsGeocode;
   "lib/checkin_questions": typeof lib_checkin_questions;
   "lib/classifier": typeof lib_classifier;
+  "lib/email_provider": typeof lib_email_provider;
   "lib/intervals": typeof lib_intervals;
   "lib/job_actuals": typeof lib_job_actuals;
   "lib/late_start": typeof lib_late_start;
@@ -277,6 +283,7 @@ declare const fullApi: ApiFromModules<{
   "lib/tireRackScraper": typeof lib_tireRackScraper;
   "lib/vdbCache": typeof lib_vdbCache;
   "lib/vehicleDatabases": typeof lib_vehicleDatabases;
+  "lib/vehicle_image": typeof lib_vehicle_image;
   "lib/vehicle_passports": typeof lib_vehicle_passports;
   "lib/walmartTireScraper": typeof lib_walmartTireScraper;
   maintenance: typeof maintenance;
@@ -437,6 +444,7 @@ declare const fullApi: ApiFromModules<{
   vehicle_pipeline: typeof vehicle_pipeline;
   vehicle_specs: typeof vehicle_specs;
   vehicles: typeof vehicles;
+  walkin_claims: typeof walkin_claims;
   ymmtCatalog: typeof ymmtCatalog;
 }>;
 

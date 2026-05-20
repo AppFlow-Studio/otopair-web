@@ -357,11 +357,17 @@ export default function SchedulePage() {
     portalAccess?.status === "active" &&
     (portalAccess.role === "shop_mechanic" || portalAccess.role === "mechanic");
 
+  // On first load for a mechanic viewer, default the filter to their own lane
+  // so the page opens to "just my schedule". Subsequent toggles to "All"
+  // (or to another mechanic) are respected — we no longer force-reset.
+  const didInitMechanicFilterRef = useRef(false);
   useEffect(() => {
-    if (isMechanicViewer && viewerMechanicId && mechanicFilter !== viewerMechanicId) {
+    if (didInitMechanicFilterRef.current) return;
+    if (isMechanicViewer && viewerMechanicId) {
       setMechanicFilter(viewerMechanicId);
+      didInitMechanicFilterRef.current = true;
     }
-  }, [isMechanicViewer, viewerMechanicId, mechanicFilter]);
+  }, [isMechanicViewer, viewerMechanicId]);
   const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
   const customerLateAlerts = useQuery(api.bookings.getOpenCustomerLateAlerts);
   const customerLateNotificationSent = useQuery(api.bookings.getCustomerLateNotificationSentMonitors);
@@ -1324,19 +1330,17 @@ export default function SchedulePage() {
               <Select
                 selectedKey={mechanicFilter}
                 onSelectionChange={(key) => setMechanicFilter(String(key))}
-                isDisabled={isMechanicViewer}
               >
                 <SelectTrigger className="h-9 rounded-lg border-border bg-card text-sm px-3 min-w-40">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectPopover placement="bottom end">
                   <SelectListBox shouldFocusWrap>
-                    {!isMechanicViewer && (
-                      <SelectItem id="all" textValue={`All ${entityLabel.plural}`}>{`All ${entityLabel.plural}`}</SelectItem>
-                    )}
+                    <SelectItem id="all" textValue={`All ${entityLabel.plural}`}>{`All ${entityLabel.plural}`}</SelectItem>
                     {context.mechanics.map((m) => (
                       <SelectItem key={m._id} id={m._id} textValue={m.name}>
                         {m.name}
+                        {isMechanicViewer && m._id === viewerMechanicId ? " (you)" : ""}
                       </SelectItem>
                     ))}
                   </SelectListBox>
@@ -1859,6 +1863,7 @@ export default function SchedulePage() {
             maxTime={maxTime}
             nowTimestamp={nowTimestamp}
             currentDate={currentDate}
+            viewerMechanicId={isMechanicViewer ? viewerMechanicId : null}
             onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
             selectedEventId={selectedBookingId ?? null}
             onProposeReschedule={handleProposeReschedule}

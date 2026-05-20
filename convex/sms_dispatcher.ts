@@ -17,6 +17,36 @@ import { v } from "convex/values";
 const SMS_BODY_TEMPLATES: Record<string, (payload: any) => string> = {
   customer_late_sms_reminder: (payload) =>
     `Brooklyn Auto: still coming for your ${payload?.scheduledTime ?? ""} appointment? Reply or tap the Otopair app.`,
+
+  walkin_booking_confirmed: (payload) => {
+    const shop = payload?.shopName ?? "your shop";
+    const when = payload?.scheduledDate && payload?.scheduledTime
+      ? `${payload.scheduledDate} at ${payload.scheduledTime}`
+      : "your scheduled time";
+    return `Otopair: you're booked at ${shop} for ${when}. We'll text you when work starts.`;
+  },
+
+  walkin_vehicle_at_shop: (payload) => {
+    const shop = payload?.shopName ?? "your shop";
+    return `Otopair: ${shop} has your vehicle. We'll update you when service begins.`;
+  },
+
+  walkin_prejob_complete: (payload) => {
+    const shop = payload?.shopName ?? "your shop";
+    const svc = payload?.primaryService ?? "service";
+    return `Otopair: inspection done at ${shop} — starting your ${svc} now.`;
+  },
+
+  walkin_completed_claim: (payload) => {
+    const shop = payload?.shopName ?? "your shop";
+    const total = payload?.totalCost != null
+      ? `Total $${Number(payload.totalCost).toFixed(2)}.`
+      : "";
+    const claim = payload?.claimUrl
+      ? ` Claim your account & full history: ${payload.claimUrl}`
+      : "";
+    return `Otopair: service complete at ${shop}. ${total}${claim}`.trim();
+  },
 };
 
 export const claimPendingSmsRows = internalMutation({
@@ -143,6 +173,7 @@ export const dispatchPendingSms = internalAction({
         body,
         status: result.status,
         providerMessageId: result.providerMessageId ?? undefined,
+        error: result.error ?? undefined,
       });
     }
 

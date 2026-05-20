@@ -1,4 +1,4 @@
-import { internalMutation, query, mutation } from "./_generated/server";
+import { internalMutation, internalQuery, query, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { awardPointsImpl } from "./healthPoints";
@@ -416,6 +416,31 @@ export const clearVehicleImageUrl = mutation({
     if (vehicle) {
       await ctx.db.patch(vehicle._id, { image_url: undefined });
     }
+  },
+});
+
+/**
+ * Internal query that returns the cached image URL + key vehicle
+ * fields for a VIN. Called by the Node-only `lib.vehicle_image`
+ * resolver before deciding whether to hit the VDB API.
+ */
+export const getCachedVehicleImage = internalQuery({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) =>
+        q.eq("vin", args.vin.toUpperCase().trim()),
+      )
+      .unique();
+    if (!vehicle) return null;
+    return {
+      image_url: (vehicle as any).image_url ?? null,
+      year: (vehicle as any).year ?? null,
+      make: (vehicle as any).metadata?.make ?? null,
+      model: (vehicle as any).metadata?.model ?? null,
+      trim: (vehicle as any).metadata?.trim ?? null,
+    };
   },
 });
 

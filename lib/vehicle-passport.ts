@@ -27,10 +27,14 @@ export const PARTS_ACCURACY_STATUSES = [
 ] as const;
 export type PartsAccuracyStatus = (typeof PARTS_ACCURACY_STATUSES)[number];
 
+// Fields that must be populated for a passport to count as "complete" — drives
+// the "First time on Otopair" banner and the completion ring. `tires.model` is
+// excluded because it's only collected on post-job for tire/alignment/rotation
+// services; otherwise a vehicle could be worked five times and still show as
+// incomplete just because the model was never relevant to those jobs.
 const REQUIRED_PASSPORT_FIELDS = [
   "mileage",
   "tires.brand",
-  "tires.model",
   "tires.overall_condition",
 ] as const;
 
@@ -353,9 +357,6 @@ export function getMissingRequiredPassportFields(
     }
     if (field === "tires.brand") {
       return !hasText(passport.tires.brand);
-    }
-    if (field === "tires.model") {
-      return !hasText(passport.tires.model);
     }
     return !isTireCondition(passport.tires.overall_condition);
   });

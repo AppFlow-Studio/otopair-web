@@ -298,9 +298,20 @@ export function mergePassportSection<T extends Record<string, unknown>>(
   if (!patch) {
     return current ?? undefined;
   }
+  // Only spread keys whose value is defined. Spreading an object that has
+  // `key: undefined` would overwrite the existing value — that was wiping
+  // tire brand/model/sizes on every non-tire post-job submit (post-job
+  // builds the patch as `{ brand: updates.tire_brand ?? undefined, ... }`
+  // and for a non-tire service every key ends up undefined).
+  const definedPatch: Partial<T> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) {
+      (definedPatch as Record<string, unknown>)[key] = value;
+    }
+  }
   const merged = {
     ...(current ?? {}),
-    ...patch,
+    ...definedPatch,
   };
   const hasDefinedValue = Object.values(merged).some((value) => value !== undefined);
   return hasDefinedValue ? merged : undefined;

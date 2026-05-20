@@ -76,6 +76,11 @@ interface DaySwimLanesProps {
     mechanicId: string;
     durationMinutes: number;
   } | null;
+  /** When set, the lane belonging to this mechanic is highlighted and edits on
+   *  other lanes are locked: drag-to-reschedule, empty-cell create, and
+   *  right-click block all become no-ops on lanes the viewer doesn't own.
+   *  Pass `null`/omit for shop owners and front-desk who can edit any lane. */
+  viewerMechanicId?: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -152,7 +157,18 @@ export default function DaySwimLanes({
   onBlockDayClick,
   currentDate,
   draftBooking,
+  viewerMechanicId,
 }: DaySwimLanesProps) {
+  const viewerKey = viewerMechanicId ? String(viewerMechanicId) : null;
+  const isMechanicViewer = viewerKey !== null;
+  const canEditColumn = useCallback(
+    (colId: string) => {
+      if (!isMechanicViewer) return true;
+      if (colId === "__unassigned__") return false;
+      return String(colId) === viewerKey;
+    },
+    [isMechanicViewer, viewerKey],
+  );
   const startHour = minTime.getHours();
   const startMinute = minTime.getMinutes();
   // maxTime of next-day midnight (e.g. new Date(0,0,1,0,0)) has getHours()===0 but is later than minTime;
@@ -228,6 +244,7 @@ export default function DaySwimLanes({
   const currentDateRef = useRef(currentDate);
   const onDragErrorRef = useRef(onDragError);
   const eventsRef = useRef(events);
+  const canEditColumnRef = useRef(canEditColumn);
 
   useEffect(() => {
     columnsRef.current = columns;
@@ -238,6 +255,7 @@ export default function DaySwimLanes({
     currentDateRef.current = currentDate;
     onDragErrorRef.current = onDragError;
     eventsRef.current = events;
+    canEditColumnRef.current = canEditColumn;
   }, [
     columns,
     slots,
@@ -247,6 +265,7 @@ export default function DaySwimLanes({
     currentDate,
     onDragError,
     events,
+    canEditColumn,
   ]);
 
   /** Given a viewport coordinate, return which column + slot the pointer is over. */
@@ -272,13 +291,22 @@ export default function DaySwimLanes({
     const contentY = cy - HEADER_HEIGHT + container.scrollTop;
     const slotIndex = Math.min(Math.max(Math.round(contentY / ROW_HEIGHT), 0), sls.length - 1);
 
-    return { colId: cols[colIndex].id, slotIndex };
+    const targetColId = cols[colIndex].id;
+    // Mechanic viewers can't drop into another mechanic's lane.
+    if (!canEditColumnRef.current(targetColId)) return null;
+
+    return { colId: targetColId, slotIndex };
   }, []);
 
   /** Pointer-based drag: creates a floating DOM element that follows the cursor. */
   const handlePointerDown = useCallback((e: React.PointerEvent, ev: CalendarEvent, colId: string) => {
     if (!DRAGGABLE_STATUSES.has(ev.status ?? "")) return;
     if (e.button !== 0) return;
+    // Mechanic viewers can't drag bookings out of someone else's lane.
+    if (!canEditColumnRef.current(colId)) {
+      onDragErrorRef.current?.("You can only adjust bookings in your own lane.");
+      return;
+    }
     e.preventDefault();
 
     const el = e.currentTarget as HTMLElement;
@@ -644,15 +672,28 @@ export default function DaySwimLanes({
         {columns.map((col, colIdx) => {
           const colBookings = bookingsByColumn.get(col.id) ?? [];
           const colBlocked = blockedByColumn.get(col.id) ?? [];
+          const isOwnLane = isMechanicViewer && String(col.id) === viewerKey;
+          const isReadOnlyLane = isMechanicViewer && !isOwnLane;
           return (
             <div
               key={col.id}
               className={`flex-1 min-w-[150px] ${colIdx < columns.length - 1 ? "border-r border-border" : ""}`}
             >
               {/* Column header */}
-              <div className="relative flex flex-col items-center justify-center border-b border-border bg-card sticky top-0 z-30 group/header gap-1.5 px-2 py-3" style={{ height: HEADER_HEIGHT }}>
+              <div
+                className={`relative flex flex-col items-center justify-center border-b sticky top-0 z-30 group/header gap-1.5 px-2 py-3 ${
+                  isOwnLane
+                    ? "bg-primary/10 border-primary/30"
+                    : "border-border bg-card"
+                }`}
+                style={{ height: HEADER_HEIGHT }}
+              >
                 {/* Avatar */}
-                <div className="shrink-0 w-10 h-10 rounded-full bg-primary/15 flex items-center justify-center p-0.5">
+                <div
+                  className={`shrink-0 w-10 h-10 rounded-full flex items-center justify-center p-0.5 ${
+                    isOwnLane ? "bg-primary/25 ring-2 ring-primary/40" : "bg-primary/15"
+                  }`}
+                >
                   {col.imageUrl ? (
                     <img
                       src={col.imageUrl}
@@ -669,8 +710,13 @@ export default function DaySwimLanes({
                   )}
                 </div>
                 <div className="flex flex-col items-center min-w-0">
-                  <span className="text-xs font-medium text-muted-foreground truncate">
+                  <span
+                    className={`text-xs font-medium truncate ${
+                      isOwnLane ? "text-primary" : "text-muted-foreground"
+                    }`}
+                  >
                     {col.label}
+                    {isOwnLane ? " · You" : ""}
                   </span>
                   {colBookings.length > 0 && (
                     <span className="text-[10px] text-muted-foreground">
@@ -678,7 +724,7 @@ export default function DaySwimLanes({
                     </span>
                   )}
                 </div>
-                {col.id !== "__unassigned__" && onBlockDayClick && (
+                {col.id !== "__unassigned__" && onBlockDayClick && !isReadOnlyLane && (
                   <button
                     className="absolute top-1 right-1 opacity-0 group-hover/header:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-destructive"
                     title={`Block full day for ${col.label}`}
@@ -691,10 +737,17 @@ export default function DaySwimLanes({
 
               {/* Time grid + events */}
               <div
-                className="relative bg-muted/30"
+                className={`relative ${
+                  isOwnLane
+                    ? "bg-primary/[0.04]"
+                    : isReadOnlyLane
+                      ? "bg-muted/50"
+                      : "bg-muted/30"
+                } ${isReadOnlyLane ? "cursor-not-allowed" : ""}`}
                 style={{ height: totalHeight }}
                 onClick={(e) => {
                   if (!onSelectEmptyCell || col.id === "__unassigned__") return;
+                  if (isReadOnlyLane) return;
                   if (
                     (e.target as HTMLElement).closest("[data-event-block]") ||
                     (e.target as HTMLElement).closest(".blocked-slot-pattern")
@@ -729,6 +782,10 @@ export default function DaySwimLanes({
                   // Only fire for empty cell clicks — ignore if target is an event block or blocked overlay
                   if ((e.target as HTMLElement).closest("[data-event-block]") || (e.target as HTMLElement).closest(".blocked-slot-pattern")) return;
                   if (!onContextMenuCell || col.id === "__unassigned__") return;
+                  if (isReadOnlyLane) {
+                    e.preventDefault();
+                    return;
+                  }
                   e.preventDefault();
                   const rect = e.currentTarget.getBoundingClientRect();
                   const relY = e.clientY - rect.top;

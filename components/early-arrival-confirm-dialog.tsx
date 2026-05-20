@@ -175,7 +175,6 @@ export default function EarlyArrivalConfirmDialog({
     open ? { bookingId } : "skip",
   );
   const pushEarlier = useMutation(api.bookings.pushBookingEarlierAndArrive);
-  const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
   const [actioning, setActioning] = useState(false);
   const [error, setError] = useState("");
 
@@ -203,18 +202,10 @@ export default function EarlyArrivalConfirmDialog({
     }
   }
 
-  async function handleKeepOriginal() {
+  function handleKeepOriginal() {
     setError("");
-    setActioning(true);
-    try {
-      await markVehicleAtShop({ bookingId });
-      onKept?.();
-      onClose();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not mark vehicle here.");
-    } finally {
-      setActioning(false);
-    }
+    onKept?.();
+    onClose();
   }
 
   const canPush =

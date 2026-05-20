@@ -2155,7 +2155,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             dayBookings={scheduleConflicts?.bookings ?? []}
             onClose={() => setShowEarlyArrivalDialog(false)}
             onPushed={() => onSuccess?.("Booking pushed earlier · vehicle here")}
-            onKept={() => onSuccess?.("Vehicle marked here")}
           />
         ) : null}
 

@@ -488,7 +488,7 @@ export default function PortalLayout({
             sidebarCompact ? "lg:ml-16" : "lg:ml-64"
           }`}
         >
-          <header className="sticky top-0 z-30 flex items-center gap-4 px-6 py-4 bg-white border-b border-gray-200 lg:hidden">
+          <header className="sticky top-0 z-40 flex items-center gap-4 px-6 py-4 bg-white border-b border-gray-200 lg:hidden">
             <button onClick={() => setSidebarOpen(true)}>
               <Menu className="w-6 h-6 text-gray-600" />
             </button>
@@ -552,7 +552,7 @@ export default function PortalLayout({
           </header>
 
           {/* Desktop top header */}
-          <header className="sticky top-0 z-30 hidden lg:flex items-center justify-end gap-3 px-6 py-3 bg-white border-b border-gray-200">
+          <header className="sticky top-0 z-40 hidden lg:flex items-center justify-end gap-3 px-6 py-3 bg-white border-b border-gray-200">
             {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
               <NotificationBell />
             )}

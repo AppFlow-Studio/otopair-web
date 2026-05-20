@@ -14,6 +14,8 @@ type NotificationItem = {
   customer: { full: string; short: string };
   vehicle: { full: string; short: string };
   services?: string[];
+  scheduledDate?: string | null;
+  scheduledTime?: string | null;
   scheduledLabel?: string | null;
   price?: number | null;
   note?: string | null;
@@ -86,7 +88,12 @@ export function NotificationCard({
 
   function handleDetails() {
     onAfterAction?.();
-    router.push(`/bookings?booking=${item.bookingId}`);
+    const params = new URLSearchParams();
+    params.set("highlight", String(item.bookingId));
+    if (item.scheduledDate) {
+      params.set("date", item.scheduledDate);
+    }
+    router.push(`/bookings?${params.toString()}`);
   }
 
   function handleSubmitQuote() {

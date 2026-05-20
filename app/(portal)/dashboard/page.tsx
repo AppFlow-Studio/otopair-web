@@ -26,7 +26,6 @@ import {
   Maximize2,
   Star,
   Store,
-  Wrench,
 } from "lucide-react";
 import MechanicDashboard from "./mechanic-dashboard";
 import LateStartReviewDialog, {
@@ -270,8 +269,21 @@ function OwnerDashboardPage({
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [actualsBookingId, setActualsBookingId] = useState<Id<"bookings"> | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
-  const [nowWorkingOverlayBookingId, setNowWorkingOverlayBookingId] =
-    useState<Id<"bookings"> | null>(null);
+  const [activeOverlayBookingIds, setActiveOverlayBookingIds] = useState<
+    Array<Id<"bookings">>
+  >([]);
+  const openOrAddOverlay = useCallback((id: Id<"bookings">) => {
+    setActiveOverlayBookingIds((prev) => {
+      if (prev.some((existing) => String(existing) === String(id))) return prev;
+      if (prev.length >= 2) return [prev[1], id];
+      return [...prev, id];
+    });
+  }, []);
+  const closeOverlayPane = useCallback((id: Id<"bookings">) => {
+    setActiveOverlayBookingIds((prev) =>
+      prev.filter((x) => String(x) !== String(id)),
+    );
+  }, []);
   const [pendingMarkCompleteFor, setPendingMarkCompleteFor] = useState<string | null>(null);
   const [rescheduleProposal, setRescheduleProposal] =
     useState<RescheduleConfirmationProposal | null>(null);
@@ -714,49 +726,77 @@ function OwnerDashboardPage({
               </h2>
             </div>
             <p className="text-[11px] text-slate-400">
-              Jump in to monitor, take notes, or mark complete.
+              Jump in to monitor side-by-side or take notes.
             </p>
           </div>
           <ul className="mt-4 space-y-2">
-            {activeJobs.map((row: any) => {
-              const b = row.booking as {
-                _id: string;
-                vehicle?: string;
-                vehicleShort?: string;
-                serviceNames?: string[];
-              };
-              return (
-                <li
-                  key={String(b._id)}
-                  className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
-                      <Wrench className="h-3.5 w-3.5" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-slate-100">
-                        {b.vehicle ?? b.vehicleShort ?? "Vehicle"}
-                      </p>
-                      <p className="truncate text-xs text-slate-400">
-                        {row.mechanicName} ·{" "}
-                        {(b.serviceNames ?? []).join(" · ")}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setNowWorkingOverlayBookingId(b._id as Id<"bookings">)
-                    }
-                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400"
+            {dashboard.todaySchedule
+              .filter((column: any) =>
+                column.bookings.some((b: any) => b.status === "in_progress"),
+              )
+              .map((column: any) => {
+                const activeBooking = column.bookings.find(
+                  (b: any) => b.status === "in_progress",
+                );
+                if (!activeBooking) return null;
+                const bookingIdStr = String(activeBooking._id);
+                const isAlreadyOpen = activeOverlayBookingIds.some(
+                  (id) => String(id) === bookingIdStr,
+                );
+                const hasOtherOpen =
+                  activeOverlayBookingIds.length > 0 && !isAlreadyOpen;
+                return (
+                  <li
+                    key={String(column.mechanicId)}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
                   >
-                    <Maximize2 className="h-3.5 w-3.5" />
-                    Jump in
-                  </button>
-                </li>
-              );
-            })}
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-200">
+                        {column.photoUrl ? (
+                          <img
+                            src={column.photoUrl}
+                            alt={column.mechanicName}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          getInitials(column.firstName, column.lastName)
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-sm font-semibold text-slate-100">
+                            {column.mechanicName}
+                          </p>
+                          <span className="text-[10px] uppercase tracking-wider text-slate-500">
+                            Mechanic
+                          </span>
+                        </div>
+                        <p className="truncate text-xs text-slate-400">
+                          {activeBooking.vehicle ??
+                            activeBooking.vehicleShort ??
+                            "Vehicle"}{" "}
+                          · {(activeBooking.serviceNames ?? []).join(" · ")}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openOrAddOverlay(activeBooking._id as Id<"bookings">)
+                      }
+                      disabled={isAlreadyOpen}
+                      className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Maximize2 className="h-3.5 w-3.5" />
+                      {isAlreadyOpen
+                        ? "Open"
+                        : hasOtherOpen
+                          ? "Open alongside"
+                          : "Jump in"}
+                    </button>
+                  </li>
+                );
+              })}
           </ul>
         </section>
       ) : null}
@@ -1243,11 +1283,11 @@ function OwnerDashboardPage({
       />
 
       <NowWorkingOverlay
-        open={nowWorkingOverlayBookingId !== null}
-        bookingId={nowWorkingOverlayBookingId}
-        onClose={() => setNowWorkingOverlayBookingId(null)}
+        bookingIds={activeOverlayBookingIds}
+        onClose={() => setActiveOverlayBookingIds([])}
+        onClosePane={closeOverlayPane}
         onMarkComplete={(id) => {
-          setNowWorkingOverlayBookingId(null);
+          closeOverlayPane(id);
           setSelectedJobId(id);
           setPendingMarkCompleteFor(String(id));
         }}

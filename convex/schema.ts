@@ -1355,6 +1355,11 @@ export default defineSchema({
     token: v.optional(v.string()),
     expires_at: v.optional(v.number()),
     accepted_at: v.optional(v.number()),
+    // Set when the shop owner closes out a pending invite on the invitee's
+    // behalf (no Clerk signup occurred). The mechanic profile is schedulable
+    // immediately; the invite acts as an audit record of who accepted.
+    accepted_by_admin: v.optional(v.boolean()),
+    accepted_by_user_id: v.optional(v.id("users")),
     created_at: v.optional(v.number()),
   })
     .index("by_shop_id", ["shop_id"])
@@ -3364,4 +3369,41 @@ export default defineSchema({
   })
     .index("by_vehicle_owner", ["vehicleOwnerId"])
     .index("by_vehicle_and_type", ["vehicleOwnerId", "snapshotType"]),
+
+  // ===== TELNYX MESSAGING =====
+  // Inbound SMS/MMS received at a Telnyx number. One row per `message.received` webhook.
+  telnyx_inbound_messages: defineTable({
+    event_id: v.string(),
+    telnyx_message_id: v.string(),
+    from_phone: v.string(),
+    to_phone: v.string(),
+    text: v.optional(v.string()),
+    message_type: v.optional(v.string()),
+    media: v.optional(v.array(v.any())),
+    occurred_at_ms: v.number(),
+    raw_payload: v.any(),
+    received_at_ms: v.number(),
+  })
+    .index("by_event_id", ["event_id"])
+    .index("by_telnyx_message_id", ["telnyx_message_id"])
+    .index("by_from_phone", ["from_phone"]),
+
+  // Outbound delivery-report events (message.sent / message.finalized).
+  // Append-only; latest row per telnyx_message_id reflects current status.
+  telnyx_message_events: defineTable({
+    event_id: v.string(),
+    event_type: v.string(),
+    telnyx_message_id: v.string(),
+    direction: v.optional(v.string()),
+    from_phone: v.optional(v.string()),
+    to_phone: v.optional(v.string()),
+    status: v.optional(v.string()),
+    errors: v.optional(v.array(v.any())),
+    occurred_at_ms: v.number(),
+    raw_payload: v.any(),
+    received_at_ms: v.number(),
+  })
+    .index("by_event_id", ["event_id"])
+    .index("by_telnyx_message_id", ["telnyx_message_id"])
+    .index("by_event_type", ["event_type"]),
 });

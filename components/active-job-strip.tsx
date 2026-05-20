@@ -67,9 +67,9 @@ export default function ActiveJobStrip() {
         </div>
 
         <NowWorkingOverlay
-          open={overlayOpen}
-          bookingId={bookingId}
+          bookingIds={overlayOpen ? [bookingId] : []}
           onClose={() => setOverlayOpen(false)}
+          onClosePane={() => setOverlayOpen(false)}
           onMarkComplete={(id) => {
             setOverlayOpen(false);
             router.push(`/dashboard?postjob=${String(id)}`);

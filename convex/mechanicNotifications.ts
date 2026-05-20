@@ -241,6 +241,8 @@ export const getFeed = query({
           customer: formatCustomerName(customer),
           vehicle,
           services: serviceNames,
+          scheduledDate: booking.scheduled_date ?? null,
+          scheduledTime: booking.scheduled_time ?? null,
           scheduledLabel: formatScheduled(
             booking.scheduled_date,
             booking.scheduled_time
@@ -269,6 +271,8 @@ export const getFeed = query({
           customer: formatCustomerName(customer),
           vehicle,
           services: [],
+          scheduledDate: null,
+          scheduledTime: null,
           scheduledLabel: null,
           price: null,
           note: booking.customer_notes ?? null,

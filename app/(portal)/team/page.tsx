@@ -29,6 +29,7 @@ import { removeTeamMember } from "@/lib/remove-team-member";
 import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
   Camera,
+  Check,
   Ellipsis,
   Loader2,
   Mail,
@@ -117,6 +118,7 @@ const deactivateManagedMechanicMutation = makeFunctionReference<"mutation">(
 );
 const generateUploadUrlMutation = makeFunctionReference<"mutation">("users:generateUploadUrl");
 const updateMemberRoleMutation = makeFunctionReference<"mutation">("invitations:updateMemberRole");
+const acceptOnBehalfMutation = makeFunctionReference<"mutation">("invitations:acceptOnBehalf");
 
 const ROLE_OPTIONS = [
   { value: "shop_mechanic", label: "Mechanic" },
@@ -308,6 +310,9 @@ export default function TeamPage() {
     shopUserId: Id<"shop_users">;
     role: string;
   }) => Promise<void>;
+  const acceptOnBehalf = useMutation(acceptOnBehalfMutation) as (args: {
+    invitationId: Id<"shop_invitations">;
+  }) => Promise<{ alreadyAccepted: boolean; shopId: Id<"shops"> }>;
 
   const membersByMechanicId = new Map<string, TeamMemberRow>();
   for (const member of teamMembers ?? []) {
@@ -495,6 +500,26 @@ export default function TeamPage() {
       setDirectorySuccess(revokeExisting ? "Invitation resent." : "Invitation sent.");
     } catch (error) {
       setDirectoryError(error instanceof Error ? error.message : "Failed to send invitation.");
+    } finally {
+      setMechanicActionId(null);
+    }
+  }
+
+  async function acceptOnBehalfOf(mechanic: MechanicRow) {
+    if (!mechanic.pendingInvitationId) return;
+    clearDirectoryMessages();
+    setMechanicActionId(mechanic._id);
+    try {
+      await acceptOnBehalf({
+        invitationId: mechanic.pendingInvitationId as Id<"shop_invitations">,
+      });
+      setDirectorySuccess(
+        `Accepted on behalf of ${mechanic.firstName} ${mechanic.lastName}. They now appear on the schedule.`
+      );
+    } catch (error) {
+      setDirectoryError(
+        error instanceof Error ? error.message : "Failed to accept invitation."
+      );
     } finally {
       setMechanicActionId(null);
     }
@@ -956,6 +981,14 @@ export default function TeamPage() {
                               Resend invite
                             </DropdownMenuItem>
                           ) : null}
+                          {mechanic.pendingInvitationId && (
+                            <DropdownMenuItem
+                              onSelect={() => void acceptOnBehalfOf(mechanic)}
+                            >
+                              <Check className="mr-2 h-4 w-4" />
+                              Mark as accepted
+                            </DropdownMenuItem>
+                          )}
                           {mechanic.pendingInvitationId && (
                             <DropdownMenuItem onSelect={() => void revokeInvite(mechanic)}>
                               <X className="mr-2 h-4 w-4" />

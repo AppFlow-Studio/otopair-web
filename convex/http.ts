@@ -165,6 +165,43 @@ http.route({
 
 
 // ============================================
+// Telnyx Messaging Webhook
+// Configure in Mission Control Portal → Messaging Profile → Webhook URL.
+// Failover URL can point at the same path on a backup deployment.
+// ============================================
+
+http.route({
+  path: "/telnyx/webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const rawBody = await request.text();
+    const signature = request.headers.get("telnyx-signature-ed25519") ?? undefined;
+    const timestamp = request.headers.get("telnyx-timestamp") ?? undefined;
+
+    try {
+      const result: any = await ctx.runAction(
+        (internal as any).lib.telnyx_webhook.processWebhook,
+        { rawBody, signature, timestamp },
+      );
+
+      if (!result?.ok) {
+        const reason: string = result?.reason ?? "unknown";
+        if (reason === "invalid_signature" || reason === "missing_signature_headers") {
+          return new Response("Invalid signature", { status: 401 });
+        }
+        return new Response(`Bad request: ${reason}`, { status: 400 });
+      }
+
+      return new Response("ok", { status: 200 });
+    } catch (error) {
+      console.error("[Telnyx Webhook] Processing failed:", error);
+      return new Response("Webhook processing failed", { status: 500 });
+    }
+  }),
+});
+
+
+// ============================================
 // MCP API Endpoints
 // Auth via Bearer token or ?token= query param
 // Wired to internal functions in mcp_api.ts

@@ -5944,34 +5944,14 @@ export const getMyShopJobContext = query({
       .collect();
     hours.sort((a: any, b: any) => a.day_of_week - b.day_of_week);
 
-    const allMechanics = await ctx.db
-      .query("mechanics")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
-      .collect();
-
-    const mechanicShopUsers = await ctx.db
-      .query("shop_users")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
-      .filter((q: any) =>
-        q.and(
-          q.eq(q.field("is_active"), true),
-          q.neq(q.field("mechanic_id"), undefined),
-          q.neq(q.field("accepted_at"), undefined),
-          q.or(
-            q.eq(q.field("role"), "shop_mechanic"),
-            q.eq(q.field("role"), "mechanic")
-          )
-        )
-      )
-      .collect();
-
-    const acceptedMechanicIds = new Set(
-      mechanicShopUsers.map((shopUser: any) => String(shopUser.mechanic_id))
-    );
-
-    const mechanics = allMechanics.filter((mechanic: any) =>
-      acceptedMechanicIds.has(String(mechanic._id))
-    );
+    // Every active mechanic profile for the shop is schedulable. Portal
+    // access (shop_users) is intentionally not required — see schedule.ts.
+    const mechanics = (
+      await ctx.db
+        .query("mechanics")
+        .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
+        .collect()
+    ).filter((mechanic: any) => mechanic.is_active !== false);
 
     const offered = await ctx.db
       .query("shop_services")
@@ -6064,31 +6044,33 @@ export const getMyOwnerDashboard = query({
       .flat()
       .sort((a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0));
 
-    const acceptedMechanicShopUsers = await ctx.db
+    // Iterate every active mechanic profile. If a shop_users row exists for
+    // the mechanic, we use it to resolve the linked Clerk avatar; if not,
+    // the mechanic still shows on today's schedule using just their profile.
+    const shopMechanics = (
+      await ctx.db
+        .query("mechanics")
+        .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+        .collect()
+    ).filter((m: any) => m.is_active !== false);
+
+    const mechanicShopUsersAll = await ctx.db
       .query("shop_users")
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
       .filter((q: any) =>
-        q.and(
-          q.eq(q.field("is_active"), true),
-          q.neq(q.field("mechanic_id"), undefined),
-          q.neq(q.field("accepted_at"), undefined),
-          q.or(
-            q.eq(q.field("role"), "shop_mechanic"),
-            q.eq(q.field("role"), "mechanic")
-          )
-        )
+        q.and(q.eq(q.field("is_active"), true), q.neq(q.field("mechanic_id"), undefined))
       )
       .collect();
+    const shopUserByMechanicId = new Map<string, any>();
+    for (const su of mechanicShopUsersAll) {
+      if (su.mechanic_id) shopUserByMechanicId.set(String(su.mechanic_id), su);
+    }
 
     const todaySchedule = (
       await Promise.all(
-        acceptedMechanicShopUsers.map(async (shopUser: any) => {
-          const mechanic = shopUser.mechanic_id
-            ? await ctx.db.get(shopUser.mechanic_id)
-            : null;
-          if (!mechanic || mechanic.is_active === false) return null;
-
-          const linkedUser = shopUser.user_id ? await ctx.db.get(shopUser.user_id) : null;
+        shopMechanics.map(async (mechanic: any) => {
+          const shopUser = shopUserByMechanicId.get(String(mechanic._id));
+          const linkedUser = shopUser?.user_id ? await ctx.db.get(shopUser.user_id) : null;
           const photoUrl =
             (await resolveMechanicPhotoUrl(ctx, mechanic)) ??
             (await resolveUserPhotoUrl(ctx, linkedUser));

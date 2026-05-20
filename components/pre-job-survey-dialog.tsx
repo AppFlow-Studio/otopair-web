@@ -1881,6 +1881,7 @@ function PreJobSurveyDialogBody({
         open={showDiscardConfirm}
         title="Discard your changes?"
         onClose={() => setShowDiscardConfirm(false)}
+        zIndexClassName="z-[80]"
         secondaryAction={{
           label: "Keep editing",
           onAction: () => setShowDiscardConfirm(false),

@@ -51,9 +51,10 @@ export default function BookingsPage() {
   const [vehicleFilter, setVehicleFilter] = useState("");
   const [serviceFilter, setServiceFilter] = useState<string[]>([]);
   const [mechanicFilter, setMechanicFilter] = useState<string[]>([]);
-  const [dateFrom, setDateFrom] = useState(todayString);
+  const initialDate = searchParams.get("date") || todayString();
+  const [dateFrom, setDateFrom] = useState(initialDate);
   const [timeFrom, setTimeFrom] = useState("");
-  const [dateTo, setDateTo] = useState(todayString);
+  const [dateTo, setDateTo] = useState(initialDate);
   const [timeTo, setTimeTo] = useState("");
 
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);

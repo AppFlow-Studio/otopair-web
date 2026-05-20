@@ -7,6 +7,7 @@ import {
   ownershipDurationToMonths,
   calculatePrevOwnerAnnualRate,
 } from "./lib/classifier";
+import { resolveTireSizesForVin } from "./lib/vehicle_passports";
 
 /**
  * vehicles.ts - Canonical vehicle catalog management
@@ -287,6 +288,21 @@ export const getVehicleBookingInfo = query({
       tire_size_front: tireSizeFront,
       tire_size_rear: tireSizeRear,
     };
+  },
+});
+
+/**
+ * Tire-size options for a specific vehicle (by VIN), annotated with source.
+ *
+ * Returns sizes the customer booking flow (mobile Shop Tires) should offer:
+ * passport-recorded sizes first (`source: "verified"`), then OEM defaults from
+ * `trim_specs` (`source: "oem_default"`). `lastKnown` carries the most recently
+ * recorded brand/model/run-flat so the mobile UI can pre-select tier hints.
+ */
+export const getTireOptionsForVehicle = query({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    return await resolveTireSizesForVin(ctx, args.vin);
   },
 });
 

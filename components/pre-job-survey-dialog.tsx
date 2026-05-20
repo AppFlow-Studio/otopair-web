@@ -26,11 +26,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { FirstVisitNotice, SourceBadge } from "@/components/vehicle-passport-section";
+import {
+  FirstVisitNotice,
+  SourceBadge,
+  sourceBadgeClassName,
+} from "@/components/vehicle-passport-section";
 import EnrichmentStatusBanner from "@/components/enrichment-status-banner";
 import {
   hasText,
   isTireCondition,
+  passportSourceLabel,
   tireConditionLabel,
   type PassportSource,
   type RotorCondition,
@@ -652,10 +657,8 @@ function PreJobSurveyDialogBody({
     if (!t) return false;
     const hasFront = hasText(t.size_front);
     const hasRear = hasText(t.size_rear) || hasText(t.size_front);
-    const hasFrontCond = isTireCondition(t.front_condition);
-    const hasRearCond = isTireCondition(t.rear_condition);
     const hasBrand = hasText(t.brand);
-    return hasFront && hasRear && hasFrontCond && hasRearCond && hasBrand;
+    return hasFront && hasRear && hasBrand;
   }, [passportData]);
   const [tireSectionExpanded, setTireSectionExpanded] = useState(
     !passportTireProfileComplete,
@@ -1417,15 +1420,28 @@ function PreJobSurveyDialogBody({
                 <div className="rounded-lg border border-primary/15 bg-muted/40 p-3 text-[12px]">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 space-y-1">
-                      <p className="font-medium text-foreground">Already on file from last service</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium text-foreground">Already on file from last service</p>
+                        {passportData?.sources["tires.brand"] ? (
+                          <span
+                            className={cn(
+                              "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]",
+                              sourceBadgeClassName(passportData.sources["tires.brand"]),
+                            )}
+                          >
+                            {passportSourceLabel(passportData.sources["tires.brand"])}
+                          </span>
+                        ) : null}
+                      </div>
                       <p className="text-muted-foreground">
                         {tireBrand ? `${tireBrand} · ` : ""}
                         {frontTireSize}
                         {rearMatchesFront || !rearTireSize
                           ? ""
                           : ` front / ${rearTireSize} rear`}
-                        {" · "}
-                        Front {tireConditionLabel(frontCondition).toLowerCase()}, rear {tireConditionLabel(rearCondition).toLowerCase()}
+                        {isTireCondition(frontCondition) && isTireCondition(rearCondition)
+                          ? ` · Front ${tireConditionLabel(frontCondition).toLowerCase()}, rear ${tireConditionLabel(rearCondition).toLowerCase()}`
+                          : ""}
                       </p>
                     </div>
                     <button
@@ -1470,6 +1486,7 @@ function PreJobSurveyDialogBody({
                       required
                       source={frontSizeSource}
                       showSource={hasPrefilledText(passportData?.passport.tires.size_front)}
+                      includeVerified
                     />
                   }
                 >
@@ -1487,6 +1504,7 @@ function PreJobSurveyDialogBody({
                         required
                         source={rearSizeSource}
                         showSource={hasPrefilledText(passportData?.passport.tires.size_rear)}
+                        includeVerified
                       />
                     }
                   >
@@ -1515,6 +1533,7 @@ function PreJobSurveyDialogBody({
                         required
                         source={passportData?.sources["tires.brand"]}
                         showSource={hasPrefilledText(passportData?.passport.tires.brand)}
+                        includeVerified
                       />
                     }
                     value={tireBrand}
@@ -2177,17 +2196,36 @@ function FieldLabelWithSource({
   required = false,
   source,
   showSource = false,
+  includeVerified = false,
 }: {
   text: string;
   required?: boolean;
   source?: PassportSource;
   showSource?: boolean;
+  /** When true, the "Verified" pill renders inline as well (default `SourceBadge`
+   *  hides it). Used in the pre-job tire section so mechanics can see at a
+   *  glance that the value already came from a previous job. */
+  includeVerified?: boolean;
 }) {
+  const renderVerifiedPill =
+    includeVerified && showSource && source === "verified";
+  const renderStandardBadge =
+    showSource && shouldRenderSourceBadge(source) && source !== "verified";
   return (
     <span className="inline-flex items-center gap-1.5">
       {required ? <span className="text-destructive">*</span> : null}
       <span>{text}</span>
-      {showSource && shouldRenderSourceBadge(source) ? <SourceBadge source={source!} /> : null}
+      {renderStandardBadge ? <SourceBadge source={source!} /> : null}
+      {renderVerifiedPill ? (
+        <span
+          className={cn(
+            "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]",
+            sourceBadgeClassName(source),
+          )}
+        >
+          {passportSourceLabel(source)}
+        </span>
+      ) : null}
     </span>
   );
 }

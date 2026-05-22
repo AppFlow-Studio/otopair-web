@@ -381,7 +381,7 @@ export const lookupT1 = internalQuery({
     // through it.
     let config: Doc<"vehicle_configs"> | null = null;
     if (args.vehicle_config_id) {
-      config = await ctx.db.get(args.vehicle_config_id);
+      config = (await ctx.db.get(args.vehicle_config_id)) as Doc<"vehicle_configs"> | null;
     } else if (args.chassis_code) {
       // vehicle_configs has no `by_chassis` index advertised here; do a
       // narrow filter+take(1) instead of a full scan. The eval harness path

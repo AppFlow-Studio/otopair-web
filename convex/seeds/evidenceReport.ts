@@ -2,11 +2,12 @@ import { internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 
 export const getEvidenceReport = internalQuery({
-  args: { entityId: v.string() },
+  args: { entityId: v.string(), entityType: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const entityType = args.entityType ?? "vehicle_config";
     const allEvidence = await ctx.db
       .query("enrichment_evidence")
-      .withIndex("by_entity_field", (q) => q.eq("entity_id", args.entityId))
+      .withIndex("by_entity", (q) => q.eq("entity_type", entityType).eq("entity_id", args.entityId))
       .collect();
 
     // Group by field_name
@@ -22,8 +23,8 @@ export const getEvidenceReport = internalQuery({
       byField[e.field_name].push({
         value: e.observed_value,
         domain: e.source_domain ?? undefined,
-        source_type: e.source_type,
-        confidence: e.confidence,
+        source_type: e.source_type ?? "",
+        confidence: e.confidence ?? 0,
       });
     }
 

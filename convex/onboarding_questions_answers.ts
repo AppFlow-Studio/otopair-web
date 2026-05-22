@@ -39,7 +39,7 @@ export const saveQuestionAnswer = mutation({
 
     if (existing) {
       const qa = existing.questions_and_answers.filter(
-        (e) => e.question !== args.question
+        (e: { question: string; answer: string }) => e.question !== args.question
       );
       qa.push(newEntry);
       await ctx.db.patch(existing._id, {

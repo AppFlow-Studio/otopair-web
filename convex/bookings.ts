@@ -383,8 +383,10 @@ export const getByUserIdWithDetails = query({
                 if (make) {
                   parts.push(make.name);
                   if (make.logo) {
-                    const logoAsset = await ctx.db.get(make.logo);
-                    makeLogoUrl = logoAsset?.url;
+                    // TODO(ts-fix): make.logo is schema-typed as string but code calls db.get on it.
+                    // Either schema should be Id<"_storage"> or this should read make.logo_url directly.
+                    const logoAsset = await ctx.db.get(make.logo as any);
+                    makeLogoUrl = (logoAsset as any)?.url;
                   }
                 }
                 parts.push(model.name);
@@ -549,7 +551,7 @@ export const getRecentlyBookedShopIdsByUserId = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", args.userId))
       .collect();
     // Sort by most recent booking first
-    bookings.sort((a, b) => b.created_at - a.created_at);
+    bookings.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
     const seen = new Set<string>();
     const shopIds: string[] = [];
     for (const b of bookings) {
@@ -586,7 +588,7 @@ export const getRecentlyBookedMechanicIdsByUserId = query({
       .query("bookings")
       .withIndex("by_user_id", (q) => q.eq("user_id", args.userId))
       .collect();
-    bookings.sort((a, b) => b.created_at - a.created_at);
+    bookings.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
     const seen = new Set<string>();
     const mechanicIds: string[] = [];
     for (const b of bookings) {
@@ -4861,9 +4863,9 @@ async function applyDownstreamMovement(
     const blockedProposal =
       plan.proposals.find((p: any) => p.blocked_reason) ?? null;
     const subjectBookingId =
-      blockedProposal?.booking_id ?? upstreamBooking._id;
+      blockedProposal?.booking?._id ?? upstreamBooking._id;
     const subjectBooking: any = blockedProposal
-      ? await ctx.db.get(blockedProposal.booking_id)
+      ? await ctx.db.get(blockedProposal.booking._id)
       : upstreamBooking;
     const subjectTime12h = formatHHMMto12h(
       subjectBooking?.scheduled_time ?? null,
@@ -6122,7 +6124,7 @@ export const getTodaysBookingsByShop = query({
           initials,
           vehicle: vehicleLabel.full,
           service: serviceName,
-          scheduledTime: formatTime(booking.scheduled_time),
+          scheduledTime: formatTime(booking.scheduled_time ?? ""),
           totalCost: booking.total_cost ?? 0,
         };
       })
@@ -6427,7 +6429,7 @@ export const getMyOwnerDashboard = query({
         invitesPendingCount: pendingInvitations.length,
         invitesPending: await Promise.all(
           pendingInvitations.map(async (invite: any) => {
-            const mechanic = invite.mechanic_id ? await ctx.db.get(invite.mechanic_id) : null;
+            const mechanic = invite.mechanic_id ? await ctx.db.get(invite.mechanic_id as Id<"mechanics">) : null;
             return {
               _id: invite._id,
               email: invite.email,
@@ -6518,7 +6520,7 @@ export const getMyMechanicDashboard = query({
     );
     if (!mechanicContext) return null;
 
-    const shop = await ctx.db.get(primary.shopId);
+    const shop = await ctx.db.get(primary.shopId as Id<"shops">);
     if (!shop) return null;
 
     const mechanicId = mechanicContext.mechanic._id;
@@ -6674,8 +6676,8 @@ export const getJobDetail = query({
     const lateMonitor = await getCustomerLateMonitorByBookingId(ctx, booking._id);
     const shopTimezone = await getShopTimezone(ctx, booking.shop_id);
     const scheduledStartMs = toBookingDateTimeMs(
-      booking.scheduled_date,
-      booking.scheduled_time,
+      booking.scheduled_date ?? "",
+      booking.scheduled_time ?? "",
       shopTimezone,
     );
 
@@ -7551,8 +7553,8 @@ export const customerDecideRecommendation = mutation({
     const rawFollowUpStart = scheduledForLater
       ? booking.recommended_scheduled_time!
       : getBookingEndTime(
-          booking.scheduled_time,
-          booking.estimated_labor_minutes,
+          booking.scheduled_time ?? "",
+          booking.estimated_labor_minutes ?? 0,
         );
 
     // For schedule-for-later, hard-reject if the proposed slot overlaps a
@@ -7629,7 +7631,7 @@ export const customerDecideRecommendation = mutation({
       for (const b of laneBookings) {
         const duration = b.estimated_labor_minutes ?? 60;
         const safeCursor = advancePastBlocks(cursor, duration);
-        if (toMinutes(b.scheduled_time) >= toMinutes(safeCursor)) break;
+        if (toMinutes(b.scheduled_time ?? "") >= toMinutes(safeCursor)) break;
         await ctx.db.patch(b._id, {
           scheduled_time: safeCursor,
           updated_at: now,
@@ -7807,7 +7809,7 @@ export const createByShop = mutation({
     // Web UI enforces this too, but server validation keeps integrity if
     // a caller bypasses the drawer.
     const servicesForOptionCheck = await Promise.all(
-      args.serviceIds.map((id: any) => ctx.db.get(id))
+      args.serviceIds.map((id) => ctx.db.get(id))
     );
     const optionMap = new Map(
       (args.selectedServiceOptions ?? []).map((row: any) => [
@@ -7825,7 +7827,8 @@ export const createByShop = mutation({
         }
         continue;
       }
-      if (svc.has_options && !optionMap.has(String(svc._id))) {
+      // TODO(ts-fix): services schema lacks `has_options` field — verify intent (rename/add to schema)
+      if ((svc as any).has_options && !optionMap.has(String(svc._id))) {
         throw new Error(
           `Service "${svc.name}" requires an option selection.`,
         );
@@ -8218,6 +8221,11 @@ export const backfillCompletedBooking = mutation({
     postjob: postjobReportValidator,
     sendCustomerReceipt: v.optional(v.boolean()),
     acknowledgedDuplicate: v.optional(v.boolean()),
+    source: v.optional(v.string()),
+    mechanicEstimatedMinutes: v.optional(v.float64()),
+    catalogEstimatedMinutes: v.optional(v.float64()),
+    mechanicQuotedPrice: v.optional(v.float64()),
+    catalogQuotedPrice: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -8357,15 +8365,9 @@ export const backfillCompletedBooking = mutation({
     // no mechanic_id break utilization, payroll, and rewards attribution,
     // so we refuse rather than silently land an orphan.
     let mechanicId: Id<"mechanics"> | undefined = args.mechanicId;
-    if (!mechanicId) {
-      const callerMech = await ctx.db
-        .query("mechanics")
-        .withIndex("by_user_and_shop", (q: any) =>
-          q.eq("user_id", user._id).eq("shop_id", args.shopId),
-        )
-        .first();
-      mechanicId = callerMech?._id;
-    }
+    // TODO(ts-fix): previously tried mechanics.by_user_and_shop, but mechanics schema
+    // has no user_id field and no such index. Skipping caller→mechanic lookup until
+    // schema clarifies the relationship (likely needs a user_id field + index).
     if (!mechanicId) {
       const fallbackMech = await ctx.db
         .query("mechanics")
@@ -8989,8 +8991,8 @@ async function proposeRescheduleImpl(
         ctx,
         booking.shop_id,
         originalMechanicId,
-        originalDate,
-        originalTime,
+        originalDate ?? "",
+        originalTime ?? "",
         durationMinutes
       );
     } else if (originalMechanicId) {
@@ -8998,8 +9000,8 @@ async function proposeRescheduleImpl(
         ctx,
         booking.shop_id,
         originalMechanicId,
-        originalDate,
-        originalTime,
+        originalDate ?? "",
+        originalTime ?? "",
         durationMinutes
       );
       if (originalSlot && String(originalSlot._id) !== String(targetSlotId)) {
@@ -9165,8 +9167,8 @@ export const customerApproveReschedule = mutation({
       ctx,
       booking.shop_id,
       originalMechanicId,
-      originalDate,
-      originalTime,
+      originalDate ?? "",
+      originalTime ?? "",
       durationMinutes
     );
     if (reservedOriginalSlot) {
@@ -9238,8 +9240,8 @@ export const shopCancelReschedule = mutation({
       ctx,
       booking.shop_id,
       originalMechanicId,
-      originalDate,
-      originalTime,
+      originalDate ?? "",
+      originalTime ?? "",
       durationMinutes
     );
 
@@ -9338,8 +9340,8 @@ export const customerDeclineReschedule = mutation({
       ctx,
       booking.shop_id,
       originalMechanicId,
-      originalDate,
-      originalTime,
+      originalDate ?? "",
+      originalTime ?? "",
       durationMinutes
     );
 
@@ -9473,7 +9475,7 @@ export const getOpenCustomerLateAlerts = query({
 
     const items = await Promise.all(
       dueRows.map(async (row: any) => {
-        const booking = await ctx.db.get(row.booking_id);
+        const booking = await ctx.db.get(row.booking_id as Id<"bookings">);
         if (!booking || !isCustomerLateMonitorEligible(booking)) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id
@@ -9531,7 +9533,7 @@ export const getCustomerLateNotificationSentMonitors = query({
 
     const items = await Promise.all(
       notifiedRows.map(async (row: any) => {
-        const booking = await ctx.db.get(row.booking_id);
+        const booking = await ctx.db.get(row.booking_id as Id<"bookings">);
         if (!booking || !isCustomerLateMonitorEligible(booking)) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
@@ -9577,7 +9579,7 @@ export const getCustomerOnMyWayMonitors = query({
 
     const items = await Promise.all(
       onMyWayRows.map(async (row: any) => {
-        const booking = await ctx.db.get(row.booking_id);
+        const booking = await ctx.db.get(row.booking_id as Id<"bookings">);
         if (!booking || booking.vehicle_arrived_at_ms) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
@@ -9620,7 +9622,7 @@ export const getOpenFrontDeskOverrunAlerts = query({
 
     const items = await Promise.all(
       rows.map(async (row: any) => {
-        const booking = await ctx.db.get(row.booking_id);
+        const booking = await ctx.db.get(row.booking_id as Id<"bookings">);
         if (!booking || booking.status !== "in_progress") return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id
@@ -9841,7 +9843,7 @@ export const getOpenLateStartReviews = query({
 
     const hydrated = await Promise.all(
       openReviews.map(async (review: any) => {
-        const upstreamBooking = await ctx.db.get(review.upstream_booking_id);
+        const upstreamBooking = await ctx.db.get(review.upstream_booking_id as Id<"bookings">);
         if (
           !upstreamBooking ||
           !isLateStartMonitorEligible(upstreamBooking) ||
@@ -9861,13 +9863,13 @@ export const getOpenLateStartReviews = query({
 
         const proposals = await Promise.all(
           review.proposals.map(async (proposal: any) => {
-            const booking = await ctx.db.get(proposal.booking_id);
+            const booking = await ctx.db.get(proposal.booking_id as Id<"bookings">);
             const customer = booking?.user_id ? await ctx.db.get(booking.user_id) : null;
             const originalMechanic = proposal.original_mechanic_id
-              ? await ctx.db.get(proposal.original_mechanic_id)
+              ? await ctx.db.get(proposal.original_mechanic_id as Id<"mechanics">)
               : null;
             const proposedMechanic = proposal.proposed_mechanic_id
-              ? await ctx.db.get(proposal.proposed_mechanic_id)
+              ? await ctx.db.get(proposal.proposed_mechanic_id as Id<"mechanics">)
               : null;
             const serviceNames = booking
               ? await resolveServiceNames(ctx, booking.service_ids)
@@ -10485,8 +10487,8 @@ export const revertExpiredReschedules = internalMutation({
         ctx,
         booking.shop_id,
         originalMechanicId,
-        originalDate,
-        originalTime,
+        originalDate ?? "",
+        originalTime ?? "",
         durationMinutes
       );
 

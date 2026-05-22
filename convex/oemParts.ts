@@ -49,7 +49,8 @@ export const upsert = mutation({
 
     const partId = await ctx.db.insert("oem_parts", {
       oem_part_number,
-      name: args.name,
+      // TODO(ts-fix): oem_parts.name is required by schema but upsert accepts optional name — verify intent (require at API level or migrate schema)
+      name: args.name ?? "",
       category: normalizeCategory(args.category),
       notes: args.notes,
       created_at: Date.now(),

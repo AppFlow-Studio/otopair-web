@@ -164,16 +164,17 @@ export const getVehicleLabels = internalQuery({
   handler: async (ctx, args) => {
     const config = await ctx.db.get(args.vehicleConfigId);
     if (!config) return null;
+    const cfg = config as any;
     const [make, model, engine] = await Promise.all([
-      config.make_id ? ctx.db.get(config.make_id as any) : null,
-      config.model_id ? ctx.db.get(config.model_id as any) : null,
-      config.engine_id ? ctx.db.get(config.engine_id as any) : null,
+      cfg.make_id ? ctx.db.get(cfg.make_id as any) : null,
+      cfg.model_id ? ctx.db.get(cfg.model_id as any) : null,
+      cfg.engine_id ? ctx.db.get(cfg.engine_id as any) : null,
     ]);
     return {
-      year: config.year as number,
+      year: cfg.year as number,
       make: (make as any)?.name ?? "",
       model: (model as any)?.name ?? "",
-      trim: (config as any).trim_name ?? "",
+      trim: cfg.trim_name ?? "",
       displacement_l: (engine as any)?.displacement_l ?? (engine as any)?.displacement_liters ?? null,
     };
   },
@@ -250,7 +251,7 @@ export const getQuotableLaborTime = internalQuery({
     const MIN_SAMPLES = 3;
     const useEmpirical =
       labor.empirical_hours != null &&
-      labor.empirical_sample_size >= MIN_SAMPLES;
+      (labor.empirical_sample_size ?? 0) >= MIN_SAMPLES;
 
     return {
       hours: useEmpirical ? labor.empirical_hours! : labor.book_hours,
@@ -326,10 +327,16 @@ export const getModelById = internalQuery({
 export const getEvidenceForField = internalQuery({
   args: { entityId: v.string(), fieldName: v.string() },
   handler: async (ctx, args) => {
+    // TODO(ts-fix): by_entity_field index requires entity_type as first field;
+    // callers here don't supply it, so fall back to filter scan to preserve
+    // runtime behavior (was already collecting all matches).
     return await ctx.db
       .query("enrichment_evidence")
-      .withIndex("by_entity_field", (q) =>
-        q.eq("entity_id", args.entityId).eq("field_name", args.fieldName)
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("entity_id"), args.entityId),
+          q.eq(q.field("field_name"), args.fieldName),
+        ),
       )
       .collect();
   },
@@ -437,9 +444,11 @@ export const getEvidenceByRun = internalQuery({
 export const getEvidenceCount = internalQuery({
   args: { entityId: v.string() },
   handler: async (ctx, args) => {
+    // TODO(ts-fix): by_entity_field index requires entity_type as first field;
+    // callers here don't supply it, so fall back to filter scan.
     const rows = await ctx.db
       .query("enrichment_evidence")
-      .withIndex("by_entity_field", (q) => q.eq("entity_id", args.entityId))
+      .filter((q) => q.eq(q.field("entity_id"), args.entityId))
       .collect();
     return rows.length;
   },
@@ -448,9 +457,11 @@ export const getEvidenceCount = internalQuery({
 export const getEvidenceForEntity = internalQuery({
   args: { entityId: v.string() },
   handler: async (ctx, args) => {
+    // TODO(ts-fix): by_entity_field index requires entity_type as first field;
+    // callers here don't supply it, so fall back to filter scan.
     return await ctx.db
       .query("enrichment_evidence")
-      .withIndex("by_entity_field", (q) => q.eq("entity_id", args.entityId))
+      .filter((q) => q.eq(q.field("entity_id"), args.entityId))
       .collect();
   },
 });
@@ -520,9 +531,10 @@ export const diagnoseFillGaps = internalQuery({
   handler: async (ctx, args) => {
     const config = await ctx.db.get(args.vehicle_config_id);
     if (!config) return null;
+    const cfg = config as any;
 
     // Engine gaps
-    const engine = config.engine_id ? await ctx.db.get(config.engine_id) : null;
+    const engine = cfg.engine_id ? await ctx.db.get(cfg.engine_id) : null;
     const engineFields: Record<string, boolean> = {
       oil_viscosity: !!(engine as any)?.oil_viscosity,
       oil_capacity_qts: !!(engine as any)?.oil_capacity_qts,
@@ -554,8 +566,8 @@ export const diagnoseFillGaps = internalQuery({
 
     // Config-level gaps
     const missingConfig: string[] = [];
-    if (!config.brake_fluid_type) missingConfig.push("brake_fluid_type");
-    if (config.has_brake_pad_sensor == null) missingConfig.push("has_brake_pad_sensor");
+    if (!cfg.brake_fluid_type) missingConfig.push("brake_fluid_type");
+    if (cfg.has_brake_pad_sensor == null) missingConfig.push("has_brake_pad_sensor");
 
     // Service intervals
     const allServices = await ctx.db.query("services").collect();
@@ -597,8 +609,8 @@ export const diagnoseFillGaps = internalQuery({
     const missingPrices = fitments.length - pricedCount;
 
     return {
-      vehicle: `${config.year} ${config.trim_name}`,
-      fill_rate: config.fill_rate,
+      vehicle: `${cfg.year} ${cfg.trim_name}`,
+      fill_rate: cfg.fill_rate,
       gaps: {
         engine: missingEngine,
         trim: missingTrim,

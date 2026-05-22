@@ -41,7 +41,7 @@ export const getCachedScrape = internalQuery({
       .first();
 
     if (!row) return null;
-    if (row.expires_at < now) return null; // expired
+    if ((row.expires_at ?? 0) < now) return null; // expired
     // Return in the shape the scraper expects
     return {
       ...row,

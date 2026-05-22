@@ -5,16 +5,28 @@
 import { v } from "convex/values";
 import { internalAction, internalQuery, internalMutation } from "../_generated/server";
 import { internal } from "../_generated/api";
+import type { Id } from "../_generated/dataModel";
 
 /** Step 1: Create test user + run processVin + create vehicle + schedule enrichment. */
 export const triggerEnrichment = internalAction({
   args: {},
-  handler: async (ctx) => {
+  handler: async (ctx): Promise<{ error: string } | { vehicleId: Id<"vehicles">; engineId: Id<"engines">; make: string; model: string; year: number; trim: string; engineCode: string }> => {
     const vin = "WBAJS7C01LBN96146";
 
     // 1. Run VIN decode (creates make/model/trim/engine records)
     console.log("[test] Decoding VIN:", vin);
-    const decoded = await ctx.runAction(internal.vehicle_pipeline.processVin, { vin });
+    const decoded: {
+      makeId: Id<"makes">;
+      modelId: Id<"models">;
+      trimId: Id<"trims">;
+      engineId: Id<"engines">;
+      make: string;
+      model: string;
+      year: number;
+      trim: string;
+      engineCode: string;
+      displacement: string;
+    } | null = await ctx.runAction(internal.vehicle_pipeline.processVin, { vin });
     if (!decoded) {
       console.error("[test] VIN decode failed");
       return { error: "VIN decode failed" };
@@ -22,7 +34,7 @@ export const triggerEnrichment = internalAction({
     console.log("[test] Decoded:", JSON.stringify(decoded, null, 2));
 
     // 2. Create/upsert the vehicle record
-    const vehicleId = await ctx.runMutation(internal.seeds.testEnrichment.upsertVehicle, {
+    const vehicleId: Id<"vehicles"> = await ctx.runMutation(internal.seeds.testEnrichment.upsertVehicle, {
       vin,
       trim_id: decoded.trimId,
       engine_id: decoded.engineId,
@@ -162,7 +174,7 @@ export const checkEnrichmentStatus = internalQuery({
     const serviceMap: Record<string, string> = {};
     const services = await ctx.db.query("services").collect();
     for (const s of services) {
-      serviceMap[s._id] = s.slug;
+      serviceMap[s._id] = s.slug ?? "";
     }
 
     return {
@@ -197,9 +209,10 @@ export const checkEnrichmentStatus = internalQuery({
         has_transfer_case: d.has_transfer_case,
         tc_fluid_type: d.tc_fluid_type,
       })),
+      // TODO(ts-fix): trim_specs schema only has tire_size_front/rear (not front_tire_size); legacy field access removed
       trim_specs: trimSpecs.map((t) => ({
-        front_tire_size: t.front_tire_size ?? t.tire_size_front,
-        rear_tire_size: t.rear_tire_size ?? t.tire_size_rear,
+        front_tire_size: (t as any).front_tire_size ?? t.tire_size_front,
+        rear_tire_size: (t as any).rear_tire_size ?? t.tire_size_rear,
         battery_group: t.battery_group,
         battery_cca: t.battery_cca,
         battery_location: t.battery_location,

@@ -2216,8 +2216,8 @@ export const seedLearningPipelineDemo = mutation({
     await ctx.db.patch(slot._id, { is_available: false });
 
     // 4. Insert a confirmed booking
-    const laborHours = oilChange.default_labor_hours;
-    const laborCost = laborHours * shop.labor_rate;
+    const laborHours = oilChange.default_labor_hours ?? 0;
+    const laborCost = laborHours * (shop.labor_rate ?? 0);
     const partsCost = 47;
     const totalCost = laborCost + partsCost;
 
@@ -3053,6 +3053,7 @@ export const seedServicesShopsMilesSafeForUser39FwQkrjp = mutation({
     let created = 0;
 
     for (const { daysAgo, service, shop, mechanic, labor, parts } of pastBookings) {
+      if (!service) continue;
       const date = new Date(now);
       date.setDate(date.getDate() - daysAgo);
       const dateStr = date.toISOString().split("T")[0];
@@ -3256,16 +3257,17 @@ export const backfillCreditTransactionsForUser39FwQkrjp = mutation({
         .unique();
       const tier = (vt?.tier ?? "driver") as "driver" | "preferred" | "elite";
       const rate = earnRates[tier] ?? 0.015;
-      const creditAmount = Math.round(b.total_cost * rate * 100) / 100;
+      const creditAmount = Math.round((b.total_cost ?? 0) * rate * 100) / 100;
       if (creditAmount <= 0) continue;
+      const bUpdatedAt = b.updated_at ?? Date.now();
       await ctx.db.insert("ownership_credit_transactions", {
         user_id: user._id,
         amount: creditAmount,
         type: "earn_service",
         description: "Maintenance rewards",
         reference_id: b._id.toString(),
-        expires_at: b.updated_at + 180 * 24 * 60 * 60 * 1000,
-        created_at: b.updated_at,
+        expires_at: bUpdatedAt + 180 * 24 * 60 * 60 * 1000,
+        created_at: bUpdatedAt,
       });
       walletCredit += creditAmount;
       inserted++;
@@ -3388,6 +3390,7 @@ export const seedPastBookingsForJohnDoe = mutation({
     let created = 0;
 
     for (const { daysAgo, service, shop, mechanic, labor, parts } of pastBookings) {
+      if (!service) continue;
       const date = new Date(now);
       date.setDate(date.getDate() - daysAgo);
       const dateStr = date.toISOString().split("T")[0];
@@ -3976,6 +3979,7 @@ export const seedDashboardBookings = mutation({
       mechanics = [
         {
           _id: fallbackMechanicId,
+          _creationTime: Date.now(),
           shop_id: args.shopId,
           first_name: "Demo",
           last_name: "Technician",

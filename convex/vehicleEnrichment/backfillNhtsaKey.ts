@@ -58,7 +58,6 @@ export const _listConfigsMissingNhtsaKey = internalQuery({
       // (here `string`), so passing `undefined` to find unset rows is a
       // type-system false negative. The runtime supports it for optional
       // indexed fields — see schema `nhtsa_vin_key: v.optional(v.string())`.
-      // @ts-expect-error TS2769 — see comment above.
       .withIndex("by_nhtsa_vin_key", (q) => q.eq("nhtsa_vin_key", undefined))
       .take(args.limit);
     return rows.map((r) => ({ _id: r._id, config_key: r.config_key }));
@@ -94,7 +93,7 @@ export const _setNhtsaVinKey = internalMutation({
   handler: async (ctx, args) => {
     const config = await ctx.db.get(args.configId);
     if (!config) return "missing" as const;
-    if (config.nhtsa_vin_key) return "already_set" as const;
+    if ((config as any).nhtsa_vin_key) return "already_set" as const;
     await ctx.db.patch(args.configId, { nhtsa_vin_key: args.nhtsa_vin_key });
     return "patched" as const;
   },
@@ -110,13 +109,12 @@ export const _setNhtsaVinKey = internalMutation({
 // TS2339 cascades from the same root — once TS bails, doc types
 // collapse to the union of all tables. Runtime is unaffected — Convex
 // validates via `convex dev`. Same remedy as `convex/oto/chat.ts:115`.
-// @ts-expect-error TS2589 — see comment block above.
 export const backfillNhtsaVinKeys = action({
   args: {
     limit: v.optional(v.number()),
     dryRun: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const limit = args.limit ?? 100;
     const dryRun = args.dryRun ?? false;
 

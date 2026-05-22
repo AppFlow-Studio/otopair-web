@@ -474,13 +474,16 @@ export const deleteFromClerk = mutation({
       await ctx.db.patch(su._id, { is_active: false, updated_at: Date.now() });
     }
 
-    const pendingInvites = await ctx.db
-      .query("shop_invitations")
-      .withIndex("by_email", (q) => q.eq("email", user.email))
-      .filter((q) => q.eq(q.field("status"), "pending"))
-      .collect();
-    for (const invitation of pendingInvites) {
-      await ctx.db.patch(invitation._id, { status: "revoked" });
+    if (user.email) {
+      const userEmail = user.email;
+      const pendingInvites = await ctx.db
+        .query("shop_invitations")
+        .withIndex("by_email", (q) => q.eq("email", userEmail))
+        .filter((q) => q.eq(q.field("status"), "pending"))
+        .collect();
+      for (const invitation of pendingInvites) {
+        await ctx.db.patch(invitation._id, { status: "revoked" });
+      }
     }
   },
 });

@@ -19,7 +19,7 @@
  * OWNER: Ahmad Hamoudeh
  */
 
-import type { MaintenanceStatus } from "@/components/cars/MaintenanceTracker";
+import type { MaintenanceStatus } from "../components/cars/MaintenanceTracker";
 
 // ============================================================================
 // TYPES

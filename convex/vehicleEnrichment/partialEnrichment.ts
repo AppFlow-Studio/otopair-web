@@ -27,7 +27,7 @@ export const partialEnrich = internalAction({
   args: {
     vehicle_config_id: v.id("vehicle_configs"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     // 1. Diagnose gaps
     const gaps = await ctx.runQuery(
       internal.vehicleEnrichment.v3queries.diagnoseFillGaps,

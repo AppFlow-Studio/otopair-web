@@ -324,7 +324,7 @@ export const discoverSourcesForMake = internalAction({
       internal.vehicleEnrichment.v3queries.getSourcesForMake,
       { make_id: args.make_id },
     );
-    const existingDomains = new Set(existingSources.map((s) => s.domain));
+    const existingDomains = new Set(existingSources.map((s: any) => s.domain));
 
     const blockedDomainDocs = await ctx.runQuery(
       internal.vehicleEnrichment.v3queries.getBlockedDomains,
@@ -332,7 +332,7 @@ export const discoverSourcesForMake = internalAction({
     );
     const allBlocked = [
       ...BLOCKED_DOMAINS,
-      ...blockedDomainDocs.map((d) => d.domain),
+      ...blockedDomainDocs.map((d: any) => d.domain),
     ];
 
     // STEP 1: SEARCH FOR SOURCES

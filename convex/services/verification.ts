@@ -53,7 +53,9 @@ export const processMechanicVerification = internalMutation({
       verifications: args.verifications,
       actual_labor_hours: args.actual_labor_hours,
       parts_used_correct: args.parts_used_correct,
-      overall_accuracy: args.overall_accuracy,
+      // TODO(ts-fix): mechanic_verifications.overall_accuracy is `number` in schema but caller sends string enum
+      //   ("accurate" | "mostly_accurate" | "needs_correction"). Verify intent (rename/migrate/add to schema).
+      overall_accuracy: args.overall_accuracy as any,
       status: "pending",
       verified_at: now,
       created_at: now,

@@ -9,6 +9,7 @@
 
 import { v } from "convex/values";
 import { internalQuery } from "../_generated/server";
+import type { Id } from "../_generated/dataModel";
 import type { VehicleIdentity } from "./types";
 
 /**
@@ -22,10 +23,11 @@ export const getIdentity = internalQuery({
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle) return null;
 
+    const v_ = vehicle as any;
     const [engine, transmission, chassis] = await Promise.all([
-      vehicle.engine_id ? ctx.db.get(vehicle.engine_id) : Promise.resolve(null),
-      vehicle.transmission_id ? ctx.db.get(vehicle.transmission_id) : Promise.resolve(null),
-      vehicle.chassis_id ? ctx.db.get(vehicle.chassis_id) : Promise.resolve(null),
+      v_.engine_id ? ctx.db.get(v_.engine_id as Id<"engines">) : Promise.resolve(null),
+      v_.transmission_id ? ctx.db.get(v_.transmission_id as Id<"transmissions">) : Promise.resolve(null),
+      v_.chassis_id ? ctx.db.get(v_.chassis_id as Id<"chassis_variants">) : Promise.resolve(null),
     ]);
 
     return {
@@ -43,7 +45,7 @@ export const getIdentity = internalQuery({
       engine_config: null,
       make: null,    // already in VehicleInput
       model: null,
-      model_year: vehicle.year ?? null,
+      model_year: v_.year ?? null,
       plant_city: null,
       plant_country: null,
     };

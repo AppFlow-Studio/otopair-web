@@ -276,7 +276,6 @@ interface AnthropicMessage {
 // registers and runs normally. The `expect-error` variant (vs `ts-ignore`)
 // makes tsc complain if Convex ever ships a fix that eliminates the false
 // positive, so we know to remove the suppression rather than leave it.
-// @ts-expect-error TS2589 — see comment block above.
 export const sendMessage = action({
   args: {
     conversationId: v.id("ai_conversations"),
@@ -295,7 +294,6 @@ export const sendMessage = action({
     // ai_messages history. No effect unless `debug` is also true.
     debug_skip_persist: v.optional(v.boolean()),
   },
-  // @ts-expect-error TS2589 — same cause as above; documents return shape.
   // `quickReplies` typed loose (v.any()) so the shape can evolve as we add
   // render tools without churning the validator on every change.
   returns: v.object({

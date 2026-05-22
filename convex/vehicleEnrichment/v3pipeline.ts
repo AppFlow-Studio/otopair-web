@@ -1031,7 +1031,7 @@ export const enrichVehicleBatchV3 = internalAction({
       const resolved = await resolveEngineCode(
         args.year, args.make, args.model, args.trim,
         args.displacement, vPicData?.cylinders ?? 4,
-        vPicData?.fuelType ?? "Gasoline", args.engineCode,
+        vPicData?.fuel_type ?? "Gasoline", args.engineCode,
       );
       if (resolved.source === "haiku" && !isNhtsaDescriptor(resolved.engineCode)) {
         console.log(`[v8] Engine code resolved: "${args.engineCode}" → "${resolved.engineCode}"`);

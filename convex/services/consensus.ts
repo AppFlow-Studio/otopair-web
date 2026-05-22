@@ -48,13 +48,14 @@ export function computeConsensus(
   if (normalized.length === 1) {
     const obs = normalized[0];
     const isMechanic = obs.source_type === "mechanic";
+    const obsConfidence = obs.confidence ?? 0;
     return {
       value: obs.observed_value,
-      confidence: obs.confidence,
+      confidence: obsConfidence,
       source_count: 1,
       is_verified: isMechanic,
       has_conflict: false,
-      needs_review: !isMechanic && obs.confidence < 0.8,
+      needs_review: !isMechanic && obsConfidence < 0.8,
     };
   }
 
@@ -74,9 +75,9 @@ export function computeConsensus(
   const candidates: Candidate[] = Object.entries(groups).map(
     ([value, observations]) => {
       const sourceCount = observations.length;
-      const confidences = observations.map((o) => o.confidence);
+      const confidences: number[] = observations.map((o) => o.confidence ?? 0);
       const avgConfidence =
-        confidences.reduce((sum, c) => sum + c, 0) / confidences.length;
+        confidences.reduce((sum: number, c: number) => sum + c, 0) / confidences.length;
       const maxConfidence = Math.max(...confidences);
       const hasMechanicVerification = observations.some(
         (o) => o.source_type === "mechanic"
@@ -111,7 +112,7 @@ export function computeConsensus(
 
   // Step 5: Determine conflict
   const hasConflict =
-    candidates.length > 1 && candidates[1].score > 0.5;
+    candidates.length > 1 && (candidates[1]?.score ?? 0) > 0.5;
 
   // Step 6: Determine review need
   const needsReview = hasConflict && !winner.hasMechanicVerification;
@@ -139,7 +140,7 @@ export async function getConsensusForField(
 ): Promise<ConsensusResult | null> {
   const evidence = await ctx.db
     .query("enrichment_evidence")
-    .withIndex("by_entity", (q) =>
+    .withIndex("by_entity_field", (q) =>
       q
         .eq("entity_type", entityType)
         .eq("entity_id", entityId)

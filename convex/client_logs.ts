@@ -43,11 +43,13 @@ export const list = query({
     ),
   },
   handler: async (ctx, args) => {
-    let q = ctx.db.query("client_logs");
-    if (args.level) {
-      q = q.withIndex("by_level", (indexQ) => indexQ.eq("level", args.level));
-    }
-    const logs = await q.collect();
+    const level = args.level;
+    const logs = level
+      ? await ctx.db
+          .query("client_logs")
+          .withIndex("by_level", (indexQ) => indexQ.eq("level", level))
+          .collect()
+      : await ctx.db.query("client_logs").collect();
     return logs.sort((a, b) => b.timestamp - a.timestamp).slice(0, args.limit ?? 100);
   },
 });

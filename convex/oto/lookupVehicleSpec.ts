@@ -78,7 +78,7 @@ export const lookupVehicleSpec = query({
     const noYear = year ? q.replace(yearMatch![0], "").trim() : q;
     const tokens = noYear
       .split(/\s+/)
-      .map((t) => t.trim())
+      .map((t: string) => t.trim())
       .filter(Boolean);
     const tokensLower = tokens.map(lower);
 
@@ -118,7 +118,7 @@ export const lookupVehicleSpec = query({
     const allMakesRaw = await ctx.db.query("makes").collect();
     const allMakes = allMakesRaw.filter((m) => !isEvalTestMake(m));
     const makeMatches = allMakes.filter((m) =>
-      tokensLower.some((tk) => matchesToken((m as any).name, tk)),
+      tokensLower.some((tk: string) => matchesToken((m as any).name, tk)),
     );
 
     // If multiple makes match, narrow to the longest-matching name (e.g.
@@ -147,7 +147,7 @@ export const lookupVehicleSpec = query({
     const makeNamesLower = new Set(
       activeMakes.map((m) => lower((m as any).name)),
     );
-    const nonMakeTokens = tokensLower.filter((tk) => !makeNamesLower.has(tk));
+    const nonMakeTokens = tokensLower.filter((tk: string) => !makeNamesLower.has(tk));
     for (const make of activeMakes) {
       const models = await ctx.db
         .query("models")

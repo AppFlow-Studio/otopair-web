@@ -107,7 +107,7 @@ export const createFromPayment = internalMutation({
 
     return await ctx.db.insert("transactions", {
       user_id: payment.user_id,
-      created_at: payment.created_at,
+      created_at: payment.created_at ?? Date.now(),
       description,
       sub_description: undefined,
       amount: -payment.amount,

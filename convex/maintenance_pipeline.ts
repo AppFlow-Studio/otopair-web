@@ -95,10 +95,13 @@ export const getServiceSpecs = internalQuery({
     for (const spec of specs) {
       let miCategory = "routine";
       const service = await ctx.db.get(spec.service_id);
-      if (service) {
-        const category = await ctx.db.get(service.service_category_id);
+      if (service && service.service_category_id) {
+        const category = await ctx.db.get(
+          service.service_category_id as Id<"service_categories">
+        );
         if (category) {
-          miCategory = MI_CATEGORY_MAP[category.name] ?? "routine";
+          miCategory =
+            MI_CATEGORY_MAP[(category as { name: string }).name] ?? "routine";
         }
       }
       enriched.push({ ...spec, service_category: miCategory });
@@ -311,7 +314,16 @@ export const runPipeline = internalAction({
     vehicleOwnerId: v.id("vehicle_owners"),
     triggeredBy: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args
+  ): Promise<
+    | undefined
+    | {
+        classificationId: Id<"vehicle_classifications"> | undefined;
+        newMode: VehicleMode;
+      }
+  > => {
     // Step 0: Load data
     const data = await ctx.runQuery(
       internal.maintenance_pipeline.getVehicleOwnerData,
@@ -649,7 +661,11 @@ export const runPipeline = internalAction({
         s.last_service_source === "booking"
     ) ?? false;
 
-    const phasedStates = applySegmentPhasing(serviceStates, segment, visit1Complete);
+    const phasedStates = applySegmentPhasing(
+      serviceStates as Parameters<typeof applySegmentPhasing>[0],
+      segment,
+      visit1Complete
+    );
 
     // Step 7b: "might_sell" filter — suppress expensive preventive services, safety-only
     const SAFETY_CATEGORIES = new Set(["brakes", "tires", "diagnostics", "compliance"]);

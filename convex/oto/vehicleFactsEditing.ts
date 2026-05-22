@@ -340,7 +340,7 @@ export const editVehicleFact = mutation({
     // Build previous_values snapshot of ONLY fields actually changing.
     const previous_values: Record<string, unknown> = {};
     let hasRealChange = false;
-    for (const k of Object.keys(changes) as Array<keyof typeof changes>) {
+    for (const k of Object.keys(changes) as string[]) {
       const newVal = (changes as Record<string, unknown>)[k];
       if (newVal === undefined) continue;
       const curVal = (current as unknown as Record<string, unknown>)[k];

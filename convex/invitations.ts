@@ -96,6 +96,57 @@ export const revoke = mutation({
   },
 });
 
+// Shop owner closes out a pending invitation on the invitee's behalf.
+// No Clerk signup is created; the mechanic profile in `mechanics` is
+// already schedulable. The invitation row carries the audit trail
+// (accepted_by_admin = true, accepted_by_user_id = the owner).
+const OWNER_ROLES_FOR_ACCEPT = new Set(["owner", "shop_owner", "admin"]);
+
+export const acceptOnBehalf = mutation({
+  args: { invitationId: v.id("shop_invitations") },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!user) throw new Error("User not found");
+
+    const invitation = await ctx.db.get(args.invitationId);
+    if (!invitation) throw new Error("Invitation not found");
+    if (invitation.status === "accepted") {
+      return { alreadyAccepted: true, shopId: invitation.shop_id };
+    }
+    if (invitation.status === "revoked") throw new Error("This invitation has been revoked.");
+
+    const membership = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_and_shop", (q) =>
+        q.eq("user_id", user._id).eq("shop_id", invitation.shop_id)
+      )
+      .filter((q) => q.eq(q.field("is_active"), true))
+      .first();
+
+    const shop = await ctx.db.get(invitation.shop_id);
+    const isOwner =
+      OWNER_ROLES_FOR_ACCEPT.has(String(membership?.role ?? "")) ||
+      String(shop?.owner_user_id ?? "") === String(user._id);
+    if (!isOwner) throw new Error("Only the shop owner can accept invitations on behalf of others.");
+
+    const now = Date.now();
+    await ctx.db.patch(args.invitationId, {
+      status: "accepted",
+      accepted_at: now,
+      accepted_by_admin: true,
+      accepted_by_user_id: user._id,
+    });
+
+    return { alreadyAccepted: false, shopId: invitation.shop_id };
+  },
+});
+
 export const getTeamMembers = query({
   args: { shopId: v.id("shops") },
   handler: async (ctx, args) => {

@@ -125,6 +125,12 @@ crons.interval(
   (internal as any).sms_dispatcher.dispatchPendingSms,
 );
 
+crons.interval(
+  "dispatch-pending-emails",
+  { minutes: 1 },
+  (internal as any).email_dispatcher.dispatchPendingEmails,
+);
+
 
 
 

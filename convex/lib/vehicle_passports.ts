@@ -298,9 +298,20 @@ export function mergePassportSection<T extends Record<string, unknown>>(
   if (!patch) {
     return current ?? undefined;
   }
+  // Only spread keys whose value is defined. Spreading an object that has
+  // `key: undefined` would overwrite the existing value — that was wiping
+  // tire brand/model/sizes on every non-tire post-job submit (post-job
+  // builds the patch as `{ brand: updates.tire_brand ?? undefined, ... }`
+  // and for a non-tire service every key ends up undefined).
+  const definedPatch: Partial<T> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) {
+      (definedPatch as Record<string, unknown>)[key] = value;
+    }
+  }
   const merged = {
     ...(current ?? {}),
-    ...patch,
+    ...definedPatch,
   };
   const hasDefinedValue = Object.values(merged).some((value) => value !== undefined);
   return hasDefinedValue ? merged : undefined;
@@ -324,4 +335,99 @@ export function serviceRequiresParts(service: {
     slug.includes("tire-replacement") ||
     slug.includes("tire_replacement")
   );
+}
+
+export type TireSizeOptionSource = "verified" | "oem_default";
+
+export type TireSizeOption = {
+  size: string;
+  source: TireSizeOptionSource;
+};
+
+export type ResolvedTireProfile = {
+  sizes: TireSizeOption[];
+  lastKnown: {
+    brand: string | null;
+    model: string | null;
+    run_flat: boolean | null;
+  };
+};
+
+function pickHighestConfidenceTrimSpec(rows: any[]): any | null {
+  if (rows.length === 0) return null;
+  return rows.reduce((best, row) => {
+    const bc = best.confidence_score ?? 0;
+    const rc = row.confidence_score ?? 0;
+    if (rc !== bc) return rc > bc ? row : best;
+    return (row.created_at ?? 0) > (best.created_at ?? 0) ? row : best;
+  });
+}
+
+export async function resolveTireSizesForVin(
+  ctx: any,
+  vin: string,
+): Promise<ResolvedTireProfile> {
+  const empty: ResolvedTireProfile = {
+    sizes: [],
+    lastKnown: { brand: null, model: null, run_flat: null },
+  };
+  const canonicalVin = typeof vin === "string" ? vin.toUpperCase().trim() : "";
+  if (!canonicalVin) return empty;
+
+  const vehicle: any = await ctx.db
+    .query("vehicles")
+    .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+    .unique();
+
+  const [passportRecord, trimSpec] = await Promise.all([
+    ctx.db
+      .query("vehicle_passports")
+      .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+      .unique(),
+    vehicle?.trim_id
+      ? ctx.db
+          .query("trim_specs")
+          .withIndex("by_trim", (q: any) => q.eq("trim_id", vehicle.trim_id))
+          .collect()
+          .then(pickHighestConfidenceTrimSpec)
+      : null,
+  ]);
+
+  const ordered: TireSizeOption[] = [];
+  const seen = new Set<string>();
+  const pushSize = (raw: unknown, source: TireSizeOptionSource) => {
+    if (typeof raw !== "string") return;
+    const size = raw.trim();
+    if (!size) return;
+    if (seen.has(size)) return;
+    seen.add(size);
+    ordered.push({ size, source });
+  };
+
+  pushSize(passportRecord?.tires?.size_front, "verified");
+  pushSize(passportRecord?.tires?.size_rear, "verified");
+  pushSize(trimSpec?.tire_size_front, "oem_default");
+  pushSize(trimSpec?.tire_size_rear, "oem_default");
+
+  const runFlat: boolean | null =
+    typeof passportRecord?.tires?.run_flat === "boolean"
+      ? passportRecord.tires.run_flat
+      : typeof trimSpec?.is_run_flat === "boolean"
+        ? trimSpec.is_run_flat
+        : null;
+
+  return {
+    sizes: ordered,
+    lastKnown: {
+      brand:
+        typeof passportRecord?.tires?.brand === "string" && passportRecord.tires.brand.trim()
+          ? passportRecord.tires.brand
+          : null,
+      model:
+        typeof passportRecord?.tires?.model === "string" && passportRecord.tires.model.trim()
+          ? passportRecord.tires.model
+          : null,
+      run_flat: runFlat,
+    },
+  };
 }

@@ -227,35 +227,15 @@ export const getScheduleContext = query({
       .collect();
     hours.sort((a: any, b: any) => a.day_of_week - b.day_of_week);
 
-    const allMechanics = await ctx.db
+    // Schedulable mechanics = every active mechanic profile for the shop.
+    // Portal access (shop_users) is a separate concern and intentionally
+    // not required here — a shop-managed mechanic without portal login
+    // is still a real, schedulable resource.
+    const mechanics = await ctx.db
       .query("mechanics")
       .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
       .filter((q: any) => q.eq(q.field("is_active"), true))
       .collect();
-
-    const mechanicShopUsers = await ctx.db
-      .query("shop_users")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shop._id))
-      .filter((q: any) =>
-        q.and(
-          q.neq(q.field("mechanic_id"), undefined),
-          q.neq(q.field("accepted_at"), undefined),
-          q.eq(q.field("is_active"), true),
-          q.or(
-            q.eq(q.field("role"), "shop_mechanic"),
-            q.eq(q.field("role"), "mechanic")
-          )
-        )
-      )
-      .collect();
-
-    const acceptedMechanicIds = new Set(
-      mechanicShopUsers.map((shopUser: any) => String(shopUser.mechanic_id))
-    );
-
-    const mechanics = allMechanics.filter((mechanic: any) =>
-      acceptedMechanicIds.has(String(mechanic._id))
-    );
 
     return {
       shopId: shop._id,

@@ -736,12 +736,56 @@ export function extractVDBFields(data: any) {
   const engineDims = dims.find((d: any) => d.engine)?.engine || [];
   const cylindersRaw = engineDims.find((e: any) => e.engine_size)?.engine_size?.[0]?.value;
 
+  // Defensive numeric parse — VDB returns some values as strings with
+  // commas (e.g. ymm-specs/v3 → "2,000"); JS coerces those to NaN
+  // when divided. Strip commas before parseFloat.
+  const parseNumLoose = (v: any): number | null => {
+    if (v == null || v === "") return null;
+    const cleaned = String(v).replace(/,/g, "").trim();
+    if (!cleaned) return null;
+    const n = parseFloat(cleaned);
+    return isNaN(n) ? null : n;
+  };
+
+  // Horsepower lives in dimensions.engine[].horsepower as a list of
+  // {value, unit}. The "hp" unit is the actual peak HP; the "rpm" unit
+  // is the rpm where peak is reached.
+  const hpEntries = engineDims.find((e: any) => "horsepower" in e)?.horsepower ?? [];
+  const horsepower = parseNumLoose(
+    hpEntries.find((x: any) => x?.unit === "hp")?.value,
+  );
+
+  // Liters from dimensions.engine[].engine_size[unit="l"]. Cleaner
+  // than dividing specifications.engine.displacement (cc) by 1000 —
+  // ymm-specs/v3 returns that as "2,000" which divides to NaN.
+  const engineDisplacementLiters = parseNumLoose(
+    engineDims.find((e: any) => "engine_size" in e)?.engine_size
+      ?.find((x: any) => x?.unit === "l")?.value,
+  );
+
+  // MPG block from specifications.mpg (city/hwy/combined).
+  const mpgSpec = findSpec("mpg");
+  const mpgCity = parseNumLoose(mpgSpec?.epa_city_economy);
+  const mpgHighway = parseNumLoose(mpgSpec?.epa_hwy_economy);
+  const mpgCombined = parseNumLoose(mpgSpec?.epa_combined_economy);
+
+  // Cylinders configuration — display string like "I-4", "V-6", "H-6".
+  // Distinct from block_type which is just the letter ("I", "V").
+  const cylindersConfiguration = engineSpec.cylinders_configuration || null;
+
   return {
     // Identity
     year: data.year ? parseInt(data.year) : null,
     make: data.make || null,
     model: data.model || null,
     trim: data.trim || null,
+    // Raw VDB style + trim_and_style — used downstream to construct
+    // the canonical `vehicle-images` YMMT URL. The catalog uses a
+    // different (model, trim) shape than the decode endpoint:
+    //   decode:  model="530i", trim_and_style="xDrive Sedan ..."
+    //   catalog: model="530",  trim="i-xDrive Sedan ..."
+    style: data.style || null,
+    trimAndStyle: data.trim_and_style || null,
     bodyType: data.vehicle?.body_type || null,
     doors: data.vehicle?.doors ? parseInt(data.vehicle.doors) : null,
 
@@ -754,6 +798,14 @@ export function extractVDBFields(data: any) {
     blockType: engineSpec.block_type || null,
     drivetrain: engineSpec.drivetype || null,
     fuelType: fuelSpec?.type || null,
+    // New: review-screen Specs card fields. Clean numeric values
+    // extracted from dimensions[].engine + specifications[].mpg.
+    horsepower,
+    engineDisplacementLiters,
+    cylindersConfiguration,
+    mpgCity,
+    mpgHighway,
+    mpgCombined,
 
     // Transmission
     transType: data.transmission?.type || null,

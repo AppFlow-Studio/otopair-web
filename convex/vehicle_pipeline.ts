@@ -347,6 +347,30 @@ export const processVin = internalAction({
         `vdb=${vdb ? "yes" : "no"}`,
       );
 
+      // Specs-card fields. VDB-first, NHTSA fallback where applicable.
+      // Returned at top level (rather than nested under vdbTrimData) so
+      // the review screen reads them as plain router params.
+      const specsForCard = {
+        horsepower:
+          vdb?.horsepower ??
+          (nhtsa.engineHP ? parseFloat(nhtsa.engineHP) : null),
+        engineDisplacementLiters: vdb?.engineDisplacementLiters ?? null,
+        cylindersConfiguration:
+          vdb?.cylindersConfiguration ?? nhtsa.engineConfig ?? null,
+        mpgCity: vdb?.mpgCity ?? null,
+        mpgHighway: vdb?.mpgHighway ?? null,
+        mpgCombined: vdb?.mpgCombined ?? null,
+        frontTireSize: vdb?.frontTireSize ?? null,
+        rearTireSize: vdb?.rearTireSize ?? null,
+        frontTirePressure: vdb?.frontTirePressure ?? null,
+        rearTirePressure: vdb?.rearTirePressure ?? null,
+        transType:
+          vdb?.transType ?? (nhtsa.transStyle || null),
+        transSpeeds:
+          vdb?.transSpeeds ??
+          (nhtsa.transSpeeds ? parseInt(nhtsa.transSpeeds) : null),
+      };
+
       return {
         makeId, modelId, trimId, engineId, transmissionId,
         make: merged.make, model: finalModel, year: merged.year, trim: finalTrim,
@@ -354,9 +378,24 @@ export const processVin = internalAction({
         cylinders: merged.cylinders, displacement: merged.displacement,
         fuelType: merged.fuelType,
         drivetrain: canonicalDrivetrain ?? "unknown",
+        // Specs-card fields (flat, for router param forwarding).
+        ...specsForCard,
         // NHTSA-only base key (deterministic per VIN, computed before
         // Claude normalization). Used for dedup in confirmVehicleForUser.
         nhtsaVinKey,
+        // Raw NHTSA series/trim/MODEL — passed downstream so VDB
+        // image/color lookups can discover the catalog's canonical
+        // model. NHTSA often returns the specific designation
+        // (e.g. "530i") in `Model`, which is exactly what VDB's
+        // catalog needs.
+        nhtsaModel: nhtsa.model || "",
+        nhtsaSeries: nhtsa.series || nhtsa.series2 || "",
+        nhtsaTrim: nhtsa.trim || nhtsa.trim2 || "",
+        // Raw VDB decode fields — used to build the YMMT combo matrix
+        // for `vehicle-images` discovery when the VIN endpoint 404s.
+        vdbDecodedModel: vdb?.model || "",
+        vdbDecodedStyle: (vdb as any)?.style || "",
+        vdbDecodedTrimAndStyle: (vdb as any)?.trimAndStyle || "",
         // VDB trim data for pre-population
         vdbTrimData: vdb ? {
           frontTireSize: vdb.frontTireSize,
@@ -974,6 +1013,33 @@ export const decodeVin = action({
       // can use it for cache lookups even if Claude rewrote the trim/model
       // between decode and confirm.
       nhtsaVinKey: result.nhtsaVinKey,
+      // Raw NHTSA model/series/trim — forwarded to the picker so it
+      // can do VDB model discovery. For BMW VINs NHTSA's model is
+      // often "530i" (exactly what VDB needs) while the merged
+      // result has been overwritten to "5 Series" by VDB or AI norm.
+      nhtsaModel: result.nhtsaModel,
+      nhtsaSeries: result.nhtsaSeries,
+      nhtsaTrim: result.nhtsaTrim,
+      // Raw VDB decode — picker uses these to build the YMMT combo
+      // matrix for `vehicle-images` direct probes when the VIN URL
+      // returns no record.
+      vdbDecodedModel: result.vdbDecodedModel,
+      vdbDecodedStyle: result.vdbDecodedStyle,
+      vdbDecodedTrimAndStyle: result.vdbDecodedTrimAndStyle,
+      // Specs-card fields for the review screen.
+      horsepower: result.horsepower,
+      engineDisplacementLiters: result.engineDisplacementLiters,
+      cylindersConfiguration: result.cylindersConfiguration,
+      mpgCity: result.mpgCity,
+      mpgHighway: result.mpgHighway,
+      mpgCombined: result.mpgCombined,
+      frontTireSize: result.frontTireSize,
+      rearTireSize: result.rearTireSize,
+      frontTirePressure: result.frontTirePressure,
+      rearTirePressure: result.rearTirePressure,
+      transType: result.transType,
+      transSpeeds: result.transSpeeds,
+      drivetrain: result.drivetrain,
     };
   },
 });

@@ -1141,25 +1141,52 @@ export const saveOnboardingField = mutation({
         break;
       }
       case "oil": {
-        const v = value as { date?: number; mileage?: number; recency?: string };
+        const v = value as { date?: number; mileage?: number; recency?: string; exactDate?: number };
         let oilDate = v.date;
         if (!oilDate && v.recency) {
-          const MS = 24 * 60 * 60 * 1000;
-          const recencyMap: Record<string, number> = {
-            recently: now - 30 * MS,
-            few_months: now - 90 * MS,
-            over_6mo: now - 210 * MS,
-          };
-          oilDate = recencyMap[v.recency];
+          // "exact_date" carries a user-picked timestamp in v.exactDate
+          // — use it directly. Other recency buckets fall back to the
+          // approximate-age presets so MaintenanceTracker has SOMETHING
+          // to compute status against.
+          if (v.recency === "exact_date" && v.exactDate) {
+            oilDate = v.exactDate;
+          } else {
+            const MS = 24 * 60 * 60 * 1000;
+            const recencyMap: Record<string, number> = {
+              recently: now - 30 * MS,
+              few_months: now - 90 * MS,
+              over_6mo: now - 210 * MS,
+            };
+            oilDate = recencyMap[v.recency];
+          }
         }
-        await upsertRecord("oil", oilDate, v.mileage, { recency: v.recency });
+        await upsertRecord("oil", oilDate, v.mileage, {
+          recency: v.recency,
+          ...(v.exactDate ? { exactDate: v.exactDate } : {}),
+        });
         break;
       }
       case "tires": {
         // Quick Read shape: { replaced, replacedWhen?, repaired } or v3 shape: { original }
         // Legacy shape:     { type, date? }
-        const v = value as { type?: string; date?: number; replaced?: string; replacedWhen?: string; repaired?: string; original?: string };
-        const date = v.date ?? (v.replacedWhen ? quickReadDateToTimestamp(v.replacedWhen) : undefined);
+        // CarInfoStepper shape: { recency, original }
+        const v = value as { type?: string; date?: number; replaced?: string; replacedWhen?: string; repaired?: string; original?: string; recency?: string; exactDate?: number };
+        let tireDate = v.date ?? (v.replacedWhen ? quickReadDateToTimestamp(v.replacedWhen) : undefined);
+        // CarInfoStepper sends `recency` (recently / few_months / over_6mo / exact_date / not_sure).
+        // Mirror the oil pattern so onboarding answers produce a real lastServiceDate.
+        if (!tireDate && v.recency) {
+          if (v.recency === "exact_date" && v.exactDate) {
+            tireDate = v.exactDate;
+          } else {
+            const MS = 24 * 60 * 60 * 1000;
+            const recencyMap: Record<string, number> = {
+              recently: now - 30 * MS,
+              few_months: now - 90 * MS,
+              over_6mo: now - 210 * MS,
+            };
+            tireDate = recencyMap[v.recency];
+          }
+        }
         // Bridge CarInfoStepper's "original" answer to the "tireReplaced" field
         // that computeTireStatusCore reads for status calculation
         let tireReplaced = v.replaced;
@@ -1168,29 +1195,49 @@ export const saveOnboardingField = mutation({
             : v.original === "no" ? "replaced"
             : "dont_know";
         }
-        await upsertRecord("tires", date, undefined, {
+        await upsertRecord("tires", tireDate, undefined, {
           tireServiceType: v.type,
           tireReplaced,
           tireReplacedWhen: v.replacedWhen,
           tireRepaired: v.repaired,
           tireOriginal: v.original,
+          recency: v.recency,
+          ...(v.exactDate ? { exactDate: v.exactDate } : {}),
         });
         break;
       }
       case "brakes": {
-        // v3 shape:     { feel }
-        // Legacy shape: { date? }
-        const v = value as { date?: number; lastDone?: string; feel?: string; actionStatus?: string };
-        const date = v.date ?? (v.lastDone ? quickReadDateToTimestamp(v.lastDone) : undefined);
-        await upsertRecord("brakes", date, undefined, {
+        // v3 modal shape:       { feel }
+        // Legacy shape:         { date? }
+        // CarInfoStepper shape: { recency, feel }
+        const v = value as { date?: number; lastDone?: string; feel?: string; actionStatus?: string; recency?: string; exactDate?: number };
+        let brakeDate = v.date ?? (v.lastDone ? quickReadDateToTimestamp(v.lastDone) : undefined);
+        // CarInfoStepper sends `recency` (recently / few_months / over_6mo / exact_date / not_sure).
+        // Mirror the oil/tires/battery pattern so onboarding answers produce a real lastServiceDate.
+        if (!brakeDate && v.recency) {
+          if (v.recency === "exact_date" && v.exactDate) {
+            brakeDate = v.exactDate;
+          } else {
+            const MS = 24 * 60 * 60 * 1000;
+            const recencyMap: Record<string, number> = {
+              recently: now - 30 * MS,
+              few_months: now - 90 * MS,
+              over_6mo: now - 210 * MS,
+            };
+            brakeDate = recencyMap[v.recency];
+          }
+        }
+        await upsertRecord("brakes", brakeDate, undefined, {
           brakeLastDoneAnswer: v.lastDone,
           brakeFeel: v.feel,
           brakeActionStatus: v.actionStatus,
+          recency: v.recency,
+          ...(v.exactDate ? { exactDate: v.exactDate } : {}),
         });
         break;
       }
       case "battery": {
-        const v = value as { date?: number; isOriginal?: boolean; modelYear?: number; replaced?: string };
+        const v = value as { date?: number; isOriginal?: boolean; modelYear?: number; replaced?: string; recency?: string; exactDate?: number };
         let installDate = v.date;
         if (v.isOriginal && !installDate && v.modelYear) {
           installDate = new Date(v.modelYear, 0, 1).getTime();
@@ -1208,7 +1255,26 @@ export const saveOnboardingField = mutation({
             }
           }
         }
-        await upsertRecord("battery", installDate, undefined, { batteryReplaced: v.replaced });
+        // CarInfoStepper sends `recency` for "When was your battery last replaced?".
+        // Honors exact_date when provided; otherwise falls back to a bucketed timestamp.
+        if (!installDate && v.recency) {
+          if (v.recency === "exact_date" && v.exactDate) {
+            installDate = v.exactDate;
+          } else {
+            const MS = 24 * 60 * 60 * 1000;
+            const recencyMap: Record<string, number> = {
+              recently: now - 30 * MS,
+              few_months: now - 90 * MS,
+              over_6mo: now - 210 * MS,
+            };
+            installDate = recencyMap[v.recency];
+          }
+        }
+        await upsertRecord("battery", installDate, undefined, {
+          batteryReplaced: v.replaced,
+          recency: v.recency,
+          ...(v.exactDate ? { exactDate: v.exactDate } : {}),
+        });
         break;
       }
       case "inspection": {

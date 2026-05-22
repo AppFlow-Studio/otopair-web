@@ -270,6 +270,36 @@ export const stripSmartcarFieldsFromVehicleOwners = mutation({
 });
 
 /**
+ * One-shot: convert legacy vehicle_owners.lastServiceWhat values written as
+ * a single string into the new string[] shape. Schema field is now array-only;
+ * rows written under the previous (string) schema will fail validation on read
+ * until this runs.
+ *
+ * Run: npx convex run migrations:migrateLastServiceWhatToArray
+ */
+export const migrateLastServiceWhatToArray = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("vehicle_owners").collect();
+    let converted = 0;
+    let alreadyArray = 0;
+    let empty = 0;
+    for (const row of rows) {
+      const r = row as Record<string, unknown>;
+      const raw = r.lastServiceWhat;
+      if (raw === undefined || raw === null) { empty += 1; continue; }
+      if (Array.isArray(raw)) { alreadyArray += 1; continue; }
+      if (typeof raw === "string") {
+        const next = raw.length > 0 ? [raw] : [];
+        await ctx.db.patch(row._id, { lastServiceWhat: next });
+        converted += 1;
+      }
+    }
+    return { converted, alreadyArray, empty, scanned: rows.length };
+  },
+});
+
+/**
  * One-shot backfill: for every vehicle that has a vehicle_config_id but is
  * missing engine_id or transmission_id (typical of mechanic walk-in created rows),
  * copy those IDs from the linked vehicle_config and seed the vehicle_passport

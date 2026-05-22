@@ -827,7 +827,7 @@ export default defineSchema({
     annualMileageBand: v.optional(v.string()),
     usagePattern: v.optional(v.string()),
     lastServiceWhen: v.optional(v.string()),
-    lastServiceWhat: v.optional(v.string()),
+    lastServiceWhat: v.optional(v.array(v.string())),
     serviceLocationPreference: v.optional(v.string()),
     garageRole: v.optional(v.string()),
     avgMonthlyDriving: v.optional(v.string()),

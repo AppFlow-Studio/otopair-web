@@ -47,6 +47,30 @@ type ProcessVinResult = {
   fuelType: string;
   drivetrain: string;
   nhtsaVinKey: string;
+  // Raw NHTSA decode passthrough — downstream VDB image/color lookups
+  // use these to discover the catalog's canonical model designation.
+  nhtsaModel: string;
+  nhtsaSeries: string;
+  nhtsaTrim: string;
+  // Raw VDB decode fields — used to build the YMMT combo matrix for
+  // `vehicle-images` discovery when the VIN endpoint 404s.
+  vdbDecodedModel: string;
+  vdbDecodedStyle: string;
+  vdbDecodedTrimAndStyle: string;
+  // Review-screen Specs card fields. Flat (not nested under vdbTrimData)
+  // so router params can forward them directly.
+  horsepower: number | null;
+  engineDisplacementLiters: number | null;
+  cylindersConfiguration: string | null;
+  mpgCity: number | null;
+  mpgHighway: number | null;
+  mpgCombined: number | null;
+  frontTireSize: string | null;
+  rearTireSize: string | null;
+  frontTirePressure: number | null;
+  rearTirePressure: number | null;
+  transType: string | null;
+  transSpeeds: number | null;
   vdbTrimData: {
     frontTireSize: string | null;
     rearTireSize: string | null;
@@ -1024,6 +1048,31 @@ type DecodeVinResult =
       displacement: string;
       fuelType: string;
       nhtsaVinKey: string;
+      // Raw NHTSA decode passthrough — picker uses these for VDB model
+      // discovery (NHTSA's Model is often the specific designation,
+      // e.g. "530i", while the merged result may have been normalized).
+      nhtsaModel: string;
+      nhtsaSeries: string;
+      nhtsaTrim: string;
+      // Raw VDB decode fields — picker builds the YMMT combo matrix
+      // for `vehicle-images` direct probes when the VIN URL 404s.
+      vdbDecodedModel: string;
+      vdbDecodedStyle: string;
+      vdbDecodedTrimAndStyle: string;
+      // Review-screen Specs card fields. Flat for router param forwarding.
+      horsepower: number | null;
+      engineDisplacementLiters: number | null;
+      cylindersConfiguration: string | null;
+      mpgCity: number | null;
+      mpgHighway: number | null;
+      mpgCombined: number | null;
+      frontTireSize: string | null;
+      rearTireSize: string | null;
+      frontTirePressure: number | null;
+      rearTirePressure: number | null;
+      transType: string | null;
+      transSpeeds: number | null;
+      drivetrain: string;
     };
 
 export const decodeVin = action({

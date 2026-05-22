@@ -344,7 +344,8 @@ type WalkinCategory =
   | "walkin_booking_confirmed"
   | "walkin_vehicle_at_shop"
   | "walkin_prejob_complete"
-  | "walkin_completed_claim";
+  | "walkin_completed_claim"
+  | "appointment_reminder";
 
 function brandedShell(headline: string, bodyHtml: string): string {
   return `
@@ -378,6 +379,8 @@ const EMAIL_SUBJECTS: Record<WalkinCategory, (p: WalkinPayload) => string> = {
     `Service starting at ${p.shopName ?? "your shop"}`,
   walkin_completed_claim: (p) =>
     `Your service at ${p.shopName ?? "your shop"} is complete`,
+  appointment_reminder: (p) =>
+    `Reminder: your appointment at ${p.shopName ?? "your shop"}`,
 };
 
 function renderMidJobBody(category: WalkinCategory, p: WalkinPayload): string {
@@ -395,6 +398,15 @@ function renderMidJobBody(category: WalkinCategory, p: WalkinPayload): string {
     case "walkin_prejob_complete": {
       const svc = p.primaryService ?? "service";
       return `<p>${hi}</p><p>Inspection complete at <strong>${shop}</strong>. Starting your <strong>${svc}</strong> now.</p>`;
+    }
+    case "appointment_reminder": {
+      const when = p.scheduledDate && p.scheduledTime
+        ? `${p.scheduledDate} at ${p.scheduledTime}`
+        : "your scheduled time";
+      const svcLine = p.primaryService
+        ? `<p>Service: <strong>${p.primaryService}</strong>.</p>`
+        : "";
+      return `<p>${hi}</p><p>This is a friendly reminder that your appointment at <strong>${shop}</strong> is <strong>${when}</strong>.</p>${svcLine}<p>Need to reschedule? Just reply to this email and we'll take care of it.</p>`;
     }
     default:
       return `<p>${hi}</p><p>Update from <strong>${shop}</strong>.</p>`;

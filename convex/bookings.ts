@@ -922,8 +922,52 @@ export const createBatch = mutation({
 
     const labor_cost = args.services.reduce((sum, s) => sum + s.labor_cost, 0);
     const parts_cost = args.services.reduce((sum, s) => sum + s.parts_cost, 0);
-    const taxes_and_fees = args.taxes_and_fees ?? 0;
-    const platform_fee = args.platform_fee ?? 0;
+
+    // ── Server-authoritative fee + tax derivation ─────────────────────
+    // We deliberately IGNORE args.taxes_and_fees and args.platform_fee from
+    // the client. The client computes those for optimistic display only;
+    // the source of truth lives here so a malicious or stale client can't
+    // undercharge. The same `computeBookingTax` util drives both display
+    // and persisted value, so they always agree when the client is
+    // honest.
+    const shop = await ctx.db.get(args.shop_id);
+    const { computeBookingTax: computeBookingTaxImpl } = await import(
+      "../lib/tax"
+    );
+
+    const PLATFORM_FEE_RATE = 0.07;
+    const PLATFORM_FEE_FLOOR = 4.99;
+    const servicesSubtotal = labor_cost + parts_cost;
+    const platform_fee =
+      servicesSubtotal > 0
+        ? Math.max(servicesSubtotal * PLATFORM_FEE_RATE, PLATFORM_FEE_FLOOR)
+        : 0;
+    const taxes_and_fees = computeBookingTaxImpl({
+      laborDollars: labor_cost,
+      partsDollars: parts_cost,
+      state: shop?.state ?? null,
+      zip: shop?.zip ?? null,
+    }).taxDollars;
+
+    // Optional cross-check: warn (don't reject) when client and server
+    // disagree by > $0.05 — useful telemetry for shop/state misconfig.
+    if (
+      args.taxes_and_fees != null &&
+      Math.abs(args.taxes_and_fees - taxes_and_fees) > 0.05
+    ) {
+      console.warn(
+        `[createBatch] tax mismatch client=${args.taxes_and_fees} server=${taxes_and_fees} shop=${args.shop_id}`,
+      );
+    }
+    if (
+      args.platform_fee != null &&
+      Math.abs(args.platform_fee - platform_fee) > 0.05
+    ) {
+      console.warn(
+        `[createBatch] platform_fee mismatch client=${args.platform_fee} server=${platform_fee} shop=${args.shop_id}`,
+      );
+    }
+
     const total_cost = labor_cost + parts_cost + taxes_and_fees + platform_fee;
     const estimated_labor_minutes = args.services.reduce((sum, s) => sum + (s.labor_hours ?? 0) * 60, 0);
 
@@ -1518,6 +1562,7 @@ export const pushBookingEarlierAndArrive = mutation({
     ]);
 
     await resolveCustomerLateMonitorForBooking(ctx, movedBooking, user._id);
+    await upsertAppointmentReminderForBooking(ctx, movedBooking);
 
     return result;
   },
@@ -1553,13 +1598,7 @@ export const markPostThresholdNoShow = mutation({
       changedBy: user._id,
       reason: "post_threshold_customer_no_show",
     });
-
-    await ctx.scheduler.runAfter(
-      0,
-      (internal as any).lib.stripe_void.voidBookingAuthorization,
-      { bookingId: booking._id },
-    );
-
+    // Stripe void is scheduled centrally by applyBookingStatusTransition.
     return result;
   },
 });
@@ -1708,7 +1747,7 @@ async function moveBookingDirectlyToConfirmedSlot(
   ]);
 
   await resolveCustomerLateMonitorForBooking(ctx, booking, changedBy);
-  await upsertCustomerLateMonitorForBooking(ctx, {
+  const nextBookingForMonitors = {
     ...booking,
     scheduled_date: newScheduledDate,
     scheduled_time: newScheduledTime,
@@ -1717,7 +1756,9 @@ async function moveBookingDirectlyToConfirmedSlot(
     status: "confirmed",
     assignment_preference: preference,
     vehicle_arrived_at_ms: undefined,
-  });
+  };
+  await upsertCustomerLateMonitorForBooking(ctx, nextBookingForMonitors);
+  await upsertAppointmentReminderForBooking(ctx, nextBookingForMonitors);
 
   await enqueueNotificationOutbox(ctx, {
     shopId: booking.shop_id,
@@ -4149,6 +4190,145 @@ async function upsertCustomerLateMonitorForBooking(ctx: any, booking: any) {
   await scheduleCustomerLateMonitorProcessing(ctx, window.pushDueAtMs);
 }
 
+// ---------------------------------------------------------------------------
+// Pre-appointment reminder monitor — mirrors customer_late_monitors but fires
+// BEFORE the appointment start (e.g. 24h prior) rather than after.
+// ---------------------------------------------------------------------------
+
+const APPOINTMENT_REMINDER_LIFECYCLE_STATUSES = [
+  "confirmed",
+  "pending_shop_acceptance",
+  "pending_customer_acceptance",
+];
+
+function isAppointmentReminderEligible(booking: any): boolean {
+  if (!booking?._id) return false;
+  if (!booking.shop_id) return false;
+  if (booking.backfilled_at_ms != null) return false;
+  if (!booking.user_id) return false;
+  if (!booking.scheduled_date || !booking.scheduled_time) return false;
+  return APPOINTMENT_REMINDER_LIFECYCLE_STATUSES.includes(booking.status);
+}
+
+async function getAppointmentReminderByBookingId(ctx: any, bookingId: any) {
+  return await ctx.db
+    .query("appointment_reminder_monitors")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
+    .first();
+}
+
+async function getShopAppointmentReminderLeadMinutes(
+  ctx: any,
+  shopId: any,
+): Promise<number> {
+  if (!shopId) return 0;
+  const shop = await ctx.db.get(shopId);
+  const raw = (shop as any)?.appointment_reminder_lead_minutes;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.floor(raw);
+}
+
+async function getAppointmentReminderWindow(
+  ctx: any,
+  booking: any,
+  leadMinutes: number,
+) {
+  const timezone = await getShopTimezone(ctx, booking.shop_id);
+  const scheduledStartMs = toBookingDateTimeMs(
+    booking.scheduled_date,
+    booking.scheduled_time,
+    timezone,
+  );
+  return {
+    scheduledStartMs,
+    dueAtMs: scheduledStartMs - leadMinutes * 60_000,
+  };
+}
+
+async function resolveAppointmentReminderForBooking(
+  ctx: any,
+  bookingId: any,
+) {
+  if (!bookingId) return;
+  const monitor = await getAppointmentReminderByBookingId(ctx, bookingId);
+  if (!monitor) return;
+  if (monitor.status === "resolved" || monitor.status === "sent") return;
+  const now = Date.now();
+  await ctx.db.patch(monitor._id, {
+    status: "resolved",
+    resolved_at_ms: now,
+    updated_at: now,
+  });
+}
+
+async function upsertAppointmentReminderForBooking(ctx: any, booking: any) {
+  if (!booking?._id) return;
+
+  // Resolve (don't delete) if the booking is no longer eligible. Keeps
+  // history queryable and avoids races with an in-flight cron tick.
+  if (!isAppointmentReminderEligible(booking)) {
+    await resolveAppointmentReminderForBooking(ctx, booking._id);
+    return;
+  }
+
+  const leadMinutes = await getShopAppointmentReminderLeadMinutes(
+    ctx,
+    booking.shop_id,
+  );
+  if (leadMinutes <= 0) {
+    await resolveAppointmentReminderForBooking(ctx, booking._id);
+    return;
+  }
+
+  const { scheduledStartMs, dueAtMs } = await getAppointmentReminderWindow(
+    ctx,
+    booking,
+    leadMinutes,
+  );
+
+  // If the reminder window has already passed (booking is in the past or
+  // booked closer-in than the lead time), skip — firing immediately would
+  // surprise the customer worse than sending nothing.
+  if (dueAtMs <= Date.now()) {
+    await resolveAppointmentReminderForBooking(ctx, booking._id);
+    return;
+  }
+
+  const existing = await getAppointmentReminderByBookingId(ctx, booking._id);
+  const now = Date.now();
+
+  // If the reminder already went out, leave the row alone — rescheduling
+  // after a send shouldn't trigger a duplicate ping.
+  if (existing && existing.status === "sent") return;
+
+  const patch = {
+    shop_id: booking.shop_id,
+    booking_id: booking._id,
+    status: "active",
+    scheduled_start_ms: scheduledStartMs,
+    due_at_ms: dueAtMs,
+    lead_minutes: leadMinutes,
+    updated_at: now,
+  };
+
+  if (existing) {
+    await ctx.db.patch(existing._id, patch);
+  } else {
+    await ctx.db.insert("appointment_reminder_monitors", {
+      ...patch,
+      created_at: now,
+    });
+  }
+
+  if (ctx.scheduler?.runAfter) {
+    await ctx.scheduler.runAfter(
+      Math.max(0, dueAtMs - Date.now()),
+      internal.bookings.processAppointmentReminderMonitors,
+      {},
+    );
+  }
+}
+
 async function resolveNeverStartedBellNotificationsForBooking(ctx: any, bookingId: any) {
   const rows = await ctx.db
     .query("notification_outbox")
@@ -5836,8 +6016,10 @@ export async function applyBookingStatusTransition(
   const nextBooking = { ...booking, ...patch };
   if (newStatus === "confirmed") {
     await upsertCustomerLateMonitorForBooking(ctx, nextBooking);
+    await upsertAppointmentReminderForBooking(ctx, nextBooking);
   } else {
     await resolveCustomerLateMonitorForBooking(ctx, nextBooking, changedBy);
+    await resolveAppointmentReminderForBooking(ctx, nextBooking._id);
     await resolveLateStartMonitorForBooking(ctx, nextBooking, changedBy);
     await resolveNeverStartedBellNotificationsForBooking(ctx, booking._id);
   }
@@ -5864,6 +6046,36 @@ export async function applyBookingStatusTransition(
       patch.updated_at,
     );
     await upsertOverrunCheckinForBooking(ctx, nextBooking, patch.updated_at);
+  }
+
+  // ── Stripe capture / void hooks ───────────────────────────────────────
+  // Capture the held authorization when the mechanic *completes* the job
+  // (not on shop accept). The booking is held in `requires_capture` for
+  // the full booking → service → complete lifecycle, then funds move.
+  //
+  // ⚠ Authorization expiry: Stripe card auths typically expire after 7
+  // days. Bookings scheduled more than ~5 days out (book + service window
+  // > 7 days) risk auth expiry before capture — track via a future cron
+  // that re-auths or alerts near the limit.
+  if (newStatus === "completed") {
+    await ctx.scheduler.runAfter(
+      0,
+      (internal as any).payments_stripe.capturePaymentIntentForBooking,
+      { bookingId: booking._id },
+    );
+  }
+  // Void the authorization on any pre-capture terminal transition. The
+  // action checks the payments row's status and skips if already captured.
+  if (
+    newStatus === "cancelled" ||
+    newStatus === "declined" ||
+    newStatus === "no_show"
+  ) {
+    await ctx.scheduler.runAfter(
+      0,
+      (internal as any).lib.stripe_void.voidBookingAuthorization,
+      { bookingId: booking._id },
+    );
   }
 
   return { success: true, oldStatus: booking.status, newStatus };
@@ -8096,6 +8308,7 @@ export const createByShop = mutation({
           freshBooking,
           "walkin_booking_confirmed",
         );
+        await upsertAppointmentReminderForBooking(ctx, freshBooking);
       }
     }
 
@@ -8740,8 +8953,10 @@ export const update = mutation({
     const nextBooking = { ...booking, ...patch };
     if (nextBooking.status === "confirmed") {
       await upsertCustomerLateMonitorForBooking(ctx, nextBooking);
+      await upsertAppointmentReminderForBooking(ctx, nextBooking);
     } else {
       await resolveCustomerLateMonitorForBooking(ctx, nextBooking, user._id);
+      await resolveAppointmentReminderForBooking(ctx, nextBooking._id);
       await resolveLateStartMonitorForBooking(ctx, nextBooking, user._id);
     }
 
@@ -9096,6 +9311,7 @@ async function proposeRescheduleImpl(
     { ...booking, ...patch },
     changedBy,
   );
+  await upsertAppointmentReminderForBooking(ctx, { ...booking, ...patch });
 
   return booking._id;
 }
@@ -9197,7 +9413,7 @@ export const customerApproveReschedule = mutation({
       },
     ]);
 
-    await upsertCustomerLateMonitorForBooking(ctx, {
+    const confirmedBooking = {
       ...booking,
       status: "confirmed",
       live_stage: "booking_confirmed",
@@ -9209,7 +9425,9 @@ export const customerApproveReschedule = mutation({
       schedule_change_mode: undefined,
       schedule_change_source_booking_id: undefined,
       customer_can_restore_original: undefined,
-    });
+    };
+    await upsertCustomerLateMonitorForBooking(ctx, confirmedBooking);
+    await upsertAppointmentReminderForBooking(ctx, confirmedBooking);
 
     return booking._id;
   },
@@ -9289,27 +9507,29 @@ export const shopCancelReschedule = mutation({
       },
     ]);
 
+    const restoredBooking = {
+      ...booking,
+      status: originalStatus,
+      live_stage: originalStatus === "confirmed" ? "booking_confirmed" : undefined,
+      scheduled_date: originalDate,
+      scheduled_time: originalTime,
+      mechanic_id: originalMechanicId,
+      time_slot_id: originalSlotId,
+      previous_scheduled_date: undefined,
+      previous_scheduled_time: undefined,
+      previous_mechanic_id: undefined,
+      previous_status: undefined,
+      reschedule_proposed_at: undefined,
+      schedule_change_mode: undefined,
+      schedule_change_source_booking_id: undefined,
+      customer_can_restore_original: undefined,
+    };
     if (originalStatus === "confirmed") {
-      await upsertCustomerLateMonitorForBooking(ctx, {
-        ...booking,
-        status: "confirmed",
-        live_stage: "booking_confirmed",
-        scheduled_date: originalDate,
-        scheduled_time: originalTime,
-        mechanic_id: originalMechanicId,
-        time_slot_id: originalSlotId,
-        previous_scheduled_date: undefined,
-        previous_scheduled_time: undefined,
-        previous_mechanic_id: undefined,
-        previous_status: undefined,
-        reschedule_proposed_at: undefined,
-        schedule_change_mode: undefined,
-        schedule_change_source_booking_id: undefined,
-        customer_can_restore_original: undefined,
-      });
+      await upsertCustomerLateMonitorForBooking(ctx, restoredBooking);
     } else {
       await resolveCustomerLateMonitorForBooking(ctx, booking);
     }
+    await upsertAppointmentReminderForBooking(ctx, restoredBooking);
 
     return booking._id;
   },
@@ -9389,27 +9609,29 @@ export const customerDeclineReschedule = mutation({
       },
     ]);
 
+    const restoredBooking = {
+      ...booking,
+      status: originalStatus,
+      live_stage: originalStatus === "confirmed" ? "booking_confirmed" : undefined,
+      scheduled_date: originalDate,
+      scheduled_time: originalTime,
+      mechanic_id: originalMechanicId,
+      time_slot_id: originalSlotId,
+      previous_scheduled_date: undefined,
+      previous_scheduled_time: undefined,
+      previous_mechanic_id: undefined,
+      previous_status: undefined,
+      reschedule_proposed_at: undefined,
+      schedule_change_mode: undefined,
+      schedule_change_source_booking_id: undefined,
+      customer_can_restore_original: undefined,
+    };
     if (originalStatus === "confirmed") {
-      await upsertCustomerLateMonitorForBooking(ctx, {
-        ...booking,
-        status: "confirmed",
-        live_stage: "booking_confirmed",
-        scheduled_date: originalDate,
-        scheduled_time: originalTime,
-        mechanic_id: originalMechanicId,
-        time_slot_id: originalSlotId,
-        previous_scheduled_date: undefined,
-        previous_scheduled_time: undefined,
-        previous_mechanic_id: undefined,
-        previous_status: undefined,
-        reschedule_proposed_at: undefined,
-        schedule_change_mode: undefined,
-        schedule_change_source_booking_id: undefined,
-        customer_can_restore_original: undefined,
-      });
+      await upsertCustomerLateMonitorForBooking(ctx, restoredBooking);
     } else {
       await resolveCustomerLateMonitorForBooking(ctx, booking);
     }
+    await upsertAppointmentReminderForBooking(ctx, restoredBooking);
 
     return booking._id;
   },
@@ -10193,6 +10415,118 @@ export const processCustomerLateMonitors = internalMutation({
   },
 });
 
+export const processAppointmentReminderMonitors = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const active = await ctx.db
+      .query("appointment_reminder_monitors")
+      .withIndex("by_status", (q: any) => q.eq("status", "active"))
+      .collect();
+
+    let nextDueAtMs: number | null = null;
+
+    for (const monitor of active) {
+      if (monitor.due_at_ms > now) {
+        nextDueAtMs =
+          nextDueAtMs == null
+            ? monitor.due_at_ms
+            : Math.min(nextDueAtMs, monitor.due_at_ms);
+        continue;
+      }
+
+      const booking = await ctx.db.get(monitor.booking_id);
+      if (!booking || !isAppointmentReminderEligible(booking)) {
+        await ctx.db.patch(monitor._id, {
+          status: "resolved",
+          resolved_at_ms: now,
+          updated_at: now,
+        });
+        continue;
+      }
+
+      const user: any = await ctx.db.get((booking as any).user_id);
+      const hasPhone = !!user?.phone;
+      const hasEmail = !!user?.email;
+
+      // Nothing to send through → resolve quietly. We won't be able to reach
+      // this customer anyway, and leaving the monitor "active" would just
+      // get re-scanned every minute forever.
+      if (!hasPhone && !hasEmail) {
+        await ctx.db.patch(monitor._id, {
+          status: "resolved",
+          resolved_at_ms: now,
+          updated_at: now,
+        });
+        continue;
+      }
+
+      const shop: any = await ctx.db.get((booking as any).shop_id);
+
+      let primaryService: string | null = null;
+      const serviceIds = (booking as any).service_ids;
+      const customServices = (booking as any).custom_services;
+      if (Array.isArray(serviceIds) && serviceIds.length > 0) {
+        const svc: any = await ctx.db.get(serviceIds[0]);
+        primaryService = svc?.name ?? null;
+      } else if (Array.isArray(customServices) && customServices.length > 0) {
+        primaryService = customServices[0]?.name ?? null;
+      }
+
+      const payload = {
+        shopName: shop?.name ?? "Your shop",
+        scheduledDate: (booking as any).scheduled_date,
+        scheduledTime: (booking as any).scheduled_time,
+        firstName: user?.first_name ?? null,
+        primaryService,
+        bookingId: String(booking._id),
+      };
+
+      const baseDedupe = `appointment_reminder:${String(booking._id)}:${monitor._id}`;
+
+      if (hasPhone) {
+        await enqueueNotificationOutbox(ctx, {
+          shopId: (booking as any).shop_id,
+          bookingId: booking._id,
+          userId: (booking as any).user_id,
+          channel: "sms",
+          category: "appointment_reminder",
+          dedupeKey: `${baseDedupe}:sms`,
+          payload,
+        });
+      }
+
+      if (hasEmail) {
+        await enqueueNotificationOutbox(ctx, {
+          shopId: (booking as any).shop_id,
+          bookingId: booking._id,
+          userId: (booking as any).user_id,
+          channel: "email",
+          category: "appointment_reminder",
+          dedupeKey: `${baseDedupe}:email`,
+          payload,
+        });
+      }
+
+      await ctx.db.patch(monitor._id, {
+        status: "sent",
+        enqueued_at_ms: now,
+        updated_at: now,
+      });
+    }
+
+    if (nextDueAtMs != null && ctx.scheduler?.runAfter) {
+      await ctx.scheduler.runAfter(
+        Math.max(0, nextDueAtMs - now),
+        internal.bookings.processAppointmentReminderMonitors,
+        {},
+      );
+    }
+
+    return { processedAt: now };
+  },
+});
+
 export const processOverrunCheckins = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -10537,7 +10871,7 @@ export const revertExpiredReschedules = internalMutation({
       ]);
 
       if (originalStatus === "confirmed") {
-        await upsertCustomerLateMonitorForBooking(ctx, {
+        const restoredBooking = {
           ...booking,
           status: "confirmed",
           live_stage: "booking_confirmed",
@@ -10553,7 +10887,9 @@ export const revertExpiredReschedules = internalMutation({
           schedule_change_mode: undefined,
           schedule_change_source_booking_id: undefined,
           customer_can_restore_original: undefined,
-        });
+        };
+        await upsertCustomerLateMonitorForBooking(ctx, restoredBooking);
+        await upsertAppointmentReminderForBooking(ctx, restoredBooking);
       }
     }
 

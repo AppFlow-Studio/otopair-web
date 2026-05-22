@@ -47,6 +47,14 @@ const SMS_BODY_TEMPLATES: Record<string, (payload: any) => string> = {
       : "";
     return `Otopair: service complete at ${shop}. ${total}${claim}`.trim();
   },
+
+  appointment_reminder: (payload) => {
+    const shop = payload?.shopName ?? "your shop";
+    const when = payload?.scheduledDate && payload?.scheduledTime
+      ? `${payload.scheduledDate} at ${payload.scheduledTime}`
+      : "your upcoming appointment";
+    return `Otopair reminder: your appointment at ${shop} is ${when}. Reply if you need to reschedule.`;
+  },
 };
 
 export const claimPendingSmsRows = internalMutation({

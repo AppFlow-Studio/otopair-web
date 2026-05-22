@@ -1290,6 +1290,9 @@ export default defineSchema({
     buffer_minutes: v.optional(v.number()),
     max_bookings_per_mechanic_rolling_hour: v.optional(v.number()),
     entity_label_mode: v.optional(v.string()),
+    // Pre-appointment reminder lead time (minutes). 0/unset = disabled.
+    // 60=1h, 120=2h, 1440=24h, 2880=48h.
+    appointment_reminder_lead_minutes: v.optional(v.number()),
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
@@ -1658,6 +1661,7 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_status", ["status"])
     .index("by_idempotency_key", ["idempotency_key"])
+    .index("by_stripe_payment_intent_id", ["stripe_payment_intent_id"])
     .index("by_created_at", ["created_at"]),
 
   // [I]
@@ -2228,6 +2232,27 @@ export default defineSchema({
     customer_acknowledged_at_ms: v.optional(v.number()),
     resolved_at_ms: v.optional(v.number()),
     resolved_by_user_id: v.optional(v.id("users")),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_status", ["status"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
+
+  // Pre-appointment reminder monitor. One row per booking with a configured
+  // lead time. Status flips active -> sent when the per-minute cron enqueues
+  // the SMS/email outbox rows; -> resolved if the booking is cancelled,
+  // resolved via lifecycle, or never had a reachable channel.
+  appointment_reminder_monitors: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    status: v.string(), // "active" | "sent" | "resolved"
+    scheduled_start_ms: v.number(),
+    due_at_ms: v.number(),
+    lead_minutes: v.number(),
+    enqueued_at_ms: v.optional(v.number()),
+    resolved_at_ms: v.optional(v.number()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
   })

@@ -29,6 +29,7 @@ export default function SettingsPage() {
   const [bufferMinutes, setBufferMinutes] = useState(10);
   const [maxPerMechanic, setMaxPerMechanic] = useState(2);
   const [entityLabelMode, setEntityLabelMode] = useState<"mechanic" | "bay">("mechanic");
+  const [reminderLeadMinutes, setReminderLeadMinutes] = useState(0);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
@@ -40,6 +41,9 @@ export default function SettingsPage() {
     setBufferMinutes(shop.buffer_minutes ?? 10);
     setMaxPerMechanic((shop as any).max_bookings_per_mechanic_rolling_hour ?? 2);
     setEntityLabelMode(((shop as any).entity_label_mode ?? "mechanic") as "mechanic" | "bay");
+    setReminderLeadMinutes(
+      Number((shop as any).appointment_reminder_lead_minutes ?? 0),
+    );
   }, [shop]);
 
   async function handleSignOut() {
@@ -58,6 +62,7 @@ export default function SettingsPage() {
         bufferMinutes,
         maxBookingsPerMechanicRollingHour: maxPerMechanic,
         entityLabelMode,
+        appointmentReminderLeadMinutes: reminderLeadMinutes,
       });
       setSettingsMessage("Scheduling settings saved.");
     } catch (error: unknown) {
@@ -268,6 +273,26 @@ export default function SettingsPage() {
                 </select>
                 <span className="mt-1 block text-xs text-gray-500">
                   How customer-visible UI refers to bookable slots.
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Appointment reminder</span>
+                <select
+                  value={reminderLeadMinutes}
+                  onChange={(event) =>
+                    setReminderLeadMinutes(Number(event.target.value))
+                  }
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                >
+                  <option value={0}>Off</option>
+                  <option value={60}>1 hour before</option>
+                  <option value={120}>2 hours before</option>
+                  <option value={1440}>1 day before</option>
+                  <option value={2880}>2 days before</option>
+                </select>
+                <span className="mt-1 block text-xs text-gray-500">
+                  Customers receive an SMS + email reminder at this lead time. Sends silently skip if no contact info is on file.
                 </span>
               </label>
             </div>

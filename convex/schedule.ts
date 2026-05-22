@@ -314,6 +314,25 @@ export const getBookingsForRange = query({
             )
           : estimatedFallback;
 
+        // Captured payment total — sum of payments with status="completed"
+        // for this booking. Only computed for completed bookings so we don't
+        // pay the lookup cost on every upcoming row.
+        let capturedAmount: number | null = null;
+        if (booking.status === "completed") {
+          const payments = await ctx.db
+            .query("payments")
+            .withIndex("by_booking_id", (q: any) =>
+              q.eq("booking_id", booking._id),
+            )
+            .collect();
+          const sum = payments.reduce(
+            (acc: number, p: any) =>
+              p.status === "completed" ? acc + (p.amount ?? 0) : acc,
+            0,
+          );
+          capturedAmount = sum > 0 ? sum : null;
+        }
+
         return {
           _id: booking._id,
           source: booking.source ?? null,
@@ -339,6 +358,7 @@ export const getBookingsForRange = query({
           vehicleDisplay: await resolveVehicleDisplay(ctx, booking.vin),
           licensePlate: booking.vin ? String(booking.vin).slice(-4) : null,
           totalCost: booking.total_cost,
+          capturedAmount,
           customerNote: booking.customer_notes ?? null,
           recommendationState: booking.recommendation_state ?? null,
           diagnosticFollowupState: booking.diagnostic_followup_state ?? null,

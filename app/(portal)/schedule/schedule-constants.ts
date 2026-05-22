@@ -24,6 +24,10 @@ export interface CalendarEvent {
   vehicleDisplay?: string | null;
   licensePlate?: string | null;
   totalCost?: number;
+  /** Sum of `payments.amount` with status="completed" for this booking.
+   *  Surfaced on completed booking blocks so the dispatcher can eyeball
+   *  what actually settled vs. the original estimate. */
+  capturedAmount?: number | null;
   blockTitle?: string | null;
   note?: string | null;
   /** Free-text note the customer left for the mechanic on the Review &

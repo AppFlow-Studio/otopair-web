@@ -114,6 +114,12 @@ crons.interval(
 );
 
 crons.interval(
+  "process-appointment-reminder-monitors",
+  { minutes: 1 },
+  internal.bookings.processAppointmentReminderMonitors,
+);
+
+crons.interval(
   "process-overrun-checkins",
   { minutes: 1 },
   internal.bookings.processOverrunCheckins,

@@ -1118,7 +1118,15 @@ export default function DaySwimLanes({
                       {ev.status === "completed" && (
                         <p className="mt-0.5 inline-flex items-center gap-1 truncate rounded-sm bg-green-100 px-1 text-[10px] font-semibold text-green-800">
                           <CheckCircle2 className="w-2.5 h-2.5 shrink-0" />
-                          {(ev as any).backfilledAtMs ? "Backfilled" : "Completed"}
+                          <span>
+                            {(ev as any).backfilledAtMs ? "Backfilled" : "Completed"}
+                          </span>
+                          {typeof ev.capturedAmount === "number" &&
+                            ev.capturedAmount > 0 && (
+                              <span className="ml-1 tabular-nums">
+                                · ${ev.capturedAmount.toFixed(2)}
+                              </span>
+                            )}
                         </p>
                       )}
                       {isPendingCustomer && (

@@ -56,7 +56,8 @@ export const sendWalkinUpdate = internalAction({
       if (
         args.category === "walkin_booking_confirmed" ||
         args.category === "walkin_vehicle_at_shop" ||
-        args.category === "walkin_prejob_complete"
+        args.category === "walkin_prejob_complete" ||
+        args.category === "appointment_reminder"
       ) {
         const result = await sendBookingUpdateEmail({
           to: args.to,

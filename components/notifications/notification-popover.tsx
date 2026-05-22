@@ -1,13 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@/convex/_generated/api";
 import { NotificationCard, type NotificationItem } from "./notification-card";
 import { NotificationEmptyState } from "./notification-empty-state";
+import { LiveAlertCard } from "./live-alert-card";
+import type { LiveAlert } from "./use-live-alerts";
 
-type Tab = "all" | "confirm" | "tire";
+type Tab = "all" | "live" | "confirm" | "tire";
 
 interface FeedShape {
   unreadCount: number;
@@ -17,15 +19,26 @@ interface FeedShape {
 
 interface NotificationPopoverProps {
   feed: FeedShape | null | undefined;
+  liveAlerts: LiveAlert[];
+  initialTab?: Tab;
   onClose: () => void;
 }
 
-export function NotificationPopover({ feed, onClose }: NotificationPopoverProps) {
+export function NotificationPopover({
+  feed,
+  liveAlerts,
+  initialTab,
+  onClose,
+}: NotificationPopoverProps) {
   const router = useRouter();
   const markAllRead = useMutation(api.mechanicNotifications.markAllRead);
 
-  const [activeTab, setActiveTab] = useState<Tab>("all");
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab ?? "all");
   const [skipped, setSkipped] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab]);
 
   const items = feed?.items ?? [];
 
@@ -49,6 +62,7 @@ export function NotificationPopover({ feed, onClose }: NotificationPopoverProps)
     (item) =>
       item.kind === "tire_quote" && !skipped.has(String(item.bookingId))
   ).length;
+  const liveCount = liveAlerts.length;
 
   function handleSkip(bookingId: string) {
     setSkipped((prev) => {
@@ -77,6 +91,9 @@ export function NotificationPopover({ feed, onClose }: NotificationPopoverProps)
   }
 
   const summary: string[] = [];
+  if (liveCount > 0) {
+    summary.push(`${liveCount} live`);
+  }
   if (confirmCount > 0) {
     summary.push(`${confirmCount} to confirm`);
   }
@@ -84,8 +101,10 @@ export function NotificationPopover({ feed, onClose }: NotificationPopoverProps)
     summary.push(`${tireCount} tire quote${tireCount === 1 ? "" : "s"}`);
   }
 
+  const showLivePinnedInAll = activeTab === "all" && liveAlerts.length > 0;
+
   return (
-    <div className="absolute right-0 mt-2 w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg z-50">
+    <div className="absolute right-0 top-full mt-2 w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg z-50">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
         <span className="text-sm font-semibold text-gray-900">
@@ -112,23 +131,30 @@ export function NotificationPopover({ feed, onClose }: NotificationPopoverProps)
         {(
           [
             { id: "all" as const, label: "All" },
+            { id: "live" as const, label: "Live", count: liveCount },
             { id: "confirm" as const, label: "To confirm" },
             { id: "tire" as const, label: "Tire quotes" },
           ]
         ).map((tab) => {
           const isActive = activeTab === tab.id;
+          const count = "count" in tab ? tab.count : undefined;
           return (
             <button
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id)}
-              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+              className={`inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                 isActive
                   ? "bg-gray-100 text-gray-900"
                   : "text-gray-500 hover:text-gray-900"
               }`}
             >
               {tab.label}
+              {count !== undefined && count > 0 && (
+                <span className="rounded-full bg-red-500 px-1.5 text-[10px] font-semibold leading-4 text-white">
+                  {count}
+                </span>
+              )}
             </button>
           );
         })}
@@ -136,19 +162,67 @@ export function NotificationPopover({ feed, onClose }: NotificationPopoverProps)
 
       {/* Body */}
       <div className="max-h-[70vh] overflow-y-auto">
-        {visibleItems.length === 0 ? (
-          <NotificationEmptyState onClose={onClose} />
+        {activeTab === "live" ? (
+          liveAlerts.length === 0 ? (
+            <div className="px-4 py-8 text-center text-xs text-gray-500">
+              No live alerts right now.
+            </div>
+          ) : (
+            <ul className="divide-y divide-gray-100">
+              {liveAlerts.map((alert) => (
+                <LiveAlertCard
+                  key={alert.id}
+                  alert={alert}
+                  onAfterAction={onClose}
+                />
+              ))}
+            </ul>
+          )
         ) : (
-          <ul className="divide-y divide-gray-100">
-            {visibleItems.map((item) => (
-              <NotificationCard
-                key={String(item.bookingId)}
-                item={item}
-                onSkip={handleSkip}
-                onAfterAction={onClose}
-              />
-            ))}
-          </ul>
+          <>
+            {showLivePinnedInAll && (
+              <div className="border-b border-gray-100 bg-amber-50/30">
+                <div className="flex items-center justify-between px-4 py-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-700">
+                    Live now
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("live")}
+                    className="text-[10px] font-medium text-amber-700 hover:text-amber-900"
+                  >
+                    View all ({liveCount})
+                  </button>
+                </div>
+                <ul className="divide-y divide-gray-100">
+                  {liveAlerts.slice(0, 2).map((alert) => (
+                    <LiveAlertCard
+                      key={alert.id}
+                      alert={alert}
+                      onAfterAction={onClose}
+                    />
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {visibleItems.length === 0 ? (
+              showLivePinnedInAll ? null : (
+                <NotificationEmptyState onClose={onClose} />
+              )
+            ) : (
+              <ul className="divide-y divide-gray-100">
+                {visibleItems.map((item) => (
+                  <NotificationCard
+                    key={String(item.bookingId)}
+                    item={item}
+                    onSkip={handleSkip}
+                    onAfterAction={onClose}
+                  />
+                ))}
+              </ul>
+            )}
+          </>
         )}
       </div>
 

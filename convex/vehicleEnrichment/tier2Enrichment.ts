@@ -131,7 +131,7 @@ export const runTier2Enrichment = internalAction({
   args: {
     vehicle_config_id: v.id("vehicle_configs"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     console.log(`[tier2] Starting for vehicle_config ${args.vehicle_config_id}`);
 
     // 1. LOAD CONTEXT

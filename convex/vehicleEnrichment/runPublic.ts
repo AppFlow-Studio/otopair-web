@@ -28,7 +28,7 @@ export const go = action({
   args: {
     vin: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();
     console.log(`[run] VIN: ${vin}`);
 
@@ -166,7 +166,7 @@ export const go = action({
 /** Diagnostic: show tire_options for a vehicle_config_id. */
 export const inspectTireOptions = action({
   args: { configId: v.string() },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const ts = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getTrimSpecs, {
       vehicleConfigId: args.configId as any,
     });
@@ -196,7 +196,7 @@ export const inspectTireOptions = action({
  */
 export const refreshTireOptions = action({
   args: { vin: v.string() },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();
 
     const vehicle = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleByVin, { vin });
@@ -244,7 +244,7 @@ export const refreshTireOptions = action({
 /** Purge all enrichment data for a VIN and re-run from scratch. */
 export const purgeAndRerun = action({
   args: { vin: v.string() },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();
     const decoded = await ctx.runAction(internal.vehicle_pipeline.processVin, { vin });
     if (!decoded) return { status: "error", reason: "decode_failed" };

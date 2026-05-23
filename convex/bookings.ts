@@ -37,7 +37,10 @@ import type { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { isTerminal, validateTransition } from "./booking_status_history";
 import { mintClaimToken } from "./walkin_claims";
+import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
+import { computeBookingTax } from "../lib/tax";
+import { computePlatformFeeDollars } from "../lib/platformFee";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   addMinutesToHHMM,
@@ -931,18 +934,10 @@ export const createBatch = mutation({
     // and persisted value, so they always agree when the client is
     // honest.
     const shop = await ctx.db.get(args.shop_id);
-    const { computeBookingTax: computeBookingTaxImpl } = await import(
-      "../lib/tax"
-    );
 
-    const PLATFORM_FEE_RATE = 0.07;
-    const PLATFORM_FEE_FLOOR = 4.99;
     const servicesSubtotal = labor_cost + parts_cost;
-    const platform_fee =
-      servicesSubtotal > 0
-        ? Math.max(servicesSubtotal * PLATFORM_FEE_RATE, PLATFORM_FEE_FLOOR)
-        : 0;
-    const taxes_and_fees = computeBookingTaxImpl({
+    const platform_fee = computePlatformFeeDollars(servicesSubtotal);
+    const taxes_and_fees = computeBookingTax({
       laborDollars: labor_cost,
       partsDollars: parts_cost,
       state: shop?.state ?? null,
@@ -2837,6 +2832,7 @@ function normalizePartsUsed(parts: Array<{
   supplied_by?: string | null;
   part_tier?: string | null;
   service_id?: Id<"services"> | null;
+  source?: "catalog" | "manual" | null;
 }>) {
   return parts
     .map((part) => {
@@ -2858,6 +2854,12 @@ function normalizePartsUsed(parts: Array<{
         supplied_by: suppliedBy,
         part_tier: hasText(part.part_tier) ? (part.part_tier as string).trim() : "oem",
         service_id: part.service_id ?? undefined,
+        // Persist provenance so the UI keeps the row locked on reload. Drop
+        // unrecognized values so the validator never sees an invalid literal.
+        source:
+          part.source === "catalog" || part.source === "manual"
+            ? part.source
+            : undefined,
       };
     })
     .filter(
@@ -7260,6 +7262,7 @@ export const completeWithPostjob = mutation({
       now,
       completedAtMs: now,
       preferAutoLaborMinutes: args.postjob.skip_optional_survey === true,
+      actorUserId: user._id,
     });
 
     await ctx.db.patch(jobActual._id, {
@@ -8772,6 +8775,7 @@ export const backfillCompletedBooking = mutation({
       },
       now,
       completedAtMs,
+      actorUserId: user._id,
     });
 
     await ctx.db.patch(jobActual._id, {
@@ -9037,6 +9041,7 @@ export const complete = mutation({
       now,
       completedAtMs: now,
       preferAutoLaborMinutes: true,
+      actorUserId: user._id,
     });
 
     const result = await applyBookingStatusTransition(ctx, {
@@ -9682,6 +9687,7 @@ export const getOpenCustomerLateAlerts = query({
     if (!user) return [];
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
+    const scope = await getCurrentNotificationScope(ctx);
 
     const now = Date.now();
     const rows = await ctx.db
@@ -9699,6 +9705,7 @@ export const getOpenCustomerLateAlerts = query({
       dueRows.map(async (row: any) => {
         const booking = await ctx.db.get(row.booking_id as Id<"bookings">);
         if (!booking || !isCustomerLateMonitorEligible(booking)) return null;
+        if (scope && !bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id
           ? await ctx.db.get(booking.mechanic_id)
@@ -9736,6 +9743,7 @@ export const getCustomerLateNotificationSentMonitors = query({
     if (!user) return [];
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
+    const scope = await getCurrentNotificationScope(ctx);
 
     const now = Date.now();
     const rows = await ctx.db
@@ -9757,6 +9765,7 @@ export const getCustomerLateNotificationSentMonitors = query({
       notifiedRows.map(async (row: any) => {
         const booking = await ctx.db.get(row.booking_id as Id<"bookings">);
         if (!booking || !isCustomerLateMonitorEligible(booking)) return null;
+        if (scope && !bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
         const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
@@ -9787,6 +9796,7 @@ export const getCustomerOnMyWayMonitors = query({
     if (!user) return [];
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
+    const scope = await getCurrentNotificationScope(ctx);
 
     const now = Date.now();
     const rows = await ctx.db
@@ -9803,6 +9813,7 @@ export const getCustomerOnMyWayMonitors = query({
       onMyWayRows.map(async (row: any) => {
         const booking = await ctx.db.get(row.booking_id as Id<"bookings">);
         if (!booking || booking.vehicle_arrived_at_ms) return null;
+        if (scope && !bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
         const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
@@ -9833,6 +9844,7 @@ export const getOpenFrontDeskOverrunAlerts = query({
     if (!user) return [];
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
+    const scope = await getCurrentNotificationScope(ctx);
 
     const rows = await ctx.db
       .query("overrun_checkins")
@@ -9846,6 +9858,7 @@ export const getOpenFrontDeskOverrunAlerts = query({
       rows.map(async (row: any) => {
         const booking = await ctx.db.get(row.booking_id as Id<"bookings">);
         if (!booking || booking.status !== "in_progress") return null;
+        if (scope && !bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id
           ? await ctx.db.get(booking.mechanic_id)
@@ -9949,6 +9962,7 @@ export const getOpenManualSchedulingAlerts = query({
     if (!user) return [];
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
+    const scope = await getCurrentNotificationScope(ctx);
 
     const rows = await ctx.db
       .query("notification_outbox")
@@ -9990,6 +10004,9 @@ export const getOpenManualSchedulingAlerts = query({
         let booking: any = null;
         if (row.booking_id) {
           booking = await ctx.db.get(row.booking_id);
+          if (booking && scope && !bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)) {
+            return null;
+          }
           if (booking) {
             scheduledTime = booking.scheduled_time ?? null;
             scheduledDate = booking.scheduled_date ?? null;
@@ -10041,7 +10058,7 @@ export const getOpenManualSchedulingAlerts = query({
         };
       }),
     );
-    return enriched;
+    return enriched.filter(Boolean);
   },
 });
 
@@ -10053,6 +10070,7 @@ export const getOpenLateStartReviews = query({
 
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
+    const scope = await getCurrentNotificationScope(ctx);
 
     const rows = await ctx.db
       .query("late_start_reviews")
@@ -10072,6 +10090,23 @@ export const getOpenLateStartReviews = query({
           (await hasBookingActuallyStarted(ctx, upstreamBooking))
         ) {
           return null;
+        }
+        // Mechanic-scoped users see a review iff the upstream booking is theirs
+        // (or unassigned) OR any proposal touches one of their bookings/mechanics.
+        if (scope && scope.kind === "mechanic") {
+          const targetMechId = String(scope.mechanicId);
+          const upstreamOwn =
+            upstreamBooking.mechanic_id == null ||
+            String(upstreamBooking.mechanic_id) === targetMechId;
+          const proposalTouchesSelf = (review.proposals ?? []).some(
+            (p: any) =>
+              (p.original_mechanic_id == null
+                ? true
+                : String(p.original_mechanic_id) === targetMechId) ||
+              (p.proposed_mechanic_id != null &&
+                String(p.proposed_mechanic_id) === targetMechId),
+          );
+          if (!upstreamOwn && !proposalTouchesSelf) return null;
         }
         const upstreamCustomer = upstreamBooking?.user_id
           ? await ctx.db.get(upstreamBooking.user_id)

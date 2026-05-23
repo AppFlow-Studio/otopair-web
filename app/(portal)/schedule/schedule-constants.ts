@@ -45,6 +45,12 @@ export interface CalendarEvent {
     | "out_of_scope"
     | null;
   diagnosticFollowupState?: "pending" | "awaiting_info" | "resolved" | null;
+  /** Tentative-hold synthetic events (status="tentative_quote") use this to
+   *  carry the underlying booking_id and the originating tire_quote_response
+   *  so click handlers can route to the right place. The event `id` itself is
+   *  a synthetic `tq_<responseId>` to avoid colliding with real booking ids. */
+  tentativeBookingId?: string;
+  responseId?: string;
 }
 
 export const statusColors: Record<string, { bg: string; text: string; border: string }> = {

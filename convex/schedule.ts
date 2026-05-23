@@ -10,6 +10,10 @@ import {
   syncMechanicDayAvailability,
   syncShopAvailabilityWindow,
 } from "./lib/timeSlotAvailability";
+import {
+  bookingVisibleUnderScope,
+  getCurrentNotificationScope,
+} from "./lib/notificationScope";
 
 async function getCurrentUserOrNull(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
@@ -277,16 +281,19 @@ export const getBookingsForRange = query({
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
 
+    const scope = await getCurrentNotificationScope(ctx);
+
     const bookings = await getShopBookings(ctx, primary.shopId);
     const filtered = bookings.filter(
       (booking: any) =>
         booking.scheduled_date >= args.dateFrom &&
         booking.scheduled_date <= args.dateTo &&
         booking.status !== "cancelled" &&
-        booking.status !== "declined"
+        booking.status !== "declined" &&
+        (!scope || bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)),
     );
 
-    return await Promise.all(
+    const realEvents = await Promise.all(
       filtered.map(async (booking: any) => {
         const customer: any = await ctx.db.get(booking.user_id);
         const mechanic: any = booking.mechanic_id
@@ -365,6 +372,69 @@ export const getBookingsForRange = query({
         };
       })
     );
+
+    // Tentative-hold events: tire-quote responses this shop has submitted that
+    // are still active (not superseded, not expired) and whose underlying
+    // booking hasn't been confirmed yet. Each response carries an availability
+    // slot the mechanic offered — surface those as dashed/translucent blocks
+    // in the responding mechanic's lane so they don't double-book themselves.
+    const now = Date.now();
+    const tireResponses = await ctx.db
+      .query("tire_quote_responses")
+      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+      .collect();
+
+    const activeResponses = tireResponses.filter((r: any) => {
+      if (r.superseded_at != null) return false;
+      if (typeof r.expires_at === "number" && r.expires_at <= now) return false;
+      if (!r.mechanic_id) return false; // unassigned tentative holds aren't surfaced
+      const date = r.availability?.date;
+      if (!date || date < args.dateFrom || date > args.dateTo) return false;
+      if (scope && scope.kind === "mechanic" && String(r.mechanic_id) !== String(scope.mechanicId)) {
+        return false;
+      }
+      return true;
+    });
+
+    const tentativeEvents = await Promise.all(
+      activeResponses.map(async (r: any) => {
+        const booking: any = await ctx.db.get(r.booking_id);
+        if (!booking) return null;
+        if (booking.status !== "pending_quote" && booking.status !== "quotes_ready") return null;
+        const customer: any = booking.user_id ? await ctx.db.get(booking.user_id) : null;
+        const mechanic: any = r.mechanic_id ? await ctx.db.get(r.mechanic_id) : null;
+        return {
+          _id: `tq_${r._id}` as any,
+          source: "tire_quote" as any,
+          backfilledAtMs: null,
+          invoiceNumber: null,
+          scheduledDate: r.availability.date as string,
+          scheduledTime: r.availability.time as string,
+          estimatedMinutes: r.estimated_duration_minutes ?? 30,
+          status: "tentative_quote" as any,
+          customerName:
+            `${customer?.first_name ?? ""} ${customer?.last_name ?? ""}`.trim() ||
+            customer?.email ||
+            "Tire quote",
+          mechanicId: r.mechanic_id,
+          mechanicName: mechanic
+            ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
+            : null,
+          serviceNames: ["Tire Replacement"],
+          vehicleDisplay: await resolveVehicleDisplay(ctx, booking.vin),
+          licensePlate: booking.vin ? String(booking.vin).slice(-4) : null,
+          totalCost: r.total ?? null,
+          capturedAmount: null,
+          customerNote: booking.customer_notes ?? null,
+          recommendationState: null,
+          diagnosticFollowupState: null,
+          bookingId: booking._id,
+          responseId: r._id,
+        };
+      }),
+    );
+
+    return [...realEvents, ...tentativeEvents.filter(Boolean)];
   },
 });
 

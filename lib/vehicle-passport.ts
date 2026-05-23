@@ -157,6 +157,10 @@ export type JobActualPartPayload = {
   // Which booking service this part belongs to. Optional for backward compat
   // with legacy rows; snapshot path falls back to booking.service_ids[0].
   service_id?: string | null;
+  // Provenance — "catalog" rows came from the Otopair prefill and their
+  // identity (name/brand/oem) is locked in the UI. "manual" rows were
+  // mechanic-added and stay fully editable. Absent on legacy rows.
+  source?: "catalog" | "manual";
 };
 
 export type PreJobSurveyPayload = {

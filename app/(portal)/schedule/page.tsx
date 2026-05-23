@@ -611,6 +611,24 @@ export default function SchedulePage() {
     setRescheduleError("");
   }, []);
 
+  // Tentative-quote events (status="tentative_quote") use a synthetic id
+  // (`tq_<responseId>`) so they don't collide with real bookings. Clicking
+  // one routes the mechanic into the tire-quote-requests page focused on the
+  // underlying booking so they can edit / withdraw their quote.
+  const handleEventSelect = useCallback(
+    (ev: CalendarEvent) => {
+      if (ev.status === "tentative_quote") {
+        const targetBooking = ev.tentativeBookingId;
+        if (targetBooking) {
+          router.push(`/bookings/tire-quote-requests?booking=${targetBooking}`);
+        }
+        return;
+      }
+      setSelectedBookingId(ev.id as Id<"bookings">);
+    },
+    [router],
+  );
+
   /**
    * Focus the day-lane on a booking so the user can drag-reschedule it
    * within the live schedule (respecting bookings, blocked time, and shop hours).
@@ -1002,6 +1020,12 @@ export default function SchedulePage() {
           recommendationState: (b as any).recommendationState ?? null,
           diagnosticFollowupState: (b as any).diagnosticFollowupState ?? null,
           backfilledAtMs: (b as any).backfilledAtMs ?? null,
+          tentativeBookingId: (b as any).bookingId
+            ? String((b as any).bookingId)
+            : undefined,
+          responseId: (b as any).responseId
+            ? String((b as any).responseId)
+            : undefined,
         };
       });
 
@@ -1443,7 +1467,7 @@ export default function SchedulePage() {
             nowTimestamp={nowTimestamp}
             currentDate={currentDate}
             viewerMechanicId={isMechanicViewer ? viewerMechanicId : null}
-            onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
+            onSelectEvent={handleEventSelect}
             selectedEventId={selectedBookingId ?? null}
             onProposeReschedule={handleProposeReschedule}
             onDragError={(msg) => setToast({ msg, key: Date.now() })}
@@ -1497,7 +1521,7 @@ export default function SchedulePage() {
               minTime={minTime}
               maxTime={maxTime}
               nowTimestamp={nowTimestamp}
-              onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
+              onSelectEvent={handleEventSelect}
               onProposeReschedule={handleProposeReschedule}
               onDragError={(msg) => setToast({ msg, key: Date.now() })}
               onContextMenuCell={(info) => {
@@ -1549,7 +1573,7 @@ export default function SchedulePage() {
                 setCurrentView("day");
                 return;
               }
-              setSelectedBookingId(ev.id as Id<"bookings">);
+              handleEventSelect(ev);
             }}
             formats={{
               dayFormat: (date: Date) => format(date, "EEE d"),

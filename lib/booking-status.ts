@@ -8,7 +8,8 @@ export type BookingStatus =
   | "completed"
   | "cancelled"
   | "no_show"
-  | "declined";
+  | "declined"
+  | "tentative_quote";
 
 export interface BookingStatusVisuals {
   label: string;
@@ -110,6 +111,15 @@ export const BOOKING_STATUS_VISUALS: Record<BookingStatus, BookingStatusVisuals>
       bg: "rgb(254 242 242)",
       text: "rgb(239 68 68)",
       border: "rgb(252 165 165)",
+    },
+  },
+  tentative_quote: {
+    label: "Pending Quote",
+    pillClass: "bg-amber-50 text-amber-700",
+    calendarColors: {
+      bg: "rgb(255 251 235)",
+      text: "rgb(180 83 9)",
+      border: "rgb(251 191 36)",
     },
   },
 };

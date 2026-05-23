@@ -967,6 +967,7 @@ export default function DaySwimLanes({
                   const isBeingDragged = dragEventId === ev.id;
                   const isPendingCustomer =
                     ev.status === "pending_customer_acceptance";
+                  const isTentativeQuote = ev.status === "tentative_quote";
                   const isAwaitingRecResponse =
                     ev.recommendationState === "pending_customer";
                   const isAwaitingInfo =
@@ -1028,10 +1029,20 @@ export default function DaySwimLanes({
                         height: Math.max(ROW_HEIGHT * 0.5, slotHeight - 2),
                         backgroundColor: colors.bg,
                         color: colors.text,
-                        borderLeft: isPendingCustomer
-                          ? `3px dashed ${colors.border}`
-                          : `3px solid ${colors.border}`,
-                        borderBottom: `2px solid ${colors.border}`,
+                        borderLeft:
+                          isPendingCustomer || isTentativeQuote
+                            ? `3px dashed ${colors.border}`
+                            : `3px solid ${colors.border}`,
+                        borderTop: isTentativeQuote
+                          ? `1px dashed ${colors.border}`
+                          : undefined,
+                        borderRight: isTentativeQuote
+                          ? `1px dashed ${colors.border}`
+                          : undefined,
+                        borderBottom: isTentativeQuote
+                          ? `1px dashed ${colors.border}`
+                          : `2px solid ${colors.border}`,
+                        opacity: isTentativeQuote ? 0.75 : undefined,
                       }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = "0 1px 3px rgba(0,0,0,0.08)"; }}
                       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = ""; }}
@@ -1047,6 +1058,11 @@ export default function DaySwimLanes({
                       {slotHeight > ROW_HEIGHT * 1.5 && (
                         <span className="absolute bottom-0.5 right-1 text-[10px] opacity-50 font-medium">
                           {formatCompactTime(ev.start.getHours(), ev.start.getMinutes())}
+                        </span>
+                      )}
+                      {isTentativeQuote && (
+                        <span className="absolute top-0.5 right-1 rounded bg-white/80 px-1 text-[9px] font-semibold uppercase tracking-wide">
+                          Pending quote
                         </span>
                       )}
                       {slotHeight <= ROW_HEIGHT * 2 && (ev.vehicleDisplay || ev.licensePlate) ? (

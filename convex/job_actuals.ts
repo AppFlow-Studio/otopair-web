@@ -467,6 +467,7 @@ export const getPrefillData = query({
       quantity_needed: number | null;
       position: string | null;
       average_price: number;       // 0 when no price data
+      median_price: number;        // 0 when no price data
       price_sample_size: number;
       price_sources_used: number;
     };
@@ -505,6 +506,7 @@ export const getPrefillData = query({
             quantity_needed: f.quantity_needed ?? null,
             position: f.position ?? null,
             average_price: priceSummary.average,
+            median_price: priceSummary.median,
             price_sample_size: priceSummary.sample_size,
             price_sources_used: priceSummary.used_sample_size,
           });
@@ -537,7 +539,9 @@ export const getPrefillData = query({
         suggestedParts.push({
           part_name: part.part_name,
           oem_number: part.oem_part_number,
-          cost: part.average_price,
+          // Prefer median across observations — robust to outlier overpays /
+          // typos and matches the tooltip/placeholder the mechanic sees.
+          cost: part.median_price > 0 ? part.median_price : part.average_price,
           service_id: rec.service_id,
         });
         existingOemNumbers.add(key);
@@ -667,6 +671,7 @@ export const completeJob = mutation({
       now,
       completedAtMs: now,
       preferAutoLaborMinutes: true,
+      actorUserId: user._id,
     });
 
     if (booking.status !== "completed") {
@@ -711,6 +716,7 @@ export const saveDraft = mutation({
       actuals: args.actuals,
       now: Date.now(),
       preferAutoLaborMinutes: booking.status === "completed",
+      actorUserId: user._id,
     });
   },
 });
@@ -791,6 +797,7 @@ export const submitJobActuals = mutation({
       now,
       completedAtMs: booking.status === "completed" ? undefined : now,
       preferAutoLaborMinutes: true,
+      actorUserId: user._id,
     });
 
     if (booking.status !== "completed") {

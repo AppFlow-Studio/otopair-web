@@ -12,6 +12,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
+import { summarizePartPrices } from "./part_prices";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -203,6 +204,127 @@ export const getOemPartsForBooking = query({
         serviceName: service.name,
         serviceSlug: service.slug,
         parts: resolved,
+      });
+    }
+
+    return out;
+  },
+});
+
+// ─── Booking review: priced parts breakdown for a vehicle owner ────────────
+//
+// Pre-booking variant of `getOemPartsForBooking` keyed by vehicle_owner instead
+// of an existing booking row. Drives the "Review & Pay" parts lines so each
+// part renders with quantity × unit price instead of being split evenly across
+// a flat `default_parts_estimate`. Pricing comes from `part_prices` (averaged
+// with outlier rejection — see part_prices.summarizePartPrices).
+
+export type PricedFitment = {
+  part_id: Id<"oem_parts">;
+  name: string;
+  oem_part_number: string;
+  category?: string;
+  position?: string;
+  quantity: number;          // quantity_needed defaulted to 1
+  unit_price: number;        // 0 when no part_prices rows exist
+  line_total: number;        // quantity × unit_price
+  has_price_data: boolean;
+  price_sample_size: number;
+};
+
+export type PricedPartsForService = {
+  serviceId: Id<"services">;
+  serviceName: string;
+  serviceSlug: string;
+  parts: PricedFitment[];
+  partsTotal: number;        // sum of line_totals
+};
+
+/**
+ * Returns OEM parts + average unit prices for each requested service, scoped to
+ * the vehicle's `vehicle_config_id` (resolved through the vehicle_owner row).
+ * Package-conditional fitments are included only when the owner has confirmed
+ * the package (matches the resolved branch of `getPartsForService`).
+ *
+ * Returns `[]` for any service that has no fitments or whose vehicle has no
+ * resolved config — the UI then falls back to `default_parts_estimate`.
+ */
+export const getPricedPartsForServices = query({
+  args: {
+    vehicleOwnerId: v.id("vehicle_owners"),
+    serviceIds: v.array(v.id("services")),
+  },
+  handler: async (ctx, args): Promise<PricedPartsForService[]> => {
+    if (args.serviceIds.length === 0) return [];
+
+    const owner = await ctx.db.get(args.vehicleOwnerId);
+    if (!owner) return [];
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", owner.vin))
+      .first();
+    if (!vehicle?.vehicle_config_id) return [];
+
+    const configId = vehicle.vehicle_config_id;
+
+    const ownerSpecs = await ctx.db
+      .query("vehicle_owner_specs")
+      .withIndex("by_vehicle_owner", (q) =>
+        q.eq("vehicle_owner_id", args.vehicleOwnerId),
+      )
+      .first();
+    const confirmed = new Set(ownerSpecs?.confirmed_packages ?? []);
+
+    const out: PricedPartsForService[] = [];
+
+    for (const serviceId of args.serviceIds) {
+      const service = await ctx.db.get(serviceId);
+      if (!service?.slug) continue;
+
+      const fitments = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", configId).eq("service_type", service.slug!),
+        )
+        .collect();
+
+      const applicable = fitments.filter(
+        (f) => f.package_code == null || confirmed.has(f.package_code),
+      );
+
+      const parts: PricedFitment[] = [];
+      let partsTotal = 0;
+      for (const f of applicable) {
+        const part = await ctx.db.get(f.part_id);
+        if (!part) continue;
+
+        const priceSummary = await summarizePartPrices(ctx, f.part_id);
+        const quantity = f.quantity_needed ?? 1;
+        const unit_price = priceSummary.average;
+        const line_total = Math.round(quantity * unit_price * 100) / 100;
+        partsTotal += line_total;
+
+        parts.push({
+          part_id: f.part_id,
+          name: part.name,
+          oem_part_number: part.oem_part_number,
+          category: part.category,
+          position: f.position,
+          quantity,
+          unit_price,
+          line_total,
+          has_price_data: priceSummary.sample_size > 0,
+          price_sample_size: priceSummary.sample_size,
+        });
+      }
+
+      out.push({
+        serviceId,
+        serviceName: service.name,
+        serviceSlug: service.slug,
+        parts,
+        partsTotal: Math.round(partsTotal * 100) / 100,
       });
     }
 

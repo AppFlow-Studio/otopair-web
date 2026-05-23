@@ -5,7 +5,7 @@
  * Charge model: destination charges with manual capture.
  *   - Auth on booking confirm → PaymentIntent with capture_method=manual,
  *     transfer_data.destination = shop.stripe_connect_account_id,
- *     application_fee_amount = booking.platform_fee (cents).
+ *     application_fee_amount = rate × subtotal (from platform_settings).
  *   - Capture on shop accept (booking transition → "confirmed").
  *   - Void on no_show / decline / pre-capture cancel.
  *   - Refund with reverse_transfer + refund_application_fee on post-capture
@@ -25,6 +25,7 @@ import {
 } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { getStripe } from "../lib/stripe";
+import { validateTransition, isTerminal } from "./payment_status_history";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -287,10 +288,6 @@ export const handlePaymentIntentEvent = internalMutation({
     }
     if (!payment) return { matched: false };
 
-    const { validateTransition, isTerminal } = await import(
-      "./payment_status_history"
-    );
-
     // Idempotent no-op on same-state.
     if (payment.status === args.newStatus) return { matched: true, noop: true };
 
@@ -339,10 +336,6 @@ export const _transitionPayment = internalMutation({
   handler: async (ctx, args) => {
     const payment = await ctx.db.get(args.paymentId);
     if (!payment) return;
-
-    const { validateTransition, isTerminal } = await import(
-      "./payment_status_history"
-    );
 
     if (payment.status === args.newStatus) return;
     if (isTerminal(payment.status)) return;
@@ -617,22 +610,28 @@ export const createPaymentIntentForBooking = action({
     }
     const amountCents = Math.round(totalDollars * 100);
 
-    // The customer was shown `booking.platform_fee` on the review screen as
-    // "Otopair Service Fee — 7%". We MUST collect exactly that — anything
-    // else creates a fee-on-fee bug (charging 7% on a total that already
-    // contains the 7% fee). If the booking row is missing this field, the
-    // upstream booking author has a bug; refuse to charge rather than
-    // silently overcollecting.
-    if (
-      booking.platform_fee == null ||
-      typeof booking.platform_fee !== "number" ||
-      booking.platform_fee < 0
-    ) {
-      throw new Error(
-        "Booking is missing its platform_fee — cannot create PaymentIntent.",
-      );
-    }
-    const platformFeeCents = Math.round(booking.platform_fee * 100);
+    // Platform fee comes from the admin-managed singleton config
+    // (`platform_settings`). The booking row itself doesn't carry a
+    // platform_fee — that field was unreliable across creation paths and
+    // didn't match the system's actual rate. Seed-on-read keeps the row
+    // present even on a fresh deploy.
+    const settings: any = await ctx.runMutation(
+      internal.platform_settings._getOrCreate,
+      {},
+    );
+    const subtotal = (booking.labor_cost ?? 0) + (booking.parts_cost ?? 0);
+    const platformFeeDollars =
+      subtotal > 0
+        ? Math.max(
+            subtotal * settings.platform_fee_rate,
+            settings.platform_fee_floor_dollars,
+          )
+        : 0;
+    // Floor at zero, cap at total to satisfy Stripe's constraint.
+    const platformFeeCents = Math.min(
+      amountCents,
+      Math.max(0, Math.round(platformFeeDollars * 100)),
+    );
 
     if (!user.stripe_customer_id) {
       throw new Error("Add a payment method before confirming.");

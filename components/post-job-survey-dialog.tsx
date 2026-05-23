@@ -70,6 +70,7 @@ type OemRecommendationPart = {
   quantity_needed?: number | null;
   position?: string | null;
   average_price?: number;
+  median_price?: number;
   price_sample_size?: number;
   price_sources_used?: number;
 };
@@ -159,6 +160,10 @@ type PartRowState = {
   // correctly downstream. Legacy rows leave it unset; snapshot path falls
   // back to booking.service_ids[0].
   service_id?: string | null;
+  // "catalog" = seeded from the Otopair prefill, identity fields locked.
+  // "manual" = mechanic-added row, fully editable. Absent on legacy rows
+  // (treated as "manual" so we never accidentally lock a user-typed row).
+  source?: "catalog" | "manual";
 };
 
 export type PhotoState = {
@@ -675,19 +680,32 @@ function OilFilterField({
 }
 
 function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
-  return parts.map((part) => ({
-    part_name: part.part_name,
-    brand: part.brand ?? "",
-    oem_number: part.oem_number,
-    cost: Number.isFinite(part.cost) ? String(part.cost) : "",
-    quantity:
-      typeof part.quantity === "number" && Number.isFinite(part.quantity)
-        ? Math.max(1, Math.round(part.quantity))
-        : 1,
-    supplied_by: part.supplied_by === "customer" ? "customer" : "shop",
-    part_tier: part.part_tier ?? "oem",
-    service_id: part.service_id ?? null,
-  }));
+  return parts.map((part) => {
+    // Prefer the explicit source if it's been persisted on the row. Fall back
+    // to the heuristic: a row carrying both a part name AND an OEM number is
+    // almost certainly catalog-derived (prefill, prior snapshot, or a swap).
+    // Bare mechanic-typed rows start blank → "manual".
+    const resolvedSource: "catalog" | "manual" =
+      part.source === "catalog" || part.source === "manual"
+        ? part.source
+        : part.part_name && part.oem_number
+          ? "catalog"
+          : "manual";
+    return {
+      part_name: part.part_name,
+      brand: part.brand ?? "",
+      oem_number: part.oem_number,
+      cost: Number.isFinite(part.cost) ? String(part.cost) : "",
+      quantity:
+        typeof part.quantity === "number" && Number.isFinite(part.quantity)
+          ? Math.max(1, Math.round(part.quantity))
+          : 1,
+      supplied_by: part.supplied_by === "customer" ? "customer" : "shop",
+      part_tier: part.part_tier ?? "oem",
+      service_id: part.service_id ?? null,
+      source: resolvedSource,
+    };
+  });
 }
 
 function makePhotoId() {
@@ -896,6 +914,7 @@ function PostJobSurveyDialogBody({
           supplied_by: suppliedBy,
           part_tier: part.part_tier || "oem",
           service_id: part.service_id ?? null,
+          source: part.source,
         };
       })
       .filter(
@@ -1934,11 +1953,14 @@ function PartsStep({
     part_tier?: string | null;
   }) => {
     if (swapIndex === null) return;
+    // A swap result is by definition a catalog SKU, so lock the row's identity
+    // even if the mechanic swapped from a "manual" entry into a known part.
     updatePart(swapIndex, {
       part_name: next.part_name,
       oem_number: next.oem_number,
       brand: next.brand ?? "",
       part_tier: next.part_tier ?? "oem",
+      source: "catalog",
     });
     closeSwap();
   };
@@ -1977,6 +1999,18 @@ function PartsStep({
             const isOemRecommended = !!oemRec;
             const sourcesUsed = oemRec?.price_sources_used ?? 0;
             const avgPrice = oemRec?.average_price ?? 0;
+            const medianPrice = oemRec?.median_price ?? 0;
+            // Identity (name / brand / OEM number) is locked when the row was
+            // seeded from the catalog. Mechanic-added "manual" rows stay fully
+            // editable. Falls back to isOemRecommended for legacy rows that
+            // were saved before `source` existed.
+            const isCatalogRow =
+              part.source === "catalog" ||
+              (part.source === undefined && isOemRecommended);
+            const lockedFieldClasses =
+              "h-8 min-w-0 flex-1 truncate rounded-md bg-muted/40 px-2 py-1.5 text-[13px] font-semibold leading-tight text-foreground";
+            const lockedSmallClasses =
+              "h-7 truncate rounded-md bg-muted/40 px-2 py-1.5 text-[11px] text-foreground";
             return (
               <div
                 key={index}
@@ -1985,15 +2019,27 @@ function PartsStep({
                 {/* Top: name + tier chip on the left, quantity stepper on the right */}
                 <div className="flex items-start gap-3">
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <input
-                        value={part.part_name}
-                        onChange={(event) =>
-                          updatePart(index, { part_name: event.target.value })
-                        }
-                        placeholder="Part name"
-                        className="h-8 min-w-0 flex-1 rounded-md border border-primary/10 bg-background px-2 text-[13px] font-semibold leading-tight text-foreground outline-none placeholder:font-normal placeholder:text-muted-foreground focus:border-primary/30"
-                      />
+                    <span className="block text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                      Part name
+                    </span>
+                    <div className="mt-0.5 flex items-center gap-1.5">
+                      {isCatalogRow ? (
+                        <span
+                          className={lockedFieldClasses}
+                          title="From catalog — swap the part to change its identity."
+                        >
+                          {part.part_name}
+                        </span>
+                      ) : (
+                        <input
+                          value={part.part_name}
+                          onChange={(event) =>
+                            updatePart(index, { part_name: event.target.value })
+                          }
+                          placeholder="Part name"
+                          className="h-8 min-w-0 flex-1 rounded-md border border-primary/10 bg-background px-2 text-[13px] font-semibold leading-tight text-foreground outline-none placeholder:font-normal placeholder:text-muted-foreground focus:border-primary/30"
+                        />
+                      )}
                       {isOemRecommended ? (
                         <span
                           className="inline-flex shrink-0 items-center rounded-md bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary"
@@ -2019,23 +2065,51 @@ function PartsStep({
                       ) : null}
                     </div>
                     {/* Brand + part number, compact and inline */}
-                    <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                      <input
-                        value={part.brand}
-                        onChange={(event) =>
-                          updatePart(index, { brand: event.target.value })
-                        }
-                        placeholder="Brand"
-                        className="h-7 rounded-md border border-primary/10 bg-background px-2 text-[11px] outline-none focus:border-primary/30"
-                      />
-                      <input
-                        value={part.oem_number}
-                        onChange={(event) =>
-                          updatePart(index, { oem_number: event.target.value })
-                        }
-                        placeholder="Part number"
-                        className="h-7 rounded-md border border-primary/10 bg-background px-2 text-[11px] outline-none focus:border-primary/30"
-                      />
+                    <div className="mt-2 grid grid-cols-2 gap-1.5">
+                      <div className="min-w-0">
+                        <span className="block text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          Brand
+                        </span>
+                        {isCatalogRow ? (
+                          <span
+                            className={`${lockedSmallClasses} mt-0.5 block`}
+                            title="From catalog — swap the part to change its brand."
+                          >
+                            {part.brand || "—"}
+                          </span>
+                        ) : (
+                          <input
+                            value={part.brand}
+                            onChange={(event) =>
+                              updatePart(index, { brand: event.target.value })
+                            }
+                            placeholder="Brand"
+                            className="mt-0.5 h-7 w-full rounded-md border border-primary/10 bg-background px-2 text-[11px] outline-none focus:border-primary/30"
+                          />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <span className="block text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          Part number
+                        </span>
+                        {isCatalogRow ? (
+                          <span
+                            className={`${lockedSmallClasses} mt-0.5 block font-mono tabular-nums`}
+                            title="From catalog — swap the part to change its OEM number."
+                          >
+                            {part.oem_number || "—"}
+                          </span>
+                        ) : (
+                          <input
+                            value={part.oem_number}
+                            onChange={(event) =>
+                              updatePart(index, { oem_number: event.target.value })
+                            }
+                            placeholder="Part number"
+                            className="mt-0.5 h-7 w-full rounded-md border border-primary/10 bg-background px-2 text-[11px] outline-none focus:border-primary/30"
+                          />
+                        )}
+                      </div>
                     </div>
                     {/* Otopair price line / cost editor */}
                     <div className="mt-2 flex items-center gap-2 text-[12px]">
@@ -2067,11 +2141,19 @@ function PartsStep({
                               }
                             }}
                             inputMode="decimal"
-                            placeholder={avgPrice > 0 ? avgPrice.toFixed(2) : "0.00"}
+                            placeholder={
+                              medianPrice > 0
+                                ? medianPrice.toFixed(2)
+                                : avgPrice > 0
+                                  ? avgPrice.toFixed(2)
+                                  : "0.00"
+                            }
                             title={
-                              isOemRecommended && sourcesUsed > 0 && avgPrice > 0
-                                ? `Otopair average $${avgPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
-                                : undefined
+                              isOemRecommended && sourcesUsed > 0 && medianPrice > 0
+                                ? `Otopair median $${medianPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
+                                : isOemRecommended && sourcesUsed > 0 && avgPrice > 0
+                                  ? `Otopair average $${avgPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
+                                  : undefined
                             }
                             className="h-6 w-20 rounded-md border border-primary/10 bg-background px-1.5 text-[12px] font-medium tabular-nums outline-none focus:border-primary/30"
                           />
@@ -2193,6 +2275,7 @@ function PartsStep({
                       supplied_by: "shop",
                       part_tier: "oem",
                       service_id: svc._id,
+                      source: "manual",
                     },
                   ])
                 }
@@ -2218,6 +2301,7 @@ function PartsStep({
                   supplied_by: "shop",
                   part_tier: "oem",
                   service_id: partsRequiredServices[0]?._id ?? null,
+                  source: "manual",
                 },
               ])
             }

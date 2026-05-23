@@ -3,224 +3,298 @@
 import { useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
-import { Badge, Card, Select, StatusBadge, tableStyles, IconChevron, IconDot } from '../Primitives'
+import type { Id } from '@/convex/_generated/dataModel'
+import {
+  Badge, Button, Card, Select, StatusBadge, tableStyles, Avatar,
+  IconBolt, IconStar, IconBug, IconMessage, IconShop,
+} from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { gotoEntity } from '../directorNav'
+import {
+  StatCard, BarRow, DualSparkline,
+  fmtCurrency, fmtPct, fmtNumber, fmtRelative,
+} from '../Charts'
 
-const COUNTER_DEFS = [
-  { key:'active_bookings',        label:'Active bookings',        hint:'confirmed + in_progress + pending', tone:'blue' },
-  { key:'bookings_today',         label:'Bookings today',         hint:'all statuses',                      tone:'slate' },
-  { key:'total_bookings',         label:'Total bookings',         hint:'lifetime',                          tone:'slate' },
-  { key:'active_shops',           label:'Active shops',           hint:'status = active',                   tone:'green' },
-  { key:'active_users',           label:'Active users',           hint:'last 30 days',                      tone:'green' },
-  { key:'open_bugs',              label:'Open bugs',              hint:'new + triaged + assigned',           tone:'red' },
-  { key:'open_feedback',          label:'Open feedback',          hint:'awaiting triage',                   tone:'orange' },
-  { key:'pending_mechanic_edits', label:'Pending mechanic edits', hint:'awaiting approval',                 tone:'yellow' },
-  { key:'untagged_refunds',       label:'Untagged refunds',       hint:'need reason code',                  tone:'red' },
-] as const
+type Period = 'today' | '7d' | '30d' | '90d'
+const PERIOD_LABELS: Record<Period, string> = { today: 'Today', '7d': '7 days', '30d': '30 days', '90d': '90 days' }
 
-const toneColor: Record<string, string> = {
-  slate:'var(--slate-600)', blue:'var(--blue-600)', green:'var(--green-600)',
-  red:'var(--red-600)', orange:'var(--orange-700)', yellow:'var(--yellow-800)',
-}
-
-const Counter = ({ def, value, sub }: { def: typeof COUNTER_DEFS[number]; value: number | undefined; sub?: string }) => (
-  <Card style={{ padding:18 }}>
-    <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:8 }}>
-      <div style={{ fontSize:12, color:'var(--slate-500)', fontWeight:500 }}>{def.label}</div>
-      <span style={{ fontSize:10, color:toneColor[def.tone], fontWeight:600, textTransform:'uppercase', letterSpacing:'0.05em' }}>{def.hint}</span>
-    </div>
-    <div className="mono" style={{ fontSize:30, fontWeight:600, color: value === undefined ? 'var(--slate-200)' : 'var(--slate-900)', letterSpacing:-0.5, lineHeight:1.1 }}>
-      {value === undefined ? '—' : value.toLocaleString()}
-    </div>
-    {sub && <div style={{ fontSize:12, color:toneColor[def.tone], marginTop:6, fontWeight:500 }}>{sub}</div>}
-  </Card>
-)
-
-const srcBadge = (src: string) => {
-  const m: Record<string, { tone: 'blue'|'green'|'purple'|'slate'|'orange'; label: string }> = {
-    consumer_ios:     { tone:'blue',   label:'iOS' },
-    consumer_android: { tone:'green',  label:'Android' },
-    shop_web:         { tone:'purple', label:'Shop web' },
-    manual:           { tone:'slate',  label:'Manual' },
-    rating_comment:   { tone:'orange', label:'Rating' },
-    email:            { tone:'slate',  label:'Email' },
-  }
-  const v = m[src] || { tone:'slate' as const, label:src }
-  return <Badge tone={v.tone}>{v.label}</Badge>
-}
-
-function ageLabel(ts: number): string {
-  const d = Date.now() - ts
-  const m = Math.floor(d / 60000)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
-}
-
-const TriageList = ({ title, count, loading, items }: {
-  title: string; count: number; loading: boolean
-  items: { title: string; chip: JSX.Element; age: string; right?: JSX.Element; onClick?: () => void }[]
-}) => (
-  <Card padded={false}>
-    <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--slate-200)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-      <div style={{ fontSize:14, fontWeight:600 }}>{title}</div>
-      <span style={{ fontSize:12, color:'var(--slate-500)' }}>{loading ? '…' : `${count} open`}</span>
-    </div>
-    <div>
-      {loading
-        ? <div style={{ padding:'20px 18px', fontSize:13, color:'var(--slate-400)' }}>Loading…</div>
-        : items.length === 0
-          ? <div style={{ padding:'20px 18px', fontSize:13, color:'var(--slate-400)' }}>Nothing to triage.</div>
-          : items.map((it, i) => (
-            <div key={i} onClick={it.onClick}
-              style={{ padding:'12px 18px', borderBottom:i < items.length-1 ? '1px solid var(--slate-100)' : 'none',
-                display:'flex', alignItems:'center', gap:12,
-                cursor: it.onClick ? 'pointer' : 'default', transition:'background 80ms' }}
-              onMouseEnter={e => { if (it.onClick) (e.currentTarget as HTMLElement).style.background = 'var(--slate-25)' }}
-              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = '' }}>
-              <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:13, fontWeight:500, color:'var(--slate-800)', marginBottom:4, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{it.title}</div>
-                <div style={{ display:'flex', alignItems:'center', gap:8 }}>{it.chip}<span style={{ fontSize:11, color:'var(--slate-500)' }}>{it.age}</span></div>
-              </div>
-              {it.right}
-              <IconChevron size={14} style={{ color: it.onClick ? 'var(--slate-400)' : 'var(--slate-200)' }} />
-            </div>
-          ))
-      }
-    </div>
-  </Card>
+const SectionTitle = ({ label, right }: { label: string; right?: React.ReactNode }) => (
+  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+    <span style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>{label}</span>
+    {right}
+  </div>
 )
 
 export const TabOverview = () => {
-  const [period, setPeriod] = useState<'today' | '7d' | '30d'>('today')
+  const [period, setPeriod] = useState<Period>('30d')
 
-  const counters       = useQuery(api.director.overviewCounters, { period })
-  const todaysBookings = useQuery(api.director.todaysBookingsList, { period })
-  const bugsGrouped    = useQuery(api.bugs.listByStatus)
-  const fbGrouped      = useQuery(api.app_feedback.listByStatus)
-
-  const periodLabel = { today: 'Today', '7d': 'Last 7 days', '30d': 'Last 30 days' }[period]
-
-  const bugItems = bugsGrouped
-    ? (bugsGrouped.new ?? []).slice(0, 5).map(b => ({
-        title:   b.title,
-        chip:    srcBadge(b.source),
-        age:     ageLabel(b.created_at),
-        onClick: () => gotoEntity('bugs', b._id),
-      }))
-    : []
-
-  const fbItems = fbGrouped
-    ? [...(fbGrouped.new ?? []).slice(0, 4), ...(fbGrouped.reviewed ?? []).slice(0, 1)].map(f => ({
-        title:   f.title,
-        chip:    srcBadge(f.source),
-        age:     ageLabel(f.created_at),
-        right:   <IconDot color={f.sentiment === 'negative' ? 'var(--red-600)' : f.sentiment === 'positive' ? 'var(--green-600)' : 'var(--slate-400)'} />,
-        onClick: () => gotoEntity('feedback', f._id),
-      }))
-    : []
-
-  const counterValues: Record<string, number | undefined> = {
-    active_bookings:        counters?.active_bookings,
-    bookings_today:         counters?.bookings_today,
-    total_bookings:         counters?.total_bookings,
-    active_shops:           counters?.active_shops,
-    active_users:           counters?.active_users,
-    open_bugs:              counters?.open_bugs,
-    open_feedback:          counters?.open_feedback,
-    pending_mechanic_edits: counters?.pending_mechanic_edits,
-    untagged_refunds:       counters?.untagged_refunds,
-  }
-
-  const counterSubs: Record<string, string | undefined> = {
-    open_bugs:     counters ? `${counters.unassigned_bugs} unassigned` : undefined,
-    open_feedback: counters ? `${counters.negative_feedback} negative` : undefined,
-  }
-
-  const counterOverrides: Partial<Record<string, { label: string; hint: string }>> = {
-    bookings_today: {
-      label: period === 'today' ? 'Bookings today' : `Bookings (${period})`,
-      hint:  period === 'today' ? 'all statuses'   : `last ${period === '7d' ? '7' : '30'} days`,
-    },
-    active_users: {
-      label: 'Active users',
-      hint:  period === 'today' ? 'joined today' : `joined in ${period === '7d' ? 'last 7 days' : 'last 30 days'}`,
-    },
-  }
+  const metrics    = useQuery(api.directorOverview.overviewMetrics, { period })
+  const chart      = useQuery(api.directorOverview.overviewRevenueChart, { days: period === '7d' ? 14 : period === '30d' ? 30 : period === '90d' ? 60 : 14 })
+  const topShops   = useQuery(api.directorOverview.overviewTopShops,    { period, limit: 8 }) as TopShopRow[] | undefined
+  const topMechs   = useQuery(api.directorOverview.overviewTopMechanics,{ period, limit: 8 }) as TopMechanicRow[] | undefined
+  const serviceMix = useQuery(api.directorOverview.overviewServiceMix,  { period, limit: 10 }) as ServiceMixRow[] | undefined
+  const today      = useQuery(api.directorOverview.overviewBookingsToday, { period, limit: 30 }) as TodayRow[] | undefined
+  const triage     = useQuery(api.directorOverview.overviewTriageQueues, {}) as TriageData | undefined
 
   return (
-    <SectionAnchor id="overview" title="Overview" subtitle="At-a-glance health for the Otopair marketplace."
+    <SectionAnchor id="overview" title="Overview"
+      subtitle="Live marketplace health. Updates in real time."
       right={
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <span style={{ fontSize:12, color:'var(--slate-500)' }}>Period</span>
-          <Select value={period} onChange={e => setPeriod(e.target.value as 'today' | '7d' | '30d')}
-            options={[{ value:'today', label:'Today' },{ value:'7d', label:'Last 7 days' },{ value:'30d', label:'Last 30 days' }]} />
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+          <Select value={period} onChange={e => setPeriod(e.target.value as Period)}
+            options={(['today','7d','30d','90d'] as Period[]).map(p => ({ value:p, label: PERIOD_LABELS[p] }))} />
         </div>
       }>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:14, marginBottom:22 }}>
-        {COUNTER_DEFS.map(def => {
-          const ov = counterOverrides[def.key]
-          return <Counter key={def.key} def={ov ? { ...def, ...ov } : def} value={counterValues[def.key]} sub={counterSubs[def.key]} />
-        })}
+
+      {/* Hero strip */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:12, marginBottom:16 }}>
+        <StatCard label="Revenue" tone="green"
+          value={metrics ? fmtCurrency(metrics.revenue.current) : '…'}
+          delta={metrics?.revenue.deltaPct != null ? metrics.revenue.deltaPct / 100 : null}
+          hint={metrics ? `vs ${fmtCurrency(metrics.revenue.prior)} prior` : ''}
+          spark={chart?.series.map(s => s.revenue)} />
+        <StatCard label="Bookings" tone="blue"
+          value={metrics ? fmtNumber(metrics.bookings.current) : '…'}
+          delta={metrics?.bookings.deltaPct != null ? metrics.bookings.deltaPct / 100 : null}
+          hint={metrics ? `${metrics.bookings.completed} completed · ${metrics.bookings.refunded} refunded` : ''}
+          spark={chart?.series.map(s => s.bookings)} />
+        <StatCard label="New users" tone="purple"
+          value={metrics ? fmtNumber(metrics.users.new) : '…'}
+          delta={metrics?.users.deltaPct != null ? metrics.users.deltaPct / 100 : null}
+          hint={metrics ? `${fmtNumber(metrics.users.total)} total` : ''} />
+        <StatCard label="Avg rating" tone="yellow"
+          value={metrics ? metrics.reviews.avgRecent.toFixed(2) : '…'}
+          accent={<IconStar size={14} style={{ color:'#F59E0B' }} />}
+          hint={metrics ? `${metrics.reviews.recent} new · ${metrics.reviews.count} lifetime` : ''} />
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'1.4fr 1fr', gap:14 }}>
-        <Card padded={false}>
-          <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--slate-200)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <div>
-              <div style={{ fontSize:14, fontWeight:600, color:'var(--slate-900)' }}>
-                {period === 'today' ? "Today's bookings" : `Bookings — ${periodLabel}`}
-              </div>
-              <div style={{ fontSize:12, color:'var(--slate-500)' }}>
-                {todaysBookings === undefined ? 'Loading…' : `${todaysBookings.length} scheduled`}
-              </div>
-            </div>
-            <span style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color:'var(--green-700)' }}>
-              <span style={{ width:7, height:7, borderRadius:999, background:'var(--green-600)', boxShadow:'0 0 0 3px rgba(5,150,105,0.18)' }} />Live
-            </span>
-          </div>
-          {todaysBookings === undefined ? (
-            <div style={{ padding:32, textAlign:'center', fontSize:13, color:'var(--slate-400)' }}>Loading…</div>
-          ) : todaysBookings.length === 0 ? (
-            <div style={{ padding:32, textAlign:'center', fontSize:13, color:'var(--slate-400)' }}>No bookings for {periodLabel.toLowerCase()}.</div>
-          ) : (
-            <table style={tableStyles.table}>
-              <thead>
-                <tr>{['Booking','User','Shop','Service','Time','Status'].map(h => <th key={h} style={tableStyles.th}>{h}</th>)}</tr>
-              </thead>
-              <tbody>
-                {todaysBookings.map(r => (
-                  <tr key={r.id}>
-                    <td style={tableStyles.td}><span className="mono" style={{ color:'var(--blue-700)', fontSize:12 }}>{String(r.id).slice(-8)}</span></td>
-                    <td style={tableStyles.td}>{r.user}</td>
-                    <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{r.shop}</td>
-                    <td style={{ ...tableStyles.td, color:'var(--slate-600)', fontSize:12 }}>{r.service}</td>
-                    <td style={tableStyles.td} className="mono">{r.time}</td>
-                    <td style={tableStyles.td}><StatusBadge status={r.status} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+      {/* Secondary ops counters */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(6, 1fr)', gap:12, marginBottom:16 }}>
+        <SmallStat label="Active bookings"   value={metrics ? fmtNumber(metrics.bookings.active) : '…'}
+          hint="confirmed + in-progress + pending" Icon={IconBolt} />
+        <SmallStat label="Active shops"      value={metrics ? fmtNumber(metrics.shops.active) : '…'}
+          hint={metrics ? `${metrics.shops.stripeConnected} on Stripe` : ''} Icon={IconShop} />
+        <SmallStat label="Avg ticket"        value={metrics ? fmtCurrency(metrics.revenue.avgTicket) : '…'}
+          hint="completed only" />
+        <SmallStat label="Open bugs"         value={metrics ? fmtNumber(metrics.bugs.open) : '…'}
+          hint={metrics ? `${metrics.bugs.unassigned} unassigned` : ''} Icon={IconBug} tone="red" />
+        <SmallStat label="Open feedback"     value={metrics ? fmtNumber(metrics.feedback.open) : '…'}
+          hint={metrics ? `${metrics.feedback.negative} negative` : ''} Icon={IconMessage} />
+        <SmallStat label="Oto thumbs-down"   value={metrics ? fmtNumber(metrics.otoFeedback.thumbsDown) : '…'}
+          hint={metrics ? `${metrics.otoFeedback.recent} new this period` : ''} Icon={IconBolt} />
+      </div>
+
+      {/* Daily chart */}
+      <Card style={{ marginBottom:16 }}>
+        <SectionTitle label="Daily revenue & bookings"
+          right={<span style={{ fontSize:11, color:'var(--slate-500)' }}>
+            {chart ? `${chart.days} days · ${fmtCurrency(chart.totalRevenue)} total · ${fmtNumber(chart.totalBookings)} bookings` : ''}
+          </span>} />
+        {chart ? <DualSparkline series={chart.series} height={140} />
+          : <div style={{ height:140, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--slate-400)', fontSize:13 }}>Loading…</div>}
+      </Card>
+
+      {/* Leaderboards */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+        <Card>
+          <SectionTitle label={`Top shops by revenue · ${PERIOD_LABELS[period]}`} />
+          {topShops === undefined
+            ? <div style={{ fontSize:12, color:'var(--slate-400)', padding:'8px 0' }}>Loading…</div>
+            : topShops.length === 0
+              ? <div style={{ fontSize:12, color:'var(--slate-400)', fontStyle:'italic' }}>No shop activity in this period.</div>
+              : (() => {
+                const max = Math.max(1, ...topShops.map(s => s.revenue))
+                return (
+                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                    {topShops.map(s => (
+                      <BarRow key={String(s.id)}
+                        label={
+                          <span style={{ display:'inline-flex', alignItems:'center', gap:8 }}>
+                            <span style={{ color:'var(--slate-900)', fontWeight:500, cursor:'pointer' }}
+                              onClick={() => gotoEntity('shops', String(s.id))}>{s.name}</span>
+                            {s.refundRate > 0.05 && <Badge tone="red">{fmtPct(s.refundRate)} refund</Badge>}
+                          </span>
+                        }
+                        value={s.revenue} max={max}
+                        valueLabel={<>{fmtCurrency(s.revenue)} <span style={{ color:'var(--slate-500)' }}>· {s.bookings}</span></>}
+                        color={s.refundRate > 0.05 ? 'var(--red-500)' : 'var(--blue-500)'} />
+                    ))}
+                  </div>
+                )
+              })()
+          }
         </Card>
 
-        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
-          <TriageList
-            title="Open bugs to triage"
-            count={counters?.open_bugs ?? 0}
-            loading={bugsGrouped === undefined}
-            items={bugItems}
-          />
-          <TriageList
-            title="Open feedback to triage"
-            count={counters?.open_feedback ?? 0}
-            loading={fbGrouped === undefined}
-            items={fbItems}
-          />
-        </div>
+        <Card>
+          <SectionTitle label={`Top mechanics · ${PERIOD_LABELS[period]}`} />
+          {topMechs === undefined
+            ? <div style={{ fontSize:12, color:'var(--slate-400)', padding:'8px 0' }}>Loading…</div>
+            : topMechs.length === 0
+              ? <div style={{ fontSize:12, color:'var(--slate-400)', fontStyle:'italic' }}>No mechanic activity in this period.</div>
+              : (
+                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                  {topMechs.map((m, i) => (
+                    <div key={String(m.id)} style={{
+                      display:'flex', alignItems:'center', gap:10, padding:'4px 0',
+                      borderBottom: i < topMechs.length - 1 ? '1px solid var(--slate-100)' : 'none',
+                    }}>
+                      <span style={{ width:18, fontSize:11, color:'var(--slate-500)', textAlign:'right' }} className="mono">{i + 1}</span>
+                      <Avatar name={m.name} size={28} />
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{m.name}</div>
+                        <div style={{ fontSize:11, color:'var(--slate-500)' }}>{m.title ?? '—'}</div>
+                      </div>
+                      <div style={{ textAlign:'right' }}>
+                        <div className="mono" style={{ fontSize:13, color:'var(--slate-900)' }}>{fmtCurrency(m.revenue)}</div>
+                        <div style={{ fontSize:11, color:'var(--slate-500)' }}>
+                          {m.completed}/{m.bookings} bookings
+                          {m.avgRating > 0 && <> · {m.avgRating.toFixed(1)}★</>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+          }
+        </Card>
+      </div>
+
+      {/* Service mix + Today's bookings */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1.4fr', gap:12, marginBottom:16 }}>
+        <Card>
+          <SectionTitle label={`Service mix · ${PERIOD_LABELS[period]}`} />
+          {serviceMix === undefined
+            ? <div style={{ fontSize:12, color:'var(--slate-400)', padding:'8px 0' }}>Loading…</div>
+            : serviceMix.length === 0
+              ? <div style={{ fontSize:12, color:'var(--slate-400)', fontStyle:'italic' }}>No services booked in this period.</div>
+              : (() => {
+                const max = Math.max(1, ...serviceMix.map(s => s.count))
+                return (
+                  <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
+                    {serviceMix.map(s => (
+                      <BarRow key={String(s.id)}
+                        label={<span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.name}</span>}
+                        value={s.count} max={max}
+                        valueLabel={<>{s.count} <span style={{ color:'var(--slate-500)' }}>· {fmtCurrency(s.revenue)}</span></>}
+                        color="var(--indigo-500, #6366F1)" />
+                    ))}
+                  </div>
+                )
+              })()
+          }
+        </Card>
+
+        <Card padded={false}>
+          <div style={{ padding:'14px 16px', borderBottom:'1px solid var(--slate-200)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>
+              {period === 'today' ? "Today's bookings" : 'Recent bookings'}
+            </span>
+            <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, fontWeight:500, color:'var(--green-700)' }}>
+              <span style={{ width:6, height:6, borderRadius:999, background:'var(--green-600)' }} />Live
+            </span>
+          </div>
+          {today === undefined
+            ? <div style={{ padding:32, textAlign:'center', color:'var(--slate-400)', fontSize:13 }}>Loading…</div>
+            : today.length === 0
+              ? <div style={{ padding:32, textAlign:'center', color:'var(--slate-400)', fontSize:13, fontStyle:'italic' }}>No bookings yet.</div>
+              : (
+                <div style={{ maxHeight:300, overflowY:'auto' }}>
+                  <table style={{ ...tableStyles.table, fontSize:12 }}>
+                    <tbody>
+                      {today.map(b => (
+                        <tr key={String(b.id)} onClick={() => gotoEntity('bookings', String(b.id))} style={{ cursor:'pointer' }}>
+                          <td style={{ ...tableStyles.td, padding:'8px 16px', color:'var(--slate-500)' }} className="mono">{b.time}</td>
+                          <td style={{ ...tableStyles.td, padding:'8px 16px', color:'var(--slate-900)' }}>{b.user}</td>
+                          <td style={{ ...tableStyles.td, padding:'8px 16px', color:'var(--slate-600)' }}>{b.shop}</td>
+                          <td style={{ ...tableStyles.td, padding:'8px 16px', color:'var(--slate-500)', maxWidth:160, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.service}</td>
+                          <td style={{ ...tableStyles.td, padding:'8px 16px' }}><StatusBadge status={b.status} /></td>
+                          <td style={{ ...tableStyles.td, padding:'8px 16px', textAlign:'right' }} className="mono">{fmtCurrency(b.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+          }
+        </Card>
+      </div>
+
+      {/* Triage rails */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:16 }}>
+        <Card padded={false}>
+          <div style={{ padding:'14px 16px', borderBottom:'1px solid var(--slate-200)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>Open bugs to triage</span>
+            <Button size="sm" onClick={() => { window.location.hash = 'bugs' }}>View all →</Button>
+          </div>
+          {triage === undefined
+            ? <div style={{ padding:24, textAlign:'center', fontSize:13, color:'var(--slate-400)' }}>Loading…</div>
+            : triage.bugs.length === 0
+              ? <div style={{ padding:24, textAlign:'center', fontSize:13, color:'var(--slate-500)' }}>Nothing to triage.</div>
+              : triage.bugs.map(b => (
+                <div key={String(b.id)} onClick={() => gotoEntity('bugs', String(b.id))}
+                  style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 16px', borderBottom:'1px solid var(--slate-100)', cursor:'pointer' }}>
+                  <Badge tone={b.status === 'new' ? 'blue' : b.status === 'triaged' ? 'indigo' : 'purple'} dot>{b.status}</Badge>
+                  <span style={{ flex:1, fontSize:13, color:'var(--slate-900)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.title}</span>
+                  <span style={{ fontSize:11, color:'var(--slate-500)' }}>{fmtRelative(b.createdAt)}</span>
+                </div>
+              ))
+          }
+        </Card>
+
+        <Card padded={false}>
+          <div style={{ padding:'14px 16px', borderBottom:'1px solid var(--slate-200)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>Open feedback to triage</span>
+            <Button size="sm" onClick={() => { window.location.hash = 'feedback' }}>View all →</Button>
+          </div>
+          {triage === undefined
+            ? <div style={{ padding:24, textAlign:'center', fontSize:13, color:'var(--slate-400)' }}>Loading…</div>
+            : triage.feedback.length === 0
+              ? <div style={{ padding:24, textAlign:'center', fontSize:13, color:'var(--slate-500)' }}>Nothing to triage.</div>
+              : triage.feedback.map(f => (
+                <div key={String(f.id)} onClick={() => gotoEntity('feedback', String(f.id))}
+                  style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 16px', borderBottom:'1px solid var(--slate-100)', cursor:'pointer' }}>
+                  <span style={{ width:6, height:6, borderRadius:999, background:
+                    f.sentiment === 'positive' ? 'var(--green-600)' :
+                    f.sentiment === 'negative' ? 'var(--red-600)' : 'var(--slate-400)' }} />
+                  <span style={{ flex:1, fontSize:13, color:'var(--slate-900)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{f.title}</span>
+                  <span style={{ fontSize:11, color:'var(--slate-500)' }}>{fmtRelative(f.createdAt)}</span>
+                </div>
+              ))
+          }
+        </Card>
       </div>
     </SectionAnchor>
   )
+}
+
+const SmallStat = ({ label, value, hint, Icon, tone }: {
+  label: string
+  value: React.ReactNode
+  hint?: string
+  Icon?: React.ComponentType<{ size?: number; style?: React.CSSProperties }>
+  tone?: 'red' | 'yellow'
+}) => (
+  <div style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, padding:'10px 12px' }}>
+    <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
+      {Icon && <Icon size={12} style={{ color: tone === 'red' ? 'var(--red-500)' : 'var(--slate-400)' }} />}
+      <span style={{ fontSize:10, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>{label}</span>
+    </div>
+    <div style={{ fontSize:18, fontWeight:600, color:'var(--slate-900)' }} className="mono">{value}</div>
+    {hint && <div style={{ fontSize:11, color: tone === 'red' ? 'var(--red-700)' : 'var(--slate-500)', marginTop:2 }}>{hint}</div>}
+  </div>
+)
+
+type TopShopRow = {
+  id: Id<'shops'>; name: string; city: string; revenue: number; bookings: number; completed: number;
+  refunded: number; refundRate: number; avgRating: number; reviewCount: number; stripeConnected: boolean
+}
+type TopMechanicRow = {
+  id: Id<'mechanics'>; name: string; title?: string; bookings: number; completed: number; revenue: number;
+  avgRating: number; reviewCount: number; shopId?: Id<'shops'>
+}
+type ServiceMixRow = { id: Id<'services'>; name: string; count: number; revenue: number }
+type TodayRow = { id: Id<'bookings'>; user: string; shop: string; service: string; time: string; date: string; status: string; total: number }
+type TriageData = {
+  bugs:     { id: Id<'bugs'>;         title: string; status: string; source: string; createdAt?: number }[]
+  feedback: { id: Id<'app_feedback'>; title: string; status: string; category: string; sentiment: string; source: string; createdAt?: number }[]
 }

@@ -6,17 +6,20 @@ import { v } from "convex/values";
 export const sidebarCounts = query({
   args: {},
   handler: async (ctx) => {
-    const [bugs, feedback, refunds, pendingVerifications] = await Promise.all([
+    const [bugs, feedback, otoFeedback, refunds, pendingVerifications] = await Promise.all([
       ctx.db.query("bugs").collect(),
       ctx.db.query("app_feedback").collect(),
+      ctx.db.query("ai_feedback").collect(),
       ctx.db.query("bookings").withIndex("by_status", (q) => q.eq("status", "refunded")).collect(),
       ctx.db.query("mechanic_verifications").withIndex("by_status", (q) => q.eq("status", "pending")).collect(),
     ]);
-    const openBugStatuses = new Set(["new", "triaged", "assigned", "in_progress"]);
-    const openFbStatuses  = new Set(["new", "reviewed", "triaged"]);
+    const openBugStatuses   = new Set(["new", "triaged", "assigned", "in_progress"]);
+    const openFbStatuses    = new Set(["new", "reviewed", "triaged"]);
+    const openOtoFbStatuses = new Set(["new", "reviewed", "actionable"]);
     return {
       bugs:          bugs.filter((b) => openBugStatuses.has(b.status)).length,
       feedback:      feedback.filter((f) => openFbStatuses.has(f.status)).length,
+      otoFeedback:   otoFeedback.filter((f) => !f.archived && openOtoFbStatuses.has(f.review_status ?? "new")).length,
       stripe:        refunds.length,
       mechanicEdits: pendingVerifications.length,
     };
@@ -168,22 +171,87 @@ export const shopDetail = query({
       };
     }));
 
-    const recentBookings = await ctx.db
+    // Pull more recent bookings (we'll surface 20 in detail + use the full
+    // set to compute per-service stats).
+    const allShopBookings = await ctx.db
       .query("bookings")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
       .order("desc")
-      .take(5);
+      .take(500);
 
+    const recentBookings = allShopBookings.slice(0, 20);
     const bookingsWithUser = await Promise.all(recentBookings.map(async (b) => {
       const user = await ctx.db.get(b.user_id);
+      const serviceNames = await Promise.all(
+        b.service_ids.map(async (sid) => { const s = await ctx.db.get(sid); return s?.name ?? "—"; })
+      );
       return {
-        id:     b._id,
-        user:   user ? `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || user.email || "Unknown" : "Unknown",
-        status: b.status,
-        total:  b.total_cost ?? 0,
-        date:   b.scheduled_date ?? "—",
+        id:        b._id,
+        user:      user ? `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || user.email || "Unknown" : "Unknown",
+        userId:    b.user_id,
+        status:    b.status,
+        total:     b.total_cost ?? 0,
+        labor:     b.labor_cost ?? 0,
+        parts:     b.parts_cost ?? 0,
+        date:      b.scheduled_date ?? "—",
+        time:      b.scheduled_time ?? "—",
+        services:  serviceNames,
+        vin:       b.vin,
+        createdAt: b.created_at,
       };
     }));
+
+    // Per-service breakdown across this shop's full history (capped 500 above).
+    // For each service performed at this shop: count, total revenue, last
+    // performed, average ticket. Helps directors see which services this shop
+    // actually does and how much they earn from each.
+    const serviceStats = new Map<string, {
+      serviceId: import("./_generated/dataModel").Id<"services">;
+      name: string;
+      count: number;
+      totalRevenue: number;
+      lastPerformed?: number;
+      completedCount: number;
+    }>();
+
+    for (const b of allShopBookings) {
+      const ts = b.created_at ?? 0;
+      const completed = b.status === "completed";
+      const perBookingRevenue = (b.total_cost ?? 0) / Math.max(b.service_ids.length, 1);
+      for (const sid of b.service_ids) {
+        const key = String(sid);
+        let row = serviceStats.get(key);
+        if (!row) {
+          const s = await ctx.db.get(sid);
+          row = {
+            serviceId: sid,
+            name: s?.name ?? "—",
+            count: 0,
+            totalRevenue: 0,
+            lastPerformed: undefined,
+            completedCount: 0,
+          };
+          serviceStats.set(key, row);
+        }
+        row.count += 1;
+        if (completed) {
+          row.completedCount += 1;
+          row.totalRevenue += perBookingRevenue;
+        }
+        if (!row.lastPerformed || ts > row.lastPerformed) row.lastPerformed = ts;
+      }
+    }
+    const serviceBreakdown = Array.from(serviceStats.values()).sort((a, b) => b.count - a.count);
+
+    // Status mix snapshot for the strip in the modal.
+    const statusMix: Record<string, number> = {};
+    for (const b of allShopBookings) {
+      statusMix[b.status] = (statusMix[b.status] ?? 0) + 1;
+    }
+
+    const totalRevenue = allShopBookings
+      .filter((b) => b.status === "completed")
+      .reduce((sum, b) => sum + (b.total_cost ?? 0), 0);
 
     return {
       id:                   shop._id,
@@ -203,6 +271,16 @@ export const shopDetail = query({
       stripePayoutsEnabled: !!shop.stripe_payouts_enabled,
       members,
       recentBookings:       bookingsWithUser,
+      bookings7d:           allShopBookings.filter((b) =>
+        b.created_at && Date.now() - b.created_at < 7 * 24 * 60 * 60 * 1000,
+      ).length,
+      bookings30d:          allShopBookings.filter((b) =>
+        b.created_at && Date.now() - b.created_at < 30 * 24 * 60 * 60 * 1000,
+      ).length,
+      totalBookings:        allShopBookings.length,
+      totalRevenue,
+      statusMix,
+      serviceBreakdown,
     };
   },
 });
@@ -225,7 +303,7 @@ export const userDetail = query({
         .query("vehicles")
         .withIndex("by_vin", (q) => q.eq("vin", o.vin))
         .first();
-      if (!vehicle) return { vin: o.vin, ymm: o.vin, nickname: o.nickname };
+      if (!vehicle) return { vehicleId: null, vin: o.vin, ymm: o.vin, nickname: o.nickname };
 
       let ymm = o.vin;
       if (vehicle.trim_id) {
@@ -241,7 +319,7 @@ export const userDetail = query({
         ymm = String(vehicle.year);
       }
 
-      return { vin: o.vin, ymm, nickname: o.nickname, mileage: o.mileage };
+      return { vehicleId: vehicle._id, vin: o.vin, ymm, nickname: o.nickname, mileage: o.mileage };
     }));
 
     // Recent bookings
@@ -385,14 +463,85 @@ export const bookingDetail = query({
       booking.shop_id ? ctx.db.get(booking.shop_id) : null,
     ]);
 
+    // Service rows — keep id + description so we can show the form filled
+    // per-service (selected option, tire spec, etc.).
     const services = await Promise.all(
-      booking.service_ids.map(async (sid) => { const s = await ctx.db.get(sid); return s?.name ?? "—"; })
+      booking.service_ids.map(async (sid) => {
+        const s = await ctx.db.get(sid);
+        let category: string | undefined;
+        if (s?.service_category_id) {
+          const cat = await ctx.db.get(s.service_category_id);
+          category = cat?.name;
+        }
+        return {
+          id:          sid,
+          name:        s?.name ?? "—",
+          slug:        s?.slug,
+          description: s?.description,
+          category,
+        };
+      })
     );
 
-    const [statusHistory, payment, review] = await Promise.all([
+    // Resolve recommended-service name if the mechanic recommended something.
+    let recommendedService: string | null = null;
+    if (booking.recommended_service_id) {
+      const rs = await ctx.db.get(booking.recommended_service_id);
+      recommendedService = rs?.name ?? null;
+    }
+
+    // Resolve selected service-option labels in case the snapshot is missing
+    // them on older bookings.
+    const selectedOptions = await Promise.all(
+      (booking.selected_service_options ?? []).map(async (o) => {
+        let label = o.option_label;
+        let type  = o.option_type;
+        if (!label) {
+          const opt = await ctx.db.get(o.option_id);
+          label = opt?.option_label ?? "—";
+          type  = opt?.option_type ?? type;
+        }
+        const svc = await ctx.db.get(o.service_id);
+        return {
+          serviceName: svc?.name ?? "—",
+          serviceId:   o.service_id,
+          label,
+          type,
+        };
+      })
+    );
+
+    // Vehicle YMM (most directors recognize a car by year+make+model).
+    let vehicleYmm: string | null = null;
+    let vehicleId: import("./_generated/dataModel").Id<"vehicles"> | null = null;
+    if (booking.vin) {
+      const veh = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+        .first();
+      if (veh) {
+        vehicleId = veh._id;
+        let make = "", model = "";
+        if (veh.trim_id) {
+          const trim = await ctx.db.get(veh.trim_id);
+          if (trim) {
+            const m = await ctx.db.get(trim.model_id);
+            if (m) {
+              model = m.name ?? "";
+              const mk = await ctx.db.get(m.make_id);
+              if (mk) make = mk.name ?? "";
+            }
+          }
+        }
+        vehicleYmm = [veh.year, make, model].filter(Boolean).join(" ") || veh.vin;
+      }
+    }
+
+    const [statusHistory, payment, review, payments] = await Promise.all([
       ctx.db.query("booking_status_history").withIndex("by_booking_id", (q) => q.eq("booking_id", id)).order("asc").collect(),
       ctx.db.query("payments").withIndex("by_booking_id", (q) => q.eq("booking_id", id)).first(),
       ctx.db.query("reviews").withIndex("by_booking_id", (q) => q.eq("booking_id", id)).first(),
+      ctx.db.query("payments").withIndex("by_booking_id", (q) => q.eq("booking_id", id)).collect(),
     ]);
 
     const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
@@ -400,12 +549,51 @@ export const bookingDetail = query({
     return {
       id:        booking._id,
       user:      user ? `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || user.email || "Unknown" : "Unknown",
+      userId:    booking.user_id,
+      userEmail: user?.email,
+      userPhone: user?.phone,
       shop:      shop?.name ?? "—",
+      shopId:    booking.shop_id ?? null,
+      shopAddress: shop?.address,
+      shopPhone:   shop?.phone,
+      shopEmail:   shop?.email,
       services,
       scheduled: booking.scheduled_date ?? "—",
       time:      booking.scheduled_time ?? "—",
       status:    booking.status,
       total:     booking.total_cost ?? 0,
+      labor:     booking.labor_cost ?? 0,
+      parts:     booking.parts_cost ?? 0,
+      laborMinutesEstimate: booking.estimated_labor_minutes,
+      invoiceNumber:        booking.invoice_number,
+      liveStage:            booking.live_stage,
+      createdAt:            booking.created_at,
+      vin:                  booking.vin,
+      vehicleYmm,
+      vehicleId,
+
+      // The "forms the user filled out"
+      customerNotes:       booking.customer_notes,
+      diagnosticSystem:    booking.diagnostic_system,
+      diagnosticChecklist: booking.diagnostic_checklist ?? [],
+      diagnosticChecklistCompletedAt: booking.diagnostic_checklist_completed_at_ms,
+      diagnosticFindingsNote: booking.diagnostic_findings_note,
+      diagnosticFollowupState: booking.diagnostic_followup_state,
+      awaitingInfoNote:    booking.awaiting_info_note,
+      outOfScopeCategory:  booking.out_of_scope_category,
+      outOfScopeNote:      booking.out_of_scope_note,
+      tireSpecs:           booking.tire_specs,
+      selectedOptions,
+      recommendedService,
+      recommendedServiceNote: booking.recommended_service_note,
+      recommendationState:    booking.recommendation_state,
+      recommendationSentAt:   booking.recommendation_sent_at_ms,
+      recommendationDecidedAt: booking.recommendation_decided_at_ms,
+      recommendedScheduledDate: booking.recommended_scheduled_date,
+      recommendedScheduledTime: booking.recommended_scheduled_time,
+      parentJobId:         booking.parent_job_id,
+      refundReason:        booking.refund_reason,
+
       statusHistory: statusHistory.map((h) => ({
         status:    h.new_status,
         changedAt: h.changed_at,
@@ -418,9 +606,19 @@ export const bookingDetail = query({
         paymentMethod:        payment.payment_method,
         status:               payment.status,
       } : null,
+      allPayments: payments.map((p) => ({
+        id:                    p._id,
+        amount:                p.amount,
+        status:                p.status,
+        stripePaymentIntentId: p.stripe_payment_intent_id,
+        paymentMethod:         p.payment_method,
+        createdAt:             p.created_at,
+      })),
       mechanic: mechanic ? {
+        id:    mechanic._id,
         name:  `${mechanic.first_name} ${mechanic.last_name}`.trim(),
         title: mechanic.title,
+        email: mechanic.email,
       } : null,
       review: review ? {
         rating:  review.rating,

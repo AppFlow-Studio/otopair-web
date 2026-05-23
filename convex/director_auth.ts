@@ -31,7 +31,6 @@ function genBase32(): string {
 }
 
 async function hotp(secret: string, counter: number): Promise<string> {
-  // Cast to any to work around overload resolution in the Convex TS environment
   const key = await (crypto.subtle as any).importKey(
     "raw", base32Decode(secret), { name: "HMAC", hash: "SHA-1" }, false, ["sign"]
   ) as CryptoKey;
@@ -64,11 +63,12 @@ export const getUserPreview = query({
   handler: async (ctx, { id }) => ctx.db.get(id),
 });
 
+/** Returns user list for Settings page — includes email so admins can see/manage accounts. */
 export const listUsers = query({
   args: {},
   handler: async (ctx) => {
     return (await ctx.db.query("director_users").collect()).map(u => ({
-      _id: u._id, name: u.name, role: u.role,
+      _id: u._id, name: u.name, role: u.role, email: u.email,
       created_at: u.created_at, last_login: u.last_login,
     }));
   },
@@ -93,6 +93,16 @@ export const _getUser = internalQuery({
   handler: async (ctx, { id }) => ctx.db.get(id),
 });
 
+export const _getUserByEmail = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, { email }) => {
+    return ctx.db
+      .query("director_users")
+      .withIndex("by_email", q => q.eq("email", email))
+      .first();
+  },
+});
+
 export const _createSession = internalMutation({
   args: { userId: v.id("director_users"), token: v.string(), name: v.string() },
   handler: async (ctx, { userId, token, name }) => {
@@ -104,7 +114,7 @@ export const _createSession = internalMutation({
     });
     await ctx.db.insert("audit_log", {
       entity_type: "director", entity_id: String(userId),
-      action: "login", actor: name, actor_id: userId, detail: "Director login via 2FA",
+      action: "login", actor: name, actor_id: userId, detail: "Director login via email + 2FA",
       created_at: Date.now(),
     });
   },
@@ -115,15 +125,20 @@ export const _insertUser = internalMutation({
     name: v.string(),
     role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
     totp_secret: v.string(),
+    email: v.optional(v.string()),
     actorName: v.string(),
     actorId: v.optional(v.id("director_users")),
   },
-  handler: async (ctx, { name, role, totp_secret, actorName, actorId }) => {
-    const id = await ctx.db.insert("director_users", { name, role, totp_secret, created_at: Date.now() });
+  handler: async (ctx, { name, role, totp_secret, email, actorName, actorId }) => {
+    const id = await ctx.db.insert("director_users", {
+      name, role, totp_secret,
+      ...(email ? { email: email.toLowerCase().trim() } : {}),
+      created_at: Date.now(),
+    });
     await ctx.db.insert("audit_log", {
       entity_type: "director", entity_id: String(id),
       action: "field_edit", actor: actorName, actor_id: actorId,
-      detail: `Director user added: ${name} (${role})`,
+      detail: `Director user added: ${name} (${role})${email ? ` <${email}>` : ""}`,
       created_at: Date.now(),
     });
     return id;
@@ -179,8 +194,65 @@ export const removeUser = mutation({
   },
 });
 
+/** Set or update the email address on an existing director account. */
+export const setUserEmail = mutation({
+  args: {
+    id: v.id("director_users"),
+    email: v.string(),
+    actorName: v.string(),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, { id, email, actorName, actorId }) => {
+    const u = await ctx.db.get(id);
+    if (!u) return { ok: false as const, reason: "user_not_found" };
+    const normalized = email.toLowerCase().trim();
+    // Ensure no other account uses this email.
+    const existing = await ctx.db
+      .query("director_users")
+      .withIndex("by_email", q => q.eq("email", normalized))
+      .first();
+    if (existing && String(existing._id) !== String(id)) {
+      return { ok: false as const, reason: "email_taken" };
+    }
+    await ctx.db.patch(id, { email: normalized });
+    await ctx.db.insert("audit_log", {
+      entity_type: "director", entity_id: String(id),
+      action: "field_edit", actor: actorName, actor_id: actorId,
+      detail: `Email set for ${u.name}: ${normalized}`,
+      created_at: Date.now(),
+    });
+    return { ok: true as const };
+  },
+});
+
 // ── Public actions ────────────────────────────────────────────────────────
 
+/**
+ * Primary login — validates email + TOTP code in one step.
+ * Deliberately returns the same generic error for unknown email vs wrong code
+ * to prevent email enumeration.
+ */
+export const loginWithEmail = action({
+  args: { email: v.string(), code: v.string() },
+  handler: async (ctx, { email, code }): Promise<
+    { success: false; error: string } |
+    { success: true; token: string; name: string; role: string; userId: string }
+  > => {
+    const GENERIC_ERROR = "Invalid email or code";
+    const user = await ctx.runQuery(internal.director_auth._getUserByEmail, {
+      email: email.toLowerCase().trim(),
+    });
+    if (!user) return { success: false, error: GENERIC_ERROR };
+    if (!(await verifyTotp(user.totp_secret, code))) {
+      return { success: false, error: GENERIC_ERROR };
+    }
+    const token = randomToken();
+    await ctx.runMutation(internal.director_auth._createSession, { userId: user._id, token, name: user.name });
+    return { success: true, token, name: user.name, role: user.role as string, userId: String(user._id) };
+  },
+});
+
+/** Legacy — kept for any existing callers; prefer loginWithEmail going forward. */
 export const verifyAndLogin = action({
   args: { userId: v.id("director_users"), code: v.string() },
   handler: async (ctx, { userId, code }) => {
@@ -197,12 +269,15 @@ export const addUser = action({
   args: {
     name: v.string(),
     role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    email: v.string(),
     actorName: v.string(),
     actorId: v.optional(v.id("director_users")),
   },
-  handler: async (ctx, { name, role, actorName, actorId }): Promise<{ id: string; totp_secret: string }> => {
+  handler: async (ctx, { name, role, email, actorName, actorId }): Promise<{ id: string; totp_secret: string }> => {
     const secret = genBase32();
-    const id = await ctx.runMutation(internal.director_auth._insertUser, { name, role, totp_secret: secret, actorName, actorId });
+    const id = await ctx.runMutation(internal.director_auth._insertUser, {
+      name, role, totp_secret: secret, email, actorName, actorId,
+    });
     return { id: String(id), totp_secret: secret };
   },
 });
@@ -223,15 +298,16 @@ export const regenerateSecret = action({
 export const bootstrap = action({
   args: {},
   handler: async (ctx): Promise<
-    { ok: false; reason: string } | { ok: true; name: string; totp_secret: string }
+    { ok: false; reason: string } | { ok: true; name: string; email: string; totp_secret: string }
   > => {
     const existing = await ctx.runQuery(api.director_auth.listUsers, {});
     if (existing.length > 0) return { ok: false, reason: "Director accounts already exist. Use Settings to add more." };
     const secret = genBase32();
     await ctx.runMutation(internal.director_auth._insertUser, {
-      name: "Bootstrap", role: "superadmin", totp_secret: secret, actorName: "System",
+      name: "Bootstrap", role: "superadmin", totp_secret: secret,
+      email: "bootstrap@otopair.com", actorName: "System",
     });
-    return { ok: true, name: "Bootstrap", totp_secret: secret };
+    return { ok: true, name: "Bootstrap", email: "bootstrap@otopair.com", totp_secret: secret };
   },
 });
 

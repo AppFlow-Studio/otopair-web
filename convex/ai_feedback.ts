@@ -83,3 +83,170 @@ export const listRecent = query({
     return await filtered.order("desc").take(limit);
   },
 });
+
+// ---------------------------------------------------------------------------
+// Director-panel surface — Oto feedback kanban (`/director#otoFeedback`).
+// Mirrors the bugs / app_feedback shape so the director UI can reuse the same
+// drag-between-columns pattern. The mobile insert leaves `review_status` and
+// `archived` unset; we treat unset as "new" / "not archived" here.
+// ---------------------------------------------------------------------------
+
+type FeedbackRow = {
+  _id: import("./_generated/dataModel").Id<"ai_feedback">;
+  _creationTime: number;
+  user_id: import("./_generated/dataModel").Id<"users">;
+  conversation_id: import("./_generated/dataModel").Id<"ai_conversations">;
+  message_id?: import("./_generated/dataModel").Id<"ai_messages">;
+  rating: "thumbs_up" | "thumbs_down";
+  comment?: string;
+  tags?: string[];
+  message_content_snapshot: string;
+  submitted_at: number;
+  review_status?: string;
+  archived?: boolean;
+  updated_at?: number;
+};
+
+const OTOFB_OPEN_STATUSES = new Set(["new", "reviewed", "actionable"]);
+
+const normalizeStatus = (s: string | undefined) => s ?? "new";
+
+export const listByStatus = query({
+  args: { includeArchived: v.optional(v.boolean()) },
+  handler: async (ctx, { includeArchived = false }) => {
+    const all = await ctx.db
+      .query("ai_feedback")
+      .withIndex("by_submitted_at")
+      .order("desc")
+      .collect();
+    const items = (includeArchived ? all.filter((f) => f.archived) : all.filter((f) => !f.archived)) as FeedbackRow[];
+
+    // Enrich with display fields the kanban card needs (user, conversation).
+    const userIds = [...new Set(items.map((f) => f.user_id))];
+    const userMap = new Map<string, { name: string; email?: string }>();
+    for (const id of userIds) {
+      const u = await ctx.db.get(id);
+      if (u) {
+        const name = [u.first_name, u.last_name].filter(Boolean).join(" ").trim() || u.username || u.email || "User";
+        userMap.set(String(id), { name, email: u.email });
+      }
+    }
+
+    const convoIds = [...new Set(items.map((f) => f.conversation_id))];
+    const convoMap = new Map<string, { scenario?: string; led_to_booking?: boolean; message_count?: number }>();
+    for (const id of convoIds) {
+      const c = await ctx.db.get(id);
+      if (c) {
+        convoMap.set(String(id), {
+          scenario: c.scenario_detected,
+          led_to_booking: c.led_to_booking,
+          message_count: c.message_count,
+        });
+      }
+    }
+
+    const enriched = items.map((f) => ({
+      ...f,
+      review_status: normalizeStatus(f.review_status),
+      userName: userMap.get(String(f.user_id))?.name,
+      userEmail: userMap.get(String(f.user_id))?.email,
+      convoScenario: convoMap.get(String(f.conversation_id))?.scenario,
+      convoMessageCount: convoMap.get(String(f.conversation_id))?.message_count,
+      convoLedToBooking: convoMap.get(String(f.conversation_id))?.led_to_booking,
+    }));
+
+    const grouped: Record<string, typeof enriched> = {
+      new: [],
+      reviewed: [],
+      actionable: [],
+      resolved: [],
+      wontfix: [],
+    };
+    for (const fb of enriched) {
+      if (grouped[fb.review_status]) grouped[fb.review_status].push(fb);
+    }
+    return grouped;
+  },
+});
+
+export const openCount = query({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("ai_feedback").collect();
+    return all.filter((f) => !f.archived && OTOFB_OPEN_STATUSES.has(normalizeStatus(f.review_status))).length;
+  },
+});
+
+export const updateStatus = mutation({
+  args: {
+    id: v.id("ai_feedback"),
+    status: v.string(),
+    actorName: v.string(),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, { id, status, actorName, actorId }) => {
+    const fb = await ctx.db.get(id);
+    if (!fb) return;
+    const prev = normalizeStatus(fb.review_status);
+    if (prev === status) return;
+    await ctx.db.patch(id, { review_status: status, updated_at: Date.now() });
+    await ctx.db.insert("audit_log", {
+      entity_type: "oto_feedback",
+      entity_id: String(id),
+      action: "status_change",
+      actor: actorName,
+      actor_id: actorId,
+      detail: `${prev} → ${status}`,
+      created_at: Date.now(),
+    });
+  },
+});
+
+export const archive = mutation({
+  args: {
+    id: v.id("ai_feedback"),
+    archived: v.boolean(),
+    actorName: v.string(),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, { id, archived, actorName, actorId }) => {
+    const fb = await ctx.db.get(id);
+    if (!fb) return;
+    await ctx.db.patch(id, { archived, updated_at: Date.now() });
+    await ctx.db.insert("audit_log", {
+      entity_type: "oto_feedback",
+      entity_id: String(id),
+      action: "status_change",
+      actor: actorName,
+      actor_id: actorId,
+      detail: archived ? "Oto feedback archived" : "Oto feedback restored from archive",
+      created_at: Date.now(),
+    });
+  },
+});
+
+// Returns the full conversation thread + the rated message highlighted.
+// Used by the director modal to show what Oto actually said in context.
+export const getConversationForFeedback = query({
+  args: { feedbackId: v.id("ai_feedback") },
+  handler: async (ctx, { feedbackId }) => {
+    const fb = await ctx.db.get(feedbackId);
+    if (!fb) return null;
+    const convo = await ctx.db.get(fb.conversation_id);
+    const messages = await ctx.db
+      .query("ai_messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", fb.conversation_id))
+      .collect();
+    messages.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+    const user = await ctx.db.get(fb.user_id);
+    const userName = user
+      ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username || user.email || "User"
+      : undefined;
+    return {
+      feedback: fb,
+      conversation: convo,
+      messages,
+      user: user ? { _id: user._id, name: userName, email: user.email, phone: user.phone } : null,
+    };
+  },
+});

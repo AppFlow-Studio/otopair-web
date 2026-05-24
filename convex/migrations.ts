@@ -287,8 +287,14 @@ export const migrateLastServiceWhatToArray = mutation({
     for (const row of rows) {
       const r = row as Record<string, unknown>;
       const raw = r.lastServiceWhat;
-      if (raw === undefined || raw === null) { empty += 1; continue; }
-      if (Array.isArray(raw)) { alreadyArray += 1; continue; }
+      if (raw === undefined || raw === null) {
+        empty += 1;
+        continue;
+      }
+      if (Array.isArray(raw)) {
+        alreadyArray += 1;
+        continue;
+      }
       if (typeof raw === "string") {
         const next = raw.length > 0 ? [raw] : [];
         await ctx.db.patch(row._id, { lastServiceWhat: next });
@@ -346,5 +352,158 @@ export const backfillWalkInVehicleEngineIds = mutation({
     }
 
     return { patched, skipped, total: vehicles.length };
+  },
+});
+
+/**
+ * One-shot cleanup: collapse duplicate `vehicles` rows that share a VIN.
+ *
+ * Background: `vehicles.vin` is indexed but not constrained unique, so a mix
+ * of seed re-runs, walk-in shop inserts, and parallel onboarding flows has
+ * landed multiple rows on the same VIN. `vehicles:listVehiclesByUser` then
+ * crashes when its `.unique()` lookup sees >1 row.
+ *
+ * Strategy per VIN with >1 row:
+ *   1. Pick a canonical row, preferring (in order): vehicle_config_id set,
+ *      then most populated optional fields, then newest updated_at /
+ *      _creationTime.
+ *   2. Repoint FKs on `part_snapshots`, `labor_quote_snapshots`, and
+ *      `user_semantic_facts` from each duplicate `_id` → canonical `_id`.
+ *   3. Delete the duplicate `vehicles` row.
+ *
+ * Defaults to dry-run; pass `{ apply: true }` to actually mutate.
+ *
+ * Run dry:     npx convex run migrations:dedupeVehiclesByVin
+ * Run apply:   npx convex run migrations:dedupeVehiclesByVin '{"apply": true}'
+ */
+export const dedupeVehiclesByVin = mutation({
+  args: { apply: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const apply = args.apply === true;
+
+    const vehicles = await ctx.db.query("vehicles").collect();
+
+    // Group rows by VIN.
+    const byVin = new Map<string, typeof vehicles>();
+    for (const v of vehicles) {
+      const key = (v.vin ?? "").toUpperCase().trim();
+      if (!key) continue;
+      const bucket = byVin.get(key);
+      if (bucket) bucket.push(v);
+      else byVin.set(key, [v]);
+    }
+
+    // Score a row by how "rich" it is — more populated optional fields wins.
+    const richness = (row: (typeof vehicles)[number]) => {
+      let score = 0;
+      if (row.vehicle_config_id) score += 100; // strongest signal — enrichment ran
+      if (row.trim_id) score += 1;
+      if (row.engine_id) score += 1;
+      if (row.transmission_id) score += 1;
+      if (row.chassis_id) score += 1;
+      if (row.year != null) score += 1;
+      if (row.image_url) score += 1;
+      if (row.enriched_engine_config_id) score += 1;
+      if (row.metadata) score += 1;
+      return score;
+    };
+
+    const lastTouched = (row: (typeof vehicles)[number]) =>
+      row.updated_at ?? row.created_at ?? row._creationTime ?? 0;
+
+    type DupReport = {
+      vin: string;
+      kept: string;
+      dropped: string[];
+      fkRepointed: {
+        part_snapshots: number;
+        labor_quote_snapshots: number;
+        user_semantic_facts: number;
+      };
+    };
+
+    const report: DupReport[] = [];
+    let scanned = 0;
+    let duplicateRowsFound = 0;
+    let duplicateRowsDeleted = 0;
+
+    for (const [vin, rows] of byVin) {
+      scanned += rows.length;
+      if (rows.length < 2) continue;
+
+      // Choose canonical: max(richness, lastTouched) — stable tiebreak on _id.
+      const sorted = [...rows].sort((a, b) => {
+        const ra = richness(a);
+        const rb = richness(b);
+        if (ra !== rb) return rb - ra;
+        const ta = lastTouched(a);
+        const tb = lastTouched(b);
+        if (ta !== tb) return tb - ta;
+        return String(a._id).localeCompare(String(b._id));
+      });
+      const canonical = sorted[0];
+      const dups = sorted.slice(1);
+      duplicateRowsFound += dups.length;
+
+      const dupIds = new Set(dups.map((d) => String(d._id)));
+
+      // Repoint FK references. Scan target tables once per VIN; cheap on dev,
+      // and these tables are sparse relative to vehicles.
+      let partRepoints = 0;
+      let laborRepoints = 0;
+      let factRepoints = 0;
+
+      const partSnaps = await ctx.db.query("part_snapshots").collect();
+      for (const row of partSnaps) {
+        if (dupIds.has(String(row.vehicle_id))) {
+          if (apply) await ctx.db.patch(row._id, { vehicle_id: canonical._id });
+          partRepoints += 1;
+        }
+      }
+
+      const laborSnaps = await ctx.db.query("labor_quote_snapshots").collect();
+      for (const row of laborSnaps) {
+        if (dupIds.has(String(row.vehicle_id))) {
+          if (apply) await ctx.db.patch(row._id, { vehicle_id: canonical._id });
+          laborRepoints += 1;
+        }
+      }
+
+      const facts = await ctx.db.query("user_semantic_facts").collect();
+      for (const row of facts) {
+        if (row.vehicle_id && dupIds.has(String(row.vehicle_id))) {
+          if (apply) await ctx.db.patch(row._id, { vehicle_id: canonical._id });
+          factRepoints += 1;
+        }
+      }
+
+      // Drop the duplicate vehicles rows.
+      if (apply) {
+        for (const d of dups) {
+          await ctx.db.delete(d._id);
+          duplicateRowsDeleted += 1;
+        }
+      }
+
+      report.push({
+        vin,
+        kept: String(canonical._id),
+        dropped: dups.map((d) => String(d._id)),
+        fkRepointed: {
+          part_snapshots: partRepoints,
+          labor_quote_snapshots: laborRepoints,
+          user_semantic_facts: factRepoints,
+        },
+      });
+    }
+
+    return {
+      mode: apply ? "applied" : "dry-run",
+      scanned,
+      vinsAffected: report.length,
+      duplicateRowsFound,
+      duplicateRowsDeleted,
+      report,
+    };
   },
 });

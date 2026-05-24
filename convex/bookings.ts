@@ -73,6 +73,7 @@ import {
   normalizeNoShowThresholdMinutes,
   roundUpToQuarterMinutes,
 } from "../lib/scheduling-overhaul";
+import { computeBookingTax } from "../lib/tax";
 import {
   getMissingRequiredPassportFields,
   getPassportCompletionPercent,
@@ -931,10 +932,6 @@ export const createBatch = mutation({
     // and persisted value, so they always agree when the client is
     // honest.
     const shop = await ctx.db.get(args.shop_id);
-    const { computeBookingTax: computeBookingTaxImpl } = await import(
-      "../lib/tax"
-    );
-
     const PLATFORM_FEE_RATE = 0.07;
     const PLATFORM_FEE_FLOOR = 4.99;
     const servicesSubtotal = labor_cost + parts_cost;
@@ -942,7 +939,7 @@ export const createBatch = mutation({
       servicesSubtotal > 0
         ? Math.max(servicesSubtotal * PLATFORM_FEE_RATE, PLATFORM_FEE_FLOOR)
         : 0;
-    const taxes_and_fees = computeBookingTaxImpl({
+    const taxes_and_fees = computeBookingTax({
       laborDollars: labor_cost,
       partsDollars: parts_cost,
       state: shop?.state ?? null,

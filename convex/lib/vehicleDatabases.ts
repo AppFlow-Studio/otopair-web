@@ -39,7 +39,20 @@ export async function advancedVinDecode(vin: string): Promise<any | null> {
     });
 
     if (!response.ok) {
-      console.log(`[vdb] API error: ${response.status} — falling back to NHTSA`);
+      // Include the body so we can distinguish "no key" (401),
+      // "wrong/expired key" (403 with auth message), and
+      // "endpoint not in plan" (403 with access message). All
+      // three look the same in summary form.
+      let bodyHint = "";
+      try {
+        bodyHint = (await response.text()).slice(0, 300);
+      } catch {}
+      console.log(
+        `[vdb] API error: ${response.status} — falling back to NHTSA. ` +
+        `Body: ${bodyHint}. ` +
+        `If 401/403: confirm VEHICLE_DATABASES_API_KEY is set on Convex (npx convex env set VEHICLE_DATABASES_API_KEY <key>) ` +
+        `with the same value as the client's EXPO_PUBLIC_VEHICLE_DB_API_KEY.`,
+      );
       return null;
     }
 

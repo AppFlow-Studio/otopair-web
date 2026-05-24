@@ -10904,7 +10904,7 @@ export const revertExpiredReschedules = internalMutation({
  * assigned — shops respond via `tire_quote_responses.create`, and the user
  * picks one with `acceptTireQuote`.
  *
- * Replaces the local-only `synthesizeTireQuoteBooking` on the mobile side.
+ * Persists mobile tire quote requests directly in Convex.
  */
 export const createTireQuoteRequest = mutation({
   args: {

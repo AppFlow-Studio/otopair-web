@@ -57,6 +57,46 @@ export const create = mutation({
 });
 
 /**
+ * setVehicleId — Ahmad QA #2 fix (2026-05-18).
+ *
+ * Persists the conversation's vehicle anchor on first send. Once written,
+ * envelope.ts pickActiveVehicleRow prefers this column over the frontend's
+ * selectedVehicleVin — so resuming the conversation later (when the global
+ * vehicle picker may have drifted to a different car) still rebinds the
+ * anchor to whatever the chat was created for.
+ *
+ * Idempotent: if `vehicle_id` is already set, returns `alreadySet: true`
+ * without re-patching. The anchor locks at first write — no rebinding mid-
+ * lifetime (per the prompt's one-chat-one-car rule).
+ */
+export const setVehicleId = mutation({
+  args: {
+    conversationId: v.id("ai_conversations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("unauthenticated");
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!user) throw new Error("user not found");
+
+    const convo = await ctx.db.get(args.conversationId);
+    if (!convo) throw new Error("conversation not found");
+    if (convo.user_id !== user._id) throw new Error("not authorized");
+
+    // Idempotent — anchor locks at first write. Don't rebind mid-lifetime.
+    if ((convo as Record<string, unknown>).vehicle_id) {
+      return { ok: true, alreadySet: true };
+    }
+    await ctx.db.patch(args.conversationId, { vehicle_id: args.vehicleId });
+    return { ok: true, alreadySet: false };
+  },
+});
+
+/**
  * updateState — Haiku-driven conversation state writeback.
  *
  * Called via the `update_conversation_state` tool on every Oto turn. Stores

@@ -156,13 +156,9 @@ const BugModal = ({ bug, onClose }: { bug: Bug | undefined; onClose: () => void 
                   options={[{ value:'', label:'Unassigned' }, ...(directorUsers ?? []).map(u => ({ value: String(u._id), label: u.name }))]}
                   style={{ width:'100%' }} />
               </div>
-              <div>
-                <label style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:6 }}>Resolution notes</label>
-                <textarea placeholder="What did you find / fix?" style={{ width:'100%', minHeight:80, padding:10, fontSize:13, border:'1px solid var(--slate-200)', borderRadius:8, fontFamily:'inherit', resize:'vertical', background:'#fff' }} />
-              </div>
-              <div>
-                <label style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:6 }}>Resolved in version</label>
-                <Input value="" onChange={() => {}} placeholder="e.g. Android 2.3.9" />
+              <div style={{ padding:'10px 12px', background:'var(--slate-25)', border:'1px solid var(--slate-100)', borderRadius:8, fontSize:11, color:'var(--slate-600)', lineHeight:1.5 }}>
+                Add resolution context as a <b>director note</b> below (in the left column).
+                Notes are timestamped, attributed to you, and surface in the audit log.
               </div>
               <div style={{ borderTop:'1px solid var(--slate-200)', paddingTop:14, marginTop:4 }}>
                 <Button variant={bug.archived ? 'secondary' : 'danger'} style={{ width:'100%' }}

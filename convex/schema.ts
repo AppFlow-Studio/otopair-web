@@ -648,6 +648,10 @@ export default defineSchema({
     status: v.optional(v.string()), // "pending" | "accepted" | "rejected"
     verified_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
+    // Per-field decisions captured at accept time (used by undoMechanicVerification).
+    // Optional because legacy accepted rows predate this field.
+    review_decisions: v.optional(v.any()),
+    reviewer_id: v.optional(v.id("director_users")),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])
     .index("by_mechanic", ["mechanic_id"])
@@ -1919,6 +1923,18 @@ export default defineSchema({
     // request_haiku_handback resets to default.
     // -----------------------------------------------------------------------
     current_model: v.optional(v.string()),
+    // -----------------------------------------------------------------------
+    // [Ahmad QA #2 — 2026-05-18] Persisted vehicle anchor for the conversation.
+    // Written on first send by chat.ts via ai_conversations.setVehicleId
+    // (the resolved active vehicle's _id). envelope.ts pickActiveVehicleRow
+    // precedence: this column WINS over preferredVin (the frontend's
+    // selectedVehicleVin) once set — so resuming the conversation later (when
+    // the global vehicle picker may have drifted to a different car) still
+    // rebinds the anchor to whatever the chat was created for. Optional
+    // because pre-existing conversations created before this column existed
+    // won't have it; envelope falls through to preferredVin in that case.
+    // -----------------------------------------------------------------------
+    vehicle_id: v.optional(v.id("vehicles")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_session_id", ["session_id"])
@@ -1962,6 +1978,11 @@ export default defineSchema({
     // truncated / re-generated.
     message_content_snapshot: v.string(),
     submitted_at: v.number(),
+    // Director-side triage state. Optional (mobile insert leaves it unset;
+    // server-side `listByStatus` treats unset as "new").
+    review_status: v.optional(v.string()), // new | reviewed | actionable | resolved | wontfix
+    archived: v.optional(v.boolean()),
+    updated_at: v.optional(v.number()),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_id", ["user_id"])
@@ -2167,9 +2188,10 @@ export default defineSchema({
     name: v.string(),
     role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
     totp_secret: v.string(),
+    email: v.optional(v.string()),
     created_at: v.number(),
     last_login: v.optional(v.number()),
-  }),
+  }).index("by_email", ["email"]),
 
   director_sessions: defineTable({
     user_id: v.id("director_users"),

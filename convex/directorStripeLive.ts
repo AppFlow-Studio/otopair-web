@@ -23,7 +23,7 @@ import Stripe from "stripe";
 // repo (v22). `lib/stripe.ts` exports a different constant intentionally —
 // see comment there. We don't import it because that file lives outside
 // the convex tsconfig.
-const STRIPE_API_VERSION = "2026-03-25.dahlia" as const;
+const STRIPE_API_VERSION = "2026-04-22.dahlia" as const;
 
 function getStripe(): Stripe | null {
   const key = process.env.STRIPE_SECRET_KEY;

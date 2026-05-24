@@ -108,6 +108,12 @@ crons.interval(
 );
 
 crons.interval(
+  "auto-drop-unconfirmed-bookings",
+  { minutes: 10 },
+  internal.bookings.autoDropUnconfirmedBookings,
+);
+
+crons.interval(
   "process-customer-late-monitors",
   { minutes: 1 },
   internal.bookings.processCustomerLateMonitors,
@@ -137,7 +143,22 @@ crons.interval(
   (internal as any).email_dispatcher.dispatchPendingEmails,
 );
 
+// Pre-Job Approval: expire 24h-stale customer approval cycles. Pre-job
+// expiry captures the $20 deposit forfeit; mid-job expiry just freezes the
+// ceiling at the prior approved set price.
+crons.interval(
+  "expire-approvals",
+  { minutes: 10 },
+  internal.booking_approvals.expireApprovals,
+);
 
-
+// Pre-Job Approval: drain notification_outbox rows with channel="push" via
+// the Expo Push API. Existing SMS/email dispatchers handle their own
+// channels; this is the push sibling.
+crons.interval(
+  "dispatch-pending-push",
+  { minutes: 1 },
+  (internal as any).lib.push_dispatcher.dispatchPendingPush,
+);
 
 export default crons;

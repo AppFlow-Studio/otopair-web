@@ -76,6 +76,16 @@ interface DaySwimLanesProps {
     mechanicId: string;
     durationMinutes: number;
   } | null;
+  /** Ghost block showing the proposed new slot for an in-progress reschedule.
+   *  Rendered with amber dashed styling to distinguish from `draftBooking`
+   *  (a brand-new booking) and the source booking still living on the lane. */
+  draftReschedule?: {
+    date: string;
+    time: string;
+    mechanicId: string;
+    durationMinutes: number;
+    hasConflict?: boolean;
+  } | null;
   /** When set, the lane belonging to this mechanic is highlighted and edits on
    *  other lanes are locked: drag-to-reschedule, empty-cell create, and
    *  right-click block all become no-ops on lanes the viewer doesn't own.
@@ -157,6 +167,7 @@ export default function DaySwimLanes({
   onBlockDayClick,
   currentDate,
   draftBooking,
+  draftReschedule,
   viewerMechanicId,
 }: DaySwimLanesProps) {
   const viewerKey = viewerMechanicId ? String(viewerMechanicId) : null;
@@ -847,6 +858,40 @@ export default function DaySwimLanes({
                       >
                         <span className="text-[11px] font-semibold text-primary uppercase tracking-wide">
                           Draft — new booking
+                        </span>
+                      </div>
+                    );
+                  })()}
+
+                {/* Proposed reschedule ghost — shows where the in-progress
+                    reschedule would land. Amber/dashed to differ from the
+                    blue new-booking draft above and the source booking still
+                    living elsewhere on the lane. Rose when there's a conflict. */}
+                {draftReschedule &&
+                  (draftReschedule.mechanicId || "__unassigned__") === col.id &&
+                  currentDate &&
+                  draftReschedule.date === dateToString(currentDate) &&
+                  (() => {
+                    const [dh, dm] = draftReschedule.time.split(":").map(Number);
+                    const startMin = minutesFromBase(startHour, startMinute, dh, dm);
+                    if (startMin < 0 || startMin >= totalMinutes) return null;
+                    const top = (startMin / totalMinutes) * totalHeight;
+                    const height = Math.max(
+                      ROW_HEIGHT,
+                      (draftReschedule.durationMinutes / totalMinutes) * totalHeight
+                    );
+                    const palette = draftReschedule.hasConflict
+                      ? "border-rose-500 bg-rose-500/15 text-rose-700"
+                      : "border-amber-500 bg-amber-400/20 text-amber-800";
+                    return (
+                      <div
+                        className={`absolute left-1 right-1 z-[7] rounded-lg border-2 border-dashed pointer-events-none flex items-center justify-center px-2 ${palette}`}
+                        style={{ top, height }}
+                      >
+                        <span className="text-[11px] font-semibold uppercase tracking-wide">
+                          {draftReschedule.hasConflict
+                            ? "Conflict — pick another slot"
+                            : "Proposed new time"}
                         </span>
                       </div>
                     );

@@ -1743,6 +1743,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     s === "confirmed" ||
                     s === "vehicle_at_shop" ||
                     s === "in_progress";
+                  const canReschedule =
+                    !!onRequestReschedule &&
+                    (s === "pending" ||
+                      s === "pending_shop_acceptance" ||
+                      s === "confirmed");
 
                   if (
                     !canAccept &&
@@ -1750,7 +1755,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     !canComplete &&
                     !canDecline &&
                     !canCancel &&
-                    !canMarkNoShow
+                    !canMarkNoShow &&
+                    !canReschedule
                   )
                     return null;
                   return (
@@ -1870,6 +1876,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                                 k completed
                               </span>
                             )}
+                          </button>
+                        )}
+                        {canReschedule && (
+                          <button
+                            onClick={() => onRequestReschedule?.()}
+                            disabled={isActioning}
+                            className={drawerSecondaryButtonClassName}
+                            title="Switch to the day-lane to drag this booking to a new time"
+                          >
+                            Reschedule
                           </button>
                         )}
                         {canDecline && (

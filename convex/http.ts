@@ -112,7 +112,8 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
       event.type === "payment_intent.succeeded" ||
       event.type === "payment_intent.payment_failed" ||
       event.type === "payment_intent.canceled" ||
-      event.type === "payment_intent.amount_capturable_updated"
+      event.type === "payment_intent.amount_capturable_updated" ||
+      event.type === "payment_intent.requires_action"
     ) {
       const pi = event.data.object as Stripe.PaymentIntent;
       const mapped =
@@ -140,8 +141,36 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
               typeof event.account === "string" ? event.account : undefined,
           },
         );
-      } else {
-        // amount_capturable_updated is informational — just dedupe-log it.
+      } else if (event.type === "payment_intent.amount_capturable_updated") {
+        // Pre-Job Approval flow: an incrementAuthorization or reauth just
+        // raised the capturable amount on this PI. Reconcile by stamping
+        // the event id on the latest booking_approvals row tied to this PI.
+        // Idempotent — replays no-op.
+        await ctx.runMutation(
+          internal.booking_approvals._reconcileAmountCapturableUpdated,
+          {
+            stripePaymentIntentId: pi.id,
+            stripeEventId: event.id,
+          },
+        );
+        await ctx.runMutation(internal.stripe_webhook_events.record, {
+          eventId: event.id,
+          eventType: event.type,
+          livemode: event.livemode,
+          stripeAccountId:
+            typeof event.account === "string" ? event.account : undefined,
+        });
+      } else if (event.type === "payment_intent.requires_action") {
+        // Card needs SCA / customer intervention. Flip the booking to
+        // reauth_required and push the customer to act.
+        const bookingId =
+          (pi.metadata && (pi.metadata as any).bookingId) || undefined;
+        if (bookingId) {
+          await ctx.runMutation(
+            internal.payments_stripe._revertBookingToPendingForReauth,
+            { bookingId: bookingId as any },
+          );
+        }
         await ctx.runMutation(internal.stripe_webhook_events.record, {
           eventId: event.id,
           eventType: event.type,

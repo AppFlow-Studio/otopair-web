@@ -320,6 +320,34 @@ export const generateUploadUrl = mutation(async (ctx) => {
 });
 
 /**
+ * MUTATION: registerExpoPushToken
+ * Persists the Expo push token on the current user so the
+ * `lib/push_dispatcher.dispatchPendingPush` cron can route approval
+ * notifications. Idempotent — re-registering the same token only bumps
+ * the `push_token_updated_at_ms`. Called from mobile after a successful
+ * Notifications.requestPermissionsAsync + getExpoPushTokenAsync.
+ */
+export const registerExpoPushToken = mutation({
+  args: { token: v.string() },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!user) throw new Error("User not found");
+    const trimmed = args.token.trim();
+    if (!trimmed) throw new Error("Empty push token");
+    await ctx.db.patch(user._id, {
+      push_token: trimmed,
+      push_token_updated_at_ms: Date.now(),
+    } as any);
+    return { ok: true };
+  },
+});
+
+/**
  * MUTATION: completeOnboarding
  * Set onboardingCompleted to true for the current user.
  * Called when the user finishes the onboarding flow (Daniel's onboarding integration).

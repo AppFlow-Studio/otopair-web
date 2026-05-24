@@ -82,10 +82,23 @@ export default function ActiveJobStrip() {
   // Owner / front-desk view
   if (header.count === 0) return null;
 
+  // Single active job: jump straight to the schedule day-lane on that
+  // booking's date/time so the viewer can investigate (handles overflow
+  // into a different day — the dashboard is filtered to "today" and would
+  // appear empty for a job that started yesterday).
+  // Multiple active jobs: keep the dashboard route, which shows the full
+  // list cross-date.
+  const targetHref =
+    header.count === 1 && header.firstBookingId && header.firstBookingDate
+      ? `/schedule?action=focus-booking&bookingId=${String(
+          header.firstBookingId,
+        )}&date=${header.firstBookingDate}`
+      : "/dashboard#active-jobs";
+
   return (
     <button
       type="button"
-      onClick={() => router.push("/dashboard#active-jobs")}
+      onClick={() => router.push(targetHref)}
       className="mb-3 flex w-full items-center justify-between gap-3 overflow-hidden rounded-xl border border-emerald-400/30 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_60%),linear-gradient(180deg,_#0f172a,_#0b1220)] px-4 py-2.5 text-left text-slate-50 shadow-[0_4px_14px_rgba(15,23,42,0.12)] transition-colors hover:border-emerald-400/50"
     >
       <div className="flex min-w-0 items-center gap-3">

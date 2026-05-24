@@ -8,6 +8,7 @@ import { AlertTriangle, Clock, Car, User as UserIcon } from "lucide-react";
 
 const CUSTOMER_LATE_CATEGORY = "customer_late_push_reminder";
 const RESOLUTION_CATEGORY = "overrun_customer_resolution";
+const MECHANIC_ROLES = new Set(["mechanic", "shop_mechanic"]);
 
 function formatTime12h(hhmm: string | null | undefined): string {
   if (!hhmm) return "";
@@ -62,16 +63,43 @@ export default function CustomerSchedulingAlerts() {
   const notifications = useQuery(api.notifications.getMyNotifications, {}) as
     | Array<any>
     | undefined;
+  const portalAccess = useQuery(api.shops.getMyPortalAccess) as
+    | { status: string; role?: string; mechanicId?: string | null }
+    | null
+    | undefined;
   const acknowledgeLate = useMutation((api as any).bookings.acknowledgeCustomerLate);
   const markRead = useMutation(api.notifications.markNotificationRead);
 
+  // When the viewer is signed in to the portal as a mechanic, only surface
+  // customer-facing scheduling alerts for bookings whose assigned mechanic
+  // is the viewer themself. The same person can be both customer and shop
+  // staff (e.g. a mechanic books a slot at their own shop and another
+  // mechanic gets assigned) — in that case we don't want the customer-late
+  // banner to nag them while they're working someone else's job.
+  const isMechanicViewer =
+    portalAccess?.status === "active" &&
+    !!portalAccess.role &&
+    MECHANIC_ROLES.has(portalAccess.role);
+  const viewerMechanicId = portalAccess?.mechanicId ?? null;
+  const shouldShowForViewer = (row: any): boolean => {
+    if (!isMechanicViewer) return true;
+    if (!viewerMechanicId) return false;
+    return String(row.assignedMechanicId ?? "") === String(viewerMechanicId);
+  };
+
   const lateRow = useMemo(
-    () => notifications?.find((n) => n.category === CUSTOMER_LATE_CATEGORY) ?? null,
-    [notifications],
+    () =>
+      notifications?.find(
+        (n) => n.category === CUSTOMER_LATE_CATEGORY && shouldShowForViewer(n),
+      ) ?? null,
+    [notifications, isMechanicViewer, viewerMechanicId],
   );
   const resolutionRow = useMemo(
-    () => notifications?.find((n) => n.category === RESOLUTION_CATEGORY) ?? null,
-    [notifications],
+    () =>
+      notifications?.find(
+        (n) => n.category === RESOLUTION_CATEGORY && shouldShowForViewer(n),
+      ) ?? null,
+    [notifications, isMechanicViewer, viewerMechanicId],
   );
 
   if (!lateRow && !resolutionRow) return null;

@@ -15,20 +15,20 @@ export const searchBySize = action({
     minLoadIndex: v.optional(v.number()),
     minSpeedRating: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     // Cache hit — return stored models (filters applied in JS)
-    const cached = await ctx.runQuery(internal.tires_catalog.getTireSizeCache, { size: args.size });
+    const cached: any = await ctx.runQuery(internal.tires_catalog.getTireSizeCache, { size: args.size });
     if (cached) {
-      let models = await ctx.runQuery(internal.tires_catalog.getTireModelsBySize, { size: args.size });
+      let models: any[] = await ctx.runQuery(internal.tires_catalog.getTireModelsBySize, { size: args.size });
 
       if (args.minLoadIndex !== undefined) {
         const min = args.minLoadIndex;
-        models = models.filter((m) => m.load_index === undefined || m.load_index >= min);
+        models = models.filter((m: any) => m.load_index === undefined || m.load_index >= min);
       }
       if (args.minSpeedRating) {
         const RANK: Record<string, number> = { N:1, P:2, Q:3, R:4, S:5, T:6, H:7, V:8, W:9, Y:10, Z:11 };
         const minRank = RANK[args.minSpeedRating.toUpperCase()] ?? 0;
-        models = models.filter((m) => !m.speed_rating || (RANK[m.speed_rating.toUpperCase()] ?? 0) >= minRank);
+        models = models.filter((m: any) => !m.speed_rating || (RANK[m.speed_rating.toUpperCase()] ?? 0) >= minRank);
       }
 
       console.log(`[tires] Cache hit for ${args.size} — returning ${models.length} models`);
@@ -36,8 +36,8 @@ export const searchBySize = action({
     }
 
     // Cache miss — fetch brand list from DB, then scrape all sources in parallel
-    const brands = await ctx.runQuery(internal.tireBrands.getBrandNames);
-    const [simpleTireResult, walmartResult, tireRackResult] = await Promise.all([
+    const brands: string[] = await ctx.runQuery(internal.tireBrands.getBrandNames);
+    const [simpleTireResult, walmartResult, tireRackResult]: [any, any, any] = await Promise.all([
       scrapeSimpleTireBySize(args.size, brands),
       scrapeWalmartBySize(args.size, brands),
       scrapeTireRackBySize(args.size, brands),
@@ -103,6 +103,7 @@ export const searchBySize = action({
             speed_rating: price.speed_rating,
             source_url: price.source_url,
           });
+          if (!modelId) continue;
           modelIdMap.set(key, modelId);
         }
         await ctx.runMutation(internal.tires_catalog.upsertTirePricing, {
@@ -135,6 +136,7 @@ export const searchBySize = action({
             part_number: price.part_number,
             source_url: price.source_url,
           });
+          if (!modelId) continue;
           modelIdMap.set(key, modelId);
         }
         await ctx.runMutation(internal.tires_catalog.upsertTirePricing, {
@@ -157,15 +159,15 @@ export const searchBySize = action({
     });
 
     // Apply vehicle-specific filters before returning (cache stores all tires unfiltered)
-    let tires = simpleTireResult.tires;
+    let tires: any[] = simpleTireResult.tires;
     if (args.minLoadIndex !== undefined) {
       const min = args.minLoadIndex;
-      tires = tires.filter((t) => t.load_index === undefined || t.load_index >= min);
+      tires = tires.filter((t: any) => t.load_index === undefined || t.load_index >= min);
     }
     if (args.minSpeedRating) {
       const RANK: Record<string, number> = { N:1, P:2, Q:3, R:4, S:5, T:6, H:7, V:8, W:9, Y:10, Z:11 };
       const minRank = RANK[args.minSpeedRating.toUpperCase()] ?? 0;
-      tires = tires.filter((t) => !t.speed_rating || (RANK[t.speed_rating.toUpperCase()] ?? 0) >= minRank);
+      tires = tires.filter((t: any) => !t.speed_rating || (RANK[t.speed_rating.toUpperCase()] ?? 0) >= minRank);
     }
 
     return { ...simpleTireResult, tires, from_cache: false };

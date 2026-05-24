@@ -15,6 +15,7 @@
 import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import Anthropic from "@anthropic-ai/sdk";
 import { searchAndFetch } from "./vehicleEnrichment/firecrawl";
 import { advancedVinDecode, extractVDBFields } from "./lib/vehicleDatabases";
@@ -30,9 +31,59 @@ const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextend
  * Process a VIN through NHTSA decode → upsert makes/models/trims/engines.
  * Returns the resolved IDs for linking to vehicle records.
  */
+type ProcessVinResult = {
+  makeId: Id<"makes">;
+  modelId: Id<"models">;
+  trimId: Id<"trims">;
+  engineId: Id<"engines">;
+  transmissionId: Id<"transmissions"> | null;
+  make: string;
+  model: string;
+  year: number;
+  trim: string;
+  engineCode: string;
+  cylinders: number;
+  displacement: string;
+  fuelType: string;
+  drivetrain: string;
+  nhtsaVinKey: string;
+  // Raw NHTSA decode passthrough — downstream VDB image/color lookups
+  // use these to discover the catalog's canonical model designation.
+  nhtsaModel: string;
+  nhtsaSeries: string;
+  nhtsaTrim: string;
+  // Raw VDB decode fields — used to build the YMMT combo matrix for
+  // `vehicle-images` discovery when the VIN endpoint 404s.
+  vdbDecodedModel: string;
+  vdbDecodedStyle: string;
+  vdbDecodedTrimAndStyle: string;
+  // Review-screen Specs card fields. Flat (not nested under vdbTrimData)
+  // so router params can forward them directly.
+  horsepower: number | null;
+  engineDisplacementLiters: number | null;
+  cylindersConfiguration: string | null;
+  mpgCity: number | null;
+  mpgHighway: number | null;
+  mpgCombined: number | null;
+  frontTireSize: string | null;
+  rearTireSize: string | null;
+  frontTirePressure: number | null;
+  rearTirePressure: number | null;
+  transType: string | null;
+  transSpeeds: number | null;
+  vdbTrimData: {
+    frontTireSize: string | null;
+    rearTireSize: string | null;
+    frontTirePressure: number | null;
+    rearTirePressure: number | null;
+    wheelTorque: number | null;
+    cca: number | null;
+  } | null;
+};
+
 export const processVin = internalAction({
   args: { vin: v.string() },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<ProcessVinResult | null> => {
     try {
       // ════════════════════════════════════════════════════════════
       // SOURCE 1: Vehicle Databases API (primary — paid, structured)
@@ -274,9 +325,9 @@ export const processVin = internalAction({
       // ════════════════════════════════════════════════════════════
       // WRITE TO DATABASE
       // ════════════════════════════════════════════════════════════
-      const makeId = await ctx.runMutation(internal.vehicle_mutations.upsertMake, { name: merged.make });
-      const modelId = await ctx.runMutation(internal.vehicle_mutations.upsertModel, { makeId, name: finalModel });
-      const trimId = await ctx.runMutation(internal.vehicle_mutations.upsertTrim, {
+      const makeId: Id<"makes"> = await ctx.runMutation(internal.vehicle_mutations.upsertMake, { name: merged.make });
+      const modelId: Id<"models"> = await ctx.runMutation(internal.vehicle_mutations.upsertModel, { makeId, name: finalModel });
+      const trimId: Id<"trims"> = await ctx.runMutation(internal.vehicle_mutations.upsertTrim, {
         modelId, name: finalTrim, year: merged.year,
       });
 
@@ -294,7 +345,7 @@ export const processVin = internalAction({
       }
 
       // Engine
-      const engineId = await ctx.runMutation(internal.vehicle_mutations.upsertEngine, {
+      const engineId: Id<"engines"> = await ctx.runMutation(internal.vehicle_mutations.upsertEngine, {
         trimId, engineCode: finalEngineCode,
         cylinders: merged.cylinders, displacement: merged.displacement,
         fuelType: merged.fuelType,
@@ -322,12 +373,12 @@ export const processVin = internalAction({
 
       // Transmission — always create
       const transType = merged.transStyle || "unknown";
-      const transDoc = await ctx.runMutation(api.transmissions.upsertTransmission, {
+      const transDoc: { _id: Id<"transmissions"> } | null = await ctx.runMutation(api.transmissions.upsertTransmission, {
         trim_id: trimId,
         transmission_type: transType,
         confidence_score: transType !== "unknown" ? 0.70 : 0.1,
       });
-      const transmissionId = transDoc?._id ?? null;
+      const transmissionId: Id<"transmissions"> | null = transDoc?._id ?? null;
 
       if (transmissionId) {
         const tp: Record<string, unknown> = {};
@@ -347,6 +398,30 @@ export const processVin = internalAction({
         `vdb=${vdb ? "yes" : "no"}`,
       );
 
+      // Specs-card fields. VDB-first, NHTSA fallback where applicable.
+      // Returned at top level (rather than nested under vdbTrimData) so
+      // the review screen reads them as plain router params.
+      const specsForCard = {
+        horsepower:
+          vdb?.horsepower ??
+          (nhtsa.engineHP ? parseFloat(nhtsa.engineHP) : null),
+        engineDisplacementLiters: vdb?.engineDisplacementLiters ?? null,
+        cylindersConfiguration:
+          vdb?.cylindersConfiguration ?? nhtsa.engineConfig ?? null,
+        mpgCity: vdb?.mpgCity ?? null,
+        mpgHighway: vdb?.mpgHighway ?? null,
+        mpgCombined: vdb?.mpgCombined ?? null,
+        frontTireSize: vdb?.frontTireSize ?? null,
+        rearTireSize: vdb?.rearTireSize ?? null,
+        frontTirePressure: vdb?.frontTirePressure ?? null,
+        rearTirePressure: vdb?.rearTirePressure ?? null,
+        transType:
+          vdb?.transType ?? (nhtsa.transStyle || null),
+        transSpeeds:
+          vdb?.transSpeeds ??
+          (nhtsa.transSpeeds ? parseInt(nhtsa.transSpeeds) : null),
+      };
+
       return {
         makeId, modelId, trimId, engineId, transmissionId,
         make: merged.make, model: finalModel, year: merged.year, trim: finalTrim,
@@ -354,9 +429,24 @@ export const processVin = internalAction({
         cylinders: merged.cylinders, displacement: merged.displacement,
         fuelType: merged.fuelType,
         drivetrain: canonicalDrivetrain ?? "unknown",
+        // Specs-card fields (flat, for router param forwarding).
+        ...specsForCard,
         // NHTSA-only base key (deterministic per VIN, computed before
         // Claude normalization). Used for dedup in confirmVehicleForUser.
         nhtsaVinKey,
+        // Raw NHTSA series/trim/MODEL — passed downstream so VDB
+        // image/color lookups can discover the catalog's canonical
+        // model. NHTSA often returns the specific designation
+        // (e.g. "530i") in `Model`, which is exactly what VDB's
+        // catalog needs.
+        nhtsaModel: nhtsa.model || "",
+        nhtsaSeries: nhtsa.series || nhtsa.series2 || "",
+        nhtsaTrim: nhtsa.trim || nhtsa.trim2 || "",
+        // Raw VDB decode fields — used to build the YMMT combo matrix
+        // for `vehicle-images` discovery when the VIN endpoint 404s.
+        vdbDecodedModel: vdb?.model || "",
+        vdbDecodedStyle: (vdb as any)?.style || "",
+        vdbDecodedTrimAndStyle: (vdb as any)?.trimAndStyle || "",
         // VDB trim data for pre-population
         vdbTrimData: vdb ? {
           frontTireSize: vdb.frontTireSize,
@@ -940,16 +1030,61 @@ export const enrichVehicleSpecs = internalAction({
  * Decode a VIN via NHTSA and upsert makes/models/trims/engines.
  * Returns decoded vehicle info for the review screen.
  */
+type DecodeVinResult =
+  | { success: false; error: string }
+  | {
+      success: true;
+      vin: string;
+      makeId: Id<"makes">;
+      modelId: Id<"models">;
+      trimId: Id<"trims">;
+      engineId: Id<"engines">;
+      make: string;
+      model: string;
+      year: number;
+      trim: string;
+      engineCode: string;
+      cylinders: number;
+      displacement: string;
+      fuelType: string;
+      nhtsaVinKey: string;
+      // Raw NHTSA decode passthrough — picker uses these for VDB model
+      // discovery (NHTSA's Model is often the specific designation,
+      // e.g. "530i", while the merged result may have been normalized).
+      nhtsaModel: string;
+      nhtsaSeries: string;
+      nhtsaTrim: string;
+      // Raw VDB decode fields — picker builds the YMMT combo matrix
+      // for `vehicle-images` direct probes when the VIN URL 404s.
+      vdbDecodedModel: string;
+      vdbDecodedStyle: string;
+      vdbDecodedTrimAndStyle: string;
+      // Review-screen Specs card fields. Flat for router param forwarding.
+      horsepower: number | null;
+      engineDisplacementLiters: number | null;
+      cylindersConfiguration: string | null;
+      mpgCity: number | null;
+      mpgHighway: number | null;
+      mpgCombined: number | null;
+      frontTireSize: string | null;
+      rearTireSize: string | null;
+      frontTirePressure: number | null;
+      rearTirePressure: number | null;
+      transType: string | null;
+      transSpeeds: number | null;
+      drivetrain: string;
+    };
+
 export const decodeVin = action({
   args: { vin: v.string() },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<DecodeVinResult> => {
     const vin = args.vin.toUpperCase().trim();
 
     if (vin.length !== 17) {
       return { success: false as const, error: "VIN must be exactly 17 characters" };
     }
 
-    const result = await ctx.runAction(internal.vehicle_pipeline.processVin, { vin });
+    const result: ProcessVinResult | null = await ctx.runAction(internal.vehicle_pipeline.processVin, { vin });
 
     if (!result) {
       return { success: false as const, error: "Could not decode this VIN. Please check and try again." };
@@ -974,6 +1109,33 @@ export const decodeVin = action({
       // can use it for cache lookups even if Claude rewrote the trim/model
       // between decode and confirm.
       nhtsaVinKey: result.nhtsaVinKey,
+      // Raw NHTSA model/series/trim — forwarded to the picker so it
+      // can do VDB model discovery. For BMW VINs NHTSA's model is
+      // often "530i" (exactly what VDB needs) while the merged
+      // result has been overwritten to "5 Series" by VDB or AI norm.
+      nhtsaModel: result.nhtsaModel,
+      nhtsaSeries: result.nhtsaSeries,
+      nhtsaTrim: result.nhtsaTrim,
+      // Raw VDB decode — picker uses these to build the YMMT combo
+      // matrix for `vehicle-images` direct probes when the VIN URL
+      // returns no record.
+      vdbDecodedModel: result.vdbDecodedModel,
+      vdbDecodedStyle: result.vdbDecodedStyle,
+      vdbDecodedTrimAndStyle: result.vdbDecodedTrimAndStyle,
+      // Specs-card fields for the review screen.
+      horsepower: result.horsepower,
+      engineDisplacementLiters: result.engineDisplacementLiters,
+      cylindersConfiguration: result.cylindersConfiguration,
+      mpgCity: result.mpgCity,
+      mpgHighway: result.mpgHighway,
+      mpgCombined: result.mpgCombined,
+      frontTireSize: result.frontTireSize,
+      rearTireSize: result.rearTireSize,
+      frontTirePressure: result.frontTirePressure,
+      rearTirePressure: result.rearTirePressure,
+      transType: result.transType,
+      transSpeeds: result.transSpeeds,
+      drivetrain: result.drivetrain,
     };
   },
 });
@@ -1004,14 +1166,23 @@ export const confirmVehicleForUser = action({
     // lookup for legacy paths that don't pass the NHTSA key.
     nhtsaVinKey: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<
+    | { success: false; error: string }
+    | {
+        success: true;
+        vehicleOwnerId: Id<"vehicle_owners">;
+        cache_hit: boolean;
+        cache_hit_source: "nhtsa_vin_key" | "config_key" | "none";
+        enrichment_scheduled: boolean;
+      }
+  > => {
     // Resolve current user from auth
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) {
       return { success: false as const, error: "Not authenticated" };
     }
 
-    const user = await ctx.runQuery(internal.vehicle_mutations.getUserByClerkId, {
+    const user: { _id: Id<"users"> } | null = await ctx.runQuery(internal.vehicle_mutations.getUserByClerkId, {
       clerkUserId: identity.subject,
     });
     if (!user) {
@@ -1021,7 +1192,7 @@ export const confirmVehicleForUser = action({
     const vin = args.vin.toUpperCase().trim();
 
     // Upsert vehicle catalog record
-    const vehicle = await ctx.runMutation(api.vehicles.upsertVehicle, {
+    const vehicle: { _id: Id<"vehicles"> } | null = await ctx.runMutation(api.vehicles.upsertVehicle, {
       vin,
       trim_id: args.trimId,
       engine_id: args.engineId,
@@ -1035,7 +1206,7 @@ export const confirmVehicleForUser = action({
     });
 
     // Link vehicle to user
-    const vehicleOwnerId = await ctx.runMutation(api.vehicles.addOwner, {
+    const vehicleOwnerId: Id<"vehicle_owners"> = await ctx.runMutation(api.vehicles.addOwner, {
       vin,
       userId: user._id,
       nickname: `${args.year} ${args.make} ${args.model}`,

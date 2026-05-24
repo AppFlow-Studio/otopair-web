@@ -79,7 +79,7 @@ export async function getApplicableServices(
 
   const [engine, chassisSpecs, drivetrainConfig, trimSpecs, allServices] =
     await Promise.all([
-      ctx.db.get(vehicleConfig.engine_id),
+      vehicleConfig.engine_id ? ctx.db.get(vehicleConfig.engine_id) : null,
       vehicleConfig.chassis_code
         ? ctx.db
             .query("chassis_specs")
@@ -107,7 +107,7 @@ export async function getApplicableServices(
     return [];
   }
 
-  return allServices.filter((service) =>
+  return allServices.filter((service: Doc<"services">) =>
     isServiceApplicable(
       service,
       engine,

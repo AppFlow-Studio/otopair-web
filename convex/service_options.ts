@@ -8,7 +8,7 @@ export const list = query({
     return await Promise.all(
       options.map(async (option) => {
         const service = await ctx.db.get(option.service_id);
-        const serviceCategory = service
+        const serviceCategory = service?.service_category_id
           ? await ctx.db.get(service.service_category_id)
           : null;
         return { ...option, service, serviceCategory };
@@ -32,7 +32,7 @@ export const getByServiceIds = query({
           serviceId,
           serviceName: service?.name ?? "Service",
           serviceSlug: service?.slug ?? null,
-          options: options.sort((a, b) => a.display_order - b.display_order),
+          options: options.sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0)),
         });
       }
     }
@@ -48,7 +48,7 @@ export const getById = query({
       return null;
     }
     const service = await ctx.db.get(option.service_id);
-    const serviceCategory = service
+    const serviceCategory = service?.service_category_id
       ? await ctx.db.get(service.service_category_id)
       : null;
     return { ...option, service, serviceCategory };

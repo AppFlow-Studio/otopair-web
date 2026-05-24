@@ -131,7 +131,7 @@ export const runTier2Enrichment = internalAction({
   args: {
     vehicle_config_id: v.id("vehicle_configs"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     console.log(`[tier2] Starting for vehicle_config ${args.vehicle_config_id}`);
 
     // 1. LOAD CONTEXT
@@ -244,7 +244,7 @@ export const runTier2Enrichment = internalAction({
       internal.vehicleEnrichment.v3queries.getBlockedDomains,
       {},
     );
-    const blockedSet = new Set(blockedDomainDocs.map((d) => d.domain));
+    const blockedSet = new Set(blockedDomainDocs.map((d: any) => d.domain));
 
     // 5. EXECUTE SEARCHES + HAIKU EXTRACTION
     const batchRows: Array<{
@@ -385,8 +385,8 @@ export const runTier2Enrichment = internalAction({
           );
 
           const tier1Evidence = allFieldEvidence
-            .filter((e) => e.confidence >= 0.8)
-            .sort((a, b) => b.confidence - a.confidence);
+            .filter((e: any) => e.confidence >= 0.8)
+            .sort((a: any, b: any) => b.confidence - a.confidence);
           const previousValue = tier1Evidence[0]?.observed_value;
 
           if (previousValue && result.value !== previousValue) {

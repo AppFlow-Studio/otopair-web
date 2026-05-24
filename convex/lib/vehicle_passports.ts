@@ -142,6 +142,11 @@ export const postjobPartValidator = v.object({
   // flows stamp it so multi-service bookings get accurate per-service
   // analytics (shop_part_preferences, cost-by-service).
   service_id: v.optional(v.id("services")),
+  // "catalog" rows came from the Otopair prefill (part_fitments); identity
+  // fields (part_name/brand/oem_number) are read-only and only price/qty/
+  // supplied_by/swap can change. "manual" rows are mechanic-added and stay
+  // fully editable. Absent = legacy row, treated as "manual" for safety.
+  source: v.optional(v.union(v.literal("catalog"), v.literal("manual"))),
 });
 
 export const postjobPhotoValidator = v.object({

@@ -7,12 +7,10 @@ import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
-  Bell,
   Calendar as CalendarIcon,
   CalendarOff,
   CalendarPlus,
   Car,
-  AlertTriangle,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -332,11 +330,7 @@ export default function SchedulePage() {
   const deleteBlockTimeType = useMutation(api.schedule.deleteBlockTimeType);
 
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
-  const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
-  const dismissManualSchedulingAlert = useMutation(api.bookings.dismissManualSchedulingAlert);
-  const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
   const rescheduleFromNoShowAlert = useMutation(api.bookings.rescheduleFromNoShowAlert);
-  const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
   const acceptLateStartReview = useMutation(api.bookings.acceptLateStartReview);
   const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
   const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
@@ -369,11 +363,6 @@ export default function SchedulePage() {
     }
   }, [isMechanicViewer, viewerMechanicId]);
   const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
-  const customerLateAlerts = useQuery(api.bookings.getOpenCustomerLateAlerts);
-  const customerLateNotificationSent = useQuery(api.bookings.getCustomerLateNotificationSentMonitors);
-  const customerOnMyWay = useQuery(api.bookings.getCustomerOnMyWayMonitors);
-  const frontDeskOverrunAlerts = useQuery(api.bookings.getOpenFrontDeskOverrunAlerts);
-  const manualSchedulingAlerts = useQuery(api.bookings.getOpenManualSchedulingAlerts);
 
   const selectedJobDetail = useQuery(
     api.bookings.getJobDetail,
@@ -622,6 +611,24 @@ export default function SchedulePage() {
     setRescheduleError("");
   }, []);
 
+  // Tentative-quote events (status="tentative_quote") use a synthetic id
+  // (`tq_<responseId>`) so they don't collide with real bookings. Clicking
+  // one routes the mechanic into the tire-quote-requests page focused on the
+  // underlying booking so they can edit / withdraw their quote.
+  const handleEventSelect = useCallback(
+    (ev: CalendarEvent) => {
+      if (ev.status === "tentative_quote") {
+        const targetBooking = ev.tentativeBookingId;
+        if (targetBooking) {
+          router.push(`/bookings/tire-quote-requests?booking=${targetBooking}`);
+        }
+        return;
+      }
+      setSelectedBookingId(ev.id as Id<"bookings">);
+    },
+    [router],
+  );
+
   /**
    * Focus the day-lane on a booking so the user can drag-reschedule it
    * within the live schedule (respecting bookings, blocked time, and shop hours).
@@ -682,24 +689,6 @@ export default function SchedulePage() {
     }
   }
 
-  async function handleMarkVehicleHereFromAlert(bookingId: string) {
-    try {
-      await markVehicleAtShop({ bookingId: bookingId as Id<"bookings"> });
-      setToast({ msg: "Vehicle marked here", key: Date.now() });
-    } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Could not mark vehicle here", key: Date.now() });
-    }
-  }
-
-  async function handleMarkNoShowFromAlert(bookingId: string) {
-    try {
-      await markPostThresholdNoShow({ bookingId: bookingId as Id<"bookings"> });
-      setToast({ msg: "Booking marked no-show", key: Date.now() });
-    } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Could not mark no-show", key: Date.now() });
-    }
-  }
-
   async function handleSubmitNoShowReschedule() {
     if (!noShowReschedule) return;
     setIsSubmittingNoShowReschedule(true);
@@ -724,18 +713,6 @@ export default function SchedulePage() {
       );
     } finally {
       setIsSubmittingNoShowReschedule(false);
-    }
-  }
-
-  async function handleOverrunExtension(bookingId: string, extensionMinutes: number) {
-    try {
-      await answerOverrunExtension({
-        bookingId: bookingId as Id<"bookings">,
-        extensionMinutes,
-      });
-      setToast({ msg: `Overrun extended ${extensionMinutes} minutes`, key: Date.now() });
-    } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Could not save overrun response", key: Date.now() });
     }
   }
 
@@ -920,6 +897,58 @@ export default function SchedulePage() {
     router.replace("/schedule", { scroll: false });
   }, [wantsAutoOpen, context?.hours, context?.mechanics, lookaheadBookings, router]);
 
+  // Deep-link handler: bell-popover actions navigate here with ?action=… to open
+  // the right modal/drawer on the schedule page.
+  const deepLinkHandledRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandledRef.current) return;
+    const action = searchParams.get("action");
+    if (!action) return;
+
+    if (action === "reschedule-no-show") {
+      const bookingId = searchParams.get("bookingId");
+      if (!bookingId) return;
+      const date = searchParams.get("date") ?? "";
+      const time = searchParams.get("time") ?? "";
+      const mechanicId = searchParams.get("mechanicId") ?? "";
+      const target = (bookingsRef.current ?? []).find(
+        (b) => String(b._id) === bookingId,
+      );
+      const customerName =
+        (target as any)?.customerName ??
+        (target as any)?.customer?.full ??
+        "";
+      if (date) {
+        const [y, mo, d] = date.split("-").map(Number);
+        if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+      }
+      setCurrentView("day");
+      setNoShowReschedule({ bookingId, customerName, date, time, mechanicId });
+      deepLinkHandledRef.current = true;
+      router.replace("/schedule", { scroll: false });
+      return;
+    }
+
+    if (action === "focus-booking") {
+      const bookingId = searchParams.get("bookingId");
+      if (!bookingId) return;
+      const date = searchParams.get("date");
+      focusBookingForReschedule(bookingId, date);
+      deepLinkHandledRef.current = true;
+      router.replace("/schedule", { scroll: false });
+      return;
+    }
+
+    if (action === "review-late-start") {
+      const reviewId = searchParams.get("reviewId");
+      if (!reviewId) return;
+      setSelectedLateStartReviewId(reviewId);
+      deepLinkHandledRef.current = true;
+      router.replace("/schedule", { scroll: false });
+      return;
+    }
+  }, [searchParams, router, focusBookingForReschedule]);
+
   const selectedLateStartReview = useMemo<LateStartReviewView | null>(() => {
     if (!lateStartReviews || !selectedLateStartReviewId) return null;
     return (
@@ -984,12 +1013,19 @@ export default function SchedulePage() {
           vehicleDisplay: (b as any).vehicleDisplay ?? null,
           licensePlate: (b as any).licensePlate ?? null,
           totalCost: b.totalCost,
+          capturedAmount: (b as any).capturedAmount ?? null,
           scheduleChangeMode: b.scheduleChangeMode,
           customerCanRestoreOriginal: b.customerCanRestoreOriginal,
           customerNote: (b as any).customerNote ?? null,
           recommendationState: (b as any).recommendationState ?? null,
           diagnosticFollowupState: (b as any).diagnosticFollowupState ?? null,
           backfilledAtMs: (b as any).backfilledAtMs ?? null,
+          tentativeBookingId: (b as any).bookingId
+            ? String((b as any).bookingId)
+            : undefined,
+          responseId: (b as any).responseId
+            ? String((b as any).responseId)
+            : undefined,
         };
       });
 
@@ -1410,439 +1446,6 @@ export default function SchedulePage() {
           </div>
         </div>
       </div>
-
-      {customerOnMyWay && customerOnMyWay.length > 0 ? (
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
-          <div className="flex items-center gap-2 text-emerald-700">
-            <Car className="h-4 w-4" />
-            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-              Customer en route
-            </span>
-          </div>
-          <div className="mt-4 grid gap-3 xl:grid-cols-2">
-            {customerOnMyWay.map((alert: any) => (
-              <div
-                key={String(alert._id)}
-                className="rounded-2xl border border-emerald-200 bg-white/90 p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-foreground">
-                      {alert.customerName}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
-                      {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
-                    </p>
-                    <p className="mt-1 text-xs text-emerald-700 font-medium">
-                      Said "on my way" {Math.round((Date.now() - alert.acknowledgedAtMs) / 60_000)}m ago
-                    </p>
-                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                      {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
-                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
-                  >
-                    Open
-                  </button>
-                </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleMarkVehicleHereFromAlert(String(alert.bookingId))}
-                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
-                  >
-                    Vehicle here
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {customerLateNotificationSent && customerLateNotificationSent.length > 0 ? (
-        <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-4 shadow-sm">
-          <div className="flex items-center gap-2 text-yellow-700">
-            <Bell className="h-4 w-4" />
-            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-              Late notification sent
-            </span>
-          </div>
-          <div className="mt-4 grid gap-3 xl:grid-cols-2">
-            {customerLateNotificationSent.map((alert: any) => (
-              <div
-                key={String(alert._id)}
-                className="rounded-2xl border border-yellow-200 bg-white/90 p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-foreground">
-                      {alert.customerName}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
-                      {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
-                    </p>
-                    <p className="mt-1 text-xs text-yellow-700 font-medium">
-                      Notified via {alert.notifiedVia} · Awaiting response
-                    </p>
-                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                      {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
-                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
-                  >
-                    Open
-                  </button>
-                </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleMarkVehicleHereFromAlert(String(alert.bookingId))}
-                    className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
-                  >
-                    Vehicle here
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {customerLateAlerts && customerLateAlerts.length > 0 ? (
-        <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 shadow-sm">
-          <div className="flex items-center gap-2 text-orange-700">
-            <AlertTriangle className="h-4 w-4" />
-            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-              No-show decisions
-            </span>
-          </div>
-          <div className="mt-4 grid gap-3 xl:grid-cols-2">
-            {customerLateAlerts.map((alert) => (
-              <div
-                key={String(alert._id)}
-                className="rounded-2xl border border-orange-200 bg-white/90 p-4"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-foreground">
-                      {alert.customerName}
-                    </p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
-                      {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
-                    </p>
-                    <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
-                      {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedBookingId(alert.bookingId as Id<"bookings">)}
-                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
-                  >
-                    Open
-                  </button>
-                </div>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleMarkVehicleHereFromAlert(String(alert.bookingId))}
-                    className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
-                  >
-                    Vehicle here
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setNoShowReschedule({
-                        bookingId: String(alert.bookingId),
-                        customerName: alert.customerName,
-                        date: alert.scheduledDate,
-                        time: alert.scheduledTime,
-                        mechanicId: alert.mechanicId ? String(alert.mechanicId) : "",
-                      })
-                    }
-                    className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
-                  >
-                    Reschedule
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleMarkNoShowFromAlert(String(alert.bookingId))}
-                    className="rounded-lg border border-orange-300 px-3 py-1.5 text-xs font-medium text-orange-800 transition-colors hover:bg-orange-100"
-                  >
-                    Mark no-show
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {frontDeskOverrunAlerts && frontDeskOverrunAlerts.length > 0 ? (
-        <div className="rounded-2xl border border-cyan-200 bg-cyan-50 p-4 shadow-sm">
-          <div className="flex items-center gap-2 text-cyan-700">
-            <Clock className="h-4 w-4" />
-            <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-              Overrun escalations
-            </span>
-          </div>
-          <div className="mt-4 grid gap-3 xl:grid-cols-2">
-            {frontDeskOverrunAlerts.map((alert) => (
-              <div
-                key={String(alert._id)}
-                className="rounded-2xl border border-cyan-200 bg-white/90 p-4"
-              >
-                <p className="text-sm font-semibold text-foreground">
-                  {alert.customerName}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {alert.serviceSummary}
-                  {alert.mechanicName ? ` · ${alert.mechanicName}` : ""}
-                </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {[15, 30, 45, 60].map((minutes) => (
-                    <button
-                      key={minutes}
-                      type="button"
-                      onClick={() => void handleOverrunExtension(String(alert.bookingId), minutes)}
-                      className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
-                    >
-                      +{minutes}m
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {manualSchedulingAlerts && manualSchedulingAlerts.length > 0 ? (
-        <div className="rounded-2xl border border-red-200 bg-red-50 p-4 shadow-sm">
-          <button
-            type="button"
-            onClick={() => setManualReviewExpanded((v) => !v)}
-            className="flex w-full items-center justify-between gap-2 text-red-700"
-            aria-expanded={manualReviewExpanded}
-          >
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4" />
-              <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-                Manual scheduling review
-              </span>
-              <span className="rounded-full bg-red-700 px-2 py-0.5 text-[10px] font-semibold text-white leading-none">
-                {manualSchedulingAlerts.length}
-              </span>
-            </div>
-            <ChevronDown
-              className={`h-4 w-4 transition-transform ${manualReviewExpanded ? "rotate-180" : ""}`}
-            />
-          </button>
-          <div className={`mt-3 space-y-2 ${manualReviewExpanded ? "" : "hidden"}`}>
-            {manualSchedulingAlerts.map((alert) => {
-              const a: any = alert;
-              const time12h = (() => {
-                const hhmm: string | null = a.scheduledTime ?? null;
-                if (!hhmm) return "";
-                const [hStr, mStr] = hhmm.split(":");
-                const h = Number(hStr);
-                const m = Number(mStr);
-                if (!Number.isFinite(h) || !Number.isFinite(m)) return hhmm;
-                const ampm = h >= 12 ? "PM" : "AM";
-                const hr = h % 12 || 12;
-                return `${hr}:${String(m).padStart(2, "0")} ${ampm}`;
-              })();
-              return (
-                <div
-                  key={String(a._id)}
-                  className="flex items-start justify-between gap-3 rounded-xl bg-white/90 px-4 py-3 text-sm text-red-900"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold">Booking</span>
-                      {a.shortHandle ? (
-                        <span className="rounded border border-red-700 bg-white px-1.5 py-0.5 font-mono text-xs font-bold leading-none text-red-900">
-                          {a.shortHandle}
-                        </span>
-                      ) : null}
-                      {time12h ? (
-                        <span className="font-semibold">at {time12h}</span>
-                      ) : null}
-                      <span className="text-red-800">needs manual rescheduling.</span>
-                    </div>
-                    {(a.customerName || a.vehicleLabel) ? (
-                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-red-800">
-                        {a.customerName ? (
-                          <span className="inline-flex items-center gap-1">
-                            <User className="h-3.5 w-3.5" />
-                            {a.customerName}
-                          </span>
-                        ) : null}
-                        {a.vehicleLabel ? (
-                          <span className="inline-flex items-center gap-1">
-                            <Car className="h-3.5 w-3.5" />
-                            {a.vehicleLabel}
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {a.reason ? (
-                      <p className="mt-1 text-xs italic text-red-700/90">{a.reason}</p>
-                    ) : null}
-                    {a.bookingId ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (a.scheduledDate) {
-                            const [y, mo, d] = a.scheduledDate.split("-").map(Number);
-                            if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
-                          }
-                          setCurrentView("day");
-                          setMechanicFilter("all");
-                          setSelectedBookingId(a.bookingId as Id<"bookings">);
-                        }}
-                        className="mt-2 text-xs font-medium text-red-700 underline-offset-2 hover:underline"
-                      >
-                        Open booking
-                      </button>
-                    ) : null}
-                  </div>
-                  {a.bookingId ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        focusBookingForReschedule(String(a.bookingId), a.scheduledDate)
-                      }
-                      className="shrink-0 rounded-lg bg-red-700 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
-                    >
-                      Reschedule
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await dismissManualSchedulingAlert({ alertId: a._id as Id<"notification_outbox"> });
-                        setToast({ msg: "Alert dismissed", key: Date.now() });
-                      } catch (err) {
-                        setToast({
-                          msg: err instanceof Error ? err.message : "Couldn't dismiss alert",
-                          key: Date.now(),
-                        });
-                      }
-                    }}
-                    className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
-      {lateStartReviews && lateStartReviews.length > 0 ? (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
-          <button
-            type="button"
-            onClick={() => setLateStartExpanded((v) => !v)}
-            className="flex w-full items-center justify-between gap-2 text-amber-700"
-            aria-expanded={lateStartExpanded}
-          >
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4" />
-              <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-                Late Start Decisions
-              </span>
-              <span className="rounded-full bg-amber-700 px-2 py-0.5 text-[10px] font-semibold text-white leading-none">
-                {lateStartReviews.length}
-              </span>
-            </div>
-            <ChevronDown
-              className={`h-4 w-4 transition-transform ${lateStartExpanded ? "rotate-180" : ""}`}
-            />
-          </button>
-          <div className={lateStartExpanded ? "" : "hidden"}>
-          <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <h2 className="text-lg font-semibold text-amber-950">
-                {lateStartReviews.length === 1
-                  ? "1 booking chain needs a delay decision"
-                  : `${lateStartReviews.length} booking chains need delay decisions`}
-              </h2>
-              <p className="mt-1 text-sm text-amber-900/80">
-                Review these before the next automatic delay applies.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => openLateStartReview(lateStartReviews[0]._id)}
-              className="inline-flex shrink-0 items-center justify-center rounded-lg bg-amber-900 px-3.5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
-            >
-              Review first alert
-            </button>
-          </div>
-
-          <div className="mt-4 grid gap-3 xl:grid-cols-2">
-            {lateStartReviews.map((review) => {
-              const autoApplyLabel =
-                review.status === "blocked_manual_review"
-                  ? "Automatic delay could not be built safely."
-                  : `Auto-applies at ${formatDecisionDueTime(review.decisionDueAtMs)} if nobody responds.`;
-              return (
-                <button
-                  key={review._id}
-                  type="button"
-                  onClick={() => openLateStartReview(review._id)}
-                  className="rounded-2xl border border-amber-200 bg-white/90 p-4 text-left transition-[border-color,box-shadow,background-color] hover:border-amber-300 hover:bg-white hover:shadow-sm"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground">
-                        {review.upstreamCustomerName}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Scheduled for{" "}
-                        {review.upstreamScheduledTime
-                          ? formatTimeLabel(review.upstreamScheduledTime)
-                          : "an unscheduled time"}
-                        {" "}with {review.upstreamMechanicName ?? "an assigned mechanic"}
-                      </p>
-                      {review.upstreamServiceSummary ? (
-                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
-                          {review.upstreamServiceSummary}
-                        </p>
-                      ) : null}
-                    </div>
-                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
-                      +{review.cycleMinutes}m
-                    </span>
-                  </div>
-                  <p className="mt-3 text-sm text-amber-900">{autoApplyLabel}</p>
-                  <p className="mt-2 text-xs font-medium text-amber-800">
-                    {review.proposals.length} affected booking
-                    {review.proposals.length === 1 ? "" : "s"}
-                  </p>
-                </button>
-              );
-            })}
-          </div>
-          </div>
-        </div>
-      ) : null}
-
       {/* Flex row: calendar + drawers */}
       <div className="flex items-start">
       {/* Main content */}
@@ -1864,7 +1467,7 @@ export default function SchedulePage() {
             nowTimestamp={nowTimestamp}
             currentDate={currentDate}
             viewerMechanicId={isMechanicViewer ? viewerMechanicId : null}
-            onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
+            onSelectEvent={handleEventSelect}
             selectedEventId={selectedBookingId ?? null}
             onProposeReschedule={handleProposeReschedule}
             onDragError={(msg) => setToast({ msg, key: Date.now() })}
@@ -1918,7 +1521,7 @@ export default function SchedulePage() {
               minTime={minTime}
               maxTime={maxTime}
               nowTimestamp={nowTimestamp}
-              onSelectEvent={(ev) => setSelectedBookingId(ev.id as Id<"bookings">)}
+              onSelectEvent={handleEventSelect}
               onProposeReschedule={handleProposeReschedule}
               onDragError={(msg) => setToast({ msg, key: Date.now() })}
               onContextMenuCell={(info) => {
@@ -1970,7 +1573,7 @@ export default function SchedulePage() {
                 setCurrentView("day");
                 return;
               }
-              setSelectedBookingId(ev.id as Id<"bookings">);
+              handleEventSelect(ev);
             }}
             formats={{
               dayFormat: (date: Date) => format(date, "EEE d"),

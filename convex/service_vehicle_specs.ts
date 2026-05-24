@@ -62,7 +62,7 @@ export const getByEngineAndService = query({
     const MIN_SAMPLES = 3;
     const useEmpirical =
       labor.empirical_hours != null &&
-      labor.empirical_sample_size >= MIN_SAMPLES;
+      (labor.empirical_sample_size ?? 0) >= MIN_SAMPLES;
     const hours = useEmpirical ? labor.empirical_hours! : labor.book_hours;
 
     return {
@@ -109,12 +109,14 @@ export const getSpecsForEngineAndServices = query({
         .withIndex("by_engine_and_service", (q) => q.eq("engine_id", args.engineId).eq("service_id", serviceId))
         .unique();
       if (doc) {
+        const lo = doc.parts_cost_low ?? 0;
+        const hi = doc.parts_cost_high ?? 0;
         specs[serviceId] = {
-          labor_hours: doc.labor_hours,
-          parts_cost_avg: (doc.parts_cost_low + doc.parts_cost_high) / 2,
-          parts_cost_low: doc.parts_cost_low,
-          parts_cost_high: doc.parts_cost_high,
-          confidence_score: doc.confidence_score,
+          labor_hours: doc.labor_hours ?? 0,
+          parts_cost_avg: (lo + hi) / 2,
+          parts_cost_low: lo,
+          parts_cost_high: hi,
+          confidence_score: doc.confidence_score ?? 0,
         };
         continue;
       }
@@ -139,10 +141,13 @@ export const getSpecsForEngineAndServices = query({
         const MIN_SAMPLES = 3;
         const useEmpirical =
           labor.empirical_hours != null &&
-          labor.empirical_sample_size >= MIN_SAMPLES;
+          (labor.empirical_sample_size ?? 0) >= MIN_SAMPLES;
         specs[serviceId] = {
-          labor_hours: useEmpirical ? labor.empirical_hours! : labor.book_hours,
+          labor_hours: useEmpirical ? labor.empirical_hours! : (labor.book_hours ?? 0),
           parts_cost_avg: 0, // parts come from part_fitments/part_prices, not labor_times
+          parts_cost_low: 0,
+          parts_cost_high: 0,
+          confidence_score: labor.confidence ?? 0.75,
         };
       }
     }

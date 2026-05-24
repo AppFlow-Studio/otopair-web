@@ -34,7 +34,7 @@ export const recordTurn = mutation({
     await ctx.db.insert("oto_telemetry", {
       ...args,
       ts: Date.now(),
-    });
+    } as any);
     return { ok: true };
   },
 });

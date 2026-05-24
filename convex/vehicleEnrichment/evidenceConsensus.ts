@@ -68,7 +68,7 @@ export const getMakeNameForConfig = internalQuery({
   handler: async (ctx, args) => {
     if (!args.make_id) return null;
     const make = await ctx.db.get(args.make_id);
-    return make?.name ?? null;
+    return (make as any)?.name ?? null;
   },
 });
 

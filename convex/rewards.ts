@@ -129,7 +129,11 @@ export const getMembershipStats = query({
       .collect();
 
     const completed = bookings.filter((b) => b.status === "completed");
-    const uniqueShops = new Set(completed.map((b) => b.shop_id.toString()));
+    const uniqueShops = new Set(
+      completed
+        .filter((b) => b.shop_id !== undefined)
+        .map((b) => b.shop_id!.toString())
+    );
     const servicesCount = completed.length;
 
     return {
@@ -157,7 +161,11 @@ export const getMembershipStatsByVehicle = query({
       .collect();
 
     const servicesCount = completedBookings.length;
-    const uniqueShops = new Set(completedBookings.map((b) => b.shop_id.toString()));
+    const uniqueShops = new Set(
+      completedBookings
+        .filter((b) => b.shop_id !== undefined)
+        .map((b) => b.shop_id!.toString())
+    );
     const bookingIds = new Set(completedBookings.map((b) => b._id.toString()));
 
     let creditEarned = 0;
@@ -396,7 +404,7 @@ export const addCreditForCompletedBooking = internalMutation({
 
     const userId = booking.user_id;
     const totalCost = booking.total_cost;
-    if (totalCost <= 0) return null;
+    if (!totalCost || totalCost <= 0) return null;
 
     // Idempotent: skip if already credited
     const existing = await ctx.db
@@ -479,7 +487,7 @@ export const addCreditForCompletedBooking = internalMutation({
       .filter((q) => q.and(q.eq(q.field("vin"), booking.vin), q.gte(q.field("updated_at"), twelveMonthsAgo)))
       .collect();
 
-    const spend12mo = completedBookings.reduce((sum, b) => sum + b.total_cost, 0);
+    const spend12mo = completedBookings.reduce((sum, b) => sum + (b.total_cost ?? 0), 0);
 
     const thresholds = { preferred: 750, elite: 1500 };
     const newTier: "driver" | "preferred" | "elite" =

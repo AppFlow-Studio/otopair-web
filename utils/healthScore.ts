@@ -12,7 +12,7 @@
  * USED IN: app/(main-tabs)/cars/index.tsx
  */
 
-import type { MaintenanceItem, MaintenanceStatus } from "@/components/cars/MaintenanceTracker";
+import type { MaintenanceItem, MaintenanceStatus } from "../components/cars/MaintenanceTracker";
 
 // ============================================================================
 // STATUS → SCORE (graduated, not binary)

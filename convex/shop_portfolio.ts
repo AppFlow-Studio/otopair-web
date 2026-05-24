@@ -7,6 +7,7 @@
 
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 
 /**
  * List portfolio items for a shop with resolved URLs (join with cdn_assets).
@@ -22,9 +23,11 @@ export const listByShopId = query({
 
     const withUrls = await Promise.all(
       items
-        .sort((a, b) => a.display_order - b.display_order)
+        .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
         .map(async (item) => {
-          const asset = await ctx.db.get(item.content_id);
+          const asset = (await ctx.db.get(
+            item.content_id as Id<"cdn_assets">,
+          )) as { url?: string; caption?: string } | null;
           return {
             _id: item._id,
             shop_id: item.shop_id,

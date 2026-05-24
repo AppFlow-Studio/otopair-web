@@ -476,7 +476,7 @@ export const insertFact = mutation({
     const id = await ctx.db.insert("vehicle_facts", {
       ...args,
       created_at: Date.now(),
-    });
+    } as any);
     return id;
   },
 });

@@ -648,6 +648,10 @@ export default defineSchema({
     status: v.optional(v.string()), // "pending" | "accepted" | "rejected"
     verified_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
+    // Per-field decisions captured at accept time (used by undoMechanicVerification).
+    // Optional because legacy accepted rows predate this field.
+    review_decisions: v.optional(v.any()),
+    reviewer_id: v.optional(v.id("director_users")),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])
     .index("by_mechanic", ["mechanic_id"])
@@ -827,7 +831,7 @@ export default defineSchema({
     annualMileageBand: v.optional(v.string()),
     usagePattern: v.optional(v.string()),
     lastServiceWhen: v.optional(v.string()),
-    lastServiceWhat: v.optional(v.string()),
+    lastServiceWhat: v.optional(v.array(v.string())),
     serviceLocationPreference: v.optional(v.string()),
     garageRole: v.optional(v.string()),
     avgMonthlyDriving: v.optional(v.string()),
@@ -1290,6 +1294,9 @@ export default defineSchema({
     buffer_minutes: v.optional(v.number()),
     max_bookings_per_mechanic_rolling_hour: v.optional(v.number()),
     entity_label_mode: v.optional(v.string()),
+    // Pre-appointment reminder lead time (minutes). 0/unset = disabled.
+    // 60=1h, 120=2h, 1440=24h, 2880=48h.
+    appointment_reminder_lead_minutes: v.optional(v.number()),
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
@@ -1658,6 +1665,7 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_status", ["status"])
     .index("by_idempotency_key", ["idempotency_key"])
+    .index("by_stripe_payment_intent_id", ["stripe_payment_intent_id"])
     .index("by_created_at", ["created_at"]),
 
   // [I]
@@ -1844,6 +1852,35 @@ export default defineSchema({
     .index("by_mechanic_id", ["mechanic_id"])
     .index("by_created_at", ["created_at"]),
 
+  // Append-only audit log of every change a mechanic makes to a row in a
+  // job_actual's parts_used array. Rows are keyed by `part_key` (oem_number,
+  // falling back to part_name) so the diff can correlate "the same part" across
+  // saves even when its array index changes. One row per *field* per save —
+  // a single save that changes both price and quantity emits two rows.
+  job_actual_part_edits: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.id("job_actuals"),
+    part_key: v.string(),
+    edit_type: v.union(
+      v.literal("added"),
+      v.literal("removed"),
+      v.literal("price"),
+      v.literal("quantity"),
+      v.literal("supplied_by"),
+      v.literal("swap"),
+    ),
+    old_value: v.optional(v.string()),
+    new_value: v.optional(v.string()),
+    // Snapshots so the log row stays readable even if parts_used mutates later.
+    part_name_snapshot: v.optional(v.string()),
+    oem_number_snapshot: v.optional(v.string()),
+    edited_by_user_id: v.id("users"),
+    edited_at: v.number(),
+  })
+    .index("by_booking_id", ["booking_id"])
+    .index("by_job_actual_id", ["job_actual_id"])
+    .index("by_edited_at", ["edited_at"]),
+
   // ===== AI & ANALYTICS =====
 
   // [I]
@@ -1886,6 +1923,18 @@ export default defineSchema({
     // request_haiku_handback resets to default.
     // -----------------------------------------------------------------------
     current_model: v.optional(v.string()),
+    // -----------------------------------------------------------------------
+    // [Ahmad QA #2 — 2026-05-18] Persisted vehicle anchor for the conversation.
+    // Written on first send by chat.ts via ai_conversations.setVehicleId
+    // (the resolved active vehicle's _id). envelope.ts pickActiveVehicleRow
+    // precedence: this column WINS over preferredVin (the frontend's
+    // selectedVehicleVin) once set — so resuming the conversation later (when
+    // the global vehicle picker may have drifted to a different car) still
+    // rebinds the anchor to whatever the chat was created for. Optional
+    // because pre-existing conversations created before this column existed
+    // won't have it; envelope falls through to preferredVin in that case.
+    // -----------------------------------------------------------------------
+    vehicle_id: v.optional(v.id("vehicles")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_session_id", ["session_id"])
@@ -1929,6 +1978,11 @@ export default defineSchema({
     // truncated / re-generated.
     message_content_snapshot: v.string(),
     submitted_at: v.number(),
+    // Director-side triage state. Optional (mobile insert leaves it unset;
+    // server-side `listByStatus` treats unset as "new").
+    review_status: v.optional(v.string()), // new | reviewed | actionable | resolved | wontfix
+    archived: v.optional(v.boolean()),
+    updated_at: v.optional(v.number()),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_id", ["user_id"])
@@ -2134,9 +2188,10 @@ export default defineSchema({
     name: v.string(),
     role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
     totp_secret: v.string(),
+    email: v.optional(v.string()),
     created_at: v.number(),
     last_login: v.optional(v.number()),
-  }),
+  }).index("by_email", ["email"]),
 
   director_sessions: defineTable({
     user_id: v.id("director_users"),
@@ -2228,6 +2283,27 @@ export default defineSchema({
     customer_acknowledged_at_ms: v.optional(v.number()),
     resolved_at_ms: v.optional(v.number()),
     resolved_by_user_id: v.optional(v.id("users")),
+    created_at: v.optional(v.number()),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_status", ["status"])
+    .index("by_shop_and_status", ["shop_id", "status"]),
+
+  // Pre-appointment reminder monitor. One row per booking with a configured
+  // lead time. Status flips active -> sent when the per-minute cron enqueues
+  // the SMS/email outbox rows; -> resolved if the booking is cancelled,
+  // resolved via lifecycle, or never had a reachable channel.
+  appointment_reminder_monitors: defineTable({
+    shop_id: v.id("shops"),
+    booking_id: v.id("bookings"),
+    status: v.string(), // "active" | "sent" | "resolved"
+    scheduled_start_ms: v.number(),
+    due_at_ms: v.number(),
+    lead_minutes: v.number(),
+    enqueued_at_ms: v.optional(v.number()),
+    resolved_at_ms: v.optional(v.number()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
   })
@@ -3411,4 +3487,15 @@ export default defineSchema({
     .index("by_event_id", ["event_id"])
     .index("by_telnyx_message_id", ["telnyx_message_id"])
     .index("by_event_type", ["event_type"]),
+
+  // Singleton table for app-level / admin-controlled config (platform fee,
+  // etc.). One row only — accessors enforce this by always using `.first()`
+  // and creating the row lazily with defaults from lib/platformFee.ts.
+  platform_settings: defineTable({
+    platform_fee_rate: v.number(),
+    platform_fee_floor_dollars: v.number(),
+    created_at: v.number(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  }),
 });

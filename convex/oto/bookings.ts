@@ -33,9 +33,9 @@ export interface OtoBookingSummary {
   created_at: number;
 }
 
-// @ts-expect-error TS2589 — Convex query({...}) generic resolution exceeds
-// TS depth limit at this schema size (117 tables). Same suppression pattern
-// as convex/oto/chat.ts:sendMessage. Runtime is unaffected.
+// Convex query({...}) generic resolution previously exceeded TS depth at this
+// schema size; ctx: any breaks the chain so direct suppression is no longer
+// required. Runtime is unaffected.
 export const getBookings = query({
   args: {
     status_filter: v.union(
@@ -45,7 +45,6 @@ export const getBookings = query({
     ),
     limit: v.optional(v.number()),
   },
-  // @ts-expect-error TS2589 — see above.
   handler: async (ctx: any, { status_filter, limit }): Promise<OtoBookingSummary[]> => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("unauthenticated");
@@ -62,7 +61,7 @@ export const getBookings = query({
       .collect();
 
     // Filter by status_filter first to avoid enriching rows we'll drop.
-    const filtered = rows.filter((b) => {
+    const filtered = rows.filter((b: any) => {
       if (status_filter === "all") return true;
       if (status_filter === "active") return ACTIVE_STATUSES.has(b.status);
       if (status_filter === "completed") return b.status === "completed";
@@ -72,13 +71,13 @@ export const getBookings = query({
     // Newest first by _creationTime — bookings.scheduled_at may be unset for
     // quote-stage rows, so _creationTime is the only universally-present
     // ordering field.
-    filtered.sort((a, b) => b._creationTime - a._creationTime);
+    filtered.sort((a: any, b: any) => b._creationTime - a._creationTime);
 
     const cap = Math.min(20, Math.max(1, limit ?? 5));
     const limited = filtered.slice(0, cap);
 
     return await Promise.all(
-      limited.map(async (b) => {
+      limited.map(async (b: any) => {
         const shop = b.shop_id ? await ctx.db.get(b.shop_id) : null;
         const mechanic = b.mechanic_id ? await ctx.db.get(b.mechanic_id) : null;
         const serviceIds = b.service_ids ?? [];
@@ -89,7 +88,7 @@ export const getBookings = query({
         return {
           id: b._id,
           status: b.status,
-          service_slugs: seen.map((s) => s.slug),
+          service_slugs: seen.map((s) => s.slug).filter((x): x is string => !!x),
           service_names: seen.map((s) => s.name),
           shop_name: shop?.name ?? null,
           mechanic_name: mechanic
@@ -123,12 +122,11 @@ export const getBookings = query({
 // definition. Keeping the two handlers independent preserves type safety.
 // =============================================================================
 
-// @ts-expect-error TS2589 — see getBookings above.
+// See getBookings above for the ctx: any rationale.
 export const getPendingBookings = query({
   args: {
     limit: v.optional(v.number()),
   },
-  // @ts-expect-error TS2589 — see getBookings above.
   handler: async (ctx: any, { limit }): Promise<OtoBookingSummary[]> => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("unauthenticated");
@@ -145,18 +143,18 @@ export const getPendingBookings = query({
       .collect();
 
     // Pending-only filter — strict subset of getBookings's "active" set.
-    const filtered = rows.filter((b) => b.status === "pending");
+    const filtered = rows.filter((b: any) => b.status === "pending");
 
     // Newest first by _creationTime — bookings.scheduled_at may be unset for
     // quote-stage rows, so _creationTime is the only universally-present
     // ordering field.
-    filtered.sort((a, b) => b._creationTime - a._creationTime);
+    filtered.sort((a: any, b: any) => b._creationTime - a._creationTime);
 
     const cap = Math.min(20, Math.max(1, limit ?? 5));
     const limited = filtered.slice(0, cap);
 
     return await Promise.all(
-      limited.map(async (b) => {
+      limited.map(async (b: any) => {
         const shop = b.shop_id ? await ctx.db.get(b.shop_id) : null;
         const mechanic = b.mechanic_id ? await ctx.db.get(b.mechanic_id) : null;
         const serviceIds = b.service_ids ?? [];
@@ -167,7 +165,7 @@ export const getPendingBookings = query({
         return {
           id: b._id,
           status: b.status,
-          service_slugs: seen.map((s) => s.slug),
+          service_slugs: seen.map((s) => s.slug).filter((x): x is string => !!x),
           service_names: seen.map((s) => s.name),
           shop_name: shop?.name ?? null,
           mechanic_name: mechanic

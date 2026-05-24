@@ -32,9 +32,13 @@ type PendingRow = {
   correctedCount: number
   unknownCount: number
   submittedAt: number | null
+  verifiedAt: number | null
   verificationCount: number
   enrichmentStatus: string | null
+  status: string
 }
+
+type StatusFilter = 'all' | 'pending' | 'accepted' | 'rejected' | 'undone'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -97,8 +101,9 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
 
   const accept = useMutation(api.director_mechanic_verifications.acceptVerification)
   const reject = useMutation(api.director_mechanic_verifications.rejectVerification)
+  const undo   = useMutation(api.undoMechanicVerification.undoById)
   const [busy, setBusy]           = useState(false)
-  const [confirming, setConfirming] = useState<'accept' | 'reject' | null>(null)
+  const [confirming, setConfirming] = useState<'accept' | 'reject' | 'undo' | null>(null)
   const [auditOpen, setAuditOpen]   = useState(false)
 
   const rawAudit = useAuditQuery(
@@ -128,9 +133,21 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
     onClose()
   }
 
+  const handleUndo = async () => {
+    setBusy(true)
+    await undo({ id: row._id, actorName, actorId })
+    setBusy(false)
+    setConfirming(null)
+    onClose()
+  }
+
   const corrected  = row.fields.filter(f => f.status === 'corrected')
   const confirmed  = row.fields.filter(f => f.status === 'confirmed')
   const unknown    = row.fields.filter(f => f.status === 'unknown')
+  const isPending  = row.status === 'pending'
+  const isAccepted = row.status === 'accepted'
+  const isRejected = row.status === 'rejected'
+  const isUndone   = row.status === 'undone'
 
   return (
     <Modal open={!!row} onClose={onClose} width={900}
@@ -144,20 +161,38 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
             <span style={{ fontSize:13, color:'var(--slate-600)', flex:1 }}>
               {confirming === 'accept'
                 ? `This will apply ${corrected.length} correction${corrected.length !== 1 ? 's' : ''} and ${confirmed.length} confirmation${confirmed.length !== 1 ? 's' : ''} to the vehicle config.`
-                : 'This will reject the submission and no data will be written.'}
+                : confirming === 'reject'
+                ? 'This will reject the submission and no data will be written.'
+                : `This will revert ${corrected.length + confirmed.length} field${corrected.length + confirmed.length !== 1 ? 's' : ''} on the vehicle config back to their previous values.`}
             </span>
             <Button onClick={() => setConfirming(null)}>Cancel</Button>
-            {confirming === 'accept'
-              ? <Button variant="primary" onClick={handleAccept} disabled={busy}>{busy ? 'Accepting…' : 'Confirm accept'}</Button>
-              : <Button variant="danger"  onClick={handleReject} disabled={busy}>{busy ? 'Rejecting…' : 'Confirm reject'}</Button>
-            }
+            {confirming === 'accept' && (
+              <Button variant="primary" onClick={handleAccept} disabled={busy}>{busy ? 'Accepting…' : 'Confirm accept'}</Button>
+            )}
+            {confirming === 'reject' && (
+              <Button variant="danger" onClick={handleReject} disabled={busy}>{busy ? 'Rejecting…' : 'Confirm reject'}</Button>
+            )}
+            {confirming === 'undo' && (
+              <Button variant="danger" onClick={handleUndo} disabled={busy}>{busy ? 'Reverting…' : 'Confirm undo'}</Button>
+            )}
           </div>
         ) : (
           <>
             <Button onClick={onClose}>Close</Button>
             <span style={{ flex:1 }} />
-            <Button variant="danger"   onClick={() => setConfirming('reject')}>Reject</Button>
-            <Button variant="primary"  onClick={() => setConfirming('accept')}>Accept verification</Button>
+            {isPending && <>
+              <Button variant="danger"   onClick={() => setConfirming('reject')}>Reject</Button>
+              <Button variant="primary"  onClick={() => setConfirming('accept')}>Accept verification</Button>
+            </>}
+            {isAccepted && (
+              <Button variant="danger" onClick={() => setConfirming('undo')}>Undo accept</Button>
+            )}
+            {isRejected && (
+              <span style={{ fontSize:12, color:'var(--slate-400)' }}>This submission was rejected · no changes applied</span>
+            )}
+            {isUndone && (
+              <span style={{ fontSize:12, color:'var(--purple-700)' }}>This verification was accepted, then reverted · data restored to pre-mechanic state</span>
+            )}
           </>
         )
       }>
@@ -292,126 +327,230 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
 
 // ── Main tab ──────────────────────────────────────────────────────────────────
 
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, { tone: 'orange' | 'green' | 'red' | 'slate' | 'purple'; label: string }> = {
+    pending:  { tone: 'orange', label: 'Pending'  },
+    accepted: { tone: 'green',  label: 'Accepted' },
+    rejected: { tone: 'red',    label: 'Rejected' },
+    undone:   { tone: 'purple', label: 'Undone'   },
+  }
+  const m = map[status] ?? { tone: 'slate' as const, label: status }
+  return <Badge tone={m.tone}>{m.label}</Badge>
+}
+
 export const TabMechanicEdits = () => {
   const session   = useContext(DirectorSessionCtx)
   const actorName = session?.name ?? 'Director'
   const actorId   = session?.userId as Id<'director_users'> | undefined
 
-  const [selected,  setSelected]  = useState<PendingRow | null>(null)
-  const [quickBusy, setQuickBusy] = useState<string | null>(null)
+  const [selected,   setSelected]   = useState<PendingRow | null>(null)
+  const [quickBusy,  setQuickBusy]  = useState<string | null>(null)
+  const [filter,     setFilter]     = useState<StatusFilter>('pending')
 
-  const pending = useQuery(api.director_mechanic_verifications.listPending)
-  const accept  = useMutation(api.director_mechanic_verifications.acceptVerification)
-  const reject  = useMutation(api.director_mechanic_verifications.rejectVerification)
+  const rows = useQuery(
+    api.director_mechanic_verifications.listAll,
+    { status: filter === 'all' ? undefined : filter }
+  )
+  const accept = useMutation(api.director_mechanic_verifications.acceptVerification)
+  const reject = useMutation(api.director_mechanic_verifications.rejectVerification)
+  const undo   = useMutation(api.undoMechanicVerification.undoById)
 
-  const quickAccept = async (e: React.MouseEvent, row: PendingRow) => {
-    e.stopPropagation()
+  // Counts shown on filter tabs — fetched separately so the counts stay
+  // accurate regardless of which filter is active.
+  const allCounts = useQuery(api.director_mechanic_verifications.listAll, { status: undefined })
+  const counts = allCounts
+    ? {
+        all:      allCounts.length,
+        pending:  allCounts.filter((r: PendingRow) => r.status === 'pending').length,
+        accepted: allCounts.filter((r: PendingRow) => r.status === 'accepted').length,
+        rejected: allCounts.filter((r: PendingRow) => r.status === 'rejected').length,
+        undone:   allCounts.filter((r: PendingRow) => r.status === 'undone').length,
+      }
+    : { all: 0, pending: 0, accepted: 0, rejected: 0, undone: 0 }
+
+  const quickAccept = async (row: PendingRow) => {
     setQuickBusy(String(row._id) + '_accept')
     await accept({ id: row._id, actorName, actorId })
     setQuickBusy(null)
   }
 
-  const quickReject = async (e: React.MouseEvent, row: PendingRow) => {
-    e.stopPropagation()
+  const quickReject = async (row: PendingRow) => {
     setQuickBusy(String(row._id) + '_reject')
     await reject({ id: row._id, actorName, actorId })
     setQuickBusy(null)
   }
 
+  const quickUndo = async (row: PendingRow) => {
+    if (!confirm(`Revert this accepted verification?\n\n${row.vehicle}\n${row.fields.length} fields will be restored to their previous values.`)) return
+    setQuickBusy(String(row._id) + '_undo')
+    await undo({ id: row._id, actorName, actorId })
+    setQuickBusy(null)
+  }
+
+  const FilterTab = ({ value, label, count }: { value: StatusFilter; label: string; count: number }) => {
+    const active = filter === value
+    return (
+      <button
+        onClick={() => setFilter(value)}
+        style={{
+          padding: '8px 14px',
+          fontSize: 13,
+          fontWeight: 600,
+          border: 'none',
+          background: 'transparent',
+          color: active ? 'var(--slate-900)' : 'var(--slate-500)',
+          borderBottom: active ? '2px solid var(--blue-600)' : '2px solid transparent',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+        }}>
+        {label}
+        <span style={{
+          fontSize: 11,
+          padding: '1px 6px',
+          borderRadius: 10,
+          background: active ? 'var(--blue-50)' : 'var(--slate-100)',
+          color: active ? 'var(--blue-700)' : 'var(--slate-500)',
+        }}>{count}</span>
+      </button>
+    )
+  }
+
   return (
-    <SectionAnchor id="mechanic-edits" title="Pending Mechanic Edits"
-      subtitle="Mechanics submit post-job verifications to correct or confirm vehicle config data. Review before writing to enrichment evidence.">
+    <SectionAnchor id="mechanic-edits" title="Mechanic Edits"
+      subtitle="Mechanics submit post-job verifications to correct or confirm vehicle config data. Review history shown across all statuses.">
 
-      {pending === undefined ? (
-        <div style={{ padding:'40px 0', textAlign:'center', fontSize:13, color:'var(--slate-400)' }}>Loading…</div>
-      ) : pending.length === 0 ? (
-        <div style={{ padding:'60px 0', textAlign:'center' }}>
-          <div style={{ fontSize:24, marginBottom:10 }}>✓</div>
-          <div style={{ fontSize:14, fontWeight:600, color:'var(--slate-700)', marginBottom:4 }}>All caught up</div>
-          <div style={{ fontSize:13, color:'var(--slate-400)' }}>No pending mechanic verifications.</div>
+      <div style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, overflow:'hidden' }}>
+        {/* Filter tabs */}
+        <div style={{ display:'flex', alignItems:'center', borderBottom:'1px solid var(--slate-200)', padding:'0 14px', gap:4 }}>
+          <FilterTab value="pending"  label="Pending"  count={counts.pending} />
+          <FilterTab value="accepted" label="Accepted" count={counts.accepted} />
+          <FilterTab value="rejected" label="Rejected" count={counts.rejected} />
+          <FilterTab value="undone"   label="Undone"   count={counts.undone} />
+          <FilterTab value="all"      label="All"      count={counts.all} />
         </div>
-      ) : (
-        <div style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, overflow:'hidden' }}>
-          <div style={{ padding:'12px 18px', borderBottom:'1px solid var(--slate-200)', display:'flex', alignItems:'center', gap:10 }}>
-            <span style={{ fontSize:13, fontWeight:600, color:'var(--slate-700)' }}>{pending.length} pending</span>
-            <Badge tone="orange">{pending.reduce((n, r) => n + r.correctedCount, 0)} corrections to review</Badge>
+
+        {rows === undefined ? (
+          <div style={{ padding:'40px 0', textAlign:'center', fontSize:13, color:'var(--slate-400)' }}>Loading…</div>
+        ) : rows.length === 0 ? (
+          <div style={{ padding:'60px 0', textAlign:'center' }}>
+            <div style={{ fontSize:24, marginBottom:10 }}>{filter === 'pending' ? '✓' : '—'}</div>
+            <div style={{ fontSize:14, fontWeight:600, color:'var(--slate-700)', marginBottom:4 }}>
+              {filter === 'pending' ? 'All caught up' : 'No records'}
+            </div>
+            <div style={{ fontSize:13, color:'var(--slate-400)' }}>
+              {filter === 'pending'
+                ? 'No pending mechanic verifications.'
+                : `No ${filter === 'all' ? '' : filter + ' '}mechanic verifications.`}
+            </div>
           </div>
+        ) : (
+          <>
+            <table style={{ ...tableStyles.table, fontSize:13 }}>
+              <thead>
+                <tr>
+                  {(['Status', 'Vehicle', 'Mechanic', 'Submitted', 'Accuracy', 'Fields', 'Parts OK', 'Labor', ''] as const).map(h => (
+                    <th key={h} style={{ ...tableStyles.th }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(rows as PendingRow[]).map(row => {
+                  const isBusy   = quickBusy?.startsWith(String(row._id))
+                  const isPending  = row.status === 'pending'
+                  const isAccepted = row.status === 'accepted'
+                  return (
+                    <tr key={String(row._id)} onClick={() => setSelected(row)}
+                      style={{ ...tableStyles.tr, cursor:'pointer' }}>
 
-          <table style={{ ...tableStyles.table, fontSize:13 }}>
-            <thead>
-              <tr>
-                {(['Vehicle', 'Mechanic', 'Submitted', 'Accuracy', 'Fields', 'Parts OK', 'Labor', ''] as const).map(h => (
-                  <th key={h} style={{ ...tableStyles.th }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(pending as PendingRow[]).map(row => {
-                const isBusy = quickBusy?.startsWith(String(row._id))
-                return (
-                  <tr key={String(row._id)} onClick={() => setSelected(row)}
-                    style={{ ...tableStyles.tr, cursor:'pointer' }}>
+                      <td style={{ ...tableStyles.td }}>
+                        <StatusBadge status={row.status} />
+                      </td>
 
-                    <td style={{ ...tableStyles.td }}>
-                      <div style={{ fontWeight:600, color:'var(--slate-900)' }}>{row.vehicle || '—'}</div>
-                      <div className="mono" style={{ fontSize:11, color:'var(--slate-400)', marginTop:2 }}>{row.configKey}</div>
-                    </td>
+                      <td style={{ ...tableStyles.td }}>
+                        <div style={{ fontWeight:600, color:'var(--slate-900)' }}>{row.vehicle || '—'}</div>
+                        <div className="mono" style={{ fontSize:11, color:'var(--slate-400)', marginTop:2 }}>{row.configKey}</div>
+                      </td>
 
-                    <td style={{ ...tableStyles.td }}>
-                      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                        <Avatar name={row.mechanicName} size={24} />
-                        <span style={{ color:'var(--slate-700)' }}>{row.mechanicName}</span>
-                      </div>
-                    </td>
+                      <td style={{ ...tableStyles.td }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                          <Avatar name={row.mechanicName} size={24} />
+                          <span style={{ color:'var(--slate-700)' }}>{row.mechanicName}</span>
+                        </div>
+                      </td>
 
-                    <td style={{ ...tableStyles.td, color:'var(--slate-500)', whiteSpace:'nowrap' }}>
-                      {timeAgo(row.submittedAt)}
-                    </td>
+                      <td style={{ ...tableStyles.td, color:'var(--slate-500)', whiteSpace:'nowrap' }}>
+                        <div>{timeAgo(row.submittedAt)}</div>
+                        {row.verifiedAt && (
+                          <div style={{ fontSize:11, color:'var(--slate-400)', marginTop:2 }}>
+                            {row.status === 'accepted' ? 'accepted' :
+                             row.status === 'rejected' ? 'rejected' :
+                             row.status === 'undone'   ? 'reverted' : 'reviewed'}{' '}
+                            {timeAgo(row.verifiedAt)}
+                          </div>
+                        )}
+                      </td>
 
-                    <td style={{ ...tableStyles.td }}>
-                      <AccuracyBar pct={row.overallAccuracy !== null
-                        ? Math.round(row.overallAccuracy * (row.overallAccuracy <= 1 ? 100 : 1))
-                        : null} />
-                    </td>
+                      <td style={{ ...tableStyles.td }}>
+                        <AccuracyBar pct={row.overallAccuracy !== null
+                          ? Math.round(row.overallAccuracy * (row.overallAccuracy <= 1 ? 100 : 1))
+                          : null} />
+                      </td>
 
-                    <td style={{ ...tableStyles.td, whiteSpace:'nowrap' }}>
-                      {row.correctedCount > 0 && <span style={{ color:'var(--orange-700)', fontWeight:600 }}>{row.correctedCount}✗ </span>}
-                      {row.confirmedCount > 0 && <span style={{ color:'var(--green-700)', fontWeight:600 }}>{row.confirmedCount}✓ </span>}
-                      {row.unknownCount > 0 && <span style={{ color:'var(--slate-400)' }}>{row.unknownCount}? </span>}
-                      {row.fields.length === 0 && <span style={{ color:'var(--slate-300)' }}>—</span>}
-                    </td>
+                      <td style={{ ...tableStyles.td, whiteSpace:'nowrap' }}>
+                        {row.correctedCount > 0 && <span style={{ color:'var(--orange-700)', fontWeight:600 }}>{row.correctedCount}✗ </span>}
+                        {row.confirmedCount > 0 && <span style={{ color:'var(--green-700)', fontWeight:600 }}>{row.confirmedCount}✓ </span>}
+                        {row.unknownCount > 0 && <span style={{ color:'var(--slate-400)' }}>{row.unknownCount}? </span>}
+                        {row.fields.length === 0 && <span style={{ color:'var(--slate-300)' }}>—</span>}
+                      </td>
 
-                    <td style={{ ...tableStyles.td }}>
-                      {row.partsUsedCorrect === true  && <Badge tone="green">Yes</Badge>}
-                      {row.partsUsedCorrect === false && <Badge tone="red">No</Badge>}
-                      {row.partsUsedCorrect === null  && <span style={{ color:'var(--slate-300)' }}>—</span>}
-                    </td>
+                      <td style={{ ...tableStyles.td }}>
+                        {row.partsUsedCorrect === true  && <Badge tone="green">Yes</Badge>}
+                        {row.partsUsedCorrect === false && <Badge tone="red">No</Badge>}
+                        {row.partsUsedCorrect === null  && <span style={{ color:'var(--slate-300)' }}>—</span>}
+                      </td>
 
-                    <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>
-                      {row.actualLaborHours !== null ? `${row.actualLaborHours}h` : '—'}
-                    </td>
+                      <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>
+                        {row.actualLaborHours !== null ? `${row.actualLaborHours}h` : '—'}
+                      </td>
 
-                    <td style={{ ...tableStyles.td }} onClick={e => e.stopPropagation()}>
-                      <div style={{ display:'flex', gap:6 }}>
-                        <Button size="sm" variant="danger"
-                          onClick={e => quickReject(e, row)}
-                          disabled={!!isBusy}>
-                          {quickBusy === String(row._id) + '_reject' ? '…' : 'Reject'}
-                        </Button>
-                        <Button size="sm" variant="primary"
-                          onClick={e => quickAccept(e, row)}
-                          disabled={!!isBusy}>
-                          {quickBusy === String(row._id) + '_accept' ? '…' : 'Accept'}
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+                      <td style={{ ...tableStyles.td }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display:'flex', gap:6 }}>
+                          {isPending && (
+                            <>
+                              <Button size="sm" variant="danger"
+                                onClick={() => quickReject(row)}
+                                disabled={!!isBusy}>
+                                {quickBusy === String(row._id) + '_reject' ? '…' : 'Reject'}
+                              </Button>
+                              <Button size="sm" variant="primary"
+                                onClick={() => quickAccept(row)}
+                                disabled={!!isBusy}>
+                                {quickBusy === String(row._id) + '_accept' ? '…' : 'Accept'}
+                              </Button>
+                            </>
+                          )}
+                          {isAccepted && (
+                            <Button size="sm" variant="danger"
+                              onClick={() => quickUndo(row)}
+                              disabled={!!isBusy}>
+                              {quickBusy === String(row._id) + '_undo' ? '…' : 'Undo'}
+                            </Button>
+                          )}
+                          {!isPending && !isAccepted && (
+                            <span style={{ fontSize:11, color:'var(--slate-400)' }}>—</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </>
+        )}
+      </div>
 
       <VerificationModal row={selected} onClose={() => setSelected(null)} />
     </SectionAnchor>

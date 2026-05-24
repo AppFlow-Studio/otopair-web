@@ -18,6 +18,7 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
+import type { Id } from "../_generated/dataModel";
 import Anthropic from "@anthropic-ai/sdk";
 import { MODEL_HAIKU } from "./utils/batchClient";
 
@@ -124,7 +125,7 @@ export const gatherVerificationData = internalQuery({
     const config = await ctx.db.get(args.vehicle_config_id);
     if (!config) return null;
 
-    const engine = config.engine_id ? await ctx.db.get(config.engine_id) : null;
+    const engine = (config as any).engine_id ? await ctx.db.get((config as any).engine_id as Id<"engines">) : null;
 
     const trimSpec = await ctx.db
       .query("trim_specs")

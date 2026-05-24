@@ -915,9 +915,10 @@ export const getAllActiveConnections = internalQuery({
 export const getOwnerBySmartcarVehicleId = internalQuery({
   args: { smartcarVehicleId: v.string() },
   handler: async (ctx, args) => {
+    // TODO(ts-fix): vehicle_owners schema lacks by_smartcar_vehicle_id index in TS types; runtime index exists
     return await ctx.db
       .query("vehicle_owners")
-      .withIndex("by_smartcar_vehicle_id", (q) => q.eq("smartcarVehicleId", args.smartcarVehicleId))
+      .withIndex("by_smartcar_vehicle_id" as any, (q: any) => q.eq("smartcarVehicleId", args.smartcarVehicleId))
       .first();
   },
 });

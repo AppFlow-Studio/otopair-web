@@ -25,6 +25,7 @@ import {
   Sprout,
   Trash2,
   Wrench,
+  Contact,
 } from "lucide-react";
 import { UserSupportPage } from "./user-support-page";
 import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
@@ -36,6 +37,7 @@ import ActiveJobStrip from "@/components/active-job-strip";
 
 const ownerManagerLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
+  { href: "/customers", label: "Customers", icon: Contact },
   { href: "/team", label: "Team", icon: Users },
   { href: "/payouts", label: "Payouts", icon: CreditCard },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -43,12 +45,14 @@ const ownerManagerLinks = [
 
 const frontDeskLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
+  { href: "/customers", label: "Customers", icon: Contact },
   { href: "/team", label: "Team", icon: Users },
 ];
 
 const mechanicLinks = [
   { href: "/my-bookings", label: "My Bookings", icon: Briefcase },
   { href: "/schedule", label: "Schedule", icon: Calendar },
+  { href: "/customers", label: "Customers", icon: Contact },
 ];
 
 const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];

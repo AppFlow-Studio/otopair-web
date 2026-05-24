@@ -508,7 +508,7 @@ export const enrichVehicleBatch = internalAction({
     engineCode: v.string(),
     displacement: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const startTime = Date.now();
     const vehicle: VehicleInput = {
       vehicleId: args.vehicleId,

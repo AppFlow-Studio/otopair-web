@@ -50,7 +50,7 @@ export const deleteEnrichmentData = internalMutation({
       console.log(`[clean] Deleted ${labor.length} labor_times`);
 
       // 5. enrichment_evidence (entity_id = vehicle_config_id as string)
-      const evidence = await ctx.db.query("enrichment_evidence").withIndex("by_entity_field", (q) => q.eq("entity_id", vcId as string)).collect();
+      const evidence = await ctx.db.query("enrichment_evidence").withIndex("by_entity", (q) => q.eq("entity_type", "vehicle_config").eq("entity_id", vcId as string)).collect();
       for (const e of evidence) await ctx.db.delete(e._id);
       console.log(`[clean] Deleted ${evidence.length} enrichment_evidence`);
 

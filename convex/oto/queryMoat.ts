@@ -437,18 +437,12 @@ async function applyBumpAndDecide(
 // breaker: the read has already happened.
 // -----------------------------------------------------------------------------
 
-// @ts-expect-error TS2589 -- Convex internalMutation generic resolution hits
-// the TS depth limit through the api.d.ts tree; same root cause and same
-// established suppression pattern as convex/oto/chat.ts:252's action decl.
-// Runtime is unaffected; Convex registers and dispatches normally.
 export const bumpUserCounter = internalMutation({
   args: {
     userId: v.id("users"),
     rowsDelta: v.number(),
     threshold: v.optional(v.number()),
   },
-  // @ts-expect-error TS2589 -- same cause as the decl suppression above;
-  // the returns validator's union inference depth bottoms out at the limit.
   returns: v.object({
     decision: v.union(
       v.literal("ok"),
@@ -456,8 +450,6 @@ export const bumpUserCounter = internalMutation({
       v.literal("hard_block"),
     ),
   }),
-  // @ts-expect-error TS2589 -- handler-arg inference through the registered
-  // api tree is the third strike of the same root cause.
   handler: async (
     ctx,
     args,
@@ -677,14 +669,10 @@ async function applyPIIBump(
  * The decision is an alarm signal, not a circuit breaker at this
  * surface (the in-query `checkPIIRead` is the actual gate).
  */
-// @ts-expect-error TS2589 -- same generic resolution depth as
-// bumpUserCounter above (Convex internalMutation through api.d.ts).
 export const bumpPIIReadCounter = internalMutation({
   args: {
     userId: v.id("users"),
   },
-  // @ts-expect-error TS2589 -- returns validator depth, matches the
-  // suppression pattern on bumpUserCounter's returns.
   returns: v.object({
     decision: v.union(
       v.literal("ok"),
@@ -692,7 +680,6 @@ export const bumpPIIReadCounter = internalMutation({
       v.literal("hard_block"),
     ),
   }),
-  // @ts-expect-error TS2589 -- handler-arg inference depth, same root.
   handler: async (ctx, args): Promise<{ decision: BumpDecision }> => {
     const decision = await applyPIIBump(ctx, args.userId);
     return { decision };

@@ -32,10 +32,9 @@ import { internal, api } from "../_generated/api";
 // makes tsc complain if Convex ever ships a fix that eliminates the
 // false positive, so we know to drop the suppression. Same root cause
 // + remedy as `convex/oto/chat.ts:115`.
-// @ts-expect-error TS2589 — see comment block above.
 export const go = action({
   args: { vin: v.string() },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();
     console.log(`[runHeadless] VIN: ${vin}`);
 

@@ -51,14 +51,16 @@ export const list = query({
     const services = await ctx.db.query("services").collect();
     return await Promise.all(
       services.map(async (service) => {
-        const serviceCategory = await ctx.db.get(service.service_category_id);
+        const serviceCategory = service.service_category_id
+          ? await ctx.db.get(service.service_category_id)
+          : null;
         const options = await ctx.db
           .query("service_options")
           .withIndex("by_service_id", (q) => q.eq("service_id", service._id))
           .collect();
-        const firstOption = options.sort((a, b) => a.display_order - b.display_order)[0];
+        const firstOption = options.sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))[0];
         const default_parts_estimate =
-          firstOption != null ? (firstOption.parts_cost_low + firstOption.parts_cost_high) / 2 : 0;
+          firstOption != null ? ((firstOption.parts_cost_low ?? 0) + (firstOption.parts_cost_high ?? 0)) / 2 : 0;
         return { ...service, serviceCategory, default_parts_estimate };
       }),
     );
@@ -152,7 +154,9 @@ export const getById = query({
     if (!service) {
       return null;
     }
-    const serviceCategory = await ctx.db.get(service.service_category_id);
+    const serviceCategory = service.service_category_id
+      ? await ctx.db.get(service.service_category_id)
+      : null;
     return { ...service, serviceCategory };
   },
 });

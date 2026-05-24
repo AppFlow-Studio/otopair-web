@@ -93,7 +93,7 @@ export const getCheckinQuestionSet = query({
     // Calculate projected mileage for Q1 prefill
     const annualRate = owner.annual_mileage_rate ?? 12_000;
     const lastMileage = owner.mileage ?? 0;
-    const lastCheckin = owner.last_checkin_at ?? owner.added_at;
+    const lastCheckin = owner.last_checkin_at ?? owner.added_at ?? Date.now();
     const monthsSinceLast = (Date.now() - lastCheckin) / (30.44 * 24 * 60 * 60 * 1000);
     const projectedMileage = Math.round(
       lastMileage + (annualRate / 12) * monthsSinceLast
@@ -133,7 +133,7 @@ export const startCheckin = mutation({
     const mode = (owner.vehicle_mode ?? "owned_active") as VehicleMode;
     const annualRate = owner.annual_mileage_rate ?? 12_000;
     const lastMileage = owner.mileage ?? 0;
-    const lastCheckin = owner.last_checkin_at ?? owner.added_at;
+    const lastCheckin = owner.last_checkin_at ?? owner.added_at ?? Date.now();
     const monthsSinceLast = (Date.now() - lastCheckin) / (30.44 * 24 * 60 * 60 * 1000);
     const projectedMileage = Math.round(
       lastMileage + (annualRate / 12) * monthsSinceLast
@@ -210,7 +210,7 @@ export const completeCheckin = mutation({
     const modeTransition =
       q7Answer === "bought_out" || q10Answer === "changed";
 
-    const velocityDelta = args.mileageReported - checkin.mileage_projected;
+    const velocityDelta = args.mileageReported - (checkin.mileage_projected ?? 0);
 
     // Complete the check-in record
     await ctx.db.patch(args.checkinId, {

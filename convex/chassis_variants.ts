@@ -49,6 +49,7 @@ export const upsertChassisVariant = mutation({
 
     const chassisId = await ctx.db.insert("chassis_variants", {
       ...payload,
+      drivetrain_type: args.drivetrain_type,
       trim_id: args.trim_id,
       created_at: Date.now(),
     });

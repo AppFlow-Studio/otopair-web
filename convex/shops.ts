@@ -394,6 +394,8 @@ export const getMyPortalAccess = query({
   },
 });
 
+const ALLOWED_APPOINTMENT_REMINDER_LEAD_MINUTES = new Set([0, 60, 120, 1440, 2880]);
+
 export const updateMySchedulingSettings = mutation({
   args: {
     noShowThresholdMinutes: v.number(),
@@ -402,6 +404,7 @@ export const updateMySchedulingSettings = mutation({
     bufferMinutes: v.optional(v.number()),
     maxBookingsPerMechanicRollingHour: v.optional(v.number()),
     entityLabelMode: v.optional(v.string()),
+    appointmentReminderLeadMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await getCurrentUser(ctx);
@@ -426,6 +429,16 @@ export const updateMySchedulingSettings = mutation({
       !ALLOWED_BUFFERS.includes(Math.round(args.bufferMinutes))
     ) {
       throw new Error("Buffer minutes must be one of 10, 15, 20, or 30.");
+    }
+    if (
+      args.appointmentReminderLeadMinutes != null &&
+      !ALLOWED_APPOINTMENT_REMINDER_LEAD_MINUTES.has(
+        Math.round(args.appointmentReminderLeadMinutes),
+      )
+    ) {
+      throw new Error(
+        "Appointment reminder lead must be Off, 1 hour, 2 hours, 1 day, or 2 days.",
+      );
     }
 
     await ctx.db.patch(primary.shop._id, {
@@ -455,6 +468,13 @@ export const updateMySchedulingSettings = mutation({
         : {}),
       ...(args.entityLabelMode === "bay" || args.entityLabelMode === "mechanic"
         ? { entity_label_mode: args.entityLabelMode }
+        : {}),
+      ...(args.appointmentReminderLeadMinutes != null
+        ? {
+            appointment_reminder_lead_minutes: Math.round(
+              args.appointmentReminderLeadMinutes,
+            ),
+          }
         : {}),
     });
 

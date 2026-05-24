@@ -2077,15 +2077,6 @@ export default function CreateBookingDrawer({
         onConfirm={(picks) => {
           setSelectedServiceOptions(picks);
           setShowOptionsPicker(false);
-          if (needsTireSpecs) {
-            setShowTirePicker(true);
-          } else if (isBackfill) {
-            void submitBackfill(backfillDuplicateAcknowledged);
-          } else if (outsideHoursWarning) {
-            setOutsideHoursConfirmOpen(true);
-          } else {
-            void submitBooking(false, picks);
-          }
         }}
       />
 

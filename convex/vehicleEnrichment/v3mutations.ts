@@ -288,8 +288,9 @@ export const upsertTrimSpecs = internalMutation({
 
     // Resolve trim_id: vehicle_config → engine → trim_id
     const config = await ctx.db.get(args.vehicle_config_id);
-    let trimId = config?.engine_id
-      ? (await ctx.db.get(config.engine_id))?.trim_id
+    const cfgAny = config as any;
+    let trimId = cfgAny?.engine_id
+      ? ((await ctx.db.get(cfgAny.engine_id)) as any)?.trim_id
       : undefined;
     if (!trimId && !existing) {
       console.warn(`[upsertTrimSpecs] No trim_id found for config ${args.vehicle_config_id}, skipping insert`);
@@ -659,7 +660,7 @@ export const upsertLaborTime = internalMutation({
       .first();
 
     if (existing) {
-      const valuesAgree = Math.abs(args.book_hours - existing.book_hours) < 0.05;
+      const valuesAgree = Math.abs(args.book_hours - (existing.book_hours ?? 0)) < 0.05;
       if (valuesAgree) {
         // Agreement: keep highest confidence, update source label to most recent.
         await ctx.db.patch(existing._id, {
@@ -855,7 +856,7 @@ export const addSourceRegistry = internalMutation({
       console.log(`[discovery] ${args.domain} already in registry, skipping`);
       return existing._id;
     }
-    return await ctx.db.insert("source_registry", args);
+    return await ctx.db.insert("source_registry", args as any);
   },
 });
 
@@ -1242,14 +1243,15 @@ export const ensureAllServiceIntervals = internalMutation({
     // Get vehicle config for applicability checks
     const config = await ctx.db.get(args.vehicle_config_id);
     if (!config) return { added: 0, skipped: 0 };
+    const cfg = config as any;
 
-    const drivetrain = (config.drivetrain ?? "").toUpperCase();
+    const drivetrain = (cfg.drivetrain ?? "").toUpperCase();
     const isFWD = drivetrain === "FWD";
 
     // Get engine to check timing system
     let timingSystem = "";
-    if (config.engine_id) {
-      const engine = await ctx.db.get(config.engine_id);
+    if (cfg.engine_id) {
+      const engine = await ctx.db.get(cfg.engine_id);
       timingSystem = ((engine as any)?.timing_system ?? "").toLowerCase();
     }
 
@@ -1296,7 +1298,7 @@ export const ensureAllServiceIntervals = internalMutation({
       }
 
       // Determine status and interval
-      const defaults = SERVICE_DEFAULTS[svc.slug];
+      const defaults = svc.slug ? SERVICE_DEFAULTS[svc.slug] : undefined;
       const isOnDemand = svc.is_labor_only && !defaults;
 
       await ctx.db.insert("service_intervals", {
@@ -1333,13 +1335,14 @@ export const ensureAllLaborTimes = internalMutation({
 
     const config = await ctx.db.get(args.vehicle_config_id);
     if (!config) return { added: 0, skipped: 0 };
+    const cfg = config as any;
 
-    const drivetrain = (config.drivetrain ?? "").toUpperCase();
+    const drivetrain = (cfg.drivetrain ?? "").toUpperCase();
     const isFWD = drivetrain === "FWD";
 
     let timingSystem = "";
-    if (config.engine_id) {
-      const engine = await ctx.db.get(config.engine_id);
+    if (cfg.engine_id) {
+      const engine = await ctx.db.get(cfg.engine_id);
       timingSystem = ((engine as any)?.timing_system ?? "").toLowerCase();
     }
 
@@ -1635,7 +1638,7 @@ export const cloneFromEngineSibling = internalMutation({
       .collect();
 
     for (const pf of sourceFitments) {
-      if (!ENGINE_PART_SERVICE_TYPES.has(pf.service_type)) continue;
+      if (!pf.service_type || !ENGINE_PART_SERVICE_TYPES.has(pf.service_type)) continue;
       const existing = await ctx.db
         .query("part_fitments")
         .withIndex("by_config_service", (q) =>
@@ -1765,7 +1768,7 @@ export const backfillEngineSiblings = internalMutation({
       }
 
       for (const pf of sourceFitments) {
-        if (!ENGINE_PART_SERVICE_TYPES.has(pf.service_type)) continue;
+        if (!pf.service_type || !ENGINE_PART_SERVICE_TYPES.has(pf.service_type)) continue;
         const existing = await ctx.db
           .query("part_fitments")
           .withIndex("by_config_service", (q) =>

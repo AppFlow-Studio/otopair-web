@@ -105,7 +105,8 @@ export async function getBatchStatus(batchId: string): Promise<"in_progress" | "
     `processing=${batch.request_counts.processing}, ` +
     `errored=${batch.request_counts.errored})`,
   );
-  return batch.processing_status;
+  // Anthropic SDK adds "canceling" — treat as still in progress for our consumers.
+  return batch.processing_status === "ended" ? "ended" : "in_progress";
 }
 
 // ─── Results ─────────────────────────────────────────────────────

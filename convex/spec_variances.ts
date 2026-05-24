@@ -115,7 +115,7 @@ export const getHighVariance = query({
   handler: async (ctx, args) => {
     const all = await ctx.db.query("spec_variances").collect();
     return all.filter(
-      (variance) => Math.abs(variance.variance_percentage) > args.threshold
+      (variance) => Math.abs(variance.variance_percentage ?? 0) > args.threshold
     );
   },
 });

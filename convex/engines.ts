@@ -29,6 +29,7 @@
 
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 
 /**
  * QUERY: list
@@ -41,8 +42,8 @@ export const list = query({
     const engines = await ctx.db.query("engines").collect();
     return await Promise.all(
       engines.map(async (engine) => {
-        const trim = await ctx.db.get(engine.trim_id);
-        const model = trim ? await ctx.db.get(trim.model_id) : null;
+        const trim = engine.trim_id ? await ctx.db.get(engine.trim_id) : null;
+        const model = trim ? await ctx.db.get(trim.model_id as Id<"models">) : null;
         return { ...engine, trim, model };
       })
     );
@@ -76,8 +77,8 @@ export const getById = query({
     if (!engine) {
       return null;
     }
-    const trim = await ctx.db.get(engine.trim_id);
-    const model = trim ? await ctx.db.get(trim.model_id) : null;
+    const trim = engine.trim_id ? await ctx.db.get(engine.trim_id) : null;
+    const model = trim ? await ctx.db.get(trim.model_id as Id<"models">) : null;
     return { ...engine, trim, model };
   },
 });

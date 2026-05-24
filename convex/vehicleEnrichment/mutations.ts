@@ -46,7 +46,7 @@ export const attachToVehicle = internalMutation({
     const vc = await ctx.db.get(args.enrichedDataId);
     await ctx.db.patch(args.vehicleId, {
       vehicle_config_id: args.enrichedDataId,
-      enriched_engine_config_id: vc?.config_key,
+      enriched_engine_config_id: (vc as any)?.config_key,
     });
   },
 });

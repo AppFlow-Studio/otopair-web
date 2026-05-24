@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, ReactNode, CSSProperties } from 'react'
+import { useState, useEffect, ReactNode, CSSProperties, ReactElement } from 'react'
 import type { Note, AuditEntry } from '../data'
 
 /* ---------- ICONS ---------- */
@@ -28,7 +28,7 @@ export const IconSearch   = (p: IconProps) => <Icon {...p}><circle cx="10.5" cy=
 export const IconFilter   = (p: IconProps) => <Icon {...p}><path d="M3 5h18l-7 9v6l-4-2v-4z"/></Icon>
 export const IconCheck    = (p: IconProps) => <Icon {...p}><path d="M5 12l5 5L20 7"/></Icon>
 export const IconX        = (p: IconProps) => <Icon {...p}><path d="M6 6l12 12M18 6L6 18"/></Icon>
-export const IconStar     = (p: IconProps) => <Icon {...p} fill="currentColor" stroke="none"><path d="M12 2l3 7 7 .7-5.3 4.7 1.7 7L12 17.5 5.6 21.4l1.7-7L2 9.7 9 9z"/></Icon>
+export const IconStar     = (p: IconProps) => <Icon {...p} fill="currentColor" stroke={0}><path d="M12 2l3 7 7 .7-5.3 4.7 1.7 7L12 17.5 5.6 21.4l1.7-7L2 9.7 9 9z"/></Icon>
 export const IconDrag     = (p: IconProps) => <Icon {...p}><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></Icon>
 export const IconCar      = (p: IconProps) => <Icon {...p}><path d="M5 16V11l2-5h10l2 5v5"/><circle cx="8" cy="16" r="2"/><circle cx="16" cy="16" r="2"/><path d="M3 11h18"/></Icon>
 export const IconCard     = (p: IconProps) => <Icon {...p}><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/></Icon>
@@ -137,12 +137,12 @@ export const Avatar = ({ name, size = 28 }: { name: string; size?: number }) => 
 }
 
 /* ---------- INPUT ---------- */
-export const Input = ({ icon, value, onChange, placeholder, style, type = 'text' }:
-  { icon?: ReactNode; value: string; onChange: (e: React.ChangeEvent<HTMLInputElement>) => void; placeholder?: string; style?: CSSProperties; type?: string }) => (
-  <div style={{ position:'relative', display:'flex', alignItems:'center', background:'#fff',
-    border:'1px solid var(--slate-200)', borderRadius:8, height:34, padding:'0 12px', gap:8, ...style }}>
+export const Input = ({ icon, value, onChange, placeholder, style, type = 'text', disabled = false }:
+  { icon?: ReactNode; value: string; onChange: (e: React.ChangeEvent<HTMLInputElement>) => void; placeholder?: string; style?: CSSProperties; type?: string; disabled?: boolean }) => (
+  <div style={{ position:'relative', display:'flex', alignItems:'center', background: disabled ? 'var(--slate-50)' : '#fff',
+    border:'1px solid var(--slate-200)', borderRadius:8, height:34, padding:'0 12px', gap:8, opacity: disabled ? 0.65 : 1, ...style }}>
     {icon && <span style={{ color:'var(--slate-400)', display:'flex' }}>{icon}</span>}
-    <input type={type} value={value} onChange={onChange} placeholder={placeholder}
+    <input type={type} value={value} onChange={onChange} placeholder={placeholder} disabled={disabled}
       style={{ flex:1, border:'none', outline:'none', background:'transparent', fontSize:13, color:'var(--slate-900)', fontFamily:'inherit' }} />
   </div>
 )
@@ -190,6 +190,7 @@ export const tableStyles = {
     textAlign:'left' as const, padding:'10px 16px', borderBottom:'1px solid var(--slate-200)',
     background:'var(--slate-25)', whiteSpace:'nowrap' as const },
   td: { fontSize:13, color:'var(--slate-800)', padding:'12px 16px', borderBottom:'1px solid var(--slate-100)', verticalAlign:'middle' as const },
+  tr: {} as React.CSSProperties,
 }
 
 /* ---------- NOTES PANEL ---------- */
@@ -261,7 +262,7 @@ export const NotesPanel = ({ initialNotes = [], placeholder = 'Add an internal n
 
 /* ---------- AUDIT LOG ---------- */
 export const auditMeta = (a: string) => {
-  const m: Record<string, { tone: Tone; label: string; Icon: (p: IconProps) => JSX.Element }> = {
+  const m: Record<string, { tone: Tone; label: string; Icon: (p: IconProps) => ReactElement }> = {
     status_change:    { tone:'blue',   label:'Status change',    Icon: IconRefresh },
     refund_issued:    { tone:'orange', label:'Refund issued',    Icon: IconCard },
     refund_tagged:    { tone:'purple', label:'Refund tagged',    Icon: IconTag },

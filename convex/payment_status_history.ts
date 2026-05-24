@@ -11,9 +11,12 @@ import { v } from "convex/values";
  * failed, refunded, cancelled → (terminal)
  */
 
+// Adds `pending → failed` (Stripe can fail before reaching processing) and
+// `processing → cancelled` (manual-capture void after authorization succeeds
+// but before capture — required for the no_show / decline flow).
 const VALID_TRANSITIONS: Record<string, string[]> = {
-  pending: ["processing", "cancelled"],
-  processing: ["completed", "failed"],
+  pending: ["processing", "cancelled", "failed"],
+  processing: ["completed", "failed", "cancelled"],
   completed: ["refunded"],
   failed: [],
   refunded: [],

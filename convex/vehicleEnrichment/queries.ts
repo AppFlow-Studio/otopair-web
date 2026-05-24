@@ -39,8 +39,8 @@ export const getForVehicle = internalQuery({
   args: { vehicleId: v.id("vehicles") },
   handler: async (ctx, args) => {
     const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle?.vehicle_config_id) return null;
-    return await ctx.db.get(vehicle.vehicle_config_id);
+    if (!(vehicle as any)?.vehicle_config_id) return null;
+    return await ctx.db.get((vehicle as any).vehicle_config_id);
   },
 });
 

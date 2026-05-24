@@ -253,7 +253,7 @@ export const completeScrapeJob = internalMutation({
       errors: args.errors,
       status: args.status,
       completed_at: now,
-      duration_ms: now - job.started_at,
+      duration_ms: now - ((job as any).started_at ?? now),
     });
   },
 });
@@ -675,7 +675,7 @@ export const runScheduledScrape = internalAction({
   args: {
     source: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any> => {
     // Kill-switch: pause marketplace scraping without redeploying.
     // Toggle via: npx convex env set --prod ENRICHMENT_PAUSED true|false
     if (process.env.ENRICHMENT_PAUSED === "true") {

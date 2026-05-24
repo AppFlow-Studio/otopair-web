@@ -98,8 +98,9 @@ export const wipe = internalMutation({
     }
 
     // vehicle_owners
+    // TODO(ts-fix): vehicle_owners has no vehicle_id field; use VIN match instead
     for (const r of await ctx.db.query("vehicle_owners").collect())
-      if (r.vehicle_id === vehicle._id) { await ctx.db.delete(r._id); deleted++; }
+      if (r.vin === vehicle.vin) { await ctx.db.delete(r._id); deleted++; }
 
     // vehicle itself
     await ctx.db.delete(vehicle._id); deleted++;

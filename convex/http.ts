@@ -11,7 +11,7 @@ import type { ActionCtx } from "./_generated/server";
 import Stripe from "stripe";
 
 const http = httpRouter();
-const STRIPE_API_VERSION = "2026-04-22.dahlia" as const;
+const STRIPE_API_VERSION = Stripe.API_VERSION;
 
 let stripeClient: Stripe | null = null;
 

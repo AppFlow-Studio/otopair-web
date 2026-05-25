@@ -760,6 +760,34 @@ export const create = mutation({
       throw new Error("User does not own this vehicle");
     }
 
+    // ─── Enrichment gate ───────────────────────────────────────────────────
+    // Parts-dependent services (anything not labor-only) require the vehicle's
+    // enrichment to be complete — otherwise OEM part numbers, capacities, fluid
+    // specs etc. may be missing or stale and we'd quote / order wrong parts.
+    // Labor-only services (tire rotation, alignment, inspection) bypass the
+    // gate since they don't read part fitments.
+    //
+    // Error is thrown ABOVE the time-slot reservation patch so a denied booking
+    // doesn't burn an inventory hold. FE catches the string and surfaces the
+    // "still setting up your car" state to the user.
+    const service = await ctx.db.get(args.service_id);
+    if (!service) {
+      throw new Error("Service not found");
+    }
+    if (!(service as any).is_labor_only) {
+      const config = (vehicle as any).vehicle_config_id
+        ? await ctx.db.get((vehicle as any).vehicle_config_id)
+        : null;
+      const enrichmentStatus = (config as any)?.enrichment_status;
+      if (enrichmentStatus !== "complete") {
+        throw new Error(
+          "VEHICLE_ENRICHMENT_INCOMPLETE: We're still setting up this vehicle's parts catalog. " +
+          "Please try again in a few minutes — we'll notify you when it's ready.",
+        );
+      }
+    }
+    // ───────────────────────────────────────────────────────────────────────
+
     await syncShopDateAvailability(ctx, {
       shopId: args.shop_id,
       date: args.scheduled_date,
@@ -2334,7 +2362,7 @@ async function scheduleOverrunCheckinProcessing(ctx: any, dueAtMs: number) {
   );
 }
 
-async function enqueueNotificationOutbox(
+export async function enqueueNotificationOutbox(
   ctx: any,
   {
     shopId,

@@ -26,6 +26,15 @@ export interface PackageRule {
   services_affected: string[];
   /** Confidence weight if matched. VDB explicit hits will scale this up; trim-name inference scales it down. */
   base_confidence: number;
+  /**
+   * When true, this rule is skipped if the vehicle matches a halo-variant rule
+   * (lib/haloVariantRules.ts) with hardwareStandard=true. Use for "sport-line"
+   * package codes whose hardware is already baseline on the halo trim — e.g.
+   * m_sport on an M3, amg_line on an AMG GT, audi_s_line on an RS4. Without
+   * this gate the same brakes/rotors get double-counted and quoting upsells
+   * parts the customer already has.
+   */
+  redundant_when_halo?: boolean;
 }
 
 /**
@@ -75,6 +84,7 @@ export const PACKAGE_RULES: PackageRule[] = [
     label: "M Performance Brake Package",
     services_affected: ["brake-pad-replacement", "brake-rotor-replacement"],
     base_confidence: 0.95,
+    redundant_when_halo: true,
   },
   {
     make: "BMW",
@@ -83,14 +93,20 @@ export const PACKAGE_RULES: PackageRule[] = [
     label: "M Performance Package",
     services_affected: ["brake-pad-replacement", "brake-rotor-replacement"],
     base_confidence: 0.85,
+    redundant_when_halo: true,
   },
   {
     make: "BMW",
-    pattern: /\bM\s*Sport\b/i,
+    // Only match hardware-bearing M Sport designations, NOT interior trim items
+    // like "M Sport Steering Wheel" or "M Sport Seats" — those ship standard on
+    // M-cars and were causing false m_sport detection on M3/M5/etc, which then
+    // surfaced the wrong brake/rotor specs in quoting.
+    pattern: /\bM\s*Sport\s+(Package|Suspension|Brakes?|Differential|Plus|Pro|II)\b/i,
     code: "m_sport",
     label: "M Sport Package",
     services_affected: ["brake-pad-replacement", "brake-rotor-replacement"],
     base_confidence: 0.85,
+    redundant_when_halo: true,
   },
   {
     make: "BMW",
@@ -117,6 +133,7 @@ export const PACKAGE_RULES: PackageRule[] = [
     label: "AMG Performance Brake Package",
     services_affected: ["brake-pad-replacement", "brake-rotor-replacement"],
     base_confidence: 0.95,
+    redundant_when_halo: true,
   },
   {
     make: "Mercedes-Benz",
@@ -133,6 +150,7 @@ export const PACKAGE_RULES: PackageRule[] = [
     label: "AMG Line",
     services_affected: ["brake-pad-replacement", "brake-rotor-replacement"],
     base_confidence: 0.8,
+    redundant_when_halo: true,
   },
 
   // ─── Audi ───────────────────────────────────────────────────────────────────
@@ -143,6 +161,7 @@ export const PACKAGE_RULES: PackageRule[] = [
     label: "S line Package",
     services_affected: ["brake-pad-replacement", "brake-rotor-replacement"],
     base_confidence: 0.8,
+    redundant_when_halo: true,
   },
   {
     make: "Audi",
@@ -223,11 +242,18 @@ export const PACKAGE_RULES: PackageRule[] = [
 export const TRIM_INFERENCE_RULES: PackageRule[] = [
   {
     make: "BMW",
-    pattern: /\bM\d{3}i?\b|\bX[3-7]\s*M\b/i, // M340i, X3 M, X5 M, etc. (not pure M cars like M3/M5)
+    // Only fire on M-Sport BADGED trims: M240i, M340i, M440i, M550i, M760i, etc.
+    // Pure M-cars (M2/M3/M4/M5/M6/M8) and X-M cars (X3 M, X4 M, X5 M, X6 M, X7 M)
+    // are real M-cars — they ship M Performance hardware as standard, not as a
+    // package. They're caught by the haloVariantRules table; we also tighten
+    // this regex (M\d{3}i — exactly 3 digits + i) so it can't match them in
+    // the first place. The redundant_when_halo flag belt-and-braces this.
+    pattern: /\bM\d{3}i\b/i,
     code: "m_sport",
     label: "M Sport Package (inferred from trim)",
     services_affected: ["brake-pad-replacement", "brake-rotor-replacement"],
     base_confidence: 0.6,
+    redundant_when_halo: true,
   },
   {
     make: "Audi",
@@ -236,6 +262,7 @@ export const TRIM_INFERENCE_RULES: PackageRule[] = [
     label: "S line Package (inferred from trim)",
     services_affected: ["brake-pad-replacement", "brake-rotor-replacement"],
     base_confidence: 0.6,
+    redundant_when_halo: true,
   },
   {
     make: "Mercedes-Benz",
@@ -244,5 +271,6 @@ export const TRIM_INFERENCE_RULES: PackageRule[] = [
     label: "AMG Line (inferred from trim)",
     services_affected: ["brake-pad-replacement", "brake-rotor-replacement"],
     base_confidence: 0.6,
+    redundant_when_halo: true,
   },
 ];

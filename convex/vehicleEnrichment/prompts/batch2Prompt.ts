@@ -25,12 +25,16 @@ JOB 1 — GAP FILL: Search the web for each field listed under "FIELDS NEEDING G
 JOB 2 — PRICING + LABOR: Look up current retail prices for each OEM part number provided. Use "[part_number] OEM price" as your query. Also determine labor hours for each applicable service.
 
 RULES:
-1. parts_cost_low = best online/discount price found
-2. parts_cost_high = dealership or retail price (typically 20-40% higher than online)
-3. Labor rate: use $125/hr fixed. Do not search for this.
-4. Labor hours: use training knowledge for well-established book times (mark source_type: "training_data", confidence 0.75). Oil change is typically 0.5 hrs.
-5. If you cannot find a value after 1-2 targeted searches, return null. Do not guess.
-6. Return VALID JSON only. No markdown fences, no explanation, no preamble.`;
+1. PRICES ARE PER-UNIT. Each OEM part is priced individually as the retail cost of ONE bottle / one filter / one pad set / one plug. Examples:
+   - Spark plug: a V8 needs 8 plugs, but you return ~$15-25 (price of ONE plug), not $200.
+   - Brake pads: OEM pads are sold as one axle SET, so the price is for that ONE set, not front+rear combined.
+   - Oil filter / cabin filter / battery: one filter, one battery. Always per OEM part number.
+2. PREFERRED RESPONSE SHAPE: itemized parts_breakdown — one entry per OEM part number Batch 1 found, with that part's own per-unit price + source URL. Search per SKU ("<part_number> OEM price"), not per service. Multi-part services (oil_change has filter + drain plug gasket + engine oil bottle) MUST itemize — never collapse them into one service-level number.
+3. service-level parts_cost_low / parts_cost_high are now OPTIONAL — set them only as a redundant sanity-check sum. The parts_breakdown[] array is the authoritative source. If you can't itemize, you may omit parts_breakdown and fall back to a per-unit parts_cost_low/high, but prefer itemizing.
+4. Labor rate: $125/hr fixed. Do not search for this.
+5. Labor hours: use training knowledge for well-established book times (mark source_type: "training_data", confidence 0.75). Oil change is typically 0.5 hrs.
+6. If you cannot find a price for a specific OEM part after 1-2 targeted searches, OMIT that part from parts_breakdown[]. Do not include it with a null or 0 price. Do not guess.
+7. Return VALID JSON only. No markdown fences, no explanation, no preamble.`;
 
 /** Field descriptions used in the gap fill user prompt. */
 const FIELD_DESCRIPTIONS: Record<string, string> = {
@@ -79,6 +83,7 @@ const FIELD_DESCRIPTIONS: Record<string, string> = {
   wiper_blade_set_oem: "OEM wiper blade set part number",
   battery_oem: "OEM battery part number",
   coolant_oem: "OEM coolant/antifreeze product part number",
+  engine_oil_oem: "OEM engine oil product part number — prefer the make's 1-quart/1-liter bottle SKU",
   battery_group: "Battery group size (e.g., H8/Group 49)",
   battery_cca: "Battery cold cranking amps (CCA)",
   spark_plug_quantity: "Number of spark plugs",
@@ -142,8 +147,20 @@ export function buildBatch2Prompt(
         .join("\n")
     : "(no part numbers available from Batch 1)";
 
-  const serviceSchemaExample = SERVICE_LIST.slice(0, 3)
-    .map((s) => `    { "service_name": "${s}", "is_applicable": true, "labor_hours": { "value": 0.5, "source_url": null, "source_type": "training_data", "confidence": 0.75 }, "parts_cost_low": { "value": 45.00, "source_url": "https://...", "source_type": "web_search", "confidence": 0.9 }, "parts_cost_high": { "value": 68.00, "source_url": "https://...", "source_type": "web_search", "confidence": 0.85 }, "confidence": 0.9, "tech_notes": null }`)
+  const serviceSchemaExample = SERVICE_LIST.slice(0, 1)
+    .map((s) => `    {
+      "service_name": "${s}",
+      "is_applicable": true,
+      "labor_hours": { "value": 0.5, "source_url": null, "source_type": "training_data", "confidence": 0.75 },
+      "parts_breakdown": [
+        { "oem_part_number": "11427583220", "price_low": 12.50, "price_high": 18.00, "source_url": "https://fcpeuro.com/...", "confidence": 0.9 },
+        { "oem_part_number": "7119963132",  "price_low": 3.40,  "price_high": 5.00,  "source_url": "https://realoem.com/...", "confidence": 0.85 }
+      ],
+      "parts_cost_low": { "value": 15.90, "source_url": null, "source_type": "synthesized", "confidence": 0.85 },
+      "parts_cost_high": { "value": 23.00, "source_url": null, "source_type": "synthesized", "confidence": 0.85 },
+      "confidence": 0.9,
+      "tech_notes": null
+    }`)
     .join(",\n");
 
   return `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim} — ${vehicle.engineCode} ${vehicle.displacement}L

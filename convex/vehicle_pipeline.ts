@@ -19,6 +19,8 @@ import type { Id } from "./_generated/dataModel";
 import Anthropic from "@anthropic-ai/sdk";
 import { searchAndFetch } from "./vehicleEnrichment/firecrawl";
 import { advancedVinDecode, extractVDBFields } from "./lib/vehicleDatabases";
+import { findHaloVariant } from "./lib/haloVariantRules";
+import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
@@ -319,6 +321,25 @@ export const processVin = internalAction({
         }
       }
 
+      // ────────────────────────────────────────────────────────────────────
+      // Halo-variant model promotion (BMW M, AMG, RS, Type R, Blackwing,
+      // Hellcat, Trackhawk, Shelby, STI, GR, Lexus F, Corvette Z06, etc.)
+      //
+      // VDB (and often Claude) return model="3 Series" / trim="M3 Competition"
+      // for halo trims. Every external spec source (wheel-size.com, OEM parts
+      // catalogs, Bilstein, etc.) treats halos as separate model lines.
+      // Promote per the curated table in lib/haloVariantRules.ts so downstream
+      // lookups hit the right rows. Data-driven — extend the table to cover a
+      // new halo without touching this file.
+      // ────────────────────────────────────────────────────────────────────
+      const halo = findHaloVariant(merged.make, finalModel, finalTrim);
+      if (halo && halo.promotedModel.toLowerCase() !== finalModel.toLowerCase()) {
+        console.log(
+          `[decode] Halo variant promoted: model "${finalModel}" → "${halo.promotedModel}" (rule=${halo.ruleId}, trim="${finalTrim}")`
+        );
+        finalModel = halo.promotedModel;
+      }
+
       // Web search + Haiku fallback when still no real engine code
       if (
         (!finalEngineCode || finalEngineCode.includes("_")) &&
@@ -428,7 +449,11 @@ export const processVin = internalAction({
       if (transmissionId) {
         const tp: Record<string, unknown> = {};
         if (merged.transSpeeds) tp.speeds = merged.transSpeeds;
-        const mapped = mapTransmissionStyle(transType);
+        // Canonicalize whatever NHTSA / VDB returned (PDK, DSG, Tiptronic,
+        // "Direct Shift Gearbox (DSG)", "Automated Manual", "Single-Speed
+        // Reduction Gear", etc.) into one of automatic|manual|CVT|DCT via
+        // Haiku with in-memory caching. No hardcoded marketing-term whitelist.
+        const mapped = await canonicalizeTransmissionType(transType);
         if (mapped) tp.type = mapped;
         if (Object.keys(tp).length > 0) {
           await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs, {
@@ -1436,15 +1461,9 @@ function mapNhtsaDriveType(driveType: string): string | undefined {
 }
 
 /** Map NHTSA TransmissionStyle to v3 type. */
-function mapTransmissionStyle(style: string): string | undefined {
-  if (!style || style === "unknown") return undefined;
-  const s = style.toLowerCase();
-  if (s.includes("cvt") || s.includes("continuously variable")) return "CVT";
-  if (s.includes("dual clutch") || s.includes("dct") || s.includes("automated manual")) return "DCT";
-  if (s.includes("manual")) return "manual";
-  if (s.includes("automatic")) return "automatic";
-  return undefined;
-}
+// Transmission style canonicalization moved to lib/transmissionTypeInference.ts
+// (Haiku-based with in-memory cache). No hardcoded marketing-term whitelist —
+// new transmission marketing names land automatically without code changes.
 
 /**
  * Call Claude to normalize NHTSA model/trim/drivetrain/engine_code into canonical OEM naming.

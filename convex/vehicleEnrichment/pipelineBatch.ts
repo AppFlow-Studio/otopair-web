@@ -135,7 +135,7 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
     "oil_filter_oem", "air_filter_oem", "cabin_filter_oem", "spark_plug_oem",
     "front_brake_pad_oem", "rear_brake_pad_oem", "rotor_front_oem", "rotor_rear_oem",
     "drain_plug_gasket_oem", "serpentine_belt_oem", "timing_belt_oem",
-    "wiper_blade_set_oem", "battery_oem", "coolant_oem",
+    "wiper_blade_set_oem", "battery_oem", "coolant_oem", "engine_oil_oem",
   ]) {
     f[k] = parseField(parts[k]);
   }
@@ -367,6 +367,10 @@ function parsePricing(rawServices: any[]): ServicePricingResult[] {
         service_name: raw.service_name,
         is_applicable: raw.is_applicable ?? true,
         labor_hours: laborHours,
+        // Legacy pipelineBatch path predates parts_breakdown. v3pipeline's
+        // parser is the authoritative one — this returns an empty array so
+        // the shared ServicePricingResult type remains satisfied.
+        parts_breakdown: [],
         parts_cost_low: partsLow,
         parts_cost_high: partsHigh,
         total_cost_low: totalLow,

@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation } from "../_generated/server";
 import { updateSourceScores } from "../services/sourceScoring";
+import { enqueueNotificationOutbox } from "../bookings";
 
 // ============================================================================
 // 1. upsertVehicleConfig
@@ -1924,5 +1925,90 @@ export const backfillVehicleEngineIds = internalMutation({
     }
 
     return { patched: true, snapshotsPatched };
+  },
+});
+
+// ============================================================================
+// notifyEnrichmentComplete — fan-out to every active owner of every vehicle
+// attached to this vehicle_config when enrichment finishes (partial → complete).
+//
+// One notification_outbox row per owner via the shared enqueueNotificationOutbox
+// helper (exported from convex/bookings.ts). dedupe_key is per-(config, user)
+// so the in-progress dedup at the helper level prevents double-fires inside a
+// single run; the caller is responsible for only invoking on the actual
+// transition (compare previousStatus !== "complete" && newStatus === "complete")
+// to avoid re-firing after the row has resolved.
+//
+// Channel is "push" — these flow into the live-alerts hooks on the FE
+// (use-live-alerts.ts / dynamic-alert-island / live-alert-card). Adding a
+// parallel "email" enqueue per owner is a one-line change if desired.
+// ============================================================================
+
+export const notifyEnrichmentComplete = internalMutation({
+  args: { vehicle_config_id: v.id("vehicle_configs") },
+  handler: async (ctx, { vehicle_config_id }) => {
+    const config = await ctx.db.get(vehicle_config_id);
+    if (!config) return { notified: 0, reason: "no_config" as const };
+
+    const cfg = config as any;
+    const [makeRow, modelRow] = await Promise.all([
+      cfg.make_id  ? ctx.db.get(cfg.make_id)  : Promise.resolve(null),
+      cfg.model_id ? ctx.db.get(cfg.model_id) : Promise.resolve(null),
+    ]);
+    const make  = (makeRow as any)?.name ?? null;
+    const model = (modelRow as any)?.name ?? null;
+    const year  = cfg.year ?? null;
+    const trim  = cfg.trim_name ?? null;
+
+    // Every vehicle attached to this config; each vehicle's VIN may have
+    // multiple active owners (primary + co-owners).
+    const vehicles = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vehicle_config", (q: any) => q.eq("vehicle_config_id", vehicle_config_id))
+      .collect();
+
+    let notified = 0;
+    const enqueuedFor: string[] = [];
+    for (const vehicle of vehicles) {
+      const vin = (vehicle as any).vin as string | undefined;
+      if (!vin) continue;
+      const owners = await ctx.db
+        .query("vehicle_owners")
+        .withIndex("by_vin", (q: any) => q.eq("vin", vin))
+        .collect();
+      for (const owner of owners) {
+        const o = owner as any;
+        if (o.status !== "active") continue;
+        if (!o.user_id) continue;
+
+        await enqueueNotificationOutbox(ctx, {
+          userId: o.user_id,
+          channel: "push",
+          category: "vehicle_enrichment_complete",
+          // Per-(config, user) — same user re-decoding a different config gets
+          // a separate notification; same user + same config re-flipping while
+          // a prior notification is still pending/dispatching is deduped.
+          dedupeKey: `enrichment_complete_${vehicle_config_id}_${o.user_id}`,
+          payload: {
+            vehicle_id: vehicle._id,
+            vehicle_config_id,
+            vin,
+            year,
+            make,
+            model,
+            trim,
+            title: "Your car is ready",
+            body: `${[year, make, model].filter(Boolean).join(" ")} is set up — you can now book parts-dependent services.`,
+          },
+        });
+        notified++;
+        enqueuedFor.push(String(o.user_id));
+      }
+    }
+
+    console.log(
+      `[enrichment-notify] config=${vehicle_config_id} ${year ?? "?"} ${make ?? "?"} ${model ?? "?"} → ${notified} owner(s)`,
+    );
+    return { notified, users: enqueuedFor };
   },
 });

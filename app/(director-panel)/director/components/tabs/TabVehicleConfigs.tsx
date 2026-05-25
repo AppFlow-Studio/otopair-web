@@ -122,6 +122,45 @@ type ServiceIntervalRow = {
 
 type FitmentSummaryRow = { service: string; count: number }
 
+// Shapes returned by directorCars.vehicleConfigFitments / partFitmentDetail.
+// Declared locally so the file compiles even when Convex codegen is mid-flight.
+type FitmentItem = {
+  fitmentId:        string
+  partId:           string
+  serviceType:      string
+  packageCode:      string | null
+  quantity:         number | null
+  confidence:       number | null
+  sourceCount:      number | null
+  mechanicVerified: boolean
+  partNumber:       string | null
+  partName:         string | null
+  brand:            string | null
+  category:         string | null
+  subcategory:      string | null
+  partTier:         string | null
+  priceCount:       number
+}
+type FitmentGroup = { service: string; items: FitmentItem[] }
+
+type PartPriceRow = {
+  price: number
+  priceType: string | null
+  sourceUrl: string | null
+  sourceDomain: string | null
+  refreshedAt: number | null
+}
+type PartEvidenceRow = {
+  field: string | null
+  value: unknown
+  sourceUrl: string | null
+  sourceDomain: string | null
+  sourceType: string | null
+  confidence: number | null
+  observedAt: number | null
+  isLatest: boolean | null
+}
+
 type EnrichmentRunRow = {
   id: Id<'enrichment_runs'>
   version?: string
@@ -148,6 +187,128 @@ type VehicleSampleRow = {
   createdAt?: number
 }
 
+// ---------------------------------------------------------------------------
+// PartFitmentDrawerBody — drill-down into a single OEM part attached to this
+// vehicle_config. Mirrors the ModalAuditDrawerBody chrome (header + scrollable
+// body + footer) so the look matches the existing audit panel.
+// ---------------------------------------------------------------------------
+
+const PartFitmentDrawerBody = ({ partId, configId, onClose }: {
+  partId: Id<'oem_parts'>
+  configId: Id<'vehicle_configs'>
+  onClose: () => void
+}) => {
+  const data = useQuery(api.directorCars.partFitmentDetail,
+    { part_id: partId, vehicle_config_id: configId })
+
+  const tierTone: Record<string, 'green' | 'blue' | 'yellow' | 'slate' | 'purple'> = {
+    oem: 'green', performance: 'purple', aftermarket: 'blue', economy: 'yellow',
+  }
+
+  return (
+    <>
+      <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--slate-200)',
+        background:'var(--slate-25)', borderRadius:'0 12px 0 0',
+        display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12 }}>
+        <div style={{ minWidth:0 }}>
+          <div style={{ fontSize:10, fontWeight:600, color:'var(--blue-600)', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:4 }}>OEM part</div>
+          <div className="mono" style={{ fontSize:14, fontWeight:600, color:'var(--slate-900)', wordBreak:'break-all' }}>{data?.partNumber ?? '—'}</div>
+          {data?.name && <div style={{ fontSize:12, color:'var(--slate-600)', marginTop:2 }}>{data.name}</div>}
+        </div>
+        <button onClick={onClose} style={{ border:'none', background:'transparent', cursor:'pointer', color:'var(--slate-500)', padding:4, borderRadius:6, display:'inline-flex' }}>
+          <IconX size={18} />
+        </button>
+      </div>
+
+      <div style={{ flex:1, overflowY:'auto', padding:18, display:'flex', flexDirection:'column', gap:18 }}>
+        {!data ? (
+          <div style={{ color:'var(--slate-400)', fontSize:12, textAlign:'center', padding:20 }}>Loading…</div>
+        ) : (
+          <>
+            {/* Identity */}
+            <div>
+              <SectionTitle label="Identity" />
+              <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                {data.brand && <Row k="Brand" v={data.brand} />}
+                {data.category && <Row k="Category" v={data.category} />}
+                {data.subcategory && <Row k="Subcategory" v={data.subcategory} />}
+                {data.partTier && <Row k="Tier" v={<Badge tone={tierTone[data.partTier] ?? 'slate'}>{data.partTier}</Badge>} />}
+                {data.sourceCount != null && <Row k="Source count" v={String(data.sourceCount)} />}
+              </div>
+            </div>
+
+            {/* Prices */}
+            <div>
+              <SectionTitle label={`Prices (${data.prices.length})`} />
+              {data.prices.length === 0 ? (
+                <div style={{ fontSize:12, color:'var(--slate-400)', fontStyle:'italic' }}>No prices recorded.</div>
+              ) : (
+                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  {(data.prices as PartPriceRow[]).map((p: PartPriceRow, i: number) => (
+                    <div key={i} style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:6, padding:'8px 10px' }}>
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:4 }}>
+                        <span className="mono" style={{ fontSize:13, fontWeight:600, color:'var(--slate-900)' }}>${p.price.toFixed(2)}</span>
+                        {p.priceType && <Badge tone="slate">{p.priceType}</Badge>}
+                      </div>
+                      {(p.sourceDomain || p.sourceUrl) && (
+                        <div style={{ fontSize:11, color:'var(--slate-600)', wordBreak:'break-all' }}>
+                          {p.sourceUrl
+                            ? <a href={p.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color:'var(--blue-700)', textDecoration:'none' }}>{p.sourceDomain ?? p.sourceUrl}</a>
+                            : p.sourceDomain}
+                        </div>
+                      )}
+                      {p.refreshedAt && (
+                        <div style={{ fontSize:10, color:'var(--slate-400)', marginTop:2 }}>{fmtDate(p.refreshedAt)} ({ageLabel(p.refreshedAt)})</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Evidence */}
+            <div>
+              <SectionTitle label={`Evidence (${data.evidence.length})`} />
+              {data.evidence.length === 0 ? (
+                <div style={{ fontSize:12, color:'var(--slate-400)', fontStyle:'italic' }}>No enrichment evidence for this config.</div>
+              ) : (
+                <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                  {(data.evidence as PartEvidenceRow[]).map((e: PartEvidenceRow, i: number) => (
+                    <div key={i} style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:6, padding:'8px 10px' }}>
+                      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:4 }}>
+                        <span className="mono" style={{ fontSize:11, color:'var(--slate-700)' }}>{e.field ?? '—'}</span>
+                        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+                          {e.sourceType && <Badge tone="slate">{e.sourceType}</Badge>}
+                          {e.confidence != null && <span className="mono" style={{ fontSize:10, color:'var(--slate-500)' }}>{e.confidence.toFixed(2)}</span>}
+                        </div>
+                      </div>
+                      {e.value != null && (
+                        <div className="mono" style={{ fontSize:11, color:'var(--slate-800)', marginBottom:4, wordBreak:'break-all' }}>{String(e.value)}</div>
+                      )}
+                      {(e.sourceDomain || e.sourceUrl) && (
+                        <div style={{ fontSize:11, color:'var(--slate-600)', wordBreak:'break-all' }}>
+                          {e.sourceUrl
+                            ? <a href={e.sourceUrl} target="_blank" rel="noopener noreferrer" style={{ color:'var(--blue-700)', textDecoration:'none' }}>{e.sourceDomain ?? e.sourceUrl}</a>
+                            : e.sourceDomain}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div style={{ padding:'10px 18px', borderTop:'1px solid var(--slate-200)', fontSize:11, color:'var(--slate-500)',
+        background:'var(--slate-25)', borderRadius:'0 0 12px 0' }}>
+        Click any source link to verify provenance.
+      </div>
+    </>
+  )
+}
+
 const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | null; onClose: () => void }) => {
   const session   = useContext(DirectorSessionCtx)
   const actorName = session?.name ?? 'Director'
@@ -158,9 +319,13 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   const [transOpen,   setTransOpen]   = useState(false)
   const [chassisOpen, setChassisOpen] = useState(false)
   const [trimOpen,    setTrimOpen]    = useState(false)
+  const [partDrawerPartId, setPartDrawerPartId] = useState<Id<'oem_parts'> | null>(null)
+  const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set())
   const [toast,     setToast]     = useState<string | null>(null)
   const detail = useQuery(api.directorCars.vehicleConfigDetail,
     configId ? { id: configId } : 'skip')
+  const fitments = useQuery(api.directorCars.vehicleConfigFitments,
+    configId ? { vehicle_config_id: configId } : 'skip')
   const updateBasics       = useMutation(api.directorConfigActions.updateConfigBasics)
   const updateEngine       = useMutation(api.directorConfigActions.updateEngineFields)
   const updateTransmission = useMutation(api.directorConfigActions.updateTransmissionFields)
@@ -173,6 +338,20 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     const t = setTimeout(() => setToast(null), 3200)
     return () => clearTimeout(t)
   }, [toast])
+
+  // Reset drill-down + accordion state when the modal closes or jumps configs.
+  useEffect(() => {
+    setPartDrawerPartId(null)
+    setExpandedServices(new Set())
+  }, [configId])
+
+  const toggleService = (service: string) => {
+    setExpandedServices(prev => {
+      const next = new Set(prev)
+      if (next.has(service)) next.delete(service); else next.add(service)
+      return next
+    })
+  }
 
   const rawAudit = useQuery(api.audit_log.listByEntity,
     configId ? { entity_type: 'vehicle_config', entity_id: configId } : 'skip')
@@ -206,6 +385,17 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
         title: 'Vehicle config audit log',
         subtitle: detail ? `${detail.configKey} · ${ymmt}` : '',
         entries: auditEntries,
+      }}
+      rightDrawer={{
+        open: !!partDrawerPartId,
+        onClose: () => setPartDrawerPartId(null),
+        children: partDrawerPartId && configId
+          ? <PartFitmentDrawerBody
+              partId={partDrawerPartId}
+              configId={configId}
+              onClose={() => setPartDrawerPartId(null)}
+            />
+          : null,
       }}
       footer={<Button onClick={onClose}>Close</Button>}>
       {!detail ? (
@@ -355,17 +545,104 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                 </div>
               )}
 
-              {/* Fitments summary */}
-              {detail.fitmentSummary && detail.fitmentSummary.length > 0 && (
+              {/* Fitments — collapsible accordion per service. Default state
+                  is compact (just headers + counts). Click a service header to
+                  expand its parts inline; click a part row to open the right
+                  drawer with full part details + sources. */}
+              {fitments && fitments.total > 0 && (
                 <div style={{ marginBottom:18 }}>
-                  <SectionTitle label={`Part fitments (${detail.fitmentTotal})`} />
-                  <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-                    {(detail.fitmentSummary as FitmentSummaryRow[]).map((f, i) => (
-                      <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:6, background:'#fff', border:'1px solid var(--slate-200)', borderRadius:999, padding:'3px 10px', fontSize:12 }}>
-                        <span style={{ color:'var(--slate-700)' }}>{f.service}</span>
-                        <span className="mono" style={{ color:'var(--slate-500)' }}>{f.count}</span>
-                      </span>
-                    ))}
+                  <SectionTitle
+                    label={`Part fitments (${fitments.total})`}
+                    right={
+                      <button
+                        onClick={() => {
+                          const all = (fitments.groups as FitmentGroup[]).map(g => g.service)
+                          setExpandedServices(prev => prev.size === all.length ? new Set() : new Set(all))
+                        }}
+                        style={{ border:'none', background:'transparent', cursor:'pointer', fontSize:11, color:'var(--blue-700)', padding:'2px 6px' }}
+                      >
+                        {expandedServices.size === fitments.groups.length ? 'Collapse all' : 'Expand all'}
+                      </button>
+                    }
+                  />
+                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                    {(fitments.groups as FitmentGroup[]).map((group: FitmentGroup) => {
+                      const isOpen = expandedServices.has(group.service)
+                      const basePartCount   = group.items.filter(it => it.packageCode == null).length
+                      const pkgVariantCount = group.items.length - basePartCount
+                      return (
+                        <div key={group.service} style={{ border:'1px solid var(--slate-200)', borderRadius:8, overflow:'hidden', background:'#fff' }}>
+                          <button
+                            onClick={() => toggleService(group.service)}
+                            style={{
+                              width:'100%', textAlign:'left', cursor:'pointer',
+                              display:'flex', alignItems:'center', justifyContent:'space-between',
+                              padding:'8px 12px', background:'var(--slate-25)',
+                              // Split into longhands — React warns when mixing
+                              // `border` shorthand with `borderBottom` longhand
+                              // in the same style object.
+                              borderTop:'none', borderLeft:'none', borderRight:'none',
+                              borderBottom: isOpen ? '1px solid var(--slate-200)' : 'none',
+                              borderTopLeftRadius:8, borderTopRightRadius:8,
+                              borderBottomLeftRadius: isOpen ? 0 : 8, borderBottomRightRadius: isOpen ? 0 : 8,
+                              fontSize:12, color:'var(--slate-800)', transition:'background 80ms',
+                            }}
+                          >
+                            <span style={{ display:'flex', alignItems:'center', gap:8, minWidth:0 }}>
+                              <span style={{ display:'inline-block', width:10, color:'var(--slate-500)', fontSize:10, lineHeight:1 }}>{isOpen ? '▾' : '▸'}</span>
+                              <span style={{ fontSize:11, fontWeight:600, color:'var(--slate-700)', textTransform:'uppercase', letterSpacing:'0.06em' }}>{group.service}</span>
+                              {pkgVariantCount > 0 && (
+                                <Badge tone="purple">{pkgVariantCount} pkg variant{pkgVariantCount === 1 ? '' : 's'}</Badge>
+                              )}
+                            </span>
+                            <span className="mono" style={{ fontSize:11, color:'var(--slate-500)' }}>{group.items.length}</span>
+                          </button>
+                          {isOpen && (
+                            <div>
+                              {group.items.map((it: FitmentItem, i: number) => {
+                                const isSelected = partDrawerPartId === (it.partId as unknown as Id<'oem_parts'>)
+                                return (
+                                  <button
+                                    key={it.fitmentId}
+                                    onClick={() => setPartDrawerPartId(it.partId as unknown as Id<'oem_parts'>)}
+                                    style={{
+                                      width:'100%', textAlign:'left', cursor:'pointer',
+                                      display:'grid', gridTemplateColumns:'minmax(0, 2fr) minmax(0, 2fr) 110px 60px 70px',
+                                      gap:10, padding:'8px 12px', alignItems:'center',
+                                      borderTop:'none', borderLeft:'none', borderRight:'none',
+                                      borderBottom: i < group.items.length - 1 ? '1px solid var(--slate-100)' : 'none',
+                                      background: isSelected ? 'var(--blue-50)' : '#fff',
+                                      fontSize:12, color:'var(--slate-800)', transition:'background 80ms',
+                                    }}
+                                    onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = 'var(--slate-25)' }}
+                                    onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = '#fff' }}
+                                  >
+                                    <span className="mono" style={{ fontWeight:600, color:'var(--slate-900)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                                      {it.partNumber ?? '—'}
+                                    </span>
+                                    <span style={{ color:'var(--slate-700)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                                      {it.partName ?? '—'}
+                                      {it.brand && <span style={{ color:'var(--slate-400)', marginLeft:6 }}>· {it.brand}</span>}
+                                    </span>
+                                    <span>
+                                      {it.packageCode
+                                        ? <Badge tone="purple">{it.packageCode}</Badge>
+                                        : <Badge tone="slate">base</Badge>}
+                                    </span>
+                                    <span className="mono" style={{ textAlign:'right', color:'var(--slate-500)' }}>
+                                      {it.quantity != null ? `×${it.quantity}` : '—'}
+                                    </span>
+                                    <span className="mono" style={{ textAlign:'right', color:'var(--slate-500)' }}>
+                                      {it.confidence != null ? it.confidence.toFixed(2) : '—'}
+                                    </span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}

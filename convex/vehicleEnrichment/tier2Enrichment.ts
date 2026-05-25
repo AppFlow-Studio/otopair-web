@@ -84,7 +84,7 @@ const ENRICHABLE_FIELDS = [
   "oil_filter_oem", "drain_plug_gasket_oem", "air_filter_oem", "cabin_filter_oem",
   "spark_plug_oem", "front_brake_pad_oem", "rear_brake_pad_oem",
   "rotor_front_oem", "rotor_rear_oem", "serpentine_belt_oem",
-  "battery_oem", "coolant_oem", "wiper_blade_set_oem",
+  "battery_oem", "coolant_oem", "engine_oil_oem", "wiper_blade_set_oem",
   "oil_viscosity", "front_tire_size", "rear_tire_size",
 ];
 
@@ -214,7 +214,7 @@ export const runTier2Enrichment = internalAction({
       });
       queries.push({
         query: `${vehicleDesc} OEM battery serpentine belt wiper part number`,
-        fields: ["battery_oem", "serpentine_belt_oem", "wiper_blade_set_oem", "coolant_oem"],
+        fields: ["battery_oem", "serpentine_belt_oem", "wiper_blade_set_oem", "coolant_oem", "engine_oil_oem"],
       });
     }
 

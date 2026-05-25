@@ -229,6 +229,7 @@ export function extractFieldsFromMarkdown(
     serpentine_belt_oem: ["serpentine belt", "drive belt", "v-belt"],
     battery_oem: ["battery", "agm battery"],
     coolant_oem: ["coolant", "antifreeze"],
+    engine_oil_oem: ["engine oil", "motor oil", "oil sku", "oil part number"],
     wiper_blade_set_oem: ["wiper blade", "wiper set"],
     oil_viscosity: ["viscosity", "oil grade", "engine oil"],
     front_tire_size: ["tire size", "front tire", "wheel tire"],

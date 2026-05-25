@@ -46,6 +46,7 @@ import {
 import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
+import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
 import type { Id } from "../_generated/dataModel";
 
 // ─── Constants ─────────────────────────────────────────────────────
@@ -134,7 +135,7 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
   for (const k of ["oil_filter_oem", "air_filter_oem", "cabin_filter_oem", "spark_plug_oem",
     "front_brake_pad_oem", "rear_brake_pad_oem", "drain_plug_gasket_oem",
     "serpentine_belt_oem", "timing_belt_oem", "wiper_blade_set_oem", "wiper_blade_rear_oem",
-    "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem"]) {
+    "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem", "engine_oil_oem"]) {
     f[k] = parseField(parts[k]);
   }
 
@@ -188,7 +189,7 @@ function parsePackageParts(data: Record<string, any>): Map<string, Record<string
     "oil_filter_oem", "air_filter_oem", "cabin_filter_oem", "spark_plug_oem",
     "front_brake_pad_oem", "rear_brake_pad_oem", "drain_plug_gasket_oem",
     "serpentine_belt_oem", "timing_belt_oem", "wiper_blade_set_oem", "wiper_blade_rear_oem",
-    "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem",
+    "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem", "engine_oil_oem",
   ];
 
   for (const [code, body] of Object.entries(packagesBlock)) {
@@ -431,10 +432,33 @@ function parseBatch2(
   // Services
   const svcData = data.services ?? [];
   for (const s of svcData) {
+    // parts_breakdown is the preferred per-OEM-part pricing channel.
+    // We strip blocked-domain sources (parser-side, like gap_fields above)
+    // and entries without a usable low price.
+    const rawBreakdown: any[] = Array.isArray(s.parts_breakdown) ? s.parts_breakdown : [];
+    const partsBreakdown = rawBreakdown
+      .map((entry) => {
+        const sanitizedSourceUrl = sanitizeUrl(entry?.source_url);
+        const blocked = isBlockedDomain(sanitizedSourceUrl);
+        const priceLow  = sanitizeNumber(entry?.price_low);
+        const priceHigh = sanitizeNumber(entry?.price_high);
+        const oemNumber = sanitizeString(entry?.oem_part_number)?.trim();
+        return {
+          oem_part_number: oemNumber ?? "",
+          price_low:       priceLow  != null && priceLow  > 0 ? priceLow  : null,
+          price_high:      priceHigh != null && priceHigh > 0 ? priceHigh : null,
+          source_url:      blocked ? null : (sanitizedSourceUrl ?? null),
+          source_domain:   blocked ? null : (extractDomain(sanitizedSourceUrl) ?? null),
+          confidence:      typeof entry?.confidence === "number" ? entry.confidence : null,
+        };
+      })
+      .filter((e) => e.oem_part_number && e.price_low != null);
+
     services.push({
       service_name: s.service_name ?? "",
       is_applicable: s.is_applicable ?? true,
       labor_hours: parseField(s.labor_hours),
+      parts_breakdown: partsBreakdown,
       parts_cost_low: parseField(s.parts_cost_low),
       parts_cost_high: parseField(s.parts_cost_high),
       total_cost_low: null,
@@ -511,6 +535,11 @@ const PART_FIELD_MAP: Record<string, {
   wiper_blade_rear_oem: { name: "Wiper Blade (Rear)", category: "wiper", subcategory: "wiper_blade_rear", serviceSlug: "wiper_blade_replacement", position: "rear" },
   battery_oem: { name: "Battery", category: "electrical", subcategory: "battery", serviceSlug: "battery_replacement" },
   coolant_oem: { name: "Coolant", category: "cooling", subcategory: "coolant", serviceSlug: "coolant_flush" },
+  // Bottle-SKU OEM engine oil. quantity_needed on the resulting fitment stays
+  // unset; quoting multiplies the per-bottle price by oil_capacity_qts from
+  // engine_specs at quote time. Mirrors how coolant_oem is sized via
+  // coolant_capacity_qts — the fitment is per-unit, the engine row supplies qty.
+  engine_oil_oem: { name: "Engine Oil", category: "fluid", subcategory: "engine_oil", serviceSlug: "oil_change" },
 };
 
 /** Map interval field prefix to service slug. */
@@ -535,6 +564,9 @@ function extractDomain(url: string | null | undefined): string | undefined {
     return undefined;
   }
 }
+
+// Transmission style canonicalization lives in lib/transmissionTypeInference.ts
+// (Haiku-based with in-memory cache). No hardcoded marketing-term whitelist.
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
@@ -622,9 +654,24 @@ async function writeNormalizedData(
   });
 
   // B. Transmission specs
+  //
+  // Claude's `attributes.transmission_type` arrives via parseBatch1a in
+  // fields.transmission_type. The prompt asks for canonical tokens
+  // ("automatic" / "manual" / "CVT" / "DCT"), so usually no normalization is
+  // needed — but defensively run it through canonicalizeTransmissionType which
+  // has a no-cost fast path for already-canonical strings and only spends a
+  // Haiku call when Claude went off-script with a marketing name. Cached.
+  //
+  // The mutation only patches fields whose value is non-undefined, so when
+  // Claude didn't answer we keep the existing row state untouched.
   if (transmissionId) {
+    const rawTransType = asString(fields.transmission_type?.value);
+    const normalizedType = rawTransType
+      ? (await canonicalizeTransmissionType(rawTransType)) ?? undefined
+      : undefined;
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs, {
       transmission_id: transmissionId,
+      type: normalizedType,
       fluid_type: asString(fields.trans_fluid_type?.value),
       data_quality: "enriched",
     });
@@ -1856,11 +1903,23 @@ export const _pollBatch2V3 = internalAction({
         });
       }
 
-      // Write part prices from Batch 2 pricing
+      // Write part prices from Batch 2 pricing.
+      //
+      // Authoritative path: svc.parts_breakdown[] — one entry per OEM part with
+      // its own per-unit price + source URL. Each entry maps directly to one
+      // part_prices row via oem_part_number → part_id (resolved from existing
+      // part_fitments rows for this vehicle_config + service).
+      //
+      // Per-part prices land INDEPENDENTLY of any service-level total — a
+      // BMW oil_change with `parts_cost_low: null` still writes prices for the
+      // filter, gasket, and oil bottle as long as Claude itemized them.
+      //
+      // Fallback path: when Claude couldn't itemize and only returned a
+      // service-level parts_cost_low, stamp that per-unit price on every
+      // fitment in the service. Same behavior as before the breakdown was
+      // introduced; preserved for legacy / sparse-data cases.
       for (const svc of services) {
-        if (!svc.is_applicable || svc.parts_cost_low?.value == null) continue;
-        const priceVal = asNumber(svc.parts_cost_low.value);
-        if (priceVal == null) continue;
+        if (!svc.is_applicable) continue;
 
         const slug = SERVICE_NAME_TO_SLUG[svc.service_name];
         if (!slug) continue;
@@ -1869,18 +1928,53 @@ export const _pollBatch2V3 = internalAction({
           internal.vehicleEnrichment.v3queries.getFitmentsByConfigAndService,
           { vehicleConfigId: args.vehicleConfigId, serviceType: slug },
         );
+        if (fitments.length === 0) continue;
 
-        if (fitments.length > 0) {
-          const pricePerPart = priceVal / fitments.length;
-          for (const fitment of fitments) {
-            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
-              part_id: fitment.part_id,
-              price: pricePerPart,
-              price_type: "online_discount",
-              source_domain: extractDomain(svc.parts_cost_low.source_url) ?? "enrichment",
-              source_url: svc.parts_cost_low.source_url ?? undefined,
-            });
+        // Preferred: itemized parts_breakdown — write each part's own price.
+        if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
+          // Build a quick oem_number → part_id lookup. Same OEM may have
+          // multiple fitments under one service (base + package variant) —
+          // every match gets the same per-unit price.
+          const numberToPartIds = new Map<string, Id<"oem_parts">[]>();
+          for (const f of fitments) {
+            const num = (f as any).oem_part_number;
+            if (!num) continue;
+            const arr = numberToPartIds.get(num) ?? [];
+            arr.push(f.part_id);
+            numberToPartIds.set(num, arr);
           }
+
+          for (const entry of svc.parts_breakdown) {
+            if (entry.price_low == null) continue;
+            const partIds = numberToPartIds.get(entry.oem_part_number);
+            if (!partIds || partIds.length === 0) continue;
+            const sourceDomain = entry.source_domain ?? extractDomain(entry.source_url ?? undefined) ?? "enrichment";
+            for (const partId of partIds) {
+              await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+                part_id:       partId,
+                price:         entry.price_low,
+                price_type:    "online_discount",
+                source_url:    entry.source_url ?? undefined,
+                source_domain: sourceDomain,
+              });
+            }
+          }
+          continue; // breakdown handled this service — don't fall through
+        }
+
+        // Fallback: legacy service-level price. Store as per-unit on each
+        // fitment in the service (no division — the prompt contracts the
+        // service-level price as per-unit too).
+        const priceVal = asNumber(svc.parts_cost_low?.value);
+        if (priceVal == null) continue;
+        for (const fitment of fitments) {
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+            part_id:       fitment.part_id,
+            price:         priceVal,
+            price_type:    "online_discount",
+            source_domain: extractDomain(svc.parts_cost_low?.source_url) ?? "enrichment",
+            source_url:    svc.parts_cost_low?.source_url ?? undefined,
+          });
         }
       }
     }
@@ -2155,6 +2249,29 @@ export const _pollBatch2V3 = internalAction({
       }
     } catch (e) {
       console.warn("[v8] Post-fallback fill rate recalculation failed (non-fatal):", e);
+    }
+
+    // Notify owners on the partial → complete transition. Fires only when the
+    // status genuinely flipped — currentVcForFinal was captured BEFORE this
+    // run's writes (line 2040), so comparing it to the final post-fallback
+    // state catches the "first time complete" case without re-firing on later
+    // re-runs that find the config already complete.
+    try {
+      const updated = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getVehicleConfigById,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+      const previousStatus = (currentVcForFinal as any)?.enrichment_status;
+      const newStatus = (updated as any)?.enrichment_status;
+      if (previousStatus !== "complete" && newStatus === "complete") {
+        console.log(`[v8] enrichment_status: ${previousStatus ?? "(none)"} → complete — notifying owners`);
+        await ctx.runMutation(
+          internal.vehicleEnrichment.v3mutations.notifyEnrichmentComplete,
+          { vehicle_config_id: args.vehicleConfigId },
+        );
+      }
+    } catch (e) {
+      console.warn("[v8] Enrichment-complete notification failed (non-fatal):", e);
     }
 
     // Post-enrichment: adversarial self-verification (Task 26).

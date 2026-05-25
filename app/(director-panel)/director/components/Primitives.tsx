@@ -404,6 +404,18 @@ const ModalAuditDrawerBody = ({ onClose, title = 'Audit log', subtitle, entries 
   </>
 )
 
+/**
+ * Generic right-side drawer slot. Caller renders its own header + body inside
+ * `children` (the Modal only provides the panel chrome). When stacked with
+ * auditDrawer, both panels appear side-by-side to the right of the main modal.
+ */
+export type RightDrawerProps = {
+  open: boolean
+  onClose: () => void
+  width?: number
+  children?: ReactNode
+}
+
 export type ModalProps = {
   open: boolean
   onClose: () => void
@@ -415,9 +427,10 @@ export type ModalProps = {
   footer?: ReactNode
   width?: number
   auditDrawer?: AuditDrawerProps
+  rightDrawer?: RightDrawerProps
 }
 
-export const Modal = ({ open, onClose, title, eyebrow, statusBadge, headerRight, children, footer, width = 880, auditDrawer }: ModalProps) => {
+export const Modal = ({ open, onClose, title, eyebrow, statusBadge, headerRight, children, footer, width = 880, auditDrawer, rightDrawer }: ModalProps) => {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -427,15 +440,21 @@ export const Modal = ({ open, onClose, title, eyebrow, statusBadge, headerRight,
     return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev }
   }, [open, onClose])
   if (!open) return null
-  const drawerWidth = 440
-  const drawerOpen = auditDrawer?.open
+  const auditWidth = 440
+  const rightWidth = rightDrawer?.width ?? 440
+  const auditOpen = !!auditDrawer?.open
+  const rightOpen = !!rightDrawer?.open
+  const anyDrawerOpen = auditOpen || rightOpen
+  const totalDrawerPx = (auditOpen ? auditWidth : 0) + (rightOpen ? rightWidth : 0)
+  // Pick the radius for the outermost open drawer (rightDrawer outranks audit when both open).
+  const mainRightRadius = anyDrawerOpen ? '12px 0 0 12px' : '12px'
   return (
     <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(15,23,42,0.55)', display:'flex',
       alignItems:'flex-start', justifyContent:'center', zIndex:200, padding:'5vh 24px', overflow:'auto', backdropFilter:'blur(2px)' }}>
       <div onClick={e => e.stopPropagation()} style={{ display:'flex', alignItems:'stretch',
-        width:drawerOpen ? `min(100%, ${width + drawerWidth}px)` : `min(100%, ${width}px)`,
+        width:`min(100%, ${width + totalDrawerPx}px)`,
         transition:'width 240ms cubic-bezier(.2,.7,.2,1)' }}>
-        <div style={{ background:'#fff', borderRadius:drawerOpen ? '12px 0 0 12px' : 12, flex:'1 1 0', minWidth:0,
+        <div style={{ background:'#fff', borderRadius:mainRightRadius, flex:'1 1 0', minWidth:0,
           boxShadow:'0 24px 60px rgba(15,23,42,0.35)', overflow:'hidden', display:'flex', flexDirection:'column',
           transition:'border-radius 240ms ease' }}>
           <div style={{ padding:'16px 22px', borderBottom:'1px solid var(--slate-200)',
@@ -456,11 +475,23 @@ export const Modal = ({ open, onClose, title, eyebrow, statusBadge, headerRight,
           {footer && <div style={{ padding:'12px 22px', borderTop:'1px solid var(--slate-200)', background:'var(--slate-25)', display:'flex', justifyContent:'flex-end', gap:8 }}>{footer}</div>}
         </div>
         {auditDrawer && (
-          <div style={{ width:drawerOpen ? drawerWidth : 0, transition:'width 240ms cubic-bezier(.2,.7,.2,1)', overflow:'hidden', display:'flex', borderRadius:'0 12px 12px 0' }}>
-            <div style={{ width:drawerWidth, flexShrink:0, background:'#fff', borderLeft:'1px solid var(--slate-200)',
-              boxShadow:'0 24px 60px rgba(15,23,42,0.35)', borderRadius:'0 12px 12px 0',
+          <div style={{ width:auditOpen ? auditWidth : 0, transition:'width 240ms cubic-bezier(.2,.7,.2,1)', overflow:'hidden', display:'flex',
+            // Only round the right edge when this is the outermost open drawer.
+            borderRadius: auditOpen && !rightOpen ? '0 12px 12px 0' : '0' }}>
+            <div style={{ width:auditWidth, flexShrink:0, background:'#fff', borderLeft:'1px solid var(--slate-200)',
+              boxShadow:'0 24px 60px rgba(15,23,42,0.35)',
+              borderRadius: rightOpen ? '0' : '0 12px 12px 0',
               display:'flex', flexDirection:'column', maxHeight:'90vh' }}>
               <ModalAuditDrawerBody {...auditDrawer} />
+            </div>
+          </div>
+        )}
+        {rightDrawer && (
+          <div style={{ width:rightOpen ? rightWidth : 0, transition:'width 240ms cubic-bezier(.2,.7,.2,1)', overflow:'hidden', display:'flex' }}>
+            <div style={{ width:rightWidth, flexShrink:0, background:'#fff', borderLeft:'1px solid var(--slate-200)',
+              boxShadow:'0 24px 60px rgba(15,23,42,0.35)', borderRadius:'0 12px 12px 0',
+              display:'flex', flexDirection:'column', maxHeight:'90vh' }}>
+              {rightDrawer.children}
             </div>
           </div>
         )}

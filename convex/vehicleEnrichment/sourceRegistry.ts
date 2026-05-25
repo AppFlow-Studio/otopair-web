@@ -110,6 +110,7 @@ const BMW_PART_SLUGS: Record<string, string> = {
   battery_group:         "battery",
   battery_oem:           "battery",      // deduped — same page as battery_group
   coolant_oem:           "coolant",
+  engine_oil_oem:        "engine_oil",
 };
 
 const TOYOTA_PART_SLUGS: Record<string, string> = {

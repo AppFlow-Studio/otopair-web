@@ -7,7 +7,10 @@
       "Bash(bunx tsc *)",
       "Bash(python3 -m json.tool)",
       "Bash(python3 *)",
-      "Bash(npx convex *)"
+      "Bash(npx convex *)",
+      "Bash(dir \"C:\\\\Users\\\\manso\\\\Desktop\\\\otopair-web\\\\app\")",
+      "Bash(dir \"C:\\\\Users\\\\manso\\\\Desktop\\\\otopair-web\\\\app\\\\\\(director-panel\\)\")",
+      "Bash(dir \"C:\\\\Users\\\\manso\\\\Desktop\\\\otopair-web\\\\convex\")"
     ]
   }
 }

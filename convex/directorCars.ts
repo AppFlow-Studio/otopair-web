@@ -579,6 +579,142 @@ export const vehicleConfigsList = query({
   },
 });
 
+/**
+ * Director: list all part_fitments for a vehicle_config, grouped by service_type,
+ * each enriched with the OEM part's identity fields. Base fitments (no package)
+ * sort before package-specific variants. Use with the part drill-down drawer
+ * — partFitmentDetail fetches per-part prices + sources on demand.
+ */
+export const vehicleConfigFitments = query({
+  args: { vehicle_config_id: v.id("vehicle_configs") },
+  handler: async (ctx, { vehicle_config_id }) => {
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", vehicle_config_id))
+      .collect();
+
+    const rows = await Promise.all(
+      fitments.map(async (f) => {
+        const part = (await ctx.db.get(f.part_id)) as any | null;
+        const prices = await ctx.db
+          .query("part_prices")
+          .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
+          .collect();
+        return {
+          fitmentId:        String(f._id),
+          partId:           String(f.part_id),
+          serviceType:      (f as any).service_type ?? "unknown",
+          packageCode:      (f as any).package_code ?? null,
+          quantity:         (f as any).quantity_needed ?? null,
+          confidence:       (f as any).confidence ?? null,
+          sourceCount:      (f as any).source_count ?? null,
+          mechanicVerified: !!(f as any).mechanic_verified,
+          partNumber:       part?.oem_part_number ?? null,
+          partName:         part?.name ?? null,
+          brand:            part?.brand ?? null,
+          category:         part?.category ?? null,
+          subcategory:      part?.subcategory ?? null,
+          partTier:         part?.part_tier ?? null,
+          priceCount:       prices.length,
+        };
+      }),
+    );
+
+    // Group by service_type; within each, base before package-specific.
+    const map = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const key = r.serviceType;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(r);
+    }
+    const groups = [...map.entries()]
+      .map(([service, items]) => ({
+        service,
+        items: items.sort((a, b) => {
+          // Base fitments (null packageCode) first.
+          if ((a.packageCode === null) !== (b.packageCode === null)) {
+            return a.packageCode === null ? -1 : 1;
+          }
+          const pkgCmp = (a.packageCode ?? "").localeCompare(b.packageCode ?? "");
+          if (pkgCmp !== 0) return pkgCmp;
+          return (a.partName ?? a.partNumber ?? "").localeCompare(b.partName ?? b.partNumber ?? "");
+        }),
+      }))
+      .sort((a, b) => a.service.localeCompare(b.service));
+
+    return { groups, total: rows.length };
+  },
+});
+
+/**
+ * Director: drill-down detail for a single OEM part — identity, all recorded
+ * prices (with source URL/domain), and any enrichment_evidence rows scoped to
+ * the vehicle_config the part is attached to (the pipeline writes part-field
+ * evidence under entity_type="part", entity_id=vehicle_config_id).
+ */
+export const partFitmentDetail = query({
+  args: {
+    part_id: v.id("oem_parts"),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+  },
+  handler: async (ctx, { part_id, vehicle_config_id }) => {
+    const part = (await ctx.db.get(part_id)) as any | null;
+    if (!part) return null;
+
+    const prices = await ctx.db
+      .query("part_prices")
+      .withIndex("by_part", (q) => q.eq("part_id", part_id))
+      .collect();
+
+    let evidence: any[] = [];
+    if (vehicle_config_id) {
+      evidence = await ctx.db
+        .query("enrichment_evidence")
+        .withIndex("by_entity", (q) =>
+          q.eq("entity_type", "part").eq("entity_id", String(vehicle_config_id)),
+        )
+        .collect();
+    }
+
+    return {
+      partId:       String(part_id),
+      partNumber:   part.oem_part_number ?? null,
+      name:         part.name ?? null,
+      brand:        part.brand ?? null,
+      category:     part.category ?? null,
+      subcategory:  part.subcategory ?? null,
+      partTier:     part.part_tier ?? null,
+      sourceCount:  part.source_count ?? null,
+      prices: prices
+        .map((p) => ({
+          price:         p.price,
+          priceType:     (p as any).price_type ?? null,
+          sourceUrl:     (p as any).source_url ?? null,
+          sourceDomain:  (p as any).source_domain ?? null,
+          refreshedAt:   (p as any).refreshed_at ?? null,
+        }))
+        .sort((a, b) => a.price - b.price),
+      evidence: evidence
+        .map((e: any) => ({
+          field:        e.field_name ?? null,
+          value:        e.observed_value ?? null,
+          sourceUrl:    e.source_url ?? null,
+          sourceDomain: e.source_domain ?? null,
+          sourceType:   e.source_type ?? null,
+          confidence:   e.confidence ?? null,
+          observedAt:   e.observed_at ?? null,
+          isLatest:     e.is_latest ?? null,
+        }))
+        // Most relevant first: latest, then highest confidence
+        .sort((a, b) => {
+          if (a.isLatest !== b.isLatest) return a.isLatest ? -1 : 1;
+          return (b.confidence ?? 0) - (a.confidence ?? 0);
+        })
+        .slice(0, 50),
+    };
+  },
+});
+
 export const vehicleConfigDetail = query({
   args: { id: v.id("vehicle_configs") },
   handler: async (ctx, { id }) => {

@@ -24,6 +24,9 @@
  * Non-fatal: any failure returns null and enrichment continues without tire data.
  */
 
+import { findHaloVariant } from "../../lib/haloVariantRules";
+import { inferHaloVariantWithHaiku } from "../../lib/haloVariantInference";
+
 const WHEEL_SIZE_API_BASE = "https://api.wheel-size.com/v2";
 
 export interface TireOption {
@@ -225,23 +228,48 @@ export async function scrapeWheelSizeOptions(
     return null;
   }
 
+  // Promote halo variants (M3, AMG GT, Type R, Blackwing, etc.) to the
+  // model name catalogs actually use. See lib/haloVariantRules.ts.
+  const haloRule = findHaloVariant(make, model, trim ?? "");
+  let effectiveModel = haloRule?.promotedModel ?? model;
+  if (haloRule && haloRule.promotedModel.toLowerCase() !== model.toLowerCase()) {
+    console.log(`[wheel-size-api] Halo variant promoted: "${model}" → "${effectiveModel}" (rule=${haloRule.ruleId})`);
+  }
   const makeSlug  = toSlug(make);
-  const modelSlug = toSlug(model);
+  let modelSlug = toSlug(effectiveModel);
 
   // USDM first → no region filter fallback
   let response = await fetchByModel(makeSlug, modelSlug, year, apiKey, "usdm");
   if (!response?.data?.length) {
-    console.log(`[wheel-size-api] No USDM results for ${year} ${make} ${model} — retrying without region filter`);
+    console.log(`[wheel-size-api] No USDM results for ${year} ${make} ${effectiveModel} — retrying without region filter`);
     response = await fetchByModel(makeSlug, modelSlug, year, apiKey);
+  }
+
+  // Long-tail fallback: if curated rule didn't promote AND the query returned
+  // zero data, ask Haiku what catalog model this halo is filed under and retry.
+  // Cost-bounded — only on zero-result misses, results cached per worker.
+  if ((!response?.data?.length) && !haloRule && trim) {
+    const inferred = await inferHaloVariantWithHaiku(make, model, trim, year);
+    if (inferred && inferred.promotedModel.toLowerCase() !== effectiveModel.toLowerCase()) {
+      console.log(
+        `[wheel-size-api] Haiku inferred promotion: "${effectiveModel}" → "${inferred.promotedModel}" — retrying`
+      );
+      effectiveModel = inferred.promotedModel;
+      modelSlug = toSlug(effectiveModel);
+      response = await fetchByModel(makeSlug, modelSlug, year, apiKey, "usdm");
+      if (!response?.data?.length) {
+        response = await fetchByModel(makeSlug, modelSlug, year, apiKey);
+      }
+    }
   }
 
   const entries = response?.data;
   if (!entries?.length) {
-    console.warn(`[wheel-size-api] No data for ${year} ${make} ${model}`);
+    console.warn(`[wheel-size-api] No data for ${year} ${make} ${effectiveModel}`);
     return null;
   }
 
-  console.log(`[wheel-size-api] ${entries.length} trim entries for ${year} ${make} ${model}`);
+  console.log(`[wheel-size-api] ${entries.length} trim entries for ${year} ${make} ${effectiveModel}`);
 
   // Pick matching trim or fall back to all
   let wheels: ApiWheel[];
@@ -262,12 +290,12 @@ export async function scrapeWheelSizeOptions(
   const tireOptions = buildTireOptions(wheels);
 
   if (tireOptions.length === 0) {
-    console.warn(`[wheel-size-api] 0 tire options parsed for ${year} ${make} ${model} ${trim ?? ""}`);
+    console.warn(`[wheel-size-api] 0 tire options parsed for ${year} ${make} ${effectiveModel} ${trim ?? ""}`);
     return null;
   }
 
   const oemCount = tireOptions.filter(t => t.is_oem_standard).length;
-  console.log(`[wheel-size-api] ${tireOptions.length} tire options (${oemCount} OE) for ${year} ${make} ${model} ${trim ?? ""}`);
+  console.log(`[wheel-size-api] ${tireOptions.length} tire options (${oemCount} OE) for ${year} ${make} ${effectiveModel} ${trim ?? ""}`);
 
   const sourceUrl = `https://www.wheel-size.com/size/${makeSlug}/${modelSlug}/${year}/`;
   return { tireOptions, sourceUrl };

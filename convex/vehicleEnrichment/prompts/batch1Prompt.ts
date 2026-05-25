@@ -174,7 +174,8 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
     "wiper_blade_set_oem": { "value": "...", ... },
     "wiper_blade_rear_oem": { "value": "...", ... },
     "battery_oem": { "value": "...", ... },
-    "coolant_oem": { "value": "...", ... }
+    "coolant_oem": { "value": "...", ... },
+    "engine_oil_oem": { "value": "...", ... }
   },
   "oem_pricing": {
     "rotor_front_price": { "value": 85.00, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 },
@@ -205,5 +206,6 @@ REMINDERS:
 - If status is "not_applicable" (e.g., timing belt on a chain engine), set miles/months values to null.
 - For rotor_front_oem and rotor_rear_oem: both may appear on the same "brake_disc" page. Extract front and rear part numbers separately if they differ by axle position.
 - coolant_oem is the OEM coolant/antifreeze part number (e.g., BMW HT-12 coolant product number), not the coolant type string.
+- engine_oil_oem is the OEM engine oil part number / SKU (e.g., BMW TwinPower Turbo 5W-30 SKU 83215A2AF99, Toyota 0W-20 SKU 00279-0WQTE, Mercedes 229.5 SKU A0009898301), NOT the viscosity string. Prefer the make's 1-quart / 1-liter bottle SKU when both bottle and bulk-jug SKUs exist — quoting multiplies by oil_capacity_qts at quote time.
 - Return null for any field not found in sources and not in the 4 allowed training data fields.`;
 }

@@ -399,6 +399,10 @@ export const completeEssentialOnboarding = mutation({
       lastUpdated: Date.now(),
     });
     return await ctx.db.get(user._id);
+  },
+});
+
+/**
  * MUTATION: registerExpoPushToken
  * Persists the Expo push token on the current user so the
  * `lib/push_dispatcher.dispatchPendingPush` cron can route approval

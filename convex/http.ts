@@ -35,7 +35,6 @@ function getStripeWebhookSecrets() {
     process.env.STRIPE_CONNECT_WEBHOOK_SECRET,
     process.env.STRIPE_WEBHOOK_SECRET,
   ].filter((secret): secret is string => Boolean(secret));
-
   return Array.from(new Set(secrets));
 }
 

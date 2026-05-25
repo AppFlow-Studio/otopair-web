@@ -21,6 +21,10 @@ type SuggestedPart = {
   part_name: string;
   oem_number: string;
   cost: number;
+  // Whole-unit count of this part needed for the service. Sourced from
+  // part_fitments.quantity_needed (catalog) or service-specific knowledge
+  // (spark_plug_quantity, tire qty). UI falls back to 1 when absent.
+  quantity?: number;
   // The booking service this suggestion belongs to. Lets the post-job and
   // backfill flows render per-service parts blocks and lets snapshot
   // attribution stay accurate on multi-service jobs.
@@ -603,22 +607,36 @@ export const getPrefillData = query({
     // suggestedParts (by normalized oem_number) so they appear as
     // pre-listed rows in the post-job parts step ready to confirm.
     const normalize = (n: string) => n.trim().toUpperCase().replace(/\s+/g, "");
-    const existingOemNumbers = new Set(
-      suggestedParts
-        .map((p) => p.oem_number)
-        .filter(Boolean)
-        .map(normalize),
-    );
+    const existingByOem = new Map<string, SuggestedPart>();
+    for (const p of suggestedParts) {
+      const key = p.oem_number ? normalize(p.oem_number) : "";
+      if (key) existingByOem.set(key, p);
+    }
     for (const rec of oemRecommendations) {
       for (const part of rec.parts) {
         const key = normalize(part.oem_part_number);
-        if (!key || existingOemNumbers.has(key)) continue;
+        if (!key) continue;
+        const catalogQty =
+          typeof part.quantity_needed === "number" && part.quantity_needed > 0
+            ? part.quantity_needed
+            : undefined;
+        const existing = existingByOem.get(key);
+        if (existing) {
+          // Cascade already surfaced this part — stamp the catalog qty so the
+          // mechanic sees the correct count (e.g., 4 spark plugs) instead of
+          // the UI's hard-coded fallback of 1.
+          if (existing.quantity === undefined && catalogQty !== undefined) {
+            existing.quantity = catalogQty;
+          }
+          continue;
+        }
         suggestedParts.push({
           part_name: part.part_name,
           oem_number: part.oem_part_number,
           // Prefer median across observations — robust to outlier overpays /
           // typos and matches the tooltip/placeholder the mechanic sees.
           cost: part.median_price > 0 ? part.median_price : part.average_price,
+          quantity: catalogQty,
           service_id: rec.service_id,
           // These rows didn't come from a learned preference — they're the
           // canonical catalog fitment for the (vehicle_config, service)
@@ -626,7 +644,7 @@ export const getPrefillData = query({
           // this car" / "Shop default".
           learned_from: "catalog",
         });
-        existingOemNumbers.add(key);
+        existingByOem.set(key, suggestedParts[suggestedParts.length - 1]);
       }
     }
 

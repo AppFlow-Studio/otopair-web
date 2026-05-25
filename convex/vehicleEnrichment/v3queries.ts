@@ -116,7 +116,7 @@ export const getFitmentsByConfigAndService = internalQuery({
     serviceType: v.string(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const fitments = await ctx.db
       .query("part_fitments")
       .withIndex("by_config_service", (q) =>
         q
@@ -124,6 +124,19 @@ export const getFitmentsByConfigAndService = internalQuery({
           .eq("service_type", args.serviceType)
       )
       .collect();
+    // Join the part identity so callers can match Batch 2's parts_breakdown[]
+    // entries (keyed by oem_part_number) back to part_id without a second query
+    // per fitment. Used by v3pipeline's per-part price write loop.
+    return await Promise.all(
+      fitments.map(async (f) => {
+        const part = (await ctx.db.get(f.part_id)) as any | null;
+        return {
+          ...f,
+          oem_part_number: part?.oem_part_number ?? null,
+          part_subcategory: part?.subcategory ?? null,
+        };
+      }),
+    );
   },
 });
 

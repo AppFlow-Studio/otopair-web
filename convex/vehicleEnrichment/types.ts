@@ -50,10 +50,28 @@ export interface IntervalResult {
 
 // ─── Service Pricing ─────────────────────────────────────────────
 
+/**
+ * Per-OEM-part price entry inside a service's parts_breakdown[].
+ * Authoritative source for part_prices rows. Each entry maps directly to one
+ * oem_parts row via oem_part_number; the pipeline resolves part_id from the
+ * existing part_fitments rows for this vehicle_config + service.
+ */
+export interface PartPriceBreakdownEntry {
+  oem_part_number: string;
+  price_low: number | null;
+  price_high: number | null;
+  source_url: string | null;
+  source_domain: string | null;
+  confidence: number | null;
+}
+
 export interface ServicePricingResult {
   service_name: string;
   is_applicable: boolean;
   labor_hours: FieldResult;
+  /** Optional per-part itemized prices — preferred over service-level totals.
+   *  Each entry's price_low is written to part_prices for the matching fitment. */
+  parts_breakdown: PartPriceBreakdownEntry[];
   parts_cost_low: FieldResult;
   parts_cost_high: FieldResult;
   total_cost_low: number | null;
@@ -322,6 +340,8 @@ export const V4_FIELD_KEYS = [
 
   // ── v7 New OEM Parts (4) ──
   "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem",
+  // ── v9.9 New OEM Parts (1) ── bottle-SKU engine oil for oil_change fitment.
+  "engine_oil_oem",
   // ── v7 New Fluid Types (3) ──
   "trans_fluid_type", "diff_fluid_type", "transfer_case_fluid_type",
   // ── v7 New Fluid Intervals (4) ──

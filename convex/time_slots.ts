@@ -1,5 +1,10 @@
-import { query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import {
+  syncMechanicDayAvailability,
+  syncShopAvailabilityWindow,
+  syncShopDateAvailability,
+} from "./lib/timeSlotAvailability";
 
 function sortSlotsBySchedule<T extends { date: string; start_time: string }>(slots: T[]) {
   return [...slots].sort((a, b) => {
@@ -21,6 +26,44 @@ export const getById = query({
   args: { id: v.id("time_slots") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.id);
+  },
+});
+
+/**
+ * Regenerates customer-facing availability from the canonical schedule rules:
+ * shop hours, active mechanics, existing bookings, and manual blocked slots.
+ * Mobile calls this before reading `time_slots` so stale generated rows don't
+ * make mechanics look unavailable.
+ */
+export const refreshShopAvailability = mutation({
+  args: {
+    shopId: v.id("shops"),
+    startDate: v.optional(v.string()),
+    days: v.optional(v.number()),
+    date: v.optional(v.string()),
+    mechanicId: v.optional(v.id("mechanics")),
+  },
+  handler: async (ctx, args) => {
+    if (args.date && args.mechanicId) {
+      return await syncMechanicDayAvailability(ctx, {
+        shopId: args.shopId,
+        mechanicId: args.mechanicId,
+        date: args.date,
+      });
+    }
+
+    if (args.date) {
+      return await syncShopDateAvailability(ctx, {
+        shopId: args.shopId,
+        date: args.date,
+      });
+    }
+
+    return await syncShopAvailabilityWindow(ctx, {
+      shopId: args.shopId,
+      startDate: args.startDate,
+      days: args.days,
+    });
   },
 });
 

@@ -18,6 +18,7 @@ import type * as app_feedback from "../app_feedback.js";
 import type * as audit_log from "../audit_log.js";
 import type * as backfillTires from "../backfillTires.js";
 import type * as booking_approvals from "../booking_approvals.js";
+import type * as booking_disputes from "../booking_disputes.js";
 import type * as booking_quotes from "../booking_quotes.js";
 import type * as booking_status_history from "../booking_status_history.js";
 import type * as bookings from "../bookings.js";
@@ -271,6 +272,7 @@ declare const fullApi: ApiFromModules<{
   audit_log: typeof audit_log;
   backfillTires: typeof backfillTires;
   booking_approvals: typeof booking_approvals;
+  booking_disputes: typeof booking_disputes;
   booking_quotes: typeof booking_quotes;
   booking_status_history: typeof booking_status_history;
   bookings: typeof bookings;

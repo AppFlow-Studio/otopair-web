@@ -12,6 +12,11 @@ const isPublicRoute = createRouteMatcher([
   "/shop-only",
   "/account-deactivated",
   "/director(.*)",
+  // Receipts deep-link is public — the page validates either Clerk
+  // ownership OR a capability token (`?t=…`) against payments.receipt_token.
+  // Walk-in customers without Clerk accounts need to reach the page from
+  // the invoice email without being bounced to sign-in.
+  "/receipts(.*)",
 ]);
 
 const isPortalRoute = createRouteMatcher([

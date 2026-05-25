@@ -166,13 +166,58 @@ export const processVin = internalAction({
       }
 
       // ════════════════════════════════════════════════════════════
-      // MERGE: VDB wins, NHTSA fills gaps
+      // YMMT validation: VDB occasionally returns the wrong basic vehicle
+      // identity for a VIN. Trust NHTSA for year/make/model/trim when the
+      // two disagree, while still using VDB for deep specs.
+      const fuzzyMatch = (
+        a: string | undefined | null,
+        b: string | undefined | null,
+      ) => {
+        const norm = (s: string | undefined | null) =>
+          (s ?? "").toLowerCase().replace(/[\s_-]+/g, " ").trim();
+        const A = norm(a);
+        const B = norm(b);
+        if (!A || !B) return true;
+        return A.includes(B) || B.includes(A);
+      };
+      const ymmtAgrees = (() => {
+        if (!vdb || !nhtsa.make || !nhtsa.model) return true;
+        const yearOk =
+          !vdb.year ||
+          !nhtsa.year ||
+          vdb.year === parseInt(nhtsa.year);
+        return (
+          yearOk &&
+          fuzzyMatch(vdb.make, nhtsa.make) &&
+          fuzzyMatch(vdb.model, nhtsa.model)
+        );
+      })();
+      const trustVdbYmmt = ymmtAgrees;
+      if (vdb && !trustVdbYmmt) {
+        console.warn(
+          `[decode] VDB/NHTSA YMMT MISMATCH — VIN ${args.vin} → ` +
+            `VDB="${vdb.year} ${vdb.make} ${vdb.model}" vs ` +
+            `NHTSA="${nhtsa.year} ${nhtsa.make} ${nhtsa.model}". ` +
+            `Preferring NHTSA's YMMT; keeping VDB's deep specs.`,
+        );
+      }
+
+      // MERGE: VDB wins for basic identity only when it agrees with NHTSA;
+      // deep specs stay VDB-first, NHTSA fills gaps.
       // ════════════════════════════════════════════════════════════
       const merged = {
-        make: vdb?.make || nhtsa.make || "",
-        model: vdb?.model || nhtsa.model || "",
-        year: vdb?.year || parseInt(nhtsa.year || "0"),
-        trim: vdb?.trim || nhtsa.trim || "Base",
+        make: trustVdbYmmt
+          ? (vdb?.make || nhtsa.make || "")
+          : (nhtsa.make || vdb?.make || ""),
+        model: trustVdbYmmt
+          ? (vdb?.model || nhtsa.model || "")
+          : (nhtsa.model || vdb?.model || ""),
+        year: trustVdbYmmt
+          ? (vdb?.year || parseInt(nhtsa.year || "0"))
+          : (parseInt(nhtsa.year || "0") || vdb?.year || 0),
+        trim: trustVdbYmmt
+          ? (vdb?.trim || nhtsa.trim || "Base")
+          : (nhtsa.trim || "Base"),
         trim2: nhtsa.trim2 || "",
         series: nhtsa.series || "",
         series2: nhtsa.series2 || "",

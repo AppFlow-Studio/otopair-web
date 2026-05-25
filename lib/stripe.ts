@@ -1,8 +1,8 @@
 import Stripe from "stripe";
 
-// Pinned to match the installed `stripe` SDK in package.json. Bump in
-// lockstep with the dependency or `tsc` blocks `npx convex dev`.
-export const STRIPE_API_VERSION = "2026-04-22.dahlia" as const;
+// Read the pinned API version directly from the installed Stripe SDK so
+// typechecking stays aligned with dependency upgrades.
+export const STRIPE_API_VERSION = Stripe.API_VERSION;
 
 export type StripeConnectStatus =
   | "not_connected"

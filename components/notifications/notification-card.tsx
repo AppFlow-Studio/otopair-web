@@ -89,11 +89,12 @@ export function NotificationCard({
   function handleDetails() {
     onAfterAction?.();
     const params = new URLSearchParams();
-    params.set("highlight", String(item.bookingId));
+    params.set("action", "focus-booking");
+    params.set("bookingId", String(item.bookingId));
     if (item.scheduledDate) {
       params.set("date", item.scheduledDate);
     }
-    router.push(`/bookings?${params.toString()}`);
+    router.push(`/schedule?${params.toString()}`);
   }
 
   function handleSubmitQuote() {

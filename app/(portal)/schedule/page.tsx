@@ -41,6 +41,7 @@ import {
 import type { CalendarEvent } from "./schedule-constants";
 import {
   getBookingEndTime,
+  getMechanicAssignmentConflict,
   overlapsBlockedSlot,
   overlapsMechanicBooking,
 } from "@/lib/schedule-overlap";
@@ -248,15 +249,23 @@ export default function SchedulePage() {
   const [rescheduleProposal, setRescheduleProposal] = useState<RescheduleProposal | null>(null);
   const [rescheduleError, setRescheduleError] = useState("");
   const [isRescheduling, setIsRescheduling] = useState(false);
-  const [noShowReschedule, setNoShowReschedule] = useState<{
+  const [manualReschedule, setManualReschedule] = useState<{
     bookingId: string;
     customerName: string;
+    originalDate: string;
+    originalTime: string;
+    originalMechanicId: string;
+    estimatedMinutes: number;
     date: string;
     time: string;
     mechanicId: string;
+    /** `propose` = standard shop-initiated reschedule (customer must approve).
+     *  `no_show_immediate` = customer is already a no-show, reschedule applies
+     *  directly via rescheduleFromNoShowAlert and a courtesy notice is sent. */
+    mode: "propose" | "no_show_immediate";
   } | null>(null);
-  const [noShowRescheduleError, setNoShowRescheduleError] = useState("");
-  const [isSubmittingNoShowReschedule, setIsSubmittingNoShowReschedule] = useState(false);
+  const [manualRescheduleError, setManualRescheduleError] = useState("");
+  const [isSubmittingManualReschedule, setIsSubmittingManualReschedule] = useState(false);
   const [selectedLateStartReviewId, setSelectedLateStartReviewId] = useState<string | null>(null);
   const [lateStartReviewError, setLateStartReviewError] = useState("");
   const [isSubmittingLateStartReview, setIsSubmittingLateStartReview] = useState(false);
@@ -689,30 +698,105 @@ export default function SchedulePage() {
     }
   }
 
-  async function handleSubmitNoShowReschedule() {
-    if (!noShowReschedule) return;
-    setIsSubmittingNoShowReschedule(true);
-    setNoShowRescheduleError("");
-    try {
-      await rescheduleFromNoShowAlert({
-        bookingId: noShowReschedule.bookingId as Id<"bookings">,
-        newScheduledDate: noShowReschedule.date,
-        newScheduledTime: noShowReschedule.time,
-        newMechanicId: noShowReschedule.mechanicId
-          ? (noShowReschedule.mechanicId as Id<"mechanics">)
-          : undefined,
-        assignmentPreference: noShowReschedule.mechanicId
-          ? "specific_mechanic"
-          : "any",
+  const openManualReschedule = useCallback(
+    (
+      bookingId: string,
+      options?: {
+        mode?: "propose" | "no_show_immediate";
+        prefilledDate?: string;
+        prefilledTime?: string;
+        prefilledMechanicId?: string;
+        customerName?: string;
+      },
+    ) => {
+      const target = (bookingsRef.current ?? []).find(
+        (b) => String(b._id) === String(bookingId),
+      );
+      if (!target) {
+        setToast({ msg: "We couldn't find that booking.", key: Date.now() });
+        return;
+      }
+      const originalDate = target.scheduledDate ?? "";
+      const originalTime = target.scheduledTime ?? "";
+      const originalMechanicId = target.mechanicId ?? "";
+      const date = options?.prefilledDate || originalDate;
+      const time = options?.prefilledTime || originalTime;
+      const mechanicId = options?.prefilledMechanicId ?? originalMechanicId;
+      if (date) {
+        const [y, mo, d] = date.split("-").map(Number);
+        if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+      }
+      setCurrentView("day");
+      setManualReschedule({
+        bookingId,
+        customerName:
+          options?.customerName ?? (target as any).customerName ?? "",
+        originalDate,
+        originalTime,
+        originalMechanicId,
+        estimatedMinutes: target.estimatedMinutes ?? 60,
+        date,
+        time,
+        mechanicId,
+        mode: options?.mode ?? "propose",
       });
-      setNoShowReschedule(null);
-      setToast({ msg: "Booking rescheduled", key: Date.now() });
+      setManualRescheduleError("");
+    },
+    [],
+  );
+
+  async function handleSubmitManualReschedule() {
+    if (!manualReschedule) return;
+    if (!manualReschedule.date || !manualReschedule.time) {
+      setManualRescheduleError("Pick a date and time before proposing.");
+      return;
+    }
+    if (
+      manualReschedule.date === manualReschedule.originalDate &&
+      manualReschedule.time === manualReschedule.originalTime &&
+      (manualReschedule.mechanicId || "") === (manualReschedule.originalMechanicId || "")
+    ) {
+      setManualRescheduleError("Pick a different date, time, or mechanic.");
+      return;
+    }
+    setIsSubmittingManualReschedule(true);
+    setManualRescheduleError("");
+    try {
+      if (manualReschedule.mode === "no_show_immediate") {
+        await rescheduleFromNoShowAlert({
+          bookingId: manualReschedule.bookingId as Id<"bookings">,
+          newScheduledDate: manualReschedule.date,
+          newScheduledTime: manualReschedule.time,
+          newMechanicId: manualReschedule.mechanicId
+            ? (manualReschedule.mechanicId as Id<"mechanics">)
+            : undefined,
+          assignmentPreference: manualReschedule.mechanicId
+            ? "specific_mechanic"
+            : "any",
+        });
+        setManualReschedule(null);
+        setToast({ msg: "Booking rescheduled", key: Date.now() });
+      } else {
+        await proposeReschedule({
+          bookingId: manualReschedule.bookingId as Id<"bookings">,
+          newScheduledDate: manualReschedule.date,
+          newScheduledTime: manualReschedule.time,
+          newMechanicId: manualReschedule.mechanicId
+            ? (manualReschedule.mechanicId as Id<"mechanics">)
+            : undefined,
+        });
+        setManualReschedule(null);
+        setToast({
+          msg: "Reschedule proposed — awaiting customer approval",
+          key: Date.now(),
+        });
+      }
     } catch (err: unknown) {
-      setNoShowRescheduleError(
+      setManualRescheduleError(
         err instanceof Error ? err.message : "Could not reschedule booking.",
       );
     } finally {
-      setIsSubmittingNoShowReschedule(false);
+      setIsSubmittingManualReschedule(false);
     }
   }
 
@@ -898,32 +982,50 @@ export default function SchedulePage() {
   }, [wantsAutoOpen, context?.hours, context?.mechanics, lookaheadBookings, router]);
 
   // Deep-link handler: bell-popover actions navigate here with ?action=… to open
-  // the right modal/drawer on the schedule page.
+  // the right modal/drawer on the schedule page. The effect retries once
+  // `bookings` finishes loading — otherwise a fast click from the bell would
+  // race ahead of the convex query and hit "We couldn't find that booking."
   const deepLinkHandledRef = useRef(false);
   useEffect(() => {
     if (deepLinkHandledRef.current) return;
     const action = searchParams.get("action");
     if (!action) return;
 
+    // Wait for booking actions until the bookings query resolves so we don't
+    // bail with a "not found" toast just because the data hasn't arrived yet.
+    const bookingActions = new Set([
+      "reschedule-no-show",
+      "focus-booking",
+    ]);
+    if (bookingActions.has(action) && bookings === undefined) return;
+
     if (action === "reschedule-no-show") {
       const bookingId = searchParams.get("bookingId");
       if (!bookingId) return;
-      const date = searchParams.get("date") ?? "";
-      const time = searchParams.get("time") ?? "";
-      const mechanicId = searchParams.get("mechanicId") ?? "";
-      const target = (bookingsRef.current ?? []).find(
-        (b) => String(b._id) === bookingId,
-      );
-      const customerName =
-        (target as any)?.customerName ??
-        (target as any)?.customer?.full ??
-        "";
-      if (date) {
-        const [y, mo, d] = date.split("-").map(Number);
+      // If the URL carries a date, switch the schedule to that date so the
+      // bookings query refetches the right range. The effect will re-run
+      // once `bookings` updates and we'll find the booking on the next pass.
+      const urlDate = searchParams.get("date") ?? "";
+      if (urlDate && urlDate !== dateToString(currentDate)) {
+        const [y, mo, d] = urlDate.split("-").map(Number);
         if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+        return;
       }
-      setCurrentView("day");
-      setNoShowReschedule({ bookingId, customerName, date, time, mechanicId });
+      const target = (bookings ?? []).find(
+        (b) => String(b._id) === String(bookingId),
+      );
+      if (!target) {
+        setToast({ msg: "We couldn't find that booking.", key: Date.now() });
+        deepLinkHandledRef.current = true;
+        router.replace("/schedule", { scroll: false });
+        return;
+      }
+      openManualReschedule(bookingId, {
+        mode: "no_show_immediate",
+        prefilledDate: searchParams.get("date") ?? undefined,
+        prefilledTime: searchParams.get("time") ?? undefined,
+        prefilledMechanicId: searchParams.get("mechanicId") ?? undefined,
+      });
       deepLinkHandledRef.current = true;
       router.replace("/schedule", { scroll: false });
       return;
@@ -933,6 +1035,15 @@ export default function SchedulePage() {
       const bookingId = searchParams.get("bookingId");
       if (!bookingId) return;
       const date = searchParams.get("date");
+      const target = (bookings ?? []).find(
+        (b) => String(b._id) === String(bookingId),
+      );
+      if (!target && !date) {
+        setToast({ msg: "We couldn't find that booking.", key: Date.now() });
+        deepLinkHandledRef.current = true;
+        router.replace("/schedule", { scroll: false });
+        return;
+      }
       focusBookingForReschedule(bookingId, date);
       deepLinkHandledRef.current = true;
       router.replace("/schedule", { scroll: false });
@@ -947,7 +1058,7 @@ export default function SchedulePage() {
       router.replace("/schedule", { scroll: false });
       return;
     }
-  }, [searchParams, router, focusBookingForReschedule]);
+  }, [searchParams, router, focusBookingForReschedule, openManualReschedule, bookings, currentDate]);
 
   const selectedLateStartReview = useMemo<LateStartReviewView | null>(() => {
     if (!lateStartReviews || !selectedLateStartReviewId) return null;
@@ -1467,10 +1578,32 @@ export default function SchedulePage() {
             nowTimestamp={nowTimestamp}
             currentDate={currentDate}
             viewerMechanicId={isMechanicViewer ? viewerMechanicId : null}
-            onSelectEvent={handleEventSelect}
+            onSelectEvent={(event) => {
+              // Mid-reschedule: clicking any booking on the lane exits
+              // reschedule mode and selects that booking in the drawer.
+              if (manualReschedule) setManualReschedule(null);
+              handleEventSelect(event);
+            }}
             selectedEventId={selectedBookingId ?? null}
             onProposeReschedule={handleProposeReschedule}
             onDragError={(msg) => setToast({ msg, key: Date.now() })}
+            onSelectEmptyCell={
+              manualReschedule
+                ? (info) => {
+                    setManualReschedule((current) =>
+                      current
+                        ? {
+                            ...current,
+                            date: info.date,
+                            time: info.startTime,
+                            mechanicId: info.mechanicId,
+                          }
+                        : current,
+                    );
+                    setManualRescheduleError("");
+                  }
+                : undefined
+            }
             onContextMenuCell={(info) => {
               if (
                 bookings &&
@@ -1494,6 +1627,37 @@ export default function SchedulePage() {
             }}
             onBlockDayClick={(mechanicId, mechanicName) => handleBlockFullDay(mechanicId, mechanicName, dateToString(currentDate))}
             draftBooking={createBookingDrawer}
+            draftReschedule={
+              manualReschedule && manualReschedule.date && manualReschedule.time
+                ? {
+                    date: manualReschedule.date,
+                    time: manualReschedule.time,
+                    mechanicId: manualReschedule.mechanicId,
+                    durationMinutes: manualReschedule.estimatedMinutes,
+                    hasConflict: (() => {
+                      if (!manualReschedule.mechanicId) return false;
+                      const outside = bookingFallsOutsideShopHours(context.hours, {
+                        date: manualReschedule.date,
+                        startTime: manualReschedule.time,
+                        estimatedMinutes: manualReschedule.estimatedMinutes,
+                      });
+                      if (outside) return true;
+                      const c = getMechanicAssignmentConflict(
+                        {
+                          _id: manualReschedule.bookingId,
+                          scheduledDate: manualReschedule.date,
+                          scheduledTime: manualReschedule.time,
+                          estimatedMinutes: manualReschedule.estimatedMinutes,
+                        },
+                        manualReschedule.mechanicId,
+                        bookings ?? [],
+                        blockedSlots ?? [],
+                      );
+                      return c !== null;
+                    })(),
+                  }
+                : null
+            }
           />
         )}
         {bookings !== undefined && currentView === "week" && mechanicFilter === "all" && (
@@ -1946,10 +2110,209 @@ export default function SchedulePage() {
         </div>
       </div>
 
-      {/* Job detail drawer */}
-      <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${selectedBookingId ? "w-[552px]" : "w-0"}`}>
+      {/* Job detail drawer (or reschedule panel when in reschedule mode) */}
+      <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${(selectedBookingId || manualReschedule) ? "w-[552px]" : "w-0"}`}>
         <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-180px)] min-h-[500px]">
-          {selectedBookingId && (
+          {manualReschedule ? (() => {
+            const m = manualReschedule;
+            const hasDateTime = Boolean(m.date && m.time);
+            const outsideHours = hasDateTime
+              ? bookingFallsOutsideShopHours(context.hours, {
+                  date: m.date,
+                  startTime: m.time,
+                  estimatedMinutes: m.estimatedMinutes,
+                })
+              : false;
+            const conflict =
+              hasDateTime && m.mechanicId
+                ? getMechanicAssignmentConflict(
+                    {
+                      _id: m.bookingId,
+                      scheduledDate: m.date,
+                      scheduledTime: m.time,
+                      estimatedMinutes: m.estimatedMinutes,
+                    },
+                    m.mechanicId,
+                    bookings ?? [],
+                    blockedSlots ?? [],
+                  )
+                : null;
+            const unchanged =
+              m.date === m.originalDate &&
+              m.time === m.originalTime &&
+              (m.mechanicId || "") === (m.originalMechanicId || "");
+            return (
+              <div className="flex h-full flex-col">
+                <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+                      {m.mode === "no_show_immediate" ? "Reschedule no-show" : "Rescheduling"}
+                    </p>
+                    <h2 className="mt-1 truncate text-base font-semibold text-foreground">
+                      {m.customerName || "Booking"}
+                    </h2>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Currently {m.originalDate} · {m.originalTime}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setManualReschedule(null)}
+                    title="Cancel reschedule"
+                    className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+                  <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-foreground">
+                    {m.mode === "no_show_immediate"
+                      ? "This customer is a no-show — the new slot will apply immediately and they'll get a courtesy notice. Click any empty slot on the schedule or use the fields below."
+                      : "Click any empty slot on the schedule to pick the new date, time, and mechanic — or use the fields below."}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <DrawerFieldLabel>Date</DrawerFieldLabel>
+                      <input
+                        type="date"
+                        value={m.date}
+                        onChange={(event) => {
+                          const nextDate = event.target.value;
+                          setManualReschedule((current) =>
+                            current ? { ...current, date: nextDate } : current,
+                          );
+                          if (nextDate) {
+                            const [y, mo, d] = nextDate.split("-").map(Number);
+                            if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+                          }
+                        }}
+                        className={drawerInputClassName}
+                      />
+                    </div>
+                    <div>
+                      <DrawerFieldLabel>Time</DrawerFieldLabel>
+                      <Select
+                        selectedKey={m.time}
+                        onSelectionChange={(key) =>
+                          setManualReschedule((current) =>
+                            current ? { ...current, time: String(key) } : current,
+                          )
+                        }
+                      >
+                        <SelectTrigger className={drawerSelectTriggerClassName}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectPopover>
+                          <SelectListBox shouldFocusWrap>
+                            {generateTimeOptions().map((option) => (
+                              <SelectItem key={option.value} id={option.value} textValue={option.label}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectListBox>
+                        </SelectPopover>
+                      </Select>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <DrawerFieldLabel>Assignment</DrawerFieldLabel>
+                      <Select
+                        selectedKey={m.mechanicId || "any"}
+                        onSelectionChange={(key) =>
+                          setManualReschedule((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  mechanicId: key === "any" ? "" : String(key),
+                                }
+                              : current,
+                          )
+                        }
+                      >
+                        <SelectTrigger className={drawerSelectTriggerClassName}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectPopover>
+                          <SelectListBox shouldFocusWrap>
+                            <SelectItem id="any" textValue={entityLabel.anyLabel}>
+                              <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
+                            </SelectItem>
+                            {mechanics.map((mechanic) => (
+                              <SelectItem key={mechanic._id} id={mechanic._id} textValue={mechanic.name}>
+                                {mechanic.name}
+                              </SelectItem>
+                            ))}
+                          </SelectListBox>
+                        </SelectPopover>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {hasDateTime ? (
+                    <div className="space-y-2">
+                      {outsideHours ? (
+                        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                          This time falls outside the shop's open hours for that day.
+                        </div>
+                      ) : null}
+                      {conflict === "booking" ? (
+                        <div className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-900">
+                          The selected mechanic already has a booking that overlaps this window.
+                        </div>
+                      ) : null}
+                      {conflict === "blocked" ? (
+                        <div className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs text-rose-900">
+                          The selected mechanic has blocked time during this window.
+                        </div>
+                      ) : null}
+                      {!outsideHours && !conflict && !unchanged ? (
+                        <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                          New time: <span className="font-semibold">{m.date} · {m.time}</span>
+                          {m.mechanicId
+                            ? ` · ${mechanics.find((mech) => mech._id === m.mechanicId)?.name ?? "mechanic"}`
+                            : ""}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {manualRescheduleError ? (
+                    <p className="text-sm text-destructive">
+                      {manualRescheduleError}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+                  <button
+                    type="button"
+                    onClick={() => setManualReschedule(null)}
+                    className="rounded-lg border border-border px-3.5 py-2 text-sm font-medium transition-colors hover:bg-muted"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmitManualReschedule()}
+                    disabled={
+                      isSubmittingManualReschedule ||
+                      !hasDateTime ||
+                      unchanged ||
+                      conflict !== null ||
+                      outsideHours
+                    }
+                    className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+                  >
+                    {isSubmittingManualReschedule ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : null}
+                    {m.mode === "no_show_immediate" ? "Reschedule now" : "Propose new time"}
+                  </button>
+                </div>
+              </div>
+            );
+          })() : selectedBookingId && (
             <BookingDetailPanel
               ref={jobDetailRef}
               job={selectedJobDetail}
@@ -1961,7 +2324,7 @@ export default function SchedulePage() {
               onRequestRescheduleConfirmation={handleProposeReschedule}
               onRequestReschedule={
                 selectedBookingId
-                  ? () => focusBookingForReschedule(String(selectedBookingId))
+                  ? () => openManualReschedule(String(selectedBookingId))
                   : undefined
               }
               onRequestNewBookingAfterCancel={({ mechanicId, scheduledDate }) => {
@@ -2020,130 +2383,6 @@ export default function SchedulePage() {
       )}
 
       </div>{/* end flex row */}
-
-      {noShowReschedule ? (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center px-4 py-6">
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setNoShowReschedule(null)}
-          />
-          <div className="relative z-[91] w-full max-w-lg rounded-2xl border border-border bg-card p-6 shadow-2xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-                  Reschedule late customer
-                </p>
-                <h2 className="mt-2 text-lg font-semibold text-foreground">
-                  {noShowReschedule.customerName}
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => setNoShowReschedule(null)}
-                className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              <div>
-                <DrawerFieldLabel>Date</DrawerFieldLabel>
-                <input
-                  type="date"
-                  value={noShowReschedule.date}
-                  onChange={(event) =>
-                    setNoShowReschedule((current) =>
-                      current ? { ...current, date: event.target.value } : current,
-                    )
-                  }
-                  className={drawerInputClassName}
-                />
-              </div>
-              <div>
-                <DrawerFieldLabel>Time</DrawerFieldLabel>
-                <Select
-                  selectedKey={noShowReschedule.time}
-                  onSelectionChange={(key) =>
-                    setNoShowReschedule((current) =>
-                      current ? { ...current, time: String(key) } : current,
-                    )
-                  }
-                >
-                  <SelectTrigger className={drawerSelectTriggerClassName}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectPopover>
-                    <SelectListBox shouldFocusWrap>
-                      {generateTimeOptions().map((option) => (
-                        <SelectItem key={option.value} id={option.value} textValue={option.label}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectListBox>
-                  </SelectPopover>
-                </Select>
-              </div>
-              <div className="sm:col-span-2">
-                <DrawerFieldLabel>Assignment</DrawerFieldLabel>
-                <Select
-                  selectedKey={noShowReschedule.mechanicId || "any"}
-                  onSelectionChange={(key) =>
-                    setNoShowReschedule((current) =>
-                      current
-                        ? {
-                            ...current,
-                            mechanicId: key === "any" ? "" : String(key),
-                          }
-                        : current,
-                    )
-                  }
-                >
-                  <SelectTrigger className={drawerSelectTriggerClassName}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectPopover>
-                    <SelectListBox shouldFocusWrap>
-                      <SelectItem id="any" textValue={entityLabel.anyLabel}>
-                        <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
-                      </SelectItem>
-                      {mechanics.map((mechanic) => (
-                        <SelectItem key={mechanic._id} id={mechanic._id} textValue={mechanic.name}>
-                          {mechanic.name}
-                        </SelectItem>
-                      ))}
-                    </SelectListBox>
-                  </SelectPopover>
-                </Select>
-              </div>
-            </div>
-            {noShowRescheduleError ? (
-              <p className="mt-4 text-sm text-destructive">
-                {noShowRescheduleError}
-              </p>
-            ) : null}
-            <div className="mt-6 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setNoShowReschedule(null)}
-                className="rounded-lg border border-border px-3.5 py-2 text-sm font-medium transition-colors hover:bg-muted"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSubmitNoShowReschedule()}
-                disabled={isSubmittingNoShowReschedule}
-                className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
-              >
-                {isSubmittingNoShowReschedule ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : null}
-                Reschedule
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       <RescheduleConfirmationDialog
         proposal={rescheduleProposal}
@@ -2293,7 +2532,7 @@ export default function SchedulePage() {
       )}
 
       {/* Success toast — shown only when blur-overlay confirmations are not open */}
-      {toast && !rescheduleProposal && !noShowReschedule && !blockDayConfirm && (
+      {toast && !rescheduleProposal && !manualReschedule && !blockDayConfirm && (
         <div className="fixed bottom-6 right-6 z-[70] bg-card border border-border rounded-lg shadow-lg px-4 py-3 text-sm text-foreground select-none pointer-events-none">
           {toast.msg}
         </div>

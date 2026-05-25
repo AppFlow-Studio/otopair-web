@@ -39,7 +39,6 @@ import { isTerminal, validateTransition } from "./booking_status_history";
 import { mintClaimToken } from "./walkin_claims";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
-import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { computeDisclosedRange } from "./booking_quotes";
 import {

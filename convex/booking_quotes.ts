@@ -141,10 +141,20 @@ async function resolvePartsBandForService(
     fallback_midpoint_dollars: number;
   },
 ): Promise<{ low: number; high: number }> {
+  // A spec/option row counts as a real band only when low and high actually
+  // differ. When they're equal we'd persist a collapsed "$X – $X" range that
+  // contradicts the ±25% band the customer just agreed to at checkout, so
+  // we fall through to the fallback in that case.
+  const isRealBand = (low: number, high: number) => high > low;
+
   // 1. Option-level band wins when an option is selected.
   if (args.option_id) {
     const opt = await ctx.db.get(args.option_id);
-    if (opt?.parts_cost_low != null && opt?.parts_cost_high != null) {
+    if (
+      opt?.parts_cost_low != null &&
+      opt?.parts_cost_high != null &&
+      isRealBand(opt.parts_cost_low, opt.parts_cost_high)
+    ) {
       return { low: opt.parts_cost_low, high: opt.parts_cost_high };
     }
   }
@@ -157,12 +167,17 @@ async function resolvePartsBandForService(
         q.eq("engine_id", args.engine_id!).eq("service_id", args.service_id),
       )
       .first();
-    if (spec?.parts_cost_low != null && spec?.parts_cost_high != null) {
+    if (
+      spec?.parts_cost_low != null &&
+      spec?.parts_cost_high != null &&
+      isRealBand(spec.parts_cost_low, spec.parts_cost_high)
+    ) {
       return { low: spec.parts_cost_low, high: spec.parts_cost_high };
     }
   }
 
-  // 3. Fallback: ±25% around the client-supplied per-service parts cost.
+  // 3. Fallback: ±25% around the client-supplied per-service parts cost
+  //    (or around the spec midpoint when the spec collapsed in step 2).
   //    For labor-only services parts_cost is 0 → band is (0, 0), which is
   //    correct (labor variance is small enough that we don't band it).
   const mid = Math.max(0, args.fallback_midpoint_dollars);

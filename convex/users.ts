@@ -32,7 +32,28 @@
  */
 
 import { action, mutation, query } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
+
+function hasEssentialOnboardingFields(
+  user: Pick<
+    Doc<"users">,
+    "email" | "emailConfirmed" | "phone" | "phoneVerified" | "first_name" | "last_name"
+  >,
+) {
+  return Boolean(
+    user.email?.trim() &&
+    user.emailConfirmed === true &&
+    user.phone &&
+    user.phoneVerified === true &&
+    user.first_name?.trim() &&
+    user.last_name?.trim(),
+  );
+}
+
+function getEssentialOnboardingCompleted(user: Doc<"users">) {
+  return user.essentialOnboardingCompleted === true || hasEssentialOnboardingFields(user);
+}
 
 /**
  * QUERY: list
@@ -75,6 +96,7 @@ export const getMe = query({
     return {
       ...user,
       profile_photo_url,
+      essentialOnboardingCompleted: getEssentialOnboardingCompleted(user),
     };
   },
 });
@@ -155,6 +177,13 @@ export const getOrCreateMe = mutation({
       if (identity.pictureUrl && !existing.profile_photo_url && !existing.profile_photo_storage_id) {
         updates.profile_photo_url = identity.pictureUrl;
       }
+      const nextUser = { ...existing, ...updates };
+      if (
+        existing.essentialOnboardingCompleted !== true &&
+        hasEssentialOnboardingFields(nextUser)
+      ) {
+        updates.essentialOnboardingCompleted = true;
+      }
 
       if (Object.keys(updates).length > 0) {
         await ctx.db.patch(existing._id, updates);
@@ -172,6 +201,7 @@ export const getOrCreateMe = mutation({
       last_name: identity.familyName || undefined,
       profile_photo_url: identity.pictureUrl || undefined,
       onboardingCompleted: false,
+      essentialOnboardingCompleted: false,
       createdAt: Date.now(),
     });
 
@@ -301,6 +331,14 @@ export const updateProfile = mutation({
     if (args.language !== undefined) updates.language = args.language;
     if (args.units !== undefined) updates.units = args.units;
 
+    const nextUser = { ...user, ...updates };
+    if (
+      user.essentialOnboardingCompleted !== true &&
+      hasEssentialOnboardingFields(nextUser)
+    ) {
+      updates.essentialOnboardingCompleted = true;
+    }
+
     if (Object.keys(updates).length === 0) {
       return user;
     }
@@ -317,6 +355,51 @@ export const updateProfile = mutation({
  */
 export const generateUploadUrl = mutation(async (ctx) => {
   return await ctx.storage.generateUploadUrl();
+});
+
+/**
+ * MUTATION: completeEssentialOnboarding
+ * Marks the required account-creation steps as complete without marking the
+ * optional onboarding steps complete.
+ */
+export const completeEssentialOnboarding = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Not authenticated");
+    }
+
+    const clerkUserId = identity.subject;
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
+      .unique();
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (identity.email && user.email !== identity.email) {
+      updates.email = identity.email;
+    }
+    if (identity.emailVerified !== undefined && user.emailConfirmed !== identity.emailVerified) {
+      updates.emailConfirmed = identity.emailVerified;
+    }
+
+    const nextUser = { ...user, ...updates };
+    if (!hasEssentialOnboardingFields(nextUser)) {
+      throw new Error("Essential onboarding is incomplete");
+    }
+
+    await ctx.db.patch(user._id, {
+      ...updates,
+      essentialOnboardingCompleted: true,
+      lastUpdated: Date.now(),
+    });
+    return await ctx.db.get(user._id);
+  },
 });
 
 /**
@@ -346,7 +429,11 @@ export const completeOnboarding = mutation({
       throw new Error("User not found");
     }
 
-    await ctx.db.patch(user._id, { onboardingCompleted: true, lastUpdated: Date.now() });
+    await ctx.db.patch(user._id, {
+      onboardingCompleted: true,
+      essentialOnboardingCompleted: true,
+      lastUpdated: Date.now(),
+    });
     return await ctx.db.get(user._id);
   },
 });
@@ -370,6 +457,15 @@ export const upsertFromClerk = mutation({
     const now = Date.now();
 
     if (existing) {
+      const nextUser = {
+        ...existing,
+        email: args.email,
+        first_name: args.first_name,
+        last_name: args.last_name,
+        profile_photo_url: args.profile_photo_url ?? undefined,
+        ...(args.phone ? { phone: args.phone } : {}),
+        ...(args.role ? { role: args.role } : {}),
+      };
       await ctx.db.patch(existing._id, {
         email: args.email,
         first_name: args.first_name,
@@ -377,6 +473,10 @@ export const upsertFromClerk = mutation({
         profile_photo_url: args.profile_photo_url ?? undefined,
         ...(args.phone ? { phone: args.phone } : {}),
         ...(args.role ? { role: args.role } : {}),
+        ...(existing.essentialOnboardingCompleted !== true &&
+        (existing.onboardingCompleted === true || hasEssentialOnboardingFields(nextUser))
+          ? { essentialOnboardingCompleted: true }
+          : {}),
         lastUpdated: now,
       });
       return existing._id;
@@ -418,6 +518,7 @@ export const upsertFromClerk = mutation({
         phone: normalizedIncomingPhone ?? claimable.phone,
         role: args.role ?? claimable.role ?? "user",
         onboardingCompleted: true,
+        essentialOnboardingCompleted: true,
         lastUpdated: now,
         walkInClaimedAt: now,
       });
@@ -433,6 +534,7 @@ export const upsertFromClerk = mutation({
       profile_photo_url: args.profile_photo_url ?? undefined,
       role: args.role ?? "user",
       onboardingCompleted: false,
+      essentialOnboardingCompleted: false,
       createdAt: now,
     });
   },

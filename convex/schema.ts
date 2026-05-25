@@ -1129,6 +1129,7 @@ export default defineSchema({
     profile_photo_storage_id: v.optional(v.string()),
     auth_provider: v.optional(v.string()),
     onboardingCompleted: v.optional(v.boolean()),
+    essentialOnboardingCompleted: v.optional(v.boolean()),
     tellUsAboutCompleted: v.optional(v.boolean()),
     user_intentions: v.optional(v.any()),
     language: v.optional(v.string()),

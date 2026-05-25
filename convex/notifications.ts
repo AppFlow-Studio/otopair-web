@@ -41,6 +41,8 @@ export const getMyNotifications = query({
     // Enrich each booking-bound row with the short handle, customer name,
     // vehicle label, and shop name so banners can render descriptive copy
     // without a second roundtrip per row.
+    const RESCHEDULE_TTL_MS = 24 * 60 * 60 * 1000;
+
     const enriched = await Promise.all(
       mine.map(async (row: any) => {
         let customerName: string | null = null;
@@ -49,11 +51,23 @@ export const getMyNotifications = query({
         let scheduledDate: string | null = null;
         let scheduledTime: string | null = null;
         let shortHandle: string | null = null;
+        let rescheduleExpiresAt: number | null = null;
+        let assignedMechanicId: string | null = null;
         if (row.booking_id) {
           const booking: any = await ctx.db.get(row.booking_id);
           if (booking) {
             scheduledDate = booking.scheduled_date ?? null;
             scheduledTime = booking.scheduled_time ?? null;
+            assignedMechanicId = booking.mechanic_id ?? null;
+            if (
+              (row.category === "booking_reschedule_proposed" ||
+                row.category === "booking_forced_delay_proposed") &&
+              typeof booking.reschedule_proposed_at === "number" &&
+              booking.status === "pending_customer_acceptance"
+            ) {
+              rescheduleExpiresAt =
+                booking.reschedule_proposed_at + RESCHEDULE_TTL_MS;
+            }
             const inv = (booking.invoice_number ?? "").trim();
             shortHandle = inv
               ? inv.startsWith("#")
@@ -106,6 +120,8 @@ export const getMyNotifications = query({
           shortHandle,
           scheduledDate,
           scheduledTime,
+          rescheduleExpiresAt,
+          assignedMechanicId,
         };
       }),
     );

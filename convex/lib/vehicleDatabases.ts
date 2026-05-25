@@ -15,6 +15,7 @@ import {
   KNOWN_SERVICE_SLUGS,
   type PackageRule,
 } from "./packageRules";
+import { findHaloVariant } from "./haloVariantRules";
 
 const VDB_BASE = "https://api.vehicledatabases.com";
 
@@ -39,7 +40,20 @@ export async function advancedVinDecode(vin: string): Promise<any | null> {
     });
 
     if (!response.ok) {
-      console.log(`[vdb] API error: ${response.status} — falling back to NHTSA`);
+      // Include the body so we can distinguish "no key" (401),
+      // "wrong/expired key" (403 with auth message), and
+      // "endpoint not in plan" (403 with access message). All
+      // three look the same in summary form.
+      let bodyHint = "";
+      try {
+        bodyHint = (await response.text()).slice(0, 300);
+      } catch {}
+      console.log(
+        `[vdb] API error: ${response.status} — falling back to NHTSA. ` +
+        `Body: ${bodyHint}. ` +
+        `If 401/403: confirm VEHICLE_DATABASES_API_KEY is set on Convex (npx convex env set VEHICLE_DATABASES_API_KEY <key>) ` +
+        `with the same value as the client's EXPO_PUBLIC_VEHICLE_DB_API_KEY.`,
+      );
       return null;
     }
 
@@ -652,8 +666,21 @@ export function assessAvailablePackages(args: {
   trim: string;
   year: number;
 }): DetectedPackage[] {
-  const { vdbRaw, make, trim } = args;
+  const { vdbRaw, make, model, trim } = args;
   const detected = new Map<string, DetectedPackage>();
+
+  // Halo variants (BMW M, AMG, RS, Type R, Blackwing, Hellcat, Trackhawk,
+  // Shelby, STI, GR, Lexus F, etc.) ship performance hardware as STANDARD.
+  // When a halo rule matches with hardwareStandard=true, package rules tagged
+  // redundant_when_halo are skipped — they'd otherwise double-count baseline
+  // equipment and surface wrong brake/rotor specs in quoting.
+  //
+  // Both model and trim are checked because catalogs (VDB, NHTSA) often file
+  // halo variants under their base series (model="3 Series", trim="M3
+  // Competition") — legacy vehicle_config rows enriched before halo promotion
+  // still carry the stale model.
+  const halo = findHaloVariant(make, model, trim);
+  const haloHardwareStandard = halo?.hardwareStandard ?? false;
 
   const upsert = (pkg: DetectedPackage) => {
     const existing = detected.get(pkg.code);
@@ -670,6 +697,7 @@ export function assessAvailablePackages(args: {
   for (const { source, text } of strings) {
     for (const rule of explicitRules) {
       if (rule.make !== "*" && rule.make.toLowerCase() !== make.toLowerCase()) continue;
+      if (haloHardwareStandard && rule.redundant_when_halo) continue;
       if (!rule.pattern.test(text)) continue;
       upsert({
         code: rule.code,
@@ -684,6 +712,7 @@ export function assessAvailablePackages(args: {
   // 2. Trim-name inference (lower confidence). Only if we don't already have a stronger match.
   for (const rule of inferenceRules) {
     if (rule.make !== "*" && rule.make.toLowerCase() !== make.toLowerCase()) continue;
+    if (haloHardwareStandard && rule.redundant_when_halo) continue;
     if (!rule.pattern.test(trim ?? "")) continue;
     if (detected.has(rule.code)) continue; // explicit hit wins
     upsert({

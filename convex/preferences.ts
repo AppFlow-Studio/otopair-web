@@ -18,6 +18,11 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
+function normalizeUnits(units: string): "mi" | "km" {
+  if (units === "mi" || units === "km") return units;
+  throw new Error("Invalid units preference. Expected 'mi' or 'km'.");
+}
+
 /**
  * QUERY: getMyPreferences
  * Get the settings preferences for the current authenticated user.
@@ -138,7 +143,7 @@ export const updateGeneralPreferences = mutation({
       last_updated: Date.now(),
     };
     if (args.language !== undefined) updates.language = args.language;
-    if (args.units !== undefined) updates.units = args.units;
+    if (args.units !== undefined) updates.units = normalizeUnits(args.units);
 
     if (existing) {
       await ctx.db.patch(existing._id, updates);

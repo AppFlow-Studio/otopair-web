@@ -39,6 +39,9 @@ export type InsertSnapshotArgs = {
   engine_id?: Id<"engines">;
   chassis_id?: Id<"chassis_variants">;
   trim_id?: Id<"trims">;
+  // Canonical VIN — denormalized for the per-VIN preference lookup so the
+  // accrual writer doesn't have to join back to bookings.
+  vin?: string;
 
   service_id: Id<"services">;
 
@@ -52,6 +55,13 @@ export type InsertSnapshotArgs = {
   quantity?: number;
   unit_cost: number;
   currency?: string;
+
+  // Swap provenance — the OEM number the mechanic swapped FROM (the part
+  // they rejected). Resolved to swap_from_part_id by the OEM→part_id lookup.
+  swap_from_oem_number?: string;
+  // "Not used here" toggle. Snapshot is still inserted (audit), but excluded
+  // from price aggregates and counted toward demoting the part's default.
+  not_used?: boolean;
 
   corrects_snapshot_id?: Id<"part_snapshots">;
   notes?: string;
@@ -105,14 +115,33 @@ export async function insertSnapshotImpl(
     if (match) partId = match._id;
   }
 
+  // Resolve the swapped-FROM part id (so the demote signal lands on the
+  // correct preference row). The mechanic might have swapped from a custom
+  // entry not in the catalog — in that case swapFromPartId stays undefined
+  // and we skip the swap_away accrual (we can't address a part we can't
+  // identify).
+  let swapFromPartId: Id<"oem_parts"> | undefined;
+  if (args.swap_from_oem_number && args.swap_from_oem_number.trim() !== "") {
+    const swapFromMatch = await ctx.db
+      .query("oem_parts")
+      .withIndex("by_part_number", (q: any) =>
+        q.eq("oem_part_number", args.swap_from_oem_number!.trim()),
+      )
+      .first();
+    if (swapFromMatch) swapFromPartId = swapFromMatch._id;
+  }
+
+  const notUsed = args.not_used === true;
+
   // Reasonableness check — silent. Compares unit_cost against the median
   // unit_cost of recent same-part snapshots on the same vehicle_config that
-  // haven't been superseded. Skipped for customer parts and when we lack the
-  // vehicle_config_id needed to scope the comparison.
+  // haven't been superseded. Skipped for customer parts, "not used" rows
+  // (no real price), and when we lack the vehicle_config_id needed to scope
+  // the comparison.
   let flaggedForReview: boolean | undefined;
   let flagReason: string | undefined;
 
-  if (!isCustomer && partId && args.vehicle_config_id) {
+  if (!isCustomer && !notUsed && partId && args.vehicle_config_id) {
     const sameConfig = await ctx.db
       .query("part_snapshots")
       .withIndex("by_service_config", (q: any) =>
@@ -126,6 +155,7 @@ export async function insertSnapshotImpl(
       (row: any) =>
         row.part_id === partId &&
         row.supplied_by === "shop" &&
+        row.not_used !== true &&
         row.superseded_by_id === undefined,
     );
     if (samePart.length >= OUTLIER_MIN_SAMPLE) {
@@ -158,6 +188,7 @@ export async function insertSnapshotImpl(
     engine_id: args.engine_id,
     chassis_id: args.chassis_id,
     trim_id: args.trim_id,
+    vin: args.vin,
 
     service_id: args.service_id,
 
@@ -178,6 +209,10 @@ export async function insertSnapshotImpl(
 
     corrects_snapshot_id: args.corrects_snapshot_id,
 
+    swap_from_oem_number: args.swap_from_oem_number?.trim() || undefined,
+    swap_from_part_id: swapFromPartId,
+    not_used: notUsed ? true : undefined,
+
     recorded_at: recordedAt,
     notes: args.notes,
   });
@@ -189,17 +224,41 @@ export async function insertSnapshotImpl(
     }
   }
 
-  if (!isCustomer && partId && args.vehicle_config_id) {
+  // Preference accrual: three independent signals can fire per snapshot.
+  //   1. "use" — the part WAS installed here (skips customer + not_used).
+  //   2. "swap_away" — the mechanic swapped FROM this part (vote against).
+  //   3. "not_used" — the mechanic marked it Not used (vote against).
+  // Both shop+config and VIN tiers are written in one call when the data
+  // permits; the writer no-ops on the tier whose key is missing.
+  const accrualBase = {
+    shop_id: args.shop_id,
+    vin: args.vin,
+    vehicle_config_id: args.vehicle_config_id,
+    service_id: args.service_id,
+    used_at: recordedAt,
+  };
+
+  if (!isCustomer && !notUsed && partId) {
     await ctx.scheduler.runAfter(
       0,
-      internal.shop_part_preferences.recordPartUsage,
-      {
-        shop_id: args.shop_id,
-        service_id: args.service_id,
-        vehicle_config_id: args.vehicle_config_id,
-        part_id: partId,
-        used_at: recordedAt,
-      },
+      internal.shop_part_preferences.recordObservation,
+      { ...accrualBase, part_id: partId, intent: "use" as const },
+    );
+  }
+
+  if (swapFromPartId) {
+    await ctx.scheduler.runAfter(
+      0,
+      internal.shop_part_preferences.recordObservation,
+      { ...accrualBase, part_id: swapFromPartId, intent: "swap_away" as const },
+    );
+  }
+
+  if (notUsed && partId) {
+    await ctx.scheduler.runAfter(
+      0,
+      internal.shop_part_preferences.recordObservation,
+      { ...accrualBase, part_id: partId, intent: "not_used" as const },
     );
   }
 

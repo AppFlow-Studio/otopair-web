@@ -21,11 +21,23 @@ type SuggestedPart = {
   part_name: string;
   oem_number: string;
   cost: number;
+  // Whole-unit count of this part needed for the service. Sourced from
+  // part_fitments.quantity_needed (catalog) or service-specific knowledge
+  // (spark_plug_quantity, tire qty). UI falls back to 1 when absent.
+  quantity?: number;
   // The booking service this suggestion belongs to. Lets the post-job and
   // backfill flows render per-service parts blocks and lets snapshot
   // attribution stay accurate on multi-service jobs.
   service_id?: Id<"services">;
+  // Which layer of the cascade returned this part. Lets the UI badge
+  // "Used last time on this car" (vin) vs "Shop default" (shop) vs catalog
+  // fallback. Absent for legacy paths that pre-date the layered cascade.
+  learned_from?: "vin" | "shop" | "config" | "catalog";
 };
+
+// Mirror of SHOP_DEMOTE_DELTA in shop_part_preferences.ts so the cascade
+// applies the same vote-against rule as the accrual writer.
+const CASCADE_SHOP_DEMOTE_DELTA = 2;
 
 function medianOf(values: number[]): number {
   if (values.length === 0) return 0;
@@ -56,12 +68,68 @@ async function resolveSuggestedPartsFromCascade(
     shopId,
     serviceId,
     vehicleConfigId,
+    vin,
   }: {
     shopId: Id<"shops">;
     serviceId: Id<"services">;
     vehicleConfigId: Id<"vehicle_configs">;
+    /** Canonical VIN. When set, Layer 0 (per-VIN sticky preference) is tried
+     *  first — that's how "we know this car had this part installed" wins
+     *  over the shop's per-model default. */
+    vin?: string;
   },
 ): Promise<SuggestedPart[]> {
+  // Layer 0 — per-VIN sticky. Single hit short-circuits the cascade so the
+  // mechanic sees what's actually installed in THIS car, not what the shop
+  // installs on this model in general.
+  if (vin) {
+    const vinRows = await ctx.db
+      .query("vehicle_part_preferences")
+      .withIndex("by_vin_service", (q: any) =>
+        q.eq("vin", vin).eq("service_id", serviceId),
+      )
+      .collect();
+
+    const eligibleVin = vinRows.filter((r: any) => {
+      const used = r.use_count ?? 0;
+      const against = (r.swap_away_count ?? 0) + (r.not_used_count ?? 0);
+      // Either explicitly the sticky default OR a single use that hasn't
+      // been voted against past the threshold.
+      return r.is_default === true || against <= used + CASCADE_SHOP_DEMOTE_DELTA;
+    });
+
+    if (eligibleVin.length > 0) {
+      // Hydrate each into a SuggestedPart. Use shop-level snapshots for the
+      // cost estimate when possible; fall back to the cross-shop median.
+      const vinSuggestions: SuggestedPart[] = [];
+      for (const row of eligibleVin) {
+        const part = await ctx.db.get(row.part_id);
+        if (!part) continue;
+        // Median of recent shop-supplied snapshots for this part across any
+        // vehicle_config, scoped to the shop when known. Cheap-and-good — a
+        // dedicated per-VIN cost would be too thin a sample.
+        const recent = await ctx.db
+          .query("part_snapshots")
+          .withIndex("by_part", (q: any) => q.eq("part_id", row.part_id))
+          .order("desc")
+          .take(50);
+        const usable = (recent as any[]).filter(
+          (s) =>
+            s.superseded_by_id === undefined &&
+            s.supplied_by === "shop" &&
+            s.not_used !== true,
+        );
+        vinSuggestions.push({
+          part_name: part.name,
+          oem_number: part.oem_part_number,
+          cost: medianOf(usable.map((s) => s.unit_cost)),
+          learned_from: "vin",
+        });
+      }
+      if (vinSuggestions.length > 0) return vinSuggestions;
+    }
+  }
+
   // Layer 1
   const prefs = await ctx.db
     .query("shop_part_preferences")
@@ -72,7 +140,14 @@ async function resolveSuggestedPartsFromCascade(
         .eq("vehicle_config_id", vehicleConfigId),
     )
     .collect();
-  const defaults = prefs.filter((p: any) => p.is_default);
+  // Honor is_default AND the same demote rule the accrual writer uses, so
+  // a recently-demoted preference doesn't sneak back in before the next
+  // accrual tick.
+  const defaults = prefs.filter((p: any) => {
+    if (!p.is_default) return false;
+    const against = (p.swap_away_count ?? 0) + (p.not_used_count ?? 0);
+    return against <= (p.use_count ?? 0) + CASCADE_SHOP_DEMOTE_DELTA;
+  });
 
   if (defaults.length > 0) {
     // Pull this shop's recent snapshots once and bucket by part_id so we can
@@ -108,6 +183,7 @@ async function resolveSuggestedPartsFromCascade(
         part_name: part.name,
         oem_number: part.oem_part_number,
         cost: medianOf(costs),
+        learned_from: "shop",
       });
     }
     if (suggestions.length > 0) return suggestions;
@@ -160,6 +236,7 @@ async function resolveSuggestedPartsFromCascade(
       part_name: part.name,
       oem_number: part.oem_part_number,
       cost: medianOf(entry.costs),
+      learned_from: "config",
     });
   }
   return suggestions;
@@ -318,6 +395,10 @@ export const getPrefillData = query({
           shopId: booking.shop_id,
           serviceId: sid,
           vehicleConfigId: vehicle.vehicle_config_id,
+          // Canonical VIN unlocks Layer 0 (per-VIN sticky preference). When
+          // a previous mechanic recorded a part install on this exact car,
+          // it surfaces here ahead of the per-model default.
+          vin: typeof booking.vin === "string" ? booking.vin : undefined,
         });
         for (const s of cascadeSuggestions) {
           suggestedParts.push({ ...s, service_id: sid });
@@ -526,25 +607,44 @@ export const getPrefillData = query({
     // suggestedParts (by normalized oem_number) so they appear as
     // pre-listed rows in the post-job parts step ready to confirm.
     const normalize = (n: string) => n.trim().toUpperCase().replace(/\s+/g, "");
-    const existingOemNumbers = new Set(
-      suggestedParts
-        .map((p) => p.oem_number)
-        .filter(Boolean)
-        .map(normalize),
-    );
+    const existingByOem = new Map<string, SuggestedPart>();
+    for (const p of suggestedParts) {
+      const key = p.oem_number ? normalize(p.oem_number) : "";
+      if (key) existingByOem.set(key, p);
+    }
     for (const rec of oemRecommendations) {
       for (const part of rec.parts) {
         const key = normalize(part.oem_part_number);
-        if (!key || existingOemNumbers.has(key)) continue;
+        if (!key) continue;
+        const catalogQty =
+          typeof part.quantity_needed === "number" && part.quantity_needed > 0
+            ? part.quantity_needed
+            : undefined;
+        const existing = existingByOem.get(key);
+        if (existing) {
+          // Cascade already surfaced this part — stamp the catalog qty so the
+          // mechanic sees the correct count (e.g., 4 spark plugs) instead of
+          // the UI's hard-coded fallback of 1.
+          if (existing.quantity === undefined && catalogQty !== undefined) {
+            existing.quantity = catalogQty;
+          }
+          continue;
+        }
         suggestedParts.push({
           part_name: part.part_name,
           oem_number: part.oem_part_number,
           // Prefer median across observations — robust to outlier overpays /
           // typos and matches the tooltip/placeholder the mechanic sees.
           cost: part.median_price > 0 ? part.median_price : part.average_price,
+          quantity: catalogQty,
           service_id: rec.service_id,
+          // These rows didn't come from a learned preference — they're the
+          // canonical catalog fitment for the (vehicle_config, service)
+          // tuple. The UI badges them differently from "Used last time on
+          // this car" / "Shop default".
+          learned_from: "catalog",
         });
-        existingOemNumbers.add(key);
+        existingByOem.set(key, suggestedParts[suggestedParts.length - 1]);
       }
     }
 

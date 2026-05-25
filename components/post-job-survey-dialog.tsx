@@ -11,6 +11,7 @@ import {
 import {
   ArrowLeft,
   ArrowLeftRight,
+  Ban,
   Camera,
   Car,
   Check,
@@ -164,6 +165,18 @@ type PartRowState = {
   // "manual" = mechanic-added row, fully editable. Absent on legacy rows
   // (treated as "manual" so we never accidentally lock a user-typed row).
   source?: "catalog" | "manual";
+  // Set by the Swap modal — the OEM number we swapped FROM. Feeds the
+  // audit log (single "swap" event instead of paired remove+add) and the
+  // preference loop (vote against the prior part for this car/service).
+  swap_from_oem_number?: string;
+  // Toggled by the new "Not used" affordance. Different from Remove (deletes
+  // the row) and Customer-supplied (driver brought it). Excludes the price
+  // from aggregates and counts toward demoting the catalog default.
+  not_used?: boolean;
+  // Which layer of the cascade put this row in front of the mechanic. Drives
+  // the small "Used last time on this car" / "Shop default" badge. Stamped
+  // by the server in getPrefillData.
+  learned_from?: "vin" | "shop" | "config" | "catalog";
 };
 
 export type PhotoState = {
@@ -704,6 +717,14 @@ function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
       part_tier: part.part_tier ?? "oem",
       service_id: part.service_id ?? null,
       source: resolvedSource,
+      not_used: part.not_used === true ? true : undefined,
+      learned_from:
+        part.learned_from === "vin" ||
+        part.learned_from === "shop" ||
+        part.learned_from === "config" ||
+        part.learned_from === "catalog"
+          ? part.learned_from
+          : undefined,
     };
   });
 }
@@ -711,6 +732,18 @@ function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
 function makePhotoId() {
   return `photo_${Math.random().toString(36).slice(2)}_${Date.now()}`;
 }
+
+/**
+ * Pre-Job Approval cycle. When `cycle` is set, the dialog's submit path is
+ * routed to the corresponding mutation in `booking_approvals.ts` instead
+ * of writing job_actuals via the parent's onSubmit. Default (undefined)
+ * preserves the legacy post-job completion flow exactly.
+ *   - "pre_job"            → submitPreJobEstimate
+ *   - "mid_job"            → submitMidJobChange
+ *   - "post_job_reapproval" → submitPostJobReapproval (rarely opened from
+ *     UI — the action invokes it internally; included for parity)
+ */
+export type PostJobSurveyCycle = "pre_job" | "mid_job" | "post_job_reapproval";
 
 export default function PostJobSurveyDialog({
   open,
@@ -725,6 +758,8 @@ export default function PostJobSurveyDialog({
   onSubmit,
   initialTechnicianNotes,
   initialPhotos,
+  cycle,
+  onApprovalSubmitted,
 }: {
   open: boolean;
   bookingId?: string | null;
@@ -738,10 +773,16 @@ export default function PostJobSurveyDialog({
   onSubmit: (payload: PostJobSurveyPayload) => Promise<void>;
   initialTechnicianNotes?: string;
   initialPhotos?: PhotoState[];
+  cycle?: PostJobSurveyCycle;
+  onApprovalSubmitted?: (result: {
+    state: string;
+    totalCents: number;
+    ceilingCents: number;
+  }) => void;
 }) {
   return (
     <PostJobSurveyDialogBody
-      key={`${passportData?.vin ?? "no-vin"}-${bookingLabel}-${prefillData?.serviceSlug ?? "no-service"}`}
+      key={`${passportData?.vin ?? "no-vin"}-${bookingLabel}-${prefillData?.serviceSlug ?? "no-service"}-${cycle ?? "postjob"}`}
       open={open}
       bookingId={bookingId ?? null}
       bookingLabel={bookingLabel}
@@ -754,6 +795,8 @@ export default function PostJobSurveyDialog({
       onSubmit={onSubmit}
       initialTechnicianNotes={initialTechnicianNotes ?? ""}
       initialPhotos={initialPhotos ?? []}
+      cycle={cycle}
+      onApprovalSubmitted={onApprovalSubmitted}
     />
   );
 }
@@ -771,6 +814,8 @@ function PostJobSurveyDialogBody({
   onSubmit,
   initialTechnicianNotes,
   initialPhotos,
+  cycle,
+  onApprovalSubmitted,
 }: {
   open: boolean;
   bookingId: string | null;
@@ -784,7 +829,20 @@ function PostJobSurveyDialogBody({
   onSubmit: (payload: PostJobSurveyPayload) => Promise<void>;
   initialTechnicianNotes: string;
   initialPhotos: PhotoState[];
+  cycle?: PostJobSurveyCycle;
+  onApprovalSubmitted?: (result: {
+    state: string;
+    totalCents: number;
+    ceilingCents: number;
+  }) => void;
 }) {
+  // Phase 2 — Pre-Job Approval mutation handles (only invoked when cycle is set).
+  const submitPreJobEstimate = useMutation(
+    (api as any).booking_approvals.submitPreJobEstimate,
+  );
+  const submitMidJobChange = useMutation(
+    (api as any).booking_approvals.submitMidJobChange,
+  );
   const serviceSlug =
     passportData?.service_slug ?? prefillData?.serviceSlug ?? null;
   const requiresParts = serviceLikelyUsesParts(
@@ -905,16 +963,21 @@ function PostJobSurveyDialogBody({
         // Customer-supplied parts log at $0 regardless of what's in the field.
         const cost = suppliedBy === "customer" ? 0 : rawCost;
         const quantity = Math.max(1, Math.round(part.quantity || 1));
+        const notUsed = part.not_used === true;
         return {
           part_name: part.part_name.trim(),
           brand: part.brand.trim() || null,
           oem_number: part.oem_number.trim(),
-          cost,
+          // "Not used" rows force $0 so a leftover input value doesn't leak
+          // into snapshot price aggregates. Mirror of normalizePartsUsed.
+          cost: notUsed ? 0 : cost,
           quantity,
           supplied_by: suppliedBy,
           part_tier: part.part_tier || "oem",
           service_id: part.service_id ?? null,
           source: part.source,
+          swap_from_oem_number: part.swap_from_oem_number || undefined,
+          not_used: notUsed ? true : undefined,
         };
       })
       .filter(
@@ -923,7 +986,8 @@ function PostJobSurveyDialogBody({
           part.brand ||
           part.oem_number ||
           (Number.isFinite(part.cost) && part.cost > 0) ||
-          part.supplied_by === "customer"
+          part.supplied_by === "customer" ||
+          part.not_used === true
       );
   }
 
@@ -987,6 +1051,61 @@ function PostJobSurveyDialogBody({
     const skipOptionalSurvey = answeredCount === 0;
 
     setError("");
+
+    // Pre-Job Approval flow: when the dialog is opened with a cycle, the
+    // submit lands on booking_approvals.* instead of writing job_actuals.
+    // The customer-side approval state then drives further UI (live
+    // status banner inside this dialog after submit).
+    if (cycle && bookingId) {
+      const partsForApproval = normalizedParts.map((p) => ({
+        part_name: p.part_name,
+        brand: p.brand ?? undefined,
+        oem_number: p.oem_number ?? "",
+        cost: p.cost,
+        quantity: p.quantity ?? 1,
+        supplied_by: p.supplied_by ?? undefined,
+        part_tier: p.part_tier ?? undefined,
+        service_id: p.service_id ?? undefined,
+        source: p.source ?? undefined,
+        swap_from_oem_number: p.swap_from_oem_number ?? undefined,
+        not_used: p.not_used ?? undefined,
+        justification_text: (p as any).justification_text ?? undefined,
+        evidence_photo_ids: (p as any).evidence_photo_ids ?? undefined,
+      }));
+      const laborMinutes =
+        actualLaborMinutes.trim() === "" ? null : Number(actualLaborMinutes);
+      const laborHours =
+        laborMinutes != null && Number.isFinite(laborMinutes)
+          ? laborMinutes / 60
+          : undefined;
+      // Phase 2 keeps the dialog's labor-rate sourcing as a TODO — the
+      // submission helper falls back to the booking's stored labor when
+      // laborRateCents is absent.
+      try {
+        let result;
+        if (cycle === "pre_job") {
+          result = await submitPreJobEstimate({
+            bookingId: bookingId as any,
+            parts: partsForApproval as any,
+            laborHours,
+            notes: technicianNotes.trim() || undefined,
+          });
+        } else if (cycle === "mid_job") {
+          result = await submitMidJobChange({
+            bookingId: bookingId as any,
+            parts: partsForApproval as any,
+            laborHours,
+            notes: technicianNotes.trim() || undefined,
+          });
+        }
+        if (result) onApprovalSubmitted?.(result as any);
+        return;
+      } catch (err: any) {
+        setError(err?.message ?? "Could not submit estimate. Try again.");
+        return;
+      }
+    }
+
     await onSubmit({
       completion_mileage: parsedMileage,
       parts_used: normalizedParts,
@@ -1953,14 +2072,27 @@ function PartsStep({
     part_tier?: string | null;
   }) => {
     if (swapIndex === null) return;
+    const prev = parts[swapIndex];
     // A swap result is by definition a catalog SKU, so lock the row's identity
     // even if the mechanic swapped from a "manual" entry into a known part.
+    // Capture the OEM we're swapping FROM so the server can emit a single
+    // "swap" audit event and so the learning loop can vote against the prior
+    // part for this (vehicle / service) combo.
+    const swapFromOem = prev?.oem_number?.trim() || undefined;
+    // Don't self-reference if the mechanic re-picked the same OEM somehow.
+    const sameOem =
+      swapFromOem &&
+      swapFromOem.toLowerCase() === next.oem_number.trim().toLowerCase();
     updatePart(swapIndex, {
       part_name: next.part_name,
       oem_number: next.oem_number,
       brand: next.brand ?? "",
       part_tier: next.part_tier ?? "oem",
       source: "catalog",
+      swap_from_oem_number: sameOem ? undefined : swapFromOem,
+      // Re-enable the row in case it was previously "Not used" — picking a
+      // new part means the mechanic is using something here.
+      not_used: undefined,
     });
     closeSwap();
   };
@@ -1992,6 +2124,7 @@ function PartsStep({
         ) : (
           parts.map((part, index) => {
             const isCustomer = part.supplied_by === "customer";
+            const isNotUsed = part.not_used === true;
             const tierLabel = tierLabelOf(part.part_tier);
             const qty = Math.max(1, part.quantity || 1);
             const oemKey = normalizeOem(part.oem_number ?? "");
@@ -2011,10 +2144,27 @@ function PartsStep({
               "h-8 min-w-0 flex-1 truncate rounded-md bg-muted/40 px-2 py-1.5 text-[13px] font-semibold leading-tight text-foreground";
             const lockedSmallClasses =
               "h-7 truncate rounded-md bg-muted/40 px-2 py-1.5 text-[11px] text-foreground";
+            // Provenance badge — surfaces *why* this row was suggested so the
+            // mechanic can trust (or override) the prefill at a glance.
+            const learnedFromLabel: string | null = (() => {
+              switch (part.learned_from) {
+                case "vin":
+                  return "Used last time on this car";
+                case "shop":
+                  return "Shop default";
+                case "config":
+                  return "Common for this model";
+                default:
+                  return null;
+              }
+            })();
             return (
               <div
                 key={index}
-                className="rounded-2xl border border-primary/15 bg-background px-3 py-3"
+                className={cn(
+                  "rounded-2xl border border-primary/15 bg-background px-3 py-3 transition-opacity",
+                  isNotUsed && "opacity-60",
+                )}
               >
                 {/* Top: name + tier chip on the left, quantity stepper on the right */}
                 <div className="flex items-start gap-3">
@@ -2063,7 +2213,23 @@ function PartsStep({
                           )?.name ?? ""}
                         </span>
                       ) : null}
+                      {isNotUsed ? (
+                        <span
+                          className="inline-flex shrink-0 items-center rounded-md bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-amber-800"
+                          title="Mechanic flagged this part as not used on this job"
+                        >
+                          Not used
+                        </span>
+                      ) : null}
                     </div>
+                    {learnedFromLabel ? (
+                      <p
+                        className="mt-1 text-[10px] italic text-muted-foreground"
+                        title="Where this suggestion came from"
+                      >
+                        {learnedFromLabel}
+                      </p>
+                    ) : null}
                     {/* Brand + part number, compact and inline */}
                     <div className="mt-2 grid grid-cols-2 gap-1.5">
                       <div className="min-w-0">
@@ -2111,7 +2277,10 @@ function PartsStep({
                         )}
                       </div>
                     </div>
-                    {/* Otopair price line / cost editor */}
+                    {/* Otopair price line / cost editor — suppressed when the
+                        mechanic flagged the row Not used; price doesn't apply
+                        when the part didn't go in. */}
+                    {!isNotUsed && (
                     <div className="mt-2 flex items-center gap-2 text-[12px]">
                       <span className="text-muted-foreground">
                         {isCustomer ? "Customer-supplied:" : "Price per unit: "}
@@ -2160,8 +2329,11 @@ function PartsStep({
                         </div>
                       )}
                     </div>
+                    )}
                   </div>
-                  {/* Quantity stepper */}
+                  {/* Quantity stepper — hidden alongside the price input when
+                      the row is flagged Not used. */}
+                  {!isNotUsed && (
                   <div className="inline-flex items-center gap-0 rounded-full border border-primary/15 bg-background">
                     <button
                       type="button"
@@ -2184,6 +2356,7 @@ function PartsStep({
                       <Plus className="h-3.5 w-3.5" />
                     </button>
                   </div>
+                  )}
                 </div>
 
                 {/* Footer row: Swap | Remove | Customer-supplied toggle.
@@ -2211,6 +2384,38 @@ function PartsStep({
                       <Trash2 className="h-3.5 w-3.5" />
                       <span>Remove</span>
                     </button>
+                    {/* "Not used" — captures the deliberate signal "this part
+                        was suggested but I'm not installing it on this car"
+                        without deleting the row. Drives the demote loop on
+                        shop+config and per-VIN preferences. Mutually
+                        exclusive with Customer supplied. */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updatePart(index, {
+                          not_used: isNotUsed ? undefined : true,
+                          // Mutually exclusive with customer-supplied.
+                          supplied_by: isNotUsed
+                            ? part.supplied_by
+                            : "shop",
+                        })
+                      }
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-md transition-colors",
+                        isNotUsed
+                          ? "font-semibold text-amber-700 hover:text-amber-800"
+                          : "text-muted-foreground hover:text-amber-700",
+                      )}
+                      aria-pressed={isNotUsed}
+                      title={
+                        isNotUsed
+                          ? "Click to un-flag — the part will count as used."
+                          : "Mark this prefilled part as not used on this job. Logs the signal for learning without deleting the row."
+                      }
+                    >
+                      <Ban className="h-3.5 w-3.5" />
+                      <span>{isNotUsed ? "Marked Not used" : "Not used"}</span>
+                    </button>
                   </div>
                   <label className="inline-flex cursor-pointer items-center gap-2 select-none">
                     <span className="text-[11px] text-muted-foreground">
@@ -2223,6 +2428,10 @@ function PartsStep({
                       onClick={() =>
                         updatePart(index, {
                           supplied_by: isCustomer ? "shop" : "customer",
+                          // Mutually exclusive with Not used — toggling
+                          // customer-supplied on implies the part WAS used
+                          // (just provided by the driver).
+                          not_used: !isCustomer ? undefined : part.not_used,
                         })
                       }
                       onKeyDown={(e) => {
@@ -2230,6 +2439,7 @@ function PartsStep({
                           e.preventDefault();
                           updatePart(index, {
                             supplied_by: isCustomer ? "shop" : "customer",
+                            not_used: !isCustomer ? undefined : part.not_used,
                           });
                         }
                       }}

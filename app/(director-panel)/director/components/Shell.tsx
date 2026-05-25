@@ -1,21 +1,24 @@
 'use client'
 
 import { ReactNode, CSSProperties } from 'react'
-import { IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe, IconAudit, IconSearch, IconSettings, IconCar, Avatar } from './Primitives'
+import { IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe, IconAudit, IconSearch, IconSettings, IconCar, IconBolt, Avatar } from './Primitives'
 
 const NAV_ITEMS = [
-  { id:'overview',  label:'Overview',  Icon:IconHome },
-  { id:'shops',     label:'Shops',     Icon:IconShop },
-  { id:'users',     label:'Users',     Icon:IconUsers },
-  { id:'bookings',  label:'Bookings',  Icon:IconCalendar },
-  { id:'bugs',      label:'Bugs',      Icon:IconBug,     badge:'bugs' },
-  { id:'feedback',  label:'Feedback',  Icon:IconMessage, badge:'feedback' },
-  { id:'stripe',    label:'Stripe',    Icon:IconStripe,  badge:'stripe' },
+  { id:'overview',     label:'Overview',     Icon:IconHome },
+  { id:'shops',        label:'Shops',        Icon:IconShop },
+  { id:'users',        label:'Users',        Icon:IconUsers },
+  { id:'bookings',     label:'Bookings',     Icon:IconCalendar },
+  { id:'cars',         label:'Cars',         Icon:IconCar },
+  { id:'configs',      label:'Vehicle configs', Icon:IconSettings },
+  { id:'bugs',         label:'Bugs',         Icon:IconBug,     badge:'bugs' },
+  { id:'feedback',     label:'Feedback',     Icon:IconMessage, badge:'feedback' },
+  { id:'otoFeedback',  label:'Oto feedback', Icon:IconBolt,    badge:'otoFeedback' },
+  { id:'stripe',       label:'Stripe',       Icon:IconStripe,  badge:'stripe' },
   { id:'audit',         label:'Audit log',       Icon:IconAudit },
   { id:'mechanicEdits', label:'Mechanic Edits',  Icon:IconCar,  badge:'mechanicEdits' },
 ]
 
-type Counts = { bugs?: number; feedback?: number; stripe?: number; mechanicEdits?: number }
+type Counts = { bugs?: number; feedback?: number; otoFeedback?: number; stripe?: number; mechanicEdits?: number }
 type CurrentUser = { name: string; role: string }
 
 export const Sidebar = ({ active, onNavigate, counts, currentUser, onLogout }: {

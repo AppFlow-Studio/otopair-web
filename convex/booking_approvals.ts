@@ -1,0 +1,724 @@
+/**
+ * booking_approvals.ts — Pre-Job / Mid-Job / Post-Job approval loop
+ *
+ * Mechanic submits a singular set-price (parts + labor) via
+ * post-job-survey-dialog. The mutation re-computes the all-in total
+ * server-side (tax + platform fee), then classifies against the customer's
+ * disclosed range (pre-job) or running approved ceiling (mid/post-job).
+ *
+ *   in-range  → auto-approve: increment Stripe hold to the new total
+ *               silently and push the customer a confirmation.
+ *   over      → open an approval cycle (24h SLA), push the customer.
+ *
+ * Every submission inserts a `booking_approvals` row. Decisions land via
+ * `applyApprovalDecision` (customer auth). SLA expiry on pre-job captures
+ * the $20 deposit forfeit; SLA expiry on mid-job holds work at the prior
+ * ceiling.
+ *
+ * Auth boundaries:
+ *   - submit* mutations require shop membership matching booking.shop_id.
+ *   - applyApprovalDecision requires booking.user_id === caller.
+ *   - expireApprovals + submitPostJobReapproval are internal (cron / action).
+ */
+
+import { v } from "convex/values";
+import {
+  internalAction,
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
+import { api, internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+import { postjobPartValidator } from "./lib/vehicle_passports";
+import { computeBookingTax } from "../lib/tax";
+import { computePlatformFeeDollars } from "../lib/platformFee";
+import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
+
+const SLA_MS = 24 * 60 * 60 * 1000;
+const MIN_MANUAL_JUSTIFICATION_LEN = 12;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Auth helpers (local copies — mirror convex/bookings.ts pattern)
+// ─────────────────────────────────────────────────────────────────────────
+
+async function getCurrentUserOrNull(ctx: any) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) return null;
+  return await ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q: any) =>
+      q.eq("clerkUserId", identity.subject),
+    )
+    .unique();
+}
+
+/** Asserts the caller is a member of the booking's shop. Used by every
+ *  mechanic-facing submit*. Returns the loaded booking + caller user. */
+async function requireShopStaffForBooking(
+  ctx: any,
+  bookingId: Id<"bookings">,
+) {
+  const user = await getCurrentUserOrNull(ctx);
+  if (!user) throw new Error("Your session has expired. Please sign in again.");
+  const booking = await ctx.db.get(bookingId);
+  if (!booking) throw new Error("Booking not found.");
+  if (!booking.shop_id) throw new Error("Booking has no shop assigned.");
+
+  const membership = await ctx.db
+    .query("shop_users")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+    .filter((q: any) => q.eq(q.field("is_active"), true))
+    .first();
+
+  const ownedShop = await ctx.db
+    .query("shops")
+    .withIndex("by_owner_user_id", (q: any) => q.eq("owner_user_id", user._id))
+    .first();
+
+  const isMember =
+    (membership && String(membership.shop_id) === String(booking.shop_id)) ||
+    (ownedShop && String(ownedShop._id) === String(booking.shop_id));
+
+  if (!isMember) throw new Error("You are not assigned to this booking.");
+  return { user, booking };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Pricing helpers
+// ─────────────────────────────────────────────────────────────────────────
+
+type SubmittedPart = {
+  part_name: string;
+  brand?: string | null;
+  oem_number: string;
+  cost: number;
+  quantity?: number;
+  supplied_by?: string;
+  part_tier?: string;
+  service_id?: Id<"services">;
+  source?: "catalog" | "manual";
+  swap_from_oem_number?: string;
+  not_used?: boolean;
+  justification_text?: string;
+  evidence_photo_ids?: Id<"_storage">[];
+  verified_against_catalog_median_cents?: number;
+};
+
+function partsSubtotalCents(parts: SubmittedPart[]): number {
+  let total = 0;
+  for (const p of parts) {
+    if (p.not_used) continue;
+    if (p.supplied_by === "customer") continue;
+    const qty = Math.max(0, p.quantity ?? 1);
+    total += Math.round((p.cost ?? 0) * qty * 100);
+  }
+  return total;
+}
+
+/** Validates parts gate: manual parts need a justification of ≥12 chars.
+ *  UI is expected to enforce the catalog-median cap; this is a server-side
+ *  defense (justification only — the median cap requires loading the part
+ *  catalog and is the dialog's responsibility). */
+function validatePartsForApproval(parts: SubmittedPart[]): void {
+  for (const p of parts) {
+    if (p.not_used) continue;
+    if (p.supplied_by === "customer") continue;
+    if (p.source === "manual") {
+      const j = (p.justification_text ?? "").trim();
+      if (j.length < MIN_MANUAL_JUSTIFICATION_LEN) {
+        throw new Error(
+          `Manual part "${p.part_name}" requires a justification of at least ${MIN_MANUAL_JUSTIFICATION_LEN} characters.`,
+        );
+      }
+    }
+  }
+}
+
+type SetPriceComputed = {
+  parts_subtotal_cents: number;
+  labor_cents: number;
+  tax_cents: number;
+  service_fee_cents: number;
+  total_cents: number;
+};
+
+/** Recompute the all-in mechanic set price server-side. Tax + platform fee
+ *  are server-authoritative — the dialog only sends parts + labor inputs. */
+async function computeMechanicSetPrice(
+  ctx: any,
+  args: {
+    booking: any;
+    parts: SubmittedPart[];
+    laborHours: number | undefined;
+    laborRateCents: number | undefined;
+  },
+): Promise<SetPriceComputed> {
+  const { booking, parts, laborHours, laborRateCents } = args;
+
+  const partsSubCents = partsSubtotalCents(parts);
+  // Fall back to the booking's stored labor when the dialog didn't override.
+  const laborDollarsFallback = booking.labor_cost ?? 0;
+  const laborCents =
+    laborHours != null && laborRateCents != null
+      ? Math.round(laborHours * laborRateCents)
+      : Math.round(laborDollarsFallback * 100);
+
+  const subtotalCents = partsSubCents + laborCents;
+  const subtotalDollars = subtotalCents / 100;
+
+  // Shop state for tax: best-effort. Without a state, computeBookingTax
+  // returns its default rule (0% / no-tax) — acceptable for the approval
+  // recompute since the disclosed range was snapshotted at booking time.
+  const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+  const shopState =
+    (shop?.address_state as string | undefined) ??
+    (shop?.state as string | undefined) ??
+    null;
+  const shopZip =
+    (shop?.address_zip as string | undefined) ??
+    (shop?.zip as string | undefined) ??
+    null;
+
+  const taxResult = computeBookingTax({
+    laborDollars: laborCents / 100,
+    partsDollars: partsSubCents / 100,
+    state: shopState ?? null,
+    zip: shopZip ?? null,
+  });
+  const taxCents = Math.round((taxResult.taxDollars ?? 0) * 100);
+
+  const feeDollars = computePlatformFeeDollars(subtotalDollars);
+  const feeCents = Math.max(0, Math.round(feeDollars * 100));
+
+  return {
+    parts_subtotal_cents: partsSubCents,
+    labor_cents: laborCents,
+    tax_cents: taxCents,
+    service_fee_cents: feeCents,
+    total_cents: subtotalCents + taxCents + feeCents,
+  };
+}
+
+function ceilingForCycle(booking: any, cycle: string): number {
+  if (cycle === "pre_job") {
+    return booking.disclosed_range_high_cents ?? 0;
+  }
+  // mid_job / post_job evaluate against the latest approved ceiling
+  return (
+    booking.running_approved_ceiling_cents ??
+    booking.disclosed_range_high_cents ??
+    0
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Shared submission handler (used by pre-job + mid-job mutations and the
+// post-job internal mutation)
+// ─────────────────────────────────────────────────────────────────────────
+
+type SubmitArgs = {
+  bookingId: Id<"bookings">;
+  cycle: "pre_job" | "mid_job" | "post_job";
+  parts: SubmittedPart[];
+  laborHours?: number;
+  laborRateCents?: number;
+  notes?: string;
+  submittedByUserId?: Id<"users">;
+};
+
+async function performSubmission(
+  ctx: any,
+  args: SubmitArgs,
+): Promise<{
+  approvalId: Id<"booking_approvals">;
+  state: string;
+  totalCents: number;
+  ceilingCents: number;
+}> {
+  const booking: any = await ctx.db.get(args.bookingId);
+  if (!booking) throw new Error("Booking not found.");
+
+  validatePartsForApproval(args.parts);
+
+  const priced = await computeMechanicSetPrice(ctx, {
+    booking,
+    parts: args.parts,
+    laborHours: args.laborHours,
+    laborRateCents: args.laborRateCents,
+  });
+
+  const ceiling = ceilingForCycle(booking, args.cycle);
+  // Pre-feature bookings (no disclosed range): there's no approval contract
+  // — fall back to legacy behavior at capture time. Reject submission here.
+  if (args.cycle === "pre_job" && ceiling <= 0) {
+    throw new Error(
+      "This booking pre-dates the pre-job approval flow and cannot be re-estimated.",
+    );
+  }
+
+  const inRange = priced.total_cents <= ceiling;
+  const now = Date.now();
+
+  // Payment intent linkage for the audit row.
+  const payment = await ctx.db
+    .query("payments")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", args.bookingId))
+    .unique();
+  const piId = payment?.stripe_payment_intent_id ?? undefined;
+
+  const approvalId = await ctx.db.insert("booking_approvals", {
+    booking_id: args.bookingId,
+    cycle: args.cycle,
+    mechanic_set_price_cents: priced.total_cents,
+    parts_snapshot: args.parts as any,
+    labor_hours: args.laborHours,
+    labor_rate_cents: args.laborRateCents,
+    notes: args.notes,
+    prior_ceiling_cents: ceiling,
+    ceiling_after_decision_cents: inRange ? priced.total_cents : undefined,
+    sla_expires_at_ms: inRange ? undefined : now + SLA_MS,
+    submitted_at_ms: now,
+    submitted_by_user_id: args.submittedByUserId,
+    decision: inRange ? "auto_approved_within_range" : undefined,
+    decided_at_ms: inRange ? now : undefined,
+    stripe_payment_intent_id: piId,
+    stripe_action: inRange ? "auto_approved_within_range" : undefined,
+  });
+
+  const newState = inRange
+    ? "in_range"
+    : args.cycle === "pre_job"
+      ? "pre_job_pending"
+      : args.cycle === "mid_job"
+        ? "mid_job_pending"
+        : "post_job_pending";
+
+  const bookingPatch: any = {
+    payment_approval_state: newState,
+    mechanic_set_price_cents: priced.total_cents,
+    updated_at: now,
+  };
+  if (inRange) {
+    bookingPatch.running_approved_ceiling_cents = priced.total_cents;
+    bookingPatch.estimate_approved_at_ms = now;
+    bookingPatch.sla_expires_at_ms = undefined;
+  } else {
+    bookingPatch.sla_expires_at_ms = now + SLA_MS;
+  }
+  await ctx.db.patch(args.bookingId, bookingPatch);
+
+  // Side effects (deferred so the mutation stays transactional):
+  //   - in-range: increment the Stripe hold + push the customer a
+  //     confirmation.
+  //   - out-of-range: push the customer the approval prompt.
+  if (inRange) {
+    if (ctx.scheduler?.runAfter) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.payments_stripe.adjustAuthorization,
+        { bookingId: args.bookingId },
+      );
+    }
+    await enqueueCustomerApprovalPush(ctx, {
+      booking,
+      bookingId: args.bookingId,
+      category: "booking_estimate_in_range",
+      title: "Service confirmed",
+      body: `Your mechanic confirmed the work at $${(priced.total_cents / 100).toFixed(2)}. Work is starting now.`,
+      deepLink: `otopair://booking/${String(args.bookingId)}`,
+      dedupeSuffix: `${args.cycle}:${approvalId}`,
+    });
+  } else {
+    await enqueueCustomerApprovalPush(ctx, {
+      booking,
+      bookingId: args.bookingId,
+      category: `booking_${args.cycle}_pending`,
+      title:
+        args.cycle === "pre_job"
+          ? "Your car requires more than we expected"
+          : args.cycle === "mid_job"
+            ? "Update from your mechanic"
+            : "Final breakdown — please confirm",
+      body: "Tap to review your mechanic's updated estimate.",
+      deepLink: `otopair://booking/${String(args.bookingId)}/approve-estimate`,
+      dedupeSuffix: `${args.cycle}:${approvalId}`,
+    });
+  }
+
+  return {
+    approvalId,
+    state: newState,
+    totalCents: priced.total_cents,
+    ceilingCents: ceiling,
+  };
+}
+
+async function enqueueCustomerApprovalPush(
+  ctx: any,
+  args: {
+    booking: any;
+    bookingId: Id<"bookings">;
+    category: string;
+    title: string;
+    body: string;
+    deepLink: string;
+    dedupeSuffix: string;
+  },
+) {
+  const userId = args.booking.user_id;
+  if (!userId) return;
+  const dedupeKey = `${args.category}:${String(args.bookingId)}:${args.dedupeSuffix}`;
+  await ctx.db.insert("notification_outbox", {
+    user_id: userId,
+    booking_id: args.bookingId,
+    shop_id: args.booking.shop_id,
+    channel: "push",
+    category: args.category,
+    status: "pending",
+    dedupe_key: dedupeKey,
+    payload: {
+      title: args.title,
+      body: args.body,
+      data: { deepLink: args.deepLink, bookingId: String(args.bookingId) },
+    },
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Public mutations
+// ─────────────────────────────────────────────────────────────────────────
+
+export const submitPreJobEstimate = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    parts: v.array(postjobPartValidator),
+    laborHours: v.optional(v.number()),
+    laborRateCents: v.optional(v.number()),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireShopStaffForBooking(ctx, args.bookingId);
+    return await performSubmission(ctx, {
+      bookingId: args.bookingId,
+      cycle: "pre_job",
+      parts: args.parts as SubmittedPart[],
+      laborHours: args.laborHours,
+      laborRateCents: args.laborRateCents,
+      notes: args.notes,
+      submittedByUserId: user._id,
+    });
+  },
+});
+
+export const submitMidJobChange = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    parts: v.array(postjobPartValidator),
+    laborHours: v.optional(v.number()),
+    laborRateCents: v.optional(v.number()),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user, booking } = await requireShopStaffForBooking(
+      ctx,
+      args.bookingId,
+    );
+    if (booking.status !== "in_progress") {
+      throw new Error(
+        "Mid-job changes can only be submitted while the booking is in progress.",
+      );
+    }
+    return await performSubmission(ctx, {
+      bookingId: args.bookingId,
+      cycle: "mid_job",
+      parts: args.parts as SubmittedPart[],
+      laborHours: args.laborHours,
+      laborRateCents: args.laborRateCents,
+      notes: args.notes,
+      submittedByUserId: user._id,
+    });
+  },
+});
+
+/** Invoked by finalizeAndChargeForBooking when the captured actuals exceed
+ *  the last approved ceiling. Not customer-callable. */
+export const submitPostJobReapproval = internalMutation({
+  args: {
+    bookingId: v.id("bookings"),
+    parts: v.array(postjobPartValidator),
+    laborHours: v.optional(v.number()),
+    laborRateCents: v.optional(v.number()),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    return await performSubmission(ctx, {
+      bookingId: args.bookingId,
+      cycle: "post_job",
+      parts: args.parts as SubmittedPart[],
+      laborHours: args.laborHours,
+      laborRateCents: args.laborRateCents,
+      notes: args.notes,
+    });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Customer decision
+// ─────────────────────────────────────────────────────────────────────────
+
+export const applyApprovalDecision = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    decision: v.union(v.literal("approved"), v.literal("declined")),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
+
+    const booking: any = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    if (String(booking.user_id) !== String(user._id)) {
+      throw new Error("Not your booking.");
+    }
+
+    // Latest open approval row (decision null). Convex indexes don't
+    // support eq(undefined), so we paginate by booking_id descending and
+    // pick the first row whose decision hasn't been set yet.
+    const candidates = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+    const open = candidates.find((r: any) => r.decision == null);
+
+    if (!open) {
+      throw new Error("No estimate is waiting for your decision.");
+    }
+
+    const now = Date.now();
+    const cycle = open.cycle as "pre_job" | "mid_job" | "post_job";
+
+    if (args.decision === "approved") {
+      const newCeiling = open.mechanic_set_price_cents;
+      await ctx.db.patch(open._id, {
+        decision: "approved",
+        decided_at_ms: now,
+        decided_by_user_id: user._id,
+        ceiling_after_decision_cents: newCeiling,
+      });
+      await ctx.db.patch(args.bookingId, {
+        payment_approval_state:
+          cycle === "pre_job"
+            ? "pre_job_approved"
+            : cycle === "mid_job"
+              ? "mid_job_approved"
+              : "post_job_approved",
+        running_approved_ceiling_cents: newCeiling,
+        estimate_approved_at_ms: now,
+        estimate_decided_by_user_id: user._id,
+        sla_expires_at_ms: undefined,
+        updated_at: now,
+      });
+      if (ctx.scheduler?.runAfter) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.payments_stripe.adjustAuthorization,
+          { bookingId: args.bookingId },
+        );
+        if (cycle === "post_job") {
+          // Final actuals already > approved ceiling. Approved → finalize
+          // capture against the new ceiling.
+          await ctx.scheduler.runAfter(
+            0,
+            internal.payments_stripe.finalizeAndChargeForBooking,
+            { bookingId: args.bookingId },
+          );
+        }
+      }
+      return { ok: true, state: "approved", ceilingCents: newCeiling };
+    }
+
+    // Declined branch
+    await ctx.db.patch(open._id, {
+      decision: "declined",
+      decided_at_ms: now,
+      decided_by_user_id: user._id,
+      ceiling_after_decision_cents:
+        booking.running_approved_ceiling_cents ??
+        booking.disclosed_range_high_cents ??
+        undefined,
+    });
+    const declinedState =
+      cycle === "pre_job"
+        ? "pre_job_declined"
+        : cycle === "mid_job"
+          ? "mid_job_declined"
+          : "post_job_declined";
+    await ctx.db.patch(args.bookingId, {
+      payment_approval_state: declinedState,
+      estimate_decided_by_user_id: user._id,
+      sla_expires_at_ms: undefined,
+      updated_at: now,
+    });
+    if (cycle === "post_job" && ctx.scheduler?.runAfter) {
+      // Capture at the prior approved ceiling. finalizeAndChargeForBooking
+      // honors min(approved_ceiling, actuals).
+      await ctx.scheduler.runAfter(
+        0,
+        internal.payments_stripe.finalizeAndChargeForBooking,
+        { bookingId: args.bookingId },
+      );
+    }
+    return { ok: true, state: declinedState };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Query: open approval for a booking (customer side)
+// ─────────────────────────────────────────────────────────────────────────
+
+export const getOpenApprovalForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    if (String((booking as any).user_id) !== String(user._id)) return null;
+
+    const candidates = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+    const open = candidates.find((r: any) => r.decision == null);
+    if (!open) return null;
+
+    return {
+      _id: open._id,
+      cycle: open.cycle,
+      mechanic_set_price_cents: open.mechanic_set_price_cents,
+      prior_ceiling_cents: open.prior_ceiling_cents,
+      parts_snapshot: open.parts_snapshot,
+      labor_hours: open.labor_hours,
+      labor_rate_cents: open.labor_rate_cents,
+      notes: open.notes,
+      submitted_at_ms: open.submitted_at_ms,
+      sla_expires_at_ms: open.sla_expires_at_ms,
+      disclosed_range_low_cents: (booking as any).disclosed_range_low_cents,
+      disclosed_range_high_cents: (booking as any).disclosed_range_high_cents,
+    };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// SLA expiry (cron-triggered)
+// ─────────────────────────────────────────────────────────────────────────
+
+export const _listExpiredOpenApprovals = internalQuery({
+  args: { nowMs: v.number() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_sla_expires_at", (q: any) =>
+        q.lt("sla_expires_at_ms", args.nowMs),
+      )
+      .collect();
+    return rows
+      .filter((r: any) => r.decision == null && r.sla_expires_at_ms != null)
+      .map((r: any) => ({
+        bookingId: r.booking_id as Id<"bookings">,
+        cycle: r.cycle as string,
+      }));
+  },
+});
+
+export const expireApprovals = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ processed: number }> => {
+    const now = Date.now();
+    const expired: Array<{ bookingId: Id<"bookings">; cycle: string }> =
+      await ctx.runQuery(
+        internal.booking_approvals._listExpiredOpenApprovals,
+        { nowMs: now },
+      );
+    let processed = 0;
+    for (const row of expired) {
+      await ctx.runMutation(internal.booking_approvals._markApprovalExpired, {
+        bookingId: row.bookingId,
+      });
+      if (row.cycle === "pre_job") {
+        // Capture the $20 deposit forfeit so the mechanic is compensated for
+        // inspection time. Scheduled so a single bad Stripe call doesn't
+        // poison the batch.
+        await ctx.scheduler.runAfter(
+          0,
+          internal.payments_stripe.captureDepositForfeit,
+          { bookingId: row.bookingId },
+        );
+      }
+      processed += 1;
+    }
+    return { processed };
+  },
+});
+
+/** Webhook reconciler — called by the `amount_capturable_updated` handler.
+ *  Finds the latest approval row matching the PI and stamps the event id.
+ *  Idempotent: if the event has already been stamped on this row, no-op. */
+export const _reconcileAmountCapturableUpdated = internalMutation({
+  args: {
+    stripePaymentIntentId: v.string(),
+    stripeEventId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Find the most recent approval row tied to this PI. Both the original
+    // PI (from booking confirm) and a reauth-replacement PI should match.
+    const rows = await ctx.db.query("booking_approvals").collect();
+    const candidate = rows
+      .filter(
+        (r: any) => r.stripe_payment_intent_id === args.stripePaymentIntentId,
+      )
+      .sort((a: any, b: any) => b.submitted_at_ms - a.submitted_at_ms)[0];
+    if (!candidate) return { status: "no_match" };
+    if (candidate.stripe_event_id === args.stripeEventId) {
+      return { status: "already_reconciled" };
+    }
+    await ctx.db.patch(candidate._id, { stripe_event_id: args.stripeEventId });
+    return { status: "ok", approvalId: candidate._id };
+  },
+});
+
+export const _markApprovalExpired = internalMutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const candidates = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+    const open = candidates.find((r: any) => r.decision == null);
+    if (!open) return;
+    const now = Date.now();
+    await ctx.db.patch(open._id, {
+      decision: "sla_expired",
+      decided_at_ms: now,
+      ceiling_after_decision_cents: undefined,
+    });
+    await ctx.db.patch(args.bookingId, {
+      payment_approval_state: "sla_expired",
+      sla_expires_at_ms: undefined,
+      updated_at: now,
+    });
+  },
+});

@@ -10,8 +10,11 @@ import { TabOverview }  from './components/tabs/TabOverview'
 import { TabShops }     from './components/tabs/TabShops'
 import { TabUsers }     from './components/tabs/TabUsers'
 import { TabBookings }  from './components/tabs/TabBookings'
+import { TabCars }      from './components/tabs/TabCars'
+import { TabVehicleConfigs } from './components/tabs/TabVehicleConfigs'
 import { TabBugs }      from './components/tabs/TabBugs'
 import { TabFeedback }  from './components/tabs/TabFeedback'
+import { TabOtoFeedback } from './components/tabs/TabOtoFeedback'
 import { TabStripe }    from './components/tabs/TabStripe'
 import { TabAudit }     from './components/tabs/TabAudit'
 import { TabSettings }       from './components/tabs/TabSettings'
@@ -24,9 +27,12 @@ const TABS: Record<string, React.ComponentType> = {
   shops:    TabShops,
   users:    TabUsers,
   bookings: TabBookings,
-  bugs:     TabBugs,
-  feedback: TabFeedback,
-  stripe:   TabStripe,
+  cars:        TabCars,
+  configs:     TabVehicleConfigs,
+  bugs:        TabBugs,
+  feedback:    TabFeedback,
+  otoFeedback: TabOtoFeedback,
+  stripe:      TabStripe,
   audit:          TabAudit,
   mechanicEdits:  TabMechanicEdits,
   settings:       TabSettings,

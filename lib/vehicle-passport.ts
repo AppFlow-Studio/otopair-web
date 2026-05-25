@@ -157,6 +157,20 @@ export type JobActualPartPayload = {
   // Which booking service this part belongs to. Optional for backward compat
   // with legacy rows; snapshot path falls back to booking.service_ids[0].
   service_id?: string | null;
+  // Provenance — "catalog" rows came from the Otopair prefill and their
+  // identity (name/brand/oem) is locked in the UI. "manual" rows were
+  // mechanic-added and stay fully editable. Absent on legacy rows.
+  source?: "catalog" | "manual";
+  // Set by the Swap modal so the learning loop can record the rejection
+  // of the previous part for this (vehicle / service) combo.
+  swap_from_oem_number?: string;
+  // "Not used here" toggle. Treated like customer-supplied for price
+  // aggregation (excluded), but counted toward demoting the part as a
+  // default for this vehicle / car-model.
+  not_used?: boolean;
+  // Server-stamped provenance — which cascade layer surfaced this row.
+  // Drives the small "Used last time on this car" / "Shop default" badge.
+  learned_from?: "vin" | "shop" | "config" | "catalog";
 };
 
 export type PreJobSurveyPayload = {

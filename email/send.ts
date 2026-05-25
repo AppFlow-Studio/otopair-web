@@ -645,6 +645,102 @@ export async function sendWalkinClaimEmail({
 }
 
 /**
+ * Receipt / invoice email — sent after Stripe capture succeeds with the
+ * branded PDF attached. Both the inline HTML and the attachment carry the
+ * same invoice number so support can match them up.
+ */
+export async function sendInvoiceEmail({
+  to,
+  invoiceNumber,
+  customerFirstName,
+  shopName,
+  totalCents,
+  status,
+  pdfBase64,
+  pdfFilename,
+  receiptUrl,
+}: {
+  to: string;
+  invoiceNumber: string;
+  customerFirstName: string | null;
+  shopName: string;
+  totalCents: number;
+  status: "paid" | "refunded";
+  pdfBase64: string;
+  pdfFilename: string;
+  receiptUrl: string | null;
+}) {
+  try {
+    const hi = customerFirstName ? `Hi ${escapeHtml(customerFirstName)},` : "Hi there,";
+    const totalLabel = `$${(Math.max(0, totalCents) / 100).toFixed(2)}`;
+    const subjectVerb = status === "refunded" ? "Refund processed" : "Receipt";
+    const headline =
+      status === "refunded"
+        ? "Your refund has been processed"
+        : "Thanks for your payment";
+    const lede =
+      status === "refunded"
+        ? `Your ${totalLabel} payment to <strong>${escapeHtml(shopName)}</strong> has been refunded. An updated invoice (<strong>${escapeHtml(invoiceNumber)}</strong>) is attached for your records.`
+        : `Your <strong>${totalLabel}</strong> payment to <strong>${escapeHtml(shopName)}</strong> went through. We've attached invoice <strong>${escapeHtml(invoiceNumber)}</strong> as a PDF for your records.`;
+
+    const onlineCta = receiptUrl
+      ? `
+      <table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 24px;">
+        <tr><td align="center">
+          <a href="${escapeHtml(receiptUrl)}"
+             style="display:inline-block;padding:14px 32px;background:${BRAND_GRADIENT};color:#fff;text-decoration:none;border-radius:8px;font-weight:600;font-size:15px;box-shadow:0 4px 14px rgba(13,114,255,0.3);">
+            View receipt online
+          </a>
+        </td></tr>
+      </table>
+      <p style="margin:0 0 24px;color:#6b7280;font-size:13px;text-align:center;">
+        Or download the PDF attached to this email.
+      </p>`
+      : "";
+
+    const body = `
+      <p style="margin:0 0 8px;">${hi}</p>
+      <p style="margin:0 0 24px;">${lede}</p>
+      <table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 24px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;">
+        <tr>
+          <td style="padding:16px 20px;">
+            <p style="margin:0 0 4px;color:#6b7280;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Invoice</p>
+            <p style="margin:0;color:#111827;font-size:16px;font-weight:600;">${escapeHtml(invoiceNumber)}</p>
+          </td>
+          <td align="right" style="padding:16px 20px;">
+            <p style="margin:0 0 4px;color:#6b7280;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">${status === "refunded" ? "Refunded" : "Total"}</p>
+            <p style="margin:0;color:#111827;font-size:18px;font-weight:700;">${totalLabel}</p>
+          </td>
+        </tr>
+      </table>
+      ${onlineCta}
+      <p style="margin:0 0 8px;color:#6b7280;font-size:14px;">Need help with this charge? Reply to this email and our team will take a look.</p>
+    `;
+    const html = brandedShellWithLogo(
+      `${subjectVerb} from ${shopName}`,
+      body,
+    );
+
+    const result = await resend.emails.send({
+      from: "Otopair <info@otopair.com>",
+      to,
+      subject: `${subjectVerb} ${invoiceNumber} · ${shopName}`,
+      html,
+      attachments: [
+        {
+          filename: pdfFilename,
+          content: pdfBase64,
+        },
+      ],
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    console.error("Error sending invoice email:", error);
+    return { success: false, error };
+  }
+}
+
+/**
  * Send notification email to company when someone joins waitlist
  */
 export async function sendWaitlistNotificationEmail(data: WaitlistSignupData) {

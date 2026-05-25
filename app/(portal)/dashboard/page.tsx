@@ -616,9 +616,14 @@ function OwnerDashboardPage({
       const rightTime = right.booking.scheduledTime ?? "";
       return String(leftTime).localeCompare(String(rightTime));
     });
-  const activeJobs = todayScheduleRows.filter(
-    (row: any) => (row.booking as { status?: string }).status === "in_progress",
-  );
+  // Active jobs come straight from the backend's cross-date `activeJobs`
+  // list now — filtering `todayScheduleRows` would hide jobs that started
+  // yesterday and overflowed into today.
+  const activeJobs = (dashboard as any).activeJobs ?? [];
+  const todayDateString = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
 
   return (
     <>
@@ -730,14 +735,10 @@ function OwnerDashboardPage({
             </p>
           </div>
           <ul className="mt-4 space-y-2">
-            {dashboard.todaySchedule
-              .filter((column: any) =>
-                column.bookings.some((b: any) => b.status === "in_progress"),
-              )
-              .map((column: any) => {
-                const activeBooking = column.bookings.find(
-                  (b: any) => b.status === "in_progress",
-                );
+            {activeJobs
+              .map((row: any) => {
+                const column = row;
+                const activeBooking = row.booking;
                 if (!activeBooking) return null;
                 const bookingIdStr = String(activeBooking._id);
                 const isAlreadyOpen = activeOverlayBookingIds.some(
@@ -770,6 +771,12 @@ function OwnerDashboardPage({
                           <span className="text-[10px] uppercase tracking-wider text-slate-500">
                             Mechanic
                           </span>
+                          {activeBooking.scheduledDate &&
+                          activeBooking.scheduledDate !== todayDateString ? (
+                            <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                              From {activeBooking.scheduledDate}
+                            </span>
+                          ) : null}
                         </div>
                         <p className="truncate text-xs text-slate-400">
                           {activeBooking.vehicle ??
@@ -779,21 +786,31 @@ function OwnerDashboardPage({
                         </p>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        openOrAddOverlay(activeBooking._id as Id<"bookings">)
-                      }
-                      disabled={isAlreadyOpen}
-                      className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Maximize2 className="h-3.5 w-3.5" />
-                      {isAlreadyOpen
-                        ? "Open"
-                        : hasOtherOpen
-                          ? "Open alongside"
-                          : "Jump in"}
-                    </button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {activeBooking.scheduledDate ? (
+                        <Link
+                          href={`/schedule?action=focus-booking&bookingId=${bookingIdStr}&date=${activeBooking.scheduledDate}`}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08]"
+                        >
+                          View on schedule
+                        </Link>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openOrAddOverlay(activeBooking._id as Id<"bookings">)
+                        }
+                        disabled={isAlreadyOpen}
+                        className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Maximize2 className="h-3.5 w-3.5" />
+                        {isAlreadyOpen
+                          ? "Open"
+                          : hasOtherOpen
+                            ? "Open alongside"
+                            : "Jump in"}
+                      </button>
+                    </div>
                   </li>
                 );
               })}

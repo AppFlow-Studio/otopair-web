@@ -278,13 +278,15 @@ async function validateShopAddressWithGoogle(
     throw new Error("This address is missing required location details. Choose a different suggestion.");
   }
 
+  // ZIP uniquely identifies a small geographic area; if the user's typed ZIP
+  // doesn't match Google's, the address they intended is somewhere else.
+  // City/state are normalized silently using Google's values (handles common
+  // typos like "N" → "NY", "Staten Is" → "Staten Island").
   if (
-    normalizeAddressToken(city) !== normalizeAddressToken(details.city) ||
-    normalizeAddressToken(state) !== normalizeAddressToken(details.state) ||
     normalizeAddressToken(zipCode) !== normalizeAddressToken(details.zipCode)
   ) {
     throw new Error(
-      "Please select a valid address to continue."
+      "We couldn't match that ZIP code to the street address. Double-check the ZIP or pick a suggested address."
     );
   }
 
@@ -912,9 +914,6 @@ export default function ShopSetupPage() {
       errors.push("This slug is already taken. Please choose another.");
     }
     if (!details.address.trim()) errors.push("Please enter a street address.");
-    if (!addressSelectedFromAutocomplete) {
-      errors.push("Please select a valid address to continue.");
-    }
     if (!details.city.trim()) errors.push("Please enter a city.");
     if (!details.state.trim()) errors.push("Please enter a state.");
     if (details.zipCode.length !== 5) errors.push("Zip code must be 5 digits.");

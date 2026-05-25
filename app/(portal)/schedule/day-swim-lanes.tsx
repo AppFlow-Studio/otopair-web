@@ -76,6 +76,16 @@ interface DaySwimLanesProps {
     mechanicId: string;
     durationMinutes: number;
   } | null;
+  /** Ghost block showing the proposed new slot for an in-progress reschedule.
+   *  Rendered with amber dashed styling to distinguish from `draftBooking`
+   *  (a brand-new booking) and the source booking still living on the lane. */
+  draftReschedule?: {
+    date: string;
+    time: string;
+    mechanicId: string;
+    durationMinutes: number;
+    hasConflict?: boolean;
+  } | null;
   /** When set, the lane belonging to this mechanic is highlighted and edits on
    *  other lanes are locked: drag-to-reschedule, empty-cell create, and
    *  right-click block all become no-ops on lanes the viewer doesn't own.
@@ -157,6 +167,7 @@ export default function DaySwimLanes({
   onBlockDayClick,
   currentDate,
   draftBooking,
+  draftReschedule,
   viewerMechanicId,
 }: DaySwimLanesProps) {
   const viewerKey = viewerMechanicId ? String(viewerMechanicId) : null;
@@ -852,6 +863,40 @@ export default function DaySwimLanes({
                     );
                   })()}
 
+                {/* Proposed reschedule ghost — shows where the in-progress
+                    reschedule would land. Amber/dashed to differ from the
+                    blue new-booking draft above and the source booking still
+                    living elsewhere on the lane. Rose when there's a conflict. */}
+                {draftReschedule &&
+                  (draftReschedule.mechanicId || "__unassigned__") === col.id &&
+                  currentDate &&
+                  draftReschedule.date === dateToString(currentDate) &&
+                  (() => {
+                    const [dh, dm] = draftReschedule.time.split(":").map(Number);
+                    const startMin = minutesFromBase(startHour, startMinute, dh, dm);
+                    if (startMin < 0 || startMin >= totalMinutes) return null;
+                    const top = (startMin / totalMinutes) * totalHeight;
+                    const height = Math.max(
+                      ROW_HEIGHT,
+                      (draftReschedule.durationMinutes / totalMinutes) * totalHeight
+                    );
+                    const palette = draftReschedule.hasConflict
+                      ? "border-rose-500 bg-rose-500/15 text-rose-700"
+                      : "border-amber-500 bg-amber-400/20 text-amber-800";
+                    return (
+                      <div
+                        className={`absolute left-1 right-1 z-[7] rounded-lg border-2 border-dashed pointer-events-none flex items-center justify-center px-2 ${palette}`}
+                        style={{ top, height }}
+                      >
+                        <span className="text-[11px] font-semibold uppercase tracking-wide">
+                          {draftReschedule.hasConflict
+                            ? "Conflict — pick another slot"
+                            : "Proposed new time"}
+                        </span>
+                      </div>
+                    );
+                  })()}
+
                 {/* Gridlines — drawn at the top of each slot so hour marks land exactly on the hour */}
                 {slots.map((s, i) => (
                   <div
@@ -967,6 +1012,7 @@ export default function DaySwimLanes({
                   const isBeingDragged = dragEventId === ev.id;
                   const isPendingCustomer =
                     ev.status === "pending_customer_acceptance";
+                  const isTentativeQuote = ev.status === "tentative_quote";
                   const isAwaitingRecResponse =
                     ev.recommendationState === "pending_customer";
                   const isAwaitingInfo =
@@ -1028,10 +1074,20 @@ export default function DaySwimLanes({
                         height: Math.max(ROW_HEIGHT * 0.5, slotHeight - 2),
                         backgroundColor: colors.bg,
                         color: colors.text,
-                        borderLeft: isPendingCustomer
-                          ? `3px dashed ${colors.border}`
-                          : `3px solid ${colors.border}`,
-                        borderBottom: `2px solid ${colors.border}`,
+                        borderLeft:
+                          isPendingCustomer || isTentativeQuote
+                            ? `3px dashed ${colors.border}`
+                            : `3px solid ${colors.border}`,
+                        borderTop: isTentativeQuote
+                          ? `1px dashed ${colors.border}`
+                          : undefined,
+                        borderRight: isTentativeQuote
+                          ? `1px dashed ${colors.border}`
+                          : undefined,
+                        borderBottom: isTentativeQuote
+                          ? `1px dashed ${colors.border}`
+                          : `2px solid ${colors.border}`,
+                        opacity: isTentativeQuote ? 0.75 : undefined,
                       }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = "0 1px 3px rgba(0,0,0,0.08)"; }}
                       onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.boxShadow = ""; }}
@@ -1047,6 +1103,11 @@ export default function DaySwimLanes({
                       {slotHeight > ROW_HEIGHT * 1.5 && (
                         <span className="absolute bottom-0.5 right-1 text-[10px] opacity-50 font-medium">
                           {formatCompactTime(ev.start.getHours(), ev.start.getMinutes())}
+                        </span>
+                      )}
+                      {isTentativeQuote && (
+                        <span className="absolute top-0.5 right-1 rounded bg-white/80 px-1 text-[9px] font-semibold uppercase tracking-wide">
+                          Pending quote
                         </span>
                       )}
                       {slotHeight <= ROW_HEIGHT * 2 && (ev.vehicleDisplay || ev.licensePlate) ? (

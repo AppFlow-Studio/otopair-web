@@ -13,6 +13,7 @@ type DirectorUser = {
   _id: Id<'director_users'>
   name: string
   role: string
+  email?: string
   created_at: number
   last_login?: number
 }
@@ -95,14 +96,19 @@ const SecretReveal = ({ secret, name }: { secret: string; name: string }) => {
 const AddUserModal = ({ onClose, actorName, actorId }: { onClose: () => void; actorName: string; actorId: Id<'director_users'> | undefined }) => {
   const addUser = useAction(api.director_auth.addUser)
   const [name,   setName]   = useState('')
+  const [email,  setEmail]  = useState('')
   const [role,   setRole]   = useState<'superadmin'|'admin'|'viewer'>('admin')
   const [secret, setSecret] = useState<{ text: string; forName: string } | null>(null)
+  const [error,  setError]  = useState('')
   const [busy,   setBusy]   = useState(false)
 
   const handleCreate = async () => {
-    if (!name.trim()) return
+    const trimEmail = email.trim().toLowerCase()
+    if (!name.trim()) { setError('Name is required.'); return }
+    if (!trimEmail || !trimEmail.includes('@')) { setError('A valid email address is required.'); return }
+    setError('')
     setBusy(true)
-    const res = await addUser({ name: name.trim(), role, actorName, actorId })
+    const res = await addUser({ name: name.trim(), email: trimEmail, role, actorName, actorId })
     setBusy(false)
     setSecret({ text: res.totp_secret, forName: name.trim() })
   }
@@ -120,15 +126,33 @@ const AddUserModal = ({ onClose, actorName, actorId }: { onClose: () => void; ac
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-600)', display: 'block', marginBottom: 6 }}>Name</label>
               <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Priya Singh" style={{ width: '100%' }} />
             </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-600)', display: 'block', marginBottom: 6 }}>
+                Email <span style={{ color: 'var(--red-500)' }}>*</span>
+              </label>
+              <Input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="name@otopair.com"
+                style={{ width: '100%' }}
+              />
+              <div style={{ fontSize: 11, color: 'var(--slate-400)', marginTop: 4 }}>
+                Required — this email is used to sign in to the Director panel.
+              </div>
+            </div>
             <div style={{ marginBottom: 20 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-600)', display: 'block', marginBottom: 6 }}>Role</label>
               <Select value={role} onChange={e => setRole(e.target.value as 'superadmin'|'admin'|'viewer')}
                 options={[{ value:'superadmin', label:'Superadmin' },{ value:'admin', label:'Admin' },{ value:'viewer', label:'Viewer' }]}
                 style={{ width: '100%' }} />
             </div>
+            {error && (
+              <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--red-600)', fontWeight: 500 }}>{error}</div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <Button onClick={onClose}>Cancel</Button>
-              <Button variant="primary" onClick={handleCreate} disabled={busy || !name.trim()}>
+              <Button variant="primary" onClick={handleCreate} disabled={busy || !name.trim() || !email.trim()}>
                 {busy ? 'Creating…' : 'Create account'}
               </Button>
             </div>
@@ -149,15 +173,56 @@ const AddUserModal = ({ onClose, actorName, actorId }: { onClose: () => void; ac
   )
 }
 
-const UserRow = ({ user, isSelf, actorName, actorId, canRemove, canRegen }: {
+/** Inline email editor for an existing user row. */
+const SetEmailInline = ({ user, actorName, actorId, onDone }: {
+  user: DirectorUser; actorName: string; actorId: Id<'director_users'> | undefined; onDone: () => void
+}) => {
+  const setUserEmail = useMutation(api.director_auth.setUserEmail)
+  const [val,  setVal]  = useState(user.email ?? '')
+  const [busy, setBusy] = useState(false)
+  const [err,  setErr]  = useState('')
+
+  const save = async () => {
+    const trimmed = val.trim().toLowerCase()
+    if (!trimmed || !trimmed.includes('@')) { setErr('Enter a valid email.'); return }
+    setBusy(true); setErr('')
+    const res = await setUserEmail({ id: user._id, email: trimmed, actorName, actorId })
+    setBusy(false)
+    if (res && !res.ok) {
+      setErr(res.reason === 'email_taken' ? 'That email is already used by another account.' : 'Error saving email.')
+    } else {
+      onDone()
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 10, display: 'flex', gap: 6, alignItems: 'center' }}>
+      <Input
+        type="email"
+        value={val}
+        onChange={e => setVal(e.target.value)}
+        placeholder="email@otopair.com"
+        style={{ flex: 1, fontSize: 13 }}
+        disabled={busy}
+      />
+      <Button size="sm" variant="primary" onClick={save} disabled={busy}>{busy ? '…' : 'Save'}</Button>
+      <Button size="sm" onClick={onDone}>Cancel</Button>
+      {err && <span style={{ fontSize: 12, color: 'var(--red-600)' }}>{err}</span>}
+    </div>
+  )
+}
+
+const UserRow = ({ user, isSelf, actorName, actorId, canRemove, canRegen, canEditEmail }: {
   user: DirectorUser; isSelf: boolean; actorName: string; actorId: Id<'director_users'> | undefined
-  canRemove: boolean   // superadmin → non-superadmin targets only
-  canRegen: boolean    // superadmin → any non-self target
+  canRemove: boolean
+  canRegen: boolean
+  canEditEmail: boolean
 }) => {
   const removeUser       = useMutation(api.director_auth.removeUser)
   const regenerateSecret = useAction(api.director_auth.regenerateSecret)
   const [newSecret,   setNewSecret]   = useState<string | null>(null)
   const [confirming,  setConfirming]  = useState(false)
+  const [editEmail,   setEditEmail]   = useState(false)
   const [busy,        setBusy]        = useState(false)
   const rb = ROLE_BADGE[user.role] ?? { tone: 'slate' as const, label: user.role }
 
@@ -179,7 +244,7 @@ const UserRow = ({ user, isSelf, actorName, actorId, canRemove, canRegen }: {
     <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--slate-100)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <Avatar name={user.name} size={36} />
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--slate-900)' }}>{user.name}</span>
             <Badge tone={rb.tone}>{rb.label}</Badge>
@@ -188,8 +253,25 @@ const UserRow = ({ user, isSelf, actorName, actorId, canRemove, canRegen }: {
           <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 2 }}>
             {user.last_login ? `Last login ${timeAgo(user.last_login)}` : 'Never logged in'} · Added {timeAgo(user.created_at)}
           </div>
+          {/* Email row */}
+          {user.email ? (
+            <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 3 }}>
+              {user.email}
+            </div>
+          ) : (
+            <div style={{ marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 12, color: 'var(--red-500)', fontWeight: 500 }}>⚠ No email — cannot sign in</span>
+              {canEditEmail && !editEmail && (
+                <button onClick={() => setEditEmail(true)}
+                  style={{ fontSize: 11, color: 'var(--blue-500)', background: 'none', border: 'none',
+                    cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+                  set email
+                </button>
+              )}
+            </div>
+          )}
         </div>
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
           {canRegen && (
             <Button size="sm" onClick={handleRegen} disabled={busy}>{busy ? '…' : 'Regen secret'}</Button>
           )}
@@ -204,6 +286,9 @@ const UserRow = ({ user, isSelf, actorName, actorId, canRemove, canRegen }: {
           )}
         </div>
       </div>
+      {editEmail && (
+        <SetEmailInline user={user} actorName={actorName} actorId={actorId} onDone={() => setEditEmail(false)} />
+      )}
       {newSecret && <SecretReveal secret={newSecret} name={user.name} />}
     </div>
   )
@@ -214,10 +299,10 @@ export const TabSettings = () => {
   const users     = useQuery(api.director_auth.listUsers)
   const [addOpen, setAddOpen] = useState(false)
 
-  const role        = session?.role ?? 'viewer'
+  const role         = session?.role ?? 'viewer'
   const isSuperadmin = role === 'superadmin'
-  const actorName   = session?.name ?? 'Director'
-  const actorId     = session?.userId as Id<'director_users'> | undefined
+  const actorName    = session?.name ?? 'Director'
+  const actorId      = session?.userId as Id<'director_users'> | undefined
 
   return (
     <SectionAnchor id="settings" title="Settings"
@@ -227,7 +312,9 @@ export const TabSettings = () => {
           <div>
             <div style={{ fontSize: 14, fontWeight: 600 }}>Director accounts</div>
             <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 2 }}>
-              {isSuperadmin ? 'Each account has its own TOTP 2FA secret.' : 'Read-only — contact a superadmin to make changes.'}
+              {isSuperadmin
+                ? 'Each account has its own email + TOTP 2FA. Email is required to sign in.'
+                : 'Read-only — contact a superadmin to make changes.'}
             </div>
           </div>
           {isSuperadmin && <Button variant="primary" onClick={() => setAddOpen(true)}>+ Add account</Button>}
@@ -248,6 +335,7 @@ export const TabSettings = () => {
                 actorId={actorId}
                 canRemove={isSuperadmin && !isSelf && u.role !== 'superadmin'}
                 canRegen={isSuperadmin && !isSelf}
+                canEditEmail={isSuperadmin}
               />
             )
           })

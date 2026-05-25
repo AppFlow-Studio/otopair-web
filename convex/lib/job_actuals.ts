@@ -34,6 +34,13 @@ export type JobActualPartInput = {
   brand?: string | null;
   oem_number: string;
   cost: number;
+  quantity?: number;
+  supplied_by?: string;
+  part_tier?: string;
+  service_id?: Id<"services">;
+  source?: "catalog" | "manual";
+  swap_from_oem_number?: string;
+  not_used?: boolean;
 };
 
 export type JobActualInput = {
@@ -426,6 +433,7 @@ export async function saveJobActualDraft(
     startedAtMs,
     completedAtMs,
     preferAutoLaborMinutes = false,
+    actorUserId,
   }: {
     booking: any;
     actuals?: JobActualInput;
@@ -433,6 +441,11 @@ export async function saveJobActualDraft(
     startedAtMs?: number;
     completedAtMs?: number;
     preferAutoLaborMinutes?: boolean;
+    /** Mechanic / shop-staff user attributed for the parts-edit audit log.
+     *  Optional so system-driven paths can still call the helper, but when
+     *  parts_used changes without an actor we skip the audit-log writes
+     *  (better silent than misattributed). */
+    actorUserId?: Id<"users">;
   }
 ) {
   const existing = await ensureJobActualRecord(ctx, {
@@ -452,6 +465,26 @@ export async function saveJobActualDraft(
   }
   if (completedAtMs != null) {
     patch.completed_at_ms = completedAtMs;
+  }
+
+  // Diff parts_used BEFORE the patch so we have a clean prev/next pair. Skip
+  // when we don't have an actor — audit rows without `edited_by_user_id`
+  // would leave the log half-attributed and the schema requires the field.
+  if (
+    actorUserId &&
+    actuals &&
+    Object.prototype.hasOwnProperty.call(actuals, "parts_used")
+  ) {
+    await recordPartEdits(ctx, {
+      bookingId: booking._id,
+      jobActualId: existing._id,
+      previousParts: Array.isArray((existing as any).parts_used)
+        ? ((existing as any).parts_used as any[])
+        : [],
+      nextParts: Array.isArray(actuals.parts_used) ? actuals.parts_used : [],
+      actorUserId,
+      now,
+    });
   }
 
   applyActualsInputToPatch(patch, actuals);
@@ -494,6 +527,7 @@ export async function finalizeJobActuals(
     actuals,
     now,
     preferAutoLaborMinutes: true,
+    actorUserId: userId,
   });
 
   await ctx.db.patch(draft._id, {
@@ -541,4 +575,211 @@ export async function reopenJobActuals(
     now,
   });
   return reopened;
+}
+
+// ---------------------------------------------------------------------------
+// Part-edit audit log
+// ---------------------------------------------------------------------------
+
+function partKey(part: any): string {
+  const oem = String(part?.oem_number ?? "").trim();
+  if (oem) return `oem:${oem.toLowerCase()}`;
+  const name = String(part?.part_name ?? "").trim();
+  return name ? `name:${name.toLowerCase()}` : "";
+}
+
+function partSnapshotSummary(part: any): string {
+  // Tiny JSON summary stamped into added/removed audit rows so the log is
+  // readable without having to reconstruct historical parts_used state.
+  return JSON.stringify({
+    name: part?.part_name ?? null,
+    oem: part?.oem_number ?? null,
+    brand: part?.brand ?? null,
+    cost: part?.cost ?? null,
+    quantity: part?.quantity ?? 1,
+    supplied_by: part?.supplied_by ?? "shop",
+    source: part?.source ?? null,
+  });
+}
+
+async function recordPartEdits(
+  ctx: any,
+  {
+    bookingId,
+    jobActualId,
+    previousParts,
+    nextParts,
+    actorUserId,
+    now,
+  }: {
+    bookingId: Id<"bookings">;
+    jobActualId: Id<"job_actuals">;
+    previousParts: any[];
+    nextParts: any[];
+    actorUserId: Id<"users">;
+    now: number;
+  },
+) {
+  const prevMap = new Map<string, any>();
+  for (const part of previousParts) {
+    const key = partKey(part);
+    if (key) prevMap.set(key, part);
+  }
+  const nextMap = new Map<string, any>();
+  for (const part of nextParts) {
+    const key = partKey(part);
+    if (key) nextMap.set(key, part);
+  }
+
+  // First pass: detect swaps via the explicit swap_from_oem_number marker.
+  // A swap manifests across two keys (old oem → new oem), so we'd normally
+  // log it as paired remove+add. With the marker, we emit a single "swap"
+  // audit row and skip both keys in the standard diff below.
+  const consumedKeys = new Set<string>();
+  for (const next of nextParts) {
+    const swapFromOem = next?.swap_from_oem_number;
+    if (!swapFromOem || typeof swapFromOem !== "string") continue;
+    const fromKey = `oem:${swapFromOem.trim().toLowerCase()}`;
+    const toKey = partKey(next);
+    const prev = prevMap.get(fromKey);
+    // Only emit the swap audit when we actually have the swapped-from row in
+    // the prior state — otherwise the swap is stale (e.g. submitted twice)
+    // and the standard diff handles it.
+    if (!prev || !toKey) continue;
+    await ctx.db.insert("job_actual_part_edits", {
+      booking_id: bookingId,
+      job_actual_id: jobActualId,
+      part_key: toKey,
+      edit_type: "swap",
+      old_value: swapFromOem,
+      new_value: String(next.oem_number ?? ""),
+      part_name_snapshot: next.part_name ? String(next.part_name) : undefined,
+      oem_number_snapshot: next.oem_number ? String(next.oem_number) : undefined,
+      edited_by_user_id: actorUserId,
+      edited_at: now,
+    });
+    consumedKeys.add(fromKey);
+    consumedKeys.add(toKey);
+  }
+
+  const allKeys = new Set<string>([...prevMap.keys(), ...nextMap.keys()]);
+
+  for (const key of allKeys) {
+    if (consumedKeys.has(key)) continue;
+    const prev = prevMap.get(key);
+    const next = nextMap.get(key);
+    const snapshotSource = next ?? prev;
+    const partNameSnap = snapshotSource?.part_name
+      ? String(snapshotSource.part_name)
+      : undefined;
+    const oemSnap = snapshotSource?.oem_number
+      ? String(snapshotSource.oem_number)
+      : undefined;
+
+    if (!prev && next) {
+      await ctx.db.insert("job_actual_part_edits", {
+        booking_id: bookingId,
+        job_actual_id: jobActualId,
+        part_key: key,
+        edit_type: "added",
+        new_value: partSnapshotSummary(next),
+        part_name_snapshot: partNameSnap,
+        oem_number_snapshot: oemSnap,
+        edited_by_user_id: actorUserId,
+        edited_at: now,
+      });
+      continue;
+    }
+
+    if (prev && !next) {
+      await ctx.db.insert("job_actual_part_edits", {
+        booking_id: bookingId,
+        job_actual_id: jobActualId,
+        part_key: key,
+        edit_type: "removed",
+        old_value: partSnapshotSummary(prev),
+        part_name_snapshot: partNameSnap,
+        oem_number_snapshot: oemSnap,
+        edited_by_user_id: actorUserId,
+        edited_at: now,
+      });
+      continue;
+    }
+
+    // Both present — compare the four mutable fields. Identity fields
+    // (part_name, brand, oem_number) on catalog rows are locked in the UI;
+    // we don't bother diffing them here because either the key would already
+    // differ (oem change → key change → handled as add/remove pair above),
+    // or the change came from a custom row where free-text edits are
+    // expected and don't need a separate audit row beyond the field that
+    // actually drives downstream behavior.
+
+    const prevCost = String(prev.cost ?? "");
+    const nextCost = String(next.cost ?? "");
+    if (prevCost !== nextCost) {
+      await ctx.db.insert("job_actual_part_edits", {
+        booking_id: bookingId,
+        job_actual_id: jobActualId,
+        part_key: key,
+        edit_type: "price",
+        old_value: prevCost,
+        new_value: nextCost,
+        part_name_snapshot: partNameSnap,
+        oem_number_snapshot: oemSnap,
+        edited_by_user_id: actorUserId,
+        edited_at: now,
+      });
+    }
+
+    const prevQty = String(prev.quantity ?? 1);
+    const nextQty = String(next.quantity ?? 1);
+    if (prevQty !== nextQty) {
+      await ctx.db.insert("job_actual_part_edits", {
+        booking_id: bookingId,
+        job_actual_id: jobActualId,
+        part_key: key,
+        edit_type: "quantity",
+        old_value: prevQty,
+        new_value: nextQty,
+        part_name_snapshot: partNameSnap,
+        oem_number_snapshot: oemSnap,
+        edited_by_user_id: actorUserId,
+        edited_at: now,
+      });
+    }
+
+    const prevSupplier = String(prev.supplied_by ?? "shop");
+    const nextSupplier = String(next.supplied_by ?? "shop");
+    if (prevSupplier !== nextSupplier) {
+      await ctx.db.insert("job_actual_part_edits", {
+        booking_id: bookingId,
+        job_actual_id: jobActualId,
+        part_key: key,
+        edit_type: "supplied_by",
+        old_value: prevSupplier,
+        new_value: nextSupplier,
+        part_name_snapshot: partNameSnap,
+        oem_number_snapshot: oemSnap,
+        edited_by_user_id: actorUserId,
+        edited_at: now,
+      });
+    }
+
+    const prevNotUsed = prev.not_used === true;
+    const nextNotUsed = next.not_used === true;
+    if (prevNotUsed !== nextNotUsed) {
+      await ctx.db.insert("job_actual_part_edits", {
+        booking_id: bookingId,
+        job_actual_id: jobActualId,
+        part_key: key,
+        edit_type: "not_used",
+        old_value: prevNotUsed ? "true" : "false",
+        new_value: nextNotUsed ? "true" : "false",
+        part_name_snapshot: partNameSnap,
+        oem_number_snapshot: oemSnap,
+        edited_by_user_id: actorUserId,
+        edited_at: now,
+      });
+    }
+  }
 }

@@ -142,6 +142,29 @@ export const postjobPartValidator = v.object({
   // flows stamp it so multi-service bookings get accurate per-service
   // analytics (shop_part_preferences, cost-by-service).
   service_id: v.optional(v.id("services")),
+  // "catalog" rows came from the Otopair prefill (part_fitments); identity
+  // fields (part_name/brand/oem_number) are read-only and only price/qty/
+  // supplied_by/swap can change. "manual" rows are mechanic-added and stay
+  // fully editable. Absent = legacy row, treated as "manual" for safety.
+  source: v.optional(v.union(v.literal("catalog"), v.literal("manual"))),
+  // Set by the Swap modal so the snapshot + preference accrual loop knows
+  // this row replaced another part. The matching part_id is resolved by the
+  // snapshot writer (where the OEM→part_id lookup already happens); we don't
+  // carry it on the row to keep parts_used a thin denormalized view.
+  swap_from_oem_number: v.optional(v.string()),
+  // Mechanic toggled "Not used here" — different from Remove (which deletes
+  // the row entirely) and from supplied_by="customer" (which means cost=0
+  // because the driver brought it). Drives the demote logic in
+  // shop_part_preferences / vehicle_part_preferences.
+  not_used: v.optional(v.boolean()),
+  // Pre-Job Approval flow — manual parts require justification (≥12 chars)
+  // when submitted via booking_approvals.submitPreJobEstimate. Optional photo
+  // evidence via _storage ids. verified_against_catalog_median_cents
+  // snapshots what summarizePartPrices reported at submit time so disputes
+  // can reconstruct whether the row was flagged.
+  justification_text: v.optional(v.string()),
+  evidence_photo_ids: v.optional(v.array(v.id("_storage"))),
+  verified_against_catalog_median_cents: v.optional(v.number()),
 });
 
 export const postjobPhotoValidator = v.object({

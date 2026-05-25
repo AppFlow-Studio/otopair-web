@@ -5,10 +5,12 @@ import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
-import { Badge, Button, Card, Input, Select, StatusBadge, Modal, AuditButton, Avatar, tableStyles, IconUsers, IconSearch, IconExternal, IconX, IconCar, IconCard } from '../Primitives'
+import { Badge, Button, Card, Input, Select, StatusBadge, Modal, AuditButton, Avatar, tableStyles, IconUsers, IconSearch, IconExternal, IconX, IconCar, IconCard, IconCheck } from '../Primitives'
 import { DirectorNotesPanel } from '../DirectorNotesPanel'
 import { SectionAnchor } from '../Shell'
 import { consumeGoto } from '../directorNav'
+import { UserVehicleHistoryModal } from '../UserVehicleHistoryModal'
+import { AdminActionPanel, ActionRow, CreditPromptModal } from '../AdminActionPanel'
 
 const loyaltyChip = (loyalty: string, pending?: boolean) => {
   if (pending) return <Badge tone="red">Pending deletion</Badge>
@@ -54,13 +56,46 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
   const actorId   = session?.userId as Id<'director_users'> | undefined
   const [auditOpen, setAuditOpen] = useState(false)
   const [confirmAction, setConfirmAction] = useState<string | null>(null)
+  const [drillVehicleId, setDrillVehicleId] = useState<Id<'vehicles'> | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
+  const [editFirst, setEditFirst] = useState('')
+  const [editLast,  setEditLast]  = useState('')
+  const [editEmail, setEditEmail] = useState('')
+  const [editPhone, setEditPhone] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [creditOpen, setCreditOpen] = useState(false)
   const softDelete = useMutation(api.director.softDeleteUser)
+  const restoreUser = useMutation(api.directorUserActions.restoreUser)
+  const setRole    = useMutation(api.directorUserActions.setUserRole)
+  const grantCredit = useMutation(api.directorUserActions.grantCredit)
+  const updateBasics = useMutation(api.directorUserActions.updateUserBasics)
   const logView    = useMutation(api.director.logView)
   const detail = useQuery(api.director.userDetail, userId ? { id: userId } : 'skip')
+  const externalIds = useQuery(api.directorUserActions.userExternalIds, userId ? { id: userId } : 'skip')
+
+  // Seed edit form when entering edit mode.
+  useEffect(() => {
+    if (!editing || !detail) return
+    // Split the name back into first/last for the form. `detail.name` is the
+    // joined form so we can't perfectly round-trip, but split on first space.
+    const parts = detail.name.split(' ')
+    setEditFirst(parts[0] ?? '')
+    setEditLast(parts.slice(1).join(' ') ?? '')
+    setEditEmail(detail.email === '—' ? '' : detail.email)
+    setEditPhone(detail.phone === '—' ? '' : detail.phone)
+  }, [editing, detail?.name, detail?.email, detail?.phone])
 
   useEffect(() => {
     if (userId) logView({ entity_type: 'user', entity_id: String(userId), actorName, actorId })
   }, [String(userId)])
+  // Auto-dismiss toast.
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 3200)
+    return () => clearTimeout(t)
+  }, [toast])
+
   const rawAudit = useQuery(api.audit_log.listByEntity, userId ? { entity_type: 'user', entity_id: userId } : 'skip')
   const auditEntries = rawAudit?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
@@ -71,9 +106,55 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
     if (!userId) return
     if (action === 'Soft Delete') {
       await softDelete({ id: userId, reason, actorName, actorId })
+      setToast('Account marked for deletion. Audit logged.')
+    } else if (action === 'Restore Account') {
+      await restoreUser({ id: userId, reason, actorName, actorId })
+      setToast('Account restored.')
     }
-    // Resend Verification and Reset Password require Clerk API — handled server-side
   }
+
+  const handleGrantCredit = async (amount: number, description: string) => {
+    if (!userId) return
+    await grantCredit({ id: userId, amount, description, actorName, actorId })
+    setCreditOpen(false)
+    setToast(`Credited $${amount.toFixed(2)} · "${description.slice(0, 36)}${description.length > 36 ? '…' : ''}"`)
+  }
+
+  const handleSaveProfile = async () => {
+    if (!userId) return
+    setSaving(true)
+    try {
+      const res = await updateBasics({
+        id: userId,
+        first_name: editFirst,
+        last_name:  editLast,
+        email:      editEmail,
+        phone:      editPhone,
+        actorName,
+        actorId,
+      })
+      if (res?.ok && res.changes > 0) {
+        setToast(`Saved ${res.changes} change${res.changes === 1 ? '' : 's'}.`)
+      } else if (res?.ok) {
+        setToast('No changes.')
+      } else {
+        setToast('Save failed.')
+      }
+      setEditing(false)
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : 'Save failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Clerk admin dashboard deep-link — Clerk owns verification + password flows.
+  const clerkDashboardUrl = externalIds?.clerkUserId
+    ? `https://dashboard.clerk.com/last-active?path=users/${externalIds.clerkUserId}`
+    : null
+  const stripeCustomerUrl = externalIds?.stripe_customer_id
+    ? `https://dashboard.stripe.com/customers/${externalIds.stripe_customer_id}`
+    : null
 
   return (
     <Modal open={!!userId} onClose={onClose} width={920}
@@ -82,26 +163,44 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
       title={detail?.name ?? ''}
       headerRight={<>
         <AuditButton onClick={() => setAuditOpen(o => !o)} count={auditEntries?.length} />
-        <Button iconRight={<IconExternal size={13} />}>Open in Stripe</Button>
-        <Button variant="primary">Edit profile</Button>
+        {stripeCustomerUrl
+          ? <a href={stripeCustomerUrl} target="_blank" rel="noopener noreferrer" style={{ textDecoration:'none' }}>
+              <Button iconRight={<IconExternal size={13} />}>Open in Stripe</Button>
+            </a>
+          : <Button iconRight={<IconExternal size={13} />} disabled>No Stripe customer</Button>}
+        {!editing
+          ? <Button variant="primary" onClick={() => setEditing(true)}>Edit profile</Button>
+          : <Button variant="primary" onClick={handleSaveProfile} disabled={saving}>{saving ? 'Saving…' : 'Save profile'}</Button>}
       </>}
       auditDrawer={{ open:auditOpen, onClose:() => setAuditOpen(false), title:'User audit log', subtitle:detail ? `${String(detail.id).slice(-8)} · ${detail.name}` : '', entries:auditEntries }}
-      footer={<><Button onClick={onClose}>Close</Button><Button variant="primary">Save changes</Button></>}>
+      footer={<>
+        {editing && <Button onClick={() => setEditing(false)} disabled={saving}>Cancel edit</Button>}
+        <Button onClick={onClose}>Close</Button>
+      </>}>
       {!detail ? (
         <div style={{ padding:40, textAlign:'center', color:'var(--slate-400)', fontSize:13 }}>Loading…</div>
       ) : <>
         <div style={{ padding:'10px 24px 16px', borderBottom:'1px solid var(--slate-200)', display:'flex', alignItems:'center', gap:14 }}>
           <Avatar name={detail.name} size={44} />
-          <div style={{ flex:1 }}>
-            <div style={{ fontSize:12, color:'var(--slate-500)', display:'flex', gap:14, alignItems:'center', flexWrap:'wrap' }}>
-              <span>{detail.email}</span><span>·</span><span>{detail.phone}</span><span>·</span><span>Joined {detail.joined}</span>
+          {editing ? (
+            <div style={{ flex:1, display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+              <Input value={editFirst} onChange={e => setEditFirst(e.target.value)} placeholder="First name" />
+              <Input value={editLast}  onChange={e => setEditLast(e.target.value)}  placeholder="Last name" />
+              <Input value={editEmail} onChange={e => setEditEmail(e.target.value)} placeholder="Email" />
+              <Input value={editPhone} onChange={e => setEditPhone(e.target.value)} placeholder="Phone" />
             </div>
-            <div style={{ fontSize:12, color:'var(--slate-500)', marginTop:4, display:'flex', gap:14 }}>
-              <span><b className="mono" style={{ color:'var(--slate-800)' }}>{detail.recentBookings.length}</b> recent bookings</span>
-              <span>·</span>
-              <span><b className="mono" style={{ color:'var(--slate-800)' }}>{detail.vehicles.length}</b> vehicles</span>
+          ) : (
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:12, color:'var(--slate-500)', display:'flex', gap:14, alignItems:'center', flexWrap:'wrap' }}>
+                <span>{detail.email}</span><span>·</span><span>{detail.phone}</span><span>·</span><span>Joined {detail.joined}</span>
+              </div>
+              <div style={{ fontSize:12, color:'var(--slate-500)', marginTop:4, display:'flex', gap:14 }}>
+                <span><b className="mono" style={{ color:'var(--slate-800)' }}>{detail.recentBookings.length}</b> recent bookings</span>
+                <span>·</span>
+                <span><b className="mono" style={{ color:'var(--slate-800)' }}>{detail.vehicles.length}</b> vehicles</span>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1.2fr 1fr', borderBottom:'1px solid var(--slate-200)' }}>
@@ -112,18 +211,31 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
             </div>
             {detail.vehicles.length === 0
               ? <div style={{ fontSize:13, color:'var(--slate-400)' }}>No vehicles added.</div>
-              : detail.vehicles.map((v, i) => (
-                <div key={i} style={{ padding:10, border:'1px solid var(--slate-200)', borderRadius:8, marginBottom:8, display:'flex', gap:10, alignItems:'center' }}>
-                  <span style={{ width:32, height:32, borderRadius:6, background:'var(--slate-100)', display:'inline-flex', alignItems:'center', justifyContent:'center', color:'var(--slate-500)' }}>
-                    <IconCar size={16} />
-                  </span>
-                  <div>
-                    <div style={{ fontSize:13, fontWeight:500 }}>{v.nickname || v.ymm}</div>
-                    {v.nickname && <div style={{ fontSize:12, color:'var(--slate-500)' }}>{v.ymm}</div>}
-                    <div className="mono" style={{ fontSize:11, color:'var(--slate-500)' }}>{v.vin}</div>
-                  </div>
-                </div>
-              ))
+              : detail.vehicles.map((v, i) => {
+                  const clickable = !!v.vehicleId
+                  return (
+                    <div key={i}
+                      onClick={() => clickable && setDrillVehicleId(v.vehicleId as Id<'vehicles'>)}
+                      style={{ padding:10, border:'1px solid var(--slate-200)', borderRadius:8, marginBottom:8,
+                        display:'flex', gap:10, alignItems:'center',
+                        cursor: clickable ? 'pointer' : 'default',
+                        transition:'background 80ms, border-color 80ms' }}
+                      onMouseEnter={e => { if (clickable) { (e.currentTarget as HTMLElement).style.background = 'var(--slate-25)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--blue-300, #93c5fd)' } }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = ''; (e.currentTarget as HTMLElement).style.borderColor = 'var(--slate-200)' }}>
+                      <span style={{ width:32, height:32, borderRadius:6, background:'var(--slate-100)', display:'inline-flex', alignItems:'center', justifyContent:'center', color:'var(--slate-500)' }}>
+                        <IconCar size={16} />
+                      </span>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:13, fontWeight:500 }}>{v.nickname || v.ymm}</div>
+                        {v.nickname && <div style={{ fontSize:12, color:'var(--slate-500)' }}>{v.ymm}</div>}
+                        <div className="mono" style={{ fontSize:11, color:'var(--slate-500)' }}>{v.vin}</div>
+                      </div>
+                      {clickable && (
+                        <span style={{ fontSize:11, color:'var(--blue-600)', fontWeight:500 }}>History →</span>
+                      )}
+                    </div>
+                  )
+                })
             }
           </div>
 
@@ -166,21 +278,28 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
           </div>
         </div>
 
-        {/* Admin actions */}
+        {/* Admin controls — expanded */}
         <div style={{ padding:'18px 24px', borderBottom:'1px solid var(--slate-200)', background:'var(--slate-25)' }}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:14, flexWrap:'wrap' }}>
-            <div>
-              <div style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:4 }}>Admin actions</div>
-              <div style={{ fontSize:12, color:'var(--slate-500)' }}>All admin actions require a reason and are logged in the audit trail.</div>
-            </div>
-            <div style={{ display:'flex', gap:8 }}>
-              <Button variant="secondary" onClick={() => setConfirmAction('Resend Verification')}>Resend verification</Button>
-              <Button variant="secondary" onClick={() => setConfirmAction('Reset Password')}>Reset password</Button>
-              <Button variant="danger" onClick={() => setConfirmAction('Soft Delete')} disabled={detail.isPendingDeletion}>
-                {detail.isPendingDeletion ? 'Deletion pending' : 'Soft delete account'}
-              </Button>
-            </div>
-          </div>
+          <AdminActionPanel title="Admin controls"
+            subtitle="Auth / password flows live in Clerk. Everything else is logged to the audit trail.">
+            {clerkDashboardUrl
+              ? <ActionRow label="Manage in Clerk" hint="Email verification, password reset, sessions, MFA, organizations"
+                  action={<a href={clerkDashboardUrl} target="_blank" rel="noopener noreferrer" style={{ textDecoration:'none' }}>
+                    <Button size="sm" iconRight={<IconExternal size={11} />}>Open Clerk</Button>
+                  </a>} />
+              : <ActionRow label="Manage in Clerk" hint="No Clerk user ID on file"
+                  action={<Button size="sm" disabled>Unavailable</Button>} />}
+            <ActionRow label="Issue manual credit"
+              hint="Adds a transactions row + audit"
+              action={<Button size="sm" onClick={() => setCreditOpen(true)}>Issue</Button>} />
+            {detail.isPendingDeletion
+              ? <ActionRow label="Restore account"
+                  hint="Undo pending deletion"
+                  action={<Button size="sm" variant="primary" onClick={() => setConfirmAction('Restore Account')}>Restore</Button>} />
+              : <ActionRow label="Soft delete account" danger
+                  hint="Marks isPendingDeletion=true. Reversible."
+                  action={<Button size="sm" variant="danger" onClick={() => setConfirmAction('Soft Delete')}>Delete</Button>} />}
+          </AdminActionPanel>
         </div>
 
         <div style={{ padding:22, background:'var(--slate-25)' }}>
@@ -194,6 +313,30 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
             onClose={() => setConfirmAction(null)}
           />
         )}
+
+        <CreditPromptModal
+          open={creditOpen}
+          onConfirm={handleGrantCredit}
+          onClose={() => setCreditOpen(false)} />
+
+        <UserVehicleHistoryModal
+          userId={userId}
+          vehicleId={drillVehicleId}
+          onClose={() => setDrillVehicleId(null)}
+        />
+
+        {toast && (
+          <div style={{
+            position:'fixed', bottom:24, right:24, zIndex:400,
+            background:'var(--slate-900)', color:'#fff',
+            padding:'10px 14px', borderRadius:8, fontSize:13, fontWeight:500,
+            boxShadow:'0 10px 30px rgba(15,23,42,0.25)',
+            display:'flex', alignItems:'center', gap:8,
+          }}>
+            <IconCheck size={14} />
+            {toast}
+          </div>
+        )}
       </>}
     </Modal>
   )
@@ -201,6 +344,7 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
 
 export const TabUsers = () => {
   const [q, setQ]           = useState('')
+  const [loyalty, setLoyalty] = useState('all')
   const [openId, setOpenId] = useState<Id<'users'> | null>(null)
 
   useEffect(() => {
@@ -210,18 +354,24 @@ export const TabUsers = () => {
 
   const users = useQuery(api.director.usersList)
 
-  const filtered = (users ?? []).filter(u =>
-    !q || u.name.toLowerCase().includes(q.toLowerCase()) ||
-    u.email.toLowerCase().includes(q.toLowerCase()) ||
-    u.phone.includes(q)
-  )
+  const filtered = (users ?? []).filter(u => {
+    if (loyalty !== 'all' && (u.loyalty ?? 'standard') !== loyalty) return false
+    if (q) {
+      const needle = q.toLowerCase()
+      return u.name.toLowerCase().includes(needle)
+        || u.email.toLowerCase().includes(needle)
+        || u.phone.includes(q)
+    }
+    return true
+  })
 
   return (
     <SectionAnchor id="users" title="Users" subtitle="All consumer accounts on Otopair."
 >
       <div style={{ display:'flex', alignItems:'center', gap:10, padding:12, background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, marginBottom:12 }}>
         <Input icon={<IconSearch size={14} />} value={q} onChange={e => setQ(e.target.value)} placeholder="Search by name, email, or phone…" style={{ width:360 }} />
-        <Select value="all" onChange={() => {}} options={[{ value:'all', label:'All loyalty tiers' },{ value:'standard', label:'Standard' },{ value:'premium', label:'Premium' },{ value:'elite', label:'Elite' }]} />
+        <Select value={loyalty} onChange={e => setLoyalty(e.target.value)}
+          options={[{ value:'all', label:'All loyalty tiers' },{ value:'standard', label:'Standard' },{ value:'premium', label:'Premium' },{ value:'elite', label:'Elite' }]} />
         <span style={{ flex:1 }} />
         <span style={{ fontSize:12, color:'var(--slate-500)' }}>
           {users === undefined ? 'Loading…' : `Showing ${filtered.length} of ${users.length} users`}

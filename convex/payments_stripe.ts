@@ -332,6 +332,26 @@ export const handlePaymentIntentEvent = internalMutation({
         (internal as any).lib.stripeTax.recordTaxTransactionForBooking,
         { bookingId: payment.booking_id, paymentId: payment._id },
       );
+      // Invoice PDF — render, store, email. Idempotent via storage-id check
+      // inside the action so webhook replays are safe.
+      await ctx.scheduler.runAfter(
+        0,
+        (internal as any).invoices_node.generateAndEmail,
+        { bookingId: payment.booking_id },
+      );
+    } else if (args.newStatus === "refunded") {
+      // Drop the cached PDF so the next render reflects the refund, then
+      // re-render + re-email the customer with an updated invoice.
+      await ctx.scheduler.runAfter(
+        0,
+        (internal as any).invoices.regenerateInvoice,
+        { bookingId: payment.booking_id },
+      );
+      await ctx.scheduler.runAfter(
+        100,
+        (internal as any).invoices_node.generateAndEmail,
+        { bookingId: payment.booking_id },
+      );
     }
 
     return { matched: true, transitioned: true };

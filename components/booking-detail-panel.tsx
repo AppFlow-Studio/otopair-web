@@ -19,6 +19,7 @@ import OverrunCheckInCard from "@/components/overrun-checkin-card";
 import InvoiceNumberField from "@/components/invoice-number-field";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import PostjobReportSection from "@/components/booking/postjob-report-section";
+import SendReceiptCard from "@/components/booking/send-receipt-card";
 import type { JobActualsPayload } from "@/lib/job-actuals";
 import VehiclePassportSection from "@/components/vehicle-passport-section";
 import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
@@ -1944,6 +1945,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
                 {job.status === "completed" && job._id ? (
                   <PostjobPhotoStrip bookingId={job._id} />
+                ) : null}
+
+                {job.status === "completed" && job._id ? (
+                  <SendReceiptCard bookingId={job._id} />
                 ) : null}
 
                 {job.status === "completed" && (

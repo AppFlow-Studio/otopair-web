@@ -1768,13 +1768,41 @@ export default defineSchema({
     incremented_total_cents: v.optional(v.number()),
     captured_amount_cents: v.optional(v.number()),
     reauth_payment_intent_id: v.optional(v.string()),
+
+    // Invoice PDF (generated server-side after capture). Identical layout to
+    // the email attachment, stored once in Convex file storage and reused for
+    // both the email send and the mobile "View Receipt PDF" link.
+    invoice_number: v.optional(v.string()),
+    invoice_storage_id: v.optional(v.id("_storage")),
+    invoice_generated_at_ms: v.optional(v.number()),
+    invoice_emailed_at_ms: v.optional(v.number()),
+    // URL-safe random token embedded in the receipt deep-link sent over
+    // email. Lets walk-in customers who don't have a Clerk account open
+    // /receipts/[bookingId]?t=<token> without signing in. Treated as
+    // capability auth — possession of the token grants read access to the
+    // receipt and PDF.
+    receipt_token: v.optional(v.string()),
+    // Set when the row was created by the Stripe-reconciliation backfill
+    // (see convex/payments_backfill.ts) rather than by the live booking
+    // flow. Lets operators tell historical-import rows apart from rows
+    // produced by current bookings without touching status semantics.
+    backfilled_at_ms: v.optional(v.number()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_user_id", ["user_id"])
     .index("by_status", ["status"])
     .index("by_idempotency_key", ["idempotency_key"])
     .index("by_stripe_payment_intent_id", ["stripe_payment_intent_id"])
-    .index("by_created_at", ["created_at"]),
+    .index("by_created_at", ["created_at"])
+    .index("by_receipt_token", ["receipt_token"]),
+
+  // Single-row-per-year counter for sequential invoice numbering
+  // (INV-<YYYY>-<6-digit zero-padded>). Allocated transactionally inside
+  // invoices.generateAndEmail; never decremented.
+  invoice_counters: defineTable({
+    year: v.number(),
+    next_value: v.number(),
+  }).index("by_year", ["year"]),
 
   // [I]
   payment_status_history: defineTable({

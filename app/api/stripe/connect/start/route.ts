@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { fetchMutation, fetchQuery } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
+import { getAppBaseUrl } from "@/lib/app-url";
 import {
   createStripeConnectOnboardingLink,
   getStripe,
@@ -9,7 +10,7 @@ import {
 } from "@/lib/stripe";
 
 function getBaseUrl(request: NextRequest) {
-  return (process.env.NEXT_PUBLIC_APP_URL ?? request.nextUrl.origin).replace(/\/+$/, "");
+  return getAppBaseUrl(request.nextUrl.origin);
 }
 
 function getBusinessUrl(shopWebsite: string | null | undefined) {

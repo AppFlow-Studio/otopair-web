@@ -1,5 +1,5 @@
 function normalizeBaseUrl(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
+  const trimmed = value?.trim().replace(/^['"]|['"]$/g, "");
   if (!trimmed) return null;
 
   const withProtocol = /^https?:\/\//i.test(trimmed)

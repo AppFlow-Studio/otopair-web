@@ -13,7 +13,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Bell, Car, Check, Clock, Copy, Ellipsis, History, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
+import { ArrowRight, Bell, Car, Check, Clock, Copy, DollarSign, Ellipsis, FileText, History, Loader2, MessageSquare, RotateCcw, Wrench, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import OverrunCheckInCard from "@/components/overrun-checkin-card";
 import InvoiceNumberField from "@/components/invoice-number-field";
@@ -94,6 +94,158 @@ function getCancelReasons(status?: string | null) {
         CANCEL_REASONS[3],
       ]
     : CANCEL_REASONS;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Activity log types                                                  */
+/* ------------------------------------------------------------------ */
+
+type ActivityActor = {
+  userId: Id<"users"> | null;
+  label: string;
+};
+
+type ActivityEvent =
+  | {
+      type: "booking_created";
+      at: number;
+      actor: ActivityActor;
+      data: {
+        quotedSetPriceCents: number | null;
+        quotedBreakdown: {
+          parts_cents: number;
+          labor_cents: number;
+          tax_cents: number;
+          service_fee_cents: number;
+        } | null;
+        disclosedRangeLowCents: number | null;
+        disclosedRangeHighCents: number | null;
+        pricedPartsSnapshot: Array<{
+          part_name: string;
+          oem_number: string;
+          quantity: number;
+          unit_price_cents: number;
+          line_total_cents: number;
+        }> | null;
+        services: string[];
+      };
+    }
+  | {
+      type: "status_change";
+      at: number;
+      actor: ActivityActor;
+      data: { from: string | null; to: string; reason: string | null };
+    }
+  | {
+      type: "estimate_submitted";
+      at: number;
+      actor: ActivityActor;
+      data: {
+        cycle: string;
+        approvalId: Id<"booking_approvals">;
+        totalCents: number;
+        partsSubtotalCents: number | null;
+        laborCents: number | null;
+        taxCents: number | null;
+        serviceFeeCents: number | null;
+        priorCeilingCents: number;
+        partsSnapshot: Array<{
+          part_name?: string;
+          oem_number?: string;
+          quantity?: number;
+          cost?: number;
+        }>;
+        notes: string | null;
+        slaExpiresAtMs: number | null;
+        autoApprovedInRange: boolean;
+      };
+    }
+  | {
+      type: "estimate_decision";
+      at: number;
+      actor: ActivityActor;
+      data: {
+        cycle: string;
+        approvalId: Id<"booking_approvals">;
+        decision: string;
+        totalCents: number;
+        ceilingAfterDecisionCents: number | null;
+      };
+    }
+  | {
+      type: "part_edit";
+      at: number;
+      actor: ActivityActor;
+      data: {
+        editType:
+          | "added"
+          | "removed"
+          | "price"
+          | "quantity"
+          | "supplied_by"
+          | "swap"
+          | "not_used";
+        partKey: string;
+        partName: string | null;
+        oemNumber: string | null;
+        oldValue: string | null;
+        newValue: string | null;
+      };
+    };
+
+function formatActivityTimestamp(ms: number): string {
+  return new Date(ms).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function formatCycleLabel(cycle: string): string {
+  if (cycle === "pre_job") return "Pre-Job";
+  if (cycle === "mid_job") return "Mid-Job";
+  if (cycle === "post_job") return "Post-Job";
+  return cycle;
+}
+
+function formatDecisionLabel(decision: string): string {
+  switch (decision) {
+    case "approved":
+      return "Approved";
+    case "declined":
+      return "Declined";
+    case "withdrawn":
+      return "Withdrawn";
+    case "auto_approved_within_range":
+      return "Auto-approved (in range)";
+    case "sla_expired":
+      return "SLA expired";
+    default:
+      return decision;
+  }
+}
+
+function formatEditType(editType: string): string {
+  switch (editType) {
+    case "added":
+      return "Added part";
+    case "removed":
+      return "Removed part";
+    case "price":
+      return "Changed price";
+    case "quantity":
+      return "Changed quantity";
+    case "supplied_by":
+      return "Changed supplier";
+    case "swap":
+      return "Swapped part";
+    case "not_used":
+      return "Marked not-used";
+    default:
+      return editType;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -438,6 +590,24 @@ export interface JobDetailData {
   totalCost: number;
   laborCost: number;
   partsCost: number;
+  quotedSetPriceDollars?: number | null;
+  quotedBreakdown?: {
+    parts_cents: number;
+    labor_cents: number;
+    tax_cents: number;
+    service_fee_cents: number;
+  } | null;
+  pricedPartsSnapshot?: Array<{
+    service_id: string;
+    part_id?: string;
+    oem_number: string;
+    part_name: string;
+    brand?: string;
+    part_tier?: string;
+    quantity: number;
+    unit_price_cents: number;
+    line_total_cents: number;
+  }> | null;
   mechanicId?: Id<"mechanics"> | null;
   assignmentPreference?: "any" | "specific_mechanic";
   vehicleArrivedAtMs?: number | null;
@@ -538,6 +708,9 @@ interface JobDetailPanelProps {
    *  user to the mechanic's currently in-progress booking so they can fill
    *  out the post-job report before starting the new one. */
   onSwitchToBooking?: (bookingId: Id<"bookings">) => void;
+  /** When true, hides the disclosed customer-facing price range in the
+   *  activity timeline. Mechanics should only see the quoted set price. */
+  hideDisclosedRange?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -557,6 +730,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       onSuccess,
       showBookingsLink,
       onSwitchToBooking,
+      hideDisclosedRange,
     },
     ref,
   ) {
@@ -570,6 +744,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [declineOtherText, setDeclineOtherText] = useState("");
     const [showPrejobDialog, setShowPrejobDialog] = useState(false);
     const [showPostjobDialog, setShowPostjobDialog] = useState(false);
+    const [showPrejobEstimateDialog, setShowPrejobEstimateDialog] = useState(false);
+    const [showMidJobDialog, setShowMidJobDialog] = useState(false);
     const [showDiagnosticDialog, setShowDiagnosticDialog] = useState(false);
     const [recommendDrawerCtx, setRecommendDrawerCtx] = useState<
       import("@/components/recommend-service-drawer").RecommendServiceContext | null
@@ -610,6 +786,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
     const savePrejob = useMutation(api.bookings.savePrejob);
     const startWithPrejob = useMutation(api.bookings.startWithPrejob);
+    const commitInspectionAndAwaitEstimate = useMutation(
+      api.bookings.commitInspectionAndAwaitEstimate,
+    );
     const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
     const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
     const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
@@ -630,6 +809,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       api.job_actuals.getPostjobReportForBooking,
       job ? { bookingId: job._id } : "skip"
     );
+    const activityLog = useQuery(
+      (api as any).booking_activity.getBookingActivityLog,
+      job ? { bookingId: job._id } : "skip"
+    ) as ActivityEvent[] | undefined;
     // Pre-flight check for the start-job flow: if the mechanic already has
     // another booking in_progress, we route through EndCurrentJobConfirmDialog
     // instead of opening the prejob survey directly.
@@ -1037,20 +1220,33 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       if (!job?._id) return;
       setActionError("");
       setIsSubmittingPrejob(true);
+      // Pre-Job Approval flow: new-cycle bookings require an estimate before
+      // the booking can move to in_progress. Park at inspection_complete and
+      // chain to the estimate dialog instead of jumping to in_progress.
+      const isNewCycle = (job as any).hasDisclosedRange === true;
       try {
         if (action === "close") {
           await savePrejob({
             bookingId: job._id,
             prejob: payload,
           });
+          setShowPrejobDialog(false);
+          onSuccess?.("Pre-job vehicle check saved");
+        } else if (isNewCycle) {
+          await commitInspectionAndAwaitEstimate({
+            bookingId: job._id,
+            prejob: payload,
+          });
+          setShowPrejobDialog(false);
+          setShowPrejobEstimateDialog(true);
         } else {
           await startWithPrejob({
             bookingId: job._id,
             prejob: payload,
           });
+          setShowPrejobDialog(false);
+          onSuccess?.("Booking started");
         }
-        setShowPrejobDialog(false);
-        onSuccess?.(action === "close" ? "Pre-job vehicle check saved" : "Booking started");
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "";
         if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
@@ -1508,13 +1704,28 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     )}
                   </div>
                   <div className={drawerInfoCardClassName}>
-                    <DrawerFieldLabel>Costs</DrawerFieldLabel>
-                    <p className="text-[15px] font-medium text-foreground">
-                      ${job.totalCost.toFixed(2)} total
-                    </p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Labor ${job.laborCost.toFixed(2)} &middot; Parts ${job.partsCost.toFixed(2)}
-                    </p>
+                    <DrawerFieldLabel>Quoted price</DrawerFieldLabel>
+                    {job.quotedSetPriceDollars != null && job.quotedBreakdown ? (
+                      <>
+                        <p className="text-[15px] font-medium text-foreground">
+                          ${job.quotedSetPriceDollars.toFixed(2)}
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Parts ${(job.quotedBreakdown.parts_cents / 100).toFixed(2)} &middot;{" "}
+                          Labor ${(job.quotedBreakdown.labor_cents / 100).toFixed(2)} &middot;{" "}
+                          Tax+Fee ${((job.quotedBreakdown.tax_cents + job.quotedBreakdown.service_fee_cents) / 100).toFixed(2)}
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-[15px] font-medium text-foreground">
+                          ${job.totalCost.toFixed(2)} total
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Labor ${job.laborCost.toFixed(2)} &middot; Parts ${job.partsCost.toFixed(2)}
+                        </p>
+                      </>
+                    )}
                   </div>
                   <div className={drawerInfoCardClassName}>
                     <DrawerFieldLabel>Status</DrawerFieldLabel>
@@ -1540,6 +1751,40 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             </span>
                           ) : null;
                         })()}
+                      {(() => {
+                        const pas = (job as any).paymentApprovalState as
+                          | string
+                          | undefined;
+                        if (pas === "reauth_required") {
+                          return (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
+                              Hold reauth needed
+                            </span>
+                          );
+                        }
+                        if (pas === "post_job_pending") {
+                          return (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                              Actuals &gt; estimate &mdash; customer review
+                            </span>
+                          );
+                        }
+                        if (pas === "pre_job_pending" || pas === "mid_job_pending") {
+                          return (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                              Pending customer approval
+                            </span>
+                          );
+                        }
+                        if (pas === "captured") {
+                          return (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+                              Charged
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -1845,6 +2090,46 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             Vehicle here
                           </button>
                         )}
+                        {job.status === "in_progress" &&
+                          (job as any).hasDisclosedRange &&
+                          ((job as any).paymentApprovalState === "in_range" ||
+                            (job as any).paymentApprovalState === "pre_job_approved" ||
+                            (job as any).paymentApprovalState === "mid_job_approved" ||
+                            (job as any).paymentApprovalState === "captured") && (
+                            <button
+                              type="button"
+                              onClick={() => setShowMidJobDialog(true)}
+                              disabled={isActioning}
+                              className={drawerSecondaryButtonClassName}
+                              title="Found extra work mid-job? Send the new price to the customer for confirmation."
+                            >
+                              Add unforeseen scope
+                            </button>
+                          )}
+                        {(job as any).hasDisclosedRange &&
+                          ((job as any).paymentApprovalState === "pre_job_pending" ||
+                            (job as any).paymentApprovalState === "mid_job_pending" ||
+                            (job as any).paymentApprovalState === "post_job_pending" ||
+                            (job as any).paymentApprovalState === "pre_job_declined" ||
+                            (job as any).paymentApprovalState === "sla_expired") && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                (job as any).paymentApprovalState === "mid_job_pending"
+                                  ? setShowMidJobDialog(true)
+                                  : setShowPrejobEstimateDialog(true)
+                              }
+                              disabled={isActioning}
+                              className={drawerSecondaryButtonClassName}
+                              title="View pending customer confirmation"
+                            >
+                              {(job as any).paymentApprovalState === "post_job_pending"
+                                ? "Customer reviewing final billing"
+                                : (job as any).paymentApprovalState === "mid_job_pending"
+                                  ? "Mid-job pending confirmation"
+                                  : "Open pending estimate"}
+                            </button>
+                          )}
                         {canComplete && job.status === "in_progress" && (
                           // TODO: Fix --success usage
                           <button
@@ -2067,6 +2352,233 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                                   const desc = getStatusDescription(h.new_status, h.reason);
                                   return desc ? <p className="text-xs text-muted-foreground -mt-1">{desc}</p> : null;
                                 })()}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Activity timeline — quote / estimates / decisions / part edits */}
+                <div className="rounded-2xl bg-muted/20 p-4">
+                  <div className="mb-3 flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-muted-foreground" />
+                    <DrawerFieldLabel className="mb-0">Activity Timeline</DrawerFieldLabel>
+                  </div>
+                  <div className="max-h-80 overflow-y-auto rounded-xl bg-background px-3 py-2">
+                    {activityLog === undefined ? (
+                      <p className="text-xs text-muted-foreground">Loading activity…</p>
+                    ) : activityLog.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No activity yet.</p>
+                    ) : (
+                      <div>
+                        {activityLog.map((ev, index) => {
+                          const isLast = index === activityLog.length - 1;
+                          const formattedDate = formatActivityTimestamp(ev.at);
+                          return (
+                            <div
+                              key={`${ev.type}-${ev.at}-${index}`}
+                              className="relative flex gap-3 pb-5 last:pb-0"
+                            >
+                              {!isLast && (
+                                <div className="absolute left-[11px] top-6 bottom-0 w-px bg-border" />
+                              )}
+                              <div className="relative z-10 shrink-0">
+                                {ev.type === "booking_created" && (
+                                  <div className="w-6 h-6 rounded-full border-2 border-primary bg-card flex items-center justify-center">
+                                    <FileText className="w-3 h-3 text-primary" strokeWidth={2.5} />
+                                  </div>
+                                )}
+                                {ev.type === "status_change" && (
+                                  <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
+                                    <ArrowRight className="w-3 h-3 text-muted-foreground" strokeWidth={2.5} />
+                                  </div>
+                                )}
+                                {ev.type === "estimate_submitted" && (
+                                  <div className="w-6 h-6 rounded-full border-2 border-amber-400 bg-card flex items-center justify-center">
+                                    <DollarSign className="w-3 h-3 text-amber-500" strokeWidth={2.5} />
+                                  </div>
+                                )}
+                                {ev.type === "estimate_decision" && (
+                                  <div
+                                    className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                                      ev.data.decision === "approved" ||
+                                      ev.data.decision === "auto_approved_within_range"
+                                        ? "border-2 border-emerald-500 bg-card"
+                                        : "bg-destructive/10"
+                                    }`}
+                                  >
+                                    {ev.data.decision === "approved" ||
+                                    ev.data.decision === "auto_approved_within_range" ? (
+                                      <Check className="w-3 h-3 text-emerald-600" strokeWidth={3} />
+                                    ) : (
+                                      <X className="w-3 h-3 text-destructive" />
+                                    )}
+                                  </div>
+                                )}
+                                {ev.type === "part_edit" && (
+                                  <div className="w-6 h-6 rounded-full border-2 border-muted-foreground/40 bg-card flex items-center justify-center">
+                                    <Wrench className="w-3 h-3 text-muted-foreground" strokeWidth={2.5} />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className="text-xs font-semibold leading-6 text-foreground">
+                                    {ev.type === "booking_created" && "Booking created"}
+                                    {ev.type === "status_change" &&
+                                      `${humanizeStatus(ev.data.from ?? "", null) || ev.data.from || "—"} → ${humanizeStatus(ev.data.to, ev.data.reason, ev.data.from)}`}
+                                    {ev.type === "estimate_submitted" &&
+                                      `${formatCycleLabel(ev.data.cycle)} estimate submitted`}
+                                    {ev.type === "estimate_decision" &&
+                                      `${formatCycleLabel(ev.data.cycle)} ${formatDecisionLabel(ev.data.decision)}`}
+                                    {ev.type === "part_edit" &&
+                                      `${formatEditType(ev.data.editType)}${ev.data.partName ? ` — ${ev.data.partName}` : ""}`}
+                                  </span>
+                                  <span className="text-[10px] text-muted-foreground shrink-0 leading-6">
+                                    {formattedDate}
+                                  </span>
+                                </div>
+
+                                {/* Per-event detail block */}
+                                {ev.type === "booking_created" && (
+                                  <div className="-mt-1 space-y-0.5 text-xs text-muted-foreground">
+                                    {ev.data.services.length > 0 && (
+                                      <p>{ev.data.services.join(", ")}</p>
+                                    )}
+                                    {ev.data.quotedSetPriceCents != null && (
+                                      <p>
+                                        Quoted{" "}
+                                        <span className="font-medium text-foreground">
+                                          ${(ev.data.quotedSetPriceCents / 100).toFixed(2)}
+                                        </span>
+                                        {!hideDisclosedRange &&
+                                          ev.data.disclosedRangeLowCents != null &&
+                                          ev.data.disclosedRangeHighCents != null && (
+                                            <>
+                                              {" "}
+                                              · Range $
+                                              {(ev.data.disclosedRangeLowCents / 100).toFixed(2)}–$
+                                              {(ev.data.disclosedRangeHighCents / 100).toFixed(2)}
+                                            </>
+                                          )}
+                                      </p>
+                                    )}
+                                    {ev.data.quotedBreakdown && (
+                                      <p className="text-[11px]">
+                                        Parts $
+                                        {(ev.data.quotedBreakdown.parts_cents / 100).toFixed(2)} · Labor $
+                                        {(ev.data.quotedBreakdown.labor_cents / 100).toFixed(2)} · Tax+Fee $
+                                        {((ev.data.quotedBreakdown.tax_cents +
+                                          ev.data.quotedBreakdown.service_fee_cents) /
+                                          100
+                                        ).toFixed(2)}
+                                      </p>
+                                    )}
+                                    {ev.data.pricedPartsSnapshot &&
+                                      ev.data.pricedPartsSnapshot.length > 0 && (
+                                        <ul className="mt-1 list-disc pl-4 text-[11px]">
+                                          {ev.data.pricedPartsSnapshot.map((p, i) => (
+                                            <li key={`${p.oem_number}-${i}`}>
+                                              {p.quantity}× {p.part_name} @ $
+                                              {(p.unit_price_cents / 100).toFixed(2)} = $
+                                              {(p.line_total_cents / 100).toFixed(2)}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                  </div>
+                                )}
+
+                                {ev.type === "status_change" && ev.data.reason && (
+                                  <p className="text-xs text-muted-foreground -mt-1">
+                                    {ev.data.reason}
+                                  </p>
+                                )}
+
+                                {ev.type === "estimate_submitted" && (
+                                  <div className="-mt-1 space-y-0.5 text-xs text-muted-foreground">
+                                    <p>
+                                      <span className="font-medium text-foreground">
+                                        ${(ev.data.totalCents / 100).toFixed(2)}
+                                      </span>
+                                      {ev.data.autoApprovedInRange ? (
+                                        <span className="ml-2 inline-flex items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+                                          In range
+                                        </span>
+                                      ) : (
+                                        <span className="ml-2 inline-flex items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700">
+                                          Awaiting customer
+                                        </span>
+                                      )}
+                                      <span className="ml-2 text-[11px]">
+                                        ceiling ${(ev.data.priorCeilingCents / 100).toFixed(2)}
+                                      </span>
+                                    </p>
+                                    {(ev.data.partsSubtotalCents != null ||
+                                      ev.data.laborCents != null) && (
+                                      <p className="text-[11px]">
+                                        {ev.data.partsSubtotalCents != null && (
+                                          <>Parts ${(ev.data.partsSubtotalCents / 100).toFixed(2)}</>
+                                        )}
+                                        {ev.data.laborCents != null && (
+                                          <> · Labor ${(ev.data.laborCents / 100).toFixed(2)}</>
+                                        )}
+                                        {ev.data.taxCents != null && (
+                                          <> · Tax ${(ev.data.taxCents / 100).toFixed(2)}</>
+                                        )}
+                                        {ev.data.serviceFeeCents != null && (
+                                          <> · Fee ${(ev.data.serviceFeeCents / 100).toFixed(2)}</>
+                                        )}
+                                      </p>
+                                    )}
+                                    {ev.actor.label && (
+                                      <p className="text-[11px]">by {ev.actor.label}</p>
+                                    )}
+                                    {ev.data.notes && (
+                                      <p className="italic text-[11px]">“{ev.data.notes}”</p>
+                                    )}
+                                  </div>
+                                )}
+
+                                {ev.type === "estimate_decision" && (
+                                  <div className="-mt-1 space-y-0.5 text-xs text-muted-foreground">
+                                    <p>
+                                      At{" "}
+                                      <span className="font-medium text-foreground">
+                                        ${(ev.data.totalCents / 100).toFixed(2)}
+                                      </span>
+                                      {ev.data.ceilingAfterDecisionCents != null && (
+                                        <span className="text-[11px]">
+                                          {" "}
+                                          · new ceiling $
+                                          {(ev.data.ceilingAfterDecisionCents / 100).toFixed(2)}
+                                        </span>
+                                      )}
+                                    </p>
+                                    {ev.actor.label && (
+                                      <p className="text-[11px]">by {ev.actor.label}</p>
+                                    )}
+                                  </div>
+                                )}
+
+                                {ev.type === "part_edit" && (
+                                  <div className="-mt-1 space-y-0.5 text-xs text-muted-foreground">
+                                    {(ev.data.oldValue || ev.data.newValue) && (
+                                      <p className="text-[11px]">
+                                        {ev.data.oldValue ?? "—"} → {ev.data.newValue ?? "—"}
+                                      </p>
+                                    )}
+                                    {ev.data.oemNumber && (
+                                      <p className="text-[11px]">OEM {ev.data.oemNumber}</p>
+                                    )}
+                                    {ev.actor.label && (
+                                      <p className="text-[11px]">by {ev.actor.label}</p>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             </div>
                           );
@@ -2303,6 +2815,68 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           isSubmitting={isSubmittingPostjob}
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
+        />
+
+        {/* Pre-Job Approval — auto-chained from the inspection dialog. */}
+        <PostJobSurveyDialog
+          open={showPrejobEstimateDialog}
+          bookingId={job ? String(job._id) : null}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          passportData={vehiclePassport ?? null}
+          estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          prefillData={actualsPrefill ?? null}
+          isSubmitting={false}
+          onClose={() => setShowPrejobEstimateDialog(false)}
+          onSubmit={async () => {
+            /* cycle path handles submit internally */
+          }}
+          cycle="pre_job"
+          onApprovalSubmitted={() =>
+            onSuccess?.("Estimate sent for confirmation")
+          }
+          laborRateCents={(job as any)?.shopLaborRateCents ?? null}
+          laborCostDollars={(job as any)?.laborCost ?? null}
+          shopState={(job as any)?.shopState ?? null}
+          shopZip={(job as any)?.shopZip ?? null}
+        />
+
+        {/* Mid-Job Approval — "Add unforeseen scope" while in_progress. */}
+        <PostJobSurveyDialog
+          open={showMidJobDialog}
+          bookingId={job ? String(job._id) : null}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          passportData={vehiclePassport ?? null}
+          estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          prefillData={actualsPrefill ?? null}
+          isSubmitting={false}
+          onClose={() => setShowMidJobDialog(false)}
+          onSubmit={async () => {
+            /* cycle path handles submit internally */
+          }}
+          cycle="mid_job"
+          onApprovalSubmitted={() =>
+            onSuccess?.("Added scope sent for confirmation")
+          }
+          laborRateCents={(job as any)?.shopLaborRateCents ?? null}
+          laborCostDollars={(job as any)?.laborCost ?? null}
+          shopState={(job as any)?.shopState ?? null}
+          shopZip={(job as any)?.shopZip ?? null}
         />
 
         <ConfirmationDialog

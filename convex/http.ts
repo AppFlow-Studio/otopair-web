@@ -135,6 +135,7 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
             newStatus: mapped,
             errorCode: pi.last_payment_error?.code ?? undefined,
             errorMessage: pi.last_payment_error?.message?.slice(0, 500) ?? undefined,
+            amountReceived: pi.amount_received ?? undefined,
             livemode: event.livemode,
             stripeAccountId:
               typeof event.account === "string" ? event.account : undefined,
@@ -150,6 +151,7 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
           {
             stripePaymentIntentId: pi.id,
             stripeEventId: event.id,
+            amountCapturable: pi.amount_capturable ?? undefined,
           },
         );
         await ctx.runMutation(internal.stripe_webhook_events.record, {
@@ -213,13 +215,59 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
       return new Response("ok", { status: 200 });
     }
 
-    // setup_intent.succeeded and charge.dispute.created are logged for now
-    // (PaymentSheet already attaches the PM on success; disputes need a
-    // dedicated handler we'll add later).
+    if (event.type === "setup_intent.succeeded") {
+      await ctx.runMutation(internal.stripe_webhook_events.record, {
+        eventId: event.id,
+        eventType: event.type,
+        livemode: event.livemode,
+        stripeAccountId:
+          typeof event.account === "string" ? event.account : undefined,
+      });
+      return new Response("ok", { status: 200 });
+    }
+
     if (
-      event.type === "setup_intent.succeeded" ||
-      event.type === "charge.dispute.created"
+      event.type === "charge.dispute.created" ||
+      event.type === "charge.dispute.updated"
     ) {
+      const dispute = event.data.object as Stripe.Dispute;
+      const chargeId =
+        typeof dispute.charge === "string"
+          ? dispute.charge
+          : dispute.charge?.id;
+      const piId =
+        typeof dispute.payment_intent === "string"
+          ? dispute.payment_intent
+          : dispute.payment_intent?.id;
+      await ctx.runMutation(internal.payment_disputes._openDispute, {
+        stripeChargeId: chargeId ?? undefined,
+        stripePaymentIntentId: piId ?? undefined,
+        stripeDisputeId: dispute.id,
+        amountCents: dispute.amount ?? 0,
+        currency: dispute.currency ?? undefined,
+        reason: dispute.reason ?? undefined,
+        status: dispute.status ?? "needs_response",
+        evidenceDueByMs:
+          dispute.evidence_details?.due_by != null
+            ? dispute.evidence_details.due_by * 1000
+            : undefined,
+      });
+      await ctx.runMutation(internal.stripe_webhook_events.record, {
+        eventId: event.id,
+        eventType: event.type,
+        livemode: event.livemode,
+        stripeAccountId:
+          typeof event.account === "string" ? event.account : undefined,
+      });
+      return new Response("ok", { status: 200 });
+    }
+
+    if (event.type === "charge.dispute.closed") {
+      const dispute = event.data.object as Stripe.Dispute;
+      await ctx.runMutation(internal.payment_disputes._closeDispute, {
+        stripeDisputeId: dispute.id,
+        status: dispute.status ?? "lost",
+      });
       await ctx.runMutation(internal.stripe_webhook_events.record, {
         eventId: event.id,
         eventType: event.type,

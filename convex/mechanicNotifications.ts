@@ -254,7 +254,13 @@ export const getFeed = query({
             booking.scheduled_date,
             booking.scheduled_time
           ),
-          price: booking.total_cost ?? null,
+          // Quoted set price the customer agreed to (single value). Falls
+          // back to the legacy total_cost for pre-feature bookings without
+          // a quote snapshot.
+          price:
+            booking.quoted_set_price_cents != null
+              ? booking.quoted_set_price_cents / 100
+              : (booking.total_cost ?? null),
           note: booking.customer_notes ?? null,
           urgency: deriveUrgency(
             booking.scheduled_date,

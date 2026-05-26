@@ -260,6 +260,11 @@ export const handlePaymentIntentEvent = internalMutation({
     newStatus: v.string(),
     errorCode: v.optional(v.string()),
     errorMessage: v.optional(v.string()),
+    // Stripe's authoritative captured amount — pulled from PI.amount_received
+    // on payment_intent.succeeded. We persist it here so the payments row
+    // reflects reality even if the action-side _patchBookingCaptured didn't
+    // run (e.g. capture call retried, webhook landed first).
+    amountReceived: v.optional(v.number()),
     livemode: v.optional(v.boolean()),
     stripeAccountId: v.optional(v.string()),
   },
@@ -309,10 +314,21 @@ export const handlePaymentIntentEvent = internalMutation({
     const err = validateTransition(payment.status, args.newStatus);
     if (err) return { matched: true, skipped: err };
 
-    await ctx.db.patch(payment._id, {
+    const paymentPatch: any = {
       status: args.newStatus,
       updated_at: Date.now(),
-    });
+    };
+    // Reconcile captured_amount_cents against Stripe's amount_received when the
+    // capture webhook lands — fills the gap if the action-side patch was
+    // skipped (capture retry, action crash after Stripe-side success).
+    if (
+      args.newStatus === "completed" &&
+      args.amountReceived != null &&
+      payment.captured_amount_cents !== args.amountReceived
+    ) {
+      paymentPatch.captured_amount_cents = args.amountReceived;
+    }
+    await ctx.db.patch(payment._id, paymentPatch);
     await ctx.scheduler.runAfter(0, internal.payment_status_history.log, {
       payment_id: payment._id,
       old_status: payment.status,
@@ -1041,7 +1057,8 @@ export const adjustAuthorization = internalAction({
       internal.payments_stripe._getPaymentByBookingId,
       { bookingId: args.bookingId },
     );
-    if (!payment?.stripe_payment_intent_id) {
+    const activePiId = resolveActivePaymentIntentId(payment);
+    if (!activePiId) {
       return { status: "skipped", reason: "no payment intent" };
     }
 
@@ -1061,10 +1078,9 @@ export const adjustAuthorization = internalAction({
 
     const stripe = getStripe();
     try {
-      await stripe.paymentIntents.incrementAuthorization(
-        payment.stripe_payment_intent_id,
-        { amount: target },
-      );
+      await stripe.paymentIntents.incrementAuthorization(activePiId, {
+        amount: target,
+      });
       await ctx.runMutation(
         internal.payments_stripe._recordAuthorizationAdjustment,
         { bookingId: args.bookingId, incrementedTotalCents: target },
@@ -1081,11 +1097,18 @@ export const adjustAuthorization = internalAction({
         code === "card_declined" ||
         code === "payment_intent_unexpected_state";
       if (!isReauthable) {
+        // Surface the failure instead of letting the booking sit with a stale
+        // hold while the mechanic thinks they're approved. Same exit as a
+        // failed reauth: revert to reauth_required + push the customer.
         await ctx.runMutation(
           internal.payments_stripe._stampApprovalStripeAction,
           { bookingId: args.bookingId, stripeAction: "increment_failed" },
         );
-        return { status: "failed", reason: err?.message };
+        await ctx.runMutation(
+          internal.payments_stripe._revertBookingToPendingForReauth,
+          { bookingId: args.bookingId },
+        );
+        return { status: "reauth_required", reason: err?.message };
       }
       // Reauth fallback: void the current $20 PI and create a fresh PI for
       // the target amount, off-session against the saved PaymentMethod.
@@ -1308,7 +1331,14 @@ export const _computeFinalTotalForBooking = internalQuery({
  *     cycle. Don't capture yet; capture lands when the customer decides.
  */
 export const finalizeAndChargeForBooking = internalAction({
-  args: { bookingId: v.id("bookings") },
+  args: {
+    bookingId: v.id("bookings"),
+    // Called from booking_approvals.applyApprovalDecision (declined branch)
+    // for post_job: capture at the prior approved ceiling without recomputing
+    // against actuals. Without this, finalize sees final > mechanic_set and
+    // reopens another post-job approval cycle — an infinite loop.
+    forceCaptureAtCeiling: v.optional(v.boolean()),
+  },
   handler: async (
     ctx,
     args,
@@ -1321,6 +1351,47 @@ export const finalizeAndChargeForBooking = internalAction({
       return { status: "skipped", reason: "booking not found" };
     }
     const { booking, partsSnapshot, partsSubtotalCents, laborCents } = computed;
+
+    // Decline branch (or explicit flag): capture at the approved ceiling and
+    // skip the actuals comparison. Honors min(ceiling, finalCents) so we
+    // never charge MORE than what the parts/labor sum actually came to.
+    const declinedFinalize =
+      args.forceCaptureAtCeiling === true ||
+      (booking.payment_approval_state as string | undefined) === "post_job_declined";
+    if (declinedFinalize) {
+      const ceiling =
+        booking.running_approved_ceiling_cents ??
+        booking.disclosed_range_high_cents ??
+        0;
+      if (ceiling <= 0) {
+        return { status: "skipped", reason: "no approved ceiling to capture against" };
+      }
+      const subtotalCents = partsSubtotalCents + laborCents;
+      const shop = booking.shop_id
+        ? await ctx.runQuery(internal.payments_stripe._getShopForFinalize, {
+            shopId: booking.shop_id,
+          })
+        : null;
+      const tax = computeBookingTax({
+        laborDollars: laborCents / 100,
+        partsDollars: partsSubtotalCents / 100,
+        state: (shop?.address_state as string | undefined) ?? null,
+        zip: (shop?.address_zip as string | undefined) ?? null,
+      });
+      const taxCents = Math.round((tax.taxDollars ?? 0) * 100);
+      const feeCents = Math.round(
+        computePlatformFeeDollars(subtotalCents / 100) * 100,
+      );
+      const finalCents = subtotalCents + taxCents + feeCents;
+      const captureCents = Math.min(ceiling, finalCents);
+      return await captureAtAmount(
+        ctx,
+        args.bookingId,
+        captureCents,
+        finalCents,
+        partsSnapshot,
+      );
+    }
 
     // Backwards-compat: bookings created before the disclosed-range fields
     // were added (Phase 1) keep the legacy capture path. payment_approval_state
@@ -1356,13 +1427,21 @@ export const finalizeAndChargeForBooking = internalAction({
 
     const mechanicSet = booking.mechanic_set_price_cents ?? 0;
     if (mechanicSet <= 0) {
-      // No mechanic submission ever happened on a non-legacy booking. Treat
-      // as "in-range" against the disclosed-high — capture at finalCents
-      // clamped to the disclosed-high so we don't outrun the customer.
+      // Should never happen on a non-legacy booking — the pre-job submit is a
+      // prerequisite for marking complete. Log loudly so we catch the
+      // upstream miss instead of silently capturing.
+      console.error(
+        `[finalizeAndChargeForBooking] mechanic_set_price_cents missing on non-legacy booking ${String(args.bookingId)}; capturing at approved ceiling`,
+      );
       const safeCap =
         booking.running_approved_ceiling_cents ??
         booking.disclosed_range_high_cents ??
-        finalCents;
+        0;
+      if (safeCap <= 0) {
+        return { status: "skipped", reason: "no ceiling and no mechanic set price" };
+      }
+      // Capture at min(actuals, ceiling) — never above what the customer
+      // implicitly authorized via the disclosed range.
       const capCents = Math.min(finalCents, safeCap);
       return await captureAtAmount(ctx, args.bookingId, capCents, finalCents, partsSnapshot);
     }
@@ -1380,6 +1459,13 @@ export const finalizeAndChargeForBooking = internalAction({
   },
 });
 
+/** When reauthFlow voids the original PI and creates a replacement, the live
+ *  hold lives on payment.reauth_payment_intent_id. Capture/refund must target
+ *  that PI — the original is cancelled and capturing it would 400. */
+function resolveActivePaymentIntentId(payment: any): string | undefined {
+  return payment?.reauth_payment_intent_id ?? payment?.stripe_payment_intent_id;
+}
+
 async function captureAtAmount(
   ctx: any,
   bookingId: any,
@@ -1391,7 +1477,8 @@ async function captureAtAmount(
     internal.payments_stripe._getPaymentByBookingId,
     { bookingId },
   );
-  if (!payment?.stripe_payment_intent_id) {
+  const activePiId = resolveActivePaymentIntentId(payment);
+  if (!activePiId) {
     return { status: "skipped", reason: "no payment intent" };
   }
   if (payment.status === "completed") {
@@ -1400,7 +1487,7 @@ async function captureAtAmount(
   const stripe = getStripe();
   try {
     const pi = await stripe.paymentIntents.capture(
-      payment.stripe_payment_intent_id,
+      activePiId,
       { amount_to_capture: Math.max(1, Math.round(captureCents)) },
     );
     await ctx.runMutation(internal.payments_stripe._patchBookingCaptured, {
@@ -1445,7 +1532,8 @@ export const refundPaymentForBooking = internalAction({
       internal.payments_stripe._getPaymentByBookingId,
       { bookingId: args.bookingId },
     );
-    if (!payment?.stripe_payment_intent_id) {
+    const activePiId = resolveActivePaymentIntentId(payment);
+    if (!activePiId) {
       return { status: "skipped", reason: "no payment intent" };
     }
     if (payment.status !== "completed") {
@@ -1457,7 +1545,7 @@ export const refundPaymentForBooking = internalAction({
 
     const stripe = getStripe();
     const refund = await stripe.refunds.create({
-      payment_intent: payment.stripe_payment_intent_id,
+      payment_intent: activePiId,
       reverse_transfer: true,
       refund_application_fee: true,
     });

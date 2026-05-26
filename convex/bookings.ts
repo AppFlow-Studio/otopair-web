@@ -40,7 +40,11 @@ import { mintClaimToken } from "./walkin_claims";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
-import { computeDisclosedRange } from "./booking_quotes";
+import {
+  computeDisclosedRange,
+  computePricedPartsSnapshot,
+  computeQuotedSetPrice,
+} from "./booking_quotes";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   addMinutesToHHMM,
@@ -206,12 +210,18 @@ function formatPassportFieldLabel(field: string) {
 }
 
 /** Live Tracker stage slugs stored on bookings when status is in_progress */
-export const LIVE_STAGE_SLUGS = ["booking_confirmed", "service_in_progress", "vehicle_ready"] as const;
+export const LIVE_STAGE_SLUGS = [
+  "booking_confirmed",
+  "inspection_complete",
+  "service_in_progress",
+  "vehicle_ready",
+] as const;
 export type LiveStageSlug = (typeof LIVE_STAGE_SLUGS)[number];
 
 /** Display title for each live stage (for currentStage in UI) */
 export const LIVE_STAGE_TITLES: Record<string, string> = {
   booking_confirmed: "Booking Confirmed",
+  inspection_complete: "Inspection complete · awaiting estimate",
   service_in_progress: "Service in Progress",
   vehicle_ready: "Your vehicle is ready",
 };
@@ -219,6 +229,7 @@ export const LIVE_STAGE_TITLES: Record<string, string> = {
 /** Progress percent when no job_actuals elapsed time (stage-based fallback) */
 const LIVE_STAGE_PROGRESS: Record<string, number> = {
   booking_confirmed: 25,
+  inspection_complete: 40,
   service_in_progress: 50,
   vehicle_ready: 90,
 };
@@ -877,6 +888,85 @@ export const create = mutation({
 });
 
 /**
+ * Resolve total `estimated_labor_minutes` for a booking using the same AI-
+ * enrichment priority chain the customer-facing UI reads from
+ * (`service_vehicle_specs.getByEngineAndService`):
+ *
+ *   1. service_vehicle_specs row keyed by (engine_id, service_id) — legacy
+ *      AI enrichment surfaced in the booking review screen.
+ *   2. labor_times row keyed by (vehicle_config_id, service_id) — v3
+ *      pipeline; prefers empirical_hours when sample size ≥ 3, else
+ *      book_hours.
+ *   3. Client-provided fallback (per-service `labor_hours` from createBatch
+ *      args). Used only when neither row exists.
+ *
+ * Returns the sum, in minutes (rounded), across all requested services. We
+ * deliberately ignore the client's per-service labor_hours when an
+ * enrichment row exists so the mechanic schedule lane height always matches
+ * the duration the customer just confirmed.
+ */
+async function resolveBookingLaborMinutes(
+  ctx: any,
+  args: {
+    engineId: Id<"engines"> | null;
+    vehicleConfigId: Id<"vehicle_configs"> | null;
+    services: Array<{
+      service_id: Id<"services">;
+      fallback_hours: number | null;
+    }>;
+  },
+): Promise<number> {
+  const MIN_EMPIRICAL_SAMPLES = 3;
+  let totalHours = 0;
+
+  for (const svc of args.services) {
+    let hours: number | null = null;
+
+    if (args.engineId) {
+      const spec = await ctx.db
+        .query("service_vehicle_specs")
+        .withIndex("by_engine_and_service", (q: any) =>
+          q.eq("engine_id", args.engineId).eq("service_id", svc.service_id),
+        )
+        .unique();
+      if (spec?.labor_hours != null && spec.labor_hours > 0) {
+        hours = spec.labor_hours;
+      }
+    }
+
+    if (hours == null && args.vehicleConfigId) {
+      const labor = await ctx.db
+        .query("labor_times")
+        .withIndex("by_vehicle_config_and_service", (q: any) =>
+          q
+            .eq("vehicle_config_id", args.vehicleConfigId)
+            .eq("service_id", svc.service_id),
+        )
+        .first();
+      if (labor) {
+        const useEmpirical =
+          labor.empirical_hours != null &&
+          (labor.empirical_sample_size ?? 0) >= MIN_EMPIRICAL_SAMPLES;
+        const resolved = useEmpirical
+          ? labor.empirical_hours
+          : labor.book_hours;
+        if (typeof resolved === "number" && resolved > 0) {
+          hours = resolved;
+        }
+      }
+    }
+
+    if (hours == null && svc.fallback_hours != null && svc.fallback_hours > 0) {
+      hours = svc.fallback_hours;
+    }
+
+    if (hours != null) totalHours += hours;
+  }
+
+  return Math.round(totalHours * 60);
+}
+
+/**
  * MUTATION: createBatch
  * Create one booking for an appointment (one time slot) with multiple services.
  * Total cost and estimated time are aggregated; one row per appointment.
@@ -1008,7 +1098,25 @@ export const createBatch = mutation({
     }
 
     const total_cost = labor_cost + parts_cost + taxes_and_fees + platform_fee;
-    const estimated_labor_minutes = args.services.reduce((sum, s) => sum + (s.labor_hours ?? 0) * 60, 0);
+    // Server-authoritative labor minutes. The mobile app's customer-facing
+    // breakdown reads labor hours from the AI-enrichment chain
+    // (service_vehicle_specs → labor_times fallback, mirrors
+    // service_vehicle_specs.getByEngineAndService). Earlier we trusted the
+    // client-provided services[].labor_hours, but the app's pricing pipeline
+    // can pass a different total (e.g. per-vehicle book_hours instead of the
+    // displayed per-service estimate), which shows up as a longer block on
+    // the mechanic schedule than the duration the customer just confirmed.
+    // Recompute from the same source the customer saw so the two stay
+    // aligned; fall back to the client value when no enrichment row exists.
+    const enrichmentLaborMinutes = await resolveBookingLaborMinutes(ctx, {
+      engineId: vehicle.engine_id ?? null,
+      vehicleConfigId: vehicle.vehicle_config_id ?? null,
+      services: args.services.map((s) => ({
+        service_id: s.service_id,
+        fallback_hours: s.labor_hours ?? null,
+      })),
+    });
+    const estimated_labor_minutes = enrichmentLaborMinutes;
 
     // ── Pre-Job Approval flow: disclosed range snapshot ──────────────
     // Customer sees this range from booking confirmation through capture;
@@ -1029,6 +1137,27 @@ export const createBatch = mutation({
       engine_id: vehicle.engine_id ?? null,
       shop_state: shop?.state ?? null,
       shop_zip: shop?.zip ?? null,
+    });
+
+    // Itemized parts snapshot — same per-unit prices the customer saw on
+    // Review & Pay. Frozen on the booking so the mechanic's post-job dialog
+    // can hydrate from this directly instead of re-querying part_prices.
+    const ownerSpecs = await ctx.db
+      .query("vehicle_owner_specs")
+      .withIndex("by_vehicle_owner", (q) =>
+        q.eq("vehicle_owner_id", ownership._id),
+      )
+      .first();
+    const pricedPartsSnapshot = await computePricedPartsSnapshot(ctx, {
+      serviceIds: args.services.map((s) => s.service_id),
+      vehicleConfigId: vehicle.vehicle_config_id ?? null,
+      confirmedPackages: new Set(ownerSpecs?.confirmed_packages ?? []),
+    });
+
+    // Single-point quote the mechanic confirms against (no min/max).
+    const quoted = computeQuotedSetPrice({
+      disclosedBreakdown: disclosedRange.breakdown,
+      pricedPartsSnapshot,
     });
 
     await assertBookingWithinShopHours(ctx, {
@@ -1073,6 +1202,10 @@ export const createBatch = mutation({
       disclosed_range_high_cents: disclosedRange.high_cents,
       disclosed_breakdown: disclosedRange.breakdown,
       disclosed_at_ms: now,
+      priced_parts_snapshot:
+        pricedPartsSnapshot.length > 0 ? pricedPartsSnapshot : undefined,
+      quoted_set_price_cents: quoted.total_cents,
+      quoted_breakdown: quoted.breakdown,
       payment_approval_state: "none",
     });
 
@@ -5922,6 +6055,214 @@ export const backfillEarlyCompletionDurations = internalMutation({
   },
 });
 
+/**
+ * Backfills `priced_parts_snapshot` on bookings that were created before
+ * the snapshot was added. New bookings populate this at create time
+ * (createBatch); this mutation closes the gap for existing rows so the
+ * mechanic's post-job dialog can hydrate from frozen booking-time prices
+ * instead of re-querying `part_prices` (which may have drifted).
+ *
+ * Scope:
+ *   - Only touches bookings with `disclosed_range_high_cents != null`
+ *     (new-cycle bookings — pre-feature bookings have no contract to snap).
+ *   - Skips rows where `priced_parts_snapshot` is already set.
+ *   - Skips rows whose vehicle / vehicle_config can't be resolved (would
+ *     produce an empty snapshot; leaving the field undefined lets the
+ *     dialog fall through to the cascade as before).
+ *
+ * Invocation:
+ *   npx convex run bookings:backfillPricedPartsSnapshot '{}'
+ *   npx convex run bookings:backfillPricedPartsSnapshot '{"shopId": "..."}'
+ *   npx convex run bookings:backfillPricedPartsSnapshot '{"limit": 200}'
+ */
+export const backfillPricedPartsSnapshot = internalMutation({
+  args: {
+    shopId: v.optional(v.id("shops")),
+    /** Caps how many rows we examine per run. Re-run until `scanned === 0`
+     *  or `patched === 0` to make incremental progress without blowing the
+     *  mutation timeout. */
+    limit: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    scanned: number;
+    patched: number;
+    skippedAlreadySet: number;
+    skippedLegacy: number;
+    skippedNoVehicle: number;
+    skippedEmptySnapshot: number;
+  }> => {
+    const limit = args.limit ?? 200;
+    const candidates = args.shopId
+      ? await ctx.db
+          .query("bookings")
+          .withIndex("by_shop_and_status", (q: any) =>
+            q.eq("shop_id", args.shopId),
+          )
+          .take(limit)
+      : await ctx.db.query("bookings").take(limit);
+
+    let scanned = 0;
+    let patched = 0;
+    let skippedAlreadySet = 0;
+    let skippedLegacy = 0;
+    let skippedNoVehicle = 0;
+    let skippedEmptySnapshot = 0;
+
+    for (const booking of candidates) {
+      scanned += 1;
+      if ((booking as any).priced_parts_snapshot != null) {
+        skippedAlreadySet += 1;
+        continue;
+      }
+      if ((booking as any).disclosed_range_high_cents == null) {
+        skippedLegacy += 1;
+        continue;
+      }
+
+      const vehicle = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q: any) => q.eq("vin", (booking as any).vin))
+        .first();
+      if (!vehicle?.vehicle_config_id) {
+        skippedNoVehicle += 1;
+        continue;
+      }
+
+      const owner = await ctx.db
+        .query("vehicle_owners")
+        .withIndex("by_vin_user", (q: any) =>
+          q
+            .eq("vin", (booking as any).vin)
+            .eq("user_id", (booking as any).user_id),
+        )
+        .first();
+      const ownerSpecs = owner
+        ? await ctx.db
+            .query("vehicle_owner_specs")
+            .withIndex("by_vehicle_owner", (q: any) =>
+              q.eq("vehicle_owner_id", owner._id),
+            )
+            .first()
+        : null;
+
+      const snapshot = await computePricedPartsSnapshot(ctx, {
+        serviceIds: ((booking as any).service_ids ?? []) as Id<"services">[],
+        vehicleConfigId: vehicle.vehicle_config_id,
+        confirmedPackages: new Set(ownerSpecs?.confirmed_packages ?? []),
+      });
+
+      if (snapshot.length === 0) {
+        skippedEmptySnapshot += 1;
+        continue;
+      }
+
+      await ctx.db.patch(booking._id, {
+        priced_parts_snapshot: snapshot,
+        updated_at: Date.now(),
+      });
+      patched += 1;
+    }
+
+    return {
+      scanned,
+      patched,
+      skippedAlreadySet,
+      skippedLegacy,
+      skippedNoVehicle,
+      skippedEmptySnapshot,
+    };
+  },
+});
+
+/**
+ * Backfills `quoted_set_price_cents` + `quoted_breakdown` on bookings that
+ * already have a disclosed range and a priced parts snapshot but predate the
+ * single-point quote field. Idempotent.
+ *
+ * Invocation:
+ *   npx convex run bookings:backfillQuotedSetPrice '{}'
+ *   npx convex run bookings:backfillQuotedSetPrice '{"shopId": "..."}'
+ *   npx convex run bookings:backfillQuotedSetPrice '{"limit": 200}'
+ */
+export const backfillQuotedSetPrice = internalMutation({
+  args: {
+    shopId: v.optional(v.id("shops")),
+    limit: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    scanned: number;
+    patched: number;
+    skippedAlreadySet: number;
+    skippedLegacy: number;
+    skippedNoSnapshot: number;
+  }> => {
+    const limit = args.limit ?? 200;
+    const candidates = args.shopId
+      ? await ctx.db
+          .query("bookings")
+          .withIndex("by_shop_and_status", (q: any) =>
+            q.eq("shop_id", args.shopId),
+          )
+          .take(limit)
+      : await ctx.db.query("bookings").take(limit);
+
+    let scanned = 0;
+    let patched = 0;
+    let skippedAlreadySet = 0;
+    let skippedLegacy = 0;
+    let skippedNoSnapshot = 0;
+
+    for (const booking of candidates) {
+      scanned += 1;
+      if ((booking as any).quoted_set_price_cents != null) {
+        skippedAlreadySet += 1;
+        continue;
+      }
+      const breakdown = (booking as any).disclosed_breakdown;
+      if (
+        (booking as any).disclosed_range_high_cents == null ||
+        breakdown == null
+      ) {
+        skippedLegacy += 1;
+        continue;
+      }
+      const snapshot = (booking as any).priced_parts_snapshot ?? [];
+      if (!Array.isArray(snapshot) || snapshot.length === 0) {
+        // No snapshot to anchor on — leave it; the snapshot backfill should
+        // run first for these rows.
+        skippedNoSnapshot += 1;
+        continue;
+      }
+
+      const quoted = computeQuotedSetPrice({
+        disclosedBreakdown: breakdown,
+        pricedPartsSnapshot: snapshot,
+      });
+
+      await ctx.db.patch(booking._id, {
+        quoted_set_price_cents: quoted.total_cents,
+        quoted_breakdown: quoted.breakdown,
+        updated_at: Date.now(),
+      });
+      patched += 1;
+    }
+
+    return {
+      scanned,
+      patched,
+      skippedAlreadySet,
+      skippedLegacy,
+      skippedNoSnapshot,
+    };
+  },
+});
+
 async function runCompletionSideEffects(ctx: any, booking: any) {
   await maybePersistEarlyCompletionDuration(ctx, booking);
 
@@ -6288,6 +6629,20 @@ async function mapMechanicDashboardJob(ctx: any, booking: any) {
     vehicleArrivedAtMs: booking.vehicle_arrived_at_ms ?? null,
     customerNotes: booking.customer_notes ?? null,
     diagnosticSystem: resolveDiagnosticSystem(booking, serviceNames),
+    // Pre-Job Approval signal — mechanic must know which start mutation to
+    // call, but MUST NOT see the customer's actual range. Boolean only.
+    hasDisclosedRange: booking.disclosed_range_high_cents != null,
+    paymentApprovalState:
+      (booking.payment_approval_state as string | undefined) ?? null,
+    mechanicSetPriceCents: booking.mechanic_set_price_cents ?? null,
+    // Single-point quote (no range) shown to the mechanic. Falls back to
+    // total_cost dollars for pre-feature bookings without a quote snapshot.
+    quotedSetPriceDollars:
+      booking.quoted_set_price_cents != null
+        ? booking.quoted_set_price_cents / 100
+        : null,
+    quotedBreakdown: booking.quoted_breakdown ?? null,
+    pricedPartsSnapshot: booking.priced_parts_snapshot ?? null,
   };
 }
 
@@ -7063,6 +7418,9 @@ export const getJobDetail = query({
       : null;
     const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
     const lateMonitor = await getCustomerLateMonitorByBookingId(ctx, booking._id);
+    const shopForRate = booking.shop_id
+      ? await ctx.db.get(booking.shop_id)
+      : null;
     const shopTimezone = await getShopTimezone(ctx, booking.shop_id);
     const scheduledStartMs = toBookingDateTimeMs(
       booking.scheduled_date ?? "",
@@ -7106,7 +7464,6 @@ export const getJobDetail = query({
       scheduledDate: booking.scheduled_date,
       scheduledTime: booking.scheduled_time,
       scheduledStartMs,
-      laborCost: booking.labor_cost,
       partsCost: booking.parts_cost,
       totalCost: booking.total_cost,
       estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
@@ -7182,6 +7539,32 @@ export const getJobDetail = query({
         thresholdDueAtMs: lateMonitor.threshold_due_at_ms,
         scheduledStartMs: lateMonitor.scheduled_start_ms,
       } : null,
+      // Pre-Job Approval flags — mechanic surface MUST NOT see the actual
+      // range, only whether one exists and the approval state.
+      hasDisclosedRange: (booking as any).disclosed_range_high_cents != null,
+      paymentApprovalState:
+        ((booking as any).payment_approval_state as string | undefined) ?? null,
+      mechanicSetPriceCents:
+        ((booking as any).mechanic_set_price_cents as number | undefined) ??
+        null,
+      // Single-point quote (no range) the mechanic confirms against.
+      quotedSetPriceDollars:
+        (booking as any).quoted_set_price_cents != null
+          ? (booking as any).quoted_set_price_cents / 100
+          : null,
+      quotedBreakdown: (booking as any).quoted_breakdown ?? null,
+      pricedPartsSnapshot: (booking as any).priced_parts_snapshot ?? null,
+      // Shop tax + labor-rate context for the post-job-survey-dialog's
+      // estimate cycle. The mechanic needs labor_rate so adjusting hours
+      // updates the displayed running total, and state/zip so the tax line
+      // matches what the server will compute on submit.
+      laborCost: booking.labor_cost ?? null,
+      shopState: shopForRate?.state ?? null,
+      shopZip: shopForRate?.zip ?? null,
+      shopLaborRateCents:
+        typeof shopForRate?.labor_rate === "number"
+          ? Math.round(shopForRate.labor_rate * 100)
+          : null,
     };
   },
 });
@@ -7273,6 +7656,15 @@ export const startWithPrejob = mutation({
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    // Pre-Job Approval flow: new-cycle bookings (with a disclosed range) must
+    // go through commitInspectionAndAwaitEstimate so the mechanic submits an
+    // estimate before status flips to in_progress. Catches a wiring regression
+    // loudly rather than triggering the customer-facing FSM guard later.
+    if ((booking as any).disclosed_range_high_cents != null) {
+      throw new Error(
+        "New-cycle booking — call commitInspectionAndAwaitEstimate instead of startWithPrejob.",
+      );
+    }
     if (!["vehicle_at_shop", "in_progress"].includes(booking.status)) {
       throw new Error("Mark the vehicle as here before saving the pre-job check.");
     }
@@ -7343,6 +7735,105 @@ export const startWithPrejob = mutation({
         });
       }
     }
+
+    return await buildVehiclePassportForBooking(ctx, booking);
+  },
+});
+
+/**
+ * Pre-Job Approval flow: persists the inspection survey + seeds the
+ * diagnostic checklist, then patches live_stage="inspection_complete" so
+ * the dashboard can prompt the mechanic to submit a pre-job estimate.
+ *
+ * Does NOT call applyBookingStatusTransition — the booking remains in
+ * vehicle_at_shop until the customer approves the estimate and the
+ * mechanic explicitly clicks "Start work" (which then transitions to
+ * in_progress through the normal FSM, gated by the approval guard).
+ */
+export const commitInspectionAndAwaitEstimate = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    prejob: prejobReportValidator,
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    // This mutation is for new-cycle bookings only. Legacy bookings keep the
+    // existing startWithPrejob flow.
+    if ((booking as any).disclosed_range_high_cents == null) {
+      throw new Error(
+        "Pre-feature booking — use startWithPrejob instead of commitInspectionAndAwaitEstimate.",
+      );
+    }
+    if (!["vehicle_at_shop", "in_progress"].includes(booking.status)) {
+      throw new Error("Mark the vehicle as here before saving the pre-job check.");
+    }
+
+    // Enforce one-active-job-per-mechanic — same guard startWithPrejob applies.
+    if (booking.status === "vehicle_at_shop" && booking.mechanic_id) {
+      const conflict = await findMechanicActiveBooking(
+        ctx,
+        booking.shop_id,
+        booking.mechanic_id,
+        booking._id,
+      );
+      if (conflict) {
+        throw new Error(`MECHANIC_HAS_ACTIVE_JOB:${String(conflict._id)}`);
+      }
+    }
+
+    const passportView = await buildVehiclePassportForBooking(ctx, booking);
+    const serviceFlags = getBookingServiceFlags(
+      await resolveServiceNames(ctx, booking.service_ids),
+    );
+    validatePrejobReport(
+      args.prejob,
+      passportView.passport.mileage ?? null,
+      serviceFlags,
+    );
+
+    const now = Date.now();
+    await persistPrejobSurvey(ctx, {
+      booking,
+      passportView,
+      prejob: args.prejob,
+      now,
+      startedAtMs: now,
+    });
+
+    // Diagnostic checklist seeding — mirrors startWithPrejob's tail block.
+    {
+      const resolvedSystem = resolveDiagnosticSystem(
+        booking,
+        await resolveServiceNames(ctx, booking.service_ids),
+      );
+      if (
+        resolvedSystem &&
+        (!booking.diagnostic_checklist ||
+          booking.diagnostic_checklist.length === 0)
+      ) {
+        await ctx.db.patch(booking._id, {
+          diagnostic_checklist: templateForSystem(resolvedSystem),
+          diagnostic_followup_state:
+            booking.diagnostic_followup_state ?? "pending",
+          updated_at: now,
+        });
+      } else if (resolvedSystem && !booking.diagnostic_followup_state) {
+        await ctx.db.patch(booking._id, {
+          diagnostic_followup_state: "pending",
+          updated_at: now,
+        });
+      }
+    }
+
+    // Park the booking at inspection_complete. Status stays put.
+    await ctx.db.patch(booking._id, {
+      live_stage: "inspection_complete",
+      updated_at: now,
+    });
 
     return await buildVehiclePassportForBooking(ctx, booking);
   },
@@ -9174,6 +9665,13 @@ export const start = mutation({
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    // Same legacy-only assertion as startWithPrejob — new-cycle bookings must
+    // not skip the estimate submission step.
+    if ((booking as any).disclosed_range_high_cents != null) {
+      throw new Error(
+        "New-cycle booking — call commitInspectionAndAwaitEstimate instead of start.",
+      );
+    }
     if (booking.status !== "vehicle_at_shop") {
       throw new Error("Mark the vehicle here before starting work.");
     }

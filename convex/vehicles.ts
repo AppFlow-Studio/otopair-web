@@ -596,17 +596,38 @@ export const addOwner = mutation({
         return existing._id;
       }
     } else {
-      // Create new ownership
+      // Primary defaults to "first car wins": a new vehicle becomes
+      // primary only when the user has no primary yet. True for their
+      // first car; every car added while a primary already exists (2nd,
+      // 3rd, 4th, ...) defaults to secondary. Also self-heals — if a
+      // previous primary was removed, the next added car restores one.
+      // An explicit is_primary still wins (e.g. the "set as primary"
+      // toggle, applied via updateOwnershipPrimary after creation).
+      let isPrimary = args.is_primary;
+      if (isPrimary === undefined) {
+        const activeOwnerships = await ctx.db
+          .query("vehicle_owners")
+          .withIndex("by_user_status", (q) =>
+            q.eq("user_id", args.userId).eq("status", "active")
+          )
+          .collect();
+        isPrimary = !activeOwnerships.some((o) => o.is_primary);
+      }
+
+      // Create new ownership. The first car also gets garageRole "primary"
+      // so its role tag + the maintenance classifier agree from the start;
+      // subsequent cars start role-less (user picks one after onboarding).
       const ownershipId = await ctx.db.insert("vehicle_owners", {
         vin: normalizedVin,
         user_id: args.userId,
         status: "active",
         nickname: args.nickname,
-        is_primary: args.is_primary ?? false,
+        is_primary: isPrimary,
+        garageRole: isPrimary ? "primary" : undefined,
         mileage: args.mileage,
         added_at: now,
       });
-      
+
       return ownershipId;
     }
   },
@@ -727,6 +748,65 @@ export const updateOwnershipPrimary = mutation({
     
     // Update the target ownership
     await ctx.db.patch(ownership._id, { is_primary: args.is_primary });
+  },
+});
+
+/**
+ * Set a vehicle's garageRole (the user-facing "role" label, e.g. Primary,
+ * Secondary, Commuter, Family, Weekend, or a custom string). garageRole is
+ * the single source of truth for role — it also feeds the maintenance
+ * classifier (weekend/stored get a lighter schedule).
+ *
+ * "Primary" is special: it's a radio that designates the default car shown
+ * on app reopen, so setting it flips is_primary on this car and clears it
+ * on every other active ownership. Any other role (or null) clears
+ * is_primary on this car.
+ */
+export const setVehicleRole = mutation({
+  args: {
+    vin: v.string(),
+    userId: v.id("users"),
+    role: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const normalizedVin = args.vin.toUpperCase().trim();
+
+    const ownership = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin_user", (q) =>
+        q.eq("vin", normalizedVin).eq("user_id", args.userId)
+      )
+      .unique();
+    if (!ownership) {
+      throw new Error("This customer isn't listed as an owner of that vehicle.");
+    }
+
+    // Store lowercase so it matches the maintenance classifier's checks
+    // ("weekend"/"stored") and the "primary" detection; the UI title-cases
+    // it for display.
+    const role = args.role && args.role.trim() ? args.role.trim().toLowerCase() : undefined;
+    const isPrimaryRole = role === "primary";
+
+    if (isPrimaryRole) {
+      // Radio: this car becomes the default; clear primary on every other.
+      const others = await ctx.db
+        .query("vehicle_owners")
+        .withIndex("by_user_status", (q) =>
+          q.eq("user_id", args.userId).eq("status", "active")
+        )
+        .collect();
+      await Promise.all(
+        others.map(async (o) => {
+          if (o._id !== ownership._id && o.is_primary) {
+            await ctx.db.patch(o._id, { is_primary: false });
+          }
+        })
+      );
+      await ctx.db.patch(ownership._id, { garageRole: "primary", is_primary: true });
+    } else {
+      // Non-primary (or cleared) role is cosmetic for the default-car flag.
+      await ctx.db.patch(ownership._id, { garageRole: role, is_primary: false });
+    }
   },
 });
 
@@ -1126,6 +1206,20 @@ export const saveOnboardingField = mutation({
       }
     }
 
+    // ── Vehicle model year → Jan 1 timestamp (used by "Never" recency) ──
+    // CarInfoStepper offers a "Never" option for oil/tires/brakes/battery.
+    // When picked, infer the service "date" as the vehicle's model year so
+    // MaintenanceTracker has a real timestamp to compute status against.
+    async function modelYearInstallDate(): Promise<number | undefined> {
+      const owner = await ctx.db.get(vehicleOwnerId);
+      if (!owner) return undefined;
+      const vehicle = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q) => q.eq("vin", owner.vin))
+        .unique();
+      return vehicle?.year ? new Date(vehicle.year, 0, 1).getTime() : undefined;
+    }
+
     // ── Dispatch by field ──────────────────────────────────────────────
     switch (field) {
       case "mileage": {
@@ -1145,11 +1239,13 @@ export const saveOnboardingField = mutation({
         let oilDate = v.date;
         if (!oilDate && v.recency) {
           // "exact_date" carries a user-picked timestamp in v.exactDate
-          // — use it directly. Other recency buckets fall back to the
-          // approximate-age presets so MaintenanceTracker has SOMETHING
-          // to compute status against.
+          // — use it directly. "never" infers from model year. Other
+          // recency buckets fall back to approximate-age presets so
+          // MaintenanceTracker has SOMETHING to compute status against.
           if (v.recency === "exact_date" && v.exactDate) {
             oilDate = v.exactDate;
+          } else if (v.recency === "never") {
+            oilDate = await modelYearInstallDate();
           } else {
             const MS = 24 * 60 * 60 * 1000;
             const recencyMap: Record<string, number> = {
@@ -1177,6 +1273,8 @@ export const saveOnboardingField = mutation({
         if (!tireDate && v.recency) {
           if (v.recency === "exact_date" && v.exactDate) {
             tireDate = v.exactDate;
+          } else if (v.recency === "never") {
+            tireDate = await modelYearInstallDate();
           } else {
             const MS = 24 * 60 * 60 * 1000;
             const recencyMap: Record<string, number> = {
@@ -1188,12 +1286,16 @@ export const saveOnboardingField = mutation({
           }
         }
         // Bridge CarInfoStepper's "original" answer to the "tireReplaced" field
-        // that computeTireStatusCore reads for status calculation
+        // that computeTireStatusCore reads for status calculation.
+        // "Never replaced" → also treat as original tires.
         let tireReplaced = v.replaced;
         if (!tireReplaced && v.original) {
           tireReplaced = v.original === "yes" ? "original"
             : v.original === "no" ? "replaced"
             : "dont_know";
+        }
+        if (!tireReplaced && v.recency === "never") {
+          tireReplaced = "original";
         }
         await upsertRecord("tires", tireDate, undefined, {
           tireServiceType: v.type,
@@ -1217,6 +1319,8 @@ export const saveOnboardingField = mutation({
         if (!brakeDate && v.recency) {
           if (v.recency === "exact_date" && v.exactDate) {
             brakeDate = v.exactDate;
+          } else if (v.recency === "never") {
+            brakeDate = await modelYearInstallDate();
           } else {
             const MS = 24 * 60 * 60 * 1000;
             const recencyMap: Record<string, number> = {
@@ -1242,21 +1346,14 @@ export const saveOnboardingField = mutation({
         if (v.isOriginal && !installDate && v.modelYear) {
           installDate = new Date(v.modelYear, 0, 1).getTime();
         }
-        // Original battery (not replaced) — infer install date from vehicle model year
-        if (v.replaced === "no" && !installDate) {
-          const owner = await ctx.db.get(vehicleOwnerId);
-          if (owner) {
-            const vehicle = await ctx.db
-              .query("vehicles")
-              .withIndex("by_vin", (q) => q.eq("vin", owner.vin))
-              .unique();
-            if (vehicle?.year) {
-              installDate = new Date(vehicle.year, 0, 1).getTime();
-            }
-          }
+        // Original battery (not replaced, or "Never" picked in onboarding) —
+        // infer install date from vehicle model year via the shared helper.
+        if (!installDate && (v.replaced === "no" || v.recency === "never")) {
+          installDate = await modelYearInstallDate();
         }
         // CarInfoStepper sends `recency` for "When was your battery last replaced?".
         // Honors exact_date when provided; otherwise falls back to a bucketed timestamp.
+        // ("never" is already handled above via the model-year path.)
         if (!installDate && v.recency) {
           if (v.recency === "exact_date" && v.exactDate) {
             installDate = v.exactDate;

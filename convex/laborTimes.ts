@@ -2,11 +2,15 @@
  * convex/laborTimes.ts — Booking-time labor-hour resolver.
  *
  * Returns vehicle-specific labor hours for each requested service. Looks up
- * `labor_times` by (vehicle_config_id, service_id); prefers `book_hours`
- * (manufacturer/manual estimate) over `empirical_hours` (mechanic-logged
- * actuals) because small samples skew the empirical number — once
- * empirical_sample_size grows the caller can blend them. Falls back to
- * `services.default_labor_hours` for services with no row.
+ * `labor_times` by (vehicle_config_id, service_id) and prefers
+ * `empirical_hours` (mechanic-logged actuals from sources like
+ * `vdb_repair_estimates`) over `book_hours` (manufacturer/manual estimate).
+ * Falls back to `services.default_labor_hours` when no row exists.
+ *
+ * Why empirical first: actuals reflect real shop conditions on the specific
+ * engine/trim — book times often underestimate on harder packages. We surface
+ * `confidence` and `empirical_sample_size` so the UI can warn on thin data,
+ * but we don't gate on sample size — empirical is the source of truth.
  */
 
 import { v } from "convex/values";
@@ -18,7 +22,7 @@ export type LaborHoursForService = {
   serviceName: string;
   serviceSlug: string;
   hours: number;
-  source: "vehicle_specific" | "default";
+  source: "vehicle_specific_empirical" | "vehicle_specific_book" | "default";
   // Diagnostic fields surfaced for the UI to render confidence/disclaimer copy.
   bookHours?: number;
   empiricalHours?: number;
@@ -59,25 +63,36 @@ export const getLaborHoursForServices = query({
             .first()
         : null;
 
+      const base = {
+        serviceId,
+        serviceName: service.name,
+        serviceSlug: service.slug,
+        bookHours: row?.book_hours,
+        empiricalHours: row?.empirical_hours,
+        empiricalSampleSize: row?.empirical_sample_size,
+        confidence: row?.confidence,
+      };
+
+      if (row && typeof row.empirical_hours === "number" && row.empirical_hours > 0) {
+        out.push({
+          ...base,
+          hours: row.empirical_hours,
+          source: "vehicle_specific_empirical",
+        });
+        continue;
+      }
+
       if (row && typeof row.book_hours === "number" && row.book_hours > 0) {
         out.push({
-          serviceId,
-          serviceName: service.name,
-          serviceSlug: service.slug,
+          ...base,
           hours: row.book_hours,
-          source: "vehicle_specific",
-          bookHours: row.book_hours,
-          empiricalHours: row.empirical_hours,
-          empiricalSampleSize: row.empirical_sample_size,
-          confidence: row.confidence,
+          source: "vehicle_specific_book",
         });
         continue;
       }
 
       out.push({
-        serviceId,
-        serviceName: service.name,
-        serviceSlug: service.slug,
+        ...base,
         hours: defaultHours,
         source: "default",
       });

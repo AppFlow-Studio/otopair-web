@@ -113,6 +113,9 @@ export default function MechanicDashboard() {
   );
   const savePrejob = useMutation(api.bookings.savePrejob);
   const startWithPrejob = useMutation(api.bookings.startWithPrejob);
+  const commitInspectionAndAwaitEstimate = useMutation(
+    api.bookings.commitInspectionAndAwaitEstimate,
+  );
   const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
   const answerOverrunCheckIn = useMutation(api.bookings.answerOverrunCheckIn);
   const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
@@ -121,7 +124,9 @@ export default function MechanicDashboard() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [toast, setToast] = useState<string>("");
   const [workflowBookingId, setWorkflowBookingId] = useState<Id<"bookings"> | null>(null);
-  const [workflowMode, setWorkflowMode] = useState<"prejob" | "postjob" | null>(null);
+  const [workflowMode, setWorkflowMode] = useState<
+    "prejob" | "prejob_estimate" | "postjob" | null
+  >(null);
   const [pendingActiveBlock, setPendingActiveBlock] = useState<{
     activeBookingId: string;
     activeVehicle: string;
@@ -180,7 +185,10 @@ export default function MechanicDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  function openWorkflowDialog(bookingId: string, mode: "prejob" | "postjob") {
+  function openWorkflowDialog(
+    bookingId: string,
+    mode: "prejob" | "prejob_estimate" | "postjob",
+  ) {
     setWorkflowBookingId(bookingId as Id<"bookings">);
     setWorkflowMode(mode);
   }
@@ -189,6 +197,11 @@ export default function MechanicDashboard() {
    * Pre-flight for the mechanic's Start button. If the mechanic already has
    * another booking in_progress today, route through a confirmation dialog
    * so they finish that one first (server enforces this same invariant).
+   *
+   * Pre-Job Approval flow: if the booking already has an approval state set
+   * (mechanic already submitted the estimate after inspection), skip the
+   * inspection re-run and route straight into the estimate dialog — the
+   * dialog's auto-flip effect lands on the right status panel.
    */
   function tryStartBooking(bookingId: string) {
     const active = dashboard?.todaysJobs.find(
@@ -202,7 +215,18 @@ export default function MechanicDashboard() {
       });
       return;
     }
-    openWorkflowDialog(bookingId, "prejob");
+    const target = dashboard?.todaysJobs.find(
+      (j: any) => String(j._id) === bookingId,
+    );
+    const pas = (target as any)?.paymentApprovalState as string | undefined;
+    const alreadyEstimated =
+      (target as any)?.hasDisclosedRange &&
+      pas != null &&
+      pas !== "none";
+    openWorkflowDialog(
+      bookingId,
+      alreadyEstimated ? "prejob_estimate" : "prejob",
+    );
   }
 
   function closeWorkflowDialog() {
@@ -226,6 +250,12 @@ export default function MechanicDashboard() {
   ) {
     if (!workflowBookingId) return;
 
+    // Pre-Job Approval flow: new-cycle bookings (with a disclosed range) must
+    // submit a pre-job estimate before the booking can transition to
+    // in_progress. We park the booking at inspection_complete and auto-chain
+    // the estimate dialog.
+    const isNewCycle = (selectedWorkflowBooking as any)?.hasDisclosedRange === true;
+
     setBusyAction(`start:${String(workflowBookingId)}`);
     try {
       if (action === "close") {
@@ -234,14 +264,23 @@ export default function MechanicDashboard() {
           prejob: payload,
         });
         setToast("Pre-job vehicle check saved");
+        closeWorkflowDialog();
+      } else if (isNewCycle) {
+        await commitInspectionAndAwaitEstimate({
+          bookingId: workflowBookingId,
+          prejob: payload,
+        });
+        // Swap dialog body to the estimate form — same workflow booking id,
+        // new mode. Do NOT close.
+        setWorkflowMode("prejob_estimate");
       } else {
         await startWithPrejob({
           bookingId: workflowBookingId,
           prejob: payload,
         });
         setToast("Booking started");
+        closeWorkflowDialog();
       }
-      closeWorkflowDialog();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "";
       if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
@@ -516,6 +555,33 @@ export default function MechanicDashboard() {
                               Notified
                             </span>
                           )}
+                          {((job as any).paymentApprovalState === "pre_job_pending" ||
+                            (job as any).paymentApprovalState === "mid_job_pending" ||
+                            (job as any).paymentApprovalState === "post_job_pending" ||
+                            (job as any).paymentApprovalState === "pre_job_declined" ||
+                            (job as any).paymentApprovalState === "sla_expired") && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openWorkflowDialog(String(job._id), "prejob_estimate")
+                              }
+                              className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 transition-colors hover:bg-amber-200"
+                              title="Reopen the estimate workflow"
+                            >
+                              {(job as any).paymentApprovalState === "post_job_pending"
+                                ? "Customer reviewing final billing"
+                                : "Pending customer confirmation"}
+                            </button>
+                          )}
+                          {(job as any).paymentApprovalState === "reauth_required" && (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800"
+                              title="The customer's card needs reauthorization before work can proceed."
+                            >
+                              <AlertCircle className="h-2.5 w-2.5" />
+                              Hold reauthorization needed
+                            </span>
+                          )}
                         </div>
                         <p className="mt-1 truncate text-sm font-medium text-foreground">
                           {job.customerDisplayName}
@@ -570,9 +636,24 @@ export default function MechanicDashboard() {
                         ) : (
                           <PlayCircle className="w-4 h-4" />
                         )}
-                        {job.vehiclePassportComplete === false
-                          ? "Confirm Specs in Details"
-                          : "Start Booking"}
+                        {(() => {
+                          if (job.vehiclePassportComplete === false)
+                            return "Confirm Specs in Details";
+                          const pas = (job as any).paymentApprovalState as
+                            | string
+                            | undefined;
+                          if (pas === "reauth_required")
+                            return "Waiting on customer reauth";
+                          if (pas === "in_range" || pas === "pre_job_approved")
+                            return "Open & start work";
+                          if (
+                            pas === "pre_job_pending" ||
+                            pas === "pre_job_declined" ||
+                            pas === "sla_expired"
+                          )
+                            return "Open estimate";
+                          return "Start Booking";
+                        })()}
                       </button>
                     ) : null}
 
@@ -864,6 +945,40 @@ export default function MechanicDashboard() {
             }),
           )
         }
+      />
+
+      {/* Pre-Job Approval — auto-chained from the inspection dialog. Same
+          PostJobSurveyDialog component, this time with cycle="pre_job" so it
+          routes submit through booking_approvals.submitPreJobEstimate and
+          renders the live ApprovalStatusPanel after send. */}
+      <PostJobSurveyDialog
+        open={workflowBookingId !== null && workflowMode === "prejob_estimate"}
+        bookingId={workflowBookingId ? String(workflowBookingId) : null}
+        bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
+        bookingSubLabel={
+          selectedWorkflowBooking
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+                selectedWorkflowBooking.scheduledDate,
+              )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
+            : ""
+        }
+        passportData={selectedWorkflowPassport ?? null}
+        estimatedLaborMinutes={selectedWorkflowBooking?.estimatedLaborMinutes ?? null}
+        prefillData={workflowPrefill ?? null}
+        isSubmitting={false}
+        onClose={closeWorkflowDialog}
+        onSubmit={async () => {
+          // Cycle submit path runs inside the dialog itself; this callback is
+          // only invoked on the legacy actuals path which is gated by cycle.
+        }}
+        cycle="pre_job"
+        onApprovalSubmitted={() => {
+          setToast("Estimate sent for confirmation");
+        }}
+        laborRateCents={(selectedWorkflowBooking as any)?.shopLaborRateCents ?? null}
+        laborCostDollars={(selectedWorkflowBooking as any)?.laborCost ?? null}
+        shopState={(selectedWorkflowBooking as any)?.shopState ?? null}
+        shopZip={(selectedWorkflowBooking as any)?.shopZip ?? null}
       />
 
       <JobActualsDialog

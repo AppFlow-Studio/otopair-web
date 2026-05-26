@@ -2,7 +2,7 @@
 // Suppress this file; runtime types are validated by the Convex deployment.
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -12,6 +12,7 @@ import { format, addDays, subDays } from "date-fns";
 import DaySwimLanes from "@/app/(portal)/schedule/day-swim-lanes";
 import type { CalendarEvent } from "@/app/(portal)/schedule/day-swim-lanes";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
+import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import {
   Select,
   SelectItem,
@@ -339,18 +340,61 @@ function QuoteSubmissionDialog({
   const [submitting, setSubmitting] = useState(false);
 
   // Schedule lane state
-  const [laneDate, setLaneDate] = useState<Date>(new Date());
+  const [laneDate, setLaneDate] = useState<Date | null>(null);
+  const initialLaneDateSelectedRef = useRef(false);
 
-  const laneDateStr = dateToString(laneDate);
+  const laneDateStr = laneDate ? dateToString(laneDate) : todayIso();
+  const initialLookaheadRange = useMemo(() => {
+    const start = new Date();
+    const end = new Date(start);
+    end.setDate(start.getDate() + 13);
+    return { dateFrom: dateToString(start), dateTo: dateToString(end) };
+  }, []);
 
-  const scheduleBookings = useQuery(api.schedule.getBookingsForRange, {
-    dateFrom: laneDateStr,
-    dateTo: laneDateStr,
+  const scheduleBookings = useQuery(
+    api.schedule.getBookingsForRange,
+    laneDate ? { dateFrom: laneDateStr, dateTo: laneDateStr } : "skip",
+  );
+  const blockedSlots = useQuery(
+    api.schedule.getBlockedSlots,
+    laneDate ? { dateFrom: laneDateStr, dateTo: laneDateStr } : "skip",
+  );
+  const initialLookaheadBookings = useQuery(api.schedule.getBookingsForRange, {
+    dateFrom: initialLookaheadRange.dateFrom,
+    dateTo: initialLookaheadRange.dateTo,
   });
-  const blockedSlots = useQuery(api.schedule.getBlockedSlots, {
-    dateFrom: laneDateStr,
-    dateTo: laneDateStr,
+  const initialLookaheadBlockedSlots = useQuery(api.schedule.getBlockedSlots, {
+    dateFrom: initialLookaheadRange.dateFrom,
+    dateTo: initialLookaheadRange.dateTo,
   });
+
+  useEffect(() => {
+    if (initialLaneDateSelectedRef.current) return;
+    if (initialLookaheadBookings === undefined || initialLookaheadBlockedSlots === undefined) return;
+
+    initialLaneDateSelectedRef.current = true;
+    if (shopHours.length === 0 || shopMechanics.length === 0) {
+      setLaneDate(dateStringToDate(todayIso()));
+      return;
+    }
+
+    const slot = findNextAvailableSlot({
+      now: new Date(),
+      shopHours,
+      mechanics: shopMechanics.map((m) => ({ _id: String(m._id) })),
+      bookings: initialLookaheadBookings,
+      blockedSlots: initialLookaheadBlockedSlots,
+      durationMinutes,
+    });
+
+    setLaneDate(dateStringToDate(slot?.date ?? todayIso()));
+  }, [
+    durationMinutes,
+    initialLookaheadBlockedSlots,
+    initialLookaheadBookings,
+    shopHours,
+    shopMechanics,
+  ]);
 
   const laneEvents: CalendarEvent[] = useMemo(() => {
     const bookingEvents: CalendarEvent[] = (scheduleBookings ?? []).map((b: any) => {
@@ -400,11 +444,13 @@ function QuoteSubmissionDialog({
   }, [scheduleBookings, blockedSlots]);
 
   const laneDayHours = useMemo(() => {
+    if (!laneDate) return null;
     const dow = laneDate.getDay();
     return shopHours.find((h) => h.dayOfWeek === dow) ?? null;
   }, [laneDate, shopHours]);
 
   const laneMinTime = useMemo(() => {
+    if (!laneDate) return new Date();
     const d = new Date(laneDate);
     if (laneDayHours && !laneDayHours.isClosed && laneDayHours.openTime) {
       const [h, m] = laneDayHours.openTime.split(":").map(Number);
@@ -416,6 +462,7 @@ function QuoteSubmissionDialog({
   }, [laneDate, laneDayHours]);
 
   const laneMaxTime = useMemo(() => {
+    if (!laneDate) return new Date();
     const d = new Date(laneDate);
     if (laneDayHours && !laneDayHours.isClosed && laneDayHours.closeTime) {
       const [h, m] = laneDayHours.closeTime.split(":").map(Number);
@@ -512,15 +559,19 @@ function QuoteSubmissionDialog({
             {/* Date nav */}
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
               <button
-                onClick={() => setLaneDate((d) => subDays(d, 1))}
-                className="rounded-md p-1 hover:bg-muted text-muted-foreground"
+                onClick={() => setLaneDate((d) => subDays(d ?? new Date(), 1))}
+                disabled={!laneDate}
+                className="rounded-md p-1 hover:bg-muted text-muted-foreground disabled:opacity-50"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
-              <span className="text-sm font-medium text-foreground">{formatDayHeading(laneDate)}</span>
+              <span className="text-sm font-medium text-foreground">
+                {laneDate ? formatDayHeading(laneDate) : "Loading schedule..."}
+              </span>
               <button
-                onClick={() => setLaneDate((d) => addDays(d, 1))}
-                className="rounded-md p-1 hover:bg-muted text-muted-foreground"
+                onClick={() => setLaneDate((d) => addDays(d ?? new Date(), 1))}
+                disabled={!laneDate}
+                className="rounded-md p-1 hover:bg-muted text-muted-foreground disabled:opacity-50"
               >
                 <ChevronRight className="h-4 w-4" />
               </button>
@@ -541,35 +592,41 @@ function QuoteSubmissionDialog({
               </div>
             )}
             <div className="flex-1 overflow-auto">
-              <DaySwimLanes
-                mechanics={shopMechanics.map((m) => ({
-                  _id: String(m._id),
-                  name: m.name,
-                  imageUrl: (m as any).imageUrl ?? null,
-                }))}
-                events={laneEvents}
-                minTime={laneMinTime}
-                maxTime={laneMaxTime}
-                nowTimestamp={Date.now()}
-                onSelectEvent={() => {}}
-                currentDate={laneDate}
-                draftBooking={
-                  availabilityDate && availabilityTime && mechanicId
-                    ? {
-                        date: availabilityDate,
-                        time: availabilityTime,
-                        mechanicId,
-                        durationMinutes,
-                      }
-                    : null
-                }
-                onSelectEmptyCell={laneDayHours?.isClosed ? undefined : (info) => {
-                  setLaneDate(dateStringToDate(info.date));
-                  setAvailabilityDate(info.date);
-                  setAvailabilityTime(info.startTime);
-                  setMechanicId(info.mechanicId);
-                }}
-              />
+              {laneDate ? (
+                <DaySwimLanes
+                  mechanics={shopMechanics.map((m) => ({
+                    _id: String(m._id),
+                    name: m.name,
+                    imageUrl: (m as any).imageUrl ?? null,
+                  }))}
+                  events={laneEvents}
+                  minTime={laneMinTime}
+                  maxTime={laneMaxTime}
+                  nowTimestamp={Date.now()}
+                  onSelectEvent={() => {}}
+                  currentDate={laneDate}
+                  draftBooking={
+                    availabilityDate && availabilityTime && mechanicId
+                      ? {
+                          date: availabilityDate,
+                          time: availabilityTime,
+                          mechanicId,
+                          durationMinutes,
+                        }
+                      : null
+                  }
+                  onSelectEmptyCell={laneDayHours?.isClosed ? undefined : (info) => {
+                    setLaneDate(dateStringToDate(info.date));
+                    setAvailabilityDate(info.date);
+                    setAvailabilityTime(info.startTime);
+                    setMechanicId(info.mechanicId);
+                  }}
+                />
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  Finding the next available day...
+                </div>
+              )}
             </div>
             <p className="px-4 py-2 text-xs text-muted-foreground border-t border-border shrink-0">
               Click an empty slot to set the "Ready by" time and assign a mechanic.

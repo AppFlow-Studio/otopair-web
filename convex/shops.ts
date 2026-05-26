@@ -482,6 +482,31 @@ export const updateMySchedulingSettings = mutation({
   },
 });
 
+export const updateMyLaborRate = mutation({
+  args: {
+    laborRate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Only shop owners can update the labor rate.");
+    }
+    if (!Number.isFinite(args.laborRate) || args.laborRate <= 0) {
+      throw new Error("Labor rate must be greater than 0.");
+    }
+
+    await ctx.db.patch(primary.shop._id, {
+      labor_rate: Math.round(args.laborRate * 100) / 100,
+    });
+
+    return primary.shop._id;
+  },
+});
+
 export const getStripeOnboardingContext = internalQuery({
   args: {
     clerkUserId: v.string(),

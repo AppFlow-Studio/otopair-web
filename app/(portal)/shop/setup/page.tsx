@@ -95,6 +95,9 @@ const saveLaborAndServicesMutation = makeFunctionReference<"mutation">(
   "shops:saveOnboardingLaborAndServices"
 );
 const addMechanicMutation = makeFunctionReference<"mutation">("shops:addOnboardingMechanic");
+const updateMechanicMutation = makeFunctionReference<"mutation">(
+  "shops:updateOnboardingMechanic"
+);
 const removeMechanicMutation = makeFunctionReference<"mutation">("shops:removeOnboardingMechanic");
 
 type GoogleMapsWindow = Window & {
@@ -165,6 +168,31 @@ type OnboardingServiceCategory = {
   services: OnboardingService[];
 };
 
+type OnboardingMechanicRow = {
+  _id: string;
+  firstName: string;
+  lastName: string;
+  title: string;
+  email?: string | null;
+  shopUserId: string | null;
+  invitationId: string | null;
+  pendingInvitationId: string | null;
+  invitationStatus?: string | null;
+  portalStatus?: string | null;
+  blockingBookingCount?: number;
+  photoUrl?: string | null;
+};
+
+type MechanicFormState = {
+  mechanicId: string | null;
+  firstName: string;
+  lastName: string;
+  title: string;
+  email: string;
+  pendingInvitationId: string | null;
+  portalStatus?: string | null;
+};
+
 type PortalAccess =
   | null
   | {
@@ -193,7 +221,7 @@ type OnboardingData = {
   } | null;
   hours: HoursFormRow[];
   serviceCategories: OnboardingServiceCategory[];
-  mechanics: unknown[];
+  mechanics: OnboardingMechanicRow[];
 };
 
 type NormalizedShopAddress = {
@@ -411,6 +439,18 @@ function getMechanicInviteLabel(status?: string | null): string {
   return "Send invite";
 }
 
+function getEmptyMechanicForm(): MechanicFormState {
+  return {
+    mechanicId: null,
+    firstName: "",
+    lastName: "",
+    title: "",
+    email: "",
+    pendingInvitationId: null,
+    portalStatus: null,
+  };
+}
+
 function getFirstIncompleteSavedStep(params: {
   hasSavedShop: boolean;
   savedHoursCount: number;
@@ -457,6 +497,13 @@ export default function ShopSetupPage() {
     title?: string;
     email?: string;
   }) => Promise<Id<"mechanics">>;
+  const updateMechanic = useMutation(updateMechanicMutation) as (args: {
+    mechanicId: Id<"mechanics">;
+    firstName: string;
+    lastName: string;
+    title?: string;
+    email?: string;
+  }) => Promise<Id<"mechanics">>;
   const removeMechanic = useMutation(removeMechanicMutation) as (args: {
     mechanicId: Id<"mechanics">;
   }) => Promise<Id<"mechanics">>;
@@ -487,14 +534,11 @@ export default function ShopSetupPage() {
   const addressLookupSessionRef = useRef<unknown>(null);
   const addressLookupRequestIdRef = useRef(0);
   const addressContainerRef = useRef<HTMLDivElement | null>(null);
+  const mechanicFormRef = useRef<HTMLDivElement | null>(null);
+  const mechanicEmailInputRef = useRef<HTMLInputElement | null>(null);
   const mechanicPhotoInputRef = useRef<HTMLInputElement | null>(null);
   const pendingMechanicPhotoIdRef = useRef<string | null>(null);
-  const [mechanicForm, setMechanicForm] = useState({
-    firstName: "",
-    lastName: "",
-    title: "",
-    email: "",
-  });
+  const [mechanicForm, setMechanicForm] = useState<MechanicFormState>(getEmptyMechanicForm);
   const [sendingInvite, setSendingInvite] = useState(false);
   const [mechanicInviteError, setMechanicInviteError] = useState<string | null>(null);
   const [mechanicInviteSuccess, setMechanicInviteSuccess] = useState(false);
@@ -1011,6 +1055,34 @@ export default function ShopSetupPage() {
     }
   }
 
+  function resetMechanicForm() {
+    setMechanicForm(getEmptyMechanicForm());
+  }
+
+  function scrollToMechanicForm({ selectEmail = false }: { selectEmail?: boolean } = {}) {
+    mechanicFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    if (!selectEmail) return;
+
+    window.setTimeout(() => {
+      mechanicEmailInputRef.current?.focus({ preventScroll: true });
+      mechanicEmailInputRef.current?.select();
+    }, 250);
+  }
+
+  function editMechanicForInvite(mechanic: OnboardingMechanicRow) {
+    setMechanicForm({
+      mechanicId: mechanic._id,
+      firstName: mechanic.firstName,
+      lastName: mechanic.lastName,
+      title: mechanic.title,
+      email: mechanic.email ?? "",
+      pendingInvitationId: mechanic.pendingInvitationId,
+      portalStatus: mechanic.portalStatus,
+    });
+    scrollToMechanicForm({ selectEmail: true });
+  }
+
   async function handleInviteMechanic() {
     clearBanners();
     setMechanicInviteError(null);
@@ -1027,14 +1099,30 @@ export default function ShopSetupPage() {
 
     setSendingInvite(true);
     try {
-      const mechanicId = await addMechanic({
-        firstName: mechanicForm.firstName.trim(),
-        lastName: mechanicForm.lastName.trim(),
-        title: mechanicForm.title.trim() || undefined,
-        email: mechanicForm.email.trim() || undefined,
-      });
+      const mechanicId = mechanicForm.mechanicId
+        ? await updateMechanic({
+            mechanicId: mechanicForm.mechanicId as Id<"mechanics">,
+            firstName: mechanicForm.firstName.trim(),
+            lastName: mechanicForm.lastName.trim(),
+            title: mechanicForm.title.trim() || undefined,
+            email: mechanicForm.email.trim() || undefined,
+          })
+        : await addMechanic({
+            firstName: mechanicForm.firstName.trim(),
+            lastName: mechanicForm.lastName.trim(),
+            title: mechanicForm.title.trim() || undefined,
+            email: mechanicForm.email.trim() || undefined,
+          });
 
       if (mechanicForm.email.trim()) {
+        if (
+          mechanicForm.pendingInvitationId &&
+          (mechanicForm.portalStatus === "invite_sent" ||
+            mechanicForm.portalStatus === "invite_expired")
+        ) {
+          await removeTeamMember({ invitationId: mechanicForm.pendingInvitationId });
+        }
+
         const result = await sendTeamInvite({
           email: mechanicForm.email.trim(),
           role: "shop_mechanic",
@@ -1045,13 +1133,13 @@ export default function ShopSetupPage() {
 
         if (!result.ok) {
           setMechanicInviteError(
-            `Mechanic profile saved, but the invitation failed: ${result.error}`
+            `Mechanic profile ${mechanicForm.mechanicId ? "updated" : "saved"}, but the invitation failed: ${result.error}`
           );
           return;
         }
       }
 
-      setMechanicForm({ firstName: "", lastName: "", title: "", email: "" });
+      resetMechanicForm();
       setMechanicInviteSuccess(true);
       setTimeout(() => setMechanicInviteSuccess(false), 4000);
     } catch (error) {
@@ -1063,18 +1151,14 @@ export default function ShopSetupPage() {
     }
   }
 
-  async function handleInviteExistingMechanic(mechanic: {
-    _id: string;
-    email?: string | null;
-    pendingInvitationId: string | null;
-    portalStatus?: string | null;
-  }) {
+  async function handleInviteExistingMechanic(mechanic: OnboardingMechanicRow) {
     clearBanners();
     setMechanicInviteError(null);
     setMechanicInviteSuccess(false);
 
     if (!onboardingData?.shop?._id) return;
     if (!mechanic.email?.trim()) {
+      editMechanicForInvite(mechanic);
       setMechanicInviteError("Add an email address before inviting this mechanic.");
       return;
     }
@@ -1207,10 +1291,13 @@ export default function ShopSetupPage() {
     clearBanners();
     setRemovingMechanicId(args.mechanicId);
     try {
-      await removeTeamMember({
-        shopUserId: args.shopUserId,
-        invitationId: args.pendingInvitationId,
-      });
+      if (args.shopUserId) {
+        await removeTeamMember({ shopUserId: args.shopUserId });
+      }
+
+      if (args.pendingInvitationId) {
+        await removeTeamMember({ invitationId: args.pendingInvitationId });
+      }
 
       await removeMechanic({ mechanicId: args.mechanicId as Id<"mechanics"> });
       setRemoveMechanicConfirm(null);
@@ -1304,20 +1391,7 @@ export default function ShopSetupPage() {
     );
   }
 
-  const mechanics = onboardingData.mechanics as Array<{
-    _id: string;
-    firstName: string;
-    lastName: string;
-    title: string;
-    email?: string | null;
-    shopUserId: string | null;
-    invitationId: string | null;
-    pendingInvitationId: string | null;
-    invitationStatus?: string | null;
-    portalStatus?: string | null;
-    blockingBookingCount?: number;
-    photoUrl?: string | null;
-  }>;
+  const mechanics = onboardingData.mechanics;
   const selectedMechanicForPhotoDialog =
     photoDialogMechanicId === null
       ? null
@@ -1892,7 +1966,10 @@ export default function ShopSetupPage() {
 
           {currentStep === 3 && (
             <div className="space-y-6">
-              <div className="grid gap-4 rounded-xl border border-border bg-muted p-5 md:grid-cols-3">
+              <div
+                ref={mechanicFormRef}
+                className="grid gap-4 rounded-xl border border-border bg-muted p-5 md:grid-cols-3"
+              >
                 <div>
                   <label className={labelClass}>
                     First Name <span className="text-destructive">*</span>
@@ -1906,7 +1983,7 @@ export default function ShopSetupPage() {
                         firstName: event.target.value,
                       }))
                     }
-                    placeholder="Anakin"
+                    placeholder="John"
                     className={inputClass}
                   />
                 </div>
@@ -1923,7 +2000,7 @@ export default function ShopSetupPage() {
                         lastName: event.target.value,
                       }))
                     }
-                    placeholder="Skywalker"
+                    placeholder="Doe"
                     className={inputClass}
                   />
                 </div>
@@ -1945,6 +2022,7 @@ export default function ShopSetupPage() {
                 <div className="md:col-span-3">
                   <label className={labelClass}>Email Address</label>
                   <input
+                    ref={mechanicEmailInputRef}
                     type="email"
                     value={mechanicForm.email}
                     onChange={(event) =>
@@ -1957,7 +2035,7 @@ export default function ShopSetupPage() {
                     className={inputClass}
                   />
                 </div>
-                <div className="md:col-span-3">
+                <div className="flex flex-wrap gap-2 md:col-span-3">
                   <button
                     type="button"
                     onClick={handleInviteMechanic}
@@ -1971,6 +2049,20 @@ export default function ShopSetupPage() {
                     )}
                     {mechanicForm.email.trim() ? "Save and invite mechanic" : "Save mechanic"}
                   </button>
+                  {mechanicForm.mechanicId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetMechanicForm();
+                        setMechanicInviteError(null);
+                        setMechanicInviteSuccess(false);
+                      }}
+                      disabled={sendingInvite}
+                      className={`${stepButtonClass} border-input bg-white text-foreground hover:bg-muted`}
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </div>
               </div>
 

@@ -249,6 +249,33 @@ export const list = query({
   },
 });
 
+// ─── Shop geocoding (client-side, keyless) ──────────────────────────
+// The map needs shops.lat/lng to drop a pin at the shop office. Instead
+// of a server-side geocoder (which needs API creds/env), the client
+// geocodes a shop's address on-device via expo-location — the same OS
+// map stack the app already renders with — and persists the result
+// here. See hooks/useShopsFromConvex.ts. This mutation only BACKFILLS:
+// it never overwrites coords a shop already has.
+
+export const setShopCoords = mutation({
+  args: { shopId: v.id("shops"), lat: v.number(), lng: v.number() },
+  handler: async (ctx, args) => {
+    const { user } = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const shop = await ctx.db.get(args.shopId);
+    if (!shop) return;
+
+    const hasCoords =
+      shop.lat != null &&
+      shop.lng != null &&
+      !(shop.lat === 0 && shop.lng === 0);
+    if (hasCoords) return; // already located — don't let a client overwrite
+
+    await ctx.db.patch(args.shopId, { lat: args.lat, lng: args.lng });
+  },
+});
+
 export const create = mutation({
   args: {
     name: v.string(),
@@ -476,6 +503,44 @@ export const updateMySchedulingSettings = mutation({
             ),
           }
         : {}),
+    });
+
+    return primary.shop._id;
+  },
+});
+
+/**
+ * Update the shop's hourly labor rate ($/hour). Owner-only — the rate
+ * flows into invoice computation (convex/invoices.ts) and the approval
+ * dialog's labor cents recompute, so we guard with the same role check as
+ * the other shop-settings mutations.
+ *
+ * Rate is stored in dollars on `shops.labor_rate` to stay consistent with
+ * the onboarding flow and director panel which also use dollars.
+ */
+export const updateMyLaborRate = mutation({
+  args: {
+    laborRate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Only shop owners can change the labor rate.");
+    }
+
+    if (!Number.isFinite(args.laborRate) || args.laborRate <= 0) {
+      throw new Error("Labor rate must be greater than $0/hour.");
+    }
+    if (args.laborRate > 1000) {
+      throw new Error("Labor rate cannot exceed $1,000/hour.");
+    }
+
+    await ctx.db.patch(primary.shop._id, {
+      labor_rate: Math.round(args.laborRate * 100) / 100,
     });
 
     return primary.shop._id;
@@ -971,6 +1036,47 @@ export const addOnboardingMechanic = mutation({
   },
 });
 
+export const updateOnboardingMechanic = mutation({
+  args: {
+    mechanicId: v.id("mechanics"),
+    firstName: v.string(),
+    lastName: v.string(),
+    title: v.optional(v.string()),
+    email: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getOrCreateCurrentShopOwner(ctx);
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Not authorized");
+    }
+
+    const mechanic = await ctx.db.get(args.mechanicId);
+    if (!mechanic || String(mechanic.shop_id) !== String(primary.shop._id)) {
+      throw new Error("Mechanic not found.");
+    }
+
+    const firstName = args.firstName.trim();
+    const lastName = args.lastName.trim();
+    if (!firstName || !lastName) throw new Error("Enter both a first and last name.");
+
+    await ctx.db.patch(args.mechanicId, {
+      first_name: firstName,
+      last_name: lastName,
+      title: args.title?.trim() || undefined,
+      email: args.email?.trim().toLowerCase() || undefined,
+    });
+
+    await syncMechanicAvailabilityWindow(ctx, {
+      shopId: primary.shop._id,
+      mechanicId: args.mechanicId,
+    });
+
+    return args.mechanicId;
+  },
+});
+
 export const removeOnboardingMechanic = mutation({
   args: {
     mechanicId: v.id("mechanics"),
@@ -1195,7 +1301,6 @@ export const updateShopHours = mutation({
       }
     }
 
-    await syncShopAvailabilityWindow(ctx, { shopId: primary.shop._id });
     return primary.shop._id;
   },
 });;

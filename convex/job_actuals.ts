@@ -374,6 +374,32 @@ export const getPrefillData = query({
 
     const suggestedParts: SuggestedPart[] = [];
 
+    // Pre-Job Approval flow: when the booking was created with a priced
+    // parts snapshot (frozen per-unit prices from `getPricedPartsForServices`
+    // at booking time), seed `suggestedParts` from that first. This is the
+    // SAME data the customer saw on Review & Pay, so the mechanic and
+    // customer can't disagree about the unit price even if `part_prices`
+    // has drifted since. The cascade + catalog fallbacks below run
+    // afterward and skip anything already covered by the snapshot.
+    const snapshot: any[] = ((booking as any).priced_parts_snapshot ?? []);
+    const snapshotOems = new Set<string>();
+    const normalizeOem = (n: string) =>
+      n.trim().toUpperCase().replace(/\s+/g, "");
+    if (snapshot && snapshot.length > 0) {
+      for (const row of snapshot) {
+        suggestedParts.push({
+          part_name: row.part_name,
+          oem_number: row.oem_number,
+          // Snapshot stores cents; SuggestedPart.cost is dollars per-unit.
+          cost: Math.round(row.unit_price_cents) / 100,
+          quantity: row.quantity,
+          service_id: row.service_id,
+          learned_from: "config",
+        });
+        if (row.oem_number) snapshotOems.add(normalizeOem(row.oem_number));
+      }
+    }
+
     // Sentinel-prefix tire identifiers so downstream consumers that key on
     // oem_number (part_snapshots, shop_part_preferences) don't get bare
     // size codes treated as OEM numbers.
@@ -401,6 +427,11 @@ export const getPrefillData = query({
           vin: typeof booking.vin === "string" ? booking.vin : undefined,
         });
         for (const s of cascadeSuggestions) {
+          // Skip rows already covered by the booking-time priced snapshot —
+          // the snapshot is the customer's source of truth.
+          if (s.oem_number && snapshotOems.has(normalizeOem(s.oem_number))) {
+            continue;
+          }
           suggestedParts.push({ ...s, service_id: sid });
         }
       }
@@ -466,11 +497,15 @@ export const getPrefillData = query({
             service_id: sid,
           });
         } else if (slug === "spark-plugs" && s.spark_plug_oem) {
+          // Per-unit cost (the dialog multiplies by quantity for the total).
+          // Pre-fix bug: previously pushed `cost: 12 * qty` (line total)
+          // with no `quantity`, which the dialog then multiplied again.
           const qty = s.spark_plug_quantity ?? 4;
           suggestedParts.push({
-            part_name: `Spark Plugs (x${qty})`,
+            part_name: "Spark Plug",
             oem_number: s.spark_plug_oem,
-            cost: 12 * qty,
+            cost: 12,
+            quantity: qty,
             service_id: sid,
           });
         } else if (slug === "serpentine-belt" && s.serpentine_belt_oem) {
@@ -633,9 +668,13 @@ export const getPrefillData = query({
         suggestedParts.push({
           part_name: part.part_name,
           oem_number: part.oem_part_number,
-          // Prefer median across observations — robust to outlier overpays /
-          // typos and matches the tooltip/placeholder the mechanic sees.
-          cost: part.median_price > 0 ? part.median_price : part.average_price,
+          // Use `average_price` — the outlier-rejected mean from
+          // summarizePartPrices. Matches what the customer saw on the mobile
+          // Review & Pay screen (getPricedPartsForServices uses the same
+          // field). `median_price` is the naïve median and gets corrupted
+          // when scraped data mixes per-unit and per-pack listings for the
+          // same OEM (e.g., spark plugs sold individually AND as set-of-4).
+          cost: part.average_price > 0 ? part.average_price : part.median_price,
           quantity: catalogQty,
           service_id: rec.service_id,
           // These rows didn't come from a learned preference — they're the

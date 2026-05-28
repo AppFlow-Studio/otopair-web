@@ -365,6 +365,7 @@ export default function MyBookingsPage() {
                 onRequestRescheduleConfirmation={handleProposeReschedule}
                 onClose={() => setSelectedJobId(null)}
                 onSuccess={setSuccessMessage}
+                hideDisclosedRange
               />
             </div>
           </div>

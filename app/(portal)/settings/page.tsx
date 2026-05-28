@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { LogOut, MapPin, Phone, Globe, Mail, ExternalLink, Loader2, Save } from "lucide-react";
+import { LogOut, MapPin, Phone, Globe, Mail, ExternalLink, Loader2, Save, DollarSign, AlertTriangle, X } from "lucide-react";
 import {
   DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
@@ -22,7 +22,13 @@ export default function SettingsPage() {
   const router = useRouter();
   const shops = useQuery(api.shops.getMyShops);
   const updateSchedulingSettings = useMutation(api.shops.updateMySchedulingSettings);
+  const updateLaborRate = useMutation(api.shops.updateMyLaborRate);
   const shop = shops?.[0] ?? null;
+  const currentLaborRate = shop?.labor_rate ?? null;
+  const [laborRateInput, setLaborRateInput] = useState("");
+  const [laborRateMessage, setLaborRateMessage] = useState("");
+  const [isLaborConfirmOpen, setIsLaborConfirmOpen] = useState(false);
+  const [isSavingLaborRate, setIsSavingLaborRate] = useState(false);
   const [noShowThreshold, setNoShowThreshold] = useState(DEFAULT_NO_SHOW_THRESHOLD_MINUTES);
   const [overrunPercent, setOverrunPercent] = useState(DEFAULT_OVERRUN_EXTENSION_PERCENT);
   const [overrunFloor, setOverrunFloor] = useState(DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
@@ -35,16 +41,45 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!shop) return;
+    setLaborRate(String(shop.labor_rate ?? 150));
     setNoShowThreshold(shop.no_show_threshold_minutes ?? DEFAULT_NO_SHOW_THRESHOLD_MINUTES);
     setOverrunPercent(shop.overrun_default_extension_percent ?? DEFAULT_OVERRUN_EXTENSION_PERCENT);
     setOverrunFloor(shop.overrun_extension_floor_minutes ?? DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
     setBufferMinutes(shop.buffer_minutes ?? 10);
-    setMaxPerMechanic((shop as any).max_bookings_per_mechanic_rolling_hour ?? 2);
-    setEntityLabelMode(((shop as any).entity_label_mode ?? "mechanic") as "mechanic" | "bay");
+    setMaxPerMechanic(shop.max_bookings_per_mechanic_rolling_hour ?? 2);
+    setEntityLabelMode(shop.entity_label_mode === "bay" ? "bay" : "mechanic");
     setReminderLeadMinutes(
-      Number((shop as any).appointment_reminder_lead_minutes ?? 0),
+      Number(shop.appointment_reminder_lead_minutes ?? 0),
     );
+    setLaborRateInput(String(shop.labor_rate ?? 150));
   }, [shop]);
+
+  const parsedNewLaborRate = Number(laborRateInput);
+  const isLaborRateValid =
+    Number.isFinite(parsedNewLaborRate) &&
+    parsedNewLaborRate > 0 &&
+    parsedNewLaborRate <= 1000;
+  const isLaborRateChanged =
+    isLaborRateValid &&
+    currentLaborRate != null &&
+    Math.abs(parsedNewLaborRate - currentLaborRate) > 0.001;
+
+  async function handleConfirmLaborRate() {
+    if (!isLaborRateValid) return;
+    setIsSavingLaborRate(true);
+    setLaborRateMessage("");
+    try {
+      await updateLaborRate({ laborRate: parsedNewLaborRate });
+      setLaborRateMessage(`Labor rate updated to $${parsedNewLaborRate.toFixed(2)}/hr.`);
+      setIsLaborConfirmOpen(false);
+    } catch (error: unknown) {
+      setLaborRateMessage(
+        error instanceof Error ? error.message : "Could not update labor rate.",
+      );
+    } finally {
+      setIsSavingLaborRate(false);
+    }
+  }
 
   async function handleSignOut() {
     await signOut();
@@ -71,6 +106,29 @@ export default function SettingsPage() {
       );
     } finally {
       setIsSavingSettings(false);
+    }
+  }
+
+  async function handleSaveLaborRate() {
+    const nextLaborRate = Number(laborRate);
+    setLaborRateMessage("");
+
+    if (!Number.isFinite(nextLaborRate) || nextLaborRate <= 0) {
+      setLaborRateMessage("Enter a labor rate greater than 0.");
+      return;
+    }
+
+    setIsSavingLaborRate(true);
+    try {
+      await updateLaborRate({ laborRate: nextLaborRate });
+      setLaborRate(String(Math.round(nextLaborRate * 100) / 100));
+      setLaborRateMessage("Labor rate saved.");
+    } catch (error: unknown) {
+      setLaborRateMessage(
+        error instanceof Error ? error.message : "Could not save labor rate.",
+      );
+    } finally {
+      setIsSavingLaborRate(false);
     }
   }
 
@@ -180,6 +238,111 @@ export default function SettingsPage() {
 
         {shop && <HoursEditor />}
         {shop && <ServicesEditor />}
+        {shop ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="mb-5">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">
+                  Labor Rate
+                </h2>
+                <p className="mt-1 text-sm text-gray-500">
+                  Set the hourly labor rate used when estimating service pricing.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,20rem)_auto] md:items-end">
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Hourly rate</span>
+                <div className="relative mt-2">
+                  <input
+                    type="number"
+                    min={1}
+                    step={0.01}
+                    value={laborRate}
+                    onChange={(event) => setLaborRate(event.target.value)}
+                    className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 pr-14 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                  />
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">
+                    /hr
+                  </span>
+                </div>
+              </label>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void handleSaveLaborRate()}
+                  disabled={isSavingLaborRate}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {isSavingLaborRate ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  Save labor rate
+                </button>
+                {laborRateMessage ? (
+                  <p className="text-sm text-gray-600">{laborRateMessage}</p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {shop ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="text-sm font-semibold text-gray-900 mb-4 uppercase tracking-wide">
+              Labor Rate
+            </h2>
+            <p className="text-sm text-gray-500 mb-5">
+              Hourly rate billed to customers for technician work. Applied to
+              every new booking and to the labor portion of invoices.
+            </p>
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Current
+                </span>
+                <p className="mt-1 text-2xl font-bold text-gray-900">
+                  {currentLaborRate != null
+                    ? `$${currentLaborRate.toFixed(2)}/hr`
+                    : "Not set"}
+                </p>
+              </div>
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">New rate ($/hr)</span>
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="relative">
+                    <DollarSign className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="number"
+                      min={1}
+                      max={1000}
+                      step="0.01"
+                      value={laborRateInput}
+                      onChange={(event) => setLaborRateInput(event.target.value)}
+                      className="w-40 rounded-lg border border-gray-200 bg-white py-2 pl-8 pr-3 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  setLaborRateMessage("");
+                  setIsLaborConfirmOpen(true);
+                }}
+                disabled={!isLaborRateChanged || isSavingLaborRate}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Save className="h-4 w-4" />
+                Update rate
+              </button>
+              {laborRateMessage ? (
+                <p className="w-full text-sm text-gray-600">{laborRateMessage}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         {shop ? (
           <div className="bg-white rounded-xl border border-gray-200 p-6">
             <h2 className="text-sm font-semibold text-gray-900 mb-4 uppercase tracking-wide">
@@ -348,6 +511,102 @@ export default function SettingsPage() {
         </div>
 
       </div>
+
+      {isLaborConfirmOpen && shop ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="labor-rate-confirm-title"
+          className="fixed inset-0 z-[90] flex items-center justify-center px-4 py-6"
+        >
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={
+              isSavingLaborRate ? undefined : () => setIsLaborConfirmOpen(false)
+            }
+          />
+          <div className="relative z-[91] w-full max-w-md overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-6 py-5">
+              <div>
+                <div className="flex items-center gap-2 text-amber-600">
+                  <AlertTriangle className="h-4 w-4" />
+                  <span className="text-xs font-semibold uppercase tracking-[0.2em]">
+                    Confirm change
+                  </span>
+                </div>
+                <h2
+                  id="labor-rate-confirm-title"
+                  className="mt-2 text-lg font-semibold text-gray-900"
+                >
+                  Update your hourly labor rate?
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsLaborConfirmOpen(false)}
+                disabled={isSavingLaborRate}
+                className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-60"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="px-6 py-5">
+              <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-gray-500">
+                    Current
+                  </p>
+                  <p className="mt-1 text-lg font-semibold text-gray-900">
+                    {currentLaborRate != null
+                      ? `$${currentLaborRate.toFixed(2)}/hr`
+                      : "Not set"}
+                  </p>
+                </div>
+                <span className="text-gray-400">→</span>
+                <div className="text-right">
+                  <p className="text-xs uppercase tracking-wide text-gray-500">
+                    New
+                  </p>
+                  <p className="mt-1 text-lg font-semibold text-blue-600">
+                    ${parsedNewLaborRate.toFixed(2)}/hr
+                  </p>
+                </div>
+              </div>
+              <p className="mt-4 text-sm text-gray-600">
+                The new rate applies immediately to <strong>all new bookings</strong>
+                {" "}and to the labor calculation on future invoices. Already-confirmed
+                bookings keep the rate that was disclosed to the customer.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-gray-200 bg-gray-50 px-6 py-4">
+              <button
+                type="button"
+                onClick={() => setIsLaborConfirmOpen(false)}
+                disabled={isSavingLaborRate}
+                className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmLaborRate()}
+                disabled={isSavingLaborRate || !isLaborRateValid}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSavingLaborRate ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -18,6 +18,7 @@ import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { summarizePartPrices } from "./part_prices";
 
 /** Fallback band width when service_vehicle_specs has no engine-specific
  *  row for a service. ±25% around the client-supplied per-service parts
@@ -186,4 +187,138 @@ async function resolvePartsBandForService(
     low: mid * (1 - FALLBACK_BAND_RATIO),
     high: mid * (1 + FALLBACK_BAND_RATIO),
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Priced-parts snapshot
+//
+// Captures the same per-unit prices and quantities the customer saw on the
+// Review & Pay screen (which renders from `getPricedPartsForServices`).
+// Stored on the booking row so the mechanic's post-job dialog hydrates
+// from frozen data, not from a re-query of `part_prices` that may have
+// drifted since the booking was placed.
+// ─────────────────────────────────────────────────────────────────────────
+
+export type PricedPartSnapshotRow = {
+  service_id: Id<"services">;
+  part_id?: Id<"oem_parts">;
+  oem_number: string;
+  part_name: string;
+  brand?: string;
+  part_tier?: string;
+  quantity: number;
+  unit_price_cents: number;
+  line_total_cents: number;
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Quoted set price (singular, mechanic-facing)
+// ─────────────────────────────────────────────────────────────────────────
+
+export type QuotedBreakdown = {
+  parts_cents: number;
+  labor_cents: number;
+  tax_cents: number;
+  service_fee_cents: number;
+};
+
+export type ComputeQuotedSetPriceResult = {
+  total_cents: number;
+  breakdown: QuotedBreakdown;
+};
+
+/**
+ * Collapse the disclosed range + itemized parts snapshot into the single
+ * "quoted set price" the mechanic confirms against. Parts use the same
+ * outlier-rejected mean per OEM the customer saw line-itemized on Review &
+ * Pay; tax and service fee use the midpoint of their disclosed bands; labor
+ * is already a single value in the disclosed breakdown.
+ *
+ * By construction `total_cents ≤ disclosed_range_high_cents`, so confirming
+ * without edits takes the existing in-range / auto-capture branch in
+ * booking_approvals.ts.
+ */
+export function computeQuotedSetPrice(args: {
+  disclosedBreakdown: DisclosedRangeBreakdown;
+  pricedPartsSnapshot: PricedPartSnapshotRow[];
+}): ComputeQuotedSetPriceResult {
+  const { disclosedBreakdown: d, pricedPartsSnapshot } = args;
+
+  const parts_cents = pricedPartsSnapshot.reduce(
+    (sum, row) => sum + row.line_total_cents,
+    0,
+  );
+  const labor_cents = d.labor_cents;
+  const tax_cents = Math.round((d.tax_low_cents + d.tax_high_cents) / 2);
+  const service_fee_cents = Math.round(
+    (d.service_fee_low_cents + d.service_fee_high_cents) / 2,
+  );
+
+  const breakdown: QuotedBreakdown = {
+    parts_cents,
+    labor_cents,
+    tax_cents,
+    service_fee_cents,
+  };
+  return {
+    total_cents: parts_cents + labor_cents + tax_cents + service_fee_cents,
+    breakdown,
+  };
+}
+
+export async function computePricedPartsSnapshot(
+  ctx: MutationCtx,
+  args: {
+    serviceIds: Id<"services">[];
+    vehicleConfigId: Id<"vehicle_configs"> | null | undefined;
+    /** From vehicle_owner_specs.confirmed_packages — gate package-conditional
+     *  fitments to those the customer has actually confirmed. */
+    confirmedPackages: Set<string>;
+  },
+): Promise<PricedPartSnapshotRow[]> {
+  if (!args.vehicleConfigId) return [];
+  const out: PricedPartSnapshotRow[] = [];
+
+  for (const serviceId of args.serviceIds) {
+    const svc = await ctx.db.get(serviceId);
+    if (!svc?.slug) continue;
+
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_config_service", (q) =>
+        q
+          .eq("vehicle_config_id", args.vehicleConfigId!)
+          .eq("service_type", svc.slug!),
+      )
+      .collect();
+
+    const applicable = fitments.filter(
+      (f) => f.package_code == null || args.confirmedPackages.has(f.package_code),
+    );
+
+    for (const f of applicable) {
+      const part = await ctx.db.get(f.part_id);
+      if (!part) continue;
+      const summary = await summarizePartPrices(ctx, f.part_id);
+      // Use the outlier-rejected mean (`average`) — same field the customer-
+      // facing breakdown reads. Median is naïve to per-pack listings mixing
+      // with per-unit listings for the same OEM (spark plugs, brake pads).
+      const unit_price_dollars = summary.average;
+      const quantity = Math.max(1, f.quantity_needed ?? 1);
+      const line_total_dollars = Math.round(quantity * unit_price_dollars * 100) / 100;
+      out.push({
+        service_id: serviceId,
+        part_id: f.part_id,
+        oem_number: part.oem_part_number,
+        part_name: part.name,
+        brand: part.brand ?? undefined,
+        part_tier: part.part_tier ?? undefined,
+        quantity,
+        unit_price_cents: Math.round(unit_price_dollars * 100),
+        line_total_cents: Math.round(line_total_dollars * 100),
+      });
+    }
+  }
+
+  return out;
 }

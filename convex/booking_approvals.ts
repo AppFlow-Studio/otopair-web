@@ -258,6 +258,30 @@ async function performSubmission(
     );
   }
 
+  // Idempotency: if a booking moves to "completed" twice in quick succession
+  // (or finalize is rescheduled) we'd otherwise insert a second open
+  // post-job approval row. Reuse the existing open row instead.
+  if (args.cycle === "post_job") {
+    const existing = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId).eq("cycle", "post_job"),
+      )
+      .order("desc")
+      .collect();
+    const openPostJob = existing.find((r: any) => r.decision == null);
+    if (openPostJob) {
+      return {
+        approvalId: openPostJob._id,
+        state:
+          (booking.payment_approval_state as string | undefined) ??
+          "post_job_pending",
+        totalCents: openPostJob.mechanic_set_price_cents,
+        ceilingCents: openPostJob.prior_ceiling_cents,
+      };
+    }
+  }
+
   const inRange = priced.total_cents <= ceiling;
   const now = Date.now();
 
@@ -272,6 +296,10 @@ async function performSubmission(
     booking_id: args.bookingId,
     cycle: args.cycle,
     mechanic_set_price_cents: priced.total_cents,
+    parts_subtotal_cents: priced.parts_subtotal_cents,
+    labor_cents: priced.labor_cents,
+    tax_cents: priced.tax_cents,
+    service_fee_cents: priced.service_fee_cents,
     parts_snapshot: args.parts as any,
     labor_hours: args.laborHours,
     labor_rate_cents: args.laborRateCents,
@@ -283,6 +311,7 @@ async function performSubmission(
     submitted_by_user_id: args.submittedByUserId,
     decision: inRange ? "auto_approved_within_range" : undefined,
     decided_at_ms: inRange ? now : undefined,
+    decision_actor: inRange ? "system" : undefined,
     stripe_payment_intent_id: piId,
     stripe_action: inRange ? "auto_approved_within_range" : undefined,
   });
@@ -568,11 +597,13 @@ export const applyApprovalDecision = mutation({
     });
     if (cycle === "post_job" && ctx.scheduler?.runAfter) {
       // Capture at the prior approved ceiling. finalizeAndChargeForBooking
-      // honors min(approved_ceiling, actuals).
+      // honors min(approved_ceiling, actuals) when forceCaptureAtCeiling is
+      // set — without the flag it'd see final > mechanic_set and reopen
+      // another post-job re-approval cycle indefinitely.
       await ctx.scheduler.runAfter(
         0,
         internal.payments_stripe.finalizeAndChargeForBooking,
-        { bookingId: args.bookingId },
+        { bookingId: args.bookingId, forceCaptureAtCeiling: true },
       );
     }
     return { ok: true, state: declinedState };
@@ -673,11 +704,15 @@ export const expireApprovals = internalAction({
 
 /** Webhook reconciler — called by the `amount_capturable_updated` handler.
  *  Finds the latest approval row matching the PI and stamps the event id.
- *  Idempotent: if the event has already been stamped on this row, no-op. */
+ *  Also patches payments.incremented_total_cents from Stripe's authoritative
+ *  amount_capturable when it differs from our DB (covers the case where the
+ *  incrementAuthorization mutation crashed mid-flight but the Stripe-side
+ *  change landed). Idempotent on event id. */
 export const _reconcileAmountCapturableUpdated = internalMutation({
   args: {
     stripePaymentIntentId: v.string(),
     stripeEventId: v.string(),
+    amountCapturable: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     // Find the most recent approval row tied to this PI. Both the original
@@ -688,12 +723,153 @@ export const _reconcileAmountCapturableUpdated = internalMutation({
         (r: any) => r.stripe_payment_intent_id === args.stripePaymentIntentId,
       )
       .sort((a: any, b: any) => b.submitted_at_ms - a.submitted_at_ms)[0];
+
+    // Drift reconciliation: patch the payment row to match Stripe's view.
+    if (args.amountCapturable != null) {
+      const payment = await ctx.db
+        .query("payments")
+        .withIndex("by_stripe_payment_intent_id", (q: any) =>
+          q.eq("stripe_payment_intent_id", args.stripePaymentIntentId),
+        )
+        .unique();
+      if (
+        payment &&
+        payment.incremented_total_cents !== args.amountCapturable
+      ) {
+        await ctx.db.patch(payment._id, {
+          incremented_total_cents: args.amountCapturable,
+          updated_at: Date.now(),
+        });
+      }
+    }
+
     if (!candidate) return { status: "no_match" };
     if (candidate.stripe_event_id === args.stripeEventId) {
       return { status: "already_reconciled" };
     }
     await ctx.db.patch(candidate._id, { stripe_event_id: args.stripeEventId });
     return { status: "ok", approvalId: candidate._id };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Mechanic-side slim query + withdraw mutation
+//
+// `getOpenApprovalForBooking` above is customer-auth gated — a mechanic
+// gets null. The estimate dialog needs a mechanic-auth query that surfaces
+// the booking's approval state WITHOUT leaking the customer's disclosed
+// range (anti-anchoring). This is that query.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const getBookingApprovalState = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    // Mirrors `requireShopStaffForBooking` but as a soft check — queries
+    // can't throw cleanly, so we return null when the caller isn't staff.
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking || !(booking as any).shop_id) return null;
+
+    const membership = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .filter((q: any) => q.eq(q.field("is_active"), true))
+      .first();
+    const ownedShop = await ctx.db
+      .query("shops")
+      .withIndex("by_owner_user_id", (q: any) =>
+        q.eq("owner_user_id", user._id),
+      )
+      .first();
+    const isStaff =
+      (membership &&
+        String(membership.shop_id) === String((booking as any).shop_id)) ||
+      (ownedShop && String(ownedShop._id) === String((booking as any).shop_id));
+    if (!isStaff) return null;
+
+    const rows = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+    const latest = rows[0] ?? null;
+    const open = rows.find((r: any) => r.decision == null) ?? null;
+
+    return {
+      payment_approval_state:
+        ((booking as any).payment_approval_state as string | undefined) ??
+        "none",
+      mechanic_set_price_cents:
+        ((booking as any).mechanic_set_price_cents as number | undefined) ??
+        null,
+      sla_expires_at_ms:
+        ((booking as any).sla_expires_at_ms as number | undefined) ?? null,
+      last_cycle: (latest?.cycle as string | undefined) ?? null,
+      last_decision: (latest?.decision as string | undefined) ?? null,
+      submitted_at_ms: (latest?.submitted_at_ms as number | undefined) ?? null,
+      has_open_approval: !!open,
+    };
+  },
+});
+
+/** Mechanic withdraws a pending estimate before the customer decides.
+ *  Marks the open approval row `withdrawn`, reverts the booking's approval
+ *  state, and pushes the customer that the shop is revising the quote. */
+export const withdrawPendingApproval = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const { user, booking } = await requireShopStaffForBooking(
+      ctx,
+      args.bookingId,
+    );
+
+    const candidates = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+    const open = candidates.find((r: any) => r.decision == null);
+    if (!open) {
+      throw new Error("No pending estimate to withdraw.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(open._id, {
+      decision: "withdrawn",
+      decided_at_ms: now,
+      decided_by_user_id: user._id,
+    });
+
+    // Revert booking state. If a prior cycle had approved a ceiling, we
+    // keep that ceiling; otherwise drop back to "none" so the booking can
+    // accept a fresh submission.
+    const priorState =
+      (booking as any).running_approved_ceiling_cents != null
+        ? "pre_job_approved"
+        : "none";
+    await ctx.db.patch(args.bookingId, {
+      payment_approval_state: priorState,
+      sla_expires_at_ms: undefined,
+      mechanic_set_price_cents: undefined,
+      updated_at: now,
+    });
+
+    await enqueueCustomerApprovalPush(ctx, {
+      booking,
+      bookingId: args.bookingId,
+      category: "booking_estimate_withdrawn",
+      title: "Shop is revising the quote",
+      body: "Your mechanic withdrew the previous estimate and will send an updated one.",
+      deepLink: `otopair://booking/${String(args.bookingId)}`,
+      dedupeSuffix: `withdrawn:${open._id}`,
+    });
+
+    return { ok: true, approvalId: open._id, state: priorState };
   },
 });
 
@@ -713,6 +889,7 @@ export const _markApprovalExpired = internalMutation({
     await ctx.db.patch(open._id, {
       decision: "sla_expired",
       decided_at_ms: now,
+      decision_actor: "system",
       ceiling_after_decision_cents: undefined,
     });
     await ctx.db.patch(args.bookingId, {

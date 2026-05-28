@@ -144,3 +144,44 @@ export const getAveragePrices = query({
     return out;
   },
 });
+
+export type OemNumberSummary = {
+  oem_number: string;
+  median_cents: number | null;
+  sample_size: number;
+};
+
+// Joins oem_parts by oem_part_number, summarizes prices for each match.
+// Returns median_cents = null when the OEM number isn't in the catalog or has
+// no priced rows — caller skips the band hint for those.
+export const summarizeForOemNumbers = query({
+  args: { oemNumbers: v.array(v.string()) },
+  handler: async (ctx, args): Promise<OemNumberSummary[]> => {
+    const out: OemNumberSummary[] = [];
+    for (const raw of args.oemNumbers) {
+      const oem = raw.trim();
+      if (!oem) {
+        out.push({ oem_number: raw, median_cents: null, sample_size: 0 });
+        continue;
+      }
+      const part = await ctx.db
+        .query("oem_parts")
+        .withIndex("by_part_number", (q: any) =>
+          q.eq("oem_part_number", oem),
+        )
+        .first();
+      if (!part) {
+        out.push({ oem_number: raw, median_cents: null, sample_size: 0 });
+        continue;
+      }
+      const summary = await summarizePartPrices(ctx, part._id);
+      out.push({
+        oem_number: raw,
+        median_cents:
+          summary.sample_size > 0 ? Math.round(summary.median * 100) : null,
+        sample_size: summary.sample_size,
+      });
+    }
+    return out;
+  },
+});

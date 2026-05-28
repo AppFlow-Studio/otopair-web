@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowLeftRight,
   Ban,
@@ -29,6 +30,9 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { makeFunctionReference } from "convex/server";
+import { useApprovalWorkflow, type ApprovalWorkflow } from "@/lib/use-approval-workflow";
+import { computeBookingTax } from "@/lib/tax";
+import { computePlatformFeeDollars } from "@/lib/platformFee";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import ScheduleSlotPicker from "@/components/booking/schedule-slot-picker";
 import ServiceOptionsPicker from "@/components/booking/service-options-picker";
@@ -177,7 +181,12 @@ type PartRowState = {
   // the small "Used last time on this car" / "Shop default" badge. Stamped
   // by the server in getPrefillData.
   learned_from?: "vin" | "shop" | "config" | "catalog";
+  // Required on "manual" rows that count toward approval (not customer-supplied,
+  // not flagged not_used). Server enforces ≥12 chars in validatePartsForApproval.
+  justification_text?: string;
 };
+
+const MIN_MANUAL_JUSTIFICATION_LEN = 12;
 
 export type PhotoState = {
   id: string;
@@ -192,6 +201,7 @@ type StepKey =
   | "time_reason"
   | "mileage"
   | "parts"
+  | "labor"
   | "difficulty"
   | "parts_accuracy"
   | "vehicle_updates"
@@ -760,6 +770,10 @@ export default function PostJobSurveyDialog({
   initialPhotos,
   cycle,
   onApprovalSubmitted,
+  laborRateCents,
+  laborCostDollars,
+  shopState,
+  shopZip,
 }: {
   open: boolean;
   bookingId?: string | null;
@@ -779,6 +793,16 @@ export default function PostJobSurveyDialog({
     totalCents: number;
     ceilingCents: number;
   }) => void;
+  /** Shop's labor rate in cents/hour. Drives the running-total bar and the
+   *  Labor step for cycle modes. */
+  laborRateCents?: number | null;
+  /** Booking's stored labor_cost (dollars). Used as a fallback rate hint
+   *  when shopLaborRateCents isn't set. */
+  laborCostDollars?: number | null;
+  /** Shop state + zip for client-side tax preview. Mirrors the server
+   *  computeBookingTax signature. */
+  shopState?: string | null;
+  shopZip?: string | null;
 }) {
   return (
     <PostJobSurveyDialogBody
@@ -797,6 +821,10 @@ export default function PostJobSurveyDialog({
       initialPhotos={initialPhotos ?? []}
       cycle={cycle}
       onApprovalSubmitted={onApprovalSubmitted}
+      laborRateCents={laborRateCents ?? null}
+      laborCostDollars={laborCostDollars ?? null}
+      shopState={shopState ?? null}
+      shopZip={shopZip ?? null}
     />
   );
 }
@@ -816,6 +844,10 @@ function PostJobSurveyDialogBody({
   initialPhotos,
   cycle,
   onApprovalSubmitted,
+  laborRateCents,
+  laborCostDollars,
+  shopState,
+  shopZip,
 }: {
   open: boolean;
   bookingId: string | null;
@@ -835,6 +867,10 @@ function PostJobSurveyDialogBody({
     totalCents: number;
     ceilingCents: number;
   }) => void;
+  laborRateCents: number | null;
+  laborCostDollars: number | null;
+  shopState: string | null;
+  shopZip: string | null;
 }) {
   // Phase 2 — Pre-Job Approval mutation handles (only invoked when cycle is set).
   const submitPreJobEstimate = useMutation(
@@ -843,6 +879,55 @@ function PostJobSurveyDialogBody({
   const submitMidJobChange = useMutation(
     (api as any).booking_approvals.submitMidJobChange,
   );
+
+  // Live workflow state for the post-submit status panel. Subscribes only
+  // when cycle is set — the legacy post-job actuals path doesn't need it.
+  const workflow = useApprovalWorkflow({
+    bookingId: cycle ? bookingId : null,
+    cycle,
+  });
+  const [submittedForApproval, setSubmittedForApproval] = useState(false);
+  // Re-entry: if the dialog opens on a booking that already has an in-flight
+  // approval for *this* cycle, jump straight to the status panel.
+  // A mid-job dialog opened on a booking still at pre_job_approved /
+  // in_range is a brand-new cycle, not a re-entry — render the form.
+  useEffect(() => {
+    if (!cycle) return;
+    if (submittedForApproval) return;
+    const state = workflow.state;
+    const matchesCycle =
+      (cycle === "pre_job" &&
+        (state === "pre_job_pending" ||
+          state === "pre_job_approved" ||
+          state === "pre_job_declined" ||
+          state === "in_range")) ||
+      (cycle === "mid_job" &&
+        (state === "mid_job_pending" ||
+          state === "mid_job_approved" ||
+          state === "mid_job_declined")) ||
+      (cycle === "post_job_reapproval" &&
+        (state === "post_job_pending" ||
+          state === "post_job_approved" ||
+          state === "post_job_declined"));
+    // sla_expired is cycle-agnostic on the booking row, so disambiguate via
+    // last_cycle from the approval snapshot.
+    const slaMatches =
+      state === "sla_expired" &&
+      ((cycle === "pre_job" &&
+        workflow.approvalState?.last_cycle === "pre_job") ||
+        (cycle === "mid_job" &&
+          workflow.approvalState?.last_cycle === "mid_job") ||
+        (cycle === "post_job_reapproval" &&
+          workflow.approvalState?.last_cycle === "post_job"));
+    if (matchesCycle || slaMatches) {
+      setSubmittedForApproval(true);
+    }
+  }, [
+    cycle,
+    workflow.state,
+    workflow.approvalState?.last_cycle,
+    submittedForApproval,
+  ]);
   const serviceSlug =
     passportData?.service_slug ?? prefillData?.serviceSlug ?? null;
   const requiresParts = serviceLikelyUsesParts(
@@ -898,32 +983,121 @@ function PostJobSurveyDialogBody({
   // Steps
   const visibleSteps = useMemo<StepKey[]>(() => {
     const list: StepKey[] = [];
-    // Required, non-skippable steps come first.
-    list.push("mileage");
-    if (requiresParts || (prefillData?.suggestedParts?.length ?? 0) > 0) {
+    const isEstimateCycle = cycle === "pre_job" || cycle === "mid_job";
+    // Pre/mid-job cycles are forward-looking quotes, not retrospective job
+    // reports. Hide every step that describes a *completed* job — mileage,
+    // parts_accuracy, vehicle_updates, time variance, difficulty, tip,
+    // recommendations. Parts → Labor → Flag (optional) → Photos → Summary.
+    if (!isEstimateCycle) {
+      list.push("mileage");
+    }
+    if (requiresParts || (prefillData?.suggestedParts?.length ?? 0) > 0 || isEstimateCycle) {
       list.push("parts");
     }
-    if (requiresParts) list.push("parts_accuracy");
-    if (updatePrompts.length > 0) list.push("vehicle_updates");
+    if (isEstimateCycle) {
+      // Mechanic confirms / adjusts labor hours for the estimate. Drives the
+      // running-total bar and the final mutation payload.
+      list.push("labor");
+    }
+    if (requiresParts && !isEstimateCycle) list.push("parts_accuracy");
+    if (updatePrompts.length > 0 && !isEstimateCycle) list.push("vehicle_updates");
     list.push("flag");
     // Optional steps follow — each shows a Skip button in the top-right.
-    list.push("time_check");
-    if (timeVariance && timeVariance !== "on_time") list.push("time_reason");
-    list.push("difficulty");
+    if (!isEstimateCycle) {
+      list.push("time_check");
+      if (timeVariance && timeVariance !== "on_time") list.push("time_reason");
+      list.push("difficulty");
+    }
     list.push("photos");
-    list.push("tip");
-    list.push("recommendations");
+    if (!isEstimateCycle) {
+      list.push("tip");
+      list.push("recommendations");
+    }
     list.push("summary");
     return list;
   }, [
+    cycle,
     timeVariance,
     requiresParts,
     prefillData?.suggestedParts?.length,
     updatePrompts.length,
   ]);
 
+  // ─── Estimate-cycle running total ──────────────────────────────────────
+  // Mirrors `computeMechanicSetPrice` on the server: parts subtotal + labor
+  // + tax + platform fee. Only computed when cycle is set; the legacy
+  // post-job actuals path renders a plain `Submit report` button.
+  const isEstimateCycle = cycle === "pre_job" || cycle === "mid_job";
+  // Resolve a per-hour labor rate. Priority:
+  //   1. Shop's stored labor_rate (cents/hour) — the canonical rate.
+  //   2. Derived from booking.labor_cost / estimated_labor_minutes — matches
+  //      what the customer was quoted, even if the shop's rate has drifted.
+  //   3. Industry default $125/hr — last resort so the bar never shows $0.
+  const effectiveLaborRateCents = useMemo(() => {
+    if (typeof laborRateCents === "number" && laborRateCents > 0) {
+      return laborRateCents;
+    }
+    if (
+      typeof laborCostDollars === "number" &&
+      laborCostDollars > 0 &&
+      typeof estimatedLaborMinutes === "number" &&
+      estimatedLaborMinutes > 0
+    ) {
+      const hours = estimatedLaborMinutes / 60;
+      return Math.round((laborCostDollars / hours) * 100);
+    }
+    return 12500;
+  }, [laborRateCents, laborCostDollars, estimatedLaborMinutes]);
+
+  const liveTotals = useMemo(() => {
+    if (!isEstimateCycle) return null;
+    let partsCents = 0;
+    for (const p of parts) {
+      if (p.not_used) continue;
+      if (p.supplied_by === "customer") continue;
+      const cost = Number(p.cost) || 0;
+      const qty = Math.max(1, Math.round(p.quantity || 1));
+      partsCents += Math.round(cost * qty * 100);
+    }
+    const hours = Number(actualLaborMinutes) || 0;
+    const laborCents = hours > 0
+      ? Math.round((hours / 60) * effectiveLaborRateCents)
+      : 0;
+    const subtotalCents = partsCents + laborCents;
+    const tax = computeBookingTax({
+      laborDollars: laborCents / 100,
+      partsDollars: partsCents / 100,
+      state: shopState ?? null,
+      zip: shopZip ?? null,
+    });
+    const taxCents = Math.round((tax.taxDollars ?? 0) * 100);
+    const feeCents = Math.max(
+      0,
+      Math.round(computePlatformFeeDollars(subtotalCents / 100) * 100),
+    );
+    return {
+      partsCents,
+      laborCents,
+      taxCents,
+      feeCents,
+      totalCents: subtotalCents + taxCents + feeCents,
+    };
+  }, [
+    isEstimateCycle,
+    parts,
+    actualLaborMinutes,
+    effectiveLaborRateCents,
+    shopState,
+    shopZip,
+  ]);
+
   const [stepIndex, setStepIndex] = useState(0);
   const [answeredCount, setAnsweredCount] = useState(0);
+
+  // Note: we intentionally do NOT compare the mechanic's per-row price to a
+  // catalog median in the UI. The shop sets the price; the customer decides.
+  // The justification gate for manual parts (source="manual") remains
+  // enforced server-side in validatePartsForApproval.
 
   useEffect(() => {
     if (stepIndex >= visibleSteps.length) {
@@ -978,6 +1152,7 @@ function PostJobSurveyDialogBody({
           source: part.source,
           swap_from_oem_number: part.swap_from_oem_number || undefined,
           not_used: notUsed ? true : undefined,
+          justification_text: part.justification_text?.trim() || undefined,
         };
       })
       .filter(
@@ -993,7 +1168,12 @@ function PostJobSurveyDialogBody({
 
   async function handleFinalSubmit() {
     const parsedMileage = Number(completionMileage);
-    if (!Number.isFinite(parsedMileage) || completionMileage.trim() === "") {
+    // Mileage isn't part of the estimate-cycle flow (the form hides that
+    // step). Only enforce on the legacy post-job actuals path.
+    if (
+      !cycle &&
+      (!Number.isFinite(parsedMileage) || completionMileage.trim() === "")
+    ) {
       setError("Completion mileage is required.");
       const mileageIdx = visibleSteps.indexOf("mileage");
       if (mileageIdx >= 0) setStepIndex(mileageIdx);
@@ -1023,6 +1203,28 @@ function PostJobSurveyDialogBody({
       const partsIdx = visibleSteps.indexOf("parts");
       if (partsIdx >= 0) setStepIndex(partsIdx);
       return;
+    }
+    // Manual (mechanic-added) parts that bill toward approval must carry a
+    // justification — server enforces this in validatePartsForApproval and a
+    // missing note will fail the submit with a generic error. Surface the
+    // gate here so the mechanic sees which row needs the note.
+    if (cycle) {
+      const missingJustification = normalizedParts.find(
+        (p) =>
+          p.source === "manual" &&
+          p.supplied_by !== "customer" &&
+          p.not_used !== true &&
+          (p.justification_text ?? "").trim().length <
+            MIN_MANUAL_JUSTIFICATION_LEN,
+      );
+      if (missingJustification) {
+        setError(
+          `Add a justification of at least ${MIN_MANUAL_JUSTIFICATION_LEN} characters for "${missingJustification.part_name || "manual part"}".`,
+        );
+        const partsIdx = visibleSteps.indexOf("parts");
+        if (partsIdx >= 0) setStepIndex(partsIdx);
+        return;
+      }
     }
     if (flaggedVehicleSpecs && flaggedReason.trim() === "") {
       setError("Please explain why the vehicle specs should be reviewed.");
@@ -1069,18 +1271,22 @@ function PostJobSurveyDialogBody({
         source: p.source ?? undefined,
         swap_from_oem_number: p.swap_from_oem_number ?? undefined,
         not_used: p.not_used ?? undefined,
-        justification_text: (p as any).justification_text ?? undefined,
+        justification_text: p.justification_text ?? undefined,
         evidence_photo_ids: (p as any).evidence_photo_ids ?? undefined,
       }));
       const laborMinutes =
         actualLaborMinutes.trim() === "" ? null : Number(actualLaborMinutes);
       const laborHours =
-        laborMinutes != null && Number.isFinite(laborMinutes)
+        laborMinutes != null && Number.isFinite(laborMinutes) && laborMinutes > 0
           ? laborMinutes / 60
           : undefined;
-      // Phase 2 keeps the dialog's labor-rate sourcing as a TODO — the
-      // submission helper falls back to the booking's stored labor when
-      // laborRateCents is absent.
+      // Send the rate alongside hours so the server can multiply directly
+      // instead of falling back to booking.labor_cost. effectiveLaborRateCents
+      // priorities shop.labor_rate, falls back to the booking's quoted rate,
+      // then a $125 default.
+      const laborRateCentsForSubmit = laborHours != null
+        ? effectiveLaborRateCents
+        : undefined;
       try {
         let result;
         if (cycle === "pre_job") {
@@ -1088,6 +1294,7 @@ function PostJobSurveyDialogBody({
             bookingId: bookingId as any,
             parts: partsForApproval as any,
             laborHours,
+            laborRateCents: laborRateCentsForSubmit,
             notes: technicianNotes.trim() || undefined,
           });
         } else if (cycle === "mid_job") {
@@ -1095,10 +1302,14 @@ function PostJobSurveyDialogBody({
             bookingId: bookingId as any,
             parts: partsForApproval as any,
             laborHours,
+            laborRateCents: laborRateCentsForSubmit,
             notes: technicianNotes.trim() || undefined,
           });
         }
-        if (result) onApprovalSubmitted?.(result as any);
+        if (result) {
+          onApprovalSubmitted?.(result as any);
+          setSubmittedForApproval(true);
+        }
         return;
       } catch (err: any) {
         setError(err?.message ?? "Could not submit estimate. Try again.");
@@ -1276,10 +1487,43 @@ function PostJobSurveyDialogBody({
     </div>
   );
 
+  const dialogTitle =
+    cycle === "pre_job"
+      ? "Set your price"
+      : cycle === "mid_job"
+        ? "Found extra work?"
+        : cycle === "post_job_reapproval"
+          ? "Confirm final billing"
+          : "Job report";
+
+  // Post-submit status panel takes over the dialog body once the mechanic
+  // sends a cycle estimate. Status is live via the workflow hook.
+  if (cycle && submittedForApproval) {
+    return (
+      <SurveyDialogShell
+        open={open}
+        title={dialogTitle}
+        onClose={onClose}
+        maxWidthClassName="max-w-2xl"
+        mobileFullBleed
+        hideHeader
+        contentClassName="flex min-h-0 flex-1 flex-col"
+      >
+        <ApprovalStatusPanel
+          workflow={workflow}
+          cycle={cycle}
+          onDismiss={onClose}
+          onReviseRequested={() => setSubmittedForApproval(false)}
+          bookingLabel={bookingLabel}
+        />
+      </SurveyDialogShell>
+    );
+  }
+
   return (
     <SurveyDialogShell
       open={open}
-      title="Job report"
+      title={dialogTitle}
       onClose={onClose}
       maxWidthClassName="max-w-2xl"
       mobileFullBleed
@@ -1390,6 +1634,9 @@ function PostJobSurveyDialogBody({
                 ? FASTER_REASON_CHOICES
                 : SLOWER_REASON_CHOICES
             }
+            cycle={cycle}
+            laborRateCents={effectiveLaborRateCents}
+            liveTotals={liveTotals}
           />
 
           {showOneMore && !isLast ? (
@@ -1404,6 +1651,31 @@ function PostJobSurveyDialogBody({
             </p>
           ) : null}
         </div>
+
+        {/* Running total bar — only when cycle is set. Mirrors server-side
+            computeMechanicSetPrice exactly: parts + labor + tax + 7% fee.
+            Hidden on the summary step (which renders its own full breakdown). */}
+        {isEstimateCycle && liveTotals && currentStep !== "summary" ? (
+          <div className="border-t border-primary/10 bg-primary/[0.025] px-5 py-2.5 sm:px-10 sm:py-3">
+            <div className="mx-auto flex w-full max-w-xl flex-wrap items-center justify-between gap-3 text-[12px]">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
+                <span>Parts <span className="font-medium tabular-nums text-foreground">${(liveTotals.partsCents / 100).toFixed(2)}</span></span>
+                <span>·</span>
+                <span>Labor <span className="font-medium tabular-nums text-foreground">${(liveTotals.laborCents / 100).toFixed(2)}</span></span>
+                <span>·</span>
+                <span>Tax <span className="font-medium tabular-nums text-foreground">${(liveTotals.taxCents / 100).toFixed(2)}</span></span>
+                <span>·</span>
+                <span>Fee <span className="font-medium tabular-nums text-foreground">${(liveTotals.feeCents / 100).toFixed(2)}</span></span>
+              </div>
+              <div className="text-[13px]">
+                <span className="text-muted-foreground">Your total </span>
+                <span className="font-semibold tabular-nums text-foreground">
+                  ${(liveTotals.totalCents / 100).toFixed(2)}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="border-t border-primary/10 bg-[rgba(17,24,28,0.025)] px-5 py-3 sm:px-10 sm:py-4">
           <div className="flex items-center justify-between gap-3">
@@ -1423,7 +1695,13 @@ function PostJobSurveyDialogBody({
                 {isSubmitting ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : null}
-                Submit report
+                {cycle
+                  ? cycle === "post_job_reapproval"
+                    ? "Confirm final"
+                    : isEstimateCycle && liveTotals
+                      ? `Send for confirmation · $${(liveTotals.totalCents / 100).toFixed(2)}`
+                      : "Send for confirmation"
+                  : "Submit report"}
               </button>
             ) : (
               <button
@@ -1554,6 +1832,17 @@ function StepContent(props: {
   flaggedReason: string;
   setFlaggedReason: (value: string) => void;
   timeReasonChoices: { value: TimeVarianceReason; label: string }[];
+  // Estimate-cycle additions. When `cycle` is null, the legacy actuals
+  // path runs and these are ignored.
+  cycle?: PostJobSurveyCycle;
+  laborRateCents: number;
+  liveTotals: {
+    partsCents: number;
+    laborCents: number;
+    taxCents: number;
+    feeCents: number;
+    totalCents: number;
+  } | null;
 }) {
   switch (props.step) {
     case "time_check":
@@ -1669,6 +1958,7 @@ function StepContent(props: {
           partsCostSum={props.partsCostSum}
           vehicleLabel={props.vehicleLabel}
           engineCode={props.engineCode}
+          cycle={props.cycle}
         />
       );
     case "difficulty":
@@ -1885,7 +2175,33 @@ function StepContent(props: {
           ) : null}
         </QuestionScreen>
       );
+    case "labor":
+      return (
+        <LaborStep
+          minutes={props.actualLaborMinutes}
+          setMinutes={props.setActualLaborMinutes}
+          rateCents={props.laborRateCents}
+          estimatedLaborMinutes={props.estimatedLaborMinutes}
+        />
+      );
     case "summary":
+      if (props.cycle && props.liveTotals) {
+        return (
+          <EstimateSummary
+            cycle={props.cycle}
+            bookingLabel={props.bookingLabel}
+            bookingSubLabel={props.bookingSubLabel}
+            parts={props.parts.filter(
+              (p) =>
+                (p.part_name.trim() !== "" || p.oem_number.trim() !== "") &&
+                !p.not_used,
+            )}
+            laborMinutes={props.actualLaborMinutes}
+            laborRateCents={props.laborRateCents}
+            totals={props.liveTotals}
+          />
+        );
+      }
       return (
         <SummaryStep
           bookingLabel={props.bookingLabel}
@@ -1994,6 +2310,7 @@ function PartsStep({
   partsCostSum,
   vehicleLabel,
   engineCode,
+  cycle,
 }: {
   parts: PartRowState[];
   setParts: React.Dispatch<React.SetStateAction<PartRowState[]>>;
@@ -2008,6 +2325,9 @@ function PartsStep({
   partsCostSum: number;
   vehicleLabel: string | null;
   engineCode: string | null;
+  // When set, this dialog is in an approval flow (pre/mid/post) — manual
+  // (mechanic-added) part rows must collect a justification.
+  cycle?: PostJobSurveyCycle;
 }) {
   const normalizeOem = (n: string) =>
     n.trim().toUpperCase().replace(/\s+/g, "");
@@ -2281,7 +2601,7 @@ function PartsStep({
                         mechanic flagged the row Not used; price doesn't apply
                         when the part didn't go in. */}
                     {!isNotUsed && (
-                    <div className="mt-2 flex items-center gap-2 text-[12px]">
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
                       <span className="text-muted-foreground">
                         {isCustomer ? "Customer-supplied:" : "Price per unit: "}
                       </span>
@@ -2358,6 +2678,37 @@ function PartsStep({
                   </div>
                   )}
                 </div>
+
+                {/* Justification — shown on every editable (manual) row that
+                    bills toward approval. Mirrors the `!isCatalogRow` heuristic
+                    used to make the identity fields editable. Server enforces
+                    ≥12 chars on cycle submissions; rendering it here lets the
+                    mechanic satisfy the gate inline. */}
+                {!isCatalogRow && !isCustomer && !isNotUsed && (
+                    <div className="mt-2.5">
+                      <span className="block text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                        Why this part?{" "}
+                        <span className="font-normal normal-case text-muted-foreground/80">
+                          (required, ≥{MIN_MANUAL_JUSTIFICATION_LEN} chars)
+                        </span>
+                      </span>
+                      <textarea
+                        value={part.justification_text ?? ""}
+                        onChange={(event) =>
+                          updatePart(index, {
+                            justification_text: event.target.value,
+                          })
+                        }
+                        placeholder="Explain why this part was needed (vehicle condition, OEM unavailable, customer request, etc.)"
+                        rows={2}
+                        className="mt-1 w-full resize-y rounded-md border border-primary/10 bg-background px-2 py-1.5 text-[12px] leading-snug text-foreground outline-none placeholder:text-muted-foreground focus:border-primary/30"
+                      />
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">
+                        {(part.justification_text ?? "").trim().length}/
+                        {MIN_MANUAL_JUSTIFICATION_LEN} characters minimum
+                      </p>
+                    </div>
+                  )}
 
                 {/* Footer row: Swap | Remove | Customer-supplied toggle.
                     Swap is hidden on blank rows (no part name yet) — it's only
@@ -3515,6 +3866,586 @@ function SummaryStep({
         <Check className="h-3.5 w-3.5 text-success" />
         All data attaches to this VIN's passport.
       </div>
+    </div>
+  );
+}
+
+/**
+ * Post-submit status panel for the Pre-Job Approval flow. Five states, all
+ * driven reactively by the useApprovalWorkflow hook. Mechanic-facing copy
+ * never uses the word "approval" — frames it as "confirmation" — and never
+ * displays the customer's disclosed range.
+ */
+function ApprovalStatusPanel({
+  workflow,
+  cycle,
+  onDismiss,
+  onReviseRequested,
+  bookingLabel,
+}: {
+  workflow: ApprovalWorkflow;
+  cycle: PostJobSurveyCycle;
+  onDismiss: () => void;
+  onReviseRequested: () => void;
+  bookingLabel: string;
+}) {
+  const setPrice = workflow.mechanicSetPriceCents
+    ? `$${(workflow.mechanicSetPriceCents / 100).toFixed(2)}`
+    : null;
+  const [confirmingRelease, setConfirmingRelease] = useState(false);
+  const [busyAction, setBusyAction] = useState<null | "start" | "release" | "withdraw">(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  // No auto-dismiss: every state requires an explicit mechanic action
+  // (Start work, Withdraw, Revise, Release). Auto-closing the dialog would
+  // strand the booking at live_stage=inspection_complete with no obvious
+  // path forward on the dashboard.
+
+  async function runAction(
+    kind: "start" | "release" | "withdraw",
+    fn: () => Promise<void>,
+  ) {
+    setActionError(null);
+    setBusyAction(kind);
+    try {
+      await fn();
+      if (kind === "start" || kind === "release") onDismiss();
+    } catch (err: any) {
+      setActionError(err?.message ?? "Action failed. Try again.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  const headerCopy =
+    cycle === "pre_job"
+      ? "Set your price"
+      : cycle === "mid_job"
+        ? "Added scope"
+        : "Final billing";
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center justify-between gap-2 px-4 pt-3 sm:px-6">
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="-m-1 inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground"
+          aria-label="Close"
+        >
+          <X className="h-4 w-4" />
+        </button>
+        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+          {headerCopy}
+        </span>
+        <span className="w-8" />
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 px-6 py-10 sm:px-12">
+        {/* Submitted set price — visible across every state so the mechanic
+            can always see what the customer is being asked to confirm.
+            Hidden only when no price is on record yet (initial mount). */}
+        {setPrice ? (
+          <div className="w-full max-w-md text-center">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+              You submitted
+            </div>
+            <div className="mt-0.5 text-[28px] font-semibold tabular-nums leading-none text-foreground sm:text-[32px]">
+              {setPrice}
+            </div>
+          </div>
+        ) : null}
+
+        {workflow.isInRange ? (
+          <div className="w-full max-w-md rounded-2xl border border-emerald-500/30 bg-emerald-50 px-5 py-5">
+            <div className="flex items-center gap-2">
+              <Check className="h-5 w-5 text-emerald-600" />
+              <p className="text-[14px] font-semibold text-emerald-900">
+                Price confirmed
+              </p>
+            </div>
+            <p className="mt-1 text-[13px] text-emerald-900/80">
+              The customer&apos;s hold has been updated{setPrice ? ` to ${setPrice}` : ""}.
+            </p>
+            {cycle === "mid_job" ? (
+              <button
+                type="button"
+                onClick={onDismiss}
+                className={cn(
+                  drawerPrimaryButtonClassName,
+                  "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
+                )}
+              >
+                Continue
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void runAction("start", workflow.onStartWork)}
+                disabled={busyAction === "start"}
+                className={cn(
+                  drawerPrimaryButtonClassName,
+                  "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
+                )}
+              >
+                {busyAction === "start" ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                Start work →
+              </button>
+            )}
+          </div>
+        ) : null}
+
+        {workflow.isPending ? (
+          <div className="w-full max-w-md rounded-2xl border border-amber-500/30 bg-amber-50 px-5 py-5">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-5 w-5 animate-spin text-amber-700" />
+              <p className="text-[14px] font-semibold text-amber-900">
+                Sent for confirmation
+              </p>
+            </div>
+            <p className="mt-1 text-[13px] text-amber-900/80">
+              {workflow.relativeSentLabel ?? "Just sent"} — most customers reply within a few minutes.
+            </p>
+            <p className="mt-2 text-[12px] text-amber-900/70">
+              You can close this and come back — we&apos;ll notify you.
+            </p>
+            <div className="mt-4 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => void runAction("withdraw", workflow.onWithdraw)}
+                disabled={busyAction === "withdraw"}
+                className="text-[12px] font-medium text-amber-900/80 underline-offset-4 hover:underline"
+              >
+                {busyAction === "withdraw" ? "Withdrawing…" : "Withdraw"}
+              </button>
+              <button
+                type="button"
+                onClick={onDismiss}
+                className={cn(
+                  drawerSecondaryButtonClassName,
+                  "h-9 rounded-lg px-4 text-[12px]",
+                )}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {workflow.isApproved ? (
+          <div className="w-full max-w-md rounded-2xl border border-emerald-500/30 bg-emerald-50 px-5 py-5">
+            <div className="flex items-center gap-2">
+              <Check className="h-5 w-5 text-emerald-600" />
+              <p className="text-[14px] font-semibold text-emerald-900">
+                Confirmed by customer
+              </p>
+            </div>
+            <p className="mt-1 text-[13px] text-emerald-900/80">
+              {cycle === "post_job_reapproval"
+                ? `Final billing confirmed${setPrice ? ` · ${setPrice}` : ""}. Capture is processing.`
+                : cycle === "mid_job"
+                  ? `Added scope confirmed${setPrice ? ` · ${setPrice}` : ""}.`
+                  : `You're cleared to start work${setPrice ? ` · ${setPrice}` : ""}.`}
+            </p>
+            {cycle === "pre_job" ? (
+              <button
+                type="button"
+                onClick={() => void runAction("start", workflow.onStartWork)}
+                disabled={busyAction === "start"}
+                className={cn(
+                  drawerPrimaryButtonClassName,
+                  "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
+                )}
+              >
+                {busyAction === "start" ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                Start work →
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onDismiss}
+                className={cn(
+                  drawerPrimaryButtonClassName,
+                  "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
+                )}
+              >
+                Continue
+              </button>
+            )}
+          </div>
+        ) : null}
+
+        {workflow.isDeclined ? (
+          <div className="w-full max-w-md rounded-2xl border border-destructive/30 bg-destructive/5 px-5 py-5">
+            <div className="flex items-center gap-2">
+              <X className="h-5 w-5 text-destructive" />
+              <p className="text-[14px] font-semibold text-destructive">
+                Customer declined
+              </p>
+            </div>
+            <p className="mt-1 text-[13px] text-foreground/80">
+              {cycle === "post_job_reapproval"
+                ? "Capture will fall back to the previously approved amount. No further action needed."
+                : cycle === "mid_job"
+                  ? "Work continues at the previously approved scope. No new charges will be added."
+                  : "You can adjust the price and resend, or release the vehicle."}
+            </p>
+            {cycle === "mid_job" || cycle === "post_job_reapproval" ? (
+              <button
+                type="button"
+                onClick={onDismiss}
+                className={cn(
+                  drawerSecondaryButtonClassName,
+                  "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
+                )}
+              >
+                Acknowledge
+              </button>
+            ) : null}
+            {cycle === "pre_job" ? (
+              confirmingRelease ? (
+                <div className="mt-4 rounded-lg border border-destructive/30 bg-white px-3 py-3 text-[12px]">
+                  <p className="font-medium text-foreground">
+                    Release this vehicle?
+                  </p>
+                  <p className="mt-1 text-foreground/70">
+                    Void the customer&apos;s hold, cancel the booking, and free the bay.
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingRelease(false)}
+                      disabled={busyAction === "release"}
+                      className={cn(
+                        drawerSecondaryButtonClassName,
+                        "h-8 flex-1 rounded-md px-3 text-[12px]",
+                      )}
+                    >
+                      Keep waiting
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void runAction("release", workflow.onRelease)}
+                      disabled={busyAction === "release"}
+                      className={cn(
+                        drawerPrimaryButtonClassName,
+                        "h-8 flex-1 rounded-md bg-destructive px-3 text-[12px] hover:bg-destructive",
+                      )}
+                    >
+                      {busyAction === "release" ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : null}
+                      Release
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4 flex gap-3">
+                  <button
+                    type="button"
+                    onClick={onReviseRequested}
+                    className={cn(
+                      drawerPrimaryButtonClassName,
+                      "h-10 flex-1 rounded-lg px-5 text-[13px]",
+                    )}
+                  >
+                    Revise estimate
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingRelease(true)}
+                    className={cn(
+                      drawerSecondaryButtonClassName,
+                      "h-10 flex-1 rounded-lg px-5 text-[13px]",
+                    )}
+                  >
+                    Release vehicle
+                  </button>
+                </div>
+              )
+            ) : null}
+          </div>
+        ) : null}
+
+        {workflow.isReauthRequired ? (
+          <div className="w-full max-w-md rounded-2xl border border-rose-500/30 bg-rose-50 px-5 py-5">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-rose-700" />
+              <p className="text-[14px] font-semibold text-rose-900">
+                Card reauthorization needed
+              </p>
+            </div>
+            <p className="mt-1 text-[13px] text-rose-900/80">
+              The customer&apos;s card couldn&apos;t cover the updated hold. We&apos;ve
+              notified them to confirm or update their payment method — work
+              should not start until the hold is restored.
+            </p>
+            <div className="mt-4">
+              <button
+                type="button"
+                onClick={onDismiss}
+                className={cn(
+                  drawerSecondaryButtonClassName,
+                  "h-9 rounded-lg px-4 text-[12px]",
+                )}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {workflow.isSlaExpired ? (
+          <div className="w-full max-w-md rounded-2xl border border-destructive/30 bg-destructive/5 px-5 py-5">
+            <div className="flex items-center gap-2">
+              <X className="h-5 w-5 text-destructive" />
+              <p className="text-[14px] font-semibold text-destructive">
+                No response in 24h
+              </p>
+            </div>
+            <p className="mt-1 text-[13px] text-foreground/80">
+              The customer didn&apos;t respond. You can revise and resend or release the vehicle.
+            </p>
+            <div className="mt-4 flex gap-3">
+              <button
+                type="button"
+                onClick={onReviseRequested}
+                className={cn(
+                  drawerPrimaryButtonClassName,
+                  "h-10 flex-1 rounded-lg px-5 text-[13px]",
+                )}
+              >
+                Revise &amp; resend
+              </button>
+              <button
+                type="button"
+                onClick={() => void runAction("release", workflow.onRelease)}
+                disabled={busyAction === "release"}
+                className={cn(
+                  drawerSecondaryButtonClassName,
+                  "h-10 flex-1 rounded-lg px-5 text-[13px]",
+                )}
+              >
+                {busyAction === "release" ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                Release vehicle
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {actionError ? (
+          <p className="text-[12px] font-medium text-destructive">{actionError}</p>
+        ) : null}
+      </div>
+
+      <div className="border-t border-primary/10 bg-[rgba(17,24,28,0.025)] px-5 py-3 text-[11px] text-muted-foreground sm:px-10 sm:py-4">
+        {bookingLabel}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Labor step for estimate cycles. Mechanic enters labor hours; the
+ * displayed labor cost is `hours × shop labor_rate`. The same rate is sent
+ * to the submit mutation so the server's recomputation lands on the same
+ * number the mechanic just saw.
+ */
+function LaborStep({
+  minutes,
+  setMinutes,
+  rateCents,
+  estimatedLaborMinutes,
+}: {
+  minutes: string;
+  setMinutes: (value: string) => void;
+  rateCents: number;
+  estimatedLaborMinutes: number | null;
+}) {
+  const minutesNum = Number(minutes) || 0;
+  const hours = minutesNum > 0 ? minutesNum / 60 : 0;
+  const laborDollars = hours > 0 ? (hours * rateCents) / 100 : 0;
+  const ratePerHourDollars = (rateCents / 100).toFixed(2);
+  return (
+    <QuestionScreen
+      eyebrow="Labor"
+      question="How long will this take?"
+      hint={`Your shop's labor rate is $${ratePerHourDollars}/hr — we'll multiply by the hours you enter.`}
+    >
+      <div className="mx-auto flex w-full max-w-xs flex-col items-center gap-3">
+        <div className="flex items-baseline gap-2">
+          <input
+            value={minutes}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (raw === "" || /^\d{0,4}$/.test(raw)) setMinutes(raw);
+            }}
+            inputMode="numeric"
+            placeholder={
+              typeof estimatedLaborMinutes === "number" && estimatedLaborMinutes > 0
+                ? String(estimatedLaborMinutes)
+                : "0"
+            }
+            className="h-16 w-28 rounded-xl border border-primary/15 bg-background text-center text-[36px] font-semibold tabular-nums outline-none focus:border-primary"
+          />
+          <span className="text-[13px] text-muted-foreground">minutes</span>
+        </div>
+        {typeof estimatedLaborMinutes === "number" && estimatedLaborMinutes > 0 ? (
+          <p className="text-[11px] text-muted-foreground">
+            Quoted estimate: {estimatedLaborMinutes} minutes
+          </p>
+        ) : null}
+        <div className="mt-2 flex items-baseline justify-center gap-1.5">
+          <span className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
+            Labor cost
+          </span>
+          <span className="text-[18px] font-semibold tabular-nums">
+            ${laborDollars.toFixed(2)}
+          </span>
+        </div>
+      </div>
+    </QuestionScreen>
+  );
+}
+
+/**
+ * Final-step summary for estimate cycles. Itemized parts + labor + tax +
+ * fee + total. Mechanic reviews their numbers before sending for
+ * confirmation. Replaces the legacy `SummaryStep` (which assumed a
+ * completed job with mileage / timing / difficulty).
+ */
+function EstimateSummary({
+  cycle,
+  bookingLabel,
+  bookingSubLabel,
+  parts,
+  laborMinutes,
+  laborRateCents,
+  totals,
+}: {
+  cycle: PostJobSurveyCycle;
+  bookingLabel: string;
+  bookingSubLabel: string;
+  parts: PartRowState[];
+  laborMinutes: string;
+  laborRateCents: number;
+  totals: {
+    partsCents: number;
+    laborCents: number;
+    taxCents: number;
+    feeCents: number;
+    totalCents: number;
+  };
+}) {
+  const eyebrow = "Review and send";
+  const question =
+    cycle === "post_job_reapproval"
+      ? "Confirm the final billing"
+      : cycle === "mid_job"
+        ? "Confirm the added scope"
+        : "Confirm your price";
+  const minutesNum = Number(laborMinutes) || 0;
+  const hours = minutesNum > 0 ? minutesNum / 60 : 0;
+  return (
+    <div className="mx-auto flex w-full max-w-xl flex-col">
+      <p className="text-center text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+        {eyebrow}
+      </p>
+      <h2 className="mt-2 text-center text-[24px] font-semibold leading-tight text-foreground sm:text-[28px]">
+        {question}
+      </h2>
+      <p className="mt-1 text-center text-[12px] text-muted-foreground">
+        {bookingSubLabel || bookingLabel}
+      </p>
+
+      <div className="mt-6 overflow-hidden rounded-xl border border-primary/10">
+        <div className="bg-primary/[0.025] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+          Parts
+        </div>
+        {parts.length === 0 ? (
+          <div className="px-4 py-3 text-[12px] text-muted-foreground">
+            No parts.
+          </div>
+        ) : (
+          <ul className="divide-y divide-primary/5">
+            {parts.map((p, idx) => {
+              const qty = Math.max(1, Math.round(p.quantity || 1));
+              const unit = Number(p.cost) || 0;
+              const isCustomer = p.supplied_by === "customer";
+              const line = isCustomer ? 0 : unit * qty;
+              return (
+                <li
+                  key={`${p.oem_number || p.part_name}-${idx}`}
+                  className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px]"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium text-foreground">
+                      {p.part_name || p.oem_number || "Part"}
+                    </div>
+                    <div className="truncate text-[11px] text-muted-foreground">
+                      {p.oem_number ? `${p.oem_number} · ` : ""}
+                      qty {qty}
+                      {isCustomer
+                        ? " · customer-supplied"
+                        : unit > 0
+                          ? ` · $${unit.toFixed(2)} ea`
+                          : ""}
+                    </div>
+                  </div>
+                  <div className="font-medium tabular-nums">
+                    ${line.toFixed(2)}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-xl border border-primary/10">
+        <ul className="divide-y divide-primary/5">
+          <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px]">
+            <div>
+              <div className="font-medium text-foreground">Labor</div>
+              <div className="text-[11px] text-muted-foreground">
+                {hours > 0
+                  ? `${hours.toFixed(2)} hr @ $${(laborRateCents / 100).toFixed(2)}/hr`
+                  : "—"}
+              </div>
+            </div>
+            <div className="font-medium tabular-nums">
+              ${(totals.laborCents / 100).toFixed(2)}
+            </div>
+          </li>
+          <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px] text-muted-foreground">
+            <div>Tax</div>
+            <div className="tabular-nums">
+              ${(totals.taxCents / 100).toFixed(2)}
+            </div>
+          </li>
+          <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px] text-muted-foreground">
+            <div>Otopair service fee (7%)</div>
+            <div className="tabular-nums">
+              ${(totals.feeCents / 100).toFixed(2)}
+            </div>
+          </li>
+          <li className="flex items-baseline justify-between gap-3 bg-primary/[0.03] px-4 py-3 text-[14px]">
+            <div className="font-semibold text-foreground">Your total</div>
+            <div className="font-semibold tabular-nums text-foreground">
+              ${(totals.totalCents / 100).toFixed(2)}
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <p className="mt-4 text-center text-[11px] text-muted-foreground">
+        Tap below to send this for customer confirmation.
+      </p>
     </div>
   );
 }

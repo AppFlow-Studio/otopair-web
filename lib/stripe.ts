@@ -31,6 +31,10 @@ export async function createStripeConnectOnboardingLink(args: {
   accountId: string;
   baseUrl: string;
 }) {
+  if (!/^https?:\/\//i.test(args.baseUrl)) {
+    throw new Error(`Resolved app base URL is invalid for Stripe: ${args.baseUrl || "(empty)"}`);
+  }
+
   const stripe = getStripe();
   const accountLink = await stripe.accountLinks.create({
     account: args.accountId,

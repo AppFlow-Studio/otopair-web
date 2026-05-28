@@ -41,14 +41,15 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!shop) return;
+    setLaborRate(String(shop.labor_rate ?? 150));
     setNoShowThreshold(shop.no_show_threshold_minutes ?? DEFAULT_NO_SHOW_THRESHOLD_MINUTES);
     setOverrunPercent(shop.overrun_default_extension_percent ?? DEFAULT_OVERRUN_EXTENSION_PERCENT);
     setOverrunFloor(shop.overrun_extension_floor_minutes ?? DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
     setBufferMinutes(shop.buffer_minutes ?? 10);
-    setMaxPerMechanic((shop as any).max_bookings_per_mechanic_rolling_hour ?? 2);
-    setEntityLabelMode(((shop as any).entity_label_mode ?? "mechanic") as "mechanic" | "bay");
+    setMaxPerMechanic(shop.max_bookings_per_mechanic_rolling_hour ?? 2);
+    setEntityLabelMode(shop.entity_label_mode === "bay" ? "bay" : "mechanic");
     setReminderLeadMinutes(
-      Number((shop as any).appointment_reminder_lead_minutes ?? 0),
+      Number(shop.appointment_reminder_lead_minutes ?? 0),
     );
     setLaborRateInput(String(shop.labor_rate ?? 150));
   }, [shop]);
@@ -105,6 +106,29 @@ export default function SettingsPage() {
       );
     } finally {
       setIsSavingSettings(false);
+    }
+  }
+
+  async function handleSaveLaborRate() {
+    const nextLaborRate = Number(laborRate);
+    setLaborRateMessage("");
+
+    if (!Number.isFinite(nextLaborRate) || nextLaborRate <= 0) {
+      setLaborRateMessage("Enter a labor rate greater than 0.");
+      return;
+    }
+
+    setIsSavingLaborRate(true);
+    try {
+      await updateLaborRate({ laborRate: nextLaborRate });
+      setLaborRate(String(Math.round(nextLaborRate * 100) / 100));
+      setLaborRateMessage("Labor rate saved.");
+    } catch (error: unknown) {
+      setLaborRateMessage(
+        error instanceof Error ? error.message : "Could not save labor rate.",
+      );
+    } finally {
+      setIsSavingLaborRate(false);
     }
   }
 
@@ -214,6 +238,56 @@ export default function SettingsPage() {
 
         {shop && <HoursEditor />}
         {shop && <ServicesEditor />}
+        {shop ? (
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="mb-5">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">
+                  Labor Rate
+                </h2>
+                <p className="mt-1 text-sm text-gray-500">
+                  Set the hourly labor rate used when estimating service pricing.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,20rem)_auto] md:items-end">
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Hourly rate</span>
+                <div className="relative mt-2">
+                  <input
+                    type="number"
+                    min={1}
+                    step={0.01}
+                    value={laborRate}
+                    onChange={(event) => setLaborRate(event.target.value)}
+                    className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 pr-14 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                  />
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-500">
+                    /hr
+                  </span>
+                </div>
+              </label>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void handleSaveLaborRate()}
+                  disabled={isSavingLaborRate}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {isSavingLaborRate ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  Save labor rate
+                </button>
+                {laborRateMessage ? (
+                  <p className="text-sm text-gray-600">{laborRateMessage}</p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
         {shop ? (
           <div className="bg-white rounded-xl border border-gray-200 p-6">
             <h2 className="text-sm font-semibold text-gray-900 mb-4 uppercase tracking-wide">

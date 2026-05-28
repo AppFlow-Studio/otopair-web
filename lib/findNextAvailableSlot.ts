@@ -1,6 +1,7 @@
 import {
   addMinutesToHHMM,
   overlapsMechanicBooking,
+  type ScheduleBlockedSlot,
   type ScheduleBooking,
 } from "./schedule-overlap";
 
@@ -48,6 +49,7 @@ export function findNextAvailableSlot(input: {
   shopHours: NextSlotShopHour[];
   mechanics: NextSlotMechanic[];
   bookings: ScheduleBooking[];
+  blockedSlots?: ScheduleBlockedSlot[];
   durationMinutes?: number;
 }): NextAvailableSlot | null {
   const duration = input.durationMinutes ?? 60;
@@ -82,6 +84,14 @@ export function findNextAvailableSlot(input: {
       const endTime = addMinutesToHHMM(startTime, duration);
 
       for (const mech of input.mechanics) {
+        const blockedConflict = (input.blockedSlots ?? []).some((slot) => {
+          if (slot.date !== dateStr) return false;
+          if (slot.mechanicId !== null && slot.mechanicId !== mech._id) return false;
+          return toMinutes(slot.startTime) < toMinutes(endTime) && toMinutes(slot.endTime) > mins;
+        });
+
+        if (blockedConflict) continue;
+
         if (
           !overlapsMechanicBooking(
             mech._id,

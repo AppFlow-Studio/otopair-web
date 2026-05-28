@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { fetchQuery } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
+import { getAppBaseUrl } from "@/lib/app-url";
 import { createStripeConnectOnboardingLink } from "@/lib/stripe";
 
 function getBaseUrl(request: NextRequest) {
-  return (process.env.NEXT_PUBLIC_APP_URL ?? request.nextUrl.origin).replace(/\/+$/, "");
+  return getAppBaseUrl(request.nextUrl.origin);
 }
 
 export async function GET(request: NextRequest) {

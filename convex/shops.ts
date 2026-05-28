@@ -1036,6 +1036,47 @@ export const addOnboardingMechanic = mutation({
   },
 });
 
+export const updateOnboardingMechanic = mutation({
+  args: {
+    mechanicId: v.id("mechanics"),
+    firstName: v.string(),
+    lastName: v.string(),
+    title: v.optional(v.string()),
+    email: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getOrCreateCurrentShopOwner(ctx);
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Not authorized");
+    }
+
+    const mechanic = await ctx.db.get(args.mechanicId);
+    if (!mechanic || String(mechanic.shop_id) !== String(primary.shop._id)) {
+      throw new Error("Mechanic not found.");
+    }
+
+    const firstName = args.firstName.trim();
+    const lastName = args.lastName.trim();
+    if (!firstName || !lastName) throw new Error("Enter both a first and last name.");
+
+    await ctx.db.patch(args.mechanicId, {
+      first_name: firstName,
+      last_name: lastName,
+      title: args.title?.trim() || undefined,
+      email: args.email?.trim().toLowerCase() || undefined,
+    });
+
+    await syncMechanicAvailabilityWindow(ctx, {
+      shopId: primary.shop._id,
+      mechanicId: args.mechanicId,
+    });
+
+    return args.mechanicId;
+  },
+});
+
 export const removeOnboardingMechanic = mutation({
   args: {
     mechanicId: v.id("mechanics"),
@@ -1260,7 +1301,6 @@ export const updateShopHours = mutation({
       }
     }
 
-    await syncShopAvailabilityWindow(ctx, { shopId: primary.shop._id });
     return primary.shop._id;
   },
 });;

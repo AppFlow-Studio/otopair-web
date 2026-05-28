@@ -188,16 +188,26 @@ function getRowName(member: TeamMemberRow) {
   return member.user.email || "Team member";
 }
 
-function getFormSubmitLabel(form: MemberForm, submitting: boolean) {
+function getFormSubmitLabel(
+  form: MemberForm,
+  submitting: boolean,
+  willInviteEditedMechanic = false
+) {
   if (submitting) {
     if (form.role === "shop_mechanic") {
-      return form.mechanicId ? "Saving..." : form.email.trim() ? "Saving and inviting..." : "Saving...";
+      return form.mechanicId
+        ? willInviteEditedMechanic
+          ? "Saving and inviting..."
+          : "Saving..."
+        : form.email.trim()
+        ? "Saving and inviting..."
+        : "Saving...";
     }
     return "Sending...";
   }
 
   if (form.role === "shop_mechanic") {
-    if (form.mechanicId) return "Save mechanic";
+    if (form.mechanicId) return willInviteEditedMechanic ? "Save and invite mechanic" : "Save mechanic";
     return form.email.trim() ? "Save and invite mechanic" : "Save mechanic";
   }
 
@@ -266,6 +276,8 @@ export default function TeamPage() {
     currentRole: string;
   } | null>(null);
   const [newRole, setNewRole] = useState<string>("");
+  const memberFormRef = useRef<HTMLDivElement | null>(null);
+  const memberEmailInputRef = useRef<HTMLInputElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const { user: clerkUser } = useUser();
 
@@ -336,6 +348,14 @@ export default function TeamPage() {
     (mechanics?.length ?? 0) +
     standaloneMembers.length +
     pendingNonMechanicInvitations.length;
+  const editingMechanic = memberForm.mechanicId
+    ? mechanics?.find((mechanic) => mechanic._id === memberForm.mechanicId) ?? null
+    : null;
+  const willInviteEditedMechanic =
+    memberForm.role === "shop_mechanic" &&
+    !!memberForm.mechanicId &&
+    !!memberForm.email.trim() &&
+    editingMechanic?.portalStatus !== "active";
 
   const inputClass =
     "w-full rounded-lg border border-input bg-background px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
@@ -376,6 +396,28 @@ export default function TeamPage() {
     });
   }
 
+  function scrollToMemberForm({ selectEmail = false }: { selectEmail?: boolean } = {}) {
+    memberFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    if (!selectEmail) return;
+
+    window.setTimeout(() => {
+      memberEmailInputRef.current?.focus({ preventScroll: true });
+      memberEmailInputRef.current?.select();
+    }, 250);
+  }
+
+  function setFormForMechanic(mechanic: MechanicRow) {
+    setMemberForm({
+      role: "shop_mechanic",
+      mechanicId: mechanic._id,
+      firstName: mechanic.firstName,
+      lastName: mechanic.lastName,
+      title: mechanic.title,
+      email: mechanic.email,
+    });
+  }
+
   async function handleFormSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!shopId) return;
@@ -391,6 +433,8 @@ export default function TeamPage() {
         }
 
         if (memberForm.mechanicId) {
+          const mechanicToInvite = editingMechanic;
+
           await updateMechanic({
             mechanicId: memberForm.mechanicId as Id<"mechanics">,
             firstName: memberForm.firstName.trim(),
@@ -398,7 +442,34 @@ export default function TeamPage() {
             title: memberForm.title.trim() || undefined,
             email: memberForm.email.trim() || undefined,
           });
-          setFormSuccess("Mechanic profile updated.");
+
+          if (memberForm.email.trim() && mechanicToInvite?.portalStatus !== "active") {
+            if (
+              mechanicToInvite?.pendingInvitationId &&
+              (mechanicToInvite.portalStatus === "invite_sent" ||
+                mechanicToInvite.portalStatus === "invite_expired")
+            ) {
+              await removeTeamMember({ invitationId: mechanicToInvite.pendingInvitationId });
+            }
+
+            const result = await sendTeamInvite({
+              email: memberForm.email.trim(),
+              role: "shop_mechanic",
+              shopId,
+              mechanicId: memberForm.mechanicId,
+              origin: window.location.origin,
+            });
+
+            if (!result.ok) {
+              setFormError(`Mechanic profile updated, but the invitation failed: ${result.error}`);
+              return;
+            }
+
+            setFormSuccess("Mechanic profile updated and invited.");
+          } else {
+            setFormSuccess("Mechanic profile updated.");
+          }
+
           resetForm();
           return;
         }
@@ -463,17 +534,15 @@ export default function TeamPage() {
 
   function editMechanic(mechanic: MechanicRow) {
     clearFormMessages();
-    setMemberForm({
-      role: "shop_mechanic",
-      mechanicId: mechanic._id,
-      firstName: mechanic.firstName,
-      lastName: mechanic.lastName,
-      title: mechanic.title,
-      email: mechanic.email,
-    });
+    setFormForMechanic(mechanic);
+    scrollToMemberForm();
   }
 
   async function inviteMechanic(mechanic: MechanicRow, revokeExisting = false) {
+    clearFormMessages();
+    setFormForMechanic(mechanic);
+    scrollToMemberForm({ selectEmail: true });
+
     if (!shopId || !mechanic.email.trim()) {
       setDirectoryError("Add an email address before inviting this mechanic.");
       return;
@@ -692,7 +761,7 @@ export default function TeamPage() {
         </p>
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+      <div ref={memberFormRef} className="rounded-2xl border border-border bg-card p-6 shadow-sm">
         <div className="mb-5 flex items-center gap-2">
           <UserPlus className="h-5 w-5 text-primary" />
           <h2 className="text-base font-semibold text-foreground">
@@ -760,6 +829,7 @@ export default function TeamPage() {
           <div>
             <label className={labelClass}>Email</label>
             <input
+              ref={memberEmailInputRef}
               type="email"
               value={memberForm.email}
               onChange={(event) =>
@@ -813,7 +883,7 @@ export default function TeamPage() {
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {submittingForm && <Loader2 className="h-4 w-4 animate-spin" />}
-              {getFormSubmitLabel(memberForm, submittingForm)}
+              {getFormSubmitLabel(memberForm, submittingForm, willInviteEditedMechanic)}
             </button>
           </div>
         </form>

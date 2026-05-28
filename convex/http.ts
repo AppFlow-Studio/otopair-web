@@ -154,6 +154,21 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
             amountCapturable: pi.amount_capturable ?? undefined,
           },
         );
+        // Reauth fallback: when the customer completed 3DS async on mobile
+        // (`ReauthView` → `resumeReauthFromMobile` returned `requires_action`
+        // → `handleNextAction` succeeded), the action couldn't clear
+        // `reauth_required` synchronously. This event is the proof the PI
+        // is now in `requires_capture`, so flip the booking state here.
+        // Idempotent on booking state (the clear mutation no-ops when state
+        // isn't `reauth_required`).
+        const bookingIdMeta =
+          (pi.metadata && (pi.metadata as any).bookingId) || undefined;
+        if (bookingIdMeta) {
+          await ctx.runMutation(
+            internal.payments_stripe._clearReauthRequiredAfterSuccess,
+            { bookingId: bookingIdMeta as any },
+          );
+        }
         await ctx.runMutation(internal.stripe_webhook_events.record, {
           eventId: event.id,
           eventType: event.type,

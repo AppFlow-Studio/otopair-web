@@ -986,16 +986,204 @@ export const _revertBookingToPendingForReauth = internalMutation({
       status: "pending",
       dedupe_key: `reauth_required:${String(args.bookingId)}:${now}`,
       payload: {
-        title: "Your card declined the additional charge",
-        body: "Please update your payment method to keep this booking.",
+        title: "Confirm new hold on your card",
+        body: "Your bank needs to verify the updated hold. Tap to confirm — you may be asked to authenticate.",
         data: {
-          deepLink: `otopair://booking/${String(args.bookingId)}`,
+          // Deep-links the customer into the reauth flow on mobile
+          // (`app/booking/approve-estimate/[id].tsx` → ReauthView). The
+          // NotificationsSheet parses this via `parseOtopairDeepLink` →
+          // kind: "reauth" → approve-estimate with `mode=reauth`.
+          deepLink: `otopair://booking/${String(args.bookingId)}/reauth`,
           bookingId: String(args.bookingId),
         },
       },
       created_at: now,
       updated_at: now,
     });
+  },
+});
+
+/** Clears `payment_approval_state = "reauth_required"` after a successful
+ *  customer-confirmed reauth. Restores the booking to `pre_job_approved`
+ *  (matching the `withdrawPendingApproval` convention at line 851) when a
+ *  running ceiling exists, else "none". Idempotent — no-op when state is
+ *  not currently `reauth_required`. Safe to call from both the mobile-
+ *  initiated action AND the `amount_capturable_updated` webhook fallback.
+ */
+export const _clearReauthRequiredAfterSuccess = internalMutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const booking: any = await ctx.db.get(args.bookingId);
+    if (!booking) return { status: "no_booking" };
+    if (booking.payment_approval_state !== "reauth_required") {
+      return { status: "skipped" };
+    }
+    const priorState =
+      booking.running_approved_ceiling_cents != null
+        ? "pre_job_approved"
+        : "none";
+    await ctx.db.patch(args.bookingId, {
+      payment_approval_state: priorState,
+      updated_at: Date.now(),
+    });
+    return { status: "cleared", priorState };
+  },
+});
+
+/**
+ * Mobile-initiated reauth resume. Called by the customer-facing
+ * `ReauthView` (mobile `app/booking/approve-estimate/[id].tsx`) when the
+ * booking is in `payment_approval_state = "reauth_required"`.
+ *
+ * Why a separate action (vs. reusing `createPaymentIntentForBooking`):
+ * the public booking action short-circuits when a PI already exists for
+ * the booking and just retrieves the existing one — appropriate for a
+ * retry from the `/confirming` flow, useless here because the existing
+ * PI is the stale $20 deposit. Reauth needs to *replace* the PI with a
+ * fresh one at the higher ceiling.
+ *
+ * Flow:
+ *   1. Verify the booking is reauth_required and the caller owns it.
+ *   2. Cancel the old PI (releases the prior hold).
+ *   3. Create + confirm a new PI ON-SESSION with the customer's chosen
+ *      PaymentMethod. On-session lets Stripe surface 3DS via
+ *      `requires_action` for the client to drive with `handleNextAction`.
+ *   4. Store `reauth_payment_intent_id` and swap `stripe_payment_intent_id`
+ *      so subsequent capture targets the new PI.
+ *   5. If status is already `requires_capture`/`succeeded`, clear the
+ *      reauth state synchronously. Otherwise the `amount_capturable_updated`
+ *      webhook clears it once 3DS completes.
+ */
+export const resumeReauthFromMobile = action({
+  args: {
+    bookingId: v.id("bookings"),
+    paymentMethodId: v.string(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    paymentIntentId: string;
+    clientSecret: string;
+    status: string;
+    requiresAction: boolean;
+    targetCents: number;
+  }> => {
+    const { user } = await requireAuthedUser(ctx);
+    const result: any = await ctx.runQuery(
+      internal.payments_stripe._getBookingForPayment,
+      { bookingId: args.bookingId },
+    );
+    if (!result?.booking) throw new Error("Booking not found.");
+    const { booking, shop } = result;
+    if (booking.user_id !== user._id) throw new Error("Not your booking.");
+    if (booking.payment_approval_state !== "reauth_required") {
+      throw new Error("This booking is not waiting on a new card hold.");
+    }
+    if (!shop?.stripe_connect_account_id) {
+      throw new Error("Shop is not ready to accept payments yet.");
+    }
+    if (!user.stripe_customer_id) {
+      throw new Error("Add a payment method before confirming.");
+    }
+
+    const payment: any = await ctx.runQuery(
+      internal.payments_stripe._getPaymentByBookingId,
+      { bookingId: args.bookingId },
+    );
+    if (!payment) {
+      throw new Error("No payment row found for this booking.");
+    }
+
+    const targetCents = Math.max(
+      booking.mechanic_set_price_cents ?? 0,
+      booking.running_approved_ceiling_cents ?? 0,
+    );
+    if (!(targetCents > 0)) {
+      throw new Error("Booking has no approved hold amount to re-authorize.");
+    }
+
+    const stripe = getStripe();
+
+    // PM-ownership check (mirrors createPaymentIntentForBooking).
+    const pm = await stripe.paymentMethods.retrieve(args.paymentMethodId);
+    if (pm.customer !== user.stripe_customer_id) {
+      throw new Error("This card doesn't belong to you.");
+    }
+
+    // Step 1: cancel the old PI (releases stale auth). Tolerate "already
+    // cancelled / captured / etc." — those are fine, we'll create a new
+    // PI either way.
+    const oldPiId = payment.stripe_payment_intent_id;
+    if (oldPiId) {
+      try {
+        await stripe.paymentIntents.cancel(oldPiId);
+      } catch {
+        // ignore — PI may already be in a terminal state.
+      }
+    }
+
+    // Step 2: create + confirm the new PI ON-SESSION so 3DS can surface to
+    // the mobile client (which drives it via `handleNextAction`).
+    let newPi;
+    try {
+      newPi = await stripe.paymentIntents.create({
+        amount: targetCents,
+        currency: "usd",
+        customer: user.stripe_customer_id,
+        payment_method: args.paymentMethodId,
+        confirm: true,
+        off_session: false,
+        capture_method: "manual",
+        transfer_data: { destination: shop.stripe_connect_account_id },
+        automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+        metadata: {
+          bookingId: String(args.bookingId),
+          userId: String(user._id),
+          shopId: String(shop._id),
+          reauthOf: oldPiId ?? "",
+        },
+      });
+    } catch (err: any) {
+      throw new Error(err?.message ?? "Card authorization failed.");
+    }
+
+    // Step 3: record the new PI on the payments row (swaps the active PI
+    // id so capture/refund target the replacement).
+    await ctx.runMutation(
+      internal.payments_stripe._recordAuthorizationAdjustment,
+      {
+        bookingId: args.bookingId,
+        incrementedTotalCents: targetCents,
+        reauthPaymentIntentId: newPi.id,
+      },
+    );
+    await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
+      bookingId: args.bookingId,
+      stripeAction: "reauth_from_mobile",
+      stripePaymentIntentId: newPi.id,
+    });
+
+    // Step 4: clear reauth state synchronously when Stripe already gave us
+    // a confirmed auth (no SCA needed). The webhook is the fallback when
+    // 3DS is required and the client completes it async.
+    if (
+      newPi.status === "requires_capture" ||
+      newPi.status === "succeeded"
+    ) {
+      await ctx.runMutation(
+        internal.payments_stripe._clearReauthRequiredAfterSuccess,
+        { bookingId: args.bookingId },
+      );
+    }
+
+    return {
+      paymentIntentId: newPi.id,
+      clientSecret: newPi.client_secret!,
+      status: newPi.status,
+      requiresAction: newPi.status === "requires_action",
+      targetCents,
+    };
   },
 });
 

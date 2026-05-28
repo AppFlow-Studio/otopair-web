@@ -181,7 +181,12 @@ type PartRowState = {
   // the small "Used last time on this car" / "Shop default" badge. Stamped
   // by the server in getPrefillData.
   learned_from?: "vin" | "shop" | "config" | "catalog";
+  // Required on "manual" rows that count toward approval (not customer-supplied,
+  // not flagged not_used). Server enforces ≥12 chars in validatePartsForApproval.
+  justification_text?: string;
 };
+
+const MIN_MANUAL_JUSTIFICATION_LEN = 12;
 
 export type PhotoState = {
   id: string;
@@ -1147,6 +1152,7 @@ function PostJobSurveyDialogBody({
           source: part.source,
           swap_from_oem_number: part.swap_from_oem_number || undefined,
           not_used: notUsed ? true : undefined,
+          justification_text: part.justification_text?.trim() || undefined,
         };
       })
       .filter(
@@ -1198,6 +1204,28 @@ function PostJobSurveyDialogBody({
       if (partsIdx >= 0) setStepIndex(partsIdx);
       return;
     }
+    // Manual (mechanic-added) parts that bill toward approval must carry a
+    // justification — server enforces this in validatePartsForApproval and a
+    // missing note will fail the submit with a generic error. Surface the
+    // gate here so the mechanic sees which row needs the note.
+    if (cycle) {
+      const missingJustification = normalizedParts.find(
+        (p) =>
+          p.source === "manual" &&
+          p.supplied_by !== "customer" &&
+          p.not_used !== true &&
+          (p.justification_text ?? "").trim().length <
+            MIN_MANUAL_JUSTIFICATION_LEN,
+      );
+      if (missingJustification) {
+        setError(
+          `Add a justification of at least ${MIN_MANUAL_JUSTIFICATION_LEN} characters for "${missingJustification.part_name || "manual part"}".`,
+        );
+        const partsIdx = visibleSteps.indexOf("parts");
+        if (partsIdx >= 0) setStepIndex(partsIdx);
+        return;
+      }
+    }
     if (flaggedVehicleSpecs && flaggedReason.trim() === "") {
       setError("Please explain why the vehicle specs should be reviewed.");
       const flagIdx = visibleSteps.indexOf("flag");
@@ -1243,7 +1271,7 @@ function PostJobSurveyDialogBody({
         source: p.source ?? undefined,
         swap_from_oem_number: p.swap_from_oem_number ?? undefined,
         not_used: p.not_used ?? undefined,
-        justification_text: (p as any).justification_text ?? undefined,
+        justification_text: p.justification_text ?? undefined,
         evidence_photo_ids: (p as any).evidence_photo_ids ?? undefined,
       }));
       const laborMinutes =
@@ -1930,6 +1958,7 @@ function StepContent(props: {
           partsCostSum={props.partsCostSum}
           vehicleLabel={props.vehicleLabel}
           engineCode={props.engineCode}
+          cycle={props.cycle}
         />
       );
     case "difficulty":
@@ -2281,6 +2310,7 @@ function PartsStep({
   partsCostSum,
   vehicleLabel,
   engineCode,
+  cycle,
 }: {
   parts: PartRowState[];
   setParts: React.Dispatch<React.SetStateAction<PartRowState[]>>;
@@ -2295,6 +2325,9 @@ function PartsStep({
   partsCostSum: number;
   vehicleLabel: string | null;
   engineCode: string | null;
+  // When set, this dialog is in an approval flow (pre/mid/post) — manual
+  // (mechanic-added) part rows must collect a justification.
+  cycle?: PostJobSurveyCycle;
 }) {
   const normalizeOem = (n: string) =>
     n.trim().toUpperCase().replace(/\s+/g, "");
@@ -2645,6 +2678,37 @@ function PartsStep({
                   </div>
                   )}
                 </div>
+
+                {/* Justification — shown on every editable (manual) row that
+                    bills toward approval. Mirrors the `!isCatalogRow` heuristic
+                    used to make the identity fields editable. Server enforces
+                    ≥12 chars on cycle submissions; rendering it here lets the
+                    mechanic satisfy the gate inline. */}
+                {!isCatalogRow && !isCustomer && !isNotUsed && (
+                    <div className="mt-2.5">
+                      <span className="block text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                        Why this part?{" "}
+                        <span className="font-normal normal-case text-muted-foreground/80">
+                          (required, ≥{MIN_MANUAL_JUSTIFICATION_LEN} chars)
+                        </span>
+                      </span>
+                      <textarea
+                        value={part.justification_text ?? ""}
+                        onChange={(event) =>
+                          updatePart(index, {
+                            justification_text: event.target.value,
+                          })
+                        }
+                        placeholder="Explain why this part was needed (vehicle condition, OEM unavailable, customer request, etc.)"
+                        rows={2}
+                        className="mt-1 w-full resize-y rounded-md border border-primary/10 bg-background px-2 py-1.5 text-[12px] leading-snug text-foreground outline-none placeholder:text-muted-foreground focus:border-primary/30"
+                      />
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">
+                        {(part.justification_text ?? "").trim().length}/
+                        {MIN_MANUAL_JUSTIFICATION_LEN} characters minimum
+                      </p>
+                    </div>
+                  )}
 
                 {/* Footer row: Swap | Remove | Customer-supplied toggle.
                     Swap is hidden on blank rows (no part name yet) — it's only

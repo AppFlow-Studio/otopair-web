@@ -478,6 +478,9 @@ export const getByUserIdWithDetails = query({
           disclosed_range_high_cents: booking.disclosed_range_high_cents,
           payment_approval_state: booking.payment_approval_state,
           final_capture_amount_cents: booking.final_capture_amount_cents,
+          // Shop-assigned invoice / work-order number — surfaced inline on
+          // the booking card so the customer can quote it on support.
+          invoice_number: booking.invoice_number,
         };
       })
     );
@@ -747,6 +750,16 @@ export const create = mutation({
     labor_cost: v.float64(),
     parts_cost: v.float64(),
     total_cost: v.float64(),
+    // The labor minutes value the customer saw on the Review & Pay screen.
+    // Treated as authoritative for the stored `estimated_labor_minutes` so the
+    // mechanic's schedule block always matches the duration the user agreed
+    // to. Optional during the mobile rollout window — when omitted we fall
+    // back to the server-derived value (legacy behavior). Flip to required
+    // once the mobile app ships the corresponding change.
+    displayed_labor_minutes: v.optional(v.float64()),
+    // Optional fallback labor hours from the mobile pricing pipeline, used
+    // only by `resolveBookingLaborMinutes` when no enrichment row exists.
+    labor_hours: v.optional(v.float64()),
     session_id: v.optional(v.string()),
     funnel_id: v.optional(v.id("conversion_funnels")),
     source_recommendation_id: v.optional(v.id("job_recommendations")),
@@ -809,11 +822,45 @@ export const create = mutation({
       throw new Error("This time slot is no longer available.");
     }
 
+    // Resolve labor minutes. Priority: client-displayed value (authoritative —
+    // matches what the customer saw on Review & Pay), then server-derived
+    // fallback for older mobile builds that don't pass the field yet.
+    const serverDerivedMinutes = await resolveBookingLaborMinutes(ctx, {
+      engineId: vehicle.engine_id ?? null,
+      vehicleConfigId: vehicle.vehicle_config_id ?? null,
+      services: [
+        {
+          service_id: args.service_id,
+          fallback_hours: args.labor_hours ?? null,
+        },
+      ],
+    });
+    const estimated_labor_minutes =
+      args.displayed_labor_minutes != null && args.displayed_labor_minutes > 0
+        ? args.displayed_labor_minutes
+        : serverDerivedMinutes;
+
+    logLaborMinutesDivergence({
+      context: "create",
+      shopId: args.shop_id,
+      vin: normalizedVin,
+      serviceIds: [args.service_id],
+      clientMinutes: args.displayed_labor_minutes,
+      serverMinutes: serverDerivedMinutes,
+    });
+
+    await assertLaborCostMatchesDuration(ctx, {
+      shopId: args.shop_id,
+      laborCostDollars: args.labor_cost,
+      expectMinutes: args.displayed_labor_minutes,
+    });
+
     await assertBookingWithinShopHours(ctx, {
       shopId: args.shop_id,
       date: args.scheduled_date,
       startTime: args.scheduled_time,
-      durationMinutes: getSlotDurationMinutes(slot),
+      durationMinutes:
+        estimated_labor_minutes > 0 ? estimated_labor_minutes : getSlotDurationMinutes(slot),
     });
 
     await ctx.db.patch(args.time_slot_id, { is_available: false });
@@ -832,6 +879,8 @@ export const create = mutation({
       labor_cost: args.labor_cost,
       parts_cost: args.parts_cost,
       total_cost: args.total_cost,
+      estimated_labor_minutes:
+        estimated_labor_minutes > 0 ? estimated_labor_minutes : undefined,
       status: "pending",
       assignment_preference: "any",
       created_at: now,
@@ -967,6 +1016,73 @@ async function resolveBookingLaborMinutes(
 }
 
 /**
+ * Fallback hourly rate (USD) used when a shop hasn't set `labor_rate`. Kept in
+ * sync with `convex/invoices.ts:DEFAULT_LABOR_RATE` — when one moves both
+ * should move.
+ */
+const FALLBACK_LABOR_RATE_DOLLARS = 120;
+
+/**
+ * Guard against price/duration desync between the mobile quote and the
+ * persisted booking. The customer's Review & Pay screen shows both a labor
+ * cost and a labor duration. Both must satisfy
+ *   labor_cost ≈ (labor_minutes / 60) * shop.labor_rate
+ * within 5¢ of rounding. If they don't, the client either rendered one of
+ * them from a stale source or is attempting an underpay — either way, we
+ * reject the booking so the shop never sees a 17-min schedule block for
+ * 54 min of paid labor.
+ *
+ * Pass `expectMinutes = undefined` to no-op (used during the optional-arg
+ * rollout window).
+ */
+async function assertLaborCostMatchesDuration(
+  ctx: any,
+  args: {
+    shopId: Id<"shops">;
+    laborCostDollars: number;
+    expectMinutes: number | undefined;
+  },
+) {
+  if (args.expectMinutes == null || args.expectMinutes <= 0) return;
+  const shop = await ctx.db.get(args.shopId);
+  const laborRate =
+    typeof shop?.labor_rate === "number" && shop.labor_rate > 0
+      ? shop.labor_rate
+      : FALLBACK_LABOR_RATE_DOLLARS;
+  const expected = (args.expectMinutes / 60) * laborRate;
+  if (Math.abs(args.laborCostDollars - expected) > 0.05) {
+    throw new Error(
+      `LABOR_COST_DURATION_MISMATCH: client sent labor_cost=$${args.laborCostDollars.toFixed(2)} ` +
+        `for ${args.expectMinutes} min at $${laborRate}/hr (expected $${expected.toFixed(2)}). ` +
+        `Booking rejected to prevent schedule/price desync.`,
+    );
+  }
+}
+
+/**
+ * Telemetry-only: log a warning when the labor minutes the client claims it
+ * displayed disagree with what the server would derive from the same priority
+ * chain (`resolveBookingLaborMinutes`). Threshold is 2 min so we ignore
+ * rounding noise. Never throws; never overrides — the client value remains
+ * authoritative, this just gives us a paper trail when shop data drifts.
+ */
+function logLaborMinutesDivergence(args: {
+  context: "create" | "createBatch" | "createByShop";
+  shopId: Id<"shops">;
+  vin: string;
+  serviceIds: Array<Id<"services">>;
+  clientMinutes: number | undefined;
+  serverMinutes: number;
+}) {
+  if (args.clientMinutes == null) return;
+  if (Math.abs(args.clientMinutes - args.serverMinutes) <= 2) return;
+  console.warn(
+    `[${args.context}] labor_minutes divergence: client=${args.clientMinutes} server=${args.serverMinutes} ` +
+      `shop=${args.shopId} vin=${args.vin} services=${args.serviceIds.join(",")}`,
+  );
+}
+
+/**
  * MUTATION: createBatch
  * Create one booking for an appointment (one time slot) with multiple services.
  * Total cost and estimated time are aggregated; one row per appointment.
@@ -999,6 +1115,12 @@ export const createBatch = mutation({
     ),
     taxes_and_fees: v.optional(v.float64()),
     platform_fee: v.optional(v.float64()),
+    // Sum of labor minutes the customer saw across all services on Review &
+    // Pay. Treated as authoritative for the booking's stored
+    // `estimated_labor_minutes`. Optional during mobile rollout — flip to
+    // required once the app ships the matching change. See `create` for the
+    // single-service equivalent.
+    displayed_labor_minutes: v.optional(v.float64()),
     session_id: v.optional(v.string()),
     funnel_id: v.optional(v.id("conversion_funnels")),
     source_recommendation_id: v.optional(v.id("job_recommendations")),
@@ -1098,16 +1220,20 @@ export const createBatch = mutation({
     }
 
     const total_cost = labor_cost + parts_cost + taxes_and_fees + platform_fee;
-    // Server-authoritative labor minutes. The mobile app's customer-facing
-    // breakdown reads labor hours from the AI-enrichment chain
-    // (service_vehicle_specs → labor_times fallback, mirrors
-    // service_vehicle_specs.getByEngineAndService). Earlier we trusted the
-    // client-provided services[].labor_hours, but the app's pricing pipeline
-    // can pass a different total (e.g. per-vehicle book_hours instead of the
-    // displayed per-service estimate), which shows up as a longer block on
-    // the mechanic schedule than the duration the customer just confirmed.
-    // Recompute from the same source the customer saw so the two stay
-    // aligned; fall back to the client value when no enrichment row exists.
+    // Labor minutes resolution. The client-displayed value (what the
+    // customer saw on Review & Pay) is authoritative when supplied — that's
+    // the contract the user agreed to and the duration the mechanic schedule
+    // lane must reflect. We still compute the server-side enrichment value
+    // for telemetry so any data drift between mobile and Convex surfaces in
+    // logs without silently mis-sizing the schedule block.
+    //
+    // Earlier this code preferred the server-derived value and ignored the
+    // client. That caused the recurring "customer saw 54 min, booking
+    // stored 17 min" bug because the mobile app and `resolveBookingLaborMinutes`
+    // walk different paths through `service_vehicle_specs` / `labor_times`
+    // (the mobile fallback resolves `vehicle_config_id` from an arbitrary
+    // vehicle with the same engine, not the customer's own — see
+    // `service_vehicle_specs.getByEngineAndService` step 2).
     const enrichmentLaborMinutes = await resolveBookingLaborMinutes(ctx, {
       engineId: vehicle.engine_id ?? null,
       vehicleConfigId: vehicle.vehicle_config_id ?? null,
@@ -1116,7 +1242,25 @@ export const createBatch = mutation({
         fallback_hours: s.labor_hours ?? null,
       })),
     });
-    const estimated_labor_minutes = enrichmentLaborMinutes;
+    const estimated_labor_minutes =
+      args.displayed_labor_minutes != null && args.displayed_labor_minutes > 0
+        ? args.displayed_labor_minutes
+        : enrichmentLaborMinutes;
+
+    logLaborMinutesDivergence({
+      context: "createBatch",
+      shopId: args.shop_id,
+      vin: normalizedVin,
+      serviceIds: args.services.map((s) => s.service_id),
+      clientMinutes: args.displayed_labor_minutes,
+      serverMinutes: enrichmentLaborMinutes,
+    });
+
+    await assertLaborCostMatchesDuration(ctx, {
+      shopId: args.shop_id,
+      laborCostDollars: labor_cost,
+      expectMinutes: args.displayed_labor_minutes,
+    });
 
     // ── Pre-Job Approval flow: disclosed range snapshot ──────────────
     // Customer sees this range from booking confirmation through capture;

@@ -3093,7 +3093,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 export default JobDetailPanel;
 
 type AvailabilitySlot = {
-  _id: Id<"time_slots">;
+  _id: string;
   date: string;
   start_time: string;
   end_time: string;

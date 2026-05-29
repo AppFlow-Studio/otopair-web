@@ -1,6 +1,9 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import {
+  DEFAULT_AVAILABILITY_DAYS,
+  listAvailableWindowsForShopDate,
+  listNextAvailableWindowsForShop,
   syncMechanicDayAvailability,
   syncShopAvailabilityWindow,
   syncShopDateAvailability,
@@ -30,10 +33,8 @@ export const getById = query({
 });
 
 /**
- * Regenerates customer-facing availability from the canonical schedule rules:
- * shop hours, active mechanics, existing bookings, and manual blocked slots.
- * Mobile calls this before reading `time_slots` so stale generated rows don't
- * make mechanics look unavailable.
+ * Compatibility cleanup for old generated free slots. Availability is now
+ * inferred from shop hours, active mechanics, bookings, and negative blocks.
  */
 export const refreshShopAvailability = mutation({
   args: {
@@ -72,52 +73,54 @@ export const getByShopAndDate = query({
     shopId: v.id("shops"),
     date: v.string(),
     mechanicId: v.optional(v.id("mechanics")),
+    durationMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const slots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_and_date", (q) =>
-        q.eq("shop_id", args.shopId).eq("date", args.date)
-      )
-      .collect();
-
-    const filtered = slots.filter((slot) => {
-      if (!slot.is_available) return false;
-      if (args.mechanicId !== undefined) {
-        return slot.mechanic_id === args.mechanicId;
-      }
-      return true;
-    });
-
-    return sortSlotsBySchedule(filtered);
+    return sortSlotsBySchedule(
+      await listAvailableWindowsForShopDate(ctx, {
+        shopId: args.shopId,
+        date: args.date,
+        mechanicId: args.mechanicId,
+        durationMinutes: args.durationMinutes,
+      })
+    );
   },
 });
 
 export const getAvailableByShopId = query({
-  args: { shopId: v.id("shops") },
+  args: {
+    shopId: v.id("shops"),
+    limit: v.optional(v.number()),
+    durationMinutes: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
-    const slots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
-      .collect();
-    return sortSlotsBySchedule(slots.filter((slot) => slot.is_available));
+    return sortSlotsBySchedule(
+      await listNextAvailableWindowsForShop(ctx, {
+        shopId: args.shopId,
+        days: DEFAULT_AVAILABILITY_DAYS,
+        limit: args.limit ?? 200,
+        durationMinutes: args.durationMinutes,
+      })
+    );
   },
 });
 
 export const getAvailableByShopAndDateTime = query({
-  args: { shopId: v.id("shops"), date: v.string(), startTime: v.string() },
+  args: {
+    shopId: v.id("shops"),
+    date: v.string(),
+    startTime: v.string(),
+    durationMinutes: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
-    const slots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_and_date", (q) =>
-        q.eq("shop_id", args.shopId).eq("date", args.date)
-      )
-      .collect();
-
     return sortSlotsBySchedule(
-      slots.filter(
-        (slot) => slot.is_available && slot.start_time === args.startTime
-      )
+      (
+        await listAvailableWindowsForShopDate(ctx, {
+          shopId: args.shopId,
+          date: args.date,
+          durationMinutes: args.durationMinutes,
+        })
+      ).filter((slot) => slot.start_time === args.startTime)
     );
   },
 });
@@ -132,6 +135,7 @@ export const getNextAvailableByShop = query({
     shopId: v.id("shops"),
     limit: v.optional(v.number()),
     mechanicId: v.optional(v.id("mechanics")),
+    durationMinutes: v.optional(v.number()),
     // Client-supplied "now" in the user's local timezone. The server runs
     // in UTC, so deriving today/minBookableTime here would drift around
     // midnight (e.g., 11 PM Hawaii looks like tomorrow in UTC and we'd
@@ -145,41 +149,18 @@ export const getNextAvailableByShop = query({
     const cutoffDate = args.cutoffDate ?? new Date().toISOString().slice(0, 10);
     const cutoffTime = args.cutoffTime ?? "00:00";
 
-    const slots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
-      .collect();
-
-    const filtered = sortSlotsBySchedule(
-      slots.filter((slot) => {
-        if (!slot.is_available) return false;
-        if (slot.date < cutoffDate) return false;
-        // Within today, drop slots that already started — otherwise a
-        // shop with long hours returns morning slots first and small
-        // limits leave the customer with nothing bookable after the
-        // client's past-time filter runs.
-        if (slot.date === cutoffDate && slot.start_time < cutoffTime) return false;
-        if (args.mechanicId !== undefined) {
-          return slot.mechanic_id === args.mechanicId;
-        }
-        return true;
+    return sortSlotsBySchedule(
+      await listNextAvailableWindowsForShop(ctx, {
+        shopId: args.shopId,
+        limit,
+        mechanicId: args.mechanicId,
+        cutoffDate,
+        cutoffTime,
+        startDate: cutoffDate,
+        durationMinutes: args.durationMinutes,
+        distinctTimes: args.mechanicId === undefined,
       })
     );
-
-    if (args.mechanicId !== undefined) {
-      return filtered.slice(0, limit);
-    }
-
-    const seen = new Set<string>();
-    const distinct: typeof filtered = [];
-    for (const slot of filtered) {
-      const key = `${slot.date}-${slot.start_time}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      distinct.push(slot);
-      if (distinct.length >= limit) break;
-    }
-    return distinct;
   },
 });
 
@@ -195,6 +176,7 @@ export const getNextAvailableByShopPerMechanic = query({
     // client — same drift problem, same fix.
     cutoffDate: v.optional(v.string()),
     cutoffTime: v.optional(v.string()),
+    durationMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const limitPerMechanic = args.limitPerMechanic ?? 12;
@@ -207,22 +189,22 @@ export const getNextAvailableByShopPerMechanic = query({
       .filter((q) => q.eq(q.field("is_active"), true))
       .collect();
 
-    const slots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
-      .collect();
-
-    return mechanics.map((mechanic) => ({
-      mechanicId: mechanic._id,
-      slots: sortSlotsBySchedule(
-        slots.filter((slot) => {
-          if (!slot.is_available) return false;
-          if (slot.date < cutoffDate) return false;
-          if (slot.date === cutoffDate && slot.start_time < cutoffTime) return false;
-          return slot.mechanic_id === mechanic._id;
-        })
-      ).slice(0, limitPerMechanic),
-    }));
+    return await Promise.all(
+      mechanics.map(async (mechanic) => ({
+        mechanicId: mechanic._id,
+        slots: sortSlotsBySchedule(
+          await listNextAvailableWindowsForShop(ctx, {
+            shopId: args.shopId,
+            limit: limitPerMechanic,
+            mechanicId: mechanic._id,
+            cutoffDate,
+            cutoffTime,
+            startDate: cutoffDate,
+            durationMinutes: args.durationMinutes,
+          })
+        ),
+      }))
+    );
   },
 });
 
@@ -236,39 +218,33 @@ export const getAvailabilityByShopAndMonth = query({
     year: v.number(),
     month: v.number(),
     mechanicId: v.optional(v.id("mechanics")),
+    durationMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const start = new Date(args.year, args.month, 1);
     const end = new Date(args.year, args.month + 1, 0);
     const startStr = start.toISOString().slice(0, 10);
     const endStr = end.toISOString().slice(0, 10);
-    const slots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
-      .collect();
-
-    const inRange = slots.filter((slot) => {
-      if (slot.date < startStr || slot.date > endStr) return false;
-      if (args.mechanicId !== undefined) {
-        return slot.mechanic_id === args.mechanicId;
-      }
-      return true;
-    });
-
     const availableDates = new Set<string>();
     const bookedDates = new Set<string>();
-
-    for (const slot of inRange) {
-      if (slot.is_available) {
-        availableDates.add(slot.date);
-      } else {
-        bookedDates.add(slot.date);
+    for (
+      let cursor = new Date(start.getTime());
+      cursor <= end;
+      cursor.setDate(cursor.getDate() + 1)
+    ) {
+      const date = cursor.toISOString().slice(0, 10);
+      const slots = await listAvailableWindowsForShopDate(ctx, {
+        shopId: args.shopId,
+        date,
+        mechanicId: args.mechanicId,
+        durationMinutes: args.durationMinutes,
+        limit: 1,
+      });
+      if (slots.length > 0) {
+        availableDates.add(date);
+      } else if (date >= startStr && date <= endStr) {
+        bookedDates.add(date);
       }
-    }
-
-    // A date is only "booked" if it has no available slots at all
-    for (const date of availableDates) {
-      bookedDates.delete(date);
     }
 
     return {

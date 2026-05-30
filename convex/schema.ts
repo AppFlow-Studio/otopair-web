@@ -1684,6 +1684,43 @@ export default defineSchema({
       )
     ),
 
+    // Per-service audit trail for the 7-layer part selector. One entry per
+    // service on the booking. `source = "vin_sticky"` means a prior install on
+    // this VIN won the slot via vehicle_part_preferences; `"scored"` means the
+    // selector ran the full 7 layers; `"no_candidates"` means no fitments
+    // matched (booking falls back to default_parts_estimate). Mechanic / director
+    // tooling reads this to explain "why this part was picked".
+    part_selection_trace: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          winner_part_id: v.optional(v.id("oem_parts")),
+          source: v.union(
+            v.literal("vin_sticky"),
+            v.literal("scored"),
+            v.literal("no_candidates"),
+          ),
+          trace: v.optional(
+            v.array(
+              v.object({
+                layer: v.union(v.number(), v.literal("gate")),
+                name: v.string(),
+                decisive: v.boolean(),
+                reason: v.string(),
+                survivor_part_ids: v.array(v.id("oem_parts")),
+                eliminated_part_ids: v.optional(v.array(v.id("oem_parts"))),
+              }),
+            ),
+          ),
+          eliminated_by_gate_part_ids: v.optional(v.array(v.id("oem_parts"))),
+        }),
+      ),
+    ),
+    // Set when the confidence gate eliminated every candidate on at least one
+    // service, forcing fallback to the full pool. Surface to director tooling
+    // for follow-up enrichment.
+    low_confidence_parts: v.optional(v.boolean()),
+
     // Single-point quoted price the mechanic confirms against. Derived at
     // booking creation from priced_parts_snapshot (single avg unit prices)
     // + disclosed_breakdown.labor_cents + midpoints of the tax / service-fee

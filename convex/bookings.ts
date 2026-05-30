@@ -1292,11 +1292,13 @@ export const createBatch = mutation({
         q.eq("vehicle_owner_id", ownership._id),
       )
       .first();
-    const pricedPartsSnapshot = await computePricedPartsSnapshot(ctx, {
+    const pricedPartsResult = await computePricedPartsSnapshot(ctx, {
       serviceIds: args.services.map((s) => s.service_id),
       vehicleConfigId: vehicle.vehicle_config_id ?? null,
+      vin: normalizedVin,
       confirmedPackages: new Set(ownerSpecs?.confirmed_packages ?? []),
     });
+    const pricedPartsSnapshot = pricedPartsResult.rows;
 
     // Single-point quote the mechanic confirms against (no min/max).
     const quoted = computeQuotedSetPrice({
@@ -1348,6 +1350,9 @@ export const createBatch = mutation({
       disclosed_at_ms: now,
       priced_parts_snapshot:
         pricedPartsSnapshot.length > 0 ? pricedPartsSnapshot : undefined,
+      part_selection_trace:
+        pricedPartsResult.trace.length > 0 ? pricedPartsResult.trace : undefined,
+      low_confidence_parts: pricedPartsResult.low_confidence ? true : undefined,
       quoted_set_price_cents: quoted.total_cents,
       quoted_breakdown: quoted.breakdown,
       payment_approval_state: "none",
@@ -6292,19 +6297,23 @@ export const backfillPricedPartsSnapshot = internalMutation({
             .first()
         : null;
 
-      const snapshot = await computePricedPartsSnapshot(ctx, {
+      const result = await computePricedPartsSnapshot(ctx, {
         serviceIds: ((booking as any).service_ids ?? []) as Id<"services">[],
         vehicleConfigId: vehicle.vehicle_config_id,
+        vin: (booking as any).vin,
         confirmedPackages: new Set(ownerSpecs?.confirmed_packages ?? []),
       });
 
-      if (snapshot.length === 0) {
+      if (result.rows.length === 0) {
         skippedEmptySnapshot += 1;
         continue;
       }
 
       await ctx.db.patch(booking._id, {
-        priced_parts_snapshot: snapshot,
+        priced_parts_snapshot: result.rows,
+        part_selection_trace:
+          result.trace.length > 0 ? result.trace : undefined,
+        low_confidence_parts: result.low_confidence ? true : undefined,
         updated_at: Date.now(),
       });
       patched += 1;

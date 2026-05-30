@@ -13,6 +13,19 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { summarizePartPrices } from "./part_prices";
+import {
+  selectPart,
+  normalizeDataQuality,
+  type CandidateInput,
+  type TraceEntry,
+} from "./partSelector";
+
+/** Confidence floor for the selector's confidence gate. Below this a fitment
+ *  can still win, but only after the gate has eliminated everyone and the
+ *  booking is flagged low_confidence_parts=true. */
+export const PART_CONFIDENCE_GATE_THRESHOLD = 0.7;
+
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -236,9 +249,161 @@ export type PricedPartsForService = {
   serviceId: Id<"services">;
   serviceName: string;
   serviceSlug: string;
-  parts: PricedFitment[];
-  partsTotal: number;        // sum of line_totals
+  /** The single winning part for this service (null when no fitments match). */
+  winner: PricedFitment | null;
+  /** Candidates the selector considered but did not pick. Empty when winner is
+   *  null or when there was only one candidate. Surfaces in mechanic / director
+   *  trace UIs; the customer-facing Review & Pay screen renders only winner. */
+  losers: PricedFitment[];
+  /** Where the winner came from: a prior install on this VIN, the 7-layer
+   *  scorer, or no candidates at all. */
+  selectionSource: "vin_sticky" | "scored" | "no_candidates";
+  /** True when the confidence gate eliminated every candidate on this service
+   *  and we fell back to the full pool. */
+  lowConfidence: boolean;
+  partsTotal: number;        // winner.line_total (or 0 when no winner)
 };
+
+// ─── Shared resolver: from (vin, config, service) → winner + losers + trace ─
+
+type WinnerCandidate = {
+  fitment: Doc<"part_fitments">;
+  part: Doc<"oem_parts">;
+  priceSummary: Awaited<ReturnType<typeof summarizePartPrices>>;
+};
+
+export type ResolvedServiceWinner = {
+  winner: WinnerCandidate | null;
+  losers: WinnerCandidate[];
+  source: "vin_sticky" | "scored" | "no_candidates";
+  trace?: TraceEntry[];
+  eliminatedByGatePartIds?: Id<"oem_parts">[];
+  lowConfidence: boolean;
+};
+
+/**
+ * Core selection helper. Used at booking-create time (via
+ * computePricedPartsSnapshot) and on the Review & Pay query.
+ *
+ * Composition (per product decision):
+ *   1. If `vehicle_part_preferences` has an `is_default=true` row for
+ *      (vin, service_id) AND that part_id is in this vehicle's fitment pool →
+ *      VIN-sticky wins, skip scoring. "We know this car has XYZ inside it."
+ *   2. Otherwise run the 7-layer scorer over the fitment pool.
+ *   3. With no fitments at all → `source: "no_candidates"` (caller falls back
+ *      to default_parts_estimate).
+ */
+export async function resolveWinningPartForService(
+  ctx: { db: any },
+  args: {
+    vin: string;
+    serviceId: Id<"services">;
+    serviceSlug: string;
+    vehicleConfigId: Id<"vehicle_configs">;
+    confirmedPackages: Set<string>;
+  },
+): Promise<ResolvedServiceWinner> {
+  const fitments = await ctx.db
+    .query("part_fitments")
+    .withIndex("by_config_service", (q: any) =>
+      q
+        .eq("vehicle_config_id", args.vehicleConfigId)
+        .eq("service_type", args.serviceSlug),
+    )
+    .collect();
+
+  const applicable = fitments.filter(
+    (f: Doc<"part_fitments">) =>
+      f.package_code == null || args.confirmedPackages.has(f.package_code),
+  );
+
+  const hydrated: WinnerCandidate[] = [];
+  for (const f of applicable) {
+    const part = await ctx.db.get(f.part_id);
+    if (!part) continue;
+    const priceSummary = await summarizePartPrices(ctx, f.part_id);
+    hydrated.push({ fitment: f, part, priceSummary });
+  }
+
+  if (hydrated.length === 0) {
+    return { winner: null, losers: [], source: "no_candidates", lowConfidence: false };
+  }
+
+  // VIN-sticky check — prefer a previously installed part on this exact VIN.
+  const vinPrefs = await ctx.db
+    .query("vehicle_part_preferences")
+    .withIndex("by_vin_service", (q: any) =>
+      q.eq("vin", args.vin).eq("service_id", args.serviceId),
+    )
+    .collect();
+  const stickyDefault = vinPrefs.find(
+    (p: Doc<"vehicle_part_preferences">) => p.is_default === true,
+  );
+  if (stickyDefault) {
+    const sticky = hydrated.find((c) => c.part._id === stickyDefault.part_id);
+    if (sticky) {
+      const losers = hydrated.filter((c) => c.part._id !== sticky.part._id);
+      return { winner: sticky, losers, source: "vin_sticky", lowConfidence: false };
+    }
+    // Sticky preference points at a part no longer in the fitment pool (e.g.
+    // catalog churn). Fall through to scoring rather than picking a part we
+    // can't price.
+  }
+
+  // 7-layer scorer.
+  const now = Date.now();
+  const inputs: CandidateInput[] = hydrated.map((c) => ({
+    part_id: c.part._id,
+    confidence: c.fitment.confidence ?? 0,
+    mechanic_verified: c.fitment.mechanic_verified === true,
+    data_quality: normalizeDataQuality(
+      c.fitment.data_quality ?? c.part.data_quality ?? null,
+    ),
+    prices: c.priceSummary.sources_used.map((s) => ({
+      price: s.price,
+      refreshed_days_ago:
+        s.refreshed_at != null
+          ? Math.max(0, Math.floor((now - s.refreshed_at) / MS_PER_DAY))
+          : 9999,
+    })),
+  }));
+
+  const result = selectPart(inputs, {
+    gateEnabled: true,
+    gateThreshold: PART_CONFIDENCE_GATE_THRESHOLD,
+  });
+  if (!result.winner) {
+    return { winner: null, losers: [], source: "no_candidates", lowConfidence: false };
+  }
+  const winner = hydrated.find((c) => c.part._id === result.winner!.part_id)!;
+  const losers = hydrated.filter((c) => c.part._id !== winner.part._id);
+  return {
+    winner,
+    losers,
+    source: "scored",
+    trace: result.trace,
+    eliminatedByGatePartIds: result.eliminatedByGate.map((e) => e.part_id),
+    lowConfidence: result.low_confidence,
+  };
+}
+
+function toPricedFitment(c: WinnerCandidate): PricedFitment {
+  const quantity = c.fitment.quantity_needed ?? 1;
+  const unit_price = c.priceSummary.average;
+  const line_total = Math.round(quantity * unit_price * 100) / 100;
+  return {
+    part_id: c.part._id,
+    name: c.part.name,
+    oem_part_number: c.part.oem_part_number,
+    category: c.part.category,
+    position: c.fitment.position,
+    quantity,
+    unit_price,
+    line_total,
+    has_price_data: c.priceSummary.sample_size > 0,
+    price_sample_size: c.priceSummary.sample_size,
+  };
+}
 
 /**
  * Returns OEM parts + average unit prices for each requested service, scoped to
@@ -282,49 +447,26 @@ export const getPricedPartsForServices = query({
       const service = await ctx.db.get(serviceId);
       if (!service?.slug) continue;
 
-      const fitments = await ctx.db
-        .query("part_fitments")
-        .withIndex("by_config_service", (q) =>
-          q.eq("vehicle_config_id", configId).eq("service_type", service.slug!),
-        )
-        .collect();
+      const resolution = await resolveWinningPartForService(ctx, {
+        vin: owner.vin,
+        serviceId,
+        serviceSlug: service.slug,
+        vehicleConfigId: configId,
+        confirmedPackages: confirmed,
+      });
 
-      const applicable = fitments.filter(
-        (f) => f.package_code == null || confirmed.has(f.package_code),
-      );
-
-      const parts: PricedFitment[] = [];
-      let partsTotal = 0;
-      for (const f of applicable) {
-        const part = await ctx.db.get(f.part_id);
-        if (!part) continue;
-
-        const priceSummary = await summarizePartPrices(ctx, f.part_id);
-        const quantity = f.quantity_needed ?? 1;
-        const unit_price = priceSummary.average;
-        const line_total = Math.round(quantity * unit_price * 100) / 100;
-        partsTotal += line_total;
-
-        parts.push({
-          part_id: f.part_id,
-          name: part.name,
-          oem_part_number: part.oem_part_number,
-          category: part.category,
-          position: f.position,
-          quantity,
-          unit_price,
-          line_total,
-          has_price_data: priceSummary.sample_size > 0,
-          price_sample_size: priceSummary.sample_size,
-        });
-      }
+      const winner = resolution.winner ? toPricedFitment(resolution.winner) : null;
+      const losers = resolution.losers.map(toPricedFitment);
 
       out.push({
         serviceId,
         serviceName: service.name,
         serviceSlug: service.slug,
-        parts,
-        partsTotal: Math.round(partsTotal * 100) / 100,
+        winner,
+        losers,
+        selectionSource: resolution.source,
+        lowConfidence: resolution.lowConfidence,
+        partsTotal: winner?.line_total ?? 0,
       });
     }
 

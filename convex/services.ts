@@ -38,6 +38,7 @@
 
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 
 /**
  * QUERY: list
@@ -158,5 +159,252 @@ export const getById = query({
       ? await ctx.db.get(service.service_category_id)
       : null;
     return { ...service, serviceCategory };
+  },
+});
+
+/**
+ * QUERY: listBookableForVehicle
+ *
+ * The dynamic filter engine. Returns the APPLICABLE services for this vehicle
+ * with a `state` per service. Reactive — when fitments land, enrichment status
+ * flips, or the user answers a package question, the returned shape updates
+ * and the booking-flow picker re-renders without a refresh.
+ *
+ * Return shape:
+ *   Array<{ service_id, slug, state }>
+ *
+ *   state values (drives frontend render):
+ *     - "bookable"              → enabled, click to add
+ *     - "blocked_by_enrichment" → parts-required, pipeline still running.
+ *                                 Render greyed (no action — wait it out).
+ *     - "blocked_by_specs"      → pending package question affects this slug.
+ *                                 Render greyed + tappable; tap redirects to
+ *                                 the My Cars vehicle detail so user answers.
+ *     - "missing_data"          → enrichment complete but no fitments exist
+ *                                 (and not blocked by packages). Backend gap —
+ *                                 HIDE entirely; user has no recourse.
+ *
+ * Non-applicable services are NOT returned at all — they never render.
+ *
+ * Coverage rule (per service S, vehicle V):
+ *
+ *   Visibility (returned at all):
+ *     - S.is_applicable !== false for this vehicle, where applicability is:
+ *         owner override (vehicle_service_states.is_applicable) wins;
+ *         else engine default (service_vehicle_specs.is_applicable) applies;
+ *         else assume applicable.
+ *
+ *   Bookable flag:
+ *     - LABOR-ONLY services (S.is_labor_only === true OR S.requires_parts !==
+ *       true) are ALWAYS bookable, even during enrichment — they need no parts
+ *       data. Inspections, state-inspection, emissions, diagnostic scans.
+ *     - PARTS-REQUIRED services need ALL of:
+ *         a. config.enrichment_status ∈ {seeded, partial, complete, verified}
+ *         b. part_fitments has ≥1 row for (config_id, service_type=S.slug)
+ *         c. No package in packages_available has S.slug ∈ services_affected
+ *            AND code ∉ (confirmed ∪ denied)
+ *
+ * Slug shape: hyphenated everywhere (services.slug, part_fitments.service_type,
+ * packages_available[].services_affected all use the KNOWN_SERVICE_SLUGS form
+ * from convex/lib/packageRules.ts).
+ *
+ * See docs/TICKET_PACKAGE_QUESTIONS.md.
+ */
+export type BookableState =
+  | "bookable"
+  | "blocked_by_enrichment"
+  | "blocked_by_specs"
+  | "missing_data";
+
+export const listBookableForVehicle = query({
+  args: { vehicleOwnerId: v.id("vehicle_owners") },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    Array<{ service_id: Id<"services">; slug: string; state: BookableState }>
+  > => {
+    const TERMINAL_STATES = new Set([
+      "seeded",
+      "partial",
+      "complete",
+      "verified",
+    ]);
+
+    const owner = await ctx.db.get(args.vehicleOwnerId);
+    if (!owner) return [];
+
+    // Vehicle + config lookups are best-effort. If the user just added a VIN
+    // and enrichment hasn't created the config yet, OR the config was deleted
+    // for debugging, we should STILL return labor-only services (inspections,
+    // diagnostics, tire rotation, etc.) — they don't need any vehicle-specific
+    // data. Only parts-required services get gated by config presence below.
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", owner.vin))
+      .first();
+    const config = vehicle?.vehicle_config_id
+      ? await ctx.db.get(vehicle.vehicle_config_id)
+      : null;
+
+    // ── Applicability lookups ──────────────────────────────────────────────
+    // Engine-level defaults: services tagged is_applicable=false for this
+    // engine type (e.g. timing belt for chain engines). Both lookups are
+    // skipped when the relevant context is missing — applicability defaults
+    // to "applicable" without engine-level data.
+    const engineId = vehicle?.engine_id ?? config?.engine_id ?? null;
+    const engineNonApplicable = new Set<string>();
+    if (engineId) {
+      const engineSpecs = await ctx.db
+        .query("service_vehicle_specs")
+        .withIndex("by_engine_id", (q) => q.eq("engine_id", engineId))
+        .collect();
+      for (const spec of engineSpecs) {
+        if (spec.is_applicable === false) {
+          engineNonApplicable.add(String(spec.service_id));
+        }
+      }
+    }
+
+    // Owner-level overrides take precedence over engine defaults.
+    const ownerStates = await ctx.db
+      .query("vehicle_service_states")
+      .withIndex("by_vehicle_owner", (q) =>
+        q.eq("vehicle_owner_id", args.vehicleOwnerId),
+      )
+      .collect();
+    const ownerApplicableOverride = new Map<string, boolean>();
+    for (const state of ownerStates) {
+      if (state.is_applicable !== undefined) {
+        ownerApplicableOverride.set(String(state.service_id), state.is_applicable);
+      }
+    }
+
+    const isEnrichmentReady = Boolean(
+      config?.enrichment_status && TERMINAL_STATES.has(config.enrichment_status),
+    );
+
+    // Pending-package slugs only matter once enrichment is ready (before that,
+    // packages_available may not even be populated yet). Without a config,
+    // there's nothing to check.
+    //
+    // packageRules.services_affected and services.slug both use the underscored
+    // shape (per seeds/seedServices.ts). Direct set match — no normalization.
+    // Rows written before the rule rename will have hyphenated slugs and
+    // won't match here; re-enrich the vehicle to refresh packages_available.
+    const pendingSlugs = new Set<string>();
+    if (isEnrichmentReady && config) {
+      const ownerSpecs = await ctx.db
+        .query("vehicle_owner_specs")
+        .withIndex("by_vehicle_owner", (q) =>
+          q.eq("vehicle_owner_id", args.vehicleOwnerId),
+        )
+        .first();
+      const confirmed = new Set(ownerSpecs?.confirmed_packages ?? []);
+      const denied = new Set(ownerSpecs?.denied_packages ?? []);
+      for (const pkg of config.packages_available ?? []) {
+        if (confirmed.has(pkg.code) || denied.has(pkg.code)) continue;
+        for (const slug of pkg.services_affected) pendingSlugs.add(slug);
+      }
+    }
+
+    const services = await ctx.db.query("services").collect();
+    const out: Array<{
+      service_id: Id<"services">;
+      slug: string;
+      state: BookableState;
+    }> = [];
+
+    for (const service of services) {
+      const slug = service.slug;
+      if (!slug) continue;
+      const sid = String(service._id);
+
+      // Applicability: owner override wins; else engine default; else applicable.
+      const ownerOverride = ownerApplicableOverride.get(sid);
+      if (ownerOverride === false) continue;
+      if (ownerOverride === undefined && engineNonApplicable.has(sid)) continue;
+
+      // Labor-only services bypass enrichment + fitment + package gates.
+      // They need no parts data and can be booked the moment the vehicle exists.
+      // Examples in the catalog: inspections (NY State, brake system),
+      // diagnostics (general, check engine, battery test), and labor-only
+      // operations (tire rotation, wheel alignment, TPMS calibration).
+      // Trust `is_labor_only` only — `requires_parts` isn't consistently set
+      // in the seed (most services leave it undefined), so falling back on it
+      // would treat almost everything as labor-only by accident.
+      if (service.is_labor_only === true) {
+        out.push({ service_id: service._id, slug, state: "bookable" });
+        continue;
+      }
+
+      // tire_replacement is parts-required but the parts come from the
+      // /(tire-booking) picker, not part_fitments. Coverage = whether the
+      // enrichment captured OEM tire data on `trim_specs` for this config:
+      // either a tire size (front/rear) or any tire_options entries.
+      // (config is non-null here — the blocked_by_enrichment branch above
+      // catches null configs and continues, but TS doesn't narrow across
+      // the per-service control flow inside the loop.)
+      if (slug === "tire_replacement" && config) {
+        const trimSpecs = await ctx.db
+          .query("trim_specs")
+          .withIndex("by_vehicle_config", (q) =>
+            q.eq("vehicle_config_id", config._id),
+          )
+          .first();
+        const hasTireData = Boolean(
+          trimSpecs?.tire_size_front ||
+            trimSpecs?.tire_size_rear ||
+            (Array.isArray(trimSpecs?.tire_options) &&
+              trimSpecs.tire_options.length > 0),
+        );
+        out.push({
+          service_id: service._id,
+          slug,
+          state: hasTireData ? "bookable" : "missing_data",
+        });
+        continue;
+      }
+
+      // Parts-required (is_labor_only is false or unset): classify the reason
+      // it can't be booked NOW so the frontend can render the right affordance.
+      // Without a config (vehicle not yet attached, or config deleted for
+      // debugging), treat as still-enriching — greyed, no action.
+      if (!config || !isEnrichmentReady) {
+        out.push({
+          service_id: service._id,
+          slug,
+          state: "blocked_by_enrichment",
+        });
+        continue;
+      }
+
+      // Enrichment is ready. Pending package questions take precedence over
+      // missing-data because the user CAN unblock them by answering specs.
+      if (pendingSlugs.has(slug)) {
+        out.push({ service_id: service._id, slug, state: "blocked_by_specs" });
+        continue;
+      }
+
+      // Fitment lookup. NOTE: services.slug is underscored but the enrichment
+      // pipeline currently writes `part_fitments.service_type` using the
+      // hyphenated PART_FIELD_MAP.serviceSlug values (see v3pipeline.ts).
+      // Until those are standardized to match, parts-required services that
+      // depend on pipeline-written fitments will appear as missing_data.
+      const fitment = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", config._id).eq("service_type", slug),
+        )
+        .first();
+      if (!fitment) {
+        out.push({ service_id: service._id, slug, state: "missing_data" });
+        continue;
+      }
+
+      out.push({ service_id: service._id, slug, state: "bookable" });
+    }
+
+    return out;
   },
 });

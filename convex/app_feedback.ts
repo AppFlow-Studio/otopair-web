@@ -1,6 +1,43 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
+/**
+ * submit — consumer-side mutation for the "Give Us Feedback" modal in
+ * Settings. Inserts a new row in `app_feedback` with status="new" so it
+ * lands in the director-side review queue. No user_id linkage (the
+ * app_feedback table is intentionally anonymous-friendly), but `source`
+ * differentiates consumer_ios / consumer_android so the team can break
+ * down feedback by platform.
+ *
+ * Title is auto-synthesized from the first ~80 chars of the text; full
+ * text lives on `description`. Category defaults to "general" and
+ * sentiment to "neutral" — director-side triage can re-classify.
+ */
+export const submit = mutation({
+  args: {
+    text: v.string(),
+    source: v.optional(v.string()), // "consumer_ios" | "consumer_android"
+  },
+  handler: async (ctx, { text, source }) => {
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error("Feedback text is required");
+    const TITLE_MAX = 80;
+    const title =
+      trimmed.length <= TITLE_MAX
+        ? trimmed
+        : `${trimmed.slice(0, TITLE_MAX - 1)}…`;
+    return await ctx.db.insert("app_feedback", {
+      title,
+      category: "general",
+      sentiment: "neutral",
+      source: source ?? "consumer_app",
+      status: "new",
+      description: trimmed,
+      created_at: Date.now(),
+    });
+  },
+});
+
 export const getById = query({
   args: { id: v.id("app_feedback") },
   handler: async (ctx, { id }) => ctx.db.get(id),

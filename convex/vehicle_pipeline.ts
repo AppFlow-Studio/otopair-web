@@ -226,7 +226,21 @@ export const processVin = internalAction({
         vehicleType: nhtsa.vehicleType || "",
 
         // Engine — VDB wins, NHTSA fills gaps
-        cylinders: vdb?.cylinders || parseFloat(nhtsa.cylinders || "0") || 0,
+        // Cylinders is the exception: NHTSA's EngineCylinders is the
+        // regulatory source and authoritative. VDB's cylinder extraction has
+        // historically confused itself with displacement (engine_size). Use
+        // NHTSA first; VDB only fills the gap when NHTSA is empty. Log a
+        // warning on disagreement so we can audit future drift.
+        cylinders: (() => {
+          const nhtsaCyl = parseFloat(nhtsa.cylinders || "0") || null;
+          const vdbCyl = vdb?.cylinders ?? null;
+          if (nhtsaCyl && vdbCyl && nhtsaCyl !== vdbCyl) {
+            console.warn(
+              `[decode] cylinders disagreement — NHTSA=${nhtsaCyl}, VDB=${vdbCyl}. Using NHTSA.`,
+            );
+          }
+          return nhtsaCyl ?? vdbCyl ?? 0;
+        })(),
         displacement: (vdb?.displacement ? String(vdb.displacement) : "") || nhtsa.displacementL || "",
         fuelType: vdb?.fuelType || nhtsa.fuelType || "Gasoline",
         turbo: nhtsa.turbo === "Yes",

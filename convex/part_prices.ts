@@ -22,6 +22,10 @@ export type PriceSummary = {
   cv: number | null;      // std-dev / mean over kept prices; null when no data or mean=0
   min: number;
   max: number;
+  // Range of the kept (non-outlier) sample — what the customer-facing UI
+  // uses to render per-part low/high. Both 0 when no price data.
+  min_kept: number;
+  max_kept: number;
   outliers_removed: number;
   // Max(refreshed_at) across kept sources — null when none have a timestamp.
   // Used by the 7-layer selector to compute price freshness in days.
@@ -87,6 +91,8 @@ export async function summarizePartPrices(
     cv: null,
     min: 0,
     max: 0,
+    min_kept: 0,
+    max_kept: 0,
     outliers_removed: 0,
     most_recent_refreshed_at: null,
     sources_used: [],
@@ -152,6 +158,8 @@ export async function summarizePartPrices(
     cv,
     min: round2(Math.min(...prices)),
     max: round2(Math.max(...prices)),
+    min_kept: round2(Math.min(...kept)),
+    max_kept: round2(Math.max(...kept)),
     outliers_removed: prices.length - kept.length,
     most_recent_refreshed_at,
     sources_used: sources_used.map((s) => ({ ...s, price: round2(s.price) })),

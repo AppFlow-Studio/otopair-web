@@ -31,7 +31,7 @@ export default function NotificationSettingsPage() {
             <p className="mt-1 text-sm text-gray-500">
               Per-channel toggles (in-app, email, push) and per-category
               controls will live here. For now, every shop staff member sees
-              all booking confirmations and tire quote requests in the bell.
+              all booking confirmations and quote requests in the bell.
             </p>
           </div>
         </div>

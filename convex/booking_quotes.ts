@@ -22,9 +22,11 @@ import { resolveWinningPartForService } from "./serviceParts";
 import type { TraceEntry } from "./partSelector";
 
 /** Fallback band width when service_vehicle_specs has no engine-specific
- *  row for a service. ±25% around the client-supplied per-service parts
- *  cost (which the booking-create mutation already received). */
-const FALLBACK_BAND_RATIO = 0.25;
+ *  row for a service. ±8% around the client-supplied per-service parts
+ *  cost — was ±25% during early development, but real source variance
+ *  (after MAD outlier rejection) sits in the 5–8% range, so a tighter cap
+ *  keeps the disclosed band honest. */
+const FALLBACK_BAND_RATIO = 0.08;
 
 export type ComputeDisclosedRangeService = {
   service_id: Id<"services">;

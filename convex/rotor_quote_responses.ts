@@ -1,0 +1,144 @@
+/**
+ * rotor_quote_responses
+ *
+ * PURPOSE: Functions for the "shop responds to a rotor quote request" flow.
+ *          Mirror of tire_quote_responses — one quote-stage booking can
+ *          collect multiple responses (one per shop). The mobile user picks
+ *          one via `bookings.acceptRotorQuote`, which fills the chosen shop
+ *          into the booking and supersedes the remaining responses.
+ */
+
+import { v } from "convex/values";
+import { mutation, query } from "./_generated/server";
+
+// ============================================================================
+// CREATE — called by the website when a shop owner submits a rotor quote
+// ============================================================================
+
+export const create = mutation({
+  args: {
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    mechanic_id: v.optional(v.id("mechanics")),
+    rotor_brand: v.string(),
+    rotor_model: v.optional(v.string()),
+    per_rotor_price: v.number(),
+    quantity: v.number(),
+    labor_cost: v.number(),
+    total: v.number(),
+    availability: v.object({
+      date: v.string(),
+      time: v.string(),
+    }),
+    estimated_duration_minutes: v.optional(v.number()),
+    expires_at: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.booking_id);
+    if (!booking) {
+      throw new Error("We couldn't find that quote request. It may have been withdrawn.");
+    }
+    if (booking.status !== "pending_quote" && booking.status !== "quotes_ready") {
+      throw new Error("This quote request is no longer accepting new quotes.");
+    }
+
+    const existing = await ctx.db
+      .query("rotor_quote_responses")
+      .withIndex("by_booking_and_shop", (q) =>
+        q.eq("booking_id", args.booking_id).eq("shop_id", args.shop_id),
+      )
+      .filter((q) => q.eq(q.field("superseded_at"), undefined))
+      .first();
+    if (existing) {
+      throw new Error("This shop has already submitted a quote for this booking.");
+    }
+
+    const now = Date.now();
+    const responseId = await ctx.db.insert("rotor_quote_responses", {
+      booking_id: args.booking_id,
+      shop_id: args.shop_id,
+      mechanic_id: args.mechanic_id,
+      rotor_brand: args.rotor_brand,
+      rotor_model: args.rotor_model,
+      per_rotor_price: args.per_rotor_price,
+      quantity: args.quantity,
+      labor_cost: args.labor_cost,
+      total: args.total,
+      availability: args.availability,
+      estimated_duration_minutes: args.estimated_duration_minutes,
+      created_at: now,
+      expires_at: args.expires_at,
+    });
+
+    // First response flips pending_quote → quotes_ready so the Quotes tab
+    // picks it up. Idempotent for subsequent responses.
+    if (booking.status === "pending_quote") {
+      await ctx.db.patch(args.booking_id, {
+        status: "quotes_ready",
+        updated_at: now,
+      });
+    }
+
+    return responseId;
+  },
+});
+
+// ============================================================================
+// LIST — non-superseded, non-expired responses for a booking
+// ============================================================================
+
+export const listForBooking = query({
+  args: {
+    booking_id: v.id("bookings"),
+  },
+  handler: async (ctx, args) => {
+    const responses = await ctx.db
+      .query("rotor_quote_responses")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.booking_id))
+      .collect();
+
+    const now = Date.now();
+    return responses
+      .filter((r) => r.superseded_at == null)
+      .filter((r) => r.expires_at == null || r.expires_at > now);
+  },
+});
+
+// ============================================================================
+// LIST WITH SHOP DETAIL — joins shop fields the quote-list sheet needs.
+// ============================================================================
+
+export const listForBookingWithShops = query({
+  args: {
+    booking_id: v.id("bookings"),
+  },
+  handler: async (ctx, args) => {
+    const responses = await ctx.db
+      .query("rotor_quote_responses")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.booking_id))
+      .collect();
+
+    const now = Date.now();
+    const live = responses
+      .filter((r) => r.superseded_at == null)
+      .filter((r) => r.expires_at == null || r.expires_at > now);
+
+    return Promise.all(
+      live.map(async (r) => {
+        const shop = await ctx.db.get(r.shop_id);
+        return {
+          ...r,
+          shop: shop
+            ? {
+                _id: shop._id,
+                name: shop.name,
+                rating: 4.7,
+                distance_mi: null,
+                verified: shop.onboarding_complete === true,
+              }
+            : null,
+        };
+      }),
+    );
+  },
+});

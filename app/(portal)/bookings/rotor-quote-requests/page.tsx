@@ -22,45 +22,45 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const TIRE_BRANDS = [
-  { value: "goodyear", label: "Goodyear" },
-  { value: "michelin", label: "Michelin" },
-  { value: "bridgestone", label: "Bridgestone" },
-  { value: "firestone", label: "Firestone" },
-  { value: "continental", label: "Continental" },
-  { value: "pirelli", label: "Pirelli" },
-  { value: "cooper", label: "Cooper" },
-  { value: "hankook", label: "Hankook" },
-  { value: "yokohama", label: "Yokohama" },
-  { value: "bfgoodrich", label: "BFGoodrich" },
-  { value: "toyo", label: "Toyo" },
-  { value: "falken", label: "Falken" },
-  { value: "general", label: "General" },
-  { value: "kumho", label: "Kumho" },
-  { value: "dunlop", label: "Dunlop" },
-  { value: "nitto", label: "Nitto" },
-  { value: "nexen", label: "Nexen" },
-  { value: "mastercraft", label: "Mastercraft" },
-  { value: "sumitomo", label: "Sumitomo" },
+// Rotor brands the shop can pick from. "Other…" lets them type free text.
+// Curated against the common OEM + aftermarket suppliers; the customer's
+// tier filter (Premium/Plus/Standard) doesn't constrain the brand list —
+// the shop sources whichever fits the price they can offer.
+const ROTOR_BRANDS = [
+  { value: "brembo", label: "Brembo" },
+  { value: "akebono", label: "Akebono" },
+  { value: "bosch", label: "Bosch" },
+  { value: "ate", label: "ATE" },
+  { value: "zimmermann", label: "Zimmermann" },
+  { value: "ebc", label: "EBC" },
+  { value: "powerstop", label: "PowerStop" },
+  { value: "centric", label: "Centric" },
+  { value: "raybestos", label: "Raybestos" },
+  { value: "wagner", label: "Wagner" },
+  { value: "acdelco", label: "AC Delco" },
+  { value: "stoptech", label: "StopTech" },
+  { value: "duragon", label: "DuraGo" },
+  { value: "detroit_axle", label: "Detroit Axle" },
+  { value: "hawk", label: "Hawk" },
 ];
 
 const OTHER_BRAND = "__other__";
 
-function TireBrandSelect({
+function RotorBrandSelect({
   value,
   onChange,
 }: {
   value: string;
   onChange: (v: string) => void;
 }) {
-  const matched = TIRE_BRANDS.find((b) => b.value === value);
+  const matched = ROTOR_BRANDS.find((b) => b.value === value);
   const isOther = !!value && !matched;
   const selectedKey = matched ? matched.value : isOther ? OTHER_BRAND : "none";
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
   const filtered = normalizedQuery
-    ? TIRE_BRANDS.filter((b) => b.label.toLowerCase().includes(normalizedQuery))
-    : TIRE_BRANDS;
+    ? ROTOR_BRANDS.filter((b) => b.label.toLowerCase().includes(normalizedQuery))
+    : ROTOR_BRANDS;
 
   return (
     <div className="space-y-2">
@@ -139,9 +139,8 @@ type OpenRequest = {
   _id: Id<"bookings">;
   _creationTime: number;
   status: string;
-  tire_specs?: {
-    size: string;
-    type: string;
+  rotor_specs?: {
+    axle: string; // "front" | "rear" | "both"
     tier: string;
     quantity: number;
   };
@@ -156,6 +155,13 @@ function formatVehicle(v: OpenRequest["vehicle"]): string {
   return parts.length ? parts.join(" ") : "Unknown vehicle";
 }
 
+function formatAxle(axle: string | undefined): string {
+  if (axle === "front") return "Front pair";
+  if (axle === "rear") return "Rear pair";
+  if (axle === "both") return "All four";
+  return "—";
+}
+
 function formatRelative(ts: number): string {
   const diffMs = Date.now() - ts;
   const mins = Math.floor(diffMs / 60000);
@@ -167,18 +173,16 @@ function formatRelative(ts: number): string {
   return `${days}d ago`;
 }
 
-export default function TireQuoteRequestsPage() {
+export default function RotorQuoteRequestsPage() {
   const context = useQuery(api.bookings.getMyShopJobContext);
   const shopId = context?.shopId as Id<"shops"> | undefined;
 
   const allRequests = useQuery(
-    api.bookings.listOpenTireQuoteRequestsForShop,
+    api.bookings.listOpenRotorQuoteRequestsForShop,
     shopId ? { shopId } : "skip",
   ) as OpenRequest[] | undefined;
 
   const [activeRequest, setActiveRequest] = useState<OpenRequest | null>(null);
-  // Client-side rejection state — does not persist across page refreshes.
-  // Backend mutation pending; once shipped, replace this with a real call.
   const [rejectedIds, setRejectedIds] = useState<Set<string>>(new Set());
 
   const requests = useMemo(
@@ -197,10 +201,11 @@ export default function TireQuoteRequestsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Quote Requests</h1>
+        <h1 className="text-2xl font-bold text-foreground">Rotor Quote Requests</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Open requests from customers shopping for Quotes. Submit a quote and the row disappears once the
-          customer picks one.
+          Open rotor quotes from customers shopping the bid path. Source the
+          lowest OEM price you can offer, submit a quote, and the row leaves
+          once the customer accepts.
         </p>
       </div>
 
@@ -219,7 +224,7 @@ export default function TireQuoteRequestsPage() {
       ) : requests.length === 0 ? (
         <div className="bg-card rounded-xl border border-border p-12 text-center">
           <Wrench className="mx-auto h-10 w-10 text-muted-foreground/40" strokeWidth={1.5} />
-          <p className="mt-3 text-sm font-medium text-foreground">No open quote requests</p>
+          <p className="mt-3 text-sm font-medium text-foreground">No open rotor quote requests</p>
           <p className="mt-1 text-xs text-muted-foreground">
             New customer requests will appear here.
           </p>
@@ -230,8 +235,7 @@ export default function TireQuoteRequestsPage() {
             <thead>
               <tr className="border-b border-border bg-muted/30">
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Vehicle</th>
-                <th className="px-5 py-3 text-left font-medium text-muted-foreground">Size</th>
-                <th className="px-5 py-3 text-left font-medium text-muted-foreground">Type</th>
+                <th className="px-5 py-3 text-left font-medium text-muted-foreground">Axle</th>
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Tier</th>
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Qty</th>
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Submitted</th>
@@ -242,14 +246,9 @@ export default function TireQuoteRequestsPage() {
               {requests.map((r) => (
                 <tr key={r._id} className="border-b border-border last:border-b-0 hover:bg-muted/20">
                   <td className="px-5 py-4 text-foreground">{formatVehicle(r.vehicle)}</td>
-                  <td className="px-5 py-4 text-foreground">{r.tire_specs?.size ?? "—"}</td>
-                  <td className="px-5 py-4 text-foreground capitalize">
-                    {r.tire_specs?.type ?? "—"}
-                  </td>
-                  <td className="px-5 py-4 text-foreground capitalize">
-                    {r.tire_specs?.tier ?? "—"}
-                  </td>
-                  <td className="px-5 py-4 text-foreground">{r.tire_specs?.quantity ?? "—"}</td>
+                  <td className="px-5 py-4 text-foreground">{formatAxle(r.rotor_specs?.axle)}</td>
+                  <td className="px-5 py-4 text-foreground capitalize">{r.rotor_specs?.tier ?? "—"}</td>
+                  <td className="px-5 py-4 text-foreground">{r.rotor_specs?.quantity ?? "—"}</td>
                   <td className="px-5 py-4 text-muted-foreground">
                     {formatRelative(r.submitted_at)}
                   </td>
@@ -325,13 +324,15 @@ function QuoteSubmissionDialog({
   shopHours: Array<{ dayOfWeek: number; openTime: string; closeTime: string; isClosed: boolean }>;
   onClose: () => void;
 }) {
-  const submit = useMutation(api.tire_quote_responses.create);
+  const submit = useMutation(api.rotor_quote_responses.create);
 
-  const [durationMinutes, setDurationMinutes] = useState(30);
+  // Rotor jobs are heavier than tire swaps — default to 60 min, give 45/60/90
+  // presets (both axles can easily run 90 min).
+  const [durationMinutes, setDurationMinutes] = useState(60);
 
-  const [tireBrand, setTireBrand] = useState("");
-  const [tireModel, setTireModel] = useState("");
-  const [perTirePrice, setPerTirePrice] = useState("");
+  const [rotorBrand, setRotorBrand] = useState("");
+  const [rotorModel, setRotorModel] = useState("");
+  const [perRotorPrice, setPerRotorPrice] = useState("");
   const [laborCost, setLaborCost] = useState("");
   const [availabilityDate, setAvailabilityDate] = useState(todayIso());
   const [availabilityTime, setAvailabilityTime] = useState("");
@@ -339,7 +340,6 @@ function QuoteSubmissionDialog({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Schedule lane state
   const [laneDate, setLaneDate] = useState<Date | null>(null);
   const initialLaneDateSelectedRef = useRef(false);
 
@@ -473,7 +473,7 @@ function QuoteSubmissionDialog({
     return d;
   }, [laneDate, laneDayHours]);
 
-  const quantity = request.tire_specs?.quantity ?? 0;
+  const quantity = request.rotor_specs?.quantity ?? 0;
 
   const availabilityDateTime = useMemo(() => {
     if (!availabilityDate || !availabilityTime) return null;
@@ -490,16 +490,16 @@ function QuoteSubmissionDialog({
     availabilityDateTime !== null && availabilityDateTime.getTime() > Date.now();
 
   const total = useMemo(() => {
-    const ppt = Number(perTirePrice);
+    const ppt = Number(perRotorPrice);
     const labor = Number(laborCost);
     if (!Number.isFinite(ppt) || !Number.isFinite(labor)) return null;
     return ppt * quantity + labor;
-  }, [perTirePrice, laborCost, quantity]);
+  }, [perRotorPrice, laborCost, quantity]);
 
   const canSubmit =
-    tireBrand.trim().length > 0 &&
-    perTirePrice !== "" &&
-    Number(perTirePrice) > 0 &&
+    rotorBrand.trim().length > 0 &&
+    perRotorPrice !== "" &&
+    Number(perRotorPrice) > 0 &&
     laborCost !== "" &&
     Number(laborCost) >= 0 &&
     availabilityIsFuture &&
@@ -515,9 +515,9 @@ function QuoteSubmissionDialog({
       await submit({
         booking_id: request._id,
         shop_id: shopId,
-        tire_brand: (TIRE_BRANDS.find((b) => b.value === tireBrand)?.label ?? tireBrand).trim(),
-        tire_model: tireModel.trim() ? tireModel.trim() : undefined,
-        per_tire_price: Number(perTirePrice),
+        rotor_brand: (ROTOR_BRANDS.find((b) => b.value === rotorBrand)?.label ?? rotorBrand).trim(),
+        rotor_model: rotorModel.trim() ? rotorModel.trim() : undefined,
+        per_rotor_price: Number(perRotorPrice),
         quantity,
         labor_cost: Number(laborCost),
         total,
@@ -539,12 +539,11 @@ function QuoteSubmissionDialog({
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" onClick={onClose} />
       <div className="relative w-full max-w-6xl h-[85vh] rounded-xl border border-border bg-card shadow-xl flex flex-col overflow-hidden">
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
           <div>
-            <h3 className="text-base font-semibold text-foreground">Submit tire quote</h3>
+            <h3 className="text-base font-semibold text-foreground">Submit rotor quote</h3>
             <p className="text-sm text-muted-foreground mt-0.5">
-              {formatVehicle(request.vehicle)} · {request.tire_specs?.size ?? "—"} · qty {quantity}
+              {formatVehicle(request.vehicle)} · {formatAxle(request.rotor_specs?.axle)} · qty {quantity}
             </p>
           </div>
           <button onClick={onClose} className="rounded-md p-1.5 hover:bg-muted text-muted-foreground">
@@ -552,11 +551,8 @@ function QuoteSubmissionDialog({
           </button>
         </div>
 
-        {/* Body: swim lanes + form */}
         <div className="flex flex-1 min-h-0">
-          {/* Left: schedule swim lanes */}
           <div className="flex-1 flex flex-col min-w-0 border-r border-border">
-            {/* Date nav */}
             <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
               <button
                 onClick={() => setLaneDate((d) => subDays(d ?? new Date(), 1))}
@@ -633,31 +629,30 @@ function QuoteSubmissionDialog({
             </p>
           </div>
 
-          {/* Right: quote form */}
           <div className="w-80 shrink-0 flex flex-col overflow-y-auto">
             <div className="p-5 space-y-4 flex-1">
-              <Field label="Tire brand" required>
-                <TireBrandSelect value={tireBrand} onChange={setTireBrand} />
+              <Field label="Rotor brand" required>
+                <RotorBrandSelect value={rotorBrand} onChange={setRotorBrand} />
               </Field>
 
-              <Field label="Tire model (optional)">
+              <Field label="Rotor model (optional)">
                 <input
                   type="text"
-                  value={tireModel}
-                  onChange={(e) => setTireModel(e.target.value)}
-                  placeholder="e.g. Pilot Sport 4S"
+                  value={rotorModel}
+                  onChange={(e) => setRotorModel(e.target.value)}
+                  placeholder="e.g. OE Replacement Disc"
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
                 />
               </Field>
 
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Per-tire price ($)" required>
+                <Field label="Per-rotor price ($)" required>
                   <input
                     type="number"
                     min="0"
                     step="0.01"
-                    value={perTirePrice}
-                    onChange={(e) => setPerTirePrice(e.target.value)}
+                    value={perRotorPrice}
+                    onChange={(e) => setPerRotorPrice(e.target.value)}
                     placeholder="0.00"
                     className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
                   />
@@ -696,7 +691,7 @@ function QuoteSubmissionDialog({
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-muted-foreground">Estimated duration</label>
                 <div className="flex gap-1.5">
-                  {[15, 30, 45].map((mins) => (
+                  {[45, 60, 90].map((mins) => (
                     <button
                       key={mins}
                       onClick={() => setDurationMinutes(mins)}
@@ -746,7 +741,6 @@ function QuoteSubmissionDialog({
               )}
             </div>
 
-            {/* Footer */}
             <div className="px-5 py-4 border-t border-border flex gap-2 justify-end shrink-0">
               <button
                 onClick={onClose}

@@ -239,8 +239,15 @@ export type PricedFitment = {
   category?: string;
   position?: string;
   quantity: number;          // quantity_needed defaulted to 1
-  unit_price: number;        // 0 when no part_prices rows exist
+  unit_price: number;        // mean of kept set — the price quoted to the mechanic. 0 when no part_prices rows exist.
   line_total: number;        // quantity × unit_price
+  // Per-part range over the post-outlier-rejection sample (kept set).
+  // Drives the customer-facing band on each line in Review & Pay. Both 0
+  // when no price data; collapses to a single value when only one source.
+  unit_price_low: number;
+  unit_price_high: number;
+  line_total_low: number;
+  line_total_high: number;
   has_price_data: boolean;
   price_sample_size: number;
 };
@@ -391,6 +398,10 @@ function toPricedFitment(c: WinnerCandidate): PricedFitment {
   const quantity = c.fitment.quantity_needed ?? 1;
   const unit_price = c.priceSummary.average;
   const line_total = Math.round(quantity * unit_price * 100) / 100;
+  const unit_price_low = c.priceSummary.min_kept;
+  const unit_price_high = c.priceSummary.max_kept;
+  const line_total_low = Math.round(quantity * unit_price_low * 100) / 100;
+  const line_total_high = Math.round(quantity * unit_price_high * 100) / 100;
   return {
     part_id: c.part._id,
     name: c.part.name,
@@ -400,6 +411,10 @@ function toPricedFitment(c: WinnerCandidate): PricedFitment {
     quantity,
     unit_price,
     line_total,
+    unit_price_low,
+    unit_price_high,
+    line_total_low,
+    line_total_high,
     has_price_data: c.priceSummary.sample_size > 0,
     price_sample_size: c.priceSummary.sample_size,
   };

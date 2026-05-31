@@ -472,6 +472,7 @@ export const getByUserIdWithDetails = query({
           shopLat: shop?.lat,
           shopLng: shop?.lng,
           tire_specs: booking.tire_specs,
+          rotor_specs: booking.rotor_specs,
           // Pre-Job Approval flow — disclosed range + approval state +
           // final captured amount. Optional: omitted on legacy rows.
           disclosed_range_low_cents: booking.disclosed_range_low_cents,
@@ -1292,11 +1293,13 @@ export const createBatch = mutation({
         q.eq("vehicle_owner_id", ownership._id),
       )
       .first();
-    const pricedPartsSnapshot = await computePricedPartsSnapshot(ctx, {
+    const pricedPartsResult = await computePricedPartsSnapshot(ctx, {
       serviceIds: args.services.map((s) => s.service_id),
       vehicleConfigId: vehicle.vehicle_config_id ?? null,
+      vin: normalizedVin,
       confirmedPackages: new Set(ownerSpecs?.confirmed_packages ?? []),
     });
+    const pricedPartsSnapshot = pricedPartsResult.rows;
 
     // Single-point quote the mechanic confirms against (no min/max).
     const quoted = computeQuotedSetPrice({
@@ -1348,6 +1351,9 @@ export const createBatch = mutation({
       disclosed_at_ms: now,
       priced_parts_snapshot:
         pricedPartsSnapshot.length > 0 ? pricedPartsSnapshot : undefined,
+      part_selection_trace:
+        pricedPartsResult.trace.length > 0 ? pricedPartsResult.trace : undefined,
+      low_confidence_parts: pricedPartsResult.low_confidence ? true : undefined,
       quoted_set_price_cents: quoted.total_cents,
       quoted_breakdown: quoted.breakdown,
       payment_approval_state: "none",
@@ -6292,19 +6298,23 @@ export const backfillPricedPartsSnapshot = internalMutation({
             .first()
         : null;
 
-      const snapshot = await computePricedPartsSnapshot(ctx, {
+      const result = await computePricedPartsSnapshot(ctx, {
         serviceIds: ((booking as any).service_ids ?? []) as Id<"services">[],
         vehicleConfigId: vehicle.vehicle_config_id,
+        vin: (booking as any).vin,
         confirmedPackages: new Set(ownerSpecs?.confirmed_packages ?? []),
       });
 
-      if (snapshot.length === 0) {
+      if (result.rows.length === 0) {
         skippedEmptySnapshot += 1;
         continue;
       }
 
       await ctx.db.patch(booking._id, {
-        priced_parts_snapshot: snapshot,
+        priced_parts_snapshot: result.rows,
+        part_selection_trace:
+          result.trace.length > 0 ? result.trace : undefined,
+        low_confidence_parts: result.low_confidence ? true : undefined,
         updated_at: Date.now(),
       });
       patched += 1;
@@ -12136,6 +12146,242 @@ export const listOpenTireQuoteRequestsForShop = query({
           _creationTime: booking._creationTime,
           status: booking.status,
           tire_specs: booking.tire_specs,
+          vin: booking.vin,
+          submitted_at: booking.created_at ?? booking._creationTime,
+          vehicle: vehicle
+            ? {
+                year: vehicle.year ?? null,
+                make: meta?.make ?? null,
+                model: meta?.model ?? null,
+              }
+            : null,
+        };
+      }),
+    );
+  },
+});
+
+// ============================================================================
+// ROTOR QUOTE REQUESTS — mirror of the tire bid flow for brake rotors
+// ============================================================================
+
+/**
+ * MUTATION: createRotorQuoteRequest
+ * Creates a quote-stage booking with status "pending_quote" carrying
+ * `rotor_specs`. Shops respond via `rotor_quote_responses.create`, and the
+ * user picks one with `acceptRotorQuote`.
+ */
+export const createRotorQuoteRequest = mutation({
+  args: {
+    user_id: v.id("users"),
+    vin: v.string(),
+    rotor_specs: v.object({
+      axle: v.string(), // "front" | "rear" | "both"
+      tier: v.string(),
+      quantity: v.number(),
+    }),
+    service_ids: v.optional(v.array(v.id("services"))),
+  },
+  handler: async (ctx, args) => {
+    const normalizedVin = args.vin.toUpperCase().trim();
+    const now = Date.now();
+
+    const bookingId = await ctx.db.insert("bookings", {
+      user_id: args.user_id,
+      vin: normalizedVin,
+      service_ids: args.service_ids ?? [],
+      status: "pending_quote",
+      rotor_specs: args.rotor_specs,
+      created_at: now,
+      updated_at: now,
+    });
+
+    await logBookingStatusChange(
+      ctx,
+      bookingId,
+      undefined,
+      "pending_quote",
+      args.user_id,
+      "rotor_quote_requested",
+    );
+
+    await ctx.db.insert("analytics_events", {
+      user_id: args.user_id,
+      event_type: "rotor_quote_request_created",
+      event_category: "booking",
+      event_data: {
+        booking_id: bookingId,
+        rotor_specs: args.rotor_specs,
+      },
+      timestamp: now,
+    });
+
+    return bookingId;
+  },
+});
+
+/**
+ * MUTATION: acceptRotorQuote
+ * Customer picks one of the shop responses for their pending rotor
+ * booking. Fills in shop_id/costs/scheduling, flips status to
+ * "confirmed", and supersedes the remaining responses.
+ */
+export const acceptRotorQuote = mutation({
+  args: {
+    booking_id: v.id("bookings"),
+    response_id: v.id("rotor_quote_responses"),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.booking_id);
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (booking.status !== "quotes_ready" && booking.status !== "pending_quote") {
+      const label =
+        BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
+        String(booking.status).replace(/_/g, " ");
+      throw new Error(`Quotes can only be accepted while a request is awaiting a quote. This one is ${label}.`);
+    }
+
+    const response = await ctx.db.get(args.response_id);
+    if (!response) throw new Error("We couldn't find that quote. It may have been withdrawn.");
+    if (String(response.booking_id) !== String(args.booking_id)) {
+      throw new Error("This quote doesn't belong to the selected request.");
+    }
+    if (response.superseded_at != null) {
+      throw new Error("This quote has already been superseded.");
+    }
+
+    const now = Date.now();
+
+    // Resolve "Rotor Replacement" service so the accepted booking carries
+    // a real service_ids entry. Tolerate the legacy underscore slug too.
+    let rotorService = await ctx.db
+      .query("services")
+      .withIndex("by_slug", (q) => q.eq("slug", "rotor-replacement"))
+      .first();
+    if (!rotorService) {
+      rotorService = await ctx.db
+        .query("services")
+        .withIndex("by_slug", (q) => q.eq("slug", "rotor_replacement"))
+        .first();
+    }
+
+    let attachServiceId: Id<"services"> | null = null;
+    if (rotorService) {
+      // The shop committed to do this rotor job by submitting a quote, so
+      // auto-register the shop_services row if missing.
+      const offered = await ctx.db
+        .query("shop_services")
+        .withIndex("by_shop_and_service", (q) =>
+          q.eq("shop_id", response.shop_id).eq("service_id", rotorService!._id),
+        )
+        .first();
+      if (!offered) {
+        await ctx.db.insert("shop_services", {
+          shop_id: response.shop_id,
+          service_id: rotorService._id,
+          is_offered: true,
+        });
+      } else if (!offered.is_offered) {
+        await ctx.db.patch(offered._id, { is_offered: true });
+      }
+      attachServiceId = rotorService._id;
+    } else {
+      console.warn(
+        "[acceptRotorQuote] no Rotor Replacement service found in catalog — service_ids will be empty",
+      );
+    }
+
+    await ctx.db.patch(args.booking_id, {
+      shop_id: response.shop_id,
+      ...(response.mechanic_id ? { mechanic_id: response.mechanic_id } : {}),
+      labor_cost: response.labor_cost,
+      parts_cost: response.per_rotor_price * response.quantity,
+      total_cost: response.total,
+      scheduled_date: response.availability.date,
+      scheduled_time: response.availability.time,
+      ...(response.estimated_duration_minutes
+        ? { estimated_labor_minutes: response.estimated_duration_minutes }
+        : {}),
+      status: "confirmed",
+      updated_at: now,
+      ...(attachServiceId ? { service_ids: [attachServiceId] } : {}),
+    });
+
+    const siblings = await ctx.db
+      .query("rotor_quote_responses")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.booking_id))
+      .collect();
+    for (const sibling of siblings) {
+      if (String(sibling._id) === String(args.response_id)) continue;
+      if (sibling.superseded_at != null) continue;
+      await ctx.db.patch(sibling._id, { superseded_at: now });
+    }
+
+    await logBookingStatusChange(
+      ctx,
+      args.booking_id,
+      booking.status,
+      "confirmed",
+      booking.user_id,
+      "rotor_quote_accepted",
+    );
+
+    return args.booking_id;
+  },
+});
+
+/**
+ * QUERY: listOpenRotorQuoteRequestsForShop
+ * Rotor-quote-stage bookings the given shop has NOT yet responded to.
+ * Used by the website's "Rotor Quote Requests" view in the shop portal.
+ */
+export const listOpenRotorQuoteRequestsForShop = query({
+  args: {
+    shopId: v.id("shops"),
+  },
+  handler: async (ctx, args) => {
+    const openBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q) => q.eq("status", "pending_quote"))
+      .collect();
+
+    const alsoQuotesReady = await ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q) => q.eq("status", "quotes_ready"))
+      .collect();
+
+    const candidates = [...openBookings, ...alsoQuotesReady].filter(
+      (b) => b.rotor_specs != null,
+    );
+
+    const filtered = await Promise.all(
+      candidates.map(async (booking) => {
+        const existing = await ctx.db
+          .query("rotor_quote_responses")
+          .withIndex("by_booking_and_shop", (q) =>
+            q.eq("booking_id", booking._id).eq("shop_id", args.shopId),
+          )
+          .filter((q) => q.eq(q.field("superseded_at"), undefined))
+          .first();
+        return existing ? null : booking;
+      }),
+    );
+
+    const open = filtered.filter((b): b is NonNullable<typeof b> => b != null);
+
+    return Promise.all(
+      open.map(async (booking) => {
+        const vehicle = await ctx.db
+          .query("vehicles")
+          .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+          .first();
+        const meta =
+          (vehicle?.metadata as { make?: string; model?: string } | undefined) ?? undefined;
+        return {
+          _id: booking._id,
+          _creationTime: booking._creationTime,
+          status: booking.status,
+          rotor_specs: booking.rotor_specs,
           vin: booking.vin,
           submitted_at: booking.created_at ?? booking._creationTime,
           vehicle: vehicle

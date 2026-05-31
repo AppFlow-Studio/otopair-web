@@ -36,6 +36,7 @@ import {
   vehiclePassportTiresValidator,
   vehicleUpdateValuesValidator,
 } from "./lib/vehicle_passports";
+import { tierValidator } from "./lib/vehicleTiers";
 
 export default defineSchema({
   // ===== CORE VEHICLE REFERENCE =====
@@ -734,6 +735,11 @@ export default defineSchema({
     slug: v.optional(v.string()),
     description: v.optional(v.string()),
     service_category_id: v.optional(v.id("service_categories")),
+    // Tier × category multiplier routing (see pricing_service_categories).
+    // Independent of service_category_id (which drives UI grouping).
+    // Null for services that opt out of the multiplier model — e.g. tires,
+    // which route through the dedicated tire quote system.
+    pricing_category_id: v.optional(v.id("pricing_service_categories")),
     display_order: v.optional(v.number()),
     default_labor_hours: v.optional(v.number()),
     has_options: v.optional(v.boolean()),
@@ -751,7 +757,8 @@ export default defineSchema({
     created_at: v.optional(v.number()),
   })
     .index("by_slug", ["slug"])
-    .index("by_category", ["service_category_id"]),
+    .index("by_category", ["service_category_id"])
+    .index("by_pricing_category", ["pricing_category_id"]),
 
   // [I]
   service_categories: defineTable({
@@ -1346,6 +1353,23 @@ export default defineSchema({
     // Pre-appointment reminder lead time (minutes). 0/unset = disabled.
     // 60=1h, 120=2h, 1440=24h, 2880=48h.
     appointment_reminder_lead_minutes: v.optional(v.number()),
+
+    // Per-vehicle-tier labor rates ($/hr). Unset key = falls back to the
+    // legacy single `labor_rate`. Tier present in `declined_tiers` = shop
+    // does not service that vehicle class. Edited via setLaborRatesByTier.
+    labor_rates_by_tier: v.optional(
+      v.object({
+        T1:  v.optional(v.number()),
+        T2a: v.optional(v.number()),
+        T2b: v.optional(v.number()),
+        T2c: v.optional(v.number()),
+        T3a: v.optional(v.number()),
+        T3b: v.optional(v.number()),
+        T4:  v.optional(v.number()),
+      }),
+    ),
+    declined_tiers: v.optional(v.array(tierValidator)),
+    labor_rates_updated_at: v.optional(v.number()),
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
@@ -1585,6 +1609,16 @@ export default defineSchema({
         quantity: v.number(),
       })
     ),
+    // Structured rotor request specs — populated for rotor-quote bookings.
+    // Mirrors tire_specs shape; axle drives the qty (front=2, rear=2,
+    // both=4). No "type" because rotor style is sourced by the shop.
+    rotor_specs: v.optional(
+      v.object({
+        axle: v.string(), // "front" | "rear" | "both"
+        tier: v.string(),
+        quantity: v.number(),
+      })
+    ),
     // Picked variants for services with has_options = true (e.g. brake pads
     // front-vs-rear). Tires keep using tire_specs above. One entry per
     // has_options service. option_label and option_type are snapshotted so
@@ -1684,6 +1718,43 @@ export default defineSchema({
       )
     ),
 
+    // Per-service audit trail for the 7-layer part selector. One entry per
+    // service on the booking. `source = "vin_sticky"` means a prior install on
+    // this VIN won the slot via vehicle_part_preferences; `"scored"` means the
+    // selector ran the full 7 layers; `"no_candidates"` means no fitments
+    // matched (booking falls back to default_parts_estimate). Mechanic / director
+    // tooling reads this to explain "why this part was picked".
+    part_selection_trace: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          winner_part_id: v.optional(v.id("oem_parts")),
+          source: v.union(
+            v.literal("vin_sticky"),
+            v.literal("scored"),
+            v.literal("no_candidates"),
+          ),
+          trace: v.optional(
+            v.array(
+              v.object({
+                layer: v.union(v.number(), v.literal("gate")),
+                name: v.string(),
+                decisive: v.boolean(),
+                reason: v.string(),
+                survivor_part_ids: v.array(v.id("oem_parts")),
+                eliminated_part_ids: v.optional(v.array(v.id("oem_parts"))),
+              }),
+            ),
+          ),
+          eliminated_by_gate_part_ids: v.optional(v.array(v.id("oem_parts"))),
+        }),
+      ),
+    ),
+    // Set when the confidence gate eliminated every candidate on at least one
+    // service, forcing fallback to the full pool. Surface to director tooling
+    // for follow-up enrichment.
+    low_confidence_parts: v.optional(v.boolean()),
+
     // Single-point quoted price the mechanic confirms against. Derived at
     // booking creation from priced_parts_snapshot (single avg unit prices)
     // + disclosed_breakdown.labor_cents + midpoints of the tax / service-fee
@@ -1762,6 +1833,34 @@ export default defineSchema({
     /** Optional expiration so stale quotes can be filtered out. */
     expires_at: v.optional(v.number()),
     /** Set when user accepts this quote (or another one). */
+    superseded_at: v.optional(v.number()),
+  })
+    .index("by_booking_id", ["booking_id"])
+    .index("by_shop_id", ["shop_id"])
+    .index("by_booking_and_shop", ["booking_id", "shop_id"]),
+
+  // Rotor quote responses — one row per shop response to a rotor-quote
+  // booking (bookings.rotor_specs set, status "pending_quote"). Mirrors
+  // tire_quote_responses; `acceptRotorQuote` fills shop/cost/scheduling
+  // onto the booking and flips it to "confirmed".
+  rotor_quote_responses: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    /** Mechanic the shop assigned. Propagated onto booking on accept. */
+    mechanic_id: v.optional(v.id("mechanics")),
+    rotor_brand: v.string(),
+    rotor_model: v.optional(v.string()),
+    per_rotor_price: v.number(),
+    quantity: v.number(),
+    labor_cost: v.number(),
+    total: v.number(),
+    availability: v.object({
+      date: v.string(),
+      time: v.string(),
+    }),
+    estimated_duration_minutes: v.optional(v.number()),
+    created_at: v.number(),
+    expires_at: v.optional(v.number()),
     superseded_at: v.optional(v.number()),
   })
     .index("by_booking_id", ["booking_id"])
@@ -3799,4 +3898,115 @@ export default defineSchema({
     .index("by_booking_id", ["booking_id"])
     .index("by_status", ["status"])
     .index("by_user_id", ["user_id"]),
+
+  // ==========================================================================
+  // MVP Pricing Multiplier (see plan: tier × category × Toyota baseline)
+  // --------------------------------------------------------------------------
+  // All six tables are admin-editable so the matrix tightens cell-by-cell as
+  // real bookings accrue, without migrations. Reads happen at quote-assembly
+  // time. CCB brakes route around the multiplier to absolute pricing; tires
+  // route around it entirely (separate quote system).
+  // ==========================================================================
+
+  // T1 Mainstream / T2 Premium Daily / T3 Performance Euro / T4 Exotic.
+  // Seeded with 4 rows. Editable (admin may add T5+ or rename).
+  pricing_tiers: defineTable({
+    code: v.string(), // "T1" | "T2" | "T3" | "T4"
+    name: v.string(),
+    anchor_vehicle_label: v.string(),
+    display_order: v.number(),
+    description: v.optional(v.string()),
+    is_active: v.boolean(),
+    created_at: v.number(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  })
+    .index("by_code", ["code"])
+    .index("by_display_order", ["display_order"]),
+
+  // The 8 functional pricing buckets (routine_fluids, filters_wear,
+  // brakes_iron, ignition, battery_electrical, labor_diag, labor_chassis,
+  // specialized_engine). Distinct from service_categories (UI grouping).
+  pricing_service_categories: defineTable({
+    code: v.string(),
+    name: v.string(),
+    display_order: v.number(),
+    notes: v.optional(v.string()),
+    is_active: v.boolean(),
+    created_at: v.number(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  })
+    .index("by_code", ["code"])
+    .index("by_display_order", ["display_order"]),
+
+  // The matrix cell: one row per (tier × pricing_category) = 32 rows at seed.
+  // Uniqueness of (tier_id, pricing_category_id) enforced in upsert mutation.
+  pricing_multipliers: defineTable({
+    tier_id: v.id("pricing_tiers"),
+    pricing_category_id: v.id("pricing_service_categories"),
+    multiplier: v.number(),
+    min_bookings_for_lock: v.number(),
+    validated_booking_count: v.number(),
+    is_locked: v.boolean(),
+    notes: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  })
+    .index("by_tier", ["tier_id"])
+    .index("by_category", ["pricing_category_id"])
+    .index("by_tier_and_category", ["tier_id", "pricing_category_id"]),
+
+  // Toyota Camry (T1) anchor price per service, in cents. is_real_data drives
+  // lock/estimate routing — when both is_real_data AND the matching
+  // multiplier.is_locked are true, the cell shows a single locked price.
+  pricing_baselines: defineTable({
+    service_id: v.id("services"),
+    anchor_vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    base_price_low_cents: v.number(),
+    base_price_high_cents: v.number(),
+    is_real_data: v.boolean(),
+    data_source: v.string(), // "enrichment" | "bookings" | "modeled" | "manual"
+    last_validated_at: v.optional(v.number()),
+    notes: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  }).index("by_service", ["service_id"]),
+
+  // Per-vehicle_config tier assignment + brake/powertrain flags. Kept off
+  // vehicle_configs so pricing edits don't churn the canonical catalog row
+  // and so the override audit trail lives in one place.
+  pricing_vehicle_assignments: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    tier_id: v.id("pricing_tiers"),
+    // "iron_standard" | "iron_high_performance" | "ccb_optional" | "ccb_standard"
+    brake_system: v.string(),
+    // "ice" | "hybrid" | "phev" | "bev"
+    powertrain_type: v.string(),
+    is_manual_override: v.boolean(),
+    override_reason: v.optional(v.string()),
+    // JSON blob; populated once the auto-classifier ships.
+    classifier_score_breakdown: v.optional(v.string()),
+    assigned_by_user_id: v.optional(v.id("users")),
+    assigned_at: v.number(),
+    created_at: v.number(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  })
+    .index("by_vehicle_config", ["vehicle_config_id"])
+    .index("by_tier", ["tier_id"]),
+
+  // CCB carve-out — absolute price bands (cents), not multiplied. Keyed by
+  // service_id (e.g. a future "ccb_pad_replacement_front_pair" service row).
+  ccb_absolute_prices: defineTable({
+    service_id: v.id("services"),
+    price_low_cents: v.number(),
+    price_high_cents: v.number(),
+    notes: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  }).index("by_service", ["service_id"]),
 });

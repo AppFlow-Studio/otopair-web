@@ -60,7 +60,8 @@ const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
 const bookingSubLinks = [
   { href: "/schedule?action=newBooking", label: "Create Booking", icon: PlusCircle },
   { href: "/bookings", label: "All Bookings", icon: List },
-  { href: "/bookings/tire-quote-requests", label: "Tire Quote Requests", icon: Wrench },
+  { href: "/bookings/tire-quote-requests", label: "Tire Quotes", icon: Wrench },
+  { href: "/bookings/rotor-quote-requests", label: "Rotor Quotes", icon: Wrench },
 ];
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"];

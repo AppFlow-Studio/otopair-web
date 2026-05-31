@@ -143,6 +143,7 @@ import type * as payments_backfill from "../payments_backfill.js";
 import type * as payments_backfill_helpers from "../payments_backfill_helpers.js";
 import type * as payments_stripe from "../payments_stripe.js";
 import type * as platform_settings from "../platform_settings.js";
+import type * as preSignups from "../preSignups.js";
 import type * as preferences from "../preferences.js";
 import type * as referrals from "../referrals.js";
 import type * as retrigger_enrichment from "../retrigger_enrichment.js";
@@ -399,6 +400,7 @@ declare const fullApi: ApiFromModules<{
   payments_backfill_helpers: typeof payments_backfill_helpers;
   payments_stripe: typeof payments_stripe;
   platform_settings: typeof platform_settings;
+  preSignups: typeof preSignups;
   preferences: typeof preferences;
   referrals: typeof referrals;
   retrigger_enrichment: typeof retrigger_enrichment;

@@ -76,6 +76,10 @@ function Navbar() {
             alert('Failed to join waitlist. Please try again.')
         }
     }
+
+    // The flagship home hero ships its own floating pill nav.
+    if (isHome) return null
+
     return (
         <>
             <div className='fixed lg:top-4 lg:left-1/2 lg:-translate-x-1/2 z-[112] w-full lg:max-w-fit mx-auto lg:rounded-[12px] transition-all duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] will-change-[background-color,border-color,box-shadow,backdrop-filter] lg:border border-white/20 bg-gradient-to-r from-[rgba(249,250,247,0.12)] to-[rgba(249,250,247,0.18)] lg:shadow-[0_2px_6px_0_rgba(0,0,0,0.15)] backdrop-blur-[9px]'>

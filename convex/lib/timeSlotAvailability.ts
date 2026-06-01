@@ -131,10 +131,17 @@ export async function getManualBlockedSlotsForShopDate(
   shopId: any,
   date?: string,
 ) {
-  const slots = await ctx.db
-    .query("time_slots")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .collect();
+  const slots = date
+    ? await ctx.db
+        .query("time_slots")
+        .withIndex("by_shop_and_date", (q: any) =>
+          q.eq("shop_id", shopId).eq("date", date),
+        )
+        .collect()
+    : await ctx.db
+        .query("time_slots")
+        .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
+        .collect();
 
   return slots.filter(
     (slot: any) =>
@@ -487,17 +494,17 @@ export async function resolveAvailableMechanicForWindow(
     });
   }
 
-  candidates.sort((left, right) => {
-    if (left.count !== right.count) return left.count - right.count;
-    if (left.minutes !== right.minutes) return left.minutes - right.minutes;
-    return String(left.mechanicId).localeCompare(String(right.mechanicId));
-  });
-
   if (!candidates[0]) {
     throw new Error("No mechanic is available for the requested time.");
   }
 
-  return candidates[0].mechanicId;
+  const lowestCount = Math.min(...candidates.map((candidate) => candidate.count));
+  const fewestBookings = candidates.filter((candidate) => candidate.count === lowestCount);
+  const lowestMinutes = Math.min(...fewestBookings.map((candidate) => candidate.minutes));
+  const tiedCandidates = fewestBookings.filter((candidate) => candidate.minutes === lowestMinutes);
+  const randomIndex = Math.floor(Math.random() * tiedCandidates.length);
+
+  return tiedCandidates[randomIndex].mechanicId;
 }
 
 export async function getMechanicDayWorkload(

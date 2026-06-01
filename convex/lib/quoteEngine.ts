@@ -1,0 +1,440 @@
+/**
+ * quoteEngine.ts — Pricing v2 (spec May 29 2026) quote-engine resolvers.
+ *
+ * Three resolvers + the top-level buildQuote, all read-only. Designed to run
+ * inside a Convex query (reactive). The Layer-5 write-back cache from the
+ * spec is deferred — Layer 5 recomputes each call (single multiplier lookup,
+ * negligible cost; ensures highest-confidence-wins without ordering subtleties).
+ *
+ * Formula (locked):
+ *   final_quote_low  = labor_hours × shop.rate_for_tier + oem_parts_low  × parts_mult
+ *   final_quote_high = labor_hours × shop.rate_for_tier + oem_parts_high × parts_mult
+ *   parts_low  = anchor × 0.94   parts_high = anchor × 1.06   (built into the seed)
+ */
+
+import { Doc, Id } from "../_generated/dataModel";
+import { QueryCtx } from "../_generated/server";
+import { resolveLaborRate, VehicleTier } from "./vehicleTiers";
+
+// Anchor — the 2020 Camry LE FWD vehicle_config (seeded by seedCamryBaseline).
+export const CAMRY_FWD_CONFIG_KEY = "2020_toyota_camry_le_fwd_a25a-fks";
+
+// ─── resolveLaborHours — 6-layer fallback per spec Part 3 ─────────────────
+
+export type LaborHoursResult =
+  | {
+      ok: true;
+      hours: number;
+      source:
+        | "vdb"
+        | "vdb_camry_baseline"
+        | "empirical"
+        | "sibling"
+        | "engine_family"
+        | "tier_estimate";
+      confidence: number;
+    }
+  | { ok: false; reason: string };
+
+export async function resolveLaborHours(
+  ctx: QueryCtx,
+  args: {
+    vehicle_config_id: Id<"vehicle_configs">;
+    service_id: Id<"services">;
+    vehicle_tier: VehicleTier;
+  },
+): Promise<LaborHoursResult> {
+  // Layer 1: direct labor_times row, real flat-rate data (not tier_estimate)
+  const direct = await ctx.db
+    .query("labor_times")
+    .withIndex("by_vehicle_config_and_service", (q) =>
+      q
+        .eq("vehicle_config_id", args.vehicle_config_id)
+        .eq("service_id", args.service_id),
+    )
+    .collect();
+
+  for (const row of direct) {
+    if (
+      row.source !== "tier_estimate" &&
+      row.book_hours != null &&
+      row.book_hours > 0
+    ) {
+      const labelled =
+        row.source === "vdb_camry_baseline" ? "vdb_camry_baseline" : "vdb";
+      return {
+        ok: true,
+        hours: row.book_hours,
+        source: labelled,
+        confidence: row.confidence ?? 0.9,
+      };
+    }
+  }
+
+  // Layer 2: empirical (≥2 completed jobs)
+  for (const row of direct) {
+    if (
+      row.empirical_hours != null &&
+      row.empirical_hours > 0 &&
+      (row.empirical_sample_size ?? 0) >= 2
+    ) {
+      return {
+        ok: true,
+        hours: row.empirical_hours,
+        source: "empirical",
+        confidence: row.confidence ?? 0.85,
+      };
+    }
+  }
+
+  // Layer 3: sibling config (same chassis_code, different config)
+  const cfg = await ctx.db.get(args.vehicle_config_id);
+  if (cfg?.chassis_code) {
+    const siblings = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_chassis_code", (q) =>
+        q.eq("chassis_code", cfg.chassis_code),
+      )
+      .collect();
+    for (const sib of siblings) {
+      if (sib._id === args.vehicle_config_id) continue;
+      const sibLabor = await ctx.db
+        .query("labor_times")
+        .withIndex("by_vehicle_config_and_service", (q) =>
+          q.eq("vehicle_config_id", sib._id).eq("service_id", args.service_id),
+        )
+        .first();
+      if (
+        sibLabor?.book_hours != null &&
+        sibLabor.book_hours > 0 &&
+        sibLabor.source !== "tier_estimate"
+      ) {
+        return {
+          ok: true,
+          hours: sibLabor.book_hours,
+          source: "sibling",
+          confidence: 0.7,
+        };
+      }
+    }
+  }
+
+  // Layer 4: engine-family estimator — DEFERRED per spec Open Items.
+
+  // Layer 5: tier_estimate fallback (Camry hours × labor multiplier)
+  const service = await ctx.db.get(args.service_id);
+  if (!service?.labor_multiplier_category_id) {
+    return { ok: false, reason: "service has no labor_multiplier_category" };
+  }
+  const laborMultRow = await ctx.db
+    .query("pricing_labor_multipliers")
+    .withIndex("by_category_tier", (q) =>
+      q
+        .eq("labor_category_id", service.labor_multiplier_category_id!)
+        .eq("tier", args.vehicle_tier),
+    )
+    .first();
+  if (!laborMultRow) {
+    return {
+      ok: false,
+      reason: `no labor multiplier for tier ${args.vehicle_tier}`,
+    };
+  }
+  const camry = await getCamryFwdConfig(ctx);
+  if (!camry) {
+    return {
+      ok: false,
+      reason: "Camry baseline config not seeded — run seedCamryBaseline:run",
+    };
+  }
+  const camryHours = await ctx.db
+    .query("labor_times")
+    .withIndex("by_vehicle_config_and_service", (q) =>
+      q.eq("vehicle_config_id", camry._id).eq("service_id", args.service_id),
+    )
+    .first();
+  if (!camryHours?.book_hours) {
+    return {
+      ok: false,
+      reason: `no Camry baseline hours for service ${args.service_id}`,
+    };
+  }
+  return {
+    ok: true,
+    hours: camryHours.book_hours * laborMultRow.multiplier,
+    source: "tier_estimate",
+    confidence: 0.3,
+  };
+}
+
+// ─── resolvePartsCost — Camry anchor × tier multiplier, w/ CCB + AWD rules ─
+
+export type PartsCostResult =
+  | { ok: true; low: number; high: number; source: string; flags: string[] }
+  | { ok: false; reason: string };
+
+export async function resolvePartsCost(
+  ctx: QueryCtx,
+  args: {
+    vehicle_config_id: Id<"vehicle_configs">;
+    service_id: Id<"services">;
+    vehicle_tier: VehicleTier;
+  },
+): Promise<PartsCostResult> {
+  const cfg = await ctx.db.get(args.vehicle_config_id);
+  if (!cfg) return { ok: false, reason: "vehicle config not found" };
+
+  const service = await ctx.db.get(args.service_id);
+  if (!service) return { ok: false, reason: "service not found" };
+
+  // CCB carve-out — brake_system lives on pricing_vehicle_assignments.
+  const pva = await ctx.db
+    .query("pricing_vehicle_assignments")
+    .withIndex("by_vehicle_config", (q) =>
+      q.eq("vehicle_config_id", args.vehicle_config_id),
+    )
+    .first();
+  const brakeSystem = pva?.brake_system;
+
+  const slug = service.slug ?? "";
+  const isBrakeService =
+    slug === "brake_pad_replacement" || slug === "rotor_replacement";
+
+  if (isBrakeService) {
+    // Spec rule: missing brake_system = refuse-to-quote (never assume steel).
+    if (brakeSystem === undefined) {
+      return {
+        ok: false,
+        reason:
+          "brake_system not classified — refuse-to-quote per spec (never assume steel)",
+      };
+    }
+    if (brakeSystem === "ccb_standard" || brakeSystem === "ccb_optional") {
+      const ccb = await ctx.db
+        .query("ccb_absolute_prices")
+        .withIndex("by_service", (q) => q.eq("service_id", args.service_id))
+        .first();
+      if (!ccb) {
+        return {
+          ok: false,
+          reason: "CCB pricing not configured for service",
+        };
+      }
+      return {
+        ok: true,
+        low: ccb.price_low_cents / 100,
+        high: ccb.price_high_cents / 100,
+        source: "ccb_absolute",
+        flags: ["ccb_absolute_pricing"],
+      };
+    }
+  }
+
+  if (!service.parts_multiplier_category_id) {
+    return {
+      ok: false,
+      reason: "service has no parts_multiplier_category (e.g. diagnostics, tires)",
+    };
+  }
+
+  const camry = await getCamryFwdConfig(ctx);
+  if (!camry?.engine_id) {
+    return {
+      ok: false,
+      reason: "Camry baseline engine not seeded — run seedCamryBaseline:run",
+    };
+  }
+  const spec = await ctx.db
+    .query("service_vehicle_specs")
+    .withIndex("by_engine_and_service", (q) =>
+      q.eq("engine_id", camry.engine_id!).eq("service_id", args.service_id),
+    )
+    .first();
+  if (spec?.parts_cost_low == null || spec.parts_cost_high == null) {
+    return {
+      ok: false,
+      reason: `no Camry baseline parts cost for service slug=${slug}`,
+    };
+  }
+
+  const partsMultRow = await ctx.db
+    .query("pricing_parts_multipliers")
+    .withIndex("by_category_tier", (q) =>
+      q
+        .eq("parts_category_id", service.parts_multiplier_category_id!)
+        .eq("tier", args.vehicle_tier),
+    )
+    .first();
+  if (!partsMultRow) {
+    return {
+      ok: false,
+      reason: `no parts multiplier for tier ${args.vehicle_tier}`,
+    };
+  }
+
+  let mult = partsMultRow.multiplier;
+  const flags: string[] = [];
+
+  // AWD surcharge per spec Part 1 Modifier rules (open-item flagged):
+  // +10% on parts mult for oil+filter, coolant, brake pads only.
+  const partsCategoryDoc = await ctx.db.get(
+    service.parts_multiplier_category_id!,
+  );
+  const partsCategoryCode = partsCategoryDoc?.code;
+  const isAwd = (cfg.drivetrain ?? "").toUpperCase() === "AWD";
+  if (
+    isAwd &&
+    (partsCategoryCode === "oil_filter" ||
+      partsCategoryCode === "coolant" ||
+      partsCategoryCode === "brake_pads")
+  ) {
+    mult *= 1.1;
+    flags.push("awd_surcharge_applied");
+  }
+
+  // Differential service is AWD-only.
+  if (slug === "differential_service" && !isAwd) {
+    return {
+      ok: false,
+      reason: "differential service not applicable to FWD vehicle",
+    };
+  }
+
+  return {
+    ok: true,
+    low: spec.parts_cost_low * mult,
+    high: spec.parts_cost_high * mult,
+    source: `multiplier:${partsCategoryCode ?? "?"}:${args.vehicle_tier}`,
+    flags,
+  };
+}
+
+// ─── buildQuote — assembles the full quote object ──────────────────────────
+
+export type Quote =
+  | {
+      ok: true;
+      low: number;
+      high: number;
+      spread_pct: number;
+      tier: VehicleTier;
+      labor: {
+        hours: number;
+        rate: number;
+        cost: number;
+        hours_source: string;
+        hours_confidence: number;
+        rate_source: string;
+      };
+      parts: { low: number; high: number; source: string };
+      flags: string[];
+      display_label?: string;
+    }
+  | {
+      ok: false;
+      refuse_to_quote: true;
+      reason: string;
+      route_to: "booking_approvals";
+    };
+
+export async function buildQuote(
+  ctx: QueryCtx,
+  args: {
+    vehicle_config_id: Id<"vehicle_configs">;
+    service_id: Id<"services">;
+    shop_id: Id<"shops">;
+  },
+): Promise<Quote> {
+  const cfg = await ctx.db.get(args.vehicle_config_id);
+  if (!cfg) return refuse("vehicle config not found");
+  const tier = cfg.pricing_tier as VehicleTier | undefined;
+  if (!tier) {
+    return refuse(
+      "vehicle has no pricing_tier — run seedTierAssignments:run or assign manually",
+    );
+  }
+
+  const shop = await ctx.db.get(args.shop_id);
+  if (!shop) return refuse("shop not found");
+
+  const rateRes = resolveLaborRate(shop, tier);
+  if (!rateRes.serviceable || rateRes.rate == null) {
+    return refuse(`shop labor rate unavailable: ${rateRes.source}`);
+  }
+
+  const hoursRes = await resolveLaborHours(ctx, {
+    vehicle_config_id: args.vehicle_config_id,
+    service_id: args.service_id,
+    vehicle_tier: tier,
+  });
+  if (!hoursRes.ok) return refuse(hoursRes.reason);
+
+  const partsRes = await resolvePartsCost(ctx, {
+    vehicle_config_id: args.vehicle_config_id,
+    service_id: args.service_id,
+    vehicle_tier: tier,
+  });
+  if (!partsRes.ok) return refuse(partsRes.reason);
+
+  const laborCost = hoursRes.hours * rateRes.rate;
+  const low = laborCost + partsRes.low;
+  const high = laborCost + partsRes.high;
+  const spreadPct = low > 0 ? ((high - low) / low) * 100 : 0;
+
+  const flags: string[] = [...partsRes.flags];
+  let display_label: string | undefined;
+  if (hoursRes.source === "tier_estimate") {
+    flags.push("tier_estimate");
+    display_label = "Initial estimate — final price confirmed at booking";
+  }
+  if (spreadPct > 10) flags.push("spread_exceeded");
+
+  return {
+    ok: true,
+    low: round2(low),
+    high: round2(high),
+    spread_pct: Math.round(spreadPct * 10) / 10,
+    tier,
+    labor: {
+      hours: hoursRes.hours,
+      rate: rateRes.rate,
+      cost: round2(laborCost),
+      hours_source: hoursRes.source,
+      hours_confidence: hoursRes.confidence,
+      rate_source: rateRes.source,
+    },
+    parts: {
+      low: round2(partsRes.low),
+      high: round2(partsRes.high),
+      source: partsRes.source,
+    },
+    flags,
+    display_label,
+  };
+}
+
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function refuse(reason: string): Quote {
+  return {
+    ok: false,
+    refuse_to_quote: true,
+    reason,
+    route_to: "booking_approvals",
+  };
+}
+
+async function getCamryFwdConfig(
+  ctx: QueryCtx,
+): Promise<Doc<"vehicle_configs"> | null> {
+  return await ctx.db
+    .query("vehicle_configs")
+    .withIndex("by_config_key", (q) =>
+      q.eq("config_key", CAMRY_FWD_CONFIG_KEY),
+    )
+    .first();
+}

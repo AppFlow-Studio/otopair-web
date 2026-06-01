@@ -268,7 +268,7 @@ const CCB_PRICES: Record<string, { low_cents: number; high_cents: number; notes?
 //   - 911 base / 718 / Cayenne S/GTS / Panamera / R8 / AMG GT → T3b
 //   - 911 Turbo / GT3 / RS / M-flagship / Aston / Bentley / Rolls → T4
 
-type AssignmentRule = {
+export type AssignmentRule = {
   tier: VehicleTier;
   make?: string;
   model_includes?: string;
@@ -281,7 +281,7 @@ type AssignmentRule = {
   reason: string;
 };
 
-const ASSIGNMENT_RULES: AssignmentRule[] = [
+export const ASSIGNMENT_RULES: AssignmentRule[] = [
   // ════════════════════ T4 ULTRA-EXOTIC (most specific first) ═══════════
   // Porsche 911 Turbo / GT3 / GT3 RS / Turbo S
   { tier: "T4", make: "Porsche", model_includes: "911",
@@ -519,9 +519,9 @@ const ASSIGNMENT_RULES: AssignmentRule[] = [
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────
 
-const norm = (s: string | undefined) => (s ?? "").toLowerCase().trim();
+export const norm = (s: string | undefined) => (s ?? "").toLowerCase().trim();
 
-function matchRule(
+export function matchRule(
   rule: AssignmentRule,
   ctx: { make: string; model: string; trim: string; year: number },
 ): boolean {

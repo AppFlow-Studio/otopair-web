@@ -226,6 +226,13 @@ export default defineSchema({
     verification_count: v.optional(v.number()),
     chassis_code: v.optional(v.string()),
     cloned_from_config_id: v.optional(v.id("vehicle_configs")),
+    // Pricing v2 (spec May 29 2026): denormalized 7-tier assignment. Quote
+    // engine reads this directly — no join through pricing_vehicle_assignments.
+    // Writers: seedTierAssignments (Part 5 explicit) → 'part5_seed';
+    // ASSIGNMENT_RULES fallback → 'rules_engine'; admin override → 'manual'.
+    pricing_tier: v.optional(tierValidator),
+    pricing_tier_source: v.optional(v.string()),
+    pricing_tier_set_at: v.optional(v.number()),
     // Packages this trim *can* ship with that affect 1+ of the 23 services.
     // Detection-only — does NOT mean a specific VIN has the package.
     // Used at booking time to compute which questions to ask the user.
@@ -249,7 +256,8 @@ export default defineSchema({
     .index("by_make_model_year", ["make_id", "model_id", "year"])
     .index("by_enrichment_status", ["enrichment_status"])
     .index("by_fill_rate", ["fill_rate"])
-    .index("by_chassis_code", ["chassis_code"]),
+    .index("by_chassis_code", ["chassis_code"])
+    .index("by_pricing_tier", ["pricing_tier"]),
 
   // [U-W] Differential/transfer case specs
   drivetrain_configs: defineTable({
@@ -740,6 +748,11 @@ export default defineSchema({
     // Null for services that opt out of the multiplier model — e.g. tires,
     // which route through the dedicated tire quote system.
     pricing_category_id: v.optional(v.id("pricing_service_categories")),
+    // Pricing v2 (spec May 29 2026): granular parts + labor multiplier routing.
+    // Replaces pricing_category_id once the quote engine cuts over. Both fields
+    // may be null (e.g. diagnostics has no parts, tire_replacement uses neither).
+    parts_multiplier_category_id: v.optional(v.id("pricing_parts_categories")),
+    labor_multiplier_category_id: v.optional(v.id("pricing_labor_categories")),
     display_order: v.optional(v.number()),
     default_labor_hours: v.optional(v.number()),
     has_options: v.optional(v.boolean()),
@@ -800,6 +813,10 @@ export default defineSchema({
     data_source: v.optional(v.string()),
     last_enriched_at: v.optional(v.number()),
     vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    // Pricing v2 (spec May 29 2026): OEM provenance for the 1.0× Camry anchor.
+    // parts_cost_low/high (above) hold the dealer parts-counter ±6% band.
+    oem_part_number: v.optional(v.string()),
+    parts_cost_basis: v.optional(v.string()),
   })
     .index("by_engine_id", ["engine_id"])
     .index("by_service_id", ["service_id"])
@@ -4009,4 +4026,42 @@ export default defineSchema({
     updated_at: v.number(),
     updated_by_user_id: v.optional(v.id("users")),
   }).index("by_service", ["service_id"]),
+
+  // ===== PRICING v2 (Spec May 29 2026 — locked) =====
+  // 9 parts categories × 7 tiers = 63 multipliers; 4 labor categories × 7 tiers
+  // = 28 multipliers. Applied to the 2020 Camry LE OEM dealer-counter baseline
+  // (see service_vehicle_specs rows seeded from Part 2).
+
+  pricing_parts_categories: defineTable({
+    // 'oil_filter' | 'air_cabin_filters' | 'spark_plugs' | 'brake_pads' |
+    // 'brake_fluid' | 'battery' | 'coolant' | 'transmission_fluid' | 'differential'
+    code: v.string(),
+    name: v.string(),
+    display_order: v.number(),
+    notes: v.optional(v.string()),
+  }).index("by_code", ["code"]),
+
+  pricing_parts_multipliers: defineTable({
+    parts_category_id: v.id("pricing_parts_categories"),
+    tier: tierValidator,
+    multiplier: v.number(),
+    source: v.string(), // 'spec_v2_locked' | 'empirical_correction'
+    updated_at: v.number(),
+  }).index("by_category_tier", ["parts_category_id", "tier"]),
+
+  pricing_labor_categories: defineTable({
+    // 'routine' | 'engine_access' | 'brakes' | 'diagnostics'
+    code: v.string(),
+    name: v.string(),
+    display_order: v.number(),
+  }).index("by_code", ["code"]),
+
+  // Spec refers to this as `labor_tier_estimates`.
+  pricing_labor_multipliers: defineTable({
+    labor_category_id: v.id("pricing_labor_categories"),
+    tier: tierValidator,
+    multiplier: v.number(),
+    source: v.string(), // 'spec_v2_locked' | 'empirical_correction'
+    updated_at: v.number(),
+  }).index("by_category_tier", ["labor_category_id", "tier"]),
 });

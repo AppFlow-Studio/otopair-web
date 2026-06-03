@@ -209,6 +209,64 @@ const TOOLS = [
     expects_response: false,
     execution_mode: "immediate",
   },
+  {
+    type: "client",
+    name: "show_info_card",
+    description:
+      "Show a generic info card for a knowledge-base topic that has NO dedicated show_demo card. Rule: if the topic matches a show_demo feature, use show_demo; OTHERWISE compose a show_info_card from what you know. You supply the content; the screen lays it out and styles it. Pick ONE layout and fill the matching field — list (items[]: bullet points), steps (items[]: ordered steps), rows (rows[]: label/value pairs), stats (stats[]: value+label number tiles), compare (pros[] and/or cons[]: what it does vs. what it doesn't). Always give a short title; summary is one line under it; footnote is fine print. Keep every entry to a few words — they're UI labels, not sentences. Don't read the card aloud; speak your short human answer alongside it.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: strProp("Short card title (a few words)."),
+        summary: strProp("Optional one-line summary shown under the title."),
+        layout: {
+          type: "string",
+          enum: ["list", "rows", "stats", "steps", "compare"],
+          description: "How to lay the content out — fill the field that matches it.",
+        },
+        items: {
+          type: "array",
+          items: strProp("A single bullet or step — a few words."),
+          description: "Bullets for 'list' or ordered steps for 'steps' (max 6, a few words each).",
+        },
+        rows: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { label: strProp("Row label."), value: strProp("Row value.") },
+            required: ["label", "value"],
+          },
+          description: "Label/value pairs for 'rows' (max 6).",
+        },
+        stats: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              value: strProp("The number/stat, e.g. '7%' or '90 days'."),
+              label: strProp("What it measures."),
+            },
+            required: ["value", "label"],
+          },
+          description: "Number tiles for 'stats' (max 4).",
+        },
+        pros: {
+          type: "array",
+          items: strProp("A single positive point — a few words."),
+          description: "Positive points / what it does, for 'compare' (max 6).",
+        },
+        cons: {
+          type: "array",
+          items: strProp("A single negative point — a few words."),
+          description: "Negative points / what it doesn't do, for 'compare' (max 6).",
+        },
+        footnote: strProp("Optional fine print under the card."),
+      },
+      required: ["title", "layout"],
+    },
+    expects_response: false,
+    execution_mode: "immediate",
+  },
 ];
 
 const PROMPT_GUIDANCE = `
@@ -220,6 +278,7 @@ Show things on screen by calling client tools — this is core to the experience
 - decode_vin(vin) — when the visitor gives a 17-character VIN; confirm the car you get back. Decode ONCE — after that you already know their car.
 - show_vehicle() — to (re)show the visitor's OWN car and its full specs. Use this whenever they ask about "my car", "my specs", "show it again", etc. Never use show_demo 'overview' for their specific car.
 - BOOKING WALKTHROUGH — when the visitor asks how booking works, to see the flow, or to go step by step, call show_booking_flow() FIRST (it opens the interactive walkthrough on the shop-picker). Then narrate as they tap through: pick a shop → pick a time → confirm. You can advance for them with show_times then confirm_booking. NEVER use show_demo("bookings") for this — that card only tracks existing appointments.
+- show_info_card(...) — the FALLBACK for topics that don't have a show_demo card above. If the question fits a show_demo feature, use show_demo; otherwise build a quick show_info_card from the knowledge base: set a short title, pick a layout (list / steps / rows / stats / compare), and fill the matching field with a few short entries. Use it for the long-tail questions so the screen still backs up your answer — don't leave outlier topics with no visual.
 - save_presignup(email) — once you naturally have their email, so their car is waiting when they sign up.
 
 How to behave:

@@ -7,6 +7,7 @@ import {
   useConversationClientTool,
 } from "@elevenlabs/react";
 import { api } from "@/convex/_generated/api";
+import { sanitizeInfoCard, type InfoCardPayload } from "./info-card";
 import {
   DEFAULT_BOOKING,
   DEFAULT_SHOPS,
@@ -54,6 +55,15 @@ function matchDemoFeature(text: string): DemoFeature | null {
   return null;
 }
 
+// Intent to start the interactive booking WALKTHROUGH (distinct from the
+// "bookings" tab demo). Triggers the shops → times → confirm flow.
+const BOOKING_RE =
+  /\b(walk me through|step by step|how (do|does|can) (i|you|we) book|how (to|do i) book|book (a|my|an|me)|start (a |the )?booking|see (the )?booking flow|how (does )?booking work)/i;
+
+// Intent to re-show the user's OWN decoded car (only meaningful after a VIN).
+const MYCAR_RE =
+  /\b(my (car|vehicle|specs|ride)|its specs|the specs|show.*(car|vehicle|specs)|see.*(car|vehicle|specs)|about my car)\b/i;
+
 // Short, natural demo-mode acknowledgements (live agent speaks its own words).
 const DEMO_LINES: Record<DemoFeature, string> = {
   service_catalog: "Here's everything you can book at launch.",
@@ -99,23 +109,51 @@ export function useOtoAgent() {
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [presignupSaved, setPresignupSaved] = useState(false);
   const [demoFeature, setDemoFeature] = useState<DemoFeature | null>(null);
+  // Outlier fallback: a generic, agent-composed info card for knowledge-base
+  // topics with no dedicated demo card (validated/clamped before it lands here).
+  const [dynamicCard, setDynamicCard] = useState<InfoCardPayload | null>(null);
+  // "awake" flips the hero into the live 3-panel layout the moment the user
+  // engages (focuses the input / taps a chip / mic), before any message lands —
+  // so the chat + schedule panels slide in together ("Oto just woke up").
+  const [awake, setAwake] = useState(false);
   const demoTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const createStub = useMutation(api.preSignups.createStub);
   const convex = useConvex();
   const stepRef = useRef<OtoStep>("intro");
   const connectedRef = useRef(false);
+  // Reliability plumbing: driveSeqRef bumps on every UI change (tool OR local),
+  // so the live-mode safety net only fires when the agent didn't drive the UI.
+  const driveSeqRef = useRef(0);
+  const cardFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastVinRef = useRef("");
   useEffect(() => {
     stepRef.current = step;
+  }, [step]);
+  useEffect(() => {
+    driveSeqRef.current += 1;
+  }, [demoFeature, step, dynamicCard]);
+  // The dynamic card lives in its own visual channel. Clear it the moment any
+  // OTHER channel takes over (a demo card, or any funnel step change) so a
+  // stale info card can never mask whatever the agent showed next.
+  useEffect(() => {
+    if (demoFeature !== null) setDynamicCard(null);
+  }, [demoFeature]);
+  useEffect(() => {
+    setDynamicCard(null);
   }, [step]);
 
   const pushMessage = useCallback((role: ChatMessage["role"], text: string) => {
     setMessages((prev) => [...prev, { id: mkId(), role, text }]);
   }, []);
 
+  /** Wake the hero into its live layout (called on first engagement). */
+  const wake = useCallback(() => setAwake(true), []);
+
   /** Decode a VIN via NHTSA (/api/vin) and surface the vehicle. */
   const decodeVin = useCallback(
     async (rawVin: string): Promise<string> => {
       const vin = rawVin.trim().toUpperCase();
+      lastVinRef.current = vin;
       setThinking(true);
       try {
         const res = await fetch(`/api/vin/${encodeURIComponent(vin)}`);
@@ -224,6 +262,54 @@ export function useOtoAgent() {
     setStep("shops");
   }, []);
 
+  /**
+   * Live-mode safety net. The agent SHOULD call a client tool for every topic,
+   * but model tool-calling isn't 100% reliable — so we also read each turn and,
+   * if the agent didn't drive the UI shortly after, surface the matching card
+   * ourselves. A VIN in a user turn is decoded immediately (never depends on a
+   * tool call). The drive-seq guard guarantees we never override the agent when
+   * it DID act, and the step guard keeps us out of the booking funnel.
+   */
+  const handleLiveTurn = useCallback(
+    (text: string, isUser: boolean) => {
+      if (isUser) {
+        const m = text.match(VIN_RE);
+        if (m && lastVinRef.current !== m[0].toUpperCase()) {
+          void decodeVin(m[0]);
+          return;
+        }
+      }
+      // Decide what the screen should show if the agent doesn't drive it.
+      let action: (() => void) | null = null;
+      if (isUser && lastVinRef.current && MYCAR_RE.test(text)) {
+        action = () => showVehicle();
+      } else if (isUser && BOOKING_RE.test(text)) {
+        action = () => {
+          setDemoFeature(null);
+          stepRef.current = "shops";
+          setStep("shops");
+        };
+      } else {
+        const feature = matchDemoFeature(text);
+        if (feature) action = () => setDemoFeature(feature);
+      }
+      if (!action) return;
+      const apply = action;
+      const seq = driveSeqRef.current;
+      if (cardFallbackRef.current) clearTimeout(cardFallbackRef.current);
+      cardFallbackRef.current = setTimeout(
+        () => {
+          if (driveSeqRef.current !== seq) return; // agent already drove the UI
+          const s = stepRef.current;
+          if (s !== "intro" && s !== "vehicle") return; // don't hijack an active booking flow
+          apply();
+        },
+        isUser ? 1000 : 500
+      );
+    },
+    [decodeVin, showVehicle]
+  );
+
   const conversation = useConversation({
     onMessage: ({ message, source }) => {
       const role = source === "user" ? "user" : "oto";
@@ -233,7 +319,10 @@ export function useOtoAgent() {
         .replace(/\[[a-zA-Z][a-zA-Z ]{0,24}\]/g, "")
         .replace(/\s{2,}/g, " ")
         .trim();
-      if (clean) pushMessage(role, clean);
+      if (!clean) return;
+      pushMessage(role, clean);
+      // Safety net runs only for live sessions (demo mode routes via runDemo).
+      if (connectedRef.current) handleLiveTurn(clean, source === "user");
     },
     onError: (message) => {
       console.warn("[oto] conversation error:", message);
@@ -349,6 +438,15 @@ export function useOtoAgent() {
     return "Started the interactive booking walkthrough — nearby shops are on screen. The user taps a shop → picks a time → confirms; narrate each step. (You can also call show_times then confirm_booking to advance for them.)";
   });
 
+  useConversationClientTool("show_info_card", (params: Record<string, unknown>) => {
+    const card = sanitizeInfoCard(params);
+    if (!card) return "Couldn't build that card — it needs at least a title.";
+    // Take over the canvas; the channel-exclusion effects keep things tidy.
+    setDemoFeature(null);
+    setDynamicCard(card);
+    return `Showing an info card: ${card.title}.`;
+  });
+
   // ---- Scripted demo fallback ---------------------------------------------
   const clearDemoTimers = useCallback(() => {
     demoTimers.current.forEach(clearTimeout);
@@ -369,8 +467,10 @@ export function useOtoAgent() {
       setDemoFeature(null); // funnel takes over the component side
       stepRef.current = target;
       setStep(target);
+      // Scripted Oto lines are for the demo fallback only — in a live session
+      // the real agent narrates, so never inject canned copy.
       const line = OTO_LINES[target as Exclude<OtoStep, "intro">];
-      if (line) {
+      if (line && !connectedRef.current) {
         setThinking(true);
         after(700, () => {
           setThinking(false);
@@ -440,6 +540,16 @@ export function useOtoAgent() {
         showVehicle();
         return;
       }
+      // Booking walkthrough intent → jump straight into the shop picker.
+      if (BOOKING_RE.test(text)) {
+        startBookingFlow();
+        setThinking(true);
+        after(600, () => {
+          setThinking(false);
+          pushMessage("oto", OTO_LINES.shops ?? "Here are nearby shops with fixed prices.");
+        });
+        return;
+      }
       const feature = matchDemoFeature(text);
       if (feature) {
         setDemoFeature(feature);
@@ -452,7 +562,7 @@ export function useOtoAgent() {
       }
       advance();
     },
-    [advance, after, decodeVin, pushMessage, showVehicle, vehicle]
+    [advance, after, decodeVin, pushMessage, showVehicle, startBookingFlow, vehicle]
   );
 
   // ---- Public actions ------------------------------------------------------
@@ -461,7 +571,11 @@ export function useOtoAgent() {
     async (raw: string) => {
       const text = raw.trim();
       if (!text) return;
+      setAwake(true);
       pushMessage("user", text);
+      // With an agent configured, run the live safety net (instant VIN decode +
+      // card fallback) so the visual never depends solely on the agent's tools.
+      if (agentConfigured) handleLiveTurn(text, true);
 
       // Live session already up (voice or text) — send straight to the agent.
       if (connectedRef.current) {
@@ -496,11 +610,12 @@ export function useOtoAgent() {
       // No agent — local demo.
       runDemo(text);
     },
-    [agentConfigured, connect, conversation, pushMessage, runDemo]
+    [agentConfigured, connect, conversation, handleLiveTurn, pushMessage, runDemo]
   );
 
   /** Talk to Oto — opens a live voice (WebRTC) session, else demo. */
   const startVoice = useCallback(async () => {
+    setAwake(true);
     // Microphone requires a secure context (https or http://localhost). On a
     // plain-IP/LAN URL navigator.mediaDevices is undefined and no prompt fires.
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
@@ -578,14 +693,20 @@ export function useOtoAgent() {
   const chooseShop = useCallback(
     (shop: Shop) => {
       setSelectedShop(shop);
-      if (connected) {
+      if (connectedRef.current) {
+        // Advance the walkthrough locally so it never stalls on a tool call;
+        // the live agent narrates the next step from the message we send it.
+        setDemoFeature(null);
+        stepRef.current = "datetime";
+        setStep("datetime");
         conversation.sendUserMessage(`I'll go with ${shop.name}.`);
       } else {
+        // Scripted demo (no live agent): canned line via advance().
         pushMessage("user", `Let's go with ${shop.name}.`);
         advance("datetime");
       }
     },
-    [advance, connected, conversation, pushMessage]
+    [advance, conversation, pushMessage]
   );
 
   /** Pick a time slot (Date & Time card). */
@@ -599,13 +720,16 @@ export function useOtoAgent() {
     const shopName = selectedShop?.name ?? booking.shop;
     const time = selectedSlot?.label ?? booking.time;
     setBooking((prev) => ({ ...prev, shop: shopName, time }));
-    if (connected) {
+    if (connectedRef.current) {
+      setDemoFeature(null);
+      stepRef.current = "confirmed";
+      setStep("confirmed");
       conversation.sendUserMessage(`Confirm my ${time} appointment.`);
     } else {
       pushMessage("user", `Confirm my ${time} appointment.`);
       advance("confirmed");
     }
-  }, [advance, booking.shop, booking.time, connected, conversation, pushMessage, selectedShop, selectedSlot]);
+  }, [advance, booking.shop, booking.time, conversation, pushMessage, selectedShop, selectedSlot]);
 
   const reset = useCallback(() => {
     clearDemoTimers();
@@ -613,6 +737,11 @@ export function useOtoAgent() {
       clearTimeout(connectTimerRef.current);
       connectTimerRef.current = null;
     }
+    if (cardFallbackRef.current) {
+      clearTimeout(cardFallbackRef.current);
+      cardFallbackRef.current = null;
+    }
+    lastVinRef.current = "";
     pendingTextRef.current = [];
     voicePendingRef.current = false;
     sessionModeRef.current = null;
@@ -629,6 +758,8 @@ export function useOtoAgent() {
     setVehicle(null);
     setPresignupSaved(false);
     setDemoFeature(null);
+    setDynamicCard(null);
+    setAwake(false);
   }, [clearDemoTimers, connected, conversation]);
 
   return {
@@ -644,10 +775,13 @@ export function useOtoAgent() {
     vehicle,
     presignupSaved,
     demoFeature,
+    dynamicCard,
+    awake,
     connected,
     isSpeaking: conversation.isSpeaking,
     status: conversation.status,
     // actions
+    wake,
     sendText,
     startVoice,
     stop,

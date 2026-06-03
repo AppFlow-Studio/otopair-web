@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Calendar, Car, Check, MapPin, Sparkles, Star } from "lucide-react";
+import { motion } from "motion/react";
 import {
   SCHEDULING_PREVIEW,
   WEEK_DAYS,
@@ -10,20 +11,32 @@ import {
   type Slot,
   type Vehicle,
 } from "./oto-flow";
+import { CountUp, Step } from "./shared";
+
+const EASE = [0.22, 1, 0.36, 1] as const;
 
 const CARD =
-  "w-full rounded-[20px] border border-[#1a1a1a]/10 bg-white/65 p-6 backdrop-blur-2xl shadow-[0_20px_50px_rgba(0,0,0,0.08)]";
+  "w-full rounded-[20px] border border-white/40 bg-white/55 p-6 backdrop-blur-2xl shadow-[0_22px_60px_rgba(0,0,0,0.10)]";
 
 const usd = (n: number) =>
   n % 1 === 0 ? `$${n}` : `$${n.toFixed(2)}`;
 
-function WeekStrip() {
+function WeekStrip({ base = 0.2 }: { base?: number }) {
   return (
     <div className="flex items-center justify-between">
       {WEEK_DAYS.map((d, i) => (
-        <div key={i} className="flex flex-col items-center gap-1.5">
+        <motion.div
+          key={i}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: base + i * 0.04, duration: 0.35, ease: EASE }}
+          className="flex flex-col items-center gap-1.5"
+        >
           <span className="text-[11px] text-[#1a1a1a]/40">{d.letter}</span>
-          <span
+          <motion.span
+            initial={d.selected ? { scale: 0.6 } : false}
+            animate={d.selected ? { scale: 1 } : {}}
+            transition={{ delay: base + 0.3, type: "spring", stiffness: 500, damping: 18 }}
             className={
               d.selected
                 ? "flex h-7 w-7 items-center justify-center rounded-md bg-[#1a1a1a] text-[13px] font-medium text-white"
@@ -31,8 +44,8 @@ function WeekStrip() {
             }
           >
             {d.date}
-          </span>
-        </div>
+          </motion.span>
+        </motion.div>
       ))}
     </div>
   );
@@ -41,18 +54,25 @@ function WeekStrip() {
 function PrimaryButton({
   children,
   onClick,
+  delay = 0.3,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
+  delay?: number;
 }) {
   return (
-    <button
+    <motion.button
       type="button"
       onClick={onClick}
-      className="mt-5 h-12 w-full rounded-xl bg-[#1a1a1a] text-[13px] font-medium uppercase tracking-[0.1em] text-white transition-transform hover:scale-[1.01] active:scale-[0.99]"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay, duration: 0.5, ease: EASE }}
+      whileHover={{ scale: 1.01 }}
+      whileTap={{ scale: 0.985 }}
+      className="mt-5 h-12 w-full rounded-xl bg-[#1a1a1a] text-[13px] font-medium uppercase tracking-[0.1em] text-white"
     >
       {children}
-    </button>
+    </motion.button>
   );
 }
 
@@ -140,7 +160,7 @@ export function VehicleCard({
 
   return (
     <div className={`${CARD} flex max-h-[70vh] flex-col lg:max-h-[460px]`}>
-      <div className="flex items-center justify-between">
+      <Step delay={0.05} className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Car className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
           <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
@@ -148,30 +168,37 @@ export function VehicleCard({
           </h3>
         </div>
         {vehicle.configLinked && (
-          <span className="rounded-full bg-[#1a1a1a] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
+          <motion.span
+            initial={{ opacity: 0, scale: 0.7 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.4, type: "spring", stiffness: 500, damping: 18 }}
+            className="rounded-full bg-[#1a1a1a] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white"
+          >
             Specs on file
-          </span>
+          </motion.span>
         )}
-      </div>
+      </Step>
 
-      <p
-        className="mt-3 text-[24px] leading-tight text-[#1a1a1a]"
-        style={{ fontFamily: "var(--font-Lora)" }}
-      >
-        {vehicle.label}
-      </p>
-      {isRich && (
-        <p className="mt-1 flex items-center gap-1.5 text-[11px] text-[#1a1a1a]/45">
-          <Sparkles className="h-3 w-3" /> Otopair vehicle intelligence
+      <Step delay={0.14}>
+        <p
+          className="mt-3 text-[24px] leading-tight text-[#1a1a1a]"
+          style={{ fontFamily: "var(--font-Lora)" }}
+        >
+          {vehicle.label}
         </p>
-      )}
+        {isRich && (
+          <p className="mt-1 flex items-center gap-1.5 text-[11px] text-[#1a1a1a]/45">
+            <Sparkles className="h-3 w-3" /> Otopair vehicle intelligence
+          </p>
+        )}
+      </Step>
 
       {/* Scrollable spec area — capped so the card always fits the screen. */}
       <div className="my-3 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 [scrollbar-width:thin]">
         {isRich ? (
           <>
-            {groups.map((g) => (
-              <div key={g.title}>
+            {groups.map((g, gi) => (
+              <Step key={g.title} delay={0.24 + gi * 0.1}>
                 <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#1a1a1a]/40">
                   {g.title}
                 </p>
@@ -180,10 +207,10 @@ export function VehicleCard({
                     <SpecRow key={label} label={label} value={value} />
                   ))}
                 </div>
-              </div>
+              </Step>
             ))}
             {tireSizes.length > 0 && (
-              <div>
+              <Step delay={0.24 + groups.length * 0.1}>
                 <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#1a1a1a]/40">
                   Available tire sizes
                 </p>
@@ -197,10 +224,10 @@ export function VehicleCard({
                     </span>
                   ))}
                 </div>
-              </div>
+              </Step>
             )}
             {packages.length > 0 && (
-              <div>
+              <Step delay={0.24 + (groups.length + 1) * 0.1}>
                 <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-[#1a1a1a]/40">
                   Factory packages
                 </p>
@@ -214,17 +241,33 @@ export function VehicleCard({
                     </span>
                   ))}
                 </div>
-              </div>
+              </Step>
             )}
-            <SpecRow label="VIN" value={vehicle.vin} mono />
+            <Step delay={0.24 + (groups.length + 2) * 0.1}>
+              <SpecRow label="VIN" value={vehicle.vin} mono />
+            </Step>
           </>
         ) : (
           // NHTSA-only fallback (no config on file).
           <div className="space-y-1.5">
-            {engine && <SpecRow label="Engine" value={engine} />}
-            {vehicle.drivetrain && <SpecRow label="Drivetrain" value={vehicle.drivetrain} />}
-            {vehicle.bodyClass && <SpecRow label="Body" value={vehicle.bodyClass} />}
-            <SpecRow label="VIN" value={vehicle.vin} mono />
+            {engine && (
+              <Step delay={0.24}>
+                <SpecRow label="Engine" value={engine} />
+              </Step>
+            )}
+            {vehicle.drivetrain && (
+              <Step delay={0.32}>
+                <SpecRow label="Drivetrain" value={vehicle.drivetrain} />
+              </Step>
+            )}
+            {vehicle.bodyClass && (
+              <Step delay={0.4}>
+                <SpecRow label="Body" value={vehicle.bodyClass} />
+              </Step>
+            )}
+            <Step delay={0.48}>
+              <SpecRow label="VIN" value={vehicle.vin} mono />
+            </Step>
           </div>
         )}
       </div>
@@ -240,19 +283,21 @@ export function VehicleCard({
 export function SchedulingCard({ onConfirm }: { onConfirm: () => void }) {
   return (
     <div className={CARD}>
-      <div className="flex items-center gap-2">
-        <Calendar className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
-          Instant Scheduling
-        </h3>
-      </div>
-      <p className="mt-1 text-[12px] text-[#1a1a1a]/45">Secured with fixed pricing</p>
+      <Step delay={0.05}>
+        <div className="flex items-center gap-2">
+          <Calendar className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+            Instant Scheduling
+          </h3>
+        </div>
+        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">Secured with fixed pricing</p>
+      </Step>
 
       <div className="my-5">
-        <WeekStrip />
+        <WeekStrip base={0.18} />
       </div>
 
-      <div className="flex items-center justify-between rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-3">
+      <Step delay={0.42} className="flex items-center justify-between rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-3">
         <span className="flex items-center gap-2 text-[14px] text-[#1a1a1a]">
           <Car className="h-4 w-4 text-[#1a1a1a]/70" strokeWidth={1.6} />
           {SCHEDULING_PREVIEW.service}
@@ -260,16 +305,16 @@ export function SchedulingCard({ onConfirm }: { onConfirm: () => void }) {
         <span className="text-[14px] font-medium text-[#1a1a1a]">
           {usd(SCHEDULING_PREVIEW.price)}.00
         </span>
-      </div>
-      <div className="mt-2 flex items-center justify-between rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-3">
+      </Step>
+      <Step delay={0.5} className="mt-2 flex items-center justify-between rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-3">
         <span className="flex items-center gap-2 text-[14px] text-[#1a1a1a]">
           <MapPin className="h-4 w-4 text-[#1a1a1a]/70" strokeWidth={1.6} />
           {SCHEDULING_PREVIEW.shop}
         </span>
         <span className="text-[13px] text-[#1a1a1a]/50">{SCHEDULING_PREVIEW.distance}</span>
-      </div>
+      </Step>
 
-      <PrimaryButton onClick={onConfirm}>Confirm Appointment</PrimaryButton>
+      <PrimaryButton onClick={onConfirm} delay={0.58}>Confirm Appointment</PrimaryButton>
     </div>
   );
 }
@@ -293,22 +338,29 @@ export function ChooseShopCard({
 
   return (
     <div className={CARD}>
-      <div className="flex items-center gap-2">
-        <MapPin className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
-          Choose a Shop
-        </h3>
-      </div>
-      <p className="mt-1 text-[12px] text-[#1a1a1a]/45">3 found nearby · Best price first</p>
+      <Step delay={0.05}>
+        <div className="flex items-center gap-2">
+          <MapPin className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+            Choose a Shop
+          </h3>
+        </div>
+        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">3 found nearby · Best price first</p>
+      </Step>
 
       <div className="mt-4 space-y-2">
-        {shops.map((shop) => {
+        {shops.map((shop, i) => {
           const isActive = shop.id === active?.id;
           return (
-            <button
+            <motion.button
               key={shop.id}
               type="button"
               onClick={() => onSelect(shop)}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.16 + i * 0.1, duration: 0.5, ease: EASE }}
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
               className={`relative w-full rounded-xl px-4 py-3 text-left transition-colors ${
                 isActive
                   ? "bg-[#1a1a1a]/[0.06] ring-1 ring-[#1a1a1a]/15"
@@ -334,14 +386,19 @@ export function ChooseShopCard({
                     <span>{shop.eta}</span>
                   </p>
                 </div>
-                <span className="text-[15px] font-medium text-[#1a1a1a]">{usd(shop.price)}</span>
+                <CountUp
+                  to={shop.price}
+                  prefix="$"
+                  duration={0.8}
+                  className="text-[15px] font-medium text-[#1a1a1a]"
+                />
               </div>
-            </button>
+            </motion.button>
           );
         })}
       </div>
 
-      <PrimaryButton onClick={() => active && onContinue(active)}>
+      <PrimaryButton onClick={() => active && onContinue(active)} delay={0.16 + shops.length * 0.1 + 0.08}>
         Continue with {firstName}
       </PrimaryButton>
     </div>
@@ -364,27 +421,34 @@ export function DateTimeCard({
 }) {
   return (
     <div className={CARD}>
-      <div className="flex items-center gap-2">
-        <Calendar className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
-          Instant Scheduling
-        </h3>
-      </div>
-      <p className="mt-1 text-[12px] text-[#1a1a1a]/45">Secured with fixed pricing</p>
+      <Step delay={0.05}>
+        <div className="flex items-center gap-2">
+          <Calendar className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+            Instant Scheduling
+          </h3>
+        </div>
+        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">Secured with fixed pricing</p>
+      </Step>
 
       <div className="my-5">
-        <WeekStrip />
+        <WeekStrip base={0.18} />
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        {slots.map((slot) => {
+        {slots.map((slot, i) => {
           const isActive = slot.id === selectedId;
           return (
-            <button
+            <motion.button
               key={slot.id}
               type="button"
               disabled={slot.disabled}
               onClick={() => onSelect(slot)}
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.42 + i * 0.07, duration: 0.4, ease: EASE }}
+              whileHover={slot.disabled ? undefined : { scale: 1.03 }}
+              whileTap={slot.disabled ? undefined : { scale: 0.96 }}
               className={`h-11 rounded-xl text-[13.5px] font-medium transition-colors ${
                 slot.disabled
                   ? "cursor-not-allowed bg-[#1a1a1a]/[0.03] text-[#1a1a1a]/25"
@@ -394,12 +458,14 @@ export function DateTimeCard({
               }`}
             >
               {slot.label}
-            </button>
+            </motion.button>
           );
         })}
       </div>
 
-      <PrimaryButton onClick={onConfirm}>Confirm Appointment</PrimaryButton>
+      <PrimaryButton onClick={onConfirm} delay={0.42 + slots.length * 0.07 + 0.08}>
+        Confirm Appointment
+      </PrimaryButton>
     </div>
   );
 }
@@ -409,9 +475,12 @@ export function DateTimeCard({
 /* ------------------------------------------------------------------ */
 function StoreButton({ store }: { store: "apple" | "google" }) {
   return (
-    <a
+    <motion.a
       href="#get-oto"
-      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#1a1a1a] px-3 py-2.5 text-white transition-transform hover:scale-[1.02]"
+      whileHover={{ y: -2, scale: 1.03 }}
+      whileTap={{ scale: 0.97 }}
+      transition={{ type: "spring", stiffness: 400, damping: 20 }}
+      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#1a1a1a] px-3 py-2.5 text-white"
     >
       {store === "apple" ? (
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
@@ -430,7 +499,7 @@ function StoreButton({ store }: { store: "apple" | "google" }) {
           {store === "apple" ? "App Store" : "Google Play"}
         </span>
       </span>
-    </a>
+    </motion.a>
   );
 }
 
@@ -448,18 +517,29 @@ export function BookingConfirmedCard({
   return (
     <div className={CARD}>
       <div className="flex flex-col items-center">
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#1a1a1a]">
-          <Check className="h-5 w-5 text-white" strokeWidth={2.5} />
-        </div>
-        <h3
-          className="mt-3 text-[22px] text-[#1a1a1a]"
-          style={{ fontFamily: "var(--font-Lora)" }}
+        <motion.div
+          initial={{ scale: 0, rotate: -25 }}
+          animate={{ scale: 1, rotate: 0 }}
+          transition={{ type: "spring", stiffness: 420, damping: 15, delay: 0.1 }}
+          className="relative flex h-9 w-9 items-center justify-center rounded-full bg-[#1a1a1a]"
         >
-          Booking confirmed
-        </h3>
+          <Check className="h-5 w-5 text-white" strokeWidth={2.5} />
+          <motion.span
+            aria-hidden
+            className="absolute inset-0 rounded-full ring-2 ring-[#1a1a1a]/40"
+            initial={{ scale: 1, opacity: 0.6 }}
+            animate={{ scale: 1.9, opacity: 0 }}
+            transition={{ duration: 0.9, ease: "easeOut", delay: 0.18 }}
+          />
+        </motion.div>
+        <Step delay={0.3}>
+          <h3 className="mt-3 text-[22px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+            Booking confirmed
+          </h3>
+        </Step>
       </div>
 
-      <div className="mt-5 border-t border-[#1a1a1a]/10 pt-4">
+      <Step delay={0.4} className="mt-5 border-t border-[#1a1a1a]/10 pt-4">
         <p className="text-[10px] uppercase tracking-[0.15em] text-[#1a1a1a]/40">
           Service Details
         </p>
@@ -470,35 +550,40 @@ export function BookingConfirmedCard({
             <p>{booking.mechanic}</p>
           </div>
         </div>
-      </div>
+      </Step>
 
-      <div className="mt-4 border-t border-[#1a1a1a]/10 pt-4">
+      <Step delay={0.5} className="mt-4 border-t border-[#1a1a1a]/10 pt-4">
         <p className="text-[10px] uppercase tracking-[0.15em] text-[#1a1a1a]/40">Logistics</p>
         <div className="mt-2 flex items-center justify-between text-[13px] text-[#1a1a1a]">
           <span>{booking.date}</span>
           <span>{booking.time}</span>
         </div>
-      </div>
+      </Step>
 
-      <div className="mt-4 flex items-center justify-between border-t border-[#1a1a1a]/10 pt-4">
+      <Step delay={0.6} className="mt-4 flex items-center justify-between border-t border-[#1a1a1a]/10 pt-4">
         <span className="text-[14px] font-medium text-[#1a1a1a]">Total Amount</span>
-        <span className="text-[18px] font-semibold text-[#1a1a1a]">{usd(booking.total)}</span>
-      </div>
+        <CountUp
+          to={booking.total}
+          prefix="$"
+          duration={1}
+          className="text-[18px] font-semibold text-[#1a1a1a]"
+        />
+      </Step>
 
       {/* Pre-signup capture — save the car so signup is seamless. */}
       {onSavePreSignup &&
         (saved ? (
-          <div className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-[#1a1a1a]/[0.05] px-4 py-3 text-[13px] text-[#1a1a1a]">
+          <Step delay={0.7} className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-[#1a1a1a]/[0.05] px-4 py-3 text-[13px] text-[#1a1a1a]">
             <Check className="h-4 w-4" strokeWidth={2.5} />
             Saved — your car will be waiting when you download the app.
-          </div>
+          </Step>
         ) : (
+          <Step delay={0.7} className="mt-5">
           <form
             onSubmit={(e) => {
               e.preventDefault();
               if (email.trim()) onSavePreSignup(email.trim());
             }}
-            className="mt-5"
           >
             <p className="mb-2 text-[12px] text-[#1a1a1a]/55">
               Email it to yourself & save your car for the app:
@@ -513,24 +598,29 @@ export function BookingConfirmedCard({
                 className="h-11 flex-1 rounded-xl border border-[#1a1a1a]/15 bg-white/70 px-3 text-[14px] text-[#1a1a1a] placeholder:text-[#1a1a1a]/40 focus:outline-none focus:ring-2 focus:ring-[#1a1a1a]/15"
                 style={{ fontSize: 16 }}
               />
-              <button
+              <motion.button
                 type="submit"
-                className="h-11 shrink-0 rounded-xl bg-[#1a1a1a] px-4 text-[13px] font-medium text-white transition-transform hover:scale-[1.02] active:scale-95"
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.95 }}
+                className="h-11 shrink-0 rounded-xl bg-[#1a1a1a] px-4 text-[13px] font-medium text-white"
               >
                 Save
-              </button>
+              </motion.button>
             </div>
           </form>
+          </Step>
         ))}
 
-      <div className="mt-5 flex gap-2">
+      <Step delay={0.8} className="mt-5 flex gap-2">
         <StoreButton store="apple" />
         <StoreButton store="google" />
-      </div>
+      </Step>
 
-      <p className="mt-3 text-center text-[10px] text-[#1a1a1a]/40">
-        Secure transaction via Otopair Pay
-      </p>
+      <Step delay={0.9}>
+        <p className="mt-3 text-center text-[10px] text-[#1a1a1a]/40">
+          Secure transaction via Otopair Pay
+        </p>
+      </Step>
     </div>
   );
 }

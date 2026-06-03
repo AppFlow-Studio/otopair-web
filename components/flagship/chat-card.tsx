@@ -24,14 +24,20 @@ export default function ChatCard({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
+    const el = scrollRef.current;
+    if (!el) return;
+    // Only auto-follow when the user is already near the bottom, so scrolling
+    // up to re-read isn't yanked back down as streamed tokens arrive.
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (!nearBottom) return;
+    const id = requestAnimationFrame(() =>
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+    );
+    return () => cancelAnimationFrame(id);
   }, [messages, thinking]);
 
   return (
-    <div className="flex h-full w-full flex-col rounded-[20px] border border-[#1a1a1a]/10 bg-white/55 p-6 backdrop-blur-2xl shadow-[0_20px_50px_rgba(0,0,0,0.08)]">
+    <div className="flex h-full w-full flex-col rounded-[20px] border border-white/40 bg-white/45 p-6 shadow-[0_22px_60px_rgba(0,0,0,0.10)] backdrop-blur-[40px]">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -59,6 +65,8 @@ export default function ChatCard({
               key={m.id}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
               className={m.role === "user" ? "flex justify-end" : "flex justify-start"}
             >
               <p

@@ -40,6 +40,8 @@ export function Waveform({
 interface VoiceBarProps {
   onSend: (text: string) => void;
   onMic: () => void;
+  /** Fired when the user engages the bar (focus/click) — used to "wake" Oto. */
+  onFocus?: () => void;
   listening?: boolean;
   placeholder?: string;
   className?: string;
@@ -49,6 +51,7 @@ interface VoiceBarProps {
 export default function VoiceBar({
   onSend,
   onMic,
+  onFocus,
   listening = false,
   placeholder = "Ask Oto about your car...",
   className,
@@ -69,18 +72,22 @@ export default function VoiceBar({
     <div
       className={`flex h-[64px] items-center gap-3 rounded-[14px] border border-[#1a1a1a]/15 bg-white/70 px-4 backdrop-blur-2xl shadow-[0_10px_30px_rgba(0,0,0,0.06)] ${className ?? ""}`}
     >
-      <button
+      <motion.button
         type="button"
         onClick={onMic}
         aria-label="Talk to Oto"
+        whileHover={{ scale: 1.08 }}
+        whileTap={{ scale: 0.9 }}
+        transition={{ type: "spring", stiffness: 400, damping: 18 }}
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/5"
       >
         <Waveform active={listening} className="text-[#1a1a1a]" />
-      </button>
+      </motion.button>
 
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}
+        onFocus={onFocus}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -93,14 +100,20 @@ export default function VoiceBar({
         aria-label="Message Oto"
       />
 
-      <button
+      <motion.button
         type="button"
         onClick={submit}
         aria-label="Send"
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/5"
+        whileHover={{ scale: 1.08 }}
+        whileTap={{ scale: 0.9 }}
+        transition={{ type: "spring", stiffness: 400, damping: 18 }}
+        className="group flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/5"
       >
-        <ArrowUpRight className="h-5 w-5" strokeWidth={1.5} />
-      </button>
+        <ArrowUpRight
+          className="h-5 w-5 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+          strokeWidth={1.5}
+        />
+      </motion.button>
     </div>
   );
 }

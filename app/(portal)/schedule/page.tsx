@@ -622,14 +622,15 @@ export default function SchedulePage() {
 
   // Tentative-quote events (status="tentative_quote") use a synthetic id
   // (`tq_<responseId>`) so they don't collide with real bookings. Clicking
-  // one routes the mechanic into the tire-quote-requests page focused on the
-  // underlying booking so they can edit / withdraw their quote.
+  // one routes the mechanic into the unified Quotes page on the Tires tab,
+  // focused on the underlying booking so they can edit / withdraw their
+  // quote.
   const handleEventSelect = useCallback(
     (ev: CalendarEvent) => {
       if (ev.status === "tentative_quote") {
         const targetBooking = ev.tentativeBookingId;
         if (targetBooking) {
-          router.push(`/bookings/tire-quote-requests?booking=${targetBooking}`);
+          router.push(`/bookings/quote-requests?type=tire&booking=${targetBooking}`);
         }
         return;
       }

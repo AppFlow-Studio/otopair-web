@@ -31,6 +31,14 @@ export const create = mutation({
       time: v.string(),
     }),
     estimated_duration_minutes: v.optional(v.number()),
+    // Pad line items — supplied when the original request had
+    // include_pads=true. acceptRotorQuote sums (pad_price × pad_quantity)
+    // into parts_cost; RotorQuoteCard renders the "Pads (Brand) — $price"
+    // row when pad_brand is set.
+    pad_brand: v.optional(v.string()),
+    pad_type: v.optional(v.string()),
+    pad_price: v.optional(v.number()),
+    pad_quantity: v.optional(v.number()),
     expires_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -66,6 +74,10 @@ export const create = mutation({
       total: args.total,
       availability: args.availability,
       estimated_duration_minutes: args.estimated_duration_minutes,
+      pad_brand: args.pad_brand,
+      pad_type: args.pad_type,
+      pad_price: args.pad_price,
+      pad_quantity: args.pad_quantity,
       created_at: now,
       expires_at: args.expires_at,
     });

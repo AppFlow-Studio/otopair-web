@@ -312,6 +312,15 @@ export async function computePricedPartsSnapshot(
     /** From vehicle_owner_specs.confirmed_packages — gate package-conditional
      *  fitments to those the customer has actually confirmed. */
     confirmedPackages: Set<string>;
+    /** Optional per-service axle/position choice (mirrors
+     *  `getPricedPartsForServices.serviceVariants`). Drives positional
+     *  filtering inside the resolver so the snapshot freezes the same part
+     *  the customer saw on Review & Pay. "both" → two snapshot rows for
+     *  the service (front + rear). */
+    serviceVariants?: Array<{
+      serviceId: Id<"services">;
+      position: string;
+    }>;
   },
 ): Promise<PricedPartsSnapshotResult> {
   if (!args.vehicleConfigId) {
@@ -321,29 +330,17 @@ export async function computePricedPartsSnapshot(
   const trace: PartSelectionTraceRow[] = [];
   let low_confidence = false;
 
-  for (const serviceId of args.serviceIds) {
-    const svc = await ctx.db.get(serviceId);
-    if (!svc?.slug) continue;
+  const positionByServiceId = new Map<string, string>();
+  for (const v of args.serviceVariants ?? []) {
+    positionByServiceId.set(String(v.serviceId), v.position.toLowerCase());
+  }
 
-    const resolution = await resolveWinningPartForService(ctx, {
-      vin: args.vin,
-      serviceId,
-      serviceSlug: svc.slug,
-      vehicleConfigId: args.vehicleConfigId,
-      confirmedPackages: args.confirmedPackages,
-    });
-
-    trace.push({
-      service_id: serviceId,
-      winner_part_id: resolution.winner?.part._id,
-      source: resolution.source,
-      trace: resolution.trace?.map(traceEntryToRow),
-      eliminated_by_gate_part_ids: resolution.eliminatedByGatePartIds,
-    });
-
+  const appendWinnerRow = (
+    serviceId: Id<"services">,
+    resolution: Awaited<ReturnType<typeof resolveWinningPartForService>>,
+  ) => {
     if (resolution.lowConfidence) low_confidence = true;
-    if (!resolution.winner) continue;
-
+    if (!resolution.winner) return;
     const { fitment: f, part, priceSummary } = resolution.winner;
     // Use the outlier-rejected mean (`average`) — same field the customer-
     // facing breakdown reads. Median is naïve to per-pack listings mixing
@@ -363,6 +360,67 @@ export async function computePricedPartsSnapshot(
       unit_price_cents: Math.round(unit_price_dollars * 100),
       line_total_cents: Math.round(line_total_dollars * 100),
     });
+  };
+
+  for (const serviceId of args.serviceIds) {
+    const svc = await ctx.db.get(serviceId);
+    if (!svc?.slug) continue;
+
+    const position = positionByServiceId.get(String(serviceId));
+
+    if (position === "both") {
+      const frontRes = await resolveWinningPartForService(ctx, {
+        vin: args.vin,
+        serviceId,
+        serviceSlug: svc.slug,
+        vehicleConfigId: args.vehicleConfigId,
+        confirmedPackages: args.confirmedPackages,
+        positionFilter: "front",
+      });
+      const rearRes = await resolveWinningPartForService(ctx, {
+        vin: args.vin,
+        serviceId,
+        serviceSlug: svc.slug,
+        vehicleConfigId: args.vehicleConfigId,
+        confirmedPackages: args.confirmedPackages,
+        positionFilter: "rear",
+      });
+      trace.push({
+        service_id: serviceId,
+        winner_part_id: frontRes.winner?.part._id,
+        source: frontRes.source,
+        trace: frontRes.trace?.map(traceEntryToRow),
+        eliminated_by_gate_part_ids: frontRes.eliminatedByGatePartIds,
+      });
+      trace.push({
+        service_id: serviceId,
+        winner_part_id: rearRes.winner?.part._id,
+        source: rearRes.source,
+        trace: rearRes.trace?.map(traceEntryToRow),
+        eliminated_by_gate_part_ids: rearRes.eliminatedByGatePartIds,
+      });
+      appendWinnerRow(serviceId, frontRes);
+      appendWinnerRow(serviceId, rearRes);
+      continue;
+    }
+
+    const resolution = await resolveWinningPartForService(ctx, {
+      vin: args.vin,
+      serviceId,
+      serviceSlug: svc.slug,
+      vehicleConfigId: args.vehicleConfigId,
+      confirmedPackages: args.confirmedPackages,
+      positionFilter: position,
+    });
+
+    trace.push({
+      service_id: serviceId,
+      winner_part_id: resolution.winner?.part._id,
+      source: resolution.source,
+      trace: resolution.trace?.map(traceEntryToRow),
+      eliminated_by_gate_part_ids: resolution.eliminatedByGatePartIds,
+    });
+    appendWinnerRow(serviceId, resolution);
   }
 
   return { rows, trace, low_confidence };

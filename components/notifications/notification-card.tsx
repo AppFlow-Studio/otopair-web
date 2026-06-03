@@ -7,7 +7,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
 type NotificationItem = {
-  kind: "booking" | "tire_quote";
+  kind: "booking" | "tire_quote" | "rotor_quote";
   bookingId: Id<"bookings">;
   createdAt: number;
   isUnread: boolean;
@@ -20,6 +20,7 @@ type NotificationItem = {
   price?: number | null;
   note?: string | null;
   tireSpecs?: { size: string; type: string; tier: string; quantity: number } | null;
+  rotorSpecs?: { axle: string; tier: string; quantity: number } | null;
   urgency?: "urgent" | null;
 };
 
@@ -54,8 +55,18 @@ export function NotificationCard({
   const [declineReason, setDeclineReason] = useState("");
 
   const isBooking = item.kind === "booking";
-  const headerLabel = isBooking ? "New booking" : "Tire quote request";
-  const headerColor = isBooking ? "text-blue-600" : "text-amber-600";
+  const isRotorQuote = item.kind === "rotor_quote";
+  const isTireQuote = item.kind === "tire_quote";
+  const headerLabel = isBooking
+    ? "New booking"
+    : isRotorQuote
+      ? "Rotor quote request"
+      : "Tire quote request";
+  const headerColor = isBooking
+    ? "text-blue-600"
+    : isRotorQuote
+      ? "text-orange-600"
+      : "text-amber-600";
 
   async function handleAccept() {
     if (pending) return;
@@ -99,7 +110,10 @@ export function NotificationCard({
 
   function handleSubmitQuote() {
     onAfterAction?.();
-    router.push(`/bookings/tire-quote-requests?booking=${item.bookingId}`);
+    const path = isRotorQuote
+      ? "/bookings/rotor-quote-requests"
+      : "/bookings/tire-quote-requests";
+    router.push(`${path}?booking=${item.bookingId}`);
   }
 
   return (
@@ -155,7 +169,7 @@ export function NotificationCard({
         </p>
       )}
 
-      {!isBooking && item.tireSpecs && (
+      {isTireQuote && item.tireSpecs && (
         <p className="mt-1 text-xs text-gray-600">
           <span className="font-medium text-gray-900">
             {item.tireSpecs.size}
@@ -166,6 +180,22 @@ export function NotificationCard({
           {item.tireSpecs.tier}
           <span className="mx-1">·</span>
           {item.tireSpecs.quantity} tires
+        </p>
+      )}
+
+      {isRotorQuote && item.rotorSpecs && (
+        <p className="mt-1 text-xs text-gray-600">
+          <span className="font-medium text-gray-900">
+            {item.rotorSpecs.axle === "front"
+              ? "Front pair"
+              : item.rotorSpecs.axle === "rear"
+                ? "Rear pair"
+                : "All four"}
+          </span>
+          <span className="mx-1">·</span>
+          {item.rotorSpecs.tier}
+          <span className="mx-1">·</span>
+          {item.rotorSpecs.quantity} rotors
         </p>
       )}
 

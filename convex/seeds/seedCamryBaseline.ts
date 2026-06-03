@@ -44,9 +44,9 @@ type BaselineSpec = {
 const BASELINE: ReadonlyArray<BaselineSpec> = [
   {
     service_slug: "oil_change",
-    parts_low: 41, parts_high: 47,
+    parts_low: 50, parts_high: 56,
     oem_part_number: "04152-YZZA1",
-    parts_cost_basis: "4.8qt 0W-16 + cartridge + gasket",
+    parts_cost_basis: "4.8qt 0W-16 + cartridge + gasket (NYC dealer parts-counter, ±6%)",
     applies_to: "shared",
   },
   {

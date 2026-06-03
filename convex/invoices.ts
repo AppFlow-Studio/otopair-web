@@ -14,6 +14,11 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import {
+  detectTier,
+  resolveVehicleConfigFromVin,
+} from "./lib/quoteEngine";
+import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
 
 const PLATFORM_FEE_BPS = 700;
 const DEFAULT_LABOR_RATE = 120;
@@ -159,7 +164,33 @@ async function assembleInvoiceData(
     const partsTotalCents = parts.reduce((sum, p) => sum + p.lineCents, 0);
 
     const laborMinutes = Number(ja?.actual_labor_minutes ?? 0);
-    const laborRate = Number(shop?.labor_rate ?? DEFAULT_LABOR_RATE);
+
+    // Tier-aware labor rate (Pricing v2). Falls back to flat shop.labor_rate
+    // and then DEFAULT_LABOR_RATE so invoice generation never breaks on an
+    // unenriched vehicle — the deep fallback is logged for finance to audit.
+    let resolvedLaborRate: number | null = null;
+    if (shop && booking.vin) {
+      const cfg = await resolveVehicleConfigFromVin(ctx as any, booking.vin);
+      const tier =
+        (cfg?.pricing_tier as VehicleTier | undefined) ??
+        (cfg ? await detectTier(ctx as any, cfg) : null);
+      if (tier) {
+        const rateRes = resolveLaborRate(shop as any, tier);
+        if (rateRes.rate != null) resolvedLaborRate = rateRes.rate;
+      }
+    }
+    let laborRate: number;
+    if (resolvedLaborRate != null) {
+      laborRate = resolvedLaborRate;
+    } else if (typeof shop?.labor_rate === "number") {
+      laborRate = shop.labor_rate;
+    } else {
+      laborRate = DEFAULT_LABOR_RATE;
+      console.warn(
+        `[assembleInvoiceData] using DEFAULT_LABOR_RATE=${DEFAULT_LABOR_RATE} ` +
+          `for booking=${bookingId} shop=${booking.shop_id ?? "?"} vin=${booking.vin ?? "?"}`,
+      );
+    }
     const laborCents = Math.round((laborMinutes / 60) * laborRate * 100);
 
     const capturedCents = Number(payment.captured_amount_cents ?? 0);

@@ -268,7 +268,14 @@ export type PricedPartsForService = {
   /** True when the confidence gate eliminated every candidate on this service
    *  and we fell back to the full pool. */
   lowConfidence: boolean;
-  partsTotal: number;        // winner.line_total (or 0 when no winner)
+  partsTotal: number;        // winner.line_total + secondaryWinner.line_total (or 0)
+  /** Second axle's winner when the customer chose `position: "both"` (e.g.
+   *  Brake Pad Replacement on all four). The primary `winner` holds front,
+   *  `secondaryWinner` holds rear. Null for single-axle (or non-positional)
+   *  services. */
+  secondaryWinner?: PricedFitment | null;
+  /** Losers from the second-axle resolver pass (mirrors `losers`). */
+  secondaryLosers?: PricedFitment[];
 };
 
 // ─── Shared resolver: from (vin, config, service) → winner + losers + trace ─
@@ -308,29 +315,81 @@ export async function resolveWinningPartForService(
     serviceSlug: string;
     vehicleConfigId: Id<"vehicle_configs">;
     confirmedPackages: Set<string>;
+    /** Optional `part_fitments.position` filter. When set, only fitments
+     *  whose `position` matches (case-insensitive) survive into the scorer.
+     *  Use "front"/"rear" for single-axle resolution; "both" or undefined
+     *  means no filter (legacy behavior — caller takes responsibility for
+     *  what that picks). */
+    positionFilter?: string;
   },
 ): Promise<ResolvedServiceWinner> {
-  const fitments = await ctx.db
-    .query("part_fitments")
-    .withIndex("by_config_service", (q: any) =>
-      q
-        .eq("vehicle_config_id", args.vehicleConfigId)
-        .eq("service_type", args.serviceSlug),
-    )
-    .collect();
+  // The catalog has two co-existing slug forms for the same service —
+  // `seed_services.ts` writes dash form ("brake-pads") while the v3
+  // enrichment pipeline (v3pipeline.ts:829) writes underscore form
+  // ("brake_pad_replacement") into part_fitments.service_type. Query
+  // both forms so we don't return empty just because the customer's
+  // booked service.slug happens to be the dash form. Safe because
+  // service_type is scoped to a single vehicle_config_id, so cross-talk
+  // is impossible.
+  const slugDash = args.serviceSlug;
+  const slugUnderscore = args.serviceSlug.replace(/-/g, "_");
+  const slugAliases = slugDash === slugUnderscore ? [slugDash] : [slugDash, slugUnderscore];
 
-  const applicable = fitments.filter(
+  const fitmentBuckets: Doc<"part_fitments">[][] = [];
+  for (const slug of slugAliases) {
+    const rows = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_config_service", (q: any) =>
+        q.eq("vehicle_config_id", args.vehicleConfigId).eq("service_type", slug),
+      )
+      .collect();
+    fitmentBuckets.push(rows);
+  }
+  // De-dup by fitment _id in case both slug forms point at the same row.
+  const seen = new Set<string>();
+  const fitments: Doc<"part_fitments">[] = [];
+  for (const bucket of fitmentBuckets) {
+    for (const f of bucket) {
+      const key = String(f._id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fitments.push(f);
+    }
+  }
+
+  const packageGated = fitments.filter(
     (f: Doc<"part_fitments">) =>
       f.package_code == null || args.confirmedPackages.has(f.package_code),
   );
 
-  const hydrated: WinnerCandidate[] = [];
-  for (const f of applicable) {
+  // Hydrate parts first — we need `oem_parts.subcategory` for position
+  // matching as a fallback when `part_fitments.position` is null. The v3
+  // pipeline writes subcategory reliably (e.g. "front_brake_pad" /
+  // "rear_brake_pad") but `position` is only set on the OEM seed map and
+  // can be missing on older fitment rows.
+  const hydratedAll: WinnerCandidate[] = [];
+  for (const f of packageGated) {
     const part = await ctx.db.get(f.part_id);
     if (!part) continue;
     const priceSummary = await summarizePartPrices(ctx, f.part_id);
-    hydrated.push({ fitment: f, part, priceSummary });
+    hydratedAll.push({ fitment: f, part, priceSummary });
   }
+
+  // Position-aware narrowing — only after the package gate. "both" /
+  // undefined → no filter. A candidate matches when EITHER its
+  // fitment.position OR its part.subcategory carries the requested axle.
+  const positionFilter = args.positionFilter?.toLowerCase();
+  const hydrated =
+    positionFilter && positionFilter !== "both"
+      ? hydratedAll.filter((c) => {
+          const pos = (c.fitment.position ?? "").toLowerCase();
+          const sub = (c.part.subcategory ?? "").toLowerCase();
+          if (pos === positionFilter) return true;
+          // subcategory like "front_brake_pad" / "rear_brake_pad" / "front_rotor"
+          if (sub.startsWith(`${positionFilter}_`)) return true;
+          return false;
+        })
+      : hydratedAll;
 
   if (hydrated.length === 0) {
     return { winner: null, losers: [], source: "no_candidates", lowConfidence: false };
@@ -433,6 +492,19 @@ export const getPricedPartsForServices = query({
   args: {
     vehicleOwnerId: v.id("vehicle_owners"),
     serviceIds: v.array(v.id("services")),
+    /** Per-service axle/position choice. Maps `serviceId → "front" | "rear" |
+     *  "both"`. Driven by the SERVICE_VARIANTS registry in
+     *  constants/serviceVariants.ts. Services not present here behave as
+     *  before (no position filter). For "both", the resolver runs twice
+     *  (front + rear) and both winners surface on the returned row. */
+    serviceVariants: v.optional(
+      v.array(
+        v.object({
+          serviceId: v.id("services"),
+          position: v.string(),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args): Promise<PricedPartsForService[]> => {
     if (args.serviceIds.length === 0) return [];
@@ -456,11 +528,58 @@ export const getPricedPartsForServices = query({
       .first();
     const confirmed = new Set(ownerSpecs?.confirmed_packages ?? []);
 
+    const positionByServiceId = new Map<string, string>();
+    for (const v of args.serviceVariants ?? []) {
+      positionByServiceId.set(String(v.serviceId), v.position.toLowerCase());
+    }
+
     const out: PricedPartsForService[] = [];
 
     for (const serviceId of args.serviceIds) {
       const service = await ctx.db.get(serviceId);
       if (!service?.slug) continue;
+
+      const position = positionByServiceId.get(String(serviceId));
+
+      // "both" → two passes (front + rear) so the breakdown carries two
+      // priced lines. Single-pass for "front"/"rear"/undefined.
+      if (position === "both") {
+        const frontRes = await resolveWinningPartForService(ctx, {
+          vin: owner.vin,
+          serviceId,
+          serviceSlug: service.slug,
+          vehicleConfigId: configId,
+          confirmedPackages: confirmed,
+          positionFilter: "front",
+        });
+        const rearRes = await resolveWinningPartForService(ctx, {
+          vin: owner.vin,
+          serviceId,
+          serviceSlug: service.slug,
+          vehicleConfigId: configId,
+          confirmedPackages: confirmed,
+          positionFilter: "rear",
+        });
+
+        const frontWinner = frontRes.winner ? toPricedFitment(frontRes.winner) : null;
+        const rearWinner = rearRes.winner ? toPricedFitment(rearRes.winner) : null;
+
+        out.push({
+          serviceId,
+          serviceName: service.name,
+          serviceSlug: service.slug,
+          winner: frontWinner,
+          losers: frontRes.losers.map(toPricedFitment),
+          selectionSource:
+            frontRes.source !== "no_candidates" ? frontRes.source : rearRes.source,
+          lowConfidence: frontRes.lowConfidence || rearRes.lowConfidence,
+          partsTotal:
+            (frontWinner?.line_total ?? 0) + (rearWinner?.line_total ?? 0),
+          secondaryWinner: rearWinner,
+          secondaryLosers: rearRes.losers.map(toPricedFitment),
+        });
+        continue;
+      }
 
       const resolution = await resolveWinningPartForService(ctx, {
         vin: owner.vin,
@@ -468,6 +587,7 @@ export const getPricedPartsForServices = query({
         serviceSlug: service.slug,
         vehicleConfigId: configId,
         confirmedPackages: confirmed,
+        positionFilter: position,
       });
 
       const winner = resolution.winner ? toPricedFitment(resolution.winner) : null;

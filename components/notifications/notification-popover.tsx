@@ -9,11 +9,11 @@ import { NotificationEmptyState } from "./notification-empty-state";
 import { LiveAlertCard } from "./live-alert-card";
 import type { LiveAlert } from "./use-live-alerts";
 
-type Tab = "all" | "live" | "confirm" | "tire";
+type Tab = "all" | "live" | "confirm" | "tire" | "rotor";
 
 interface FeedShape {
   unreadCount: number;
-  counts: { confirm: number; tireQuote: number };
+  counts: { confirm: number; tireQuote: number; rotorQuote: number };
   items: NotificationItem[];
 }
 
@@ -52,6 +52,9 @@ export function NotificationPopover({
     if (activeTab === "tire") {
       return filteredBySkip.filter((item) => item.kind === "tire_quote");
     }
+    if (activeTab === "rotor") {
+      return filteredBySkip.filter((item) => item.kind === "rotor_quote");
+    }
     return filteredBySkip;
   }, [items, skipped, activeTab]);
 
@@ -61,6 +64,10 @@ export function NotificationPopover({
   const tireCount = items.filter(
     (item) =>
       item.kind === "tire_quote" && !skipped.has(String(item.bookingId))
+  ).length;
+  const rotorCount = items.filter(
+    (item) =>
+      item.kind === "rotor_quote" && !skipped.has(String(item.bookingId))
   ).length;
   const liveCount = liveAlerts.length;
 
@@ -100,6 +107,9 @@ export function NotificationPopover({
   if (tireCount > 0) {
     summary.push(`${tireCount} tire quote${tireCount === 1 ? "" : "s"}`);
   }
+  if (rotorCount > 0) {
+    summary.push(`${rotorCount} rotor quote${rotorCount === 1 ? "" : "s"}`);
+  }
 
   const showLivePinnedInAll = activeTab === "all" && liveAlerts.length > 0;
 
@@ -134,6 +144,7 @@ export function NotificationPopover({
             { id: "live" as const, label: "Live", count: liveCount },
             { id: "confirm" as const, label: "To confirm" },
             { id: "tire" as const, label: "Tire quotes" },
+            { id: "rotor" as const, label: "Rotor quotes" },
           ]
         ).map((tab) => {
           const isActive = activeTab === tab.id;

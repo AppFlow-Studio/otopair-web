@@ -149,6 +149,7 @@ import type * as payments_stripe from "../payments_stripe.js";
 import type * as platform_settings from "../platform_settings.js";
 import type * as preferences from "../preferences.js";
 import type * as pricing from "../pricing.js";
+import type * as quote_request_dismissals from "../quote_request_dismissals.js";
 import type * as quotes from "../quotes.js";
 import type * as referrals from "../referrals.js";
 import type * as retrigger_enrichment from "../retrigger_enrichment.js";
@@ -419,6 +420,7 @@ declare const fullApi: ApiFromModules<{
   platform_settings: typeof platform_settings;
   preferences: typeof preferences;
   pricing: typeof pricing;
+  quote_request_dismissals: typeof quote_request_dismissals;
   quotes: typeof quotes;
   referrals: typeof referrals;
   retrigger_enrichment: typeof retrigger_enrichment;

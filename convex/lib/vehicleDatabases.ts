@@ -80,6 +80,36 @@ function mapSteeringType(raw: string | null | undefined): "electric" | "hydrauli
   return null;
 }
 
+/**
+ * Maps VDB raw `brakingSpec.type` to the rotor-booking radio enum. Drives the
+ * "According to our records, your YYYY Make Model has: Standard brakes"
+ * pre-selection on the Shop Rotors screen (spec section 2, field 1).
+ * Conservative — unknown vocabulary returns undefined so the UI falls back
+ * to user-pick instead of mis-stating OEM data.
+ */
+export function normalizeBrakeSystemType(
+  raw: string | null | undefined,
+): "standard" | "sport" | "carbon_ceramic" | undefined {
+  if (!raw) return undefined;
+  const lower = raw.toLowerCase();
+  if (lower.includes("carbon") || lower.includes("ceramic composite") || lower.includes("ccm")) {
+    return "carbon_ceramic";
+  }
+  if (
+    lower.includes("sport") ||
+    lower.includes("performance") ||
+    lower.includes("brembo") ||
+    lower.includes("m performance") ||
+    lower.includes("akebono performance")
+  ) {
+    return "sport";
+  }
+  if (lower.includes("standard") || lower.includes("base") || lower.includes("oem") || lower.includes("regular")) {
+    return "standard";
+  }
+  return undefined;
+}
+
 // ─── VDB Repair Estimates API ────────────────────────────────────────────────
 // Dual-source: VDB provides structured intervals (from mileage schedule), labor
 // hours, and parts cost ranges. AI enrichment fills what VDB doesn't cover.
@@ -915,6 +945,7 @@ export function extractVDBFields(data: any) {
       ? parseFloat(getBrakeVal("rear_brake_rotor_dia"))
       : null,
     brakeType: brakingSpec.type || null,
+    brakeSystemType: normalizeBrakeSystemType(brakingSpec.type),
 
     // Steering (normalized: "electric" | "hydraulic" | "electro-hydraulic" | null)
     steeringType: mapSteeringType(steeringSpec?.type),

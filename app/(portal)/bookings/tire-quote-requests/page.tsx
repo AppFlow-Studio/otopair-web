@@ -167,42 +167,46 @@ function formatRelative(ts: number): string {
   return `${days}d ago`;
 }
 
-export default function TireQuoteRequestsPage() {
+/**
+ * Body of the Tire Quote Requests page — exported separately so the
+ * unified "Quotes" page at /bookings/quote-requests can render it as one
+ * of its tabs. The default export below is the backward-compat shell at
+ * /bookings/tire-quote-requests in case anything still deep-links there.
+ */
+export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: boolean } = {}) {
   const context = useQuery(api.bookings.getMyShopJobContext);
   const shopId = context?.shopId as Id<"shops"> | undefined;
 
-  const allRequests = useQuery(
+  const requests = useQuery(
     api.bookings.listOpenTireQuoteRequestsForShop,
     shopId ? { shopId } : "skip",
   ) as OpenRequest[] | undefined;
 
   const [activeRequest, setActiveRequest] = useState<OpenRequest | null>(null);
-  // Client-side rejection state — does not persist across page refreshes.
-  // Backend mutation pending; once shipped, replace this with a real call.
-  const [rejectedIds, setRejectedIds] = useState<Set<string>>(new Set());
+  const [pendingRejectId, setPendingRejectId] = useState<string | null>(null);
+  const dismissQuoteRequest = useMutation(api.quote_request_dismissals.dismiss);
 
-  const requests = useMemo(
-    () => allRequests?.filter((r) => !rejectedIds.has(String(r._id))),
-    [allRequests, rejectedIds],
-  );
-
-  const handleReject = (id: Id<"bookings">) => {
-    setRejectedIds((prev) => {
-      const next = new Set(prev);
-      next.add(String(id));
-      return next;
-    });
+  const handleReject = async (id: Id<"bookings">) => {
+    if (!shopId) return;
+    setPendingRejectId(String(id));
+    try {
+      await dismissQuoteRequest({ booking_id: id, shop_id: shopId });
+    } finally {
+      setPendingRejectId(null);
+    }
   };
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Quote Requests</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Open requests from customers shopping for Quotes. Submit a quote and the row disappears once the
-          customer picks one.
-        </p>
-      </div>
+      {hideHeader ? null : (
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Tire Quote Requests</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Open requests from customers shopping for tires. Submit a quote
+            and the row disappears once the customer picks one.
+          </p>
+        </div>
+      )}
 
       {context === undefined ? (
         <div className="bg-card rounded-xl border border-border p-8 text-center text-muted-foreground">
@@ -263,9 +267,10 @@ export default function TireQuoteRequestsPage() {
                       </button>
                       <button
                         onClick={() => handleReject(r._id)}
-                        className="inline-flex items-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+                        disabled={pendingRejectId === String(r._id)}
+                        className="inline-flex items-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
                       >
-                        Reject
+                        {pendingRejectId === String(r._id) ? "Rejecting…" : "Reject"}
                       </button>
                     </div>
                   </td>
@@ -789,4 +794,11 @@ function Field({
       {children}
     </div>
   );
+}
+
+// Backward-compat default export so direct deep-links to
+// /bookings/tire-quote-requests still resolve. The sidebar now points at
+// the unified /bookings/quote-requests page.
+export default function TireQuoteRequestsPage() {
+  return <TireQuoteRequestsContent />;
 }

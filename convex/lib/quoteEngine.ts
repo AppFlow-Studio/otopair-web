@@ -15,9 +15,32 @@
 import { Doc, Id } from "../_generated/dataModel";
 import { QueryCtx } from "../_generated/server";
 import { resolveLaborRate, VehicleTier } from "./vehicleTiers";
+import { ASSIGNMENT_RULES, matchRule } from "../seeds/seedPricing";
 
 // Anchor — the 2020 Camry LE FWD vehicle_config (seeded by seedCamryBaseline).
 export const CAMRY_FWD_CONFIG_KEY = "2020_toyota_camry_le_fwd_a25a-fks";
+
+// ─── vdb quality gate ───────────────────────────────────────────────────────
+// Lived experience: vdb-seeded labor_times "wrong often" — chassis/engine
+// clones and training-data fallbacks pollute Layer 1 ahead of the more
+// accurate Yassin tier_estimate (Camry-anchored). Disqualify them.
+
+const DISQUALIFIED_DATA_QUALITY: ReadonlySet<string> = new Set([
+  "chassis_clone",
+  "engine_clone",
+  "training_data",
+  "default_fallback",
+]);
+const MIN_VDB_CONFIDENCE = 0.75;
+const MIN_EMPIRICAL_SAMPLES = 5;
+
+function isHighQualityVdb(row: Doc<"labor_times">): boolean {
+  if (row.book_hours == null || row.book_hours <= 0) return false;
+  if (row.source === "tier_estimate") return false;
+  if (DISQUALIFIED_DATA_QUALITY.has(row.data_quality ?? "")) return false;
+  if ((row.confidence ?? 0) < MIN_VDB_CONFIDENCE) return false;
+  return true;
+}
 
 // ─── resolveLaborHours — 6-layer fallback per spec Part 3 ─────────────────
 
@@ -55,28 +78,43 @@ export async function resolveLaborHours(
     .collect();
 
   for (const row of direct) {
+    // Camry baseline rows are seeded data, always accepted.
+    if (row.source === "vdb_camry_baseline" && row.book_hours != null && row.book_hours > 0) {
+      return {
+        ok: true,
+        hours: row.book_hours,
+        source: "vdb_camry_baseline",
+        confidence: row.confidence ?? 0.9,
+      };
+    }
+    if (isHighQualityVdb(row)) {
+      return {
+        ok: true,
+        hours: row.book_hours!,
+        source: "vdb",
+        confidence: row.confidence ?? 0.9,
+      };
+    }
+    // Low-quality vdb rows: log and fall through to subsequent layers.
     if (
       row.source !== "tier_estimate" &&
       row.book_hours != null &&
       row.book_hours > 0
     ) {
-      const labelled =
-        row.source === "vdb_camry_baseline" ? "vdb_camry_baseline" : "vdb";
-      return {
-        ok: true,
-        hours: row.book_hours,
-        source: labelled,
-        confidence: row.confidence ?? 0.9,
-      };
+      console.warn(
+        `[quoteEngine] disqualified vdb labor_times row: ` +
+          `vehicle_config=${args.vehicle_config_id} service=${args.service_id} ` +
+          `data_quality=${row.data_quality ?? "?"} confidence=${row.confidence ?? "?"}`,
+      );
     }
   }
 
-  // Layer 2: empirical (≥2 completed jobs)
+  // Layer 2: empirical (≥MIN_EMPIRICAL_SAMPLES completed jobs)
   for (const row of direct) {
     if (
       row.empirical_hours != null &&
       row.empirical_hours > 0 &&
-      (row.empirical_sample_size ?? 0) >= 2
+      (row.empirical_sample_size ?? 0) >= MIN_EMPIRICAL_SAMPLES
     ) {
       return {
         ok: true,
@@ -347,11 +385,17 @@ export async function buildQuote(
 ): Promise<Quote> {
   const cfg = await ctx.db.get(args.vehicle_config_id);
   if (!cfg) return refuse("vehicle config not found");
-  const tier = cfg.pricing_tier as VehicleTier | undefined;
+  let tier = cfg.pricing_tier as VehicleTier | undefined;
   if (!tier) {
-    return refuse(
-      "vehicle has no pricing_tier — run seedTierAssignments:run or assign manually",
-    );
+    // Lazy detect via ASSIGNMENT_RULES — read-only here. The persisting write
+    // happens in quotes:previewForBooking (a mutation) so queries stay pure.
+    const detected = await detectTier(ctx, cfg);
+    if (!detected) {
+      return refuse(
+        "vehicle make/model not in pricing rules — route to booking_approvals",
+      );
+    }
+    tier = detected;
   }
 
   const shop = await ctx.db.get(args.shop_id);
@@ -437,4 +481,98 @@ async function getCamryFwdConfig(
       q.eq("config_key", CAMRY_FWD_CONFIG_KEY),
     )
     .first();
+}
+
+// ─── detectTier — read-only ASSIGNMENT_RULES walk ───────────────────────────
+// Used when vehicle_configs.pricing_tier is null. Pure: returns the tier or
+// null without writing. The persisting write happens in quotes:previewForBooking.
+
+export async function detectTier(
+  ctx: QueryCtx,
+  cfg: Doc<"vehicle_configs">,
+): Promise<VehicleTier | null> {
+  if (cfg.pricing_tier) return cfg.pricing_tier as VehicleTier;
+  const [make, model] = await Promise.all([
+    ctx.db.get(cfg.make_id),
+    ctx.db.get(cfg.model_id),
+  ]);
+  if (!make || !model) return null;
+  const matchCtx = {
+    make: make.name,
+    model: (model as any).name ?? "",
+    trim: cfg.trim_name ?? "",
+    year: cfg.year,
+  };
+  for (const rule of ASSIGNMENT_RULES) {
+    if (matchRule(rule, matchCtx)) return rule.tier;
+  }
+  return null;
+}
+
+// ─── resolveVehicleConfigFromVin ────────────────────────────────────────────
+// Bookings carry `vin`, not `vehicle_config_id`. Shared helper for the booking
+// + invoice rewires.
+
+export async function resolveVehicleConfigFromVin(
+  ctx: QueryCtx,
+  vin: string,
+): Promise<Doc<"vehicle_configs"> | null> {
+  const vehicle = await ctx.db
+    .query("vehicles")
+    .withIndex("by_vin", (q) => q.eq("vin", vin))
+    .first();
+  const cfgId = (vehicle as { vehicle_config_id?: Id<"vehicle_configs"> } | null)
+    ?.vehicle_config_id;
+  if (!cfgId) return null;
+  return await ctx.db.get(cfgId);
+}
+
+// ─── resolveQuoteSeries — multi-service aggregator ──────────────────────────
+// Used by createBatch + the previewForBooking mutation. Loops buildQuote over
+// each service and aggregates labor_minutes + low/high totals so the caller
+// can validate against a single number.
+
+export type QuoteSeries = {
+  quotes: Quote[];
+  total_low: number;
+  total_high: number;
+  labor_minutes_total: number;
+  labor_cost_total: number;
+};
+
+export async function resolveQuoteSeries(
+  ctx: QueryCtx,
+  args: {
+    vehicle_config_id: Id<"vehicle_configs">;
+    service_ids: Id<"services">[];
+    shop_id: Id<"shops">;
+  },
+): Promise<QuoteSeries> {
+  const quotes: Quote[] = [];
+  let total_low = 0;
+  let total_high = 0;
+  let labor_minutes_total = 0;
+  let labor_cost_total = 0;
+
+  for (const service_id of args.service_ids) {
+    const q = await buildQuote(ctx, {
+      vehicle_config_id: args.vehicle_config_id,
+      service_id,
+      shop_id: args.shop_id,
+    });
+    quotes.push(q);
+    if (q.ok) {
+      total_low += q.low;
+      total_high += q.high;
+      labor_minutes_total += q.labor.hours * 60;
+      labor_cost_total += q.labor.cost;
+    }
+  }
+  return {
+    quotes,
+    total_low: round2(total_low),
+    total_high: round2(total_high),
+    labor_minutes_total: Math.round(labor_minutes_total),
+    labor_cost_total: round2(labor_cost_total),
+  };
 }

@@ -79,6 +79,68 @@ const STEP_META = [
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"] as const;
 
+const TIER_ORDER = ["T1", "T2a", "T2b", "T2c", "T3a", "T3b", "T4"] as const;
+type TierCode = (typeof TIER_ORDER)[number];
+
+const TIER_META: Record<
+  TierCode,
+  { label: string; band: { lo: number; hi: number }; examples: string }
+> = {
+  T1: {
+    label: "Mainstream",
+    band: { lo: 130, hi: 150 },
+    examples: "Toyota, Honda, Ford, Hyundai, Kia, Mazda, Nissan, Subaru",
+  },
+  T2a: {
+    label: "Value premium",
+    band: { lo: 160, hi: 185 },
+    examples: "Lexus, Acura, Genesis, Volvo, Infiniti, Buick",
+  },
+  T2b: {
+    label: "German mid",
+    band: { lo: 165, hi: 195 },
+    examples: "Mercedes (non-AMG), Audi (non-S/RS), VW GTI/Golf R",
+  },
+  T2c: {
+    label: "BMW non-M",
+    band: { lo: 175, hi: 210 },
+    examples: "BMW 3/5/X3/X5, MINI JCW, Macan base",
+  },
+  T3a: {
+    label: "Performance",
+    band: { lo: 195, hi: 235 },
+    examples: "BMW M3/M5/X3M, Mercedes-AMG C63/E63, Audi RS/S",
+  },
+  T3b: {
+    label: "Premium sports",
+    band: { lo: 215, hi: 275 },
+    examples: "Porsche 911 / Cayman / Boxster, AMG GT, Audi R8",
+  },
+  T4: {
+    label: "Ultra-exotic",
+    band: { lo: 250, hi: 400 },
+    examples: "Ferrari, Lamborghini, Rolls-Royce, Bentley, McLaren",
+  },
+};
+
+type TierFormRow = {
+  tier: TierCode;
+  declined: boolean;
+  rateInput: string;
+};
+
+function initialTierRows(
+  rates: Partial<Record<TierCode, number>> | undefined,
+  declined: TierCode[] | undefined,
+): TierFormRow[] {
+  const declinedSet = new Set(declined ?? []);
+  return TIER_ORDER.map((tier) => ({
+    tier,
+    declined: declinedSet.has(tier),
+    rateInput: rates?.[tier] != null ? String(rates[tier]) : "",
+  }));
+}
+
 const getPortalAccessQuery = makeFunctionReference<"query">("shops:getMyPortalAccess");
 const getOnboardingDataQuery = makeFunctionReference<"query">("shops:getMyOnboardingData");
 const getShopBySlugQuery = makeFunctionReference<"query">("shops:getBySlug");
@@ -93,6 +155,9 @@ const upsertShopDetailsMutation = makeFunctionReference<"mutation">(
 const saveHoursMutation = makeFunctionReference<"mutation">("shops:saveOnboardingHours");
 const saveLaborAndServicesMutation = makeFunctionReference<"mutation">(
   "shops:saveOnboardingLaborAndServices"
+);
+const setLaborRatesByTierMutation = makeFunctionReference<"mutation">(
+  "shopLaborRates:setLaborRatesByTier"
 );
 const addMechanicMutation = makeFunctionReference<"mutation">("shops:addOnboardingMechanic");
 const updateMechanicMutation = makeFunctionReference<"mutation">(
@@ -214,6 +279,8 @@ type OnboardingData = {
     zipCode: string;
     phone: string;
     laborRate?: number;
+    laborRatesByTier?: Partial<Record<TierCode, number>>;
+    declinedTiers?: TierCode[];
     stripeConnectAccountId?: string | null;
     stripeRequirementsCurrentlyDue?: string[];
     stripeConnectReady?: boolean;
@@ -491,6 +558,11 @@ export default function ShopSetupPage() {
     laborRate: number;
     serviceIds: Id<"services">[];
   }) => Promise<Id<"shops">>;
+  const saveTierLaborRates = useMutation(setLaborRatesByTierMutation) as (args: {
+    shop_id: Id<"shops">;
+    rates: Partial<Record<TierCode, number>>;
+    declined_tiers: TierCode[];
+  }) => Promise<unknown>;
   const addMechanic = useMutation(addMechanicMutation) as (args: {
     firstName: string;
     lastName: string;
@@ -519,6 +591,9 @@ export default function ShopSetupPage() {
   });
   const [hours, setHours] = useState<HoursFormRow[]>(getDefaultHours());
   const [laborRate, setLaborRate] = useState("150");
+  const [tierRows, setTierRows] = useState<TierFormRow[]>(() =>
+    initialTierRows(undefined, undefined),
+  );
   const [selectedServiceIds, setSelectedServiceIds] = useState<Set<string>>(new Set());
   const [slugManual, setSlugManual] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
@@ -652,6 +727,12 @@ export default function ShopSetupPage() {
     setDetails(nextDetails);
     setHours(nextHours);
     setLaborRate(nextLaborRate);
+    setTierRows(
+      initialTierRows(
+        onboardingData.shop?.laborRatesByTier,
+        onboardingData.shop?.declinedTiers,
+      ),
+    );
     setSelectedServiceIds(nextSelectedServiceIds);
     setAddressSelectedFromAutocomplete(Boolean(nextDetails.address));
     setAddressSuggestions([]);
@@ -1034,14 +1115,42 @@ export default function ShopSetupPage() {
       return;
     }
 
+    const tierRates: Partial<Record<TierCode, number>> = {};
+    const tierDeclined: TierCode[] = [];
+    for (const row of tierRows) {
+      if (row.declined) {
+        tierDeclined.push(row.tier);
+        continue;
+      }
+      const trimmed = row.rateInput.trim();
+      if (trimmed === "") continue;
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n < 50 || n > 900) {
+        setStepError(
+          `Tier ${row.tier} rate must be a number between $50 and $900/hr.`,
+        );
+        return;
+      }
+      tierRates[row.tier] = Math.round(n);
+    }
+
     setSavingStep(2);
     try {
-      await saveLaborAndServices({
+      const shopId = await saveLaborAndServices({
         laborRate: Number(laborRate),
         serviceIds: Array.from(selectedServiceIds).map(
           (id) => id as Id<"services">
         ),
       });
+      const hasTierChanges =
+        Object.keys(tierRates).length > 0 || tierDeclined.length > 0;
+      if (hasTierChanges) {
+        await saveTierLaborRates({
+          shop_id: shopId,
+          rates: tierRates,
+          declined_tiers: tierDeclined,
+        });
+      }
       setStepSuccess("Labor rate and services saved.");
       setCurrentStep(3);
     } catch (error) {
@@ -1824,6 +1933,132 @@ export default function ShopSetupPage() {
                 <p className="mt-2 text-xs text-muted-foreground">
                   Otopair shops start at $150/hr. You can adjust this any time.
                 </p>
+              </div>
+
+              <div className="rounded-xl border border-border bg-muted p-5">
+                <div className="mb-1 flex items-center justify-between">
+                  <h3 className="text-base font-semibold text-foreground">
+                    Per-tier rates
+                  </h3>
+                </div>
+                <p className="mb-4 text-xs text-muted-foreground">
+                  Optional: charge differently per vehicle class. Blank tiers
+                  fall back to your base rate of{" "}
+                  <span className="font-medium text-foreground">
+                    ${laborRate || 150}/hr
+                  </span>
+                  . Use Decline to mark a tier you don&apos;t service.
+                </p>
+                <div className="overflow-hidden rounded-lg border border-border bg-white">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Tier
+                        </th>
+                        <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">
+                          Suggested
+                        </th>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Rate ($/hr)
+                        </th>
+                        <th className="px-3 py-2 text-right font-semibold">
+                          Status
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {tierRows.map((row) => {
+                        const meta = TIER_META[row.tier];
+                        const trimmed = row.rateInput.trim();
+                        const n = Number(trimmed);
+                        const inputValid =
+                          row.declined ||
+                          trimmed === "" ||
+                          (Number.isFinite(n) && n >= 50 && n <= 900);
+                        return (
+                          <tr key={row.tier} className="align-top">
+                            <td className="px-3 py-2.5">
+                              <div className="font-semibold text-foreground">
+                                {row.tier}{" "}
+                                <span className="font-normal text-muted-foreground">
+                                  · {meta.label}
+                                </span>
+                              </div>
+                              <div className="mt-0.5 text-[11px] text-muted-foreground leading-snug">
+                                e.g. {meta.examples}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap text-xs">
+                              ${meta.band.lo}–${meta.band.hi}
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <div className="inline-flex items-center overflow-hidden rounded-md border border-input bg-white focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring">
+                                <span className="border-r border-input bg-muted px-2 py-1.5 text-xs text-muted-foreground">
+                                  $
+                                </span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={row.rateInput}
+                                  onChange={(event) =>
+                                    setTierRows((prev) =>
+                                      prev.map((r) =>
+                                        r.tier === row.tier
+                                          ? { ...r, rateInput: event.target.value }
+                                          : r,
+                                      ),
+                                    )
+                                  }
+                                  disabled={row.declined}
+                                  placeholder={String(laborRate || 150)}
+                                  className={`w-20 px-2 py-1.5 text-sm text-foreground outline-none disabled:bg-muted disabled:text-muted-foreground ${
+                                    inputValid ? "" : "text-destructive"
+                                  }`}
+                                />
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5 text-right">
+                              {row.declined ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setTierRows((prev) =>
+                                      prev.map((r) =>
+                                        r.tier === row.tier
+                                          ? { ...r, declined: false }
+                                          : r,
+                                      ),
+                                    )
+                                  }
+                                  className="rounded-md border border-input px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                                >
+                                  Restore
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setTierRows((prev) =>
+                                      prev.map((r) =>
+                                        r.tier === row.tier
+                                          ? { ...r, declined: true, rateInput: "" }
+                                          : r,
+                                      ),
+                                    )
+                                  }
+                                  className="rounded-md border border-input px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+                                >
+                                  Decline
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
               <div>

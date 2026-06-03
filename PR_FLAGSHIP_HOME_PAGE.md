@@ -138,7 +138,7 @@ All values render as **plain text** (React-escaped) — no `dangerouslySetInnerH
 - `components/flagship/chat-card.tsx`, `voice-bar.tsx`, `oto-orb.tsx`, `pill-nav.tsx` — chat/input/orb/nav
 - `scripts/setup-oto-agent.mjs` — tool defs + prompt; adds `show_info_card`
 
-> Out of scope / intentionally left uncommitted: director-panel + `convex/director_auth.ts` auth edits, and the `FLAGSHIP_HERO_HANDOFF.md` / `MECHANIC_EDITS_TECHNICAL_SPEC.md` working docs — these are separate concerns.
+> Out of scope of this section: the director-panel + `convex/director_auth.ts` auth edits are a separate concern, documented below. The `FLAGSHIP_HERO_HANDOFF.md` / `MECHANIC_EDITS_TECHNICAL_SPEC.md` working docs remain uncommitted.
 
 ---
 

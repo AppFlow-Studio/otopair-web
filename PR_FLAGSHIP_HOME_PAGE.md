@@ -155,3 +155,58 @@ All values render as **plain text** (React-escaped) — no `dangerouslySetInnerH
 - Voice needs a secure context (https or `http://localhost`); on a plain-IP/LAN URL the mic prompt won't fire and Oto tells the visitor to type instead.
 - Emitting side-effects inside a `setState` updater double-fires under React StrictMode (it caused duplicate chat messages once) — `advance()` schedules messages outside the updater via `stepRef`.
 - Launch context baked into the demo data: Staten Island, June 1, 2026, iOS & Android.
+
+<br />
+
+---
+---
+
+# Director panel — admin auth hardening
+
+> **Separate concern from the home page**, documented here per request as a combined reference. These changes are tracked independently of the flagship commit above.
+
+## Summary
+
+Hardens the director (admin) panel's **email + TOTP 2FA** login and account management. Motivated by a real incident: a duplicate "Abubeckr" account whose 2FA silently broke because the person was *re-created* under a new email instead of edited, and failed logins left no diagnosable trace. Three fixes — a failed-login audit trail, a duplicate-account guard, and per-email authenticator labeling.
+
+## How it works
+
+### 1. Failed-login audit trail (`convex/director_auth.ts`)
+
+- New internal mutation `_logFailedLogin` records a `login_failed` row in `audit_log` with the **real** reason (`unknown_email` | `invalid_code`), actor, and a human-readable detail.
+- `loginWithEmail` normalizes the email and logs both failure modes. The browser still only ever receives the generic `"Invalid email or code"` — **account existence is never leaked client-side** — but the audit log keeps the true reason so the next lockout is diagnosable instead of "not reproducible."
+
+### 2. Duplicate-account guard in `addUser` (`convex/director_auth.ts`)
+
+`addUser` now returns a discriminated result instead of unconditionally succeeding:
+
+```ts
+  { ok: true;  id; totp_secret }
+| { ok: false; reason: "email_taken" }
+| { ok: false; reason: "name_exists"; existingEmail? }
+```
+
+- **Hard block** — one account per email (mirrors the invariant in `setUserEmail`).
+- **Soft guard** — if a user with the same (trimmed, case-insensitive) name already exists, it returns `name_exists` rather than creating a second account. Re-creating a person under a new email silently orphans their existing 2FA enrollment — exactly what broke the duplicate "Abubeckr." Passing `force: true` proceeds past the warning (names can legitimately repeat).
+- Name + email are normalized (trim / lowercase) on insert.
+
+### 3. Settings UI (`app/(director-panel)/director/components/tabs/TabSettings.tsx`)
+
+- `AddUserModal` handles the discriminated result: an inline error for `email_taken`, and an **amber warning** for `name_exists` that explains the orphaned-2FA risk and offers a **"Create anyway"** button (re-submits with `force: true`).
+- `SecretReveal` labels the TOTP `otpauth://` URI — and the displayed account string — by **email** when available, not name alone, so a re-created/duplicate account produces a *distinct* entry in the user's authenticator app instead of an indistinguishable one. The URI also pins `algorithm=SHA1&digits=6&period=30` for authenticator compatibility.
+
+### 4. Audit display (`Primitives.tsx`, `TabAudit.tsx`)
+
+- Register the `login_failed` action so it renders properly in the Audit tab: red tone + "Login failed" label + bolt icon (`auditMeta`), plus a matching entry in `ACTION_LABELS`.
+
+## Files
+
+- `convex/director_auth.ts` — `_logFailedLogin`; failed-login logging in `loginWithEmail`; duplicate-guard + discriminated result in `addUser`
+- `app/(director-panel)/director/components/tabs/TabSettings.tsx` — add-user error/warning + force flow; email-labeled TOTP reveal
+- `app/(director-panel)/director/components/Primitives.tsx` — `login_failed` audit metadata
+- `app/(director-panel)/director/components/tabs/TabAudit.tsx` — `login_failed` action label
+
+## Notes
+
+- Security posture preserved: the client response stays generic; the richer failure reason lives only in the server-side audit log.
+- Existing duplicate accounts aren't auto-merged — the guard prevents *new* duplicates; clean up any pre-existing ones by editing rather than re-creating.

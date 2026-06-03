@@ -23,6 +23,7 @@ const ACTION_LABELS: Record<string, string> = {
   view:             'Viewed',
   login:            'Login',
   logout:           'Logout',
+  login_failed:     'Login failed',
 }
 
 const ENTITY_TAB: Record<string, string> = {

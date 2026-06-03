@@ -34,11 +34,15 @@ function timeAgo(ts: number): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
-const SecretReveal = ({ secret, name }: { secret: string; name: string }) => {
+const SecretReveal = ({ secret, name, email }: { secret: string; name: string; email?: string }) => {
   const [copied,   setCopied]  = useState(false)
   const [qrUrl,    setQrUrl]   = useState<string | null>(null)
   const formatted = secret.match(/.{1,4}/g)?.join(' ') ?? secret
-  const otpauth   = `otpauth://totp/Otopair%20Director:${encodeURIComponent(name)}?secret=${secret}&issuer=Otopair%20Director`
+  // Label by email when available so a re-created account produces a *distinct*
+  // authenticator entry — labelling by name alone made duplicate accounts
+  // indistinguishable in the user's app, which is how the old "Abubeckr" lingered.
+  const account   = email ?? name
+  const otpauth   = `otpauth://totp/${encodeURIComponent(`Otopair Director (${account})`)}?secret=${secret}&issuer=Otopair%20Director&algorithm=SHA1&digits=6&period=30`
 
   useEffect(() => {
     QRCode.toDataURL(otpauth, { width: 200, margin: 2, color: { dark: '#0F172A', light: '#FFFFFF' } })
@@ -85,7 +89,7 @@ const SecretReveal = ({ secret, name }: { secret: string; name: string }) => {
             <Button size="sm" onClick={copy}>{copied ? '✓ Copied' : 'Copy key'}</Button>
           </div>
           <div style={{ marginTop: 8, fontSize: 11, color: 'var(--blue-600)' }}>
-            Account: <code>Otopair Director: {name}</code>
+            Account: <code>Otopair Director ({account})</code>
           </div>
         </div>
       </div>
@@ -98,19 +102,28 @@ const AddUserModal = ({ onClose, actorName, actorId }: { onClose: () => void; ac
   const [name,   setName]   = useState('')
   const [email,  setEmail]  = useState('')
   const [role,   setRole]   = useState<'superadmin'|'admin'|'viewer'>('admin')
-  const [secret, setSecret] = useState<{ text: string; forName: string } | null>(null)
+  const [secret, setSecret] = useState<{ text: string; forName: string; email: string } | null>(null)
   const [error,  setError]  = useState('')
+  const [nameWarn, setNameWarn] = useState<{ existingEmail?: string } | null>(null)
   const [busy,   setBusy]   = useState(false)
 
-  const handleCreate = async () => {
+  const handleCreate = async (force = false) => {
     const trimEmail = email.trim().toLowerCase()
     if (!name.trim()) { setError('Name is required.'); return }
     if (!trimEmail || !trimEmail.includes('@')) { setError('A valid email address is required.'); return }
-    setError('')
+    setError(''); setNameWarn(null)
     setBusy(true)
-    const res = await addUser({ name: name.trim(), email: trimEmail, role, actorName, actorId })
+    const res = await addUser({ name: name.trim(), email: trimEmail, role, actorName, actorId, force })
     setBusy(false)
-    setSecret({ text: res.totp_secret, forName: name.trim() })
+    if (!res.ok) {
+      if (res.reason === 'email_taken') {
+        setError('An account with that email already exists.')
+      } else if (res.reason === 'name_exists') {
+        setNameWarn({ existingEmail: res.existingEmail })
+      }
+      return
+    }
+    setSecret({ text: res.totp_secret, forName: name.trim(), email: trimEmail })
   }
 
   return (
@@ -150,9 +163,26 @@ const AddUserModal = ({ onClose, actorName, actorId }: { onClose: () => void; ac
             {error && (
               <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--red-600)', fontWeight: 500 }}>{error}</div>
             )}
+            {nameWarn && (
+              <div style={{ marginBottom: 12, padding: '10px 12px', background: 'var(--amber-50, #fffbeb)',
+                border: '1px solid var(--amber-200, #fde68a)', borderRadius: 8 }}>
+                <div style={{ fontSize: 13, color: 'var(--amber-700, #b45309)', fontWeight: 600 }}>
+                  An account named “{name.trim()}” already exists{nameWarn.existingEmail ? ` (${nameWarn.existingEmail})` : ''}.
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4 }}>
+                  Re-creating a person instead of editing the existing account orphans their 2FA.
+                  Edit that account from the list, or continue only if this is genuinely a different person.
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <Button size="sm" variant="primary" onClick={() => handleCreate(true)} disabled={busy}>
+                    {busy ? 'Creating…' : 'Create anyway'}
+                  </Button>
+                </div>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <Button onClick={onClose}>Cancel</Button>
-              <Button variant="primary" onClick={handleCreate} disabled={busy || !name.trim() || !email.trim()}>
+              <Button variant="primary" onClick={() => handleCreate()} disabled={busy || !name.trim() || !email.trim()}>
                 {busy ? 'Creating…' : 'Create account'}
               </Button>
             </div>
@@ -162,7 +192,7 @@ const AddUserModal = ({ onClose, actorName, actorId }: { onClose: () => void; ac
             <div style={{ fontSize: 13, color: 'var(--green-700)', fontWeight: 500, marginBottom: 4 }}>
               ✓ Account created for {secret.forName}
             </div>
-            <SecretReveal secret={secret.text} name={secret.forName} />
+            <SecretReveal secret={secret.text} name={secret.forName} email={secret.email} />
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
               <Button variant="primary" onClick={onClose}>Done</Button>
             </div>
@@ -289,7 +319,7 @@ const UserRow = ({ user, isSelf, actorName, actorId, canRemove, canRegen, canEdi
       {editEmail && (
         <SetEmailInline user={user} actorName={actorName} actorId={actorId} onDone={() => setEditEmail(false)} />
       )}
-      {newSecret && <SecretReveal secret={newSecret} name={user.name} />}
+      {newSecret && <SecretReveal secret={newSecret} name={user.name} email={user.email} />}
     </div>
   )
 }

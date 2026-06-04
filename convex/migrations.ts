@@ -1,11 +1,6 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import {
-  syncShopAvailabilityWindow,
-  DEFAULT_AVAILABILITY_DAYS,
-} from "./lib/timeSlotAvailability";
-
 // One-shot backfill: any job_actuals row that already has a postjob_report
 // submitted but never got finalized_at_ms stamped (because completeWithPostjob
 // used to skip the finalize step) gets retroactively closed. Clears the
@@ -201,19 +196,15 @@ export const backfillServiceOptions = mutation({
 });
 
 /**
- * Regenerate time_slots to the 15-minute grid for all active shops over the
- * next N days (default 30). Deletes only unbooked / is_available rows; any
- * blocked slot or in-flight booking is left untouched.
+ * One-shot cleanup for the inferred-availability model. Positive/free
+ * availability rows are no longer persisted; only negative blocked/hold rows
+ * stay in `time_slots`.
  *
- * Run: npx convex run migrations:regenerateSlotsFifteenMinGrid
+ * Run: npx convex run migrations:cleanupGeneratedAvailableTimeSlots
  */
-export const regenerateSlotsFifteenMinGrid = mutation({
-  args: { days: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const days = args.days ?? DEFAULT_AVAILABILITY_DAYS;
-    const shops = await ctx.db.query("shops").collect();
-
-    // Drop existing available rows; sync will repopulate at 15-min grid.
+export const cleanupGeneratedAvailableTimeSlots = mutation({
+  args: {},
+  handler: async (ctx) => {
     const available = await ctx.db
       .query("time_slots")
       .withIndex("by_availability", (q) => q.eq("is_available", true))
@@ -222,19 +213,25 @@ export const regenerateSlotsFifteenMinGrid = mutation({
       await ctx.db.delete(row._id);
     }
 
-    let created = 0;
-    let deleted = available.length;
-    for (const shop of shops) {
-      if (shop.is_active === false) continue;
-      const result = await syncShopAvailabilityWindow(ctx, {
-        shopId: shop._id,
-        days,
-      });
-      created += result.created;
-      deleted += result.deleted;
-    }
+    return { deleted: available.length };
+  },
+});
 
-    return { created, deleted, shopCount: shops.length };
+/**
+ * Backward-compatible alias. This used to rebuild positive 15-minute rows; it
+ * now only removes them.
+ */
+export const regenerateSlotsFifteenMinGrid = mutation({
+  args: { days: v.optional(v.number()) },
+  handler: async (ctx) => {
+    const available = await ctx.db
+      .query("time_slots")
+      .withIndex("by_availability", (q) => q.eq("is_available", true))
+      .collect();
+    for (const row of available) {
+      await ctx.db.delete(row._id);
+    }
+    return { created: 0, deleted: available.length };
   },
 });
 

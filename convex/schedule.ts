@@ -137,12 +137,8 @@ async function getManualBlockedSlotsForShop(ctx: any, shopId: any) {
     .query("time_slots")
     .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
     .collect();
-  const bookings = await getShopBookings(ctx, shopId);
-  const bookingSlotIds = new Set(
-    bookings.filter((booking: any) => booking.time_slot_id).map((booking: any) => String(booking.time_slot_id))
-  );
   return slots.filter(
-    (slot: any) => !slot.is_available && !bookingSlotIds.has(String(slot._id))
+    (slot: any) => !slot.is_available && slot.block_kind !== undefined
   );
 }
 

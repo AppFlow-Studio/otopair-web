@@ -1855,7 +1855,21 @@ export const _pollBatch2V3 = internalAction({
       year: args.year, make: args.make, model: args.model,
       trim: args.trim, engineCode: args.engineCode, displacement: args.displacement,
     };
-    const cylinders = parseInt(vehicle.displacement) >= 4 ? 8 : parseInt(vehicle.displacement) >= 2.5 ? 6 : 4;
+    // Use the real cylinder count from the engines table (written upstream
+    // from NHTSA's EngineCylinders during processVin). The previous code
+    // inferred cylinders from displacement via a hardcoded `>=4 ? 8 : >=2.5
+    // ? 6 : 4` ladder, which mishandled I3 (1.0-1.5L), I5 (Audi RS3), V10
+    // (R8, M5 E60), V12, W12 — and silently fed wrong values to
+    // runSanityChecks. Fallback to 4 only if the engines table read failed
+    // entirely (rare; sanity checks just become less informative).
+    //
+    // Fetched fresh here because this action (_pollBatch2V3) doesn't receive
+    // vPicData via args — the first-action local `vPicData` is out of scope.
+    const enginePicData = await ctx.runQuery(
+      internal.vehicleEnrichment.nhtsa.getIdentity,
+      { vehicleId: args.vehicleId },
+    );
+    const cylinders = enginePicData?.cylinders ?? 4;
     const sanityFlags = runSanityChecks(allFields, cylinders);
     const oemFlags = validateAllOemParts(allFields, vehicle.make);
     if (sanityFlags.length > 0) console.log(`[v8] Sanity: ${sanityFlags.length} flags (applied before write)`);

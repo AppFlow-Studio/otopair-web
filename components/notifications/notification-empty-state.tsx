@@ -21,7 +21,7 @@ export function NotificationEmptyState({
         You&apos;re all caught up
       </p>
       <p className="mt-1 max-w-[260px] text-xs text-gray-500">
-        New booking requests and tire quote requests will appear here.
+        New booking requests and quote requests will appear here.
       </p>
       <button
         type="button"

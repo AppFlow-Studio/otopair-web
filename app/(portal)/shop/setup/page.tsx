@@ -21,11 +21,20 @@ import {
   CreditCard,
   Loader2,
   Plus,
+  Sliders,
   Trash2,
   UserRoundCog,
   Users,
   Wrench,
 } from "lucide-react";
+import FixedPriceTierStrip, {
+  FIXED_PRICE_TIERS,
+  centsMapToInputs,
+  countPricedTiers,
+  priceMapToCents,
+  type FixedPriceMap,
+  type FixedPriceTier,
+} from "@/components/shop/fixed-price-tier-strip";
 
 function toSlug(name: string): string {
   return name
@@ -79,6 +88,68 @@ const STEP_META = [
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"] as const;
 
+const TIER_ORDER = ["T1", "T2a", "T2b", "T2c", "T3a", "T3b", "T4"] as const;
+type TierCode = (typeof TIER_ORDER)[number];
+
+const TIER_META: Record<
+  TierCode,
+  { label: string; band: { lo: number; hi: number }; examples: string }
+> = {
+  T1: {
+    label: "Mainstream",
+    band: { lo: 130, hi: 150 },
+    examples: "Toyota, Honda, Ford, Hyundai, Kia, Mazda, Nissan, Subaru",
+  },
+  T2a: {
+    label: "Value premium",
+    band: { lo: 160, hi: 185 },
+    examples: "Lexus, Acura, Genesis, Volvo, Infiniti, Buick",
+  },
+  T2b: {
+    label: "German mid",
+    band: { lo: 165, hi: 195 },
+    examples: "Mercedes (non-AMG), Audi (non-S/RS), VW GTI/Golf R",
+  },
+  T2c: {
+    label: "BMW non-M",
+    band: { lo: 175, hi: 210 },
+    examples: "BMW 3/5/X3/X5, MINI JCW, Macan base",
+  },
+  T3a: {
+    label: "Performance",
+    band: { lo: 195, hi: 235 },
+    examples: "BMW M3/M5/X3M, Mercedes-AMG C63/E63, Audi RS/S",
+  },
+  T3b: {
+    label: "Premium sports",
+    band: { lo: 215, hi: 275 },
+    examples: "Porsche 911 / Cayman / Boxster, AMG GT, Audi R8",
+  },
+  T4: {
+    label: "Ultra-exotic",
+    band: { lo: 250, hi: 400 },
+    examples: "Ferrari, Lamborghini, Rolls-Royce, Bentley, McLaren",
+  },
+};
+
+type TierFormRow = {
+  tier: TierCode;
+  declined: boolean;
+  rateInput: string;
+};
+
+function initialTierRows(
+  rates: Partial<Record<TierCode, number>> | undefined,
+  declined: TierCode[] | undefined,
+): TierFormRow[] {
+  const declinedSet = new Set(declined ?? []);
+  return TIER_ORDER.map((tier) => ({
+    tier,
+    declined: declinedSet.has(tier),
+    rateInput: rates?.[tier] != null ? String(rates[tier]) : "",
+  }));
+}
+
 const getPortalAccessQuery = makeFunctionReference<"query">("shops:getMyPortalAccess");
 const getOnboardingDataQuery = makeFunctionReference<"query">("shops:getMyOnboardingData");
 const getShopBySlugQuery = makeFunctionReference<"query">("shops:getBySlug");
@@ -93,6 +164,15 @@ const upsertShopDetailsMutation = makeFunctionReference<"mutation">(
 const saveHoursMutation = makeFunctionReference<"mutation">("shops:saveOnboardingHours");
 const saveLaborAndServicesMutation = makeFunctionReference<"mutation">(
   "shops:saveOnboardingLaborAndServices"
+);
+const setLaborRatesByTierMutation = makeFunctionReference<"mutation">(
+  "shopLaborRates:setLaborRatesByTier"
+);
+const listShopServiceFixedPricesQuery = makeFunctionReference<"query">(
+  "shopServiceFixedPrices:listForShop"
+);
+const setShopServiceFixedPricesMutation = makeFunctionReference<"mutation">(
+  "shopServiceFixedPrices:setFixedPricesForService"
 );
 const addMechanicMutation = makeFunctionReference<"mutation">("shops:addOnboardingMechanic");
 const updateMechanicMutation = makeFunctionReference<"mutation">(
@@ -214,6 +294,8 @@ type OnboardingData = {
     zipCode: string;
     phone: string;
     laborRate?: number;
+    laborRatesByTier?: Partial<Record<TierCode, number>>;
+    declinedTiers?: TierCode[];
     stripeConnectAccountId?: string | null;
     stripeRequirementsCurrentlyDue?: string[];
     stripeConnectReady?: boolean;
@@ -491,6 +573,11 @@ export default function ShopSetupPage() {
     laborRate: number;
     serviceIds: Id<"services">[];
   }) => Promise<Id<"shops">>;
+  const saveTierLaborRates = useMutation(setLaborRatesByTierMutation) as (args: {
+    shop_id: Id<"shops">;
+    rates: Partial<Record<TierCode, number>>;
+    declined_tiers: TierCode[];
+  }) => Promise<unknown>;
   const addMechanic = useMutation(addMechanicMutation) as (args: {
     firstName: string;
     lastName: string;
@@ -507,6 +594,13 @@ export default function ShopSetupPage() {
   const removeMechanic = useMutation(removeMechanicMutation) as (args: {
     mechanicId: Id<"mechanics">;
   }) => Promise<Id<"mechanics">>;
+  const setShopServiceFixedPrices = useMutation(
+    setShopServiceFixedPricesMutation,
+  ) as (args: {
+    shop_id: Id<"shops">;
+    service_id: Id<"services">;
+    prices: Partial<Record<FixedPriceTier, number | null>>;
+  }) => Promise<unknown>;
 
   const [details, setDetails] = useState<ShopDetailsForm>({
     name: "",
@@ -519,7 +613,19 @@ export default function ShopSetupPage() {
   });
   const [hours, setHours] = useState<HoursFormRow[]>(getDefaultHours());
   const [laborRate, setLaborRate] = useState("150");
+  const [tierRows, setTierRows] = useState<TierFormRow[]>(() =>
+    initialTierRows(undefined, undefined),
+  );
   const [selectedServiceIds, setSelectedServiceIds] = useState<Set<string>>(new Set());
+  const [pricingOpenServiceIds, setPricingOpenServiceIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [fixedPricesByService, setFixedPricesByService] = useState<
+    Record<string, FixedPriceMap>
+  >({});
+  const [fixedPricesBaseline, setFixedPricesBaseline] = useState<
+    Record<string, FixedPriceMap>
+  >({});
   const [slugManual, setSlugManual] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [stepError, setStepError] = useState<string | null>(null);
@@ -581,6 +687,15 @@ export default function ShopSetupPage() {
       ? { slug: details.slug }
       : "skip"
   ) as { _id: Id<"shops"> } | null | undefined;
+  const persistedShopId = onboardingData?.shop?._id ?? null;
+  const fixedPricesData = useQuery(
+    listShopServiceFixedPricesQuery,
+    persistedShopId ? { shop_id: persistedShopId } : "skip",
+  ) as Record<string, Partial<Record<FixedPriceTier, number>>> | undefined;
+  const declinedTierSet = useMemo(
+    () => new Set<string>(onboardingData?.shop?.declinedTiers ?? []),
+    [onboardingData],
+  );
   const serviceCategories = useMemo(
     () => (onboardingData?.serviceCategories ?? []) as OnboardingServiceCategory[],
     [onboardingData]
@@ -652,6 +767,12 @@ export default function ShopSetupPage() {
     setDetails(nextDetails);
     setHours(nextHours);
     setLaborRate(nextLaborRate);
+    setTierRows(
+      initialTierRows(
+        onboardingData.shop?.laborRatesByTier,
+        onboardingData.shop?.declinedTiers,
+      ),
+    );
     setSelectedServiceIds(nextSelectedServiceIds);
     setAddressSelectedFromAutocomplete(Boolean(nextDetails.address));
     setAddressSuggestions([]);
@@ -661,6 +782,16 @@ export default function ShopSetupPage() {
     setCurrentStep(firstIncompleteSavedStep);
     setHydratedShopId(shopId);
   }, [firstIncompleteSavedStep, hydratedShopId, onboardingData, router, serviceCategories]);
+
+  useEffect(() => {
+    if (!fixedPricesData) return;
+    const next: Record<string, FixedPriceMap> = {};
+    for (const [serviceId, centsMap] of Object.entries(fixedPricesData)) {
+      next[serviceId] = centsMapToInputs(centsMap);
+    }
+    setFixedPricesByService(next);
+    setFixedPricesBaseline(next);
+  }, [fixedPricesData]);
 
   useEffect(() => {
     const stripeStatus = searchParams.get("stripe");
@@ -1034,14 +1165,73 @@ export default function ShopSetupPage() {
       return;
     }
 
+    const tierRates: Partial<Record<TierCode, number>> = {};
+    const tierDeclined: TierCode[] = [];
+    for (const row of tierRows) {
+      if (row.declined) {
+        tierDeclined.push(row.tier);
+        continue;
+      }
+      const trimmed = row.rateInput.trim();
+      if (trimmed === "") continue;
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n < 50 || n > 900) {
+        setStepError(
+          `Tier ${row.tier} rate must be a number between $50 and $900/hr.`,
+        );
+        return;
+      }
+      tierRates[row.tier] = Math.round(n);
+    }
+
     setSavingStep(2);
     try {
-      await saveLaborAndServices({
+      const shopId = await saveLaborAndServices({
         laborRate: Number(laborRate),
         serviceIds: Array.from(selectedServiceIds).map(
           (id) => id as Id<"services">
         ),
       });
+      const hasTierChanges =
+        Object.keys(tierRates).length > 0 || tierDeclined.length > 0;
+      if (hasTierChanges) {
+        await saveTierLaborRates({
+          shop_id: shopId,
+          rates: tierRates,
+          declined_tiers: tierDeclined,
+        });
+      }
+
+      // Persist fixed prices for any service whose strip values changed.
+      const dirtyServiceIds: string[] = [];
+      for (const serviceId of Object.keys(fixedPricesByService)) {
+        const current = fixedPricesByService[serviceId] ?? {};
+        const baseline = fixedPricesBaseline[serviceId] ?? {};
+        for (const tier of FIXED_PRICE_TIERS) {
+          if ((current[tier] ?? "") !== (baseline[tier] ?? "")) {
+            dirtyServiceIds.push(serviceId);
+            break;
+          }
+        }
+      }
+      for (const serviceId of dirtyServiceIds) {
+        const current = fixedPricesByService[serviceId] ?? {};
+        const baseline = fixedPricesBaseline[serviceId] ?? {};
+        const centsPatch = priceMapToCents(current);
+        const changed: Partial<Record<FixedPriceTier, number | null>> = {};
+        for (const tier of FIXED_PRICE_TIERS) {
+          if ((current[tier] ?? "") !== (baseline[tier] ?? "")) {
+            changed[tier] = tier in centsPatch ? centsPatch[tier]! : null;
+          }
+        }
+        if (Object.keys(changed).length === 0) continue;
+        await setShopServiceFixedPrices({
+          shop_id: shopId,
+          service_id: serviceId as Id<"services">,
+          prices: changed,
+        });
+      }
+      setFixedPricesBaseline(fixedPricesByService);
       setStepSuccess("Labor rate and services saved.");
       setCurrentStep(3);
     } catch (error) {
@@ -1826,6 +2016,132 @@ export default function ShopSetupPage() {
                 </p>
               </div>
 
+              <div className="rounded-xl border border-border bg-muted p-5">
+                <div className="mb-1 flex items-center justify-between">
+                  <h3 className="text-base font-semibold text-foreground">
+                    Per-tier rates
+                  </h3>
+                </div>
+                <p className="mb-4 text-xs text-muted-foreground">
+                  Optional: charge differently per vehicle class. Blank tiers
+                  fall back to your base rate of{" "}
+                  <span className="font-medium text-foreground">
+                    ${laborRate || 150}/hr
+                  </span>
+                  . Use Decline to mark a tier you don&apos;t service.
+                </p>
+                <div className="overflow-hidden rounded-lg border border-border bg-white">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Tier
+                        </th>
+                        <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">
+                          Suggested
+                        </th>
+                        <th className="px-3 py-2 text-left font-semibold">
+                          Rate ($/hr)
+                        </th>
+                        <th className="px-3 py-2 text-right font-semibold">
+                          Status
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {tierRows.map((row) => {
+                        const meta = TIER_META[row.tier];
+                        const trimmed = row.rateInput.trim();
+                        const n = Number(trimmed);
+                        const inputValid =
+                          row.declined ||
+                          trimmed === "" ||
+                          (Number.isFinite(n) && n >= 50 && n <= 900);
+                        return (
+                          <tr key={row.tier} className="align-top">
+                            <td className="px-3 py-2.5">
+                              <div className="font-semibold text-foreground">
+                                {row.tier}{" "}
+                                <span className="font-normal text-muted-foreground">
+                                  · {meta.label}
+                                </span>
+                              </div>
+                              <div className="mt-0.5 text-[11px] text-muted-foreground leading-snug">
+                                e.g. {meta.examples}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap text-xs">
+                              ${meta.band.lo}–${meta.band.hi}
+                            </td>
+                            <td className="px-3 py-2.5">
+                              <div className="inline-flex items-center overflow-hidden rounded-md border border-input bg-white focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring">
+                                <span className="border-r border-input bg-muted px-2 py-1.5 text-xs text-muted-foreground">
+                                  $
+                                </span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={row.rateInput}
+                                  onChange={(event) =>
+                                    setTierRows((prev) =>
+                                      prev.map((r) =>
+                                        r.tier === row.tier
+                                          ? { ...r, rateInput: event.target.value }
+                                          : r,
+                                      ),
+                                    )
+                                  }
+                                  disabled={row.declined}
+                                  placeholder={String(laborRate || 150)}
+                                  className={`w-20 px-2 py-1.5 text-sm text-foreground outline-none disabled:bg-muted disabled:text-muted-foreground ${
+                                    inputValid ? "" : "text-destructive"
+                                  }`}
+                                />
+                              </div>
+                            </td>
+                            <td className="px-3 py-2.5 text-right">
+                              {row.declined ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setTierRows((prev) =>
+                                      prev.map((r) =>
+                                        r.tier === row.tier
+                                          ? { ...r, declined: false }
+                                          : r,
+                                      ),
+                                    )
+                                  }
+                                  className="rounded-md border border-input px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                                >
+                                  Restore
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setTierRows((prev) =>
+                                      prev.map((r) =>
+                                        r.tier === row.tier
+                                          ? { ...r, declined: true, rateInput: "" }
+                                          : r,
+                                      ),
+                                    )
+                                  }
+                                  className="rounded-md border border-input px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+                                >
+                                  Decline
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
               <div>
                 <div className="mb-4 flex items-center justify-between">
                   <div>
@@ -1898,38 +2214,86 @@ export default function ShopSetupPage() {
                       <div className="divide-y divide-gray-100">
                         {category.services.map((service) => {
                           const checked = selectedServiceIds.has(service._id);
+                          const prices = fixedPricesByService[service._id] ?? {};
+                          const pricedCount = countPricedTiers(prices);
+                          const isPricingOpen =
+                            checked && pricingOpenServiceIds.has(service._id);
                           return (
-                            <label
+                            <div
                               key={service._id}
-                              className="flex cursor-pointer items-start gap-3 px-4 py-4 hover:bg-muted"
+                              className="px-4 py-4 hover:bg-muted/60"
                             >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(event) =>
-                                  setSelectedServiceIds((prev) => {
-                                    const next = new Set(prev);
-                                    if (event.target.checked) next.add(service._id);
-                                    else next.delete(service._id);
-                                    return next;
-                                  })
-                                }
-                                className="mt-1 h-4 w-4 rounded border-input text-primary focus:ring-ring"
-                              />
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-sm font-medium text-foreground">
-                                    {service.name}
+                              <div className="flex items-start gap-3">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(event) =>
+                                    setSelectedServiceIds((prev) => {
+                                      const next = new Set(prev);
+                                      if (event.target.checked) next.add(service._id);
+                                      else next.delete(service._id);
+                                      return next;
+                                    })
+                                  }
+                                  className="mt-1 h-4 w-4 rounded border-input text-primary focus:ring-ring"
+                                  aria-label={`Offer ${service.name}`}
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-medium text-foreground">
+                                      {service.name}
+                                    </p>
+                                    <span className="rounded-lg bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                      {service.defaultLaborHours} hr
+                                    </span>
+                                    {pricedCount > 0 ? (
+                                      <span className="rounded-lg bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                                        {pricedCount} fixed price{pricedCount === 1 ? "" : "s"}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                                    {service.description}
                                   </p>
-                                  <span className="rounded-lg bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                    {service.defaultLaborHours} hr
-                                  </span>
                                 </div>
-                                <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                                  {service.description}
-                                </p>
+                                {checked ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPricingOpenServiceIds((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(service._id)) next.delete(service._id);
+                                        else next.add(service._id);
+                                        return next;
+                                      })
+                                    }
+                                    className={`mt-0.5 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+                                      isPricingOpen
+                                        ? "border-blue-200 bg-blue-50 text-blue-700"
+                                        : "border-input text-muted-foreground hover:bg-muted"
+                                    }`}
+                                    aria-expanded={isPricingOpen}
+                                  >
+                                    <Sliders className="h-3 w-3" />
+                                    Fixed prices
+                                  </button>
+                                ) : null}
                               </div>
-                            </label>
+                              {isPricingOpen ? (
+                                <div className="mt-3 rounded-md border border-border bg-white">
+                                  <FixedPriceTierStrip
+                                    prices={prices}
+                                    declinedTiers={declinedTierSet}
+                                    onChange={(nextPrices) =>
+                                      setFixedPricesByService((prev) => ({
+                                        ...prev,
+                                        [service._id]: nextPrices,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                              ) : null}
+                            </div>
                           );
                         })}
                       </div>

@@ -45,24 +45,46 @@ export const searchBySize = action({
 
     if (!simpleTireResult) return null;
 
-    // Write tire models, collect id map for pricing linkage
-    // Cache brand → tier lookups so we don't query the DB for the same brand twice
-    const tierCache = new Map<string, "elite" | "select" | "standard" | null>();
-    async function getBrandTier(brand: string) {
+    // Write tire models, collect id map for pricing linkage.
+    // Cache brand → tier lookups so we don't query the DB for the same brand twice.
+    // `tire_brands.tier` can be "elite" | "select" | "standard" | "unlisted"; the
+    // catalog validator on tire_models only accepts the first three, so callers
+    // must SKIP the tire when this returns "unlisted" — we don't catalog
+    // unlisted brands (and don't want to silently store them with null tier
+    // either, since they're noise we explicitly demoted via tireBrands seeding).
+    type StoredTier = "elite" | "select" | "standard" | "unlisted" | null;
+    const tierCache = new Map<string, StoredTier>();
+    async function getBrandTier(brand: string): Promise<StoredTier> {
       if (!tierCache.has(brand)) {
         const row = await ctx.runQuery(internal.tireBrands.getByBrand, { brand });
-        tierCache.set(brand, row?.tier ?? null);
+        const t = row?.tier;
+        tierCache.set(
+          brand,
+          t === "elite" || t === "select" || t === "standard" || t === "unlisted"
+            ? t
+            : null,
+        );
       }
-      return tierCache.get(brand) ?? undefined;
+      return tierCache.get(brand) ?? null;
+    }
+    /** True when the brand is explicitly tagged unlisted — skip cataloging. */
+    function isUnlistedTier(t: StoredTier): boolean {
+      return t === "unlisted";
+    }
+    /** Map StoredTier → upsert-validator-compatible value (drops "unlisted"). */
+    function asUpsertTier(t: StoredTier): "elite" | "select" | "standard" | undefined {
+      return t === "elite" || t === "select" || t === "standard" ? t : undefined;
     }
 
     const modelIdMap = new Map<string, Id<"tire_models">>();
     for (const tire of simpleTireResult.tires) {
+      const tier = await getBrandTier(tire.brand);
+      if (isUnlistedTier(tier)) continue; // skip unlisted brands entirely
       const id = await ctx.runMutation(internal.tires_catalog.upsertTireModel, {
         brand: tire.brand,
         model: tire.model,
         size: tire.size,
-        tier: await getBrandTier(tire.brand),
+        tier: asUpsertTier(tier),
         tire_type: tire.tire_type,
         load_index: tire.load_index,
         speed_rating: tire.speed_rating,
@@ -93,11 +115,13 @@ export const searchBySize = action({
         let modelId = modelIdMap.get(key);
         if (!modelId) {
           if (!price.tire_type && price.load_index === undefined && !price.speed_rating) continue;
+          const tier = await getBrandTier(price.brand);
+          if (isUnlistedTier(tier)) continue; // skip unlisted brands entirely
           modelId = await ctx.runMutation(internal.tires_catalog.upsertTireModel, {
             brand: price.brand,
             model: price.model,
             size: price.size,
-            tier: await getBrandTier(price.brand),
+            tier: asUpsertTier(tier),
             tire_type: price.tire_type,
             load_index: price.load_index,
             speed_rating: price.speed_rating,
@@ -125,11 +149,13 @@ export const searchBySize = action({
         if (!modelId) {
           // Only create new model if we have enough spec data
           if (!price.tire_type && price.load_index === undefined && !price.speed_rating) continue;
+          const tier = await getBrandTier(price.brand);
+          if (isUnlistedTier(tier)) continue; // skip unlisted brands entirely
           modelId = await ctx.runMutation(internal.tires_catalog.upsertTireModel, {
             brand: price.brand,
             model: price.model,
             size: price.size,
-            tier: await getBrandTier(price.brand),
+            tier: asUpsertTier(tier),
             tire_type: price.tire_type,
             load_index: price.load_index,
             speed_rating: price.speed_rating,

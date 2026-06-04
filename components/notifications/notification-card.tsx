@@ -7,7 +7,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
 type NotificationItem = {
-  kind: "booking" | "tire_quote";
+  kind: "booking" | "tire_quote" | "rotor_quote";
   bookingId: Id<"bookings">;
   createdAt: number;
   isUnread: boolean;
@@ -20,8 +20,32 @@ type NotificationItem = {
   price?: number | null;
   note?: string | null;
   tireSpecs?: { size: string; type: string; tier: string; quantity: number } | null;
+  rotorSpecs?: {
+    brake_system_type: "standard" | "sport" | "carbon_ceramic";
+    axle: "front" | "rear" | "both";
+    include_pads: boolean;
+    pad_type?: "ceramic" | "semi_metallic" | "oem_recommended";
+  } | null;
   urgency?: "urgent" | null;
 };
+
+function formatBrakeSystemLabel(t: NonNullable<NotificationItem["rotorSpecs"]>["brake_system_type"]): string {
+  if (t === "sport") return "Sport";
+  if (t === "carbon_ceramic") return "Carbon ceramic";
+  return "Standard";
+}
+
+function formatPadTypeLabel(t: NonNullable<NotificationItem["rotorSpecs"]>["pad_type"]): string {
+  if (t === "ceramic") return "Ceramic";
+  if (t === "semi_metallic") return "Semi-metallic";
+  if (t === "oem_recommended") return "OEM recommended";
+  return "";
+}
+
+function rotorQtyForAxle(axle: NonNullable<NotificationItem["rotorSpecs"]>["axle"]): number {
+  if (axle === "both") return 4;
+  return 2;
+}
 
 function relativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -54,8 +78,18 @@ export function NotificationCard({
   const [declineReason, setDeclineReason] = useState("");
 
   const isBooking = item.kind === "booking";
-  const headerLabel = isBooking ? "New booking" : "Tire quote request";
-  const headerColor = isBooking ? "text-blue-600" : "text-amber-600";
+  const isRotorQuote = item.kind === "rotor_quote";
+  const isTireQuote = item.kind === "tire_quote";
+  const headerLabel = isBooking
+    ? "New booking"
+    : isRotorQuote
+      ? "Rotor quote request"
+      : "Tire quote request";
+  const headerColor = isBooking
+    ? "text-blue-600"
+    : isRotorQuote
+      ? "text-orange-600"
+      : "text-amber-600";
 
   async function handleAccept() {
     if (pending) return;
@@ -99,7 +133,8 @@ export function NotificationCard({
 
   function handleSubmitQuote() {
     onAfterAction?.();
-    router.push(`/bookings/tire-quote-requests?booking=${item.bookingId}`);
+    const type = isRotorQuote ? "rotor" : "tire";
+    router.push(`/bookings/quote-requests?type=${type}&booking=${item.bookingId}`);
   }
 
   return (
@@ -155,7 +190,7 @@ export function NotificationCard({
         </p>
       )}
 
-      {!isBooking && item.tireSpecs && (
+      {isTireQuote && item.tireSpecs && (
         <p className="mt-1 text-xs text-gray-600">
           <span className="font-medium text-gray-900">
             {item.tireSpecs.size}
@@ -166,6 +201,33 @@ export function NotificationCard({
           {item.tireSpecs.tier}
           <span className="mx-1">·</span>
           {item.tireSpecs.quantity} tires
+        </p>
+      )}
+
+      {isRotorQuote && item.rotorSpecs && (
+        <p className="mt-1 text-xs text-gray-600">
+          <span className="font-medium text-gray-900">
+            {item.rotorSpecs.axle === "front"
+              ? "Front pair"
+              : item.rotorSpecs.axle === "rear"
+                ? "Rear pair"
+                : "All four"}
+          </span>
+          <span className="mx-1">·</span>
+          {formatBrakeSystemLabel(item.rotorSpecs.brake_system_type)}
+          <span className="mx-1">·</span>
+          {rotorQtyForAxle(item.rotorSpecs.axle)} rotors
+          {item.rotorSpecs.include_pads && (
+            <>
+              <span className="mx-1">·</span>
+              <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                + Pads
+                {item.rotorSpecs.pad_type
+                  ? ` (${formatPadTypeLabel(item.rotorSpecs.pad_type)})`
+                  : ""}
+              </span>
+            </>
+          )}
         </p>
       )}
 

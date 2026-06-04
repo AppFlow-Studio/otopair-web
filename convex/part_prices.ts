@@ -18,9 +18,18 @@ export type PriceSummary = {
   used_sample_size: number;
   average: number;       // mean of non-outlier prices (0 if no data)
   median: number;        // median of all prices
+  trimmed_median: number; // median after dropping one from each end (n≥3); else = median
+  cv: number | null;      // std-dev / mean over kept prices; null when no data or mean=0
   min: number;
   max: number;
+  // Range of the kept (non-outlier) sample — what the customer-facing UI
+  // uses to render per-part low/high. Both 0 when no price data.
+  min_kept: number;
+  max_kept: number;
   outliers_removed: number;
+  // Max(refreshed_at) across kept sources — null when none have a timestamp.
+  // Used by the 7-layer selector to compute price freshness in days.
+  most_recent_refreshed_at: number | null;
   // The actual price points used to compute the average — handy for the UI
   // to show "averaged across N sources".
   sources_used: Array<{
@@ -78,9 +87,14 @@ export async function summarizePartPrices(
     used_sample_size: 0,
     average: 0,
     median: 0,
+    trimmed_median: 0,
+    cv: null,
     min: 0,
     max: 0,
+    min_kept: 0,
+    max_kept: 0,
     outliers_removed: 0,
+    most_recent_refreshed_at: null,
     sources_used: [],
   };
   if (rows.length === 0) return empty;
@@ -99,6 +113,20 @@ export async function summarizePartPrices(
   const sum = kept.reduce((acc, v) => acc + v, 0);
   const average = round2(sum / kept.length);
 
+  // Coefficient of variation across the kept (post-outlier) set — the selector
+  // uses this as its price-stability signal. Population SD over the kept mean.
+  const meanKept = sum / kept.length;
+  const variance = kept.reduce((acc, v) => acc + (v - meanKept) ** 2, 0) / kept.length;
+  const cv = meanKept > 0 ? Math.sqrt(variance) / meanKept : null;
+
+  // Trimmed median: drop one from each end when we have ≥3 kept points;
+  // smooths a single high or low outlier that survived MAD filtering.
+  const trimmed =
+    kept.length >= 3
+      ? [...kept].sort((a, b) => a - b).slice(1, -1)
+      : kept;
+  const trimmed_median = round2(median(trimmed));
+
   // Map kept indices back to original rows so we can report sources used.
   // The two arrays are aligned because we built `prices` in row order and
   // skipped only invalid prices — but the index space is the filtered one.
@@ -114,15 +142,26 @@ export async function summarizePartPrices(
     refreshed_at: (validRows[i].refreshed_at as number | undefined) ?? null,
   }));
 
+  const refreshedTimestamps = sources_used
+    .map((s) => s.refreshed_at)
+    .filter((t): t is number => typeof t === "number");
+  const most_recent_refreshed_at =
+    refreshedTimestamps.length > 0 ? Math.max(...refreshedTimestamps) : null;
+
   return {
     part_id: partId,
     sample_size: prices.length,
     used_sample_size: kept.length,
     average,
     median: round2(median(prices)),
+    trimmed_median,
+    cv,
     min: round2(Math.min(...prices)),
     max: round2(Math.max(...prices)),
+    min_kept: round2(Math.min(...kept)),
+    max_kept: round2(Math.max(...kept)),
     outliers_removed: prices.length - kept.length,
+    most_recent_refreshed_at,
     sources_used: sources_used.map((s) => ({ ...s, price: round2(s.price) })),
   };
 }

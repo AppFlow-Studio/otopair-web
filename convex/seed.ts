@@ -410,16 +410,14 @@ export const claimSeedDataForCurrentUser = mutation({
 });
 
 /**
- * Seed time slots for ONE shop. Use when `seedTimeSlots` (which runs all
- * shops in one transaction) blows the 4096-read limit. Idempotent — the
- * underlying syncShopAvailabilityWindow upserts per mechanic-day, so safe
- * to re-run.
+ * Clean generated free time slots for ONE shop. Availability is inferred, so
+ * this only removes legacy positive availability rows.
  *
  * Usage:
  *   npx convex run seed:seedTimeSlotsForShop '{"shopId":"...","days":14}'
  *
  * Args:
- *   shopId — Id<"shops"> to seed
+ *   shopId — Id<"shops"> to clean
  *   days   — number of days from today (default 14, smaller = fewer reads)
  */
 export const seedTimeSlotsForShop = mutation({
@@ -527,13 +525,13 @@ export const seedTimeSlots = mutation({
           const startTime = `${hour.toString().padStart(2, "0")}:00`;
           const endTime = `${(hour + 1).toString().padStart(2, "0")}:00`;
 
-          await ctx.db.insert("time_slots", {
+          // legacy positive slot insert removed
             shop_id: mechanic.shop_id,
             mechanic_id: mechanic._id,
             date: dateStr,
             start_time: startTime,
             end_time: endTime,
-            is_available: true,
+            is_available: false,
           });
           totalCreated++;
         }
@@ -1496,40 +1494,8 @@ export const seed = mutation({
       review_count: 37,
     });
 
-    // --- Time Slots (next 7 days, multiple slots per mechanic) ---
-    const today = new Date();
-    const mechanicsWithSlots = [
-      { shop_id: shop1Id, mechanic_id: mech1Id },
-      { shop_id: shop1Id, mechanic_id: mech2Id },
-      { shop_id: shop2Id, mechanic_id: mech3Id },
-      { shop_id: shop3Id, mechanic_id: mech4Id },
-      { shop_id: shop3Id, mechanic_id: mech5Id },
-      { shop_id: shop4Id, mechanic_id: mech6Id },
-      { shop_id: shop4Id, mechanic_id: mech7Id },
-      { shop_id: shop5Id, mechanic_id: mech8Id },
-    ];
-    const startHours = [8, 9, 10, 11, 13, 14, 15];
-
-    for (let dayOffset = 1; dayOffset <= 7; dayOffset++) {
-      const date = new Date(today);
-      date.setDate(date.getDate() + dayOffset);
-      const dateStr = date.toISOString().split("T")[0];
-
-      for (const { shop_id, mechanic_id } of mechanicsWithSlots) {
-        for (const hour of startHours) {
-          const startTime = `${hour.toString().padStart(2, "0")}:00`;
-          const endTime = `${(hour + 1).toString().padStart(2, "0")}:00`;
-          await ctx.db.insert("time_slots", {
-            shop_id,
-            mechanic_id,
-            date: dateStr,
-            start_time: startTime,
-            end_time: endTime,
-            is_available: true,
-          });
-        }
-      }
-    }
+    // Availability is inferred at read/write time; seed data does not
+    // materialize free time_slots.
 
     // --- Users (main seeded user is provided userId when present) ---
     let userId: any;
@@ -1694,25 +1660,12 @@ export const seed = mutation({
       const scheduledDate = when.toISOString().split("T")[0];
       const createdAt = now + dateOffsetDays * 24 * 60 * 60 * 1000;
       const totalCost = laborCost + partsCost;
-      const [startHour] = scheduledTime.split(":").map(Number);
-      const endTime = `${String(startHour + 1).padStart(2, "0")}:00`;
-
-      const timeSlotId = await ctx.db.insert("time_slots", {
-        shop_id: shopId,
-        mechanic_id: mechanicId,
-        date: scheduledDate,
-        start_time: scheduledTime,
-        end_time: endTime,
-        is_available: status === "completed",
-      });
-
       const bookingId = await ctx.db.insert("bookings", {
         user_id: userId,
         vin,
         shop_id: shopId,
         mechanic_id: mechanicId,
         service_ids: [serviceId],
-        time_slot_id: timeSlotId,
         scheduled_date: scheduledDate,
         scheduled_time: scheduledTime,
         labor_cost: laborCost,
@@ -2190,30 +2143,11 @@ export const seedLearningPipelineDemo = mutation({
     }
     if (!mechanic) throw new Error("No active mechanic found at any shop.");
 
-    // 3. Find or create an available time slot
-    const allSlots = await ctx.db.query("time_slots").collect();
-    let slot: (typeof allSlots)[number] | null = allSlots.find((s) => s.shop_id === shop._id && s.is_available) ?? null;
-
-    if (!slot) {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const dateStr = tomorrow.toISOString().split("T")[0];
-
-      const slotId = await ctx.db.insert("time_slots", {
-        shop_id: shop._id,
-        mechanic_id: mechanic._id,
-        date: dateStr,
-        start_time: "10:00",
-        end_time: "11:00",
-        is_available: true,
-      });
-      slot = await ctx.db.get(slotId);
-    }
-
-    if (!slot) throw new Error("Failed to find or create time slot");
-
-    // Mark slot as unavailable
-    await ctx.db.patch(slot._id, { is_available: false });
+    // 3. Pick a demo schedule time. Availability is inferred, not stored.
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const scheduledDate = tomorrow.toISOString().split("T")[0];
+    const scheduledTime = "10:00";
 
     // 4. Insert a confirmed booking
     const laborHours = oilChange.default_labor_hours ?? 0;
@@ -2227,9 +2161,8 @@ export const seedLearningPipelineDemo = mutation({
       shop_id: shop._id,
       mechanic_id: mechanic._id,
       service_ids: [oilChange._id],
-      time_slot_id: slot._id,
-      scheduled_date: slot.date,
-      scheduled_time: slot.start_time,
+      scheduled_date: scheduledDate,
+      scheduled_time: scheduledTime,
       labor_cost: laborCost,
       parts_cost: partsCost,
       total_cost: totalCost,
@@ -2837,22 +2770,12 @@ export const seedAllDataForUser39FwQkrjp = mutation({
       const createdAt = now - daysAgo * 24 * 60 * 60 * 1000;
       const totalCost = labor + parts;
 
-      const timeSlotId = await ctx.db.insert("time_slots", {
-        shop_id: shop._id,
-        mechanic_id: mechanic._id,
-        date: dateStr,
-        start_time: "10:00",
-        end_time: "11:00",
-        is_available: false,
-      });
-
       const bookingId = await ctx.db.insert("bookings", {
         user_id: user._id,
         vin,
         shop_id: shop._id,
         mechanic_id: mechanic._id,
         service_ids: [service._id],
-        time_slot_id: timeSlotId,
         scheduled_date: dateStr,
         scheduled_time: "10:00",
         labor_cost: labor,
@@ -3060,22 +2983,12 @@ export const seedServicesShopsMilesSafeForUser39FwQkrjp = mutation({
       const createdAt = now - daysAgo * 24 * 60 * 60 * 1000;
       const totalCost = labor + parts;
 
-      const timeSlotId = await ctx.db.insert("time_slots", {
-        shop_id: shop._id,
-        mechanic_id: mechanic._id,
-        date: dateStr,
-        start_time: "10:00",
-        end_time: "11:00",
-        is_available: false,
-      });
-
       const bookingId = await ctx.db.insert("bookings", {
         user_id: user._id,
         vin,
         shop_id: shop._id,
         mechanic_id: mechanic._id,
         service_ids: [service._id],
-        time_slot_id: timeSlotId,
         scheduled_date: dateStr,
         scheduled_time: "10:00",
         labor_cost: labor,
@@ -3397,22 +3310,12 @@ export const seedPastBookingsForJohnDoe = mutation({
       const createdAt = now - daysAgo * 24 * 60 * 60 * 1000;
       const totalCost = labor + parts;
 
-      const timeSlotId = await ctx.db.insert("time_slots", {
-        shop_id: shop._id,
-        mechanic_id: mechanic._id,
-        date: dateStr,
-        start_time: "10:00",
-        end_time: "11:00",
-        is_available: false,
-      });
-
       const bookingId = await ctx.db.insert("bookings", {
         user_id: user._id,
         vin,
         shop_id: shop._id,
         mechanic_id: mechanic._id,
         service_ids: [service._id],
-        time_slot_id: timeSlotId,
         scheduled_date: dateStr,
         scheduled_time: "10:00",
         labor_cost: labor,
@@ -3561,22 +3464,12 @@ export const seedLiveBookingForJohnDoe = mutation({
     const estimatedMinutes = 45;
     const startedAtMs = now - 10 * 60 * 1000;
 
-    const timeSlotId = await ctx.db.insert("time_slots", {
-      shop_id: shop._id,
-      mechanic_id: mechanic._id,
-      date: today,
-      start_time: "10:00",
-      end_time: "11:00",
-      is_available: false,
-    });
-
     const bookingId = await ctx.db.insert("bookings", {
       user_id: user._id,
       vin,
       shop_id: shop._id,
       mechanic_id: mechanic._id,
       service_ids: [oilChange._id],
-      time_slot_id: timeSlotId,
       scheduled_date: today,
       scheduled_time: "10:00",
       labor_cost: labor,
@@ -4162,23 +4055,12 @@ export const seedDashboardBookings = mutation({
       liveStage?: string;
       key: string;
     }) => {
-      const endTime = dashboardAddMinutesToTime(scheduledTime, estimatedMinutes ?? 60);
-      const timeSlotId = await ctx.db.insert("time_slots", {
-        shop_id: args.shopId,
-        mechanic_id: mechanicId,
-        date: scheduledDate,
-        start_time: scheduledTime,
-        end_time: endTime,
-        is_available: false,
-      });
-
       const bookingId = await ctx.db.insert("bookings", {
         user_id: userIds[userIdx],
         vin: demoVehicles[vinIdx].vin,
         shop_id: args.shopId,
         mechanic_id: mechanicId,
         service_ids: [serviceId],
-        time_slot_id: timeSlotId,
         scheduled_date: scheduledDate,
         scheduled_time: scheduledTime,
         labor_cost: laborCost,
@@ -4382,21 +4264,12 @@ export const seedDashboardBookings = mutation({
         const visitTime = dashboardMinutesToTime(9 * 60 + ((vehicleIdx + visitIdx) % 5) * 60);
         const visitEndTime = dashboardAddMinutesToTime(visitTime, service.estimatedMinutes);
         const visitCompletedAt = new Date(`${visitDate}T${visitEndTime}:00.000Z`).getTime();
-        const historicalSlotId = await ctx.db.insert("time_slots", {
-          shop_id: args.shopId,
-          mechanic_id: mechanic._id,
-          date: visitDate,
-          start_time: visitTime,
-          end_time: visitEndTime,
-          is_available: false,
-        });
         const historicalBookingId = await ctx.db.insert("bookings", {
           user_id: userIds[vehicleIdx],
           vin: vehicle.vin,
           shop_id: args.shopId,
           mechanic_id: mechanic._id,
           service_ids: [service.id],
-          time_slot_id: historicalSlotId,
           scheduled_date: visitDate,
           scheduled_time: visitTime,
           labor_cost: service.laborCost,
@@ -5111,23 +4984,12 @@ export const seedLateStartReviewScenario = mutation({
       laborCost: number;
       partsCost: number;
     }) => {
-      const endTime = dashboardAddMinutesToTime(scheduledTime, estimatedMinutes);
-      const slotId = await ctx.db.insert("time_slots", {
-        shop_id: args.shopId,
-        mechanic_id: mechanicId,
-        date: today,
-        start_time: scheduledTime,
-        end_time: endTime,
-        is_available: false,
-      });
-
       const bookingId = await ctx.db.insert("bookings", {
         user_id: customer._id,
         vin,
         shop_id: args.shopId,
         mechanic_id: mechanicId,
         service_ids: [serviceId],
-        time_slot_id: slotId,
         scheduled_date: today,
         scheduled_time: scheduledTime,
         labor_cost: laborCost,

@@ -759,6 +759,8 @@ export const getMyOnboardingData = query({
             zipCode: shop.zip,
             phone: shop.phone,
             laborRate: shop.labor_rate ?? 150,
+            laborRatesByTier: shop.labor_rates_by_tier ?? {},
+            declinedTiers: shop.declined_tiers ?? [],
             lat: shop.lat ?? null,
             lng: shop.lng ?? null,
             email: shop.email ?? null,

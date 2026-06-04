@@ -62,6 +62,48 @@ export function getBookingEndTime(
   return addMinutesToHHMM(scheduledTime, estimatedMinutes ?? 60);
 }
 
+export const SLOT_GRID_MINUTES = 15;
+export const DEFAULT_BUFFER_MINUTES = 10;
+export const ALLOWED_BUFFERS = [10, 15, 20, 30] as const;
+export type AllowedBuffer = (typeof ALLOWED_BUFFERS)[number];
+
+function fromMinutes(total: number): string {
+  const clamped = Math.max(0, Math.min(1440, total));
+  const hours = Math.floor(clamped / 60);
+  const minutes = clamped % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+export function ceilToQuarterHour(hhmm: string): string {
+  const total = toMinutes(hhmm);
+  return fromMinutes(Math.ceil(total / SLOT_GRID_MINUTES) * SLOT_GRID_MINUTES);
+}
+
+export function floorToQuarterHour(hhmm: string): string {
+  const total = toMinutes(hhmm);
+  return fromMinutes(Math.floor(total / SLOT_GRID_MINUTES) * SLOT_GRID_MINUTES);
+}
+
+export function nextBookableStartAfter(
+  bookingEnd: string,
+  bufferMinutes: number
+): string {
+  return ceilToQuarterHour(addMinutesToHHMM(bookingEnd, bufferMinutes));
+}
+
+export function normalizeBufferMinutes(value: number | null | undefined): number {
+  if (value == null) return DEFAULT_BUFFER_MINUTES;
+  const allowed = ALLOWED_BUFFERS as readonly number[];
+  return allowed.includes(value) ? value : DEFAULT_BUFFER_MINUTES;
+}
+
+export function getBufferedWindowEndMinutes(
+  endTime: string,
+  bufferMinutes: number | null | undefined = 0
+): number {
+  return toMinutes(endTime) + (bufferMinutes ?? 0);
+}
+
 export function overlapsBlockedSlot(
   mechanicId: string,
   date: string,
@@ -86,10 +128,11 @@ export function overlapsMechanicBooking(
   startTime: string,
   endTime: string,
   bookings: ScheduleBooking[],
-  excludeBookingId?: string
+  excludeBookingId?: string,
+  bufferMinutes: number = 0
 ): boolean {
   const windowStart = toMinutes(startTime);
-  const windowEnd = toMinutes(endTime);
+  const windowEnd = getBufferedWindowEndMinutes(endTime, bufferMinutes);
   return bookings.some((booking) => {
     if (excludeBookingId && booking._id === excludeBookingId) return false;
     if (booking.scheduledDate !== date) return false;
@@ -102,8 +145,9 @@ export function overlapsMechanicBooking(
     }
     if (booking.mechanicId !== mechanicId) return false;
     const bookingStart = toMinutes(booking.scheduledTime);
-    const bookingEnd = toMinutes(
-      getBookingEndTime(booking.scheduledTime, booking.estimatedMinutes)
+    const bookingEnd = getBufferedWindowEndMinutes(
+      getBookingEndTime(booking.scheduledTime, booking.estimatedMinutes),
+      bufferMinutes
     );
     return bookingStart < windowEnd && bookingEnd > windowStart;
   });

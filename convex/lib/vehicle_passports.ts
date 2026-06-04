@@ -360,10 +360,17 @@ export function serviceRequiresParts(service: {
   );
 }
 
-export type TireSizeOptionSource = "verified" | "oem_default";
+export type TireSizeOptionSource = "verified" | "oem_standard" | "oem_optional";
 
 export type TireSizeOption = {
+  /** Canonical (front) tire size, e.g. "245/40R19". */
   size: string;
+  /**
+   * Rear tire size for staggered setups (different from front). `null` when:
+   *  - no rear specified (square setup), OR
+   *  - rear equals front (square setup expressed with both filled in).
+   */
+  sizeRear: string | null;
   source: TireSizeOptionSource;
 };
 
@@ -418,19 +425,55 @@ export async function resolveTireSizesForVin(
 
   const ordered: TireSizeOption[] = [];
   const seen = new Set<string>();
-  const pushSize = (raw: unknown, source: TireSizeOptionSource) => {
-    if (typeof raw !== "string") return;
-    const size = raw.trim();
-    if (!size) return;
-    if (seen.has(size)) return;
-    seen.add(size);
-    ordered.push({ size, source });
+  // Each picker option = ONE tire fitment (one OEM wheel package, or the
+  // user's verified passport entry), with front + optional rear grouped
+  // together. The key dedupes by the front/rear pair so we don't surface
+  // duplicate packages, but still allow the same front size to appear with
+  // different rears (e.g. staggered Y-rated vs square V-rated).
+  const pushOption = (
+    rawFront: unknown,
+    rawRear: unknown,
+    source: TireSizeOptionSource,
+  ) => {
+    if (typeof rawFront !== "string") return;
+    const front = rawFront.trim();
+    if (!front) return;
+    const rearTrimmed =
+      typeof rawRear === "string" ? rawRear.trim() : "";
+    // Treat empty / equal-to-front as "square" — no rear distinction shown.
+    const rear =
+      rearTrimmed && rearTrimmed !== front ? rearTrimmed : null;
+    const key = rear ? `${front}+${rear}` : front;
+    if (seen.has(key)) return;
+    seen.add(key);
+    ordered.push({ size: front, sizeRear: rear, source });
   };
 
-  pushSize(passportRecord?.tires?.size_front, "verified");
-  pushSize(passportRecord?.tires?.size_rear, "verified");
-  pushSize(trimSpec?.tire_size_front, "oem_default");
-  pushSize(trimSpec?.tire_size_rear, "oem_default");
+  // 1. Verified passport entry (single grouped fitment).
+  pushOption(
+    passportRecord?.tires?.size_front,
+    passportRecord?.tires?.size_rear,
+    "verified",
+  );
+
+  // 2. trim_specs.tire_options[] — one entry per OEM wheel package.
+  // `is_oem_standard` distinguishes the standard fitment from optional
+  // upgrade packages (performance wheels, regional variants, etc).
+  const tireOptions = Array.isArray(trimSpec?.tire_options) ? trimSpec.tire_options : [];
+  for (const opt of tireOptions) {
+    if (!opt) continue;
+    pushOption(
+      opt.size_front,
+      opt.size_rear,
+      opt.is_oem_standard === true ? "oem_standard" : "oem_optional",
+    );
+  }
+
+  // 3. Fallback to the flat tire_size_front/rear pair when tire_options is
+  // empty (older enrichment runs). Treated as the standard fitment.
+  if (ordered.length === 0 || (ordered.length === 1 && ordered[0].source === "verified")) {
+    pushOption(trimSpec?.tire_size_front, trimSpec?.tire_size_rear, "oem_standard");
+  }
 
   const runFlat: boolean | null =
     typeof passportRecord?.tires?.run_flat === "boolean"

@@ -10,6 +10,7 @@
 
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { assertMechanicAvailableForWindow } from "./lib/timeSlotAvailability";
 
 // ============================================================================
 // CREATE — called by the website when a shop owner submits a quote
@@ -59,6 +60,17 @@ export const create = mutation({
     if (existing) {
       throw new Error("This shop has already submitted a quote for this booking.");
     }
+    if (!args.mechanic_id) {
+      throw new Error("Pick a mechanic before submitting a tire quote.");
+    }
+
+    await assertMechanicAvailableForWindow(ctx, {
+      shopId: args.shop_id,
+      mechanicId: args.mechanic_id,
+      date: args.availability.date,
+      startTime: args.availability.time,
+      durationMinutes: args.estimated_duration_minutes ?? 30,
+    });
 
     const now = Date.now();
     const responseId = await ctx.db.insert("tire_quote_responses", {

@@ -80,6 +80,36 @@ function mapSteeringType(raw: string | null | undefined): "electric" | "hydrauli
   return null;
 }
 
+/**
+ * Maps VDB raw `brakingSpec.type` to the rotor-booking radio enum. Drives the
+ * "According to our records, your YYYY Make Model has: Standard brakes"
+ * pre-selection on the Shop Rotors screen (spec section 2, field 1).
+ * Conservative — unknown vocabulary returns undefined so the UI falls back
+ * to user-pick instead of mis-stating OEM data.
+ */
+export function normalizeBrakeSystemType(
+  raw: string | null | undefined,
+): "standard" | "sport" | "carbon_ceramic" | undefined {
+  if (!raw) return undefined;
+  const lower = raw.toLowerCase();
+  if (lower.includes("carbon") || lower.includes("ceramic composite") || lower.includes("ccm")) {
+    return "carbon_ceramic";
+  }
+  if (
+    lower.includes("sport") ||
+    lower.includes("performance") ||
+    lower.includes("brembo") ||
+    lower.includes("m performance") ||
+    lower.includes("akebono performance")
+  ) {
+    return "sport";
+  }
+  if (lower.includes("standard") || lower.includes("base") || lower.includes("oem") || lower.includes("regular")) {
+    return "standard";
+  }
+  return undefined;
+}
+
 // ─── VDB Repair Estimates API ────────────────────────────────────────────────
 // Dual-source: VDB provides structured intervals (from mileage schedule), labor
 // hours, and parts cost ranges. AI enrichment fills what VDB doesn't cover.
@@ -607,40 +637,56 @@ export interface DetectedPackage {
 }
 
 /**
- * Walk a VDB raw response and pull every string we can match package rules against.
- * VDB's payload shape varies by year/vintage, so we cast a wide net.
+ * Walk the entire VDB raw response (full recursive traversal) and pull every
+ * string value we can match package rules against.
+ *
+ * Rationale: VDB's payload shape varies by year, model, and API tier. The 2020
+ * M2 CS "M Carbon Ceramic Brakes" entry lives at `mechanical[i].description.package_name`;
+ * other vehicles surface options under `optional_options[]`, `equipment[]`,
+ * `packages[]`, `trim_packages[]`, or whole new top-level keys we haven't
+ * catalogued. Rather than chase each shape, we recursively traverse the entire
+ * response and collect every string. The regex patterns in PACKAGE_RULES are
+ * specific enough that running them over random strings (dealer names, VINs,
+ * URLs) produces effectively zero false positives.
+ *
+ * Source-tag: everything gets `vdb_optional_options` since we no longer
+ * distinguish source location by top-level key. This is fine for detection;
+ * confidence weights live on the matching rule, not the source.
+ *
+ * Safety guards:
+ *   - WeakSet cycle protection (in case VDB ever returns a circular ref)
+ *   - max depth 20 (sane stop; real responses are ~5 deep)
+ *   - skip strings shorter than 2 chars (single chars never match) and longer
+ *     than 500 chars (URLs, multi-paragraph descriptions — won't match any
+ *     short package-name pattern and waste regex time)
  */
 function collectPackageStrings(vdbRaw: any): { source: DetectedPackage["detected_from"]; text: string }[] {
   const out: { source: DetectedPackage["detected_from"]; text: string }[] = [];
   if (!vdbRaw || typeof vdbRaw !== "object") return out;
 
-  const pushFromOptions = (
-    arr: any,
-    source: DetectedPackage["detected_from"],
-  ) => {
-    if (!Array.isArray(arr)) return;
-    for (const item of arr) {
-      if (typeof item === "string") {
-        out.push({ source, text: item });
-      } else if (item && typeof item === "object") {
-        // VDB option entries usually have { name, description, category, ... }
-        for (const key of ["name", "description", "label", "category", "package_name"]) {
-          const val = item[key];
-          if (typeof val === "string" && val.length > 0) {
-            out.push({ source, text: val });
-          }
-        }
+  const seen = new WeakSet<object>();
+  const MAX_DEPTH = 20;
+
+  const walk = (node: any, depth: number) => {
+    if (node == null || depth > MAX_DEPTH) return;
+    if (typeof node === "string") {
+      if (node.length >= 2 && node.length <= 500) {
+        out.push({ source: "vdb_optional_options", text: node });
       }
+      return;
+    }
+    if (typeof node !== "object") return;
+    if (seen.has(node)) return;
+    seen.add(node);
+
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+    } else {
+      for (const val of Object.values(node)) walk(val, depth + 1);
     }
   };
 
-  pushFromOptions(vdbRaw.optional_options, "vdb_optional_options");
-  pushFromOptions(vdbRaw.standard_options, "vdb_standard_options");
-  pushFromOptions(vdbRaw.installed_equipment, "vdb_installed_equipment");
-  pushFromOptions(vdbRaw.equipment, "vdb_installed_equipment");
-  pushFromOptions(vdbRaw.packages, "vdb_optional_options");
-  pushFromOptions(vdbRaw.trim_packages, "vdb_optional_options");
-
+  walk(vdbRaw, 0);
   return out;
 }
 
@@ -692,7 +738,7 @@ export function assessAvailablePackages(args: {
   const explicitRules = PACKAGE_RULES.filter(ruleAffectsKnownService);
   const inferenceRules = TRIM_INFERENCE_RULES.filter(ruleAffectsKnownService);
 
-  // 1. Explicit matches against VDB option/equipment strings.
+  // 1. Explicit matches against VDB option/equipment strings (highest signal).
   const strings = collectPackageStrings(vdbRaw);
   for (const { source, text } of strings) {
     for (const rule of explicitRules) {
@@ -709,7 +755,10 @@ export function assessAvailablePackages(args: {
     }
   }
 
-  // 2. Trim-name inference (lower confidence). Only if we don't already have a stronger match.
+  // 2. Trim-name inference (lower confidence). Only if we don't already have
+  // an explicit hit — trim-name inference was previously removed due to false
+  // positives; the curated TRIM_INFERENCE_RULES table re-introduces it with
+  // tightly-scoped patterns to avoid that pitfall.
   for (const rule of inferenceRules) {
     if (rule.make !== "*" && rule.make.toLowerCase() !== make.toLowerCase()) continue;
     if (haloHardwareStandard && rule.redundant_when_halo) continue;
@@ -761,9 +810,17 @@ export function extractVDBFields(data: any) {
   const engineDescription =
     data.standard_options?.find((o: any) => o.name === "Engine")?.description || null;
 
-  // Cylinders from dimensions
+  // Engine dimensions block — used downstream for displacement + horsepower.
+  // Historical bug: this block previously read `engine_size` and labeled it
+  // as `cylinders`. `engine_size` is the DISPLACEMENT in liters (see
+  // engineDisplacementLiters below — same field). For every car >=3.0L the
+  // resulting "cylinder count" was the displacement integer (3.0L → 3 cyl,
+  // 4.0L → 4 cyl) and got written into the engines table, then propagated
+  // through every downstream consumer. NHTSA's EngineCylinders is the
+  // authoritative source — read it at the merge step in vehicle_pipeline.ts.
+  // Here we extract a clean cylinder count from the structured config string
+  // ("I-6", "V-8", "H-6", "W-12") and fall back to the engine description.
   const engineDims = dims.find((d: any) => d.engine)?.engine || [];
-  const cylindersRaw = engineDims.find((e: any) => e.engine_size)?.engine_size?.[0]?.value;
 
   // Defensive numeric parse — VDB returns some values as strings with
   // commas (e.g. ymm-specs/v3 → "2,000"); JS coerces those to NaN
@@ -802,6 +859,23 @@ export function extractVDBFields(data: any) {
   // Distinct from block_type which is just the letter ("I", "V").
   const cylindersConfiguration = engineSpec.cylinders_configuration || null;
 
+  // Cylinder count — derived from cylinders_configuration first, then the
+  // engine description string. The "Cylinder"-anchored regex runs first so
+  // strings like "3.0L Inline 6-Cylinder M TwinPower Turbo" return 6, not 3.
+  const parseCylinderCount = (s: string | null | undefined): number | null => {
+    if (!s) return null;
+    // Cylinder-anchored: "6-Cylinder", "8 Cylinder", "12-cyl"
+    const cylMatch = s.match(/(\d+)[\s-]?(?:Cylinder|cyl)\b/i);
+    if (cylMatch) return parseInt(cylMatch[1], 10);
+    // Config-shape: "I-6", "V-8", "W-12", "H-6", "L4", "B6"
+    const configMatch = s.match(/\b[BHILVRW]-?(\d+)\b/i);
+    if (configMatch) return parseInt(configMatch[1], 10);
+    return null;
+  };
+  const cylindersCount =
+    parseCylinderCount(cylindersConfiguration) ??
+    parseCylinderCount(engineDescription);
+
   return {
     // Identity
     year: data.year ? parseInt(data.year) : null,
@@ -821,7 +895,7 @@ export function extractVDBFields(data: any) {
     // Engine
     engineCode: engineSpec.code || null,
     engineDescription,
-    cylinders: cylindersRaw ? parseFloat(cylindersRaw) : null,
+    cylinders: cylindersCount,
     displacement: engineSpec.displacement ? engineSpec.displacement / 1000 : null,
     camType: engineSpec.cam_type || null,
     blockType: engineSpec.block_type || null,
@@ -871,6 +945,7 @@ export function extractVDBFields(data: any) {
       ? parseFloat(getBrakeVal("rear_brake_rotor_dia"))
       : null,
     brakeType: brakingSpec.type || null,
+    brakeSystemType: normalizeBrakeSystemType(brakingSpec.type),
 
     // Steering (normalized: "electric" | "hydraulic" | "electro-hydraulic" | null)
     steeringType: mapSteeringType(steeringSpec?.type),

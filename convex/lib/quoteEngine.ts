@@ -401,6 +401,41 @@ export async function buildQuote(
   const shop = await ctx.db.get(args.shop_id);
   if (!shop) return refuse("shop not found");
 
+  // Per-(shop, service, tier) flat-price override. When set, the shop has
+  // declared a single advertised price (e.g. $89.99 oil change) — bypass the
+  // labor + parts math entirely. Tax + platform fee are still added on top by
+  // the booking flow.
+  const fixed = await ctx.db
+    .query("shop_service_fixed_prices")
+    .withIndex("by_shop_service_tier", (q) =>
+      q
+        .eq("shop_id", args.shop_id)
+        .eq("service_id", args.service_id)
+        .eq("tier", tier),
+    )
+    .unique();
+  if (fixed) {
+    const price = round2(fixed.price_cents / 100);
+    return {
+      ok: true,
+      low: price,
+      high: price,
+      spread_pct: 0,
+      tier,
+      labor: {
+        hours: 0,
+        rate: 0,
+        cost: 0,
+        hours_source: "fixed_override",
+        hours_confidence: 1,
+        rate_source: "fixed_override",
+      },
+      parts: { low: price, high: price, source: "fixed_override" },
+      flags: ["fixed_price_override"],
+      display_label: "Fixed price",
+    };
+  }
+
   const rateRes = resolveLaborRate(shop, tier);
   if (!rateRes.serviceable || rateRes.rate == null) {
     return refuse(`shop labor rate unavailable: ${rateRes.source}`);

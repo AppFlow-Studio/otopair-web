@@ -87,6 +87,14 @@ export function NotificationPopover({
     }
   }
 
+  function goToQuoteRequests() {
+    onClose();
+    // Land on whichever tab actually has open work. Rotor wins if both are
+    // populated to surface the heavier job; otherwise default to tire.
+    const type = rotorCount > 0 ? "rotor" : "tire";
+    router.push(`/bookings/quote-requests?type=${type}`);
+  }
+
   function goToBookings() {
     onClose();
     router.push("/bookings");
@@ -239,13 +247,24 @@ export function NotificationPopover({
 
       {/* Footer */}
       <div className="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-4 py-2">
-        <button
-          type="button"
-          onClick={goToBookings}
-          className="text-xs font-medium text-gray-700 hover:text-gray-900"
-        >
-          View all bookings
-        </button>
+        <div className="flex items-center gap-3">
+          {(tireCount > 0 || rotorCount > 0) && (
+            <button
+              type="button"
+              onClick={goToQuoteRequests}
+              className="text-xs font-medium text-gray-900 hover:text-gray-700"
+            >
+              Open quote requests ({tireCount + rotorCount})
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={goToBookings}
+            className="text-xs font-medium text-gray-700 hover:text-gray-900"
+          >
+            View all bookings
+          </button>
+        </div>
         <button
           type="button"
           onClick={goToSettings}

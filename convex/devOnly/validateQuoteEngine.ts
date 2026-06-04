@@ -609,6 +609,113 @@ export const runAll = internalMutation({
       });
     }
 
+    // ── 7. Fixed-price override check ────────────────────────────────────
+    // Seed a (shop, service, tier) flat price on a dedicated T1 shop and
+    // assert buildQuote short-circuits to that exact dollar amount with the
+    // `fixed_price_override` flag set. Also confirms that a sibling tier
+    // (T2c, untouched) still produces the dynamic range — i.e. fixed prices
+    // are opt-in per cell.
+    const FIXED_PRICE_SHOP_SLUG = `${SHOP_SLUG_PREFIX}fixed_price`;
+    const FIXED_PRICE_CENTS = 8999; // $89.99
+    let fixedShop = await ctx.db
+      .query("shops")
+      .withIndex("by_slug", (q) => q.eq("slug", FIXED_PRICE_SHOP_SLUG))
+      .first();
+    if (fixedShop) {
+      await ctx.db.patch(fixedShop._id, {
+        labor_rate: TIER_RATES.T1,
+        labor_rates_by_tier: { T1: TIER_RATES.T1, T2c: TIER_RATES.T2c } as any,
+        declined_tiers: [],
+        labor_rates_updated_at: now,
+      });
+    } else {
+      const id = await ctx.db.insert("shops", {
+        name: "Spec V2 Validation Shop (fixed-price)",
+        slug: FIXED_PRICE_SHOP_SLUG,
+        labor_rate: TIER_RATES.T1,
+        labor_rates_by_tier: { T1: TIER_RATES.T1, T2c: TIER_RATES.T2c } as any,
+        declined_tiers: [],
+        labor_rates_updated_at: now,
+      } as any);
+      fixedShop = (await ctx.db.get(id))!;
+    }
+    const oilSvc = serviceBySlug.get("oil_change");
+    if (oilSvc) {
+      const existing = await ctx.db
+        .query("shop_service_fixed_prices")
+        .withIndex("by_shop_service_tier", (q) =>
+          q
+            .eq("shop_id", fixedShop!._id)
+            .eq("service_id", oilSvc._id)
+            .eq("tier", "T1"),
+        )
+        .unique();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          price_cents: FIXED_PRICE_CENTS,
+          updated_at: now,
+        });
+      } else {
+        await ctx.db.insert("shop_service_fixed_prices", {
+          shop_id: fixedShop._id,
+          service_id: oilSvc._id,
+          tier: "T1",
+          price_cents: FIXED_PRICE_CENTS,
+          updated_at: now,
+        });
+      }
+
+      const camryId = configIdByKey.get(CAMRY_FWD_CONFIG_KEY)!;
+      const overrideQuote = await buildQuote(ctx, {
+        vehicle_config_id: camryId,
+        service_id: oilSvc._id,
+        shop_id: fixedShop._id,
+      });
+      const expectedPrice = FIXED_PRICE_CENTS / 100;
+      const overridePass =
+        overrideQuote.ok &&
+        Math.abs(overrideQuote.low - expectedPrice) < 0.005 &&
+        Math.abs(overrideQuote.high - expectedPrice) < 0.005 &&
+        overrideQuote.flags.includes("fixed_price_override") &&
+        overrideQuote.labor.hours_source === "fixed_override";
+      results.push({
+        example: "F1 — fixed-price override on Camry T1 oil → flat $89.99",
+        tier: "T1",
+        quote: overrideQuote,
+        pass: overridePass,
+        detail: overridePass
+          ? `flat=$${overrideQuote.ok ? overrideQuote.low : "?"} flags=[${overrideQuote.ok ? overrideQuote.flags.join(",") : "refuse"}]`
+          : `expected low===high===${expectedPrice} with fixed_price_override flag; got ${JSON.stringify(overrideQuote)}`,
+      });
+
+      // Sibling tier sanity: BMW 330i (T2c) on the same shop has no fixed
+      // price set for T2c — engine should fall through to the standard
+      // multiplier range.
+      const bmwId = configIdByKey.get("spec_v2_validation_bmw_330i");
+      if (bmwId) {
+        const fallbackQuote = await buildQuote(ctx, {
+          vehicle_config_id: bmwId,
+          service_id: oilSvc._id,
+          shop_id: fixedShop._id,
+        });
+        const fallbackPass =
+          fallbackQuote.ok &&
+          !fallbackQuote.flags.includes("fixed_price_override") &&
+          fallbackQuote.labor.hours_source !== "fixed_override" &&
+          fallbackQuote.high > fallbackQuote.low;
+        results.push({
+          example:
+            "F2 — sibling tier (T2c) on same shop falls back to range",
+          tier: "T2c",
+          quote: fallbackQuote,
+          pass: fallbackPass,
+          detail: fallbackPass
+            ? `range=$${fallbackQuote.ok ? fallbackQuote.low : "?"}-${fallbackQuote.ok ? fallbackQuote.high : "?"}`
+            : `expected dynamic range without fixed_price_override; got ${JSON.stringify(fallbackQuote)}`,
+        });
+      }
+    }
+
     const passed = results.filter((r) => r.pass).length;
     const failed = results.length - passed;
 

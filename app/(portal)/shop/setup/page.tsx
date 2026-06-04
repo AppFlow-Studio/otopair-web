@@ -21,11 +21,20 @@ import {
   CreditCard,
   Loader2,
   Plus,
+  Sliders,
   Trash2,
   UserRoundCog,
   Users,
   Wrench,
 } from "lucide-react";
+import FixedPriceTierStrip, {
+  FIXED_PRICE_TIERS,
+  centsMapToInputs,
+  countPricedTiers,
+  priceMapToCents,
+  type FixedPriceMap,
+  type FixedPriceTier,
+} from "@/components/shop/fixed-price-tier-strip";
 
 function toSlug(name: string): string {
   return name
@@ -158,6 +167,12 @@ const saveLaborAndServicesMutation = makeFunctionReference<"mutation">(
 );
 const setLaborRatesByTierMutation = makeFunctionReference<"mutation">(
   "shopLaborRates:setLaborRatesByTier"
+);
+const listShopServiceFixedPricesQuery = makeFunctionReference<"query">(
+  "shopServiceFixedPrices:listForShop"
+);
+const setShopServiceFixedPricesMutation = makeFunctionReference<"mutation">(
+  "shopServiceFixedPrices:setFixedPricesForService"
 );
 const addMechanicMutation = makeFunctionReference<"mutation">("shops:addOnboardingMechanic");
 const updateMechanicMutation = makeFunctionReference<"mutation">(
@@ -579,6 +594,13 @@ export default function ShopSetupPage() {
   const removeMechanic = useMutation(removeMechanicMutation) as (args: {
     mechanicId: Id<"mechanics">;
   }) => Promise<Id<"mechanics">>;
+  const setShopServiceFixedPrices = useMutation(
+    setShopServiceFixedPricesMutation,
+  ) as (args: {
+    shop_id: Id<"shops">;
+    service_id: Id<"services">;
+    prices: Partial<Record<FixedPriceTier, number | null>>;
+  }) => Promise<unknown>;
 
   const [details, setDetails] = useState<ShopDetailsForm>({
     name: "",
@@ -595,6 +617,15 @@ export default function ShopSetupPage() {
     initialTierRows(undefined, undefined),
   );
   const [selectedServiceIds, setSelectedServiceIds] = useState<Set<string>>(new Set());
+  const [pricingOpenServiceIds, setPricingOpenServiceIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [fixedPricesByService, setFixedPricesByService] = useState<
+    Record<string, FixedPriceMap>
+  >({});
+  const [fixedPricesBaseline, setFixedPricesBaseline] = useState<
+    Record<string, FixedPriceMap>
+  >({});
   const [slugManual, setSlugManual] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [stepError, setStepError] = useState<string | null>(null);
@@ -656,6 +687,15 @@ export default function ShopSetupPage() {
       ? { slug: details.slug }
       : "skip"
   ) as { _id: Id<"shops"> } | null | undefined;
+  const persistedShopId = onboardingData?.shop?._id ?? null;
+  const fixedPricesData = useQuery(
+    listShopServiceFixedPricesQuery,
+    persistedShopId ? { shop_id: persistedShopId } : "skip",
+  ) as Record<string, Partial<Record<FixedPriceTier, number>>> | undefined;
+  const declinedTierSet = useMemo(
+    () => new Set<string>(onboardingData?.shop?.declinedTiers ?? []),
+    [onboardingData],
+  );
   const serviceCategories = useMemo(
     () => (onboardingData?.serviceCategories ?? []) as OnboardingServiceCategory[],
     [onboardingData]
@@ -742,6 +782,16 @@ export default function ShopSetupPage() {
     setCurrentStep(firstIncompleteSavedStep);
     setHydratedShopId(shopId);
   }, [firstIncompleteSavedStep, hydratedShopId, onboardingData, router, serviceCategories]);
+
+  useEffect(() => {
+    if (!fixedPricesData) return;
+    const next: Record<string, FixedPriceMap> = {};
+    for (const [serviceId, centsMap] of Object.entries(fixedPricesData)) {
+      next[serviceId] = centsMapToInputs(centsMap);
+    }
+    setFixedPricesByService(next);
+    setFixedPricesBaseline(next);
+  }, [fixedPricesData]);
 
   useEffect(() => {
     const stripeStatus = searchParams.get("stripe");
@@ -1151,6 +1201,37 @@ export default function ShopSetupPage() {
           declined_tiers: tierDeclined,
         });
       }
+
+      // Persist fixed prices for any service whose strip values changed.
+      const dirtyServiceIds: string[] = [];
+      for (const serviceId of Object.keys(fixedPricesByService)) {
+        const current = fixedPricesByService[serviceId] ?? {};
+        const baseline = fixedPricesBaseline[serviceId] ?? {};
+        for (const tier of FIXED_PRICE_TIERS) {
+          if ((current[tier] ?? "") !== (baseline[tier] ?? "")) {
+            dirtyServiceIds.push(serviceId);
+            break;
+          }
+        }
+      }
+      for (const serviceId of dirtyServiceIds) {
+        const current = fixedPricesByService[serviceId] ?? {};
+        const baseline = fixedPricesBaseline[serviceId] ?? {};
+        const centsPatch = priceMapToCents(current);
+        const changed: Partial<Record<FixedPriceTier, number | null>> = {};
+        for (const tier of FIXED_PRICE_TIERS) {
+          if ((current[tier] ?? "") !== (baseline[tier] ?? "")) {
+            changed[tier] = tier in centsPatch ? centsPatch[tier]! : null;
+          }
+        }
+        if (Object.keys(changed).length === 0) continue;
+        await setShopServiceFixedPrices({
+          shop_id: shopId,
+          service_id: serviceId as Id<"services">,
+          prices: changed,
+        });
+      }
+      setFixedPricesBaseline(fixedPricesByService);
       setStepSuccess("Labor rate and services saved.");
       setCurrentStep(3);
     } catch (error) {
@@ -2133,38 +2214,86 @@ export default function ShopSetupPage() {
                       <div className="divide-y divide-gray-100">
                         {category.services.map((service) => {
                           const checked = selectedServiceIds.has(service._id);
+                          const prices = fixedPricesByService[service._id] ?? {};
+                          const pricedCount = countPricedTiers(prices);
+                          const isPricingOpen =
+                            checked && pricingOpenServiceIds.has(service._id);
                           return (
-                            <label
+                            <div
                               key={service._id}
-                              className="flex cursor-pointer items-start gap-3 px-4 py-4 hover:bg-muted"
+                              className="px-4 py-4 hover:bg-muted/60"
                             >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={(event) =>
-                                  setSelectedServiceIds((prev) => {
-                                    const next = new Set(prev);
-                                    if (event.target.checked) next.add(service._id);
-                                    else next.delete(service._id);
-                                    return next;
-                                  })
-                                }
-                                className="mt-1 h-4 w-4 rounded border-input text-primary focus:ring-ring"
-                              />
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-sm font-medium text-foreground">
-                                    {service.name}
+                              <div className="flex items-start gap-3">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(event) =>
+                                    setSelectedServiceIds((prev) => {
+                                      const next = new Set(prev);
+                                      if (event.target.checked) next.add(service._id);
+                                      else next.delete(service._id);
+                                      return next;
+                                    })
+                                  }
+                                  className="mt-1 h-4 w-4 rounded border-input text-primary focus:ring-ring"
+                                  aria-label={`Offer ${service.name}`}
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm font-medium text-foreground">
+                                      {service.name}
+                                    </p>
+                                    <span className="rounded-lg bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                      {service.defaultLaborHours} hr
+                                    </span>
+                                    {pricedCount > 0 ? (
+                                      <span className="rounded-lg bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                                        {pricedCount} fixed price{pricedCount === 1 ? "" : "s"}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                                    {service.description}
                                   </p>
-                                  <span className="rounded-lg bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                    {service.defaultLaborHours} hr
-                                  </span>
                                 </div>
-                                <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                                  {service.description}
-                                </p>
+                                {checked ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPricingOpenServiceIds((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(service._id)) next.delete(service._id);
+                                        else next.add(service._id);
+                                        return next;
+                                      })
+                                    }
+                                    className={`mt-0.5 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
+                                      isPricingOpen
+                                        ? "border-blue-200 bg-blue-50 text-blue-700"
+                                        : "border-input text-muted-foreground hover:bg-muted"
+                                    }`}
+                                    aria-expanded={isPricingOpen}
+                                  >
+                                    <Sliders className="h-3 w-3" />
+                                    Fixed prices
+                                  </button>
+                                ) : null}
                               </div>
-                            </label>
+                              {isPricingOpen ? (
+                                <div className="mt-3 rounded-md border border-border bg-white">
+                                  <FixedPriceTierStrip
+                                    prices={prices}
+                                    declinedTiers={declinedTierSet}
+                                    onChange={(nextPrices) =>
+                                      setFixedPricesByService((prev) => ({
+                                        ...prev,
+                                        [service._id]: nextPrices,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                              ) : null}
+                            </div>
                           );
                         })}
                       </div>

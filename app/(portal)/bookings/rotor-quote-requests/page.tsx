@@ -24,8 +24,8 @@ import {
 
 // Rotor brands the shop can pick from. "Other…" lets them type free text.
 // Curated against the common OEM + aftermarket suppliers; the customer's
-// tier filter (Premium/Plus/Standard) doesn't constrain the brand list —
-// the shop sources whichever fits the price they can offer.
+// brake system type (Standard/Sport/Carbon Ceramic) doesn't constrain the
+// brand list — the shop sources whichever fits the price they can offer.
 const ROTOR_BRANDS = [
   { value: "brembo", label: "Brembo" },
   { value: "akebono", label: "Akebono" },
@@ -44,23 +44,45 @@ const ROTOR_BRANDS = [
   { value: "hawk", label: "Hawk" },
 ];
 
+// Pad brands curated for the OEM-replacement pipeline. Mirrors the rotor
+// list — most suppliers offer both — with a few pad-specialists added.
+const PAD_BRANDS = [
+  { value: "akebono", label: "Akebono" },
+  { value: "brembo", label: "Brembo" },
+  { value: "bosch", label: "Bosch" },
+  { value: "ate", label: "ATE" },
+  { value: "ebc", label: "EBC" },
+  { value: "powerstop", label: "PowerStop" },
+  { value: "centric", label: "Centric" },
+  { value: "raybestos", label: "Raybestos" },
+  { value: "wagner", label: "Wagner" },
+  { value: "acdelco", label: "AC Delco" },
+  { value: "hawk", label: "Hawk" },
+  { value: "ferodo", label: "Ferodo" },
+  { value: "textar", label: "Textar" },
+];
+
 const OTHER_BRAND = "__other__";
 
-function RotorBrandSelect({
+function BrandSelect({
+  brands,
   value,
   onChange,
+  placeholder = "Select brand…",
 }: {
+  brands: Array<{ value: string; label: string }>;
   value: string;
   onChange: (v: string) => void;
+  placeholder?: string;
 }) {
-  const matched = ROTOR_BRANDS.find((b) => b.value === value);
+  const matched = brands.find((b) => b.value === value);
   const isOther = !!value && !matched;
   const selectedKey = matched ? matched.value : isOther ? OTHER_BRAND : "none";
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
   const filtered = normalizedQuery
-    ? ROTOR_BRANDS.filter((b) => b.label.toLowerCase().includes(normalizedQuery))
-    : ROTOR_BRANDS;
+    ? brands.filter((b) => b.label.toLowerCase().includes(normalizedQuery))
+    : brands;
 
   return (
     <div className="space-y-2">
@@ -76,7 +98,7 @@ function RotorBrandSelect({
       >
         <SelectTrigger className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground justify-between">
           <SelectValue>
-            {matched ? matched.label : isOther ? "Other…" : "Select brand…"}
+            {matched ? matched.label : isOther ? "Other…" : placeholder}
           </SelectValue>
         </SelectTrigger>
         <SelectPopover className="rounded-md">
@@ -97,8 +119,8 @@ function RotorBrandSelect({
             />
           </div>
           <SelectListBox shouldFocusWrap className="p-1 max-h-56 overflow-y-auto text-sm">
-            <SelectItem id="none" textValue="Select brand…" className="min-h-0 rounded-sm px-2.5 py-1.5 text-xs text-muted-foreground">
-              Select brand…
+            <SelectItem id="none" textValue={placeholder} className="min-h-0 rounded-sm px-2.5 py-1.5 text-xs text-muted-foreground">
+              {placeholder}
             </SelectItem>
             {filtered.map((b) => (
               <SelectItem key={b.value} id={b.value} textValue={b.label} className="min-h-0 rounded-sm px-2.5 py-1.5 text-xs">
@@ -135,15 +157,22 @@ const todayIso = () => {
   return `${year}-${month}-${day}`;
 };
 
+type BrakeSystemType = "standard" | "sport" | "carbon_ceramic";
+type Axle = "front" | "rear" | "both";
+type PadType = "ceramic" | "semi_metallic" | "oem_recommended";
+
+type RotorSpecs = {
+  brake_system_type: BrakeSystemType;
+  axle: Axle;
+  include_pads: boolean;
+  pad_type?: PadType;
+};
+
 type OpenRequest = {
   _id: Id<"bookings">;
   _creationTime: number;
   status: string;
-  rotor_specs?: {
-    axle: string; // "front" | "rear" | "both"
-    tier: string;
-    quantity: number;
-  };
+  rotor_specs?: RotorSpecs;
   vin: string;
   submitted_at: number;
   vehicle: { year: number | null; make: string | null; model: string | null } | null;
@@ -155,10 +184,32 @@ function formatVehicle(v: OpenRequest["vehicle"]): string {
   return parts.length ? parts.join(" ") : "Unknown vehicle";
 }
 
-function formatAxle(axle: string | undefined): string {
+function formatAxle(axle: Axle | undefined): string {
   if (axle === "front") return "Front pair";
   if (axle === "rear") return "Rear pair";
   if (axle === "both") return "All four";
+  return "—";
+}
+
+// Per spec (docs/rotor-booking/SPEC_v1.pdf): front=2, rear=2, both=4.
+// Quantity is derived from axle at render time — not stored on the booking.
+function rotorQuantityForAxle(axle: Axle | undefined): number {
+  if (axle === "front" || axle === "rear") return 2;
+  if (axle === "both") return 4;
+  return 0;
+}
+
+function formatBrakeSystem(t: BrakeSystemType | undefined): string {
+  if (t === "standard") return "Standard";
+  if (t === "sport") return "Sport";
+  if (t === "carbon_ceramic") return "Carbon ceramic";
+  return "—";
+}
+
+function formatPadType(t: PadType | undefined): string {
+  if (t === "ceramic") return "Ceramic";
+  if (t === "semi_metallic") return "Semi-metallic";
+  if (t === "oem_recommended") return "OEM recommended";
   return "—";
 }
 
@@ -241,42 +292,63 @@ export function RotorQuoteRequestsContent({ hideHeader = false }: { hideHeader?:
             <thead>
               <tr className="border-b border-border bg-muted/30">
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Vehicle</th>
+                <th className="px-5 py-3 text-left font-medium text-muted-foreground">Brake system</th>
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Axle</th>
-                <th className="px-5 py-3 text-left font-medium text-muted-foreground">Tier</th>
-                <th className="px-5 py-3 text-left font-medium text-muted-foreground">Qty</th>
+                <th className="px-5 py-3 text-left font-medium text-muted-foreground">Rotors</th>
+                <th className="px-5 py-3 text-left font-medium text-muted-foreground">Brake Pads</th>
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Submitted</th>
                 <th className="px-5 py-3" />
               </tr>
             </thead>
             <tbody>
-              {requests.map((r) => (
-                <tr key={r._id} className="border-b border-border last:border-b-0 hover:bg-muted/20">
-                  <td className="px-5 py-4 text-foreground">{formatVehicle(r.vehicle)}</td>
-                  <td className="px-5 py-4 text-foreground">{formatAxle(r.rotor_specs?.axle)}</td>
-                  <td className="px-5 py-4 text-foreground capitalize">{r.rotor_specs?.tier ?? "—"}</td>
-                  <td className="px-5 py-4 text-foreground">{r.rotor_specs?.quantity ?? "—"}</td>
-                  <td className="px-5 py-4 text-muted-foreground">
-                    {formatRelative(r.submitted_at)}
-                  </td>
-                  <td className="px-5 py-4 text-right">
-                    <div className="inline-flex items-center gap-2">
-                      <button
-                        onClick={() => setActiveRequest(r)}
-                        className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
-                      >
-                        Make Quote
-                      </button>
-                      <button
-                        onClick={() => handleReject(r._id)}
-                        disabled={pendingRejectId === String(r._id)}
-                        className="inline-flex items-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-                      >
-                        {pendingRejectId === String(r._id) ? "Rejecting…" : "Reject"}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {requests.map((r) => {
+                const qty = rotorQuantityForAxle(r.rotor_specs?.axle);
+                const includePads = r.rotor_specs?.include_pads === true;
+                return (
+                  <tr key={r._id} className="border-b border-border last:border-b-0 hover:bg-muted/20">
+                    <td className="px-5 py-4 text-foreground">{formatVehicle(r.vehicle)}</td>
+                    <td className="px-5 py-4 text-foreground">{formatBrakeSystem(r.rotor_specs?.brake_system_type)}</td>
+                    <td className="px-5 py-4 text-foreground">{formatAxle(r.rotor_specs?.axle)}</td>
+                    <td className="px-5 py-4 text-foreground">{qty || "—"}</td>
+                    <td className="px-5 py-4 text-foreground">
+                      {includePads ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                            Include
+                          </span>
+                          {r.rotor_specs?.pad_type ? (
+                            <span className="text-xs text-muted-foreground">
+                              {formatPadType(r.rotor_specs.pad_type)}
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Rotors only</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-4 text-muted-foreground">
+                      {formatRelative(r.submitted_at)}
+                    </td>
+                    <td className="px-5 py-4 text-right">
+                      <div className="inline-flex items-center gap-2">
+                        <button
+                          onClick={() => setActiveRequest(r)}
+                          className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+                        >
+                          Make Quote
+                        </button>
+                        <button
+                          onClick={() => handleReject(r._id)}
+                          disabled={pendingRejectId === String(r._id)}
+                          className="inline-flex items-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+                        >
+                          {pendingRejectId === String(r._id) ? "Rejecting…" : "Reject"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -333,13 +405,30 @@ function QuoteSubmissionDialog({
 }) {
   const submit = useMutation(api.rotor_quote_responses.create);
 
+  const includePads = request.rotor_specs?.include_pads === true;
+  const requestedPadType = request.rotor_specs?.pad_type;
+  const rotorQuantity = rotorQuantityForAxle(request.rotor_specs?.axle);
+  const isCarbonCeramic = request.rotor_specs?.brake_system_type === "carbon_ceramic";
+
   // Rotor jobs are heavier than tire swaps — default to 60 min, give 45/60/90
-  // presets (both axles can easily run 90 min).
-  const [durationMinutes, setDurationMinutes] = useState(60);
+  // presets (both axles can easily run 90 min). Carbon-ceramic + pads tilts
+  // toward the upper end, so seed 90 there.
+  const [durationMinutes, setDurationMinutes] = useState(
+    isCarbonCeramic || (request.rotor_specs?.axle === "both" && includePads) ? 90 : 60,
+  );
 
   const [rotorBrand, setRotorBrand] = useState("");
   const [rotorModel, setRotorModel] = useState("");
   const [perRotorPrice, setPerRotorPrice] = useState("");
+  // Pad fields — only collected when the request had include_pads=true.
+  // pad_quantity defaults to rotor qty since pads ship paired; the shop can
+  // override (e.g. 4-pad axle kit for a "front pair" request).
+  const [padBrand, setPadBrand] = useState("");
+  const [padType, setPadType] = useState<PadType | "">(requestedPadType ?? "");
+  const [padPrice, setPadPrice] = useState("");
+  const [padQuantity, setPadQuantity] = useState<string>(
+    includePads ? String(rotorQuantity || "") : "",
+  );
   const [laborCost, setLaborCost] = useState("");
   const [availabilityDate, setAvailabilityDate] = useState(todayIso());
   const [availabilityTime, setAvailabilityTime] = useState("");
@@ -480,8 +569,6 @@ function QuoteSubmissionDialog({
     return d;
   }, [laneDate, laneDayHours]);
 
-  const quantity = request.rotor_specs?.quantity ?? 0;
-
   const availabilityDateTime = useMemo(() => {
     if (!availabilityDate || !availabilityTime) return null;
     const dt = new Date(`${availabilityDate}T${availabilityTime}`);
@@ -496,12 +583,30 @@ function QuoteSubmissionDialog({
   const availabilityIsFuture =
     availabilityDateTime !== null && availabilityDateTime.getTime() > Date.now();
 
+  const padsSubtotal = useMemo(() => {
+    if (!includePads) return 0;
+    const pp = Number(padPrice);
+    const pq = Number(padQuantity);
+    if (!Number.isFinite(pp) || !Number.isFinite(pq)) return null;
+    return pp * pq;
+  }, [includePads, padPrice, padQuantity]);
+
   const total = useMemo(() => {
-    const ppt = Number(perRotorPrice);
+    const ppr = Number(perRotorPrice);
     const labor = Number(laborCost);
-    if (!Number.isFinite(ppt) || !Number.isFinite(labor)) return null;
-    return ppt * quantity + labor;
-  }, [perRotorPrice, laborCost, quantity]);
+    if (!Number.isFinite(ppr) || !Number.isFinite(labor)) return null;
+    if (includePads && padsSubtotal === null) return null;
+    return ppr * rotorQuantity + labor + (padsSubtotal ?? 0);
+  }, [perRotorPrice, laborCost, rotorQuantity, includePads, padsSubtotal]);
+
+  const padsValid = !includePads || (
+    padBrand.trim().length > 0 &&
+    padType !== "" &&
+    padPrice !== "" &&
+    Number(padPrice) >= 0 &&
+    padQuantity !== "" &&
+    Number(padQuantity) > 0
+  );
 
   const canSubmit =
     rotorBrand.trim().length > 0 &&
@@ -509,6 +614,7 @@ function QuoteSubmissionDialog({
     Number(perRotorPrice) > 0 &&
     laborCost !== "" &&
     Number(laborCost) >= 0 &&
+    padsValid &&
     availabilityIsFuture &&
     mechanicId !== "" &&
     total !== null &&
@@ -525,12 +631,20 @@ function QuoteSubmissionDialog({
         rotor_brand: (ROTOR_BRANDS.find((b) => b.value === rotorBrand)?.label ?? rotorBrand).trim(),
         rotor_model: rotorModel.trim() ? rotorModel.trim() : undefined,
         per_rotor_price: Number(perRotorPrice),
-        quantity,
+        quantity: rotorQuantity,
         labor_cost: Number(laborCost),
         total,
         availability: { date: availabilityDate, time: availabilityTime },
         estimated_duration_minutes: durationMinutes,
         mechanic_id: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
+        ...(includePads
+          ? {
+              pad_brand: (PAD_BRANDS.find((b) => b.value === padBrand)?.label ?? padBrand).trim(),
+              pad_type: padType || undefined,
+              pad_price: Number(padPrice),
+              pad_quantity: Number(padQuantity),
+            }
+          : {}),
       });
       onClose();
     } catch (e) {
@@ -550,7 +664,10 @@ function QuoteSubmissionDialog({
           <div>
             <h3 className="text-base font-semibold text-foreground">Submit rotor quote</h3>
             <p className="text-sm text-muted-foreground mt-0.5">
-              {formatVehicle(request.vehicle)} · {formatAxle(request.rotor_specs?.axle)} · qty {quantity}
+              {formatVehicle(request.vehicle)} ·{" "}
+              {formatBrakeSystem(request.rotor_specs?.brake_system_type)} ·{" "}
+              {formatAxle(request.rotor_specs?.axle)} · {rotorQuantity} rotors
+              {includePads ? ` · pads${requestedPadType ? ` (${formatPadType(requestedPadType)})` : ""}` : ""}
             </p>
           </div>
           <button onClick={onClose} className="rounded-md p-1.5 hover:bg-muted text-muted-foreground">
@@ -638,8 +755,31 @@ function QuoteSubmissionDialog({
 
           <div className="w-80 shrink-0 flex flex-col overflow-y-auto">
             <div className="p-5 space-y-4 flex-1">
+              <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Brake system</span>
+                  <span className="font-medium text-foreground">
+                    {formatBrakeSystem(request.rotor_specs?.brake_system_type)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Axle</span>
+                  <span className="font-medium text-foreground">
+                    {formatAxle(request.rotor_specs?.axle)} · {rotorQuantity} rotors
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Pads</span>
+                  <span className="font-medium text-foreground">
+                    {includePads
+                      ? `Included${requestedPadType ? ` · ${formatPadType(requestedPadType)}` : ""}`
+                      : "Not requested"}
+                  </span>
+                </div>
+              </div>
+
               <Field label="Rotor brand" required>
-                <RotorBrandSelect value={rotorBrand} onChange={setRotorBrand} />
+                <BrandSelect brands={ROTOR_BRANDS} value={rotorBrand} onChange={setRotorBrand} />
               </Field>
 
               <Field label="Rotor model (optional)">
@@ -664,15 +804,77 @@ function QuoteSubmissionDialog({
                     className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
                   />
                 </Field>
-                <Field label="Quantity">
+                <Field label="Rotor qty">
                   <input
                     type="number"
-                    value={quantity}
+                    value={rotorQuantity}
                     readOnly
                     className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
                   />
                 </Field>
               </div>
+
+              {includePads && (
+                <div className="rounded-md border border-border bg-background/40 p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-foreground">Brake pads</p>
+                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      Customer requested
+                    </span>
+                  </div>
+
+                  <Field label="Pad brand" required>
+                    <BrandSelect
+                      brands={PAD_BRANDS}
+                      value={padBrand}
+                      onChange={setPadBrand}
+                      placeholder="Select pad brand…"
+                    />
+                  </Field>
+
+                  <Field label="Pad type" required>
+                    <select
+                      value={padType}
+                      onChange={(e) => setPadType(e.target.value as PadType | "")}
+                      className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
+                    >
+                      <option value="">Select pad type…</option>
+                      <option value="ceramic">Ceramic</option>
+                      <option value="semi_metallic">Semi-metallic</option>
+                      <option value="oem_recommended">OEM recommended</option>
+                    </select>
+                    {requestedPadType && padType && padType !== requestedPadType && (
+                      <p className="text-[11px] text-amber-700">
+                        Customer requested {formatPadType(requestedPadType)} — confirm this swap.
+                      </p>
+                    )}
+                  </Field>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Per-pad price ($)" required>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={padPrice}
+                        onChange={(e) => setPadPrice(e.target.value)}
+                        placeholder="0.00"
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                      />
+                    </Field>
+                    <Field label="Pad qty" required>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={padQuantity}
+                        onChange={(e) => setPadQuantity(e.target.value)}
+                        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                      />
+                    </Field>
+                  </div>
+                </div>
+              )}
 
               <Field label="Labor cost ($)" required>
                 <input
@@ -686,14 +888,44 @@ function QuoteSubmissionDialog({
                 />
               </Field>
 
-              <Field label="Total ($)">
-                <input
-                  type="text"
-                  value={total !== null ? total.toFixed(2) : "—"}
-                  readOnly
-                  className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-medium text-foreground"
-                />
-              </Field>
+              <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">
+                    Rotors ({rotorQuantity} × ${perRotorPrice || "0.00"})
+                  </span>
+                  <span className="font-medium text-foreground">
+                    {perRotorPrice !== "" && Number.isFinite(Number(perRotorPrice))
+                      ? `$${(Number(perRotorPrice) * rotorQuantity).toFixed(2)}`
+                      : "—"}
+                  </span>
+                </div>
+                {includePads && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">
+                      Pads ({padQuantity || 0} × ${padPrice || "0.00"})
+                    </span>
+                    <span className="font-medium text-foreground">
+                      {padsSubtotal !== null && padsSubtotal !== undefined
+                        ? `$${padsSubtotal.toFixed(2)}`
+                        : "—"}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Labor</span>
+                  <span className="font-medium text-foreground">
+                    {laborCost !== "" && Number.isFinite(Number(laborCost))
+                      ? `$${Number(laborCost).toFixed(2)}`
+                      : "—"}
+                  </span>
+                </div>
+                <div className="flex justify-between pt-1 border-t border-border">
+                  <span className="font-medium text-foreground">Total</span>
+                  <span className="font-semibold text-foreground">
+                    {total !== null ? `$${total.toFixed(2)}` : "—"}
+                  </span>
+                </div>
+              </div>
 
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-muted-foreground">Estimated duration</label>

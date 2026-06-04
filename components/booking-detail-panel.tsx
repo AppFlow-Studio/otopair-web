@@ -590,6 +590,10 @@ export interface JobDetailData {
   totalCost: number;
   laborCost: number;
   partsCost: number;
+  /** True when the customer agreed to a per-(shop, service, tier) flat
+   *  price at create time. Drives the "Fixed price" pill on the booking
+   *  card — does not expose the customer's disclosed ceiling. */
+  isFixedPrice?: boolean;
   quotedSetPriceDollars?: number | null;
   quotedBreakdown?: {
     parts_cents: number;
@@ -1704,7 +1708,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     )}
                   </div>
                   <div className={drawerInfoCardClassName}>
-                    <DrawerFieldLabel>Quoted price</DrawerFieldLabel>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <DrawerFieldLabel>
+                        {job.isFixedPrice ? "Fixed price" : "Quoted price"}
+                      </DrawerFieldLabel>
+                      {job.isFixedPrice && (
+                        <span className="inline-flex items-center rounded-md bg-[#EFF6FF] px-2 py-0.5 text-[11px] font-semibold text-[#5299FE]">
+                          Fixed price
+                        </span>
+                      )}
+                    </div>
                     {job.quotedSetPriceDollars != null && job.quotedBreakdown ? (
                       <>
                         <p className="text-[15px] font-medium text-foreground">
@@ -1725,6 +1738,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           Labor ${job.laborCost.toFixed(2)} &middot; Parts ${job.partsCost.toFixed(2)}
                         </p>
                       </>
+                    )}
+                    {job.isFixedPrice && (
+                      <p className="mt-1 text-[12px] text-muted-foreground">
+                        Customer agreed to this flat rate at booking — no
+                        deviation expected.
+                      </p>
                     )}
                   </div>
                   <div className={drawerInfoCardClassName}>

@@ -1423,6 +1423,22 @@ export default defineSchema({
     .index("by_service_id", ["service_id"])
     .index("by_shop_and_service", ["shop_id", "service_id"]),
 
+  // Per-(shop, service, tier) flat-price overrides. Row exists ⇒ that tier
+  // is sold at `price_cents` flat (labor + parts merged); tax + platform fee
+  // still added on top by the booking flow. Missing row ⇒ engine range
+  // applies. Server rejects writes for any tier in shops.declined_tiers.
+  shop_service_fixed_prices: defineTable({
+    shop_id: v.id("shops"),
+    service_id: v.id("services"),
+    tier: tierValidator,
+    price_cents: v.number(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  })
+    .index("by_shop_service_tier", ["shop_id", "service_id", "tier"])
+    .index("by_shop", ["shop_id"])
+    .index("by_shop_service", ["shop_id", "service_id"]),
+
   // [I]
   shop_portfolio: defineTable({
     shop_id: v.id("shops"),
@@ -1743,6 +1759,13 @@ export default defineSchema({
       })
     ),
     disclosed_at_ms: v.optional(v.number()),
+    // True when ANY service line in this booking resolved to a shop's
+    // per-(shop, service, tier) flat-price override at create time.
+    // Carries no anchoring info (no dollar amount) — it just tells the
+    // mechanic-facing UI "this is a flat-rate job, charge the agreed
+    // amount, no deviation." Safe to surface to mechanics; intentionally
+    // NOT in MECHANIC_FORBIDDEN_FIELDS.
+    is_fixed_price: v.optional(v.boolean()),
     // Itemized parts snapshot taken at booking-create time. Same per-unit
     // prices and quantities the customer saw on the Review & Pay screen.
     // The mechanic's post-job dialog hydrates from this first so the

@@ -20,9 +20,32 @@ type NotificationItem = {
   price?: number | null;
   note?: string | null;
   tireSpecs?: { size: string; type: string; tier: string; quantity: number } | null;
-  rotorSpecs?: { axle: string; tier: string; quantity: number } | null;
+  rotorSpecs?: {
+    brake_system_type: "standard" | "sport" | "carbon_ceramic";
+    axle: "front" | "rear" | "both";
+    include_pads: boolean;
+    pad_type?: "ceramic" | "semi_metallic" | "oem_recommended";
+  } | null;
   urgency?: "urgent" | null;
 };
+
+function formatBrakeSystemLabel(t: NonNullable<NotificationItem["rotorSpecs"]>["brake_system_type"]): string {
+  if (t === "sport") return "Sport";
+  if (t === "carbon_ceramic") return "Carbon ceramic";
+  return "Standard";
+}
+
+function formatPadTypeLabel(t: NonNullable<NotificationItem["rotorSpecs"]>["pad_type"]): string {
+  if (t === "ceramic") return "Ceramic";
+  if (t === "semi_metallic") return "Semi-metallic";
+  if (t === "oem_recommended") return "OEM recommended";
+  return "";
+}
+
+function rotorQtyForAxle(axle: NonNullable<NotificationItem["rotorSpecs"]>["axle"]): number {
+  if (axle === "both") return 4;
+  return 2;
+}
 
 function relativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -110,10 +133,8 @@ export function NotificationCard({
 
   function handleSubmitQuote() {
     onAfterAction?.();
-    const path = isRotorQuote
-      ? "/bookings/rotor-quote-requests"
-      : "/bookings/tire-quote-requests";
-    router.push(`${path}?booking=${item.bookingId}`);
+    const type = isRotorQuote ? "rotor" : "tire";
+    router.push(`/bookings/quote-requests?type=${type}&booking=${item.bookingId}`);
   }
 
   return (
@@ -193,9 +214,20 @@ export function NotificationCard({
                 : "All four"}
           </span>
           <span className="mx-1">·</span>
-          {item.rotorSpecs.tier}
+          {formatBrakeSystemLabel(item.rotorSpecs.brake_system_type)}
           <span className="mx-1">·</span>
-          {item.rotorSpecs.quantity} rotors
+          {rotorQtyForAxle(item.rotorSpecs.axle)} rotors
+          {item.rotorSpecs.include_pads && (
+            <>
+              <span className="mx-1">·</span>
+              <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                + Pads
+                {item.rotorSpecs.pad_type
+                  ? ` (${formatPadTypeLabel(item.rotorSpecs.pad_type)})`
+                  : ""}
+              </span>
+            </>
+          )}
         </p>
       )}
 

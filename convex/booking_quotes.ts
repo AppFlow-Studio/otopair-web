@@ -20,6 +20,8 @@ import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { resolveWinningPartForService } from "./serviceParts";
 import type { TraceEntry } from "./partSelector";
+import { detectTier } from "./lib/quoteEngine";
+import type { VehicleTier } from "./lib/vehicleTiers";
 
 /** Fallback band width when service_vehicle_specs has no engine-specific
  *  row for a service. ±8% around the client-supplied per-service parts
@@ -33,6 +35,11 @@ export type ComputeDisclosedRangeService = {
   /** Client-supplied per-service parts cost (dollars). Used as the midpoint
    *  when no service_vehicle_specs row exists for the engine. */
   parts_cost: number;
+  /** Per-service labor cost (dollars). Used to zero-out the labor contribution
+   *  on services that resolve to a flat fixed price (which already bundles
+   *  labor + parts). Optional for backward compat: when omitted, the labor
+   *  reduction step is skipped and total `labor_cost_dollars` is used as-is. */
+  labor_cost?: number;
   /** Optional option_id when has_options. Triggers service_options lookup
    *  instead of service_vehicle_specs. */
   option_id?: Id<"service_options">;
@@ -46,6 +53,12 @@ export type ComputeDisclosedRangeArgs = {
   engine_id?: Id<"engines"> | null;
   shop_state?: string | null;
   shop_zip?: string | null;
+  /** Optional — when both shop_id and vehicle_config_id are provided, each
+   *  service is checked against shop_service_fixed_prices for the vehicle's
+   *  tier. A hit replaces that service's parts band with the flat price and
+   *  zeroes its labor contribution. */
+  shop_id?: Id<"shops"> | null;
+  vehicle_config_id?: Id<"vehicle_configs"> | null;
 };
 
 export type DisclosedRangeBreakdown = {
@@ -58,10 +71,28 @@ export type DisclosedRangeBreakdown = {
   service_fee_high_cents: number;
 };
 
+/** Per-line flat-price hit captured during disclosed-range computation.
+ *  Forwarded into `computeQuotedSetPrice` so the quoted parts total reflects
+ *  the locked-in flat amount instead of the raw OEM unit price in
+ *  `priced_parts_snapshot`. Without this the mechanic surface would render
+ *  "Parts $8.10" for an oil change the customer agreed to at $60 flat. */
+export type FixedPriceLine = {
+  service_id: Id<"services">;
+  price_cents: number;
+};
+
 export type ComputeDisclosedRangeResult = {
   low_cents: number;
   high_cents: number;
   breakdown: DisclosedRangeBreakdown;
+  /** True when at least one service line resolved to a per-(shop, service,
+   *  tier) flat-price override. Persisted on the booking row as
+   *  `is_fixed_price` so the mechanic-facing UI can render a "Fixed price"
+   *  badge without exposing the customer's disclosed ceiling. */
+  is_fixed_price: boolean;
+  /** Per-service flat-price hits. Empty when no service resolved to a
+   *  shop_service_fixed_prices row. Threaded into `computeQuotedSetPrice`. */
+  fixed_price_lines: FixedPriceLine[];
 };
 
 const dollarsToCents = (d: number) => Math.round(d * 100);
@@ -78,8 +109,48 @@ export async function computeDisclosedRange(
 ): Promise<ComputeDisclosedRangeResult> {
   let parts_low_dollars = 0;
   let parts_high_dollars = 0;
+  let labor_reduction_dollars = 0;
+  let is_fixed_price = false;
+  const fixed_price_lines: FixedPriceLine[] = [];
+
+  // Resolve the vehicle's tier once for the whole booking — used to look up
+  // per-(shop, service, tier) flat-price overrides. Skip silently if either
+  // shop_id or vehicle_config_id wasn't supplied; this keeps the helper
+  // backward-compatible for callers that don't yet thread them through.
+  let tier: VehicleTier | null = null;
+  if (args.shop_id && args.vehicle_config_id) {
+    const cfg = await ctx.db.get(args.vehicle_config_id);
+    if (cfg) {
+      tier =
+        (cfg.pricing_tier as VehicleTier | undefined) ??
+        (await detectTier(ctx, cfg));
+    }
+  }
 
   for (const svc of args.services) {
+    if (tier && args.shop_id) {
+      const fixed = await ctx.db
+        .query("shop_service_fixed_prices")
+        .withIndex("by_shop_service_tier", (q) =>
+          q
+            .eq("shop_id", args.shop_id!)
+            .eq("service_id", svc.service_id)
+            .eq("tier", tier!),
+        )
+        .unique();
+      if (fixed) {
+        const price = fixed.price_cents / 100;
+        parts_low_dollars += price;
+        parts_high_dollars += price;
+        labor_reduction_dollars += svc.labor_cost ?? 0;
+        is_fixed_price = true;
+        fixed_price_lines.push({
+          service_id: svc.service_id,
+          price_cents: fixed.price_cents,
+        });
+        continue;
+      }
+    }
     const band = await resolvePartsBandForService(ctx, {
       service_id: svc.service_id,
       option_id: svc.option_id,
@@ -90,7 +161,10 @@ export async function computeDisclosedRange(
     parts_high_dollars += band.high;
   }
 
-  const labor_dollars = args.labor_cost_dollars;
+  const labor_dollars = Math.max(
+    0,
+    args.labor_cost_dollars - labor_reduction_dollars,
+  );
 
   const tax_low_dollars = computeBookingTax({
     laborDollars: labor_dollars,
@@ -133,7 +207,7 @@ export async function computeDisclosedRange(
     breakdown.tax_high_cents +
     breakdown.service_fee_high_cents;
 
-  return { low_cents, high_cents, breakdown };
+  return { low_cents, high_cents, breakdown, is_fixed_price, fixed_price_lines };
 }
 
 async function resolvePartsBandForService(
@@ -237,6 +311,13 @@ export type ComputeQuotedSetPriceResult = {
  * Pay; tax and service fee use the midpoint of their disclosed bands; labor
  * is already a single value in the disclosed breakdown.
  *
+ * For services that resolved to a per-(shop, service, tier) flat price,
+ * the locked-in `price_cents` replaces the snapshot rows' line totals.
+ * The snapshot rows themselves are retained for the mechanic's post-job
+ * dialog (which seeds `suggestedParts` from them — see job_actuals.ts) but
+ * they no longer drive the quoted total, since the customer agreed to the
+ * flat amount, not the raw OEM unit price.
+ *
  * By construction `total_cents ≤ disclosed_range_high_cents`, so confirming
  * without edits takes the existing in-range / auto-capture branch in
  * booking_approvals.ts.
@@ -244,13 +325,25 @@ export type ComputeQuotedSetPriceResult = {
 export function computeQuotedSetPrice(args: {
   disclosedBreakdown: DisclosedRangeBreakdown;
   pricedPartsSnapshot: PricedPartSnapshotRow[];
+  fixedPriceLines?: FixedPriceLine[];
 }): ComputeQuotedSetPriceResult {
-  const { disclosedBreakdown: d, pricedPartsSnapshot } = args;
+  const { disclosedBreakdown: d, pricedPartsSnapshot, fixedPriceLines } = args;
 
-  const parts_cents = pricedPartsSnapshot.reduce(
-    (sum, row) => sum + row.line_total_cents,
+  const fixedServiceIds = new Set(
+    (fixedPriceLines ?? []).map((l) => String(l.service_id)),
+  );
+  const variablePartsCents = pricedPartsSnapshot.reduce(
+    (sum, row) =>
+      fixedServiceIds.has(String(row.service_id))
+        ? sum
+        : sum + row.line_total_cents,
     0,
   );
+  const fixedPartsCents = (fixedPriceLines ?? []).reduce(
+    (sum, l) => sum + l.price_cents,
+    0,
+  );
+  const parts_cents = variablePartsCents + fixedPartsCents;
   const labor_cents = d.labor_cents;
   const tax_cents = Math.round((d.tax_low_cents + d.tax_high_cents) / 2);
   const service_fee_cents = Math.round(

@@ -1330,12 +1330,15 @@ export const createBatch = mutation({
       services: args.services.map((s) => ({
         service_id: s.service_id,
         parts_cost: s.parts_cost,
+        labor_cost: s.labor_cost,
         option_id: optionsByServiceId.get(s.service_id),
       })),
       labor_cost_dollars: labor_cost,
       engine_id: vehicle.engine_id ?? null,
       shop_state: shop?.state ?? null,
       shop_zip: shop?.zip ?? null,
+      shop_id: args.shop_id,
+      vehicle_config_id: vehicle.vehicle_config_id ?? null,
     });
 
     // Itemized parts snapshot — same per-unit prices the customer saw on
@@ -1359,10 +1362,15 @@ export const createBatch = mutation({
     });
     const pricedPartsSnapshot = pricedPartsResult.rows;
 
-    // Single-point quote the mechanic confirms against (no min/max).
+    // Single-point quote the mechanic confirms against (no min/max). For
+    // flat-priced services, the locked-in `price_cents` replaces the raw
+    // OEM unit prices captured in `pricedPartsSnapshot`, so the mechanic
+    // sees the same amount the customer agreed to ($60 fixed) instead of
+    // the bare part cost ($8.10 oil filter).
     const quoted = computeQuotedSetPrice({
       disclosedBreakdown: disclosedRange.breakdown,
       pricedPartsSnapshot,
+      fixedPriceLines: disclosedRange.fixed_price_lines,
     });
 
     await assertBookingWithinShopHours(ctx, {
@@ -1407,6 +1415,10 @@ export const createBatch = mutation({
       disclosed_range_high_cents: disclosedRange.high_cents,
       disclosed_breakdown: disclosedRange.breakdown,
       disclosed_at_ms: now,
+      // Persist the flat-rate flag so the mechanic-facing UI knows to
+      // render a "Fixed price" badge. Safe to surface — carries no
+      // anchoring info (no dollar amount).
+      is_fixed_price: disclosedRange.is_fixed_price ? true : undefined,
       priced_parts_snapshot:
         pricedPartsSnapshot.length > 0 ? pricedPartsSnapshot : undefined,
       part_selection_trace:
@@ -6413,6 +6425,7 @@ export const backfillQuotedSetPrice = internalMutation({
     skippedAlreadySet: number;
     skippedLegacy: number;
     skippedNoSnapshot: number;
+    skippedFixedPrice: number;
   }> => {
     const limit = args.limit ?? 200;
     const candidates = args.shopId
@@ -6429,6 +6442,7 @@ export const backfillQuotedSetPrice = internalMutation({
     let skippedAlreadySet = 0;
     let skippedLegacy = 0;
     let skippedNoSnapshot = 0;
+    let skippedFixedPrice = 0;
 
     for (const booking of candidates) {
       scanned += 1;
@@ -6451,6 +6465,15 @@ export const backfillQuotedSetPrice = internalMutation({
         skippedNoSnapshot += 1;
         continue;
       }
+      // Legacy fixed-price bookings don't store `fixed_price_lines`, so we
+      // can't reconstruct the per-line flat amounts from the booking row
+      // alone. Skip rather than fall back to summing OEM unit prices —
+      // that would overwrite a previously-correct quoted_set_price with the
+      // $8.10-instead-of-$60 bug this field was added to fix.
+      if ((booking as any).is_fixed_price === true) {
+        skippedFixedPrice += 1;
+        continue;
+      }
 
       const quoted = computeQuotedSetPrice({
         disclosedBreakdown: breakdown,
@@ -6471,6 +6494,7 @@ export const backfillQuotedSetPrice = internalMutation({
       skippedAlreadySet,
       skippedLegacy,
       skippedNoSnapshot,
+      skippedFixedPrice,
     };
   },
 });
@@ -7778,6 +7802,12 @@ export const getJobDetail = query({
       // Pre-Job Approval flags — mechanic surface MUST NOT see the actual
       // range, only whether one exists and the approval state.
       hasDisclosedRange: (booking as any).disclosed_range_high_cents != null,
+      // True when the customer agreed to a per-(shop, service, tier) flat
+      // price at create time. Mechanic UI uses this to render a "Fixed
+      // price" pill — does NOT reveal the dollar amount (that lives in
+      // quotedSetPriceDollars / totalCost, both of which the mechanic
+      // already sees).
+      isFixedPrice: (booking as any).is_fixed_price === true,
       paymentApprovalState:
         ((booking as any).payment_approval_state as string | undefined) ?? null,
       mechanicSetPriceCents:

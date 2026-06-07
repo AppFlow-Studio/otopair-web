@@ -2213,6 +2213,103 @@ export const rescheduleFromNoShowAlert = mutation({
   },
 });
 
+export const customerRequestReschedule = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    newScheduledDate: v.string(),
+    newScheduledTime: v.string(),
+    newMechanicId: v.optional(v.id("mechanics")),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) {
+      throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    }
+    if (String(booking.user_id) !== String(user._id)) {
+      throw new Error("Not your booking.");
+    }
+    if (!booking.shop_id) {
+      throw new Error("This booking doesn't have a shop assigned yet.");
+    }
+    if (["cancelled", "completed", "no_show", "in_progress"].includes(booking.status)) {
+      const label =
+        BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
+        String(booking.status).replace(/_/g, " ");
+      throw new Error(`This booking can't be rescheduled while it's ${label}.`);
+    }
+
+    const currentMechanicId = await getBookingMechanicId(ctx, booking);
+    const durationMinutes = booking.estimated_labor_minutes ?? 60;
+    const targetMechanicId = await resolveMechanicForWindow(ctx, {
+      shopId: booking.shop_id,
+      date: args.newScheduledDate,
+      startTime: args.newScheduledTime,
+      durationMinutes,
+      preferredMechanicId: args.newMechanicId ?? currentMechanicId ?? undefined,
+      excludeBookingId: String(booking._id),
+      allowAfterClose: false,
+    });
+    const now = Date.now();
+    const previousStatus = booking.status;
+
+    await ctx.db.patch(booking._id, {
+      scheduled_date: args.newScheduledDate,
+      scheduled_time: args.newScheduledTime,
+      mechanic_id: targetMechanicId,
+      time_slot_id: undefined,
+      status: "pending_shop_acceptance",
+      live_stage: undefined,
+      assignment_preference: args.newMechanicId ? "specific_mechanic" : "any",
+      previous_scheduled_date: booking.scheduled_date,
+      previous_scheduled_time: booking.scheduled_time,
+      previous_mechanic_id: currentMechanicId ?? undefined,
+      previous_status: previousStatus,
+      reschedule_proposed_at: now,
+      schedule_change_mode: "customer_reschedule",
+      customer_can_restore_original: false,
+      updated_at: now,
+    });
+
+    if (booking.time_slot_id) {
+      await releaseBookingSlot(ctx, booking.time_slot_id);
+    }
+
+    await logBookingStatusChange(
+      ctx,
+      booking._id,
+      previousStatus,
+      "pending_shop_acceptance",
+      user._id,
+      "customer_requested_reschedule",
+    );
+
+    await syncBookingAssignments(ctx, [
+      {
+        shopId: booking.shop_id,
+        mechanicId: currentMechanicId,
+        date: booking.scheduled_date,
+      },
+      {
+        shopId: booking.shop_id,
+        mechanicId: targetMechanicId,
+        date: args.newScheduledDate,
+      },
+    ]);
+
+    await upsertAppointmentReminderForBooking(ctx, {
+      ...booking,
+      scheduled_date: args.newScheduledDate,
+      scheduled_time: args.newScheduledTime,
+      mechanic_id: targetMechanicId,
+      time_slot_id: undefined,
+      status: "pending_shop_acceptance",
+    });
+
+    return booking._id;
+  },
+});
+
 function getOverrunAnswerSource(shopUser: any): "mechanic" | "front_desk" {
   return shopUser?.role === "shop_mechanic" || shopUser?.role === "mechanic"
     ? "mechanic"

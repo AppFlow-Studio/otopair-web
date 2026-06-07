@@ -115,6 +115,15 @@ export async function clearOnboardingResumeState(clerkUserId?: string | null) {
   ]);
 }
 
+export async function clearOnboardingCurrentStepState(clerkUserId?: string | null) {
+  await Promise.all([
+    SecureStore.deleteItemAsync(ONBOARDING_CURRENT_STEP_KEY),
+    clerkUserId
+      ? SecureStore.deleteItemAsync(getOnboardingCurrentStepKey(clerkUserId))
+      : Promise.resolve(),
+  ]);
+}
+
 // Steps that are saved/restored for resume. Auth steps (emailSignup, emailVerify)
 // are excluded — if the user closes during those, they aren't signed in yet and
 // will be sent to the beginning of onboarding normally by index.tsx.

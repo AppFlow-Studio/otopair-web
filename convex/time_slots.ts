@@ -219,6 +219,8 @@ export const getAvailabilityByShopAndMonth = query({
     month: v.number(),
     mechanicId: v.optional(v.id("mechanics")),
     durationMinutes: v.optional(v.number()),
+    cutoffDate: v.optional(v.string()),
+    cutoffTime: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const start = new Date(args.year, args.month, 1);
@@ -238,6 +240,7 @@ export const getAvailabilityByShopAndMonth = query({
         date,
         mechanicId: args.mechanicId,
         durationMinutes: args.durationMinutes,
+        cutoffTime: args.cutoffDate === date ? args.cutoffTime : undefined,
         limit: 1,
       });
       if (slots.length > 0) {

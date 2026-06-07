@@ -3,6 +3,7 @@ import { internalMutation, mutation } from "../_generated/server";
 import { updateSourceScores } from "../services/sourceScoring";
 import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
+import { isLaborOnlyService } from "../lib/servicePartsReference";
 
 // ============================================================================
 // 1. upsertVehicleConfig
@@ -425,12 +426,27 @@ export const upsertPartAndFitment = internalMutation({
     // Package this fitment is scoped to (see docs/PACKAGE_AWARE_PARTS.md).
     // null/undefined = base/default fitment.
     package_code: v.optional(v.string()),
+    // Service Parts Reference role: "core" | "as_needed" | "kit" (see
+    // lib/servicePartsReference.ts). Stamped on the fitment so the resolver can
+    // group/price by role without re-deriving. Optional — older callers omit it
+    // and the resolver falls back to roleForSubcategory.
+    service_role: v.optional(v.string()),
     confidence: v.float64(),
     source_domain: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
     console.log(`[v8-parts] upsertPartAndFitment: ${args.oem_part_number} (${args.subcategory}) for ${args.service_type}${args.package_code ? ` [package=${args.package_code}]` : ""}`);
+
+    // Defense in depth (design §5): labor-only services never carry parts. The
+    // enrichment write loops only pass parts-bearing service_types, so this
+    // should never fire in practice — but a labor-only service_type slipping in
+    // here would silently corrupt the invoice contract, so reject it loudly.
+    if (isLaborOnlyService(args.service_type)) {
+      throw new Error(
+        `[v8-parts] refusing to write part ${args.oem_part_number} (${args.subcategory}) to labor-only service "${args.service_type}" — labor-only services bill no parts`,
+      );
+    }
 
     // Upsert OEM part
     let part = await ctx.db
@@ -491,6 +507,9 @@ export const upsertPartAndFitment = internalMutation({
         confidence: args.confidence,
         last_confirmed_at: now,
         source_count: (existingFitment.source_count ?? 0) + 1,
+        // Backfill/refresh the reference role on re-confirm so older rows that
+        // predate role stamping pick it up. Only when the caller supplies one.
+        ...(args.service_role ? { service_role: args.service_role } : {}),
       });
     } else {
       fitmentId = await ctx.db.insert("part_fitments", {
@@ -500,6 +519,7 @@ export const upsertPartAndFitment = internalMutation({
         quantity_needed: args.quantity_needed,
         position: args.position,
         package_code: args.package_code,
+        service_role: args.service_role,
         confidence: args.confidence,
         source_count: 1,
         first_confirmed_at: now,

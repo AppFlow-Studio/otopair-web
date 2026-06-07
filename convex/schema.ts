@@ -392,6 +392,12 @@ export default defineSchema({
     // When set, this fitment only applies if the owner has confirmed this package
     // in vehicle_owner_specs.confirmed_packages.
     package_code: v.optional(v.string()),
+    // Role this part plays in the service per the Service Parts Reference:
+    // "core" (every invoice, locked) | "as_needed" (discovery — makes the
+    // quote a range) | "kit" (variant bundle). NOT oem_parts.part_tier
+    // (part quality) and NOT VehicleTier (pricing tier). Older rows lack it —
+    // resolver falls back to lib/servicePartsReference roleForSubcategory.
+    service_role: v.optional(v.string()),
     confidence: v.optional(v.number()),
     source_count: v.optional(v.number()),
     first_confirmed_at: v.optional(v.number()),
@@ -1818,6 +1824,15 @@ export default defineSchema({
           quantity: v.number(),
           unit_price_cents: v.number(),
           line_total_cents: v.number(),
+          // Service Parts Reference role fields (additive, 2026-06). One
+          // snapshot row per ROLE winner (oil + filter + washer…), not one
+          // per service. core/kit rows only — as_needed stays out of the
+          // locked contract.
+          service_role: v.optional(v.string()),
+          role_key: v.optional(v.string()),
+          // How quantity was derived: "fitment" | "fixed:N" | "per_cylinder"
+          // | "capacity:<field>=<value><unit>/<pkg>" | "unknown_capacity".
+          quantity_basis: v.optional(v.string()),
         })
       )
     ),
@@ -1851,6 +1866,9 @@ export default defineSchema({
             ),
           ),
           eliminated_by_gate_part_ids: v.optional(v.array(v.id("oem_parts"))),
+          // Which part role within the service this trace entry scored
+          // (selection now runs per role group). Absent on legacy rows.
+          role_key: v.optional(v.string()),
         }),
       ),
     ),

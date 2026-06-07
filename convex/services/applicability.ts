@@ -21,8 +21,16 @@ export function isServiceApplicable(
     return false;
   }
 
-  // 2. Timing belt services only apply to belt engines
-  if (service.requires_timing_belt === true && engine.timing_system !== "belt") {
+  // 2. Timing belt services only apply to belt engines. Gate ONLY when the
+  // timing system is actually known — null/undefined must fail OPEN (the
+  // enrichment seeding in v3mutations gates positively on "chain" the same
+  // way; a car with unknown timing data keeps the service bookable so the
+  // user retains recourse).
+  if (
+    service.requires_timing_belt === true &&
+    engine.timing_system != null &&
+    engine.timing_system !== "belt"
+  ) {
     return false;
   }
 
@@ -34,10 +42,13 @@ export function isServiceApplicable(
     return false;
   }
 
-  // 4. Differential services require a serviceable differential
+  // 4. Differential services require a serviceable differential. Exclude
+  // only on a POSITIVE "no differential" — a missing drivetrain row or
+  // unset flag fails open (consistent with every other rule here).
   if (
     service.requires_differential === true &&
-    drivetrainConfig?.has_differential !== true
+    drivetrainConfig != null &&
+    drivetrainConfig.has_differential === false
   ) {
     return false;
   }
@@ -51,9 +62,11 @@ export function isServiceApplicable(
     return false;
   }
 
-  // 6. OBD-II dependent services require min model year
+  // 6. OBD-II dependent services require min model year. A missing year
+  // must fail open (null < N coerces null→0 and would exclude everything).
   if (
     service.min_model_year !== undefined &&
+    vehicleConfig.year != null &&
     vehicleConfig.year < service.min_model_year
   ) {
     return false;

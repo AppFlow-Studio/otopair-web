@@ -44,6 +44,7 @@ import {
   computeDisclosedRange,
   computePricedPartsSnapshot,
   computeQuotedSetPrice,
+  reconcileDisclosedCeilingWithQuote,
 } from "./booking_quotes";
 import {
   detectTier,
@@ -1363,6 +1364,15 @@ export const createBatch = mutation({
       pricedPartsSnapshot,
       fixedPriceLines: disclosedRange.fixed_price_lines,
     });
+    // The role-itemized, capacity-multiplied snapshot can legitimately sum
+    // above the bundled-basis disclosed band — raise the contracted ceiling
+    // to cover the quote so the `quoted ≤ disclosed_high` auto-capture
+    // invariant holds by construction (the customer saw these same itemized
+    // lines on Review & Pay).
+    const reconciledRange = reconcileDisclosedCeilingWithQuote(
+      disclosedRange,
+      quoted.total_cents,
+    );
 
     const durationMinutes =
       estimated_labor_minutes > 0
@@ -1405,9 +1415,9 @@ export const createBatch = mutation({
         args.selected_service_options && args.selected_service_options.length > 0
           ? args.selected_service_options
           : undefined,
-      disclosed_range_low_cents: disclosedRange.low_cents,
-      disclosed_range_high_cents: disclosedRange.high_cents,
-      disclosed_breakdown: disclosedRange.breakdown,
+      disclosed_range_low_cents: reconciledRange.low_cents,
+      disclosed_range_high_cents: reconciledRange.high_cents,
+      disclosed_breakdown: reconciledRange.breakdown,
       disclosed_at_ms: now,
       // Persist the flat-rate flag so the mechanic-facing UI knows to
       // render a "Fixed price" badge. Safe to surface — carries no
@@ -6318,9 +6328,27 @@ export const backfillQuotedSetPrice = internalMutation({
         pricedPartsSnapshot: snapshot,
       });
 
+      // Keep the `quoted ≤ disclosed_high` invariant on backfilled rows too:
+      // the role-itemized snapshot can sum above the bundled-basis disclosed
+      // band (see reconcileDisclosedCeilingWithQuote). Raise the ceiling and
+      // the parts_high component by the shortfall.
+      const highCents = (booking as any).disclosed_range_high_cents as number;
+      const ceilingPatch =
+        quoted.total_cents > highCents
+          ? {
+              disclosed_range_high_cents: quoted.total_cents,
+              disclosed_breakdown: {
+                ...breakdown,
+                parts_high_cents:
+                  breakdown.parts_high_cents + (quoted.total_cents - highCents),
+              },
+            }
+          : {};
+
       await ctx.db.patch(booking._id, {
         quoted_set_price_cents: quoted.total_cents,
         quoted_breakdown: quoted.breakdown,
+        ...ceilingPatch,
         updated_at: Date.now(),
       });
       patched += 1;

@@ -136,7 +136,13 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
   for (const k of ["oil_filter_oem", "air_filter_oem", "cabin_filter_oem", "spark_plug_oem",
     "front_brake_pad_oem", "rear_brake_pad_oem", "drain_plug_gasket_oem",
     "serpentine_belt_oem", "timing_belt_oem", "wiper_blade_set_oem", "wiper_blade_rear_oem",
-    "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem", "engine_oil_oem"]) {
+    "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem", "engine_oil_oem",
+    // Service Parts Reference expansion (§5) — every reference role's OEM SKU.
+    "oil_filter_housing_oring_oem", "ignition_coil_oem", "intake_manifold_gasket_oem",
+    "timing_kit_oem", "water_pump_oem", "atf_fluid_oem", "trans_filter_oem",
+    "trans_pan_gasket_oem", "brake_fluid_oem", "ps_fluid_oem", "gear_oil_oem",
+    "friction_modifier_oem", "brake_hardware_kit_front_oem", "brake_hardware_kit_rear_oem",
+    "brake_wear_sensor_front_oem", "brake_wear_sensor_rear_oem"]) {
     f[k] = parseField(parts[k]);
   }
 
@@ -191,6 +197,12 @@ function parsePackageParts(data: Record<string, any>): Map<string, Record<string
     "front_brake_pad_oem", "rear_brake_pad_oem", "drain_plug_gasket_oem",
     "serpentine_belt_oem", "timing_belt_oem", "wiper_blade_set_oem", "wiper_blade_rear_oem",
     "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem", "engine_oil_oem",
+    // Service Parts Reference expansion (§5) — every reference role's OEM SKU.
+    "oil_filter_housing_oring_oem", "ignition_coil_oem", "intake_manifold_gasket_oem",
+    "timing_kit_oem", "water_pump_oem", "atf_fluid_oem", "trans_filter_oem",
+    "trans_pan_gasket_oem", "brake_fluid_oem", "ps_fluid_oem", "gear_oil_oem",
+    "friction_modifier_oem", "brake_hardware_kit_front_oem", "brake_hardware_kit_rear_oem",
+    "brake_wear_sensor_front_oem", "brake_wear_sensor_rear_oem",
   ];
 
   for (const [code, body] of Object.entries(packagesBlock)) {
@@ -512,35 +524,75 @@ const SERVICE_NAME_TO_SLUG: Record<string, string> = {
   "Fuel System Cleaning": "fuel_system_cleaning",
 };
 
-/** Map OEM part field to { name, category, subcategory, serviceSlug, position }. */
+/**
+ * Map OEM part field to { name, category, subcategory, serviceSlug, serviceRole, position }.
+ *
+ * `serviceRole` is the Service Parts Reference role this part plays within its
+ * service — "core" (on essentially every invoice; locked price), "as_needed"
+ * (situational discovery; makes the quote a range), or "kit" (variant bundle:
+ * timing kit, trans pan service). Derived 1:1 from
+ * convex/lib/servicePartsReference.ts by (serviceSlug, subcategory); the
+ * resolver stamps it on the snapshot. NOT oem_parts.part_tier (part quality)
+ * nor VehicleTier (pricing tier). serpentine_belt / wipers have no reference
+ * service (not in the 23) — left "core" with their existing slugs.
+ */
 const PART_FIELD_MAP: Record<string, {
   name: string;
   category: string;
   subcategory: string;
   serviceSlug: string | null;
+  serviceRole: "core" | "as_needed" | "kit";
   position?: string;
 }> = {
-  oil_filter_oem: { name: "Oil Filter", category: "filter", subcategory: "oil_filter", serviceSlug: "oil_change" },
-  drain_plug_gasket_oem: { name: "Oil Drain Plug Gasket", category: "gasket", subcategory: "drain_plug_gasket", serviceSlug: "oil_change" },
-  air_filter_oem: { name: "Engine Air Filter", category: "filter", subcategory: "air_filter", serviceSlug: "filter_replacement" },
-  cabin_filter_oem: { name: "Cabin Air Filter", category: "filter", subcategory: "cabin_filter", serviceSlug: "filter_replacement" },
-  spark_plug_oem: { name: "Spark Plug", category: "ignition", subcategory: "spark_plug", serviceSlug: "spark_plugs" },
-  front_brake_pad_oem: { name: "Front Brake Pads", category: "brake", subcategory: "front_brake_pad", serviceSlug: "brake_pad_replacement", position: "front" },
-  rear_brake_pad_oem: { name: "Rear Brake Pads", category: "brake", subcategory: "rear_brake_pad", serviceSlug: "brake_pad_replacement", position: "rear" },
-  rotor_front_oem: { name: "Front Brake Rotor", category: "rotor", subcategory: "front_rotor", serviceSlug: "rotor_replacement", position: "front" },
-  rotor_rear_oem: { name: "Rear Brake Rotor", category: "rotor", subcategory: "rear_rotor", serviceSlug: "rotor_replacement", position: "rear" },
-  serpentine_belt_oem: { name: "Serpentine Belt", category: "belt", subcategory: "serpentine_belt", serviceSlug: null },
-  timing_belt_oem: { name: "Timing Belt", category: "timing", subcategory: "timing_belt", serviceSlug: "timing_belt" },
+  oil_filter_oem: { name: "Oil Filter", category: "filter", subcategory: "oil_filter", serviceSlug: "oil_change", serviceRole: "core" },
+  drain_plug_gasket_oem: { name: "Oil Drain Plug Gasket", category: "gasket", subcategory: "drain_plug_gasket", serviceSlug: "oil_change", serviceRole: "core" },
+  air_filter_oem: { name: "Engine Air Filter", category: "filter", subcategory: "air_filter", serviceSlug: "filter_replacement", serviceRole: "core" },
+  cabin_filter_oem: { name: "Cabin Air Filter", category: "filter", subcategory: "cabin_filter", serviceSlug: "filter_replacement", serviceRole: "core" },
+  spark_plug_oem: { name: "Spark Plug", category: "ignition", subcategory: "spark_plug", serviceSlug: "spark_plugs", serviceRole: "core" },
+  front_brake_pad_oem: { name: "Front Brake Pads", category: "brake", subcategory: "front_brake_pad", serviceSlug: "brake_pad_replacement", serviceRole: "core", position: "front" },
+  rear_brake_pad_oem: { name: "Rear Brake Pads", category: "brake", subcategory: "rear_brake_pad", serviceSlug: "brake_pad_replacement", serviceRole: "core", position: "rear" },
+  rotor_front_oem: { name: "Front Brake Rotor", category: "rotor", subcategory: "front_rotor", serviceSlug: "rotor_replacement", serviceRole: "core", position: "front" },
+  rotor_rear_oem: { name: "Rear Brake Rotor", category: "rotor", subcategory: "rear_rotor", serviceSlug: "rotor_replacement", serviceRole: "core", position: "rear" },
+  serpentine_belt_oem: { name: "Serpentine Belt", category: "belt", subcategory: "serpentine_belt", serviceSlug: null, serviceRole: "core" },
+  timing_belt_oem: { name: "Timing Belt", category: "timing", subcategory: "timing_belt", serviceSlug: "timing_belt", serviceRole: "core" },
   // Front wipers ship as a set (driver + passenger as one part). Rear wiper is its own part.
-  wiper_blade_set_oem: { name: "Wiper Blade Set (Front)", category: "wiper", subcategory: "wiper_blade_front_set", serviceSlug: "wiper_blade_replacement", position: "front" },
-  wiper_blade_rear_oem: { name: "Wiper Blade (Rear)", category: "wiper", subcategory: "wiper_blade_rear", serviceSlug: "wiper_blade_replacement", position: "rear" },
-  battery_oem: { name: "Battery", category: "electrical", subcategory: "battery", serviceSlug: "battery_replacement" },
-  coolant_oem: { name: "Coolant", category: "cooling", subcategory: "coolant", serviceSlug: "coolant_flush" },
+  wiper_blade_set_oem: { name: "Wiper Blade Set (Front)", category: "wiper", subcategory: "wiper_blade_front_set", serviceSlug: "wiper_blade_replacement", serviceRole: "core", position: "front" },
+  wiper_blade_rear_oem: { name: "Wiper Blade (Rear)", category: "wiper", subcategory: "wiper_blade_rear", serviceSlug: "wiper_blade_replacement", serviceRole: "core", position: "rear" },
+  battery_oem: { name: "Battery", category: "electrical", subcategory: "battery", serviceSlug: "battery_replacement", serviceRole: "core" },
+  coolant_oem: { name: "Coolant", category: "cooling", subcategory: "coolant", serviceSlug: "coolant_flush", serviceRole: "core" },
   // Bottle-SKU OEM engine oil. quantity_needed on the resulting fitment stays
   // unset; quoting multiplies the per-bottle price by oil_capacity_qts from
   // engine_specs at quote time. Mirrors how coolant_oem is sized via
   // coolant_capacity_qts — the fitment is per-unit, the engine row supplies qty.
-  engine_oil_oem: { name: "Engine Oil", category: "fluid", subcategory: "engine_oil", serviceSlug: "oil_change" },
+  engine_oil_oem: { name: "Engine Oil", category: "fluid", subcategory: "engine_oil", serviceSlug: "oil_change", serviceRole: "core" },
+
+  // ── Service Parts Reference expansion (§5) — every reference role gets a
+  // discovered + priced OEM SKU. Conditional existence IS the data: a null
+  // from the prompt means the vehicle doesn't use that part. ──────────────────
+  // oil_change extras
+  oil_filter_housing_oring_oem: { name: "Oil Filter Housing Cap O-Ring", category: "gasket", subcategory: "oil_filter_housing_oring", serviceSlug: "oil_change", serviceRole: "core" },
+  // spark_plugs extras (discovery)
+  ignition_coil_oem: { name: "Ignition Coil", category: "ignition", subcategory: "ignition_coil", serviceSlug: "spark_plugs", serviceRole: "as_needed" },
+  intake_manifold_gasket_oem: { name: "Intake Manifold Gasket", category: "gasket", subcategory: "intake_manifold_gasket", serviceSlug: "spark_plugs", serviceRole: "as_needed" },
+  // timing_belt kit bundle
+  timing_kit_oem: { name: "Timing Kit (tensioner, idlers, seals)", category: "timing", subcategory: "timing_kit", serviceSlug: "timing_belt", serviceRole: "kit" },
+  water_pump_oem: { name: "Water Pump", category: "cooling", subcategory: "water_pump", serviceSlug: "timing_belt", serviceRole: "kit" },
+  // transmission_service fluid + pan-service kit
+  atf_fluid_oem: { name: "Transmission Fluid (ATF / CVT)", category: "fluid", subcategory: "atf_fluid", serviceSlug: "transmission_service", serviceRole: "core" },
+  trans_filter_oem: { name: "Transmission Filter", category: "filter", subcategory: "trans_filter", serviceSlug: "transmission_service", serviceRole: "kit" },
+  trans_pan_gasket_oem: { name: "Transmission Pan Gasket", category: "gasket", subcategory: "trans_pan_gasket", serviceSlug: "transmission_service", serviceRole: "kit" },
+  // brake_fluid_flush
+  brake_fluid_oem: { name: "Brake Fluid", category: "fluid", subcategory: "brake_fluid", serviceSlug: "brake_fluid_flush", serviceRole: "core" },
+  // power_steering_flush
+  ps_fluid_oem: { name: "Power Steering Fluid", category: "fluid", subcategory: "ps_fluid", serviceSlug: "power_steering_flush", serviceRole: "core" },
+  // differential_service
+  gear_oil_oem: { name: "Gear Oil (GL-5 hypoid)", category: "fluid", subcategory: "gear_oil", serviceSlug: "differential_service", serviceRole: "core" },
+  friction_modifier_oem: { name: "LSD Friction Modifier", category: "fluid", subcategory: "friction_modifier", serviceSlug: "differential_service", serviceRole: "as_needed" },
+  // brake_pad_replacement extras (discovery; wear sensor promotes to core when has_brake_pad_sensor at resolve time)
+  brake_hardware_kit_front_oem: { name: "Brake Hardware Kit (Front)", category: "brake", subcategory: "front_brake_hardware_kit", serviceSlug: "brake_pad_replacement", serviceRole: "as_needed", position: "front" },
+  brake_hardware_kit_rear_oem: { name: "Brake Hardware Kit (Rear)", category: "brake", subcategory: "rear_brake_hardware_kit", serviceSlug: "brake_pad_replacement", serviceRole: "as_needed", position: "rear" },
+  brake_wear_sensor_front_oem: { name: "Brake Wear Sensor (Front)", category: "brake", subcategory: "front_brake_wear_sensor", serviceSlug: "brake_pad_replacement", serviceRole: "as_needed", position: "front" },
+  brake_wear_sensor_rear_oem: { name: "Brake Wear Sensor (Rear)", category: "brake", subcategory: "rear_brake_wear_sensor", serviceSlug: "brake_pad_replacement", serviceRole: "as_needed", position: "rear" },
 };
 
 /** Map interval field prefix to service slug. */
@@ -830,6 +882,7 @@ async function writeNormalizedData(
       service_type: meta.serviceSlug ?? meta.subcategory,
       quantity_needed: qty,
       position: meta.position,
+      service_role: meta.serviceRole,
       confidence: fields[fieldKey]?.confidence ?? 0.7,
       source_domain: extractDomain(fields[fieldKey]?.source_url),
     });
@@ -871,6 +924,7 @@ async function writeNormalizedData(
           quantity_needed: qty,
           position: meta.position,
           package_code: packageCode,
+          service_role: meta.serviceRole,
           confidence: pkgFields[fieldKey]?.confidence ?? 0.7,
           source_domain: extractDomain(pkgFields[fieldKey]?.source_url),
         });

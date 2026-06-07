@@ -29,6 +29,7 @@ import { internalAction, internalMutation, internalQuery } from "../_generated/s
 import { internal } from "../_generated/api";
 import { fetchUrlWithHtml } from "./firecrawl";
 import { parsePartPrices, normalizeOemNumber } from "./priceParser";
+import { LABOR_ONLY_SLUGS, roleForSubcategory } from "../lib/servicePartsReference";
 
 const LEGACY_PRICE_TYPES = new Set(["online_discount", "you_save"]);
 const LEGACY_DOMAINS = new Set(["enrichment"]);
@@ -214,6 +215,433 @@ export const backfillPartPrices = internalAction({
         selfContinue,
         batch,
       });
+    }
+    return summary;
+  },
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Service Parts Reference corpus backfills (SERVICE_PARTS_REFERENCE_DESIGN.md §6)
+//
+// All paginate part_fitments, follow the dry-run→live + flag-gate + reversible-
+// log pattern above, and reuse price_backfill_log (distinct `batch` prefix per
+// sweep; the fitment's part_id goes in part_id, the full fitment row in
+// deleted_row). Deletes/patches are batched per page; the action self-continues.
+// ════════════════════════════════════════════════════════════════════════════
+
+const FITMENT_PAGE_LIMIT = 200;
+
+/** One page of part_fitments, with each row's part hydrated (null when the
+ *  referenced oem_parts doc was deleted — those are orphans). */
+export const _fitmentsPage = internalQuery({
+  args: { cursor: v.union(v.string(), v.null()), limit: v.number() },
+  handler: async (ctx, { cursor, limit }) => {
+    const res = await ctx.db.query("part_fitments").paginate({ cursor, numItems: limit });
+    const items = [];
+    for (const fitment of res.page) {
+      const part = await ctx.db.get(fitment.part_id);
+      items.push({
+        fitment,
+        partExists: part !== null,
+        subcategory: part?.subcategory ?? null,
+        category: part?.category ?? null,
+      });
+    }
+    return { items, isDone: res.isDone, cursor: res.continueCursor };
+  },
+});
+
+// ── 1. Orphan fitments — delete fitments whose oem_parts doc is gone ──────────
+
+/** Snapshot + delete one orphan fitment (its part_id is dangling). Returns 1
+ *  when deleted, 0 when the part turned out to exist (lost a race). */
+export const _deleteOrphanFitment = internalMutation({
+  args: { fitmentId: v.id("part_fitments"), batch: v.string() },
+  handler: async (ctx, { fitmentId, batch }) => {
+    const fitment = await ctx.db.get(fitmentId);
+    if (!fitment) return 0;
+    const part = await ctx.db.get(fitment.part_id);
+    if (part !== null) return 0; // no longer orphan — leave intact
+    await ctx.db.insert("price_backfill_log", {
+      part_id: fitment.part_id,
+      deleted_row: fitment,
+      batch,
+      deleted_at: Date.now(),
+    });
+    await ctx.db.delete(fitmentId);
+    return 1;
+  },
+});
+
+type OrphanSummary = {
+  batch: string;
+  dryRun: boolean;
+  fitmentsScanned: number;
+  orphansFound: number;
+  orphansDeleted: number;
+  isDone: boolean;
+  nextCursor: string;
+};
+
+export const backfillDeleteOrphanFitments = internalAction({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    limit: v.optional(v.number()),
+    dryRun: v.optional(v.boolean()),
+    selfContinue: v.optional(v.boolean()),
+    batch: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<OrphanSummary> => {
+    const dryRun = args.dryRun ?? true;
+    if (!dryRun && process.env.BACKFILL_ORPHAN_FITMENTS !== "on") {
+      throw new Error(
+        "Live backfill disabled. Set BACKFILL_ORPHAN_FITMENTS=on, or pass dryRun:true.",
+      );
+    }
+    const limit = args.limit ?? FITMENT_PAGE_LIMIT;
+    const selfContinue = args.selfContinue ?? true;
+    const batch = args.batch ?? `orphan_fitments_${dryRun ? "dryrun" : "live"}`;
+
+    const page = await ctx.runQuery(internal.vehicleEnrichment.backfills._fitmentsPage, {
+      cursor: args.cursor ?? null,
+      limit,
+    });
+
+    let orphansFound = 0;
+    let orphansDeleted = 0;
+    for (const item of page.items) {
+      if (item.partExists) continue;
+      orphansFound++;
+      if (!dryRun) {
+        orphansDeleted += await ctx.runMutation(
+          internal.vehicleEnrichment.backfills._deleteOrphanFitment,
+          { fitmentId: item.fitment._id, batch },
+        );
+      }
+    }
+
+    const summary = {
+      batch,
+      dryRun,
+      fitmentsScanned: page.items.length,
+      orphansFound,
+      orphansDeleted,
+      isDone: page.isDone,
+      nextCursor: page.cursor,
+    };
+    console.log(`[backfill:orphan] ${JSON.stringify(summary)}`);
+
+    if (selfContinue && !page.isDone) {
+      await ctx.scheduler.runAfter(
+        1000,
+        internal.vehicleEnrichment.backfills.backfillDeleteOrphanFitments,
+        { cursor: page.cursor, limit, dryRun, selfContinue, batch },
+      );
+    }
+    return summary;
+  },
+});
+
+// ── 2. Stamp service_role from the canonical reference ───────────────────────
+
+/** Patch one fitment's service_role. Idempotent: re-resolves and re-patches the
+ *  same value. Returns 1 when patched, 0 when the role couldn't be resolved. */
+export const _stampServiceRole = internalMutation({
+  args: { fitmentId: v.id("part_fitments"), serviceRole: v.string() },
+  handler: async (ctx, { fitmentId, serviceRole }) => {
+    const fitment = await ctx.db.get(fitmentId);
+    if (!fitment) return 0;
+    await ctx.db.patch(fitmentId, { service_role: serviceRole });
+    return 1;
+  },
+});
+
+type StampSummary = {
+  batch: string;
+  dryRun: boolean;
+  fitmentsScanned: number;
+  alreadyStamped: number;
+  resolved: number;
+  unresolved: number;
+  patched: number;
+  byRole: Record<string, number>;
+  isDone: boolean;
+  nextCursor: string;
+};
+
+export const backfillStampServiceRoles = internalAction({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    limit: v.optional(v.number()),
+    dryRun: v.optional(v.boolean()),
+    selfContinue: v.optional(v.boolean()),
+    batch: v.optional(v.string()),
+    // Counts accumulate across self-continued pages for a single readable total.
+    byRole: v.optional(v.record(v.string(), v.number())),
+  },
+  handler: async (ctx, args): Promise<StampSummary> => {
+    const dryRun = args.dryRun ?? true;
+    if (!dryRun && process.env.BACKFILL_SERVICE_ROLES !== "on") {
+      throw new Error(
+        "Live backfill disabled. Set BACKFILL_SERVICE_ROLES=on, or pass dryRun:true.",
+      );
+    }
+    const limit = args.limit ?? FITMENT_PAGE_LIMIT;
+    const selfContinue = args.selfContinue ?? true;
+    const batch = args.batch ?? `service_roles_${dryRun ? "dryrun" : "live"}`;
+    const byRole: Record<string, number> = { ...(args.byRole ?? {}) };
+
+    const page = await ctx.runQuery(internal.vehicleEnrichment.backfills._fitmentsPage, {
+      cursor: args.cursor ?? null,
+      limit,
+    });
+
+    let alreadyStamped = 0;
+    let resolved = 0;
+    let unresolved = 0;
+    let patched = 0;
+    for (const item of page.items) {
+      const { fitment } = item;
+      if (fitment.service_role != null) {
+        alreadyStamped++;
+        continue;
+      }
+      const role = roleForSubcategory(
+        fitment.service_type ?? "",
+        item.subcategory,
+        item.category,
+      );
+      if (!role) {
+        unresolved++;
+        continue;
+      }
+      resolved++;
+      // Report counts per (service_type, roleKey) so the dry run shows exactly
+      // what would be stamped where.
+      const key = `${fitment.service_type ?? "?"}::${role.roleKey}=${role.serviceRole}`;
+      byRole[key] = (byRole[key] ?? 0) + 1;
+      if (!dryRun) {
+        patched += await ctx.runMutation(
+          internal.vehicleEnrichment.backfills._stampServiceRole,
+          { fitmentId: fitment._id, serviceRole: role.serviceRole },
+        );
+      }
+    }
+
+    const summary = {
+      batch,
+      dryRun,
+      fitmentsScanned: page.items.length,
+      alreadyStamped,
+      resolved,
+      unresolved,
+      patched,
+      byRole,
+      isDone: page.isDone,
+      nextCursor: page.cursor,
+    };
+    console.log(
+      `[backfill:roles] ${JSON.stringify({ ...summary, byRole: Object.keys(byRole).length })}`,
+    );
+
+    if (selfContinue && !page.isDone) {
+      await ctx.scheduler.runAfter(
+        1000,
+        internal.vehicleEnrichment.backfills.backfillStampServiceRoles,
+        { cursor: page.cursor, limit, dryRun, selfContinue, batch, byRole },
+      );
+    }
+    return summary;
+  },
+});
+
+// ── 3. Fix malformed positions ("Front, LEFT, RIGHT" → "front") ──────────────
+
+/** Lowercased first axle token of a comma-bearing position, or null when no
+ *  recognizable front/rear axle token leads the string. */
+function firstAxleToken(position: string): string | null {
+  const first = position.split(",")[0]?.trim().toLowerCase() ?? "";
+  if (first === "front" || first === "rear") return first;
+  return null;
+}
+
+export const _fixFitmentPosition = internalMutation({
+  args: { fitmentId: v.id("part_fitments"), position: v.string() },
+  handler: async (ctx, { fitmentId, position }) => {
+    const fitment = await ctx.db.get(fitmentId);
+    if (!fitment) return 0;
+    await ctx.db.patch(fitmentId, { position });
+    return 1;
+  },
+});
+
+type PositionSummary = {
+  batch: string;
+  dryRun: boolean;
+  fitmentsScanned: number;
+  malformedFound: number;
+  patched: number;
+  byFix: Record<string, number>;
+  isDone: boolean;
+  nextCursor: string;
+};
+
+export const backfillFixMalformedPositions = internalAction({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    limit: v.optional(v.number()),
+    dryRun: v.optional(v.boolean()),
+    selfContinue: v.optional(v.boolean()),
+    batch: v.optional(v.string()),
+    byFix: v.optional(v.record(v.string(), v.number())),
+  },
+  handler: async (ctx, args): Promise<PositionSummary> => {
+    const dryRun = args.dryRun ?? true;
+    if (!dryRun && process.env.BACKFILL_FIX_POSITIONS !== "on") {
+      throw new Error(
+        "Live backfill disabled. Set BACKFILL_FIX_POSITIONS=on, or pass dryRun:true.",
+      );
+    }
+    const limit = args.limit ?? FITMENT_PAGE_LIMIT;
+    const selfContinue = args.selfContinue ?? true;
+    const batch = args.batch ?? `fix_positions_${dryRun ? "dryrun" : "live"}`;
+    const byFix: Record<string, number> = { ...(args.byFix ?? {}) };
+
+    const page = await ctx.runQuery(internal.vehicleEnrichment.backfills._fitmentsPage, {
+      cursor: args.cursor ?? null,
+      limit,
+    });
+
+    let malformedFound = 0;
+    let patched = 0;
+    for (const item of page.items) {
+      const pos = item.fitment.position;
+      if (pos == null || !pos.includes(",")) continue;
+      const fixed = firstAxleToken(pos);
+      if (!fixed) continue; // no clean axle token to recover — leave untouched
+      malformedFound++;
+      const key = `${pos} → ${fixed}`;
+      byFix[key] = (byFix[key] ?? 0) + 1;
+      if (!dryRun) {
+        patched += await ctx.runMutation(
+          internal.vehicleEnrichment.backfills._fixFitmentPosition,
+          { fitmentId: item.fitment._id, position: fixed },
+        );
+      }
+    }
+
+    const summary = {
+      batch,
+      dryRun,
+      fitmentsScanned: page.items.length,
+      malformedFound,
+      patched,
+      byFix,
+      isDone: page.isDone,
+      nextCursor: page.cursor,
+    };
+    console.log(`[backfill:positions] ${JSON.stringify(summary)}`);
+
+    if (selfContinue && !page.isDone) {
+      await ctx.scheduler.runAfter(
+        1000,
+        internal.vehicleEnrichment.backfills.backfillFixMalformedPositions,
+        { cursor: page.cursor, limit, dryRun, selfContinue, batch, byFix },
+      );
+    }
+    return summary;
+  },
+});
+
+// ── 4. Sweep stray labor-only fitments (currently zero — invariant insurance) ─
+
+/** Snapshot + delete one fitment whose service_type is labor-only. */
+export const _deleteLaborOnlyFitment = internalMutation({
+  args: { fitmentId: v.id("part_fitments"), batch: v.string() },
+  handler: async (ctx, { fitmentId, batch }) => {
+    const fitment = await ctx.db.get(fitmentId);
+    if (!fitment) return 0;
+    await ctx.db.insert("price_backfill_log", {
+      part_id: fitment.part_id,
+      deleted_row: fitment,
+      batch,
+      deleted_at: Date.now(),
+    });
+    await ctx.db.delete(fitmentId);
+    return 1;
+  },
+});
+
+type LaborOnlySummary = {
+  batch: string;
+  dryRun: boolean;
+  fitmentsScanned: number;
+  strayFound: number;
+  deleted: number;
+  byService: Record<string, number>;
+  isDone: boolean;
+  nextCursor: string;
+};
+
+export const backfillSweepLaborOnlyFitments = internalAction({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    limit: v.optional(v.number()),
+    dryRun: v.optional(v.boolean()),
+    selfContinue: v.optional(v.boolean()),
+    batch: v.optional(v.string()),
+    byService: v.optional(v.record(v.string(), v.number())),
+  },
+  handler: async (ctx, args): Promise<LaborOnlySummary> => {
+    const dryRun = args.dryRun ?? true;
+    if (!dryRun && process.env.BACKFILL_LABOR_ONLY_SWEEP !== "on") {
+      throw new Error(
+        "Live backfill disabled. Set BACKFILL_LABOR_ONLY_SWEEP=on, or pass dryRun:true.",
+      );
+    }
+    const limit = args.limit ?? FITMENT_PAGE_LIMIT;
+    const selfContinue = args.selfContinue ?? true;
+    const batch = args.batch ?? "labor_only_sweep";
+    const byService: Record<string, number> = { ...(args.byService ?? {}) };
+
+    const page = await ctx.runQuery(internal.vehicleEnrichment.backfills._fitmentsPage, {
+      cursor: args.cursor ?? null,
+      limit,
+    });
+
+    let strayFound = 0;
+    let deleted = 0;
+    for (const item of page.items) {
+      const svc = item.fitment.service_type;
+      if (svc == null || !LABOR_ONLY_SLUGS.has(svc)) continue;
+      strayFound++;
+      byService[svc] = (byService[svc] ?? 0) + 1;
+      if (!dryRun) {
+        deleted += await ctx.runMutation(
+          internal.vehicleEnrichment.backfills._deleteLaborOnlyFitment,
+          { fitmentId: item.fitment._id, batch },
+        );
+      }
+    }
+
+    const summary = {
+      batch,
+      dryRun,
+      fitmentsScanned: page.items.length,
+      strayFound,
+      deleted,
+      byService,
+      isDone: page.isDone,
+      nextCursor: page.cursor,
+    };
+    console.log(`[backfill:labor-only] ${JSON.stringify(summary)}`);
+
+    if (selfContinue && !page.isDone) {
+      await ctx.scheduler.runAfter(
+        1000,
+        internal.vehicleEnrichment.backfills.backfillSweepLaborOnlyFitments,
+        { cursor: page.cursor, limit, dryRun, selfContinue, batch, byService },
+      );
     }
     return summary;
   },

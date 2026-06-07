@@ -176,7 +176,23 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
     "wiper_blade_rear_oem": { "value": "...", ... },
     "battery_oem": { "value": "...", ... },
     "coolant_oem": { "value": "...", ... },
-    "engine_oil_oem": { "value": "...", ... }
+    "engine_oil_oem": { "value": "...", ... },
+    "oil_filter_housing_oring_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
+    "ignition_coil_oem": { "value": "...", ... },
+    "intake_manifold_gasket_oem": { "value": "...", ... },
+    "timing_kit_oem": { "value": "...", ... },
+    "water_pump_oem": { "value": "...", ... },
+    "atf_fluid_oem": { "value": "...", ... },
+    "trans_filter_oem": { "value": "...", ... },
+    "trans_pan_gasket_oem": { "value": "...", ... },
+    "brake_fluid_oem": { "value": "...", ... },
+    "ps_fluid_oem": { "value": "...", ... },
+    "gear_oil_oem": { "value": "...", ... },
+    "friction_modifier_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
+    "brake_hardware_kit_front_oem": { "value": "...", ... },
+    "brake_hardware_kit_rear_oem": { "value": "...", ... },
+    "brake_wear_sensor_front_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
+    "brake_wear_sensor_rear_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null }
   },
   "battery": {
     "battery_group": { "value": "H8/Group 49", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
@@ -203,5 +219,12 @@ REMINDERS:
 - For rotor_front_oem and rotor_rear_oem: both may appear on the same "brake_disc" page. Extract front and rear part numbers separately if they differ by axle position.
 - coolant_oem is the OEM coolant/antifreeze part number (e.g., BMW HT-12 coolant product number), not the coolant type string.
 - engine_oil_oem is the OEM engine oil part number / SKU (e.g., BMW TwinPower Turbo 5W-30 SKU 83215A2AF99, Toyota 0W-20 SKU 00279-0WQTE, Mercedes 229.5 SKU A0009898301), NOT the viscosity string. Prefer the make's 1-quart / 1-liter bottle SKU when both bottle and bulk-jug SKUs exist — quoting multiplies by oil_capacity_qts at quote time.
+- FLUID SKUs (atf_fluid_oem, brake_fluid_oem, ps_fluid_oem, gear_oil_oem, friction_modifier_oem): return the OEM FLUID BOTTLE part number, NEVER the spec string (e.g. NOT "DOT 4", "SP-IV", "ATF WS", "GL-5 75W-90", "Type 3 PSF"). Prefer the make's 1-quart / 1-liter bottle SKU when both bottle and bulk-jug SKUs exist — quoting multiplies by the vehicle's fluid capacity at quote time. Each fluid SKU is conditional: set it to null when the vehicle doesn't use it — atf_fluid_oem null on a manual transmission, ps_fluid_oem null on electric power steering, gear_oil_oem null when there is no serviceable differential, friction_modifier_oem null on a non-LSD (open) differential.
+- oil_filter_housing_oring_oem: the oil-filter cap O-ring part number for CARTRIDGE-filter engines only; null on spin-on (canister) filter engines.
+- timing_kit_oem / water_pump_oem: null on chain-driven engines (no belt service). timing_kit_oem is the tensioner/idler/seal kit SKU; water_pump_oem is the belt-driven water pump.
+- trans_filter_oem / trans_pan_gasket_oem: the pan-service filter and pan gasket (or RTV) SKUs; null when the transmission has no serviceable filter / sealed unit.
+- brake_wear_sensor_front_oem / brake_wear_sensor_rear_oem: the pad-wear sensor part number per axle (standard on most BMW / Euro); null on cars without electronic pad-wear sensors.
+- brake_hardware_kit_front_oem / brake_hardware_kit_rear_oem: the caliper hardware (clips / shims / abutment) kit SKU per axle.
+- Conditional existence IS the data: returning null for any of the above means the vehicle does not use that part — do not guess a substitute.
 - Return null for any field not found in sources and not in the 4 allowed training data fields.`;
 }

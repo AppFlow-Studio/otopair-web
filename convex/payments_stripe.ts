@@ -197,9 +197,9 @@ export const _recordPaymentIntent = internalMutation({
 /**
  * Cleans up an orphaned booking + payments row when the PaymentIntent
  * couldn't be created (e.g. card declined immediately, network error before
- * confirm). Releases the time slot and flips the payments row to `failed`
- * so the user can retry with a different card without leaking a pending
- * booking.
+ * confirm). Flips the payments row to `failed` so the user can retry with a
+ * different card without leaking a pending booking. Availability is inferred
+ * from bookings, so there is no positive slot inventory to release.
  */
 export const _cancelBookingForPaymentFailure = internalMutation({
   args: {
@@ -218,13 +218,6 @@ export const _cancelBookingForPaymentFailure = internalMutation({
       status: "cancelled",
       updated_at: Date.now(),
     });
-    if (booking.time_slot_id) {
-      const slot = await ctx.db.get(booking.time_slot_id);
-      if (slot) {
-        await ctx.db.patch(booking.time_slot_id, { is_available: true });
-      }
-    }
-
     const payment = await ctx.db
       .query("payments")
       .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))

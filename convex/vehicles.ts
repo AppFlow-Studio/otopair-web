@@ -125,6 +125,31 @@ export const getVehicleOwner = query({
  * ownership before calling (e.g. via getMyVehicles). Year/make/model/trim
  * is non-sensitive catalog metadata.
  */
+/**
+ * QUERY: getBrakeSystemTypeForVin
+ *
+ * Returns the OEM brake system tier for the vehicle behind the given VIN.
+ * Drives the "According to our records, your YYYY Make Model has: Standard
+ * brakes" radio pre-selection on Shop Rotors (spec section 2, field 1).
+ *
+ * Returns `null` when the field hasn't been backfilled yet — the UI then
+ * leaves no radio pre-selected and the user picks manually.
+ */
+export const getBrakeSystemTypeForVin = query({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    const normalizedVin = args.vin.toUpperCase().trim();
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", normalizedVin))
+      .unique();
+    if (!vehicle?.vehicle_config_id) return null;
+    const config = await ctx.db.get(vehicle.vehicle_config_id);
+    if (!config) return null;
+    return config.brake_system_type ?? null;
+  },
+});
+
 export const getDisplayInfoForVin = query({
   args: { vin: v.string() },
   handler: async (ctx, args) => {
@@ -1674,5 +1699,104 @@ export const scrubLegacySmartcarFields = internalMutation({
       cleaned += 1;
     }
     return { scanned: rows.length, cleaned };
+  },
+});
+
+/**
+ * QUERY: getReadiness
+ *
+ * Single-shot read for the My Cars vehicle-detail surface. Returns whether the
+ * vehicle is still being set up (pipeline running) or ready, and — when ready —
+ * the package questions the user needs to answer before the affected services
+ * become bookable.
+ *
+ * See docs/TICKET_PACKAGE_QUESTIONS.md and docs/PACKAGE_AWARE_PARTS.md.
+ *
+ * Status taxonomy:
+ *   - "enriching" = pipeline still running (or vehicle not yet config-attached).
+ *                   UI shows "Setting up your car…" pill.
+ *   - "ready"     = enrichment_status is terminal (seeded | partial | complete |
+ *                   verified). UI shows the package-questions CTA if pending > 0.
+ *
+ * Lazy-row semantics: if no vehicle_owner_specs row exists, confirmed/denied
+ * both default to empty — pending = everything in packages_available.
+ */
+export const getReadiness = query({
+  args: { vehicleOwnerId: v.id("vehicle_owners") },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    status: "enriching" | "ready";
+    pendingPackages: Array<{
+      code: string;
+      label: string;
+      services_affected: string[];
+      detected_from: string;
+      confidence?: number;
+    }>;
+  }> => {
+    // Terminal "data exists, use it" states. Matches the precedent at
+    // vehicleEnrichment/runPublic.ts:105 and runTest.ts:91. `seeded` is the
+    // fixture state used by seed.ts:2520 with fill_rate: 1.0.
+    const TERMINAL_STATES = new Set([
+      "seeded",
+      "partial",
+      "complete",
+      "verified",
+    ]);
+
+    const owner = await ctx.db.get(args.vehicleOwnerId);
+    if (!owner) {
+      // Owner row missing — fail safe to "enriching" so the UI shows the
+      // pending pill rather than the spec CTA on a broken context.
+      return { status: "enriching", pendingPackages: [] };
+    }
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", owner.vin))
+      .first();
+    if (!vehicle?.vehicle_config_id) {
+      // Vehicle not yet attached to a config (early enrichment window).
+      return { status: "enriching", pendingPackages: [] };
+    }
+
+    const config = await ctx.db.get(vehicle.vehicle_config_id);
+    if (!config) {
+      return { status: "enriching", pendingPackages: [] };
+    }
+
+    const status: "enriching" | "ready" =
+      config.enrichment_status && TERMINAL_STATES.has(config.enrichment_status)
+        ? "ready"
+        : "enriching";
+
+    if (status === "enriching") {
+      return { status, pendingPackages: [] };
+    }
+
+    // status === "ready" — compute pending packages against owner specs.
+    const ownerSpecs = await ctx.db
+      .query("vehicle_owner_specs")
+      .withIndex("by_vehicle_owner", (q) =>
+        q.eq("vehicle_owner_id", args.vehicleOwnerId),
+      )
+      .first();
+
+    const confirmed = new Set(ownerSpecs?.confirmed_packages ?? []);
+    const denied = new Set(ownerSpecs?.denied_packages ?? []);
+
+    const pendingPackages = (config.packages_available ?? [])
+      .filter((p) => !confirmed.has(p.code) && !denied.has(p.code))
+      .map((p) => ({
+        code: p.code,
+        label: p.label,
+        services_affected: p.services_affected,
+        detected_from: p.detected_from,
+        confidence: p.confidence,
+      }));
+
+    return { status, pendingPackages };
   },
 });

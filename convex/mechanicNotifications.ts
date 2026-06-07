@@ -225,6 +225,28 @@ export const getFeed = query({
       )
     ).filter((b): b is NonNullable<typeof b> => b != null);
 
+    // Rotor quote requests — mirror of the tire branch above. Bookings with
+    // rotor_specs in pending_quote / quotes_ready that this shop hasn't
+    // responded to yet. See listOpenRotorQuoteRequestsForShop.
+    const rotorCandidates = [...pendingQuote, ...quotesReady].filter(
+      (b: any) => b.rotor_specs != null
+    );
+
+    const rotorRequests = (
+      await Promise.all(
+        rotorCandidates.map(async (booking: any) => {
+          const existing = await ctx.db
+            .query("rotor_quote_responses")
+            .withIndex("by_booking_and_shop", (q: any) =>
+              q.eq("booking_id", booking._id).eq("shop_id", shopId)
+            )
+            .filter((q: any) => q.eq(q.field("superseded_at"), undefined))
+            .first();
+          return existing ? null : booking;
+        })
+      )
+    ).filter((b): b is NonNullable<typeof b> => b != null);
+
     // Hydrate cards for both kinds.
     const confirmItems = await Promise.all(
       pendingConfirm.map(async (booking: any) => {
@@ -267,6 +289,7 @@ export const getFeed = query({
             booking.scheduled_time
           ),
           tireSpecs: null,
+          rotorSpecs: null,
         };
       })
     );
@@ -291,17 +314,44 @@ export const getFeed = query({
           note: booking.customer_notes ?? null,
           urgency: null,
           tireSpecs: booking.tire_specs ?? null,
+          rotorSpecs: null,
         };
       })
     );
 
-    const items = [...confirmItems, ...tireItems].sort(
+    const rotorItems = await Promise.all(
+      rotorRequests.map(async (booking: any) => {
+        const customer = await ctx.db.get(booking.user_id);
+        const vehicle = await resolveVehicleShort(ctx, booking.vin);
+        const createdAt = booking.created_at ?? booking._creationTime ?? 0;
+        return {
+          kind: "rotor_quote" as const,
+          bookingId: booking._id as Id<"bookings">,
+          createdAt,
+          isUnread: createdAt > lastSeenAt,
+          customer: formatCustomerName(customer),
+          vehicle,
+          services: [],
+          scheduledDate: null,
+          scheduledTime: null,
+          scheduledLabel: null,
+          price: null,
+          note: booking.customer_notes ?? null,
+          urgency: null,
+          tireSpecs: null,
+          rotorSpecs: booking.rotor_specs ?? null,
+        };
+      })
+    );
+
+    const items = [...confirmItems, ...tireItems, ...rotorItems].sort(
       (a, b) => b.createdAt - a.createdAt
     );
 
     const counts = {
       confirm: confirmItems.length,
       tireQuote: tireItems.length,
+      rotorQuote: rotorItems.length,
     };
 
     const unreadCount = items.reduce(

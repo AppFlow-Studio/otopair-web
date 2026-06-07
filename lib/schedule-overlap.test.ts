@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  getBufferedWindowEndMinutes,
   getMechanicAssignmentConflict,
   overlapsMechanicBooking,
   shouldConfirmMechanicChange,
@@ -73,6 +74,34 @@ test("overlapsMechanicBooking ignores no-show bookings", () => {
   );
 
   assert.equal(hasOverlap, false);
+});
+
+test("getBufferedWindowEndMinutes adds the shop buffer to the proposed end", () => {
+  assert.equal(getBufferedWindowEndMinutes("12:15", 10), 745);
+  assert.equal(getBufferedWindowEndMinutes("12:15", 20), 755);
+});
+
+test("overlapsMechanicBooking applies buffer to the proposed booking window", () => {
+  const hasOverlap = overlapsMechanicBooking(
+    "mech-2",
+    "2026-04-02",
+    "12:00",
+    "12:15",
+    [
+      {
+        _id: "booking-2",
+        scheduledDate: "2026-04-02",
+        scheduledTime: "12:15",
+        estimatedMinutes: 60,
+        status: "confirmed",
+        mechanicId: "mech-2",
+      },
+    ],
+    undefined,
+    10
+  );
+
+  assert.equal(hasOverlap, true);
 });
 
 test("getMechanicAssignmentConflict detects blocked-slot overlaps", () => {

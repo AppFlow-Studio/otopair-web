@@ -12548,3 +12548,233 @@ export const getBookingByIdForCustomer = query({
     };
   },
 });
+
+/**
+ * QUERY: getReceipt
+ *
+ * Composes a single payload for the Receipt sheet — Past Services row tap
+ * and Vehicle Service History row tap both consume this. Only completed
+ * bookings owned by the calling user can be read.
+ *
+ * Field mapping (spec-name → live-field):
+ *   customer_concern   → booking.customer_notes  (already collected at create)
+ *   mechanic_findings  → job_actuals.mechanic_findings  (new field)
+ *   odometer_in        → job_actuals.odometer_in        (new field)
+ *   odometer_out       → job_actuals.completion_mileage (already used by postjob)
+ *
+ * Returns null when:
+ *   - booking doesn't exist
+ *   - booking.status !== "completed"
+ *   - caller isn't the booking's user
+ */
+export const getReceipt = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    if (booking.status !== "completed") return null;
+
+    // Auth — only the booking owner reads it. (Walk-in receipt-token path
+    // lives elsewhere and routes through a separate query.)
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q: any) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .unique();
+    if (!user || user._id !== booking.user_id) return null;
+
+    const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
+    const payment = await ctx.db
+      .query("payments")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+      .first();
+
+    const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const mechanic = booking.mechanic_id
+      ? await ctx.db.get(booking.mechanic_id)
+      : null;
+
+    // Vehicle metadata (year/make/model/trim, image, plate). Stored on the
+    // canonical vehicles row (joined on VIN) — vehicle_owners carries the
+    // plate when present.
+    let vehicleRow: any = null;
+    if (booking.vin) {
+      vehicleRow = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
+        .first();
+    }
+    const vehicleOwner = booking.vin
+      ? await ctx.db
+          .query("vehicle_owners")
+          .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
+          .first()
+      : null;
+    const meta: any = vehicleRow?.metadata ?? {};
+
+    // Service line items — pull names and labor cost. The booking carries
+    // a single labor_cost across all services; split is proportional to
+    // the catalog default_labor_hours so each line item reads naturally.
+    type ServiceLine = {
+      type: "service";
+      name: string;
+      labor_hours: number | null;
+      labor_cost: number | null;
+    };
+    const serviceLines: ServiceLine[] = [];
+    let totalHours = 0;
+    const rawServices: Array<{ name: string; hours: number | null }> = [];
+    if (Array.isArray(booking.service_ids)) {
+      for (const sid of booking.service_ids) {
+        const svc: any = await ctx.db.get(sid);
+        if (!svc) continue;
+        const hours: number | null =
+          typeof svc.default_labor_hours === "number"
+            ? svc.default_labor_hours
+            : null;
+        if (hours != null) totalHours += hours;
+        rawServices.push({ name: svc.name ?? "Service", hours });
+      }
+    }
+    const bookingLaborCost = booking.labor_cost ?? null;
+    for (const s of rawServices) {
+      let lineCost: number | null = null;
+      if (
+        bookingLaborCost != null &&
+        s.hours != null &&
+        totalHours > 0
+      ) {
+        lineCost = (bookingLaborCost * s.hours) / totalHours;
+      } else if (rawServices.length === 1 && bookingLaborCost != null) {
+        lineCost = bookingLaborCost;
+      }
+      serviceLines.push({
+        type: "service",
+        name: s.name,
+        labor_hours: s.hours,
+        labor_cost: lineCost,
+      });
+    }
+    // Custom one-off services (e.g. diagnostic items added at create time).
+    if (Array.isArray((booking as any).custom_services)) {
+      for (const c of (booking as any).custom_services) {
+        if (c?.name) {
+          serviceLines.push({
+            type: "service",
+            name: c.name,
+            labor_hours: null,
+            labor_cost: null,
+          });
+        }
+      }
+    }
+
+    // Parts line items — from job_actuals.parts_used (mechanic-confirmed
+    // actual list, NOT the quoted estimate).
+    type PartLine = {
+      type: "part";
+      name: string;
+      oem_number: string | null;
+      cost: number | null;
+    };
+    const partLines: PartLine[] = Array.isArray(jobActual?.parts_used)
+      ? (jobActual!.parts_used as any[]).map((p: any) => ({
+          type: "part",
+          name: p.part_name ?? "Part",
+          oem_number: p.oem_number ?? null,
+          cost: typeof p.cost === "number" ? p.cost : null,
+        }))
+      : [];
+
+    // Totals stack.
+    const laborSubtotal = booking.labor_cost ?? null;
+    const partsSubtotalActual: number =
+      typeof jobActual?.actual_parts_cost === "number"
+        ? jobActual!.actual_parts_cost!
+        : (booking.parts_cost ?? 0);
+    const partsSubtotalQuoted: number = booking.parts_cost ?? 0;
+    const partsSaved = Math.max(0, partsSubtotalQuoted - partsSubtotalActual);
+    const platformFee =
+      laborSubtotal != null
+        ? computePlatformFeeDollars(laborSubtotal + partsSubtotalActual)
+        : 0;
+    const grandTotal =
+      typeof booking.total_cost === "number"
+        ? booking.total_cost
+        : (laborSubtotal ?? 0) + partsSubtotalActual + platformFee;
+    // Tax isn't tracked as a discrete field — derive what's left over so the
+    // four-row stack still sums to the captured total.
+    const taxRemainder = Math.max(
+      0,
+      grandTotal - (laborSubtotal ?? 0) - partsSubtotalActual - platformFee,
+    );
+
+    return {
+      receipt_number: `OTP-${booking._id.slice(-8).toUpperCase()}`,
+      service_date: booking.scheduled_date ?? null,
+      completed_at: jobActual?.completed_at_ms ?? booking.completed_at_ms ?? null,
+      shop: shop
+        ? {
+            name: (shop as any).name,
+            address: (shop as any).address ?? null,
+            city: (shop as any).city ?? null,
+            phone: (shop as any).phone ?? null,
+            rating: (shop as any).rating ?? null,
+            review_count: (shop as any).review_count ?? null,
+            labor_rate: (shop as any).labor_rate ?? null,
+          }
+        : null,
+      mechanic: mechanic
+        ? {
+            first_name: (mechanic as any).first_name,
+            last_name: (mechanic as any).last_name,
+            title: (mechanic as any).title ?? null,
+            photo_url: (mechanic as any).photo ?? null,
+            rating: (mechanic as any).rating ?? null,
+            review_count: (mechanic as any).review_count ?? null,
+          }
+        : null,
+      vehicle: {
+        year: vehicleRow?.year ?? null,
+        make: meta.make ?? null,
+        model: meta.model ?? null,
+        trim: meta.trim ?? null,
+        plate: (vehicleOwner as any)?.license_plate ?? null,
+        vin_last4: booking.vin ? booking.vin.slice(-4).toUpperCase() : null,
+        image_url: vehicleRow?.image_url ?? null,
+        odometer_in: jobActual?.odometer_in ?? null,
+        odometer_out: jobActual?.completion_mileage ?? null,
+      },
+      service_notes: {
+        customer_concern: booking.customer_notes ?? "",
+        mechanic_findings: jobActual?.mechanic_findings ?? "",
+      },
+      line_items: [...serviceLines, ...partLines] as Array<
+        ServiceLine | PartLine
+      >,
+      totals: {
+        labor_subtotal: laborSubtotal,
+        parts_subtotal: partsSubtotalActual,
+        platform_fee: platformFee,
+        tax: taxRemainder,
+        total: grandTotal,
+        parts_saved: partsSaved,
+      },
+      payment: payment
+        ? {
+            method: (payment as any).payment_method ?? null,
+            card_last4: null, // not stored; populate from Stripe payload if needed
+            amount: (payment as any).amount,
+            status: (payment as any).status,
+            stripe_intent_id:
+              (payment as any).stripe_payment_intent_id ?? null,
+            charged_at: (payment as any).updated_at ?? (payment as any).created_at ?? null,
+            invoice_storage_id: (payment as any).invoice_storage_id ?? null,
+          }
+        : null,
+    };
+  },
+});

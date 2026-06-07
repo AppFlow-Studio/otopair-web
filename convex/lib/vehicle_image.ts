@@ -51,6 +51,28 @@ export const resolveVehicleImage = internalAction({
         { vin },
       );
       if (cached?.image_url) return cached.image_url as string;
+
+      // YMMT-level cache hit — a sibling VIN with the same
+      // year/make/model/trim already resolved an image for this
+      // vehicle_config. Return it and back-fill this VIN's row so the
+      // next read hits step 1 directly (no join needed).
+      if (cached?.config_image_url) {
+        if (vin.length === 17) {
+          try {
+            await ctx.runMutation(api.vehicles.saveVehicleImageUrl, {
+              vin,
+              image_url: cached.config_image_url as string,
+            });
+          } catch (err) {
+            console.warn(
+              "[vehicle_image] failed to back-fill image_url from config cache:",
+              err,
+            );
+          }
+        }
+        return cached.config_image_url as string;
+      }
+
       year = year ?? cached?.year ?? null;
       make = make ?? cached?.make ?? null;
       model = model ?? cached?.model ?? null;

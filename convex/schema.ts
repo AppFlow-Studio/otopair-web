@@ -237,6 +237,12 @@ export default defineSchema({
     verification_count: v.optional(v.number()),
     chassis_code: v.optional(v.string()),
     cloned_from_config_id: v.optional(v.id("vehicle_configs")),
+    // YMMT-level cache of the VDB exterior image. Populated by
+    // saveVehicleImageUrl on first successful resolve for any VIN that
+    // links to this config; read by resolveVehicleImage so a different
+    // VIN with the same year/make/model/trim skips the VDB call.
+    // First-fetched-wins (we don't overwrite once set).
+    image_url: v.optional(v.string()),
     // Pricing v2 (spec May 29 2026): denormalized 7-tier assignment. Quote
     // engine reads this directly — no join through pricing_vehicle_assignments.
     // Writers: seedTierAssignments (Part 5 explicit) → 'part5_seed';
@@ -2221,6 +2227,15 @@ export default defineSchema({
     difficulty_rating: v.optional(v.number()),
     parts_used: v.optional(v.any()),
     technician_notes: v.optional(v.string()),
+    // Customer-facing summary of what the mechanic did. Distinct from
+    // `technician_notes` (which stays internal). Required by the shop
+    // portal at job completion per Receipt Spec v4, but optional at
+    // the DB layer so legacy job_actuals rows don't break.
+    mechanic_findings: v.optional(v.string()),
+    // Vehicle mileage at drop-off. Paired with the existing
+    // `completion_mileage` (= odometer_out) to form the
+    // "Mileage 47,832 → 47,835" line on the receipt sheet.
+    odometer_in: v.optional(v.float64()),
     finalized_at_ms: v.optional(v.number()),
     finalized_by_user_id: v.optional(v.id("users")),
     prejob_report: v.optional(prejobReportValidator),
@@ -3991,6 +4006,26 @@ export default defineSchema({
     .index("by_booking_id", ["booking_id"])
     .index("by_status", ["status"])
     .index("by_user_id", ["user_id"]),
+
+  // ─────────────────────────────────────────────────────────────────────
+  // urgency_tier_events — Action Engine calibration log (v1.1 spec §6
+  // Change 4). Records every observed Now/Soon/Soonish/Resting tier-entry
+  // per maintenance item per vehicle. Drives post-launch retuning of
+  // URGENCY_TIER_CUTOFFS — without this stream the 75/55/25 thresholds
+  // are blind. `from_tier` is undefined on the first observation per
+  // session; otherwise it's the prior tier the client saw.
+  // ─────────────────────────────────────────────────────────────────────
+  urgency_tier_events: defineTable({
+    vin: v.string(),
+    item_id: v.string(),
+    from_tier: v.optional(v.string()),
+    to_tier: v.string(),
+    urgency_score: v.number(),
+    occurred_at: v.number(),
+  })
+    .index("by_vin", ["vin"])
+    .index("by_vin_item", ["vin", "item_id"])
+    .index("by_to_tier", ["to_tier"]),
 
   // ==========================================================================
   // MVP Pricing Multiplier (see plan: tier × category × Toyota baseline)

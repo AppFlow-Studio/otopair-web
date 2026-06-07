@@ -459,8 +459,15 @@ export const getCachedVehicleImage = internalQuery({
       )
       .unique();
     if (!vehicle) return null;
+    // YMMT-level fallback: if this VIN's vehicles row has no image yet
+    // but it's already linked to a vehicle_configs row, surface that
+    // config's cached image so resolveVehicleImage can return without
+    // hitting VDB. The link is set when the vehicle is confirmed.
+    const configId = (vehicle as any).vehicle_config_id as string | undefined;
+    const configRow = configId ? await ctx.db.get(configId as any) : null;
     return {
       image_url: (vehicle as any).image_url ?? null,
+      config_image_url: (configRow as any)?.image_url ?? null,
       year: (vehicle as any).year ?? null,
       make: (vehicle as any).metadata?.make ?? null,
       model: (vehicle as any).metadata?.model ?? null,
@@ -482,8 +489,19 @@ export const saveVehicleImageUrl = mutation({
       .query("vehicles")
       .withIndex("by_vin", (q) => q.eq("vin", args.vin.toUpperCase().trim()))
       .unique();
-    if (vehicle) {
-      await ctx.db.patch(vehicle._id, { image_url: args.image_url });
+    if (!vehicle) return;
+    await ctx.db.patch(vehicle._id, { image_url: args.image_url });
+
+    // Promote the image to the YMMT cache (vehicle_configs.image_url) so
+    // a different VIN with the same year/make/model/trim skips VDB next
+    // time. First-fetched-wins: only write if the config slot is empty,
+    // so concurrent fetches for sibling VINs don't fight over it.
+    const configId = (vehicle as any).vehicle_config_id as string | undefined;
+    if (configId) {
+      const cfg = await ctx.db.get(configId as any);
+      if (cfg && !(cfg as any).image_url) {
+        await ctx.db.patch(cfg._id, { image_url: args.image_url } as any);
+      }
     }
   },
 });

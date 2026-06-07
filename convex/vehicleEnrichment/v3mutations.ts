@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, mutation } from "../_generated/server";
 import { updateSourceScores } from "../services/sourceScoring";
 import { enqueueNotificationOutbox } from "../bookings";
+import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
 
 // ============================================================================
 // 1. upsertVehicleConfig
@@ -690,6 +691,101 @@ export const upsertLaborTime = internalMutation({
       empirical_sample_size: 0,
       created_at: Date.now(),
     });
+  },
+});
+
+// ============================================================================
+// 9b. Labor observations + recompute (replaces upsertLaborTime's confidence-wins)
+// ============================================================================
+
+/** Append a per-source CATALOG labor observation (dedup by config+service+source). */
+export const upsertLaborObservation = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    hours: v.float64(),
+    source: v.string(),
+    weight: v.float64(),
+    tier: v.optional(v.string()),
+    engine_family: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const tier = args.tier ?? "catalog";
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("labor_observations")
+      .withIndex("by_config_service_source", (q) =>
+        q
+          .eq("vehicle_config_id", args.vehicle_config_id)
+          .eq("service_id", args.service_id)
+          .eq("source", args.source),
+      )
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        hours: args.hours,
+        weight: args.weight,
+        tier,
+        engine_family: args.engine_family,
+        observed_at: now,
+      });
+      return existing._id;
+    }
+    return await ctx.db.insert("labor_observations", {
+      vehicle_config_id: args.vehicle_config_id,
+      service_id: args.service_id,
+      engine_family: args.engine_family,
+      hours: args.hours,
+      source: args.source,
+      tier,
+      weight: args.weight,
+      observed_at: now,
+    });
+  },
+});
+
+/** Recompute labor_times.book_hours/empirical for one (config, service).
+ *  bookOnly=true (the enrichment path) skips the empirical job_actuals scan. */
+export const recomputeLaborTime = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    book_only: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    await recomputeLaborForConfigService(ctx, {
+      vehicleConfigId: args.vehicle_config_id,
+      serviceId: args.service_id,
+      bookOnly: args.book_only,
+    });
+  },
+});
+
+/**
+ * Cron target: recompute empirical/catalog labor for any (config, service)
+ * touched by a labor_quote_snapshot in the last window — so internal data folds
+ * in continuously without re-enriching. No-op until real shop data accrues.
+ */
+export const recomputeRecentLabor = internalMutation({
+  args: { sinceMs: v.optional(v.float64()) },
+  handler: async (ctx, args) => {
+    const since = args.sinceMs ?? Date.now() - 7 * 60 * 60 * 1000;
+    const snaps = await ctx.db
+      .query("labor_quote_snapshots")
+      .withIndex("by_recorded_at", (q) => q.gte("recorded_at", since))
+      .collect();
+    const seen = new Set<string>();
+    for (const s of snaps) {
+      if (!s.vehicle_config_id || !s.service_id) continue;
+      const key = `${s.vehicle_config_id}|${s.service_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      await recomputeLaborForConfigService(ctx, {
+        vehicleConfigId: s.vehicle_config_id,
+        serviceId: s.service_id,
+      });
+    }
+    return { recomputed: seen.size };
   },
 });
 

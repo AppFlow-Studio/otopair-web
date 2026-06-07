@@ -658,10 +658,25 @@ export default defineSchema({
     scrape_success: v.optional(v.boolean()),
     http_status: v.optional(v.number()),
     created_at: v.optional(v.number()),
+    // Deterministic prices parsed from the raw HTML at scrape time (JSON-LD),
+    // serialized as ParsedPartPrice[]. Carries correct per-SKU prices from the
+    // scrape action to the price-write step. `format_version` lets the price
+    // path treat older markdown-only rows as a miss so they re-fetch HTML.
+    part_prices_json: v.optional(v.string()),
+    format_version: v.optional(v.number()),
   })
     .index("by_cache_key", ["cache_key"])
     .index("by_expires_at", ["expires_at"])
     .index("by_make_year", ["make_id", "year"]),
+
+  // Reversibility log for the price backfill: every legacy part_prices row the
+  // backfill deletes is snapshotted here first, so a prune can be undone.
+  price_backfill_log: defineTable({
+    part_id: v.id("oem_parts"),
+    deleted_row: v.any(), // the original part_prices document
+    batch: v.string(),
+    deleted_at: v.number(),
+  }).index("by_batch", ["batch"]),
 
   scrape_jobs: defineTable({
     source: v.string(),
@@ -833,6 +848,26 @@ export default defineSchema({
     .index("by_vehicle_config", ["vehicle_config_id"])
     .index("by_vehicle_config_and_service", ["vehicle_config_id", "service_id"])
     .index("by_engine_family", ["engine_family"]),
+
+  // [W] Append-only per-source labor observations — mirror of part_prices for
+  // service times. Each source (VDB, LLM book-time, …) contributes one CATALOG
+  // row per (config, service); a weighted robust median over them produces
+  // labor_times.book_hours, so no single source (e.g. VDB) is the source of
+  // truth. Empirical post-job actuals are aggregated live from job_actuals, not
+  // stored here.
+  labor_observations: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    engine_family: v.optional(v.string()),
+    hours: v.number(),
+    source: v.string(), // "vdb_repair_estimates" | "llm_training" | "llm_web" | ...
+    tier: v.string(), // "catalog" (book-time sources) | "empirical" (reserved)
+    weight: v.number(), // catalog trust weight (vdb 0.4, llm 0.3, …)
+    observed_at: v.number(),
+  })
+    .index("by_config_service", ["vehicle_config_id", "service_id"])
+    .index("by_config_service_source", ["vehicle_config_id", "service_id", "source"])
+    .index("by_engine_family_service", ["engine_family", "service_id"]),
 
   // ===== VEHICLES & OWNERSHIP =====
 

@@ -438,14 +438,19 @@ export function useOtoAgent() {
     return "Started the interactive booking walkthrough — nearby shops are on screen. The user taps a shop → picks a time → confirms; narrate each step. (You can also call show_times then confirm_booking to advance for them.)";
   });
 
-  useConversationClientTool("show_info_card", (params: Record<string, unknown>) => {
-    const card = sanitizeInfoCard(params);
+  /** Validate + surface a generic agent-composed info card (the long-tail fallback). */
+  const showInfoCard = useCallback((raw: unknown): string => {
+    const card = sanitizeInfoCard(raw);
     if (!card) return "Couldn't build that card — it needs at least a title.";
     // Take over the canvas; the channel-exclusion effects keep things tidy.
     setDemoFeature(null);
     setDynamicCard(card);
     return `Showing an info card: ${card.title}.`;
-  });
+  }, []);
+
+  useConversationClientTool("show_info_card", (params: Record<string, unknown>) =>
+    showInfoCard(params)
+  );
 
   // ---- Scripted demo fallback ---------------------------------------------
   const clearDemoTimers = useCallback(() => {
@@ -793,6 +798,7 @@ export function useOtoAgent() {
     savePreSignup,
     showDemo,
     showVehicle,
+    showInfoCard,
     startBookingFlow,
     reset,
     getInputByteFrequencyData: conversation.getInputByteFrequencyData,

@@ -5,6 +5,14 @@
 import { v } from "convex/values";
 import { internalQuery, internalMutation, mutation } from "../_generated/server";
 
+/**
+ * Cache format version. Bump when the price path needs to invalidate older rows.
+ * v2 introduced `part_prices_json` (deterministic JSON-LD prices). A parts_catalog
+ * row with `format_version` < this (or undefined) is treated as a miss by the
+ * price path so it re-fetches raw HTML and re-parses prices.
+ */
+export const CACHE_FORMAT_VERSION = 2;
+
 /** Build a deterministic cache key from vehicle + source type. */
 function buildCacheKey(make: string, model: string, year: number, sourceType: string): string {
   return `${make}_${model}_${year}_${sourceType}`.toLowerCase().replace(/\s+/g, "_");
@@ -97,6 +105,9 @@ export const storeScrapeCache = internalMutation({
       v.literal("pricing"),
     ),
     expiresAt: v.float64(),
+    // Deterministic JSON-LD prices (ParsedPartPrice[] serialized). Only the
+    // registry parts-catalog path supplies this; other callers omit it.
+    partPricesJson: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const cacheKey = buildCacheKey(args.vehicleMake, args.vehicleModel, args.vehicleYear, args.sourceType);
@@ -119,6 +130,8 @@ export const storeScrapeCache = internalMutation({
         scraped_at: args.scrapedAt,
         expires_at: args.expiresAt,
         scrape_success: true,
+        part_prices_json: args.partPricesJson,
+        format_version: CACHE_FORMAT_VERSION,
       });
     } else {
       await ctx.db.insert("scrape_cache", {
@@ -134,6 +147,8 @@ export const storeScrapeCache = internalMutation({
         ttl_days: ttlDays,
         scrape_success: true,
         created_at: now,
+        part_prices_json: args.partPricesJson,
+        format_version: CACHE_FORMAT_VERSION,
       });
     }
   },

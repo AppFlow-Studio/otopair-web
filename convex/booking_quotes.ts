@@ -18,7 +18,7 @@ import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
-import { summarizePartPrices } from "./part_prices";
+import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
 
 /** Fallback band width when service_vehicle_specs has no engine-specific
  *  row for a service. ±25% around the client-supplied per-service parts
@@ -300,10 +300,10 @@ export async function computePricedPartsSnapshot(
       const part = await ctx.db.get(f.part_id);
       if (!part) continue;
       const summary = await summarizePartPrices(ctx, f.part_id);
-      // Use the outlier-rejected mean (`average`) — same field the customer-
-      // facing breakdown reads. Median is naïve to per-pack listings mixing
-      // with per-unit listings for the same OEM (spark plugs, brake pads).
-      const unit_price_dollars = summary.average;
+      // PARTS_PRICE_SOURCE flag (shared selector): median across sources once
+      // flipped (gated at >=3 sources so per-pack vs per-unit listings can't
+      // swing it), else the outlier-rejected mean. Default is average.
+      const unit_price_dollars = quoteUnitPrice(summary);
       const quantity = Math.max(1, f.quantity_needed ?? 1);
       const line_total_dollars = Math.round(quantity * unit_price_dollars * 100) / 100;
       out.push({

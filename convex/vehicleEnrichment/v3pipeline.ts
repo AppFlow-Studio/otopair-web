@@ -33,6 +33,7 @@ import { validateAllOemParts } from "./validation/oemValidation";
 import { BLOCKED_DOMAINS } from "./sourceRegistry";
 import { applyApplicabilityRules } from "./applicabilityRules";
 import { scrapeVehicleSources } from "./scraper";
+import { normalizeOemNumber } from "./priceParser";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
 import {
   advancedVinDecode,
@@ -1629,12 +1630,22 @@ export const _pollBatch1V3 = internalAction({
             { slug },
           );
           if (!svc) continue;
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborTime, {
+          // VDB is now ONE of N inputs into the labor median — no longer the
+          // de-facto source of truth via "highest confidence wins". (The 0.4
+          // weight is informational; the median itself is unweighted — see
+          // labor_aggregation.ts.) book_only skips the empirical job_actuals scan.
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
             vehicle_config_id: args.vehicleConfigId,
             service_id: svc._id,
-            book_hours: hours,
+            hours,
             source: "vdb_repair_estimates",
-            confidence: 0.9,
+            weight: 0.4,
+            tier: "catalog",
+          });
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
+            vehicle_config_id: args.vehicleConfigId,
+            service_id: svc._id,
+            book_only: true,
           });
           laborCount++;
         }
@@ -1870,6 +1881,50 @@ export const _pollBatch2V3 = internalAction({
         args.makeId, args.runId, args.make, serviceCache,
       );
 
+      // Deterministic per-SKU prices parsed from the registry HTML (JSON-LD) at
+      // scrape time, carried on the parts_catalog cache row. These are the
+      // authoritative price source; the LLM breakdown below only fills parts
+      // these did not cover, and may never overwrite a deterministically-priced
+      // part (tracked in `deterministicallyPriced`).
+      const deterministicPrices = new Map<
+        string,
+        { price: number; source_domain: string; source_url: string }
+      >();
+      const deterministicallyPriced = new Set<Id<"oem_parts">>();
+      try {
+        const cachedParts = await ctx.runQuery(
+          internal.vehicleEnrichment.scraperQueries.getCachedScrape,
+          {
+            vehicleMake: args.make,
+            vehicleModel: args.model,
+            vehicleYear: args.year,
+            sourceType: "parts_catalog",
+          },
+        );
+        if (cachedParts?.part_prices_json) {
+          const arr = JSON.parse(cachedParts.part_prices_json) as Array<{
+            oem_part_number: string;
+            price: number;
+            source_domain: string;
+            source_url: string;
+          }>;
+          for (const p of arr) {
+            if (p?.oem_part_number && typeof p.price === "number" && p.price > 0) {
+              deterministicPrices.set(normalizeOemNumber(p.oem_part_number), {
+                price: p.price,
+                source_domain: p.source_domain,
+                source_url: p.source_url,
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[v8] deterministic price load failed (non-fatal):", e);
+      }
+      if (deterministicPrices.size > 0) {
+        console.log(`[v8] ${deterministicPrices.size} deterministic JSON-LD prices for ${args.make} ${args.model}`);
+      }
+
       // Write labor times from Batch 2 pricing
       for (const svc of services) {
         if (!svc.is_applicable) continue;
@@ -1887,19 +1942,25 @@ export const _pollBatch2V3 = internalAction({
           { engineId: args.engineId },
         );
 
-        // Determine source type: web_search only if there's a real, non-blocked source URL
+        // LLM book-time estimate → one CATALOG observation. web_search only if
+        // there's a real, non-blocked source URL (rare for labor — it's usually
+        // training knowledge). Engine-family is stamped so siblings converge.
         const laborSourceUrl = svc.labor_hours?.source_url;
         const isWebSource = laborSourceUrl && !isBlockedDomain(laborSourceUrl);
-        const laborSource = isWebSource ? "web_search" as const : "training_data" as const;
-        const laborConfidence = isWebSource ? 0.85 : 0.75;
 
-        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborTime, {
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
           vehicle_config_id: args.vehicleConfigId,
           service_id: serviceId,
-          book_hours: laborVal,
-          source: laborSource,
-          confidence: laborConfidence,
+          hours: laborVal,
+          source: isWebSource ? "llm_web" : "llm_training",
+          weight: isWebSource ? 0.5 : 0.3,
+          tier: "catalog",
           engine_family: engineDoc?.engine_family,
+        });
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
+          vehicle_config_id: args.vehicleConfigId,
+          service_id: serviceId,
+          book_only: true,
         });
       }
 
@@ -1930,6 +1991,24 @@ export const _pollBatch2V3 = internalAction({
         );
         if (fitments.length === 0) continue;
 
+        // Authoritative: deterministic JSON-LD prices. Write the real per-SKU
+        // price for any fitment whose OEM number was parsed from the registry
+        // HTML, and mark it so the LLM breakdown below can't overwrite it.
+        for (const f of fitments) {
+          const num = (f as any).oem_part_number as string | null;
+          if (!num) continue;
+          const dp = deterministicPrices.get(normalizeOemNumber(num));
+          if (!dp) continue;
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+            part_id:       f.part_id,
+            price:         dp.price,
+            price_type:    "sale",
+            source_url:    dp.source_url,
+            source_domain: dp.source_domain,
+          });
+          deterministicallyPriced.add(f.part_id);
+        }
+
         // Preferred: itemized parts_breakdown — write each part's own price.
         if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
           // Build a quick oem_number → part_id lookup. Same OEM may have
@@ -1950,10 +2029,13 @@ export const _pollBatch2V3 = internalAction({
             if (!partIds || partIds.length === 0) continue;
             const sourceDomain = entry.source_domain ?? extractDomain(entry.source_url ?? undefined) ?? "enrichment";
             for (const partId of partIds) {
+              // Deterministic JSON-LD price already owns this part — the LLM
+              // estimate must not overwrite it or pollute the median.
+              if (deterministicallyPriced.has(partId)) continue;
               await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
                 part_id:       partId,
                 price:         entry.price_low,
-                price_type:    "online_discount",
+                price_type:    "llm_estimate",
                 source_url:    entry.source_url ?? undefined,
                 source_domain: sourceDomain,
               });
@@ -1968,10 +2050,12 @@ export const _pollBatch2V3 = internalAction({
         const priceVal = asNumber(svc.parts_cost_low?.value);
         if (priceVal == null) continue;
         for (const fitment of fitments) {
+          // Skip parts the deterministic JSON-LD parser already priced.
+          if (deterministicallyPriced.has(fitment.part_id)) continue;
           await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
             part_id:       fitment.part_id,
             price:         priceVal,
-            price_type:    "online_discount",
+            price_type:    "llm_estimate",
             source_domain: extractDomain(svc.parts_cost_low?.source_url) ?? "enrichment",
             source_url:    svc.parts_cost_low?.source_url ?? undefined,
           });

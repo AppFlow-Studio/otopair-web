@@ -11,6 +11,7 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { median, nonOutlierIndices } from "./lib/robustStats";
 
 export type PriceSummary = {
   part_id: Id<"oem_parts">;
@@ -31,37 +32,8 @@ export type PriceSummary = {
   }>;
 };
 
-function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[mid - 1] + sorted[mid]) / 2
-    : sorted[mid];
-}
-
-/**
- * Robust outlier rejection using the modified z-score on MAD.
- * Threshold of 3.5 is the Iglewicz/Hoaglin recommendation.
- *
- * Returns the indices of values to KEEP. When sample is too small (< 4)
- * or MAD is zero (all values equal), keeps everything.
- */
-function nonOutlierIndices(values: number[]): number[] {
-  if (values.length < 4) return values.map((_, i) => i);
-  const med = median(values);
-  const absDev = values.map((v) => Math.abs(v - med));
-  const mad = median(absDev);
-  if (mad === 0) return values.map((_, i) => i);
-  const threshold = 3.5;
-  const kept: number[] = [];
-  for (let i = 0; i < values.length; i++) {
-    const score = (0.6745 * (values[i] - med)) / mad;
-    if (Math.abs(score) <= threshold) kept.push(i);
-  }
-  // Safety: if every point got rejected (degenerate), fall back to all.
-  return kept.length > 0 ? kept : values.map((_, i) => i);
-}
+// `median` + `nonOutlierIndices` now live in ./lib/robustStats (shared with
+// labor-time aggregation). Imported above — behavior is unchanged.
 
 export async function summarizePartPrices(
   ctx: { db: any },
@@ -125,6 +97,29 @@ export async function summarizePartPrices(
     outliers_removed: prices.length - kept.length,
     sources_used: sources_used.map((s) => ({ ...s, price: round2(s.price) })),
   };
+}
+
+/**
+ * Quote-time unit-price selector. The founder wants the median ACROSS SOURCES;
+ * we use the robust median once there are >= 3 sources (so a single per-pack vs
+ * per-unit listing can't swing it), else fall back to the outlier-rejected mean.
+ *
+ * Behind the PARTS_PRICE_SOURCE env flag so the cutover is reversible:
+ *   - unset / "average" → outlier-rejected mean (legacy; DEFAULT)
+ *   - "median"          → median @ >=3 sources, else average
+ *
+ * Flip to "median" only AFTER the price backfill prunes legacy rows and the
+ * shadow diff is signed off — `median` is NOT outlier-protected (only `average`
+ * is), so at small samples a stale row would otherwise drag it.
+ */
+export function quoteUnitPrice(p: {
+  average: number;
+  median: number;
+  sample_size: number;
+}): number {
+  const mode = process.env.PARTS_PRICE_SOURCE ?? "average";
+  if (mode === "median" && p.sample_size >= 3 && p.median > 0) return p.median;
+  return p.average > 0 ? p.average : p.median;
 }
 
 export const getAveragePrice = query({

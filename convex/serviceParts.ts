@@ -12,7 +12,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { summarizePartPrices } from "./part_prices";
+import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -301,7 +301,8 @@ export const getPricedPartsForServices = query({
 
         const priceSummary = await summarizePartPrices(ctx, f.part_id);
         const quantity = f.quantity_needed ?? 1;
-        const unit_price = priceSummary.average;
+        // PARTS_PRICE_SOURCE flag: median@>=3 sources once flipped, else average.
+        const unit_price = quoteUnitPrice(priceSummary);
         const line_total = Math.round(quantity * unit_price * 100) / 100;
         partsTotal += line_total;
 

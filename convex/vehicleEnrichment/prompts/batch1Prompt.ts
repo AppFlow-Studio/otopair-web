@@ -42,10 +42,11 @@ SUPERSESSION HANDLING (critical for correct part numbers):
   - If multiple parts listed, match by fitment year range that includes the vehicle year.
   - Example: cabin air filter lists "64116996208 (2018-2020, Replaced by 64115A1BDB6)" and "64115A1BDB6 (2018-2023, current)" → correct answer is 64115A1BDB6.
 
-PRICING EXTRACTION:
-- Parts pages include both discount price and MSRP for each part.
-- For brake rotors (rotor_front_price, rotor_rear_price) and battery (battery_price): extract the discount/online price as the value. These are stored as single values (not low/high) in the oem_pricing section.
-- If pricing is listed per-pair (front+rear rotors on same page), extract the per-piece price.
+PRICING:
+- Do NOT extract or return any prices. Part pricing is captured separately and
+  deterministically from the page's structured data (JSON-LD). The markdown you
+  receive flattens the real price together with the struck-through MSRP and the
+  "You Save $X" figure, so any price read from it is unreliable. Omit pricing.
 
 CONFIDENCE TIERS:
 - 0.95-1.0: Value extracted directly from OEM catalog or owner's manual in the source documents
@@ -176,11 +177,6 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
     "battery_oem": { "value": "...", ... },
     "coolant_oem": { "value": "...", ... },
     "engine_oil_oem": { "value": "...", ... }
-  },
-  "oem_pricing": {
-    "rotor_front_price": { "value": 85.00, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 },
-    "rotor_rear_price": { "value": 75.00, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 },
-    "battery_price": { "value": 220.00, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 }
   },
   "battery": {
     "battery_group": { "value": "H8/Group 49", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },

@@ -10,6 +10,7 @@ import {
   prejobReportValidator,
   vehicleUpdateValuesValidator,
 } from "./vehicle_passports";
+import { recomputeLaborForConfigService } from "./labor_aggregation";
 
 export const jobActualPartValidator = postjobPartValidator;
 
@@ -276,84 +277,12 @@ async function recomputeEmpiricalLaborTimes(
     now: number;
   }
 ) {
-  const finalizedActuals = (await ctx.db.query("job_actuals").collect()).filter(
-    (jobActual: any) =>
-      jobActual.finalized_at_ms != null && jobActual.actual_labor_minutes != null
-  );
-
-  const bookingCache = new Map<string, any>();
-  const vehicleCache = new Map<string, any>();
-  const matchingHours: number[] = [];
-
-  for (const jobActual of finalizedActuals) {
-    const bookingKey = String(jobActual.booking_id);
-    let booking = bookingCache.get(bookingKey);
-    if (booking === undefined) {
-      booking = await ctx.db.get(jobActual.booking_id);
-      bookingCache.set(bookingKey, booking ?? null);
-    }
-    if (!booking) continue;
-    if (String(primaryServiceId(booking) ?? "") !== String(serviceId)) continue;
-
-    const vehicleKey = String(booking.vin);
-    let vehicle = vehicleCache.get(vehicleKey);
-    if (vehicle === undefined) {
-      vehicle = await ctx.db
-        .query("vehicles")
-        .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
-        .unique();
-      vehicleCache.set(vehicleKey, vehicle ?? null);
-    }
-    if (!vehicle) continue;
-    if (String(vehicle.vehicle_config_id ?? "") !== String(vehicleConfigId)) continue;
-
-    matchingHours.push(jobActual.actual_labor_minutes / 60);
-  }
-
-  const laborRows = await ctx.db
-    .query("labor_times")
-    .withIndex("by_vehicle_config", (q: any) => q.eq("vehicle_config_id", vehicleConfigId))
-    .collect();
-  const laborRow =
-    laborRows.find((row: any) => String(row.service_id) === String(serviceId)) ?? null;
-
-  if (matchingHours.length === 0) {
-    if (laborRow) {
-      await ctx.db.patch(laborRow._id, {
-        empirical_hours: 0,
-        empirical_sample_size: 0,
-        empirical_p25: 0,
-        empirical_p75: 0,
-      });
-    }
-    return;
-  }
-
-  const empiricalHours =
-    matchingHours.reduce((sum, value) => sum + value, 0) / matchingHours.length;
-  const empiricalP25 = calculatePercentile(matchingHours, 0.25);
-  const empiricalP75 = calculatePercentile(matchingHours, 0.75);
-
-  if (laborRow) {
-    await ctx.db.patch(laborRow._id, {
-      empirical_hours: empiricalHours,
-      empirical_sample_size: matchingHours.length,
-      empirical_p25: empiricalP25,
-      empirical_p75: empiricalP75,
-    });
-    return;
-  }
-
-  await ctx.db.insert("labor_times", {
-    vehicle_config_id: vehicleConfigId,
-    service_id: serviceId,
-    empirical_hours: empiricalHours,
-    empirical_sample_size: matchingHours.length,
-    empirical_p25: empiricalP25,
-    empirical_p75: empiricalP75,
-    source: "job_actuals",
-    created_at: now,
-  });
+  // Delegates to the shared labor aggregator: book_hours from the robust median
+  // of catalog observations, empirical_hours from SINGLE-service post-job actuals
+  // gated at LABOR_EMPIRICAL_MIN_SAMPLES. (The previous implementation full-scanned
+  // job_actuals, used a plain mean, and credited a multi-service booking's whole
+  // duration to service_ids[0] — all fixed in recomputeLaborForConfigService.)
+  await recomputeLaborForConfigService(ctx, { vehicleConfigId, serviceId, now });
 }
 
 async function upsertSpecVarianceForJobActual(

@@ -8,9 +8,11 @@
  * Falls back to `services.default_labor_hours` when no row exists.
  *
  * Why empirical first: actuals reflect real shop conditions on the specific
- * engine/trim — book times often underestimate on harder packages. We surface
- * `confidence` and `empirical_sample_size` so the UI can warn on thin data,
- * but we don't gate on sample size — empirical is the source of truth.
+ * engine/trim — book times often underestimate on harder packages. Empirical is
+ * gated upstream: the aggregator (convex/lib/labor_aggregation.ts) only writes
+ * `empirical_hours` once there are >= LABOR_EMPIRICAL_MIN_SAMPLES single-service
+ * post-job actuals, and clears it to 0 below that — so a single padded estimate
+ * can't swing a quote. Here we simply prefer empirical_hours when it is > 0.
  */
 
 import { v } from "convex/values";

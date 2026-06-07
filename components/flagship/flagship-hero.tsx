@@ -25,6 +25,7 @@ import {
 } from "./cards";
 import { DemoCard } from "./demo-cards";
 import { DynamicCard } from "./dynamic-card";
+import DebugTriggers from "./debug-triggers"; // TEMP — remove with debug-triggers.tsx
 import { useOtoAgent, type OtoAgent } from "./use-oto-agent";
 
 // Discoverability chips under the intro bar — each routes to a real demo card
@@ -211,6 +212,9 @@ function HeroInner() {
       className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#eceae6]"
     >
       <PillNav />
+
+      {/* TEMP: dev-only trigger panel for every card the agent can summon. */}
+      {process.env.NODE_ENV === "development" && <DebugTriggers oto={oto} />}
 
       {/* Headline — collapses (but stays prominent) once the conversation starts. */}
       <div

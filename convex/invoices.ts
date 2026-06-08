@@ -16,6 +16,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   detectTier,
+  resolveQuoteSeries,
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
@@ -87,6 +88,15 @@ export type AssembledInvoiceData = {
   stripePaymentIntentId: string | null;
 
   issuedAtMs: number;
+
+  // Pricing v2 sanity flags raised during invoice assembly. Possible values:
+  //   - "incomplete_rate": shop.labor_rate AND tier-aware rate both missing,
+  //                       used DEFAULT_LABOR_RATE to keep the PDF renderable
+  //   - "invoice_price_outside_fallback_band": captured subtotal diverges
+  //                       from the quoteEngine [low, high] band by >5–8%
+  //   - per-quote engine flags rolled up (tier_estimate, etc.)
+  // Empty array when everything checks out.
+  quoteFlags: string[];
 };
 
 function pickVehicleTitle(metadata: any): {
@@ -167,13 +177,17 @@ async function assembleInvoiceData(
 
     // Tier-aware labor rate (Pricing v2). Falls back to flat shop.labor_rate
     // and then DEFAULT_LABOR_RATE so invoice generation never breaks on an
-    // unenriched vehicle — the deep fallback is logged for finance to audit.
+    // unenriched vehicle. When the deep fallback fires, raise the
+    // `incomplete_rate` flag so finance/operators can audit instead of
+    // relying on log greps.
+    const quoteFlagsSet = new Set<string>();
     let resolvedLaborRate: number | null = null;
+    let cfgForBand: Doc<"vehicle_configs"> | null = null;
     if (shop && booking.vin) {
-      const cfg = await resolveVehicleConfigFromVin(ctx as any, booking.vin);
+      cfgForBand = await resolveVehicleConfigFromVin(ctx as any, booking.vin);
       const tier =
-        (cfg?.pricing_tier as VehicleTier | undefined) ??
-        (cfg ? await detectTier(ctx as any, cfg) : null);
+        (cfgForBand?.pricing_tier as VehicleTier | undefined) ??
+        (cfgForBand ? await detectTier(ctx as any, cfgForBand) : null);
       if (tier) {
         const rateRes = resolveLaborRate(shop as any, tier);
         if (rateRes.rate != null) resolvedLaborRate = rateRes.rate;
@@ -186,6 +200,7 @@ async function assembleInvoiceData(
       laborRate = shop.labor_rate;
     } else {
       laborRate = DEFAULT_LABOR_RATE;
+      quoteFlagsSet.add("incomplete_rate");
       console.warn(
         `[assembleInvoiceData] using DEFAULT_LABOR_RATE=${DEFAULT_LABOR_RATE} ` +
           `for booking=${bookingId} shop=${booking.shop_id ?? "?"} vin=${booking.vin ?? "?"}`,
@@ -205,6 +220,41 @@ async function assembleInvoiceData(
       Math.round((totalCents * PLATFORM_FEE_BPS) / 10000),
     );
     const taxCents = Math.max(0, totalCents - subtotalCents - platformFeeCents);
+
+    // Pricing v2 sanity check: compare captured subtotal against engine band
+    // (−5% under low / +8% over high). Soft flag only; persisted to
+    // payments.invoice_quote_flags so finance can audit drift without
+    // grepping logs. Also rolls per-quote engine flags up to the invoice.
+    if (
+      cfgForBand &&
+      booking.shop_id &&
+      Array.isArray(booking.service_ids) &&
+      booking.service_ids.length > 0
+    ) {
+      const series = await resolveQuoteSeries(ctx as any, {
+        vehicle_config_id: cfgForBand._id,
+        service_ids: booking.service_ids,
+        shop_id: booking.shop_id,
+      });
+      if (!series.quotes.some((q) => !q.ok)) {
+        for (const q of series.quotes) {
+          if (!q.ok) continue;
+          for (const f of q.flags) quoteFlagsSet.add(f);
+        }
+        const subtotalDollars = subtotalCents / 100;
+        const bandLow = series.total_low * 0.95;
+        const bandHigh = series.total_high * 1.08;
+        if (subtotalDollars < bandLow || subtotalDollars > bandHigh) {
+          quoteFlagsSet.add("invoice_price_outside_fallback_band");
+          console.warn(
+            `[assembleInvoiceData] subtotal=$${subtotalDollars.toFixed(2)} ` +
+              `outside fallback band [$${bandLow.toFixed(2)}, $${bandHigh.toFixed(2)}] ` +
+              `(engine [$${series.total_low.toFixed(2)}, $${series.total_high.toFixed(2)}]) ` +
+              `booking=${bookingId}`,
+          );
+        }
+      }
+    }
 
     const customerName =
       [user?.first_name, user?.last_name]
@@ -281,6 +331,8 @@ async function assembleInvoiceData(
         payment.updated_at ??
         payment.created_at ??
         Date.now(),
+
+      quoteFlags: Array.from(quoteFlagsSet),
     };
 }
 
@@ -438,6 +490,7 @@ export const _patchInvoiceMeta = internalMutation({
     invoiceStorageId: v.optional(v.id("_storage")),
     invoiceGeneratedAtMs: v.optional(v.number()),
     invoiceEmailedAtMs: v.optional(v.number()),
+    invoiceQuoteFlags: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const patch: Record<string, unknown> = {};
@@ -447,6 +500,9 @@ export const _patchInvoiceMeta = internalMutation({
       patch.invoice_generated_at_ms = args.invoiceGeneratedAtMs;
     if (args.invoiceEmailedAtMs !== undefined)
       patch.invoice_emailed_at_ms = args.invoiceEmailedAtMs;
+    if (args.invoiceQuoteFlags !== undefined)
+      patch.invoice_quote_flags =
+        args.invoiceQuoteFlags.length > 0 ? args.invoiceQuoteFlags : undefined;
     if (Object.keys(patch).length === 0) return;
     await ctx.db.patch(args.paymentId, patch);
   },

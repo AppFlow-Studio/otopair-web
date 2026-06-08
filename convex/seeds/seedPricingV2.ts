@@ -84,7 +84,7 @@ const LABOR_CATEGORIES: ReadonlyArray<{
 ];
 
 const LABOR_MATRIX: Record<LaborCategoryCode, Record<VehicleTier, number>> = {
-  routine:       { T1: 1.0, T2a: 1.0, T2b: 1.1, T2c: 1.2, T3a: 1.3, T3b: 1.5, T4: 3.0 },
+  routine:       { T1: 1.0, T2a: 1.0, T2b: 1.1, T2c: 1.2, T3a: 1.3, T3b: 1.5, T4: 1.7 },
   engine_access: { T1: 1.0, T2a: 1.2, T2b: 1.5, T2c: 1.5, T3a: 2.0, T3b: 2.2, T4: 3.0 },
   brakes:        { T1: 1.0, T2a: 1.0, T2b: 1.1, T2c: 1.2, T3a: 1.3, T3b: 1.5, T4: 2.0 },
   diagnostics:   { T1: 1.0, T2a: 1.2, T2b: 1.4, T2c: 1.5, T3a: 1.7, T3b: 2.0, T4: 2.5 },

@@ -20,7 +20,7 @@ import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { resolveWinningPartForService } from "./serviceParts";
 import type { TraceEntry } from "./partSelector";
-import { detectTier } from "./lib/quoteEngine";
+import { detectTier, resolveQuoteSeries } from "./lib/quoteEngine";
 import type { VehicleTier } from "./lib/vehicleTiers";
 
 /** Fallback band width when service_vehicle_specs has no engine-specific
@@ -93,6 +93,20 @@ export type ComputeDisclosedRangeResult = {
   /** Per-service flat-price hits. Empty when no service resolved to a
    *  shop_service_fixed_prices row. Threaded into `computeQuotedSetPrice`. */
   fixed_price_lines: FixedPriceLine[];
+  /** Pricing v2 flags raised during disclosed-range computation. Possible
+   *  values: per-quote engine flags (tier_estimate, awd_surcharge_applied,
+   *  ccb_absolute_pricing, fixed_price_override, spread_exceeded), plus
+   *  'fallback_only' when the engine refused at least one service and the
+   *  band fell back to service_vehicle_specs / fallback midpoint logic.
+   *  The mobile UI surfaces these as an "Estimate" pill. Empty when the
+   *  engine signed off on every service cleanly. */
+  quote_flags: string[];
+  /** Pricing v2 engine band for the labor+parts portion (dollars). Null when
+   *  the engine refused at least one service. Persisted alongside the
+   *  disclosed range so finance can audit how far the customer's contracted
+   *  band sits from the engine's confidence-weighted fallback. */
+  quote_fallback_low_dollars: number | null;
+  quote_fallback_high_dollars: number | null;
 };
 
 const dollarsToCents = (d: number) => Math.round(d * 100);
@@ -207,7 +221,44 @@ export async function computeDisclosedRange(
     breakdown.tax_high_cents +
     breakdown.service_fee_high_cents;
 
-  return { low_cents, high_cents, breakdown, is_fixed_price, fixed_price_lines };
+  // Pricing v2 sanity sidecar. Call the quote engine over the same service
+  // list and roll its per-quote flags up onto the disclosed range. When any
+  // service refuses (e.g. CCB without absolute pricing, no pricing_tier
+  // match), the customer's band is still the source of truth — we just mark
+  // it `fallback_only` so the UI can render an "Estimate" pill. Skipped
+  // when the caller hasn't threaded shop_id + vehicle_config_id.
+  const quote_flags_set = new Set<string>();
+  let quote_fallback_low_dollars: number | null = null;
+  let quote_fallback_high_dollars: number | null = null;
+  if (args.shop_id && args.vehicle_config_id) {
+    const series = await resolveQuoteSeries(ctx, {
+      vehicle_config_id: args.vehicle_config_id,
+      service_ids: args.services.map((s) => s.service_id),
+      shop_id: args.shop_id,
+    });
+    if (series.quotes.some((q) => !q.ok)) {
+      quote_flags_set.add("fallback_only");
+      quote_flags_set.add("tier_estimate");
+    } else {
+      for (const q of series.quotes) {
+        if (!q.ok) continue;
+        for (const f of q.flags) quote_flags_set.add(f);
+      }
+      quote_fallback_low_dollars = series.total_low;
+      quote_fallback_high_dollars = series.total_high;
+    }
+  }
+
+  return {
+    low_cents,
+    high_cents,
+    breakdown,
+    is_fixed_price,
+    fixed_price_lines,
+    quote_flags: Array.from(quote_flags_set),
+    quote_fallback_low_dollars,
+    quote_fallback_high_dollars,
+  };
 }
 
 async function resolvePartsBandForService(

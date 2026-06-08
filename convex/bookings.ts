@@ -1098,6 +1098,46 @@ async function assertLaborCostMatchesDuration(
 }
 
 /**
+ * Pricing v2 sanity-check: compare the shop-supplied total against the
+ * quoteEngine fallback band already attached to the disclosed range.
+ * Returns the union of engine flags (rolled up by computeDisclosedRange)
+ * plus `price_outside_fallback_band` when the client total falls outside
+ * −5% / +8% of the engine's [low, high]. Soft only — never throws.
+ *
+ * The asymmetric threshold mirrors assertLaborCostMatchesDuration's 5–8%
+ * drift band: the engine is the floor (shops shouldn't underbill into the
+ * engine's confidence interval) and the customer is the ceiling (shops
+ * shouldn't overbill more than 8% above the engine high).
+ */
+function computeQuoteFallbackFlags(args: {
+  baseFlags: string[];
+  fallbackLow: number | null;
+  fallbackHigh: number | null;
+  clientTotalDollars: number;
+  vin: string;
+}): string[] {
+  const flagSet = new Set<string>(args.baseFlags);
+  if (args.fallbackLow == null || args.fallbackHigh == null) {
+    return Array.from(flagSet);
+  }
+  const bandLow = args.fallbackLow * 0.95; // −5%
+  const bandHigh = args.fallbackHigh * 1.08; // +8%
+  if (
+    args.clientTotalDollars < bandLow ||
+    args.clientTotalDollars > bandHigh
+  ) {
+    flagSet.add("price_outside_fallback_band");
+    console.warn(
+      `[computeQuoteFallbackFlags] client_total=$${args.clientTotalDollars.toFixed(2)} ` +
+        `outside fallback band [$${bandLow.toFixed(2)}, $${bandHigh.toFixed(2)}] ` +
+        `(engine [$${args.fallbackLow.toFixed(2)}, $${args.fallbackHigh.toFixed(2)}]) ` +
+        `vin=${args.vin}`,
+    );
+  }
+  return Array.from(flagSet);
+}
+
+/**
  * Telemetry-only: log a warning when the labor minutes the client claims it
  * displayed disagree with what the server would derive from the same priority
  * chain (`resolveBookingLaborMinutes`). Threshold is 2 min so we ignore
@@ -1332,6 +1372,19 @@ export const createBatch = mutation({
       vehicle_config_id: vehicle.vehicle_config_id ?? null,
     });
 
+    // Pricing v2 fallback-band sanity: union of engine-derived flags from
+    // computeDisclosedRange + price_outside_fallback_band when the shop-
+    // supplied (labor + parts) total falls outside −5% / +8% of the engine
+    // [low, high]. Persisted on the booking row; the mobile review screen
+    // renders an "Estimate" pill when non-empty.
+    const quoteFlagsForBooking = computeQuoteFallbackFlags({
+      baseFlags: disclosedRange.quote_flags,
+      fallbackLow: disclosedRange.quote_fallback_low_dollars,
+      fallbackHigh: disclosedRange.quote_fallback_high_dollars,
+      clientTotalDollars: labor_cost + parts_cost,
+      vin: normalizedVin,
+    });
+
     // Itemized parts snapshot — same per-unit prices the customer saw on
     // Review & Pay. Frozen on the booking so the mechanic's post-job dialog
     // can hydrate from this directly instead of re-querying part_prices.
@@ -1421,6 +1474,12 @@ export const createBatch = mutation({
       quoted_set_price_cents: quoted.total_cents,
       quoted_breakdown: quoted.breakdown,
       payment_approval_state: "none",
+      quote_flags:
+        quoteFlagsForBooking.length > 0 ? quoteFlagsForBooking : undefined,
+      quote_fallback_low:
+        disclosedRange.quote_fallback_low_dollars ?? undefined,
+      quote_fallback_high:
+        disclosedRange.quote_fallback_high_dollars ?? undefined,
     });
 
     await logBookingStatusChange(

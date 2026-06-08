@@ -1865,6 +1865,14 @@ export default defineSchema({
     final_capture_amount_cents: v.optional(v.number()),
     final_parts_used_at_capture: v.optional(v.array(postjobPartValidator)),
     sla_expires_at_ms: v.optional(v.number()),
+
+    // Pricing v2 sanity-check flags raised when the shop-supplied total
+    // diverges from the quoteEngine fallback band. Soft-only; UI surfaces
+    // an "Estimate" pill but writes still succeed. Snapshotted once at
+    // createBatch and never mutated afterwards.
+    quote_flags: v.optional(v.array(v.string())),
+    quote_fallback_low: v.optional(v.float64()),
+    quote_fallback_high: v.optional(v.float64()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])
@@ -2011,6 +2019,11 @@ export default defineSchema({
     invoice_storage_id: v.optional(v.id("_storage")),
     invoice_generated_at_ms: v.optional(v.number()),
     invoice_emailed_at_ms: v.optional(v.number()),
+    // Pricing v2 sanity-check flags raised inside assembleInvoiceData when
+    // the captured total diverges from the quoteEngine fallback band, or
+    // when shop.labor_rate is missing and the tier-aware rate is also null.
+    // Soft-only; surfaced to operators in the receipt PDF + admin UI.
+    invoice_quote_flags: v.optional(v.array(v.string())),
     // URL-safe random token embedded in the receipt deep-link sent over
     // email. Lets walk-in customers who don't have a Clerk account open
     // /receipts/[bookingId]?t=<token> without signing in. Treated as

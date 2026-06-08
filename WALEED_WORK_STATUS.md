@@ -79,12 +79,10 @@ This doc is the single source of truth for: ✅ done · 🟡 partial · ⬜ not 
 - [ ] Mobile renderer for the quick-reply chips + escape button (the `quickReplies` payload is already returned by the backend).
 - **Action:** flip this Notion card to **In progress** (logic shipped) — UI remains.
 
-### D. Onboarding knowledge → Oto  *(Notion: "Not started" — now MOSTLY done on the backend)*
+### D. Onboarding knowledge → Oto  ✅ *(Notion: now flipped to **Done**)*
 **Done:** `car_knowledge_level` piped into Oto's prompt; answer complexity scales by level; verified live (Waleed = beginner). `convex/oto/onboarding_questions_answers.ts:getCarKnowledgeLevelForUser` + envelope + prompt rule.
-**Left:**
-- [ ] Confirm the onboarding scale with AB (only one row exists, value `1`; I mapped 1→beginner, 2→intermediate, 3+→experienced — adjust if the scale is 1–5).
-- [ ] AB to ensure onboarding actually writes the level for all users (else the question is cosmetic).
-- **Action:** flip this Notion card to **In progress / mostly done**.
+**Scale CONFIRMED 1–3** from temurbek production data (not assumed): `1` = "I prefer things explained to me" → beginner, `2` = "I know some stuff" → intermediate, `3` = "I'm car-savvy" → experienced. The `knowledgeLabel` mapping was already correct; comment locked to the confirmed scale.
+**Left (not Waleed/Oto):** AB ensures onboarding writes the level for all users (4 have it on temurbek so far).
 
 ### E. 11 Labs Flagship Landing Page  *(Notion: In progress — correct)*
 **Done:** the conversational hero exists and is committed (`app/(marketing)`, `components/flagship/*`).
@@ -94,15 +92,12 @@ This doc is the single source of truth for: ✅ done · 🟡 partial · ⬜ not 
 
 ## ⬜ NOT DONE — and where it actually lives
 
-### F. Oto — mechanic-chat impersonation (P0 trust)  *(Notion: Bugs / Stuck)*
-**Diagnosis confirmed (matches your Notion root-cause note exactly):** there is **no human shop↔customer message table** in this repo; the "mechanic chat" routes through the same Oto `ai_messages` pipeline (role = assistant) with no human-sender concept and auto-replies to everything.
-**Fix is mostly mobile / cross-cutting, NOT in otopair-web today:**
-- [ ] Tag assistant messages in `ai_messages.metadata` with a sender type (small backend change — *could* land here).
-- [ ] Mobile: render AI messages as a labeled "Oto · Otopair Assistant" bubble, distinct from user + (future) human-shop.
-- [ ] Apply the Oto restraint gate to chat (no reply to contentless "sounds good").
-- [ ] "Who am I speaking with?" → honest Oto-identity answer + route to shop.
-- [ ] Persistent shop-response-time status + one-tap "Talk to the shop directly".
-- **Owner:** Waleed (responder logic + routing) + Ahmad (sender attribution UI). I did **not** fabricate a fix here — the offending surface isn't in this repo.
+### F. Oto — mechanic-chat impersonation (P0 trust)  🟡 *(Oto-side SHIPPED; Notion → In progress)*
+**Clarified with you:** the real bug was a "Chat with a mechanic" button that seeded the chat, and Oto then **impersonated the mechanic**. The `role` field already exists (user/assistant), so this is a behavior fix, not a schema change.
+**Done + verified live (this session):** new hard prompt rule — Oto is **always Oto**, never role-plays/speaks as a mechanic or shop, even when asked to "chat with a mechanic." One short honest line, **no soft-deny**, then pivots to a real action. Test: *"I want to chat with my mechanic about my brakes"* → *"You're talking to Oto, Otopair's assistant — I'm not the shop, but I can get you booked…"* Commit `f9ef474`.
+**Left (app-side, not otopair-web):**
+- [ ] Remove the "Chat with a mechanic" button (app team).
+- [ ] Mobile labeled-sender "Oto · Otopair Assistant" bubble treatment.
 
 ### G. Health-score "fake tips" loading screen  *(P0 from beta)*
 - **Not in otopair-web.** No tip array / factoid generator anywhere in `convex/`, `app/`, or `components/`. The strings are a mobile UI list.
@@ -120,12 +115,16 @@ This doc is the single source of truth for: ✅ done · 🟡 partial · ⬜ not 
 
 ---
 
-## Notion sync needed (stale statuses to correct)
-| Notion card | Current | Should be |
+## Notion sync — ✅ APPLIED (Jun 8 2026, via the connected Notion plugin, as Waleed)
+Each card was updated with a status change **and** a detailed progress note (commit refs + live-test evidence).
+| Notion card | Was | Now |
 |---|---|---|
-| Oto — Guided quick-replies / one-question / escape hatch | Not started | **In progress** (logic done; UI left) |
-| Oto AI — Backend + Frontend | Not started | **In progress** (backend live) |
-| Feed onboarding knowledge level into Oto | Not started | **In progress** (wired; AB scale confirm left) |
-| Labor-time validation + data-good signal | In progress | keep (accurate) |
+| Feed onboarding knowledge level into Oto | Not started | ✅ **Done** (wired, scale-confirmed 1–3, verified) |
+| Oto — Guided quick-replies / one-question / escape hatch | Not started | 🟡 **In progress** (logic shipped; mobile UI left) |
+| Oto AI — Backend + Frontend | Not started | 🟡 **In progress** (backend live) |
+| Oto — mechanic-chat impersonation | Bugs / Stuck | 🟡 **In progress** (Oto-side fix shipped; app-side UI left) |
+| Labor-time validation + data-good signal | In progress | kept (accurate) |
+
+**Notion read limitation (still true):** even with the plugin connected, the available Notion tools have **no bulk row-query** — only semantic search (capped) + per-page fetch. So a full whole-board count requires enumerating page-by-page; the updates above target the specific items verified this session.
 
 > **Notion tooling caveat:** the available Notion integration this session has no row-query/SQL tool and can't bulk-filter the board by assignee — only semantic search (capped) + per-page fetch. So this list covers the items I could positively identify, not a guaranteed-complete board audit. A filtered "Waleed — by Status" view can be created in Notion to see the full set directly.

@@ -26,7 +26,7 @@
 // bumping here automatically bumps the composite.
 // =============================================================================
 
-export const VOLATILE_PROMPT_VERSION = "v0.17-volatile" as const;
+export const VOLATILE_PROMPT_VERSION = "v0.18-volatile" as const;
 
 export const VOLATILE_PROMPT_SECTION = `
 # Examples
@@ -98,7 +98,9 @@ You: [calls \`list_services_for_vehicle\` with the vehicle's ID]
 
 User: *"My brakes have been squealing for a few weeks."*
 
-You: *"Squealing usually means the pads are worn down to the wear indicators. A Diagnostic Scan reads any trouble codes your car has stored, and a mechanic can confirm whether it's pads, rotors, or something else before any work happens. Booking a Diagnostic Scan will allow a mechanic to diagnose your car and pin down the exact issue — want to book that service now?"*
+You: *"Squealing usually means the pads are worn down. A Diagnostic Scan is where a mechanic plugs in and reads what the car logged, then confirms whether it's pads, rotors, or something else before any work happens. Booking a Diagnostic Scan will allow a mechanic to diagnose your car and pin down the exact issue — want to book that service now?"*
+
+(Plain language — "plugs in and reads what the car logged," not "reads the trouble codes your car has stored." "Diagnostic Scan" stays as the catalog name.)
 
 ---
 

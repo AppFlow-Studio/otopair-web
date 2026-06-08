@@ -135,6 +135,7 @@ import type * as oto_queryMoat from "../oto/queryMoat.js";
 import type * as oto_recordConfirmation from "../oto/recordConfirmation.js";
 import type * as oto_reliability from "../oto/reliability.js";
 import type * as oto_searchedFacts from "../oto/searchedFacts.js";
+import type * as oto_simulate from "../oto/simulate.js";
 import type * as oto_system_prompt from "../oto/system_prompt.js";
 import type * as oto_telemetry from "../oto/telemetry.js";
 import type * as oto_tools from "../oto/tools.js";
@@ -417,6 +418,7 @@ declare const fullApi: ApiFromModules<{
   "oto/recordConfirmation": typeof oto_recordConfirmation;
   "oto/reliability": typeof oto_reliability;
   "oto/searchedFacts": typeof oto_searchedFacts;
+  "oto/simulate": typeof oto_simulate;
   "oto/system_prompt": typeof oto_system_prompt;
   "oto/telemetry": typeof oto_telemetry;
   "oto/tools": typeof oto_tools;

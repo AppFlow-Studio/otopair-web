@@ -44,6 +44,7 @@ import { v } from "convex/values";
 import {
   buildEnvelope,
   formatDisplayString,
+  knowledgeLabel,
   pickActiveVehicleRow,
   type DisplayInfo,
   type OwnedVehicleRow,
@@ -470,7 +471,10 @@ async function sendMessageHandler(
 // Core handler — owns the full chat turn. Wrapped by sendMessageHandler
 // above so retry-exhaust errors get translated to a friendly shape before
 // hitting the action's return validator.
-async function sendMessageHandlerCore(
+// Exported so the eval/simulation harness (convex/oto/simulate.ts) can drive a
+// full authenticated turn with a fabricated identity — see that file. NOT a
+// public API surface; the only public entry is the `sendMessage` action above.
+export async function sendMessageHandlerCore(
   // `ctx` typed `any` so this function's body doesn't drag the api tree into
   // its inferred type. Doc<…> annotations on each call-site result restore
   // type safety where it matters.
@@ -793,6 +797,13 @@ async function sendMessageHandlerCore(
     written_by: f.written_by,
     created_at: f.created_at,
   }));
+  // Onboarding car-knowledge level → scale Oto's answer complexity. Read once
+  // per turn; null when the user never answered (Oto stays at friendly
+  // baseline). See knowledgeLabel + the prompt's "Knowledge-level adaptation".
+  const rawKnowledgeLevel: number | string | null = await ctx.runQuery(
+    api.onboarding_questions_answers.getCarKnowledgeLevelForUser,
+    { user_id: user._id },
+  );
   const envelope = buildEnvelope({
     userFirstName: user.first_name ?? null,
     vehicle: activeVehicle,
@@ -801,6 +812,7 @@ async function sendMessageHandlerCore(
     conversationState: convoState,
     diagnosticTurnCount,
     priorConversationFacts: envelopePriorFacts,
+    knowledgeLevel: knowledgeLabel(rawKnowledgeLevel),
   });
   console.log("[oto/chat] envelope sent to Haiku:\n" + envelope);
 
@@ -1560,12 +1572,20 @@ async function sendMessageHandlerCore(
     };
   }
 
-  // Polite-exit counter (Locked Principle #6) — server-managed.
-  // - Reset to 0 when this turn rendered a booking (any render_book_service
-  //   fire — diagnostic-scan or direct-service — resolves the narrowing).
-  // - Increment if Haiku's just-written last_user_intent starts with
-  //   "symptom_narrowing" (we're still narrowing this turn).
-  // - Leave alone otherwise.
+  // Polite-exit counter (Locked Principle #6) — server-managed, SERVER-DERIVED.
+  // Beta feedback: the over-interrogation→booking guardrail "isn't firing." Root
+  // cause: the count only advanced when Haiku self-tagged last_user_intent as
+  // "symptom_narrowing" every turn, which it often forgot to do — so the count
+  // never reached the threshold and the polite-exit block never appeared.
+  //
+  // We now derive "still interrogating" from observable turn shape instead of
+  // trusting the model to tag itself:
+  //   - rendered a booking this turn → narrowing resolved → reset to 0.
+  //   - else Oto's reply asked a question (a "?") AND we're in a diagnostic arc
+  //     (the model tagged a diagnostic/symptom intent, OR the count is already
+  //     advancing) → increment. Once the arc starts, every further question-turn
+  //     advances even if the model stops tagging.
+  //   - else Oto answered without asking → the narrowing arc resolved → reset.
   // Skip on harness debug runs.
   if (!skipPersist) {
     try {
@@ -1574,14 +1594,33 @@ async function sendMessageHandlerCore(
       if (renderedBooking) {
         nextCount = 0;
       } else {
-        // Re-read the conversation to see what Haiku just wrote via state tool.
         const fresh = await ctx.runQuery(api.ai_conversations.getById, {
           id: conversationId,
         });
         const latestIntent = (fresh as any)?.last_user_intent as string | undefined;
-        if (latestIntent && latestIntent.startsWith("symptom_narrowing")) {
+        const askedQuestion = /\?/.test(finalText ?? "");
+        const modelTaggedNarrowing =
+          !!latestIntent &&
+          (latestIntent.startsWith("symptom_narrowing") ||
+            latestIntent.startsWith("diagnos"));
+        const alreadyNarrowing = diagnosticTurnCount > 0;
+        // A booking OFFER ("...want to book that service now?") ends in a "?"
+        // but is CONVERGENCE, not failed narrowing — the two-step
+        // offer→confirm→render pattern means render_book_service hasn't fired
+        // yet, so renderedBooking is still false this turn. Don't let the offer
+        // turn inflate the count (it would push a successful conversation into
+        // the forced not_sure exit one turn early). Hold the count on offer.
+        const offeringBooking =
+          /\b(book|booking|set (?:that|it) up|schedule)\b/i.test(finalText ?? "");
+        if (askedQuestion && !offeringBooking && (modelTaggedNarrowing || alreadyNarrowing)) {
           nextCount = diagnosticTurnCount + 1;
+        } else if (!askedQuestion && alreadyNarrowing) {
+          // Oto stopped asking — arc resolved or moved on. Decay so a later,
+          // unrelated clarifying question doesn't instantly re-trip the exit.
+          nextCount = 0;
         }
+        // offeringBooking turn → leave count unchanged (convergence, not a
+        // failed-narrowing turn).
       }
       if (nextCount !== null) {
         await ctx.runMutation(api.ai_conversations.setDiagnosticTurnCount, {

@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { id:'bookings',     label:'Bookings',     Icon:IconCalendar },
   { id:'cars',         label:'Cars',         Icon:IconCar },
   { id:'configs',      label:'Vehicle configs', Icon:IconSettings },
+  { id:'pricing',      label:'Pricing & tiers', Icon:IconBolt },
   { id:'bugs',         label:'Bugs',         Icon:IconBug,     badge:'bugs' },
   { id:'feedback',     label:'Feedback',     Icon:IconMessage, badge:'feedback' },
   { id:'otoFeedback',  label:'Oto feedback', Icon:IconBolt,    badge:'otoFeedback' },

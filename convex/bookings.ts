@@ -1372,62 +1372,12 @@ export const createBatch = mutation({
       vehicle_config_id: vehicle.vehicle_config_id ?? null,
     });
 
-    // Per-service `fallback_catch` detection: walk args.services alongside
-    // disclosedRange.service_quote_flags (same order) and append a
-    // 'fallback_catch' flag to any line whose client-supplied parts_cost
-    // falls outside the engine's per-service parts band. This is what
-    // surfaces the Alfa-Stelvio bug-class case (AI-enriched parts $25 vs
-    // engine multiplier band $148.50–$167.40) on the director side.
-    const serviceQuoteFlagsForBooking = disclosedRange.service_quote_flags.map(
-      (row, idx) => {
-        const svc = args.services[idx];
-        const partsCost = svc?.parts_cost ?? 0;
-        const flagsSet = new Set(row.flags);
-        if (
-          row.engine_parts_low != null &&
-          row.engine_parts_high != null &&
-          row.engine_parts_low > 0
-        ) {
-          const bandLow = row.engine_parts_low * 0.95; // −5%
-          const bandHigh = row.engine_parts_high * 1.08; // +8%
-          if (partsCost < bandLow || partsCost > bandHigh) {
-            flagsSet.add("fallback_catch");
-            console.warn(
-              `[createBatch] per-service fallback catch service=${svc?.service_id} ` +
-                `client_parts=$${partsCost.toFixed(2)} ` +
-                `engine_band=[$${row.engine_parts_low.toFixed(2)}, $${row.engine_parts_high.toFixed(2)}] ` +
-                `vin=${normalizedVin}`,
-            );
-          }
-        }
-        return {
-          ...row,
-          flags: Array.from(flagsSet),
-          booking_line_parts_cost: partsCost,
-        };
-      },
-    );
-
-    // Booking-level aggregate: union of computeDisclosedRange engine flags +
-    // any per-service `fallback_catch` we just detected + the booking-total
-    // price_outside_fallback_band check from Phase 2. Persisted on the
-    // booking row; the mobile review screen renders an "Estimate" pill when
-    // non-empty.
-    const aggregatedFlags = new Set<string>(disclosedRange.quote_flags);
-    for (const row of serviceQuoteFlagsForBooking) {
-      for (const f of row.flags) aggregatedFlags.add(f);
-    }
-    const quoteFlagsForBooking = computeQuoteFallbackFlags({
-      baseFlags: Array.from(aggregatedFlags),
-      fallbackLow: disclosedRange.quote_fallback_low_dollars,
-      fallbackHigh: disclosedRange.quote_fallback_high_dollars,
-      clientTotalDollars: labor_cost + parts_cost,
-      vin: normalizedVin,
-    });
-
     // Itemized parts snapshot — same per-unit prices the customer saw on
     // Review & Pay. Frozen on the booking so the mechanic's post-job dialog
     // can hydrate from this directly instead of re-querying part_prices.
+    // Computed before the per-service flag block so we can diff the AI's
+    // per-OEM prices against the submitted parts_cost and distinguish
+    // engine-corrected lines from missed catches.
     const ownerSpecs = await ctx.db
       .query("vehicle_owner_specs")
       .withIndex("by_vehicle_owner", (q) =>
@@ -1445,6 +1395,106 @@ export const createBatch = mutation({
       })),
     });
     const pricedPartsSnapshot = pricedPartsResult.rows;
+
+    // Aggregate the AI's per-OEM prices per service so we can tell the
+    // difference between "client submitted what AI quoted" (status quo)
+    // and "client corrected from AI to the engine band" (Phase 4 happy
+    // path). Used in the per-service flag block below.
+    const aiPartsDollarsByServiceId = new Map<string, number>();
+    for (const row of pricedPartsSnapshot) {
+      const sid = String(row.service_id);
+      aiPartsDollarsByServiceId.set(
+        sid,
+        (aiPartsDollarsByServiceId.get(sid) ?? 0) + row.line_total_cents / 100,
+      );
+    }
+
+    // Per-service flag detection: walk args.services alongside
+    // disclosedRange.service_quote_flags (same order). Distinguishes:
+    //   - 'fallback_catch'         : submitted outside engine band → client
+    //                                missed the swap, AI bad number persisted
+    //   - 'engine_corrected_parts' : submitted inside engine band BUT differs
+    //                                from AI snapshot by >5% → client used
+    //                                the engine band instead of AI (happy
+    //                                path for the Alfa-Stelvio bug class)
+    //   - no flag                  : AI was right, submitted matches engine
+    const serviceQuoteFlagsForBooking = disclosedRange.service_quote_flags.map(
+      (row, idx) => {
+        const svc = args.services[idx];
+        const partsCost = svc?.parts_cost ?? 0;
+        const flagsSet = new Set(row.flags);
+        // Fixed-price modes (per-(shop,service,tier) override or CCB absolute)
+        // are a set price, not an estimate — they cannot be "outside band" or
+        // "engine-corrected". Skip the fallback-spec band check entirely so
+        // they never get tagged as fallback. Parts-band logic for these is
+        // deferred to a follow-up.
+        const isFixedPrice =
+          flagsSet.has("fixed_price_override") ||
+          flagsSet.has("ccb_absolute_pricing");
+        if (
+          !isFixedPrice &&
+          row.engine_parts_low != null &&
+          row.engine_parts_high != null &&
+          row.engine_parts_low > 0
+        ) {
+          const bandLow = row.engine_parts_low * 0.95; // −5%
+          const bandHigh = row.engine_parts_high * 1.08; // +8%
+          if (partsCost < bandLow || partsCost > bandHigh) {
+            flagsSet.add("fallback_catch");
+            console.warn(
+              `[createBatch] per-service fallback catch service=${svc?.service_id} ` +
+                `client_parts=$${partsCost.toFixed(2)} ` +
+                `engine_band=[$${row.engine_parts_low.toFixed(2)}, $${row.engine_parts_high.toFixed(2)}] ` +
+                `vin=${normalizedVin}`,
+            );
+          } else {
+            // Inside band — check if it materially differs from what AI
+            // would have produced. If so, the client successfully corrected
+            // from AI to engine; record it as a positive signal.
+            const aiDollars = aiPartsDollarsByServiceId.get(
+              String(svc?.service_id),
+            );
+            if (
+              aiDollars != null &&
+              aiDollars > 0 &&
+              partsCost > 0 &&
+              Math.abs(aiDollars - partsCost) / partsCost > 0.05
+            ) {
+              flagsSet.add("engine_corrected_parts");
+              console.info(
+                `[createBatch] per-service engine-corrected parts service=${svc?.service_id} ` +
+                  `client_parts=$${partsCost.toFixed(2)} ` +
+                  `ai_snapshot_parts=$${aiDollars.toFixed(2)} ` +
+                  `engine_band=[$${row.engine_parts_low.toFixed(2)}, $${row.engine_parts_high.toFixed(2)}] ` +
+                  `vin=${normalizedVin}`,
+              );
+            }
+          }
+        }
+        return {
+          ...row,
+          flags: Array.from(flagsSet),
+          booking_line_parts_cost: partsCost,
+        };
+      },
+    );
+
+    // Booking-level aggregate: union of computeDisclosedRange engine flags +
+    // any per-service `fallback_catch` / `engine_corrected_parts` we just
+    // detected + the booking-total price_outside_fallback_band check from
+    // Phase 2. Persisted on the booking row; the mobile review screen
+    // renders an "Estimate" pill when non-empty.
+    const aggregatedFlags = new Set<string>(disclosedRange.quote_flags);
+    for (const row of serviceQuoteFlagsForBooking) {
+      for (const f of row.flags) aggregatedFlags.add(f);
+    }
+    const quoteFlagsForBooking = computeQuoteFallbackFlags({
+      baseFlags: Array.from(aggregatedFlags),
+      fallbackLow: disclosedRange.quote_fallback_low_dollars,
+      fallbackHigh: disclosedRange.quote_fallback_high_dollars,
+      clientTotalDollars: labor_cost + parts_cost,
+      vin: normalizedVin,
+    });
 
     // Single-point quote the mechanic confirms against (no min/max). For
     // flat-priced services, the locked-in `price_cents` replaces the raw

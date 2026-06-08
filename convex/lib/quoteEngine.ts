@@ -16,6 +16,7 @@ import { Doc, Id } from "../_generated/dataModel";
 import { QueryCtx } from "../_generated/server";
 import { resolveLaborRate, VehicleTier } from "./vehicleTiers";
 import { ASSIGNMENT_RULES, matchRule } from "../seeds/seedPricing";
+import { resolveServiceUnitCount, unitScale } from "./serviceUnits";
 
 // Anchor — the 2020 Camry LE FWD vehicle_config (seeded by seedCamryBaseline).
 export const CAMRY_FWD_CONFIG_KEY = "2020_toyota_camry_le_fwd_a25a-fks";
@@ -364,7 +365,31 @@ export type Quote =
         hours_confidence: number;
         rate_source: string;
       };
-      parts: { low: number; high: number; source: string };
+      parts: {
+        /** Service total parts band (per-unit × unit_count). Drives the
+         *  customer-facing line total + Stripe hold. */
+        low: number;
+        high: number;
+        source: string;
+        /** Per-unit band — display the SAME number on each per-OEM-part
+         *  row when unit_count > 1 (e.g. front + rear axles, 8 plugs,
+         *  N quarts of oil). */
+        per_unit_low: number;
+        per_unit_high: number;
+        /** How many of `unit_label` this vehicle consumes for this service.
+         *  For per_axle: 1 or 2 (booking position). For per_cylinder: 4/6/8.
+         *  For per_unit_spec: engines.{capacity}. For per_wheel: 4. For
+         *  fixed_kit: 1. */
+        unit_count: number;
+        /** How many units the Camry-anchored band represents. Caller scales
+         *  by (unit_count / baseline_count). */
+        baseline_count: number;
+        /** Display label: "axle" | "cyl" | "qt" | "wheel" | "kit". */
+        unit_label: string | null;
+        /** True when we couldn't resolve a per-vehicle count and fell back
+         *  to the baseline (e.g. unenriched engine, missing capacity). */
+        unit_count_estimated: boolean;
+      };
       flags: string[];
       display_label?: string;
     }
@@ -381,6 +406,9 @@ export async function buildQuote(
     vehicle_config_id: Id<"vehicle_configs">;
     service_id: Id<"services">;
     shop_id: Id<"shops">;
+    /** Booking position for per_axle services ("front" | "rear" | "both").
+     *  Ignored for other parts_kind values. Defaults to 1 axle when null. */
+    booking_position?: "front" | "rear" | "both" | null;
   },
 ): Promise<Quote> {
   const cfg = await ctx.db.get(args.vehicle_config_id);
@@ -430,7 +458,17 @@ export async function buildQuote(
         hours_confidence: 1,
         rate_source: "fixed_override",
       },
-      parts: { low: price, high: price, source: "fixed_override" },
+      parts: {
+        low: price,
+        high: price,
+        source: "fixed_override",
+        per_unit_low: price,
+        per_unit_high: price,
+        unit_count: 1,
+        baseline_count: 1,
+        unit_label: "kit",
+        unit_count_estimated: false,
+      },
       flags: ["fixed_price_override"],
       display_label: "Fixed price",
     };
@@ -455,9 +493,51 @@ export async function buildQuote(
   });
   if (!partsRes.ok) return refuse(partsRes.reason);
 
+  // Resolve the per-vehicle unit count via the service's parts_kind:
+  // per_axle uses booking_position, per_cylinder reads engines.cylinders,
+  // per_unit_spec reads the engine capacity field, per_wheel = 4, etc.
+  // The service total parts band = per-unit band × (unit_count / baseline).
+  const service = await ctx.db.get(args.service_id);
+  const camry = await getCamryFwdConfig(ctx);
+  const camrySpec =
+    camry?.engine_id && service
+      ? await ctx.db
+          .query("service_vehicle_specs")
+          .withIndex("by_engine_and_service", (q) =>
+            q
+              .eq("engine_id", camry.engine_id!)
+              .eq("service_id", args.service_id),
+          )
+          .first()
+      : null;
+  let engineRow: Doc<"engines"> | null = null;
+  if (cfg.engine_id) {
+    engineRow = (await ctx.db.get(cfg.engine_id)) ?? null;
+  }
+  const unitRes = service
+    ? resolveServiceUnitCount({
+        service,
+        engine: engineRow,
+        bookingPosition: args.booking_position ?? null,
+        baselineFromSpec: camrySpec?.parts_baseline_unit_count ?? null,
+      })
+    : {
+        count: 1,
+        label: null,
+        baseline: 1,
+        is_estimate: true,
+      };
+
+  // CCB absolute pricing is a flat per-axle price already, so don't scale
+  // it again — treat as unit_count=1 baseline=1.
+  const isCcbAbsolute = partsRes.source === "ccb_absolute";
+  const scale = isCcbAbsolute ? 1 : unitScale(unitRes);
+  const scaledPartsLow = partsRes.low * scale;
+  const scaledPartsHigh = partsRes.high * scale;
+
   const laborCost = hoursRes.hours * rateRes.rate;
-  const low = laborCost + partsRes.low;
-  const high = laborCost + partsRes.high;
+  const low = laborCost + scaledPartsLow;
+  const high = laborCost + scaledPartsHigh;
   const spreadPct = low > 0 ? ((high - low) / low) * 100 : 0;
 
   const flags: string[] = [...partsRes.flags];
@@ -465,6 +545,9 @@ export async function buildQuote(
   if (hoursRes.source === "tier_estimate") {
     flags.push("tier_estimate");
     display_label = "Initial estimate — final price confirmed at booking";
+  }
+  if (unitRes.is_estimate && !isCcbAbsolute) {
+    flags.push("unit_count_estimated");
   }
   if (spreadPct > 10) flags.push("spread_exceeded");
 
@@ -483,9 +566,15 @@ export async function buildQuote(
       rate_source: rateRes.source,
     },
     parts: {
-      low: round2(partsRes.low),
-      high: round2(partsRes.high),
+      low: round2(scaledPartsLow),
+      high: round2(scaledPartsHigh),
       source: partsRes.source,
+      per_unit_low: round2(partsRes.low),
+      per_unit_high: round2(partsRes.high),
+      unit_count: isCcbAbsolute ? 1 : unitRes.count,
+      baseline_count: isCcbAbsolute ? 1 : unitRes.baseline,
+      unit_label: isCcbAbsolute ? "axle" : unitRes.label,
+      unit_count_estimated: isCcbAbsolute ? false : unitRes.is_estimate,
     },
     flags,
     display_label,
@@ -581,6 +670,10 @@ export async function resolveQuoteSeries(
     vehicle_config_id: Id<"vehicle_configs">;
     service_ids: Id<"services">[];
     shop_id: Id<"shops">;
+    /** Optional per-service booking positions for per_axle services.
+     *  Map: service_id (stringified) → "front" | "rear" | "both". When a
+     *  service id is absent, defaults to 1 axle. */
+    service_positions?: Record<string, "front" | "rear" | "both">;
   },
 ): Promise<QuoteSeries> {
   const quotes: Quote[] = [];
@@ -594,6 +687,8 @@ export async function resolveQuoteSeries(
       vehicle_config_id: args.vehicle_config_id,
       service_id,
       shop_id: args.shop_id,
+      booking_position:
+        args.service_positions?.[String(service_id)] ?? null,
     });
     quotes.push(q);
     if (q.ok) {

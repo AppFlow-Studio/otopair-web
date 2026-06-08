@@ -110,6 +110,13 @@ export const patchVehicleConfig = internalMutation({
         }),
       ),
     ),
+    brake_system_type: v.optional(
+      v.union(
+        v.literal("standard"),
+        v.literal("sport"),
+        v.literal("carbon_ceramic"),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const { vehicle_config_id, ...fields } = args;

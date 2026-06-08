@@ -173,8 +173,14 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
                     const catches = detail.services.filter((s) =>
                       (s.quoteFlags ?? []).includes('fallback_catch'),
                     ).length
-                    return catches > 0
-                      ? `Services (${detail.services.length}) · ${catches} fallback catch${catches > 1 ? 'es' : ''}`
+                    const corrected = detail.services.filter((s) =>
+                      (s.quoteFlags ?? []).includes('engine_corrected_parts'),
+                    ).length
+                    const parts: string[] = []
+                    if (catches > 0) parts.push(`${catches} fallback catch${catches > 1 ? 'es' : ''}`)
+                    if (corrected > 0) parts.push(`${corrected} engine-corrected`)
+                    return parts.length > 0
+                      ? `Services (${detail.services.length}) · ${parts.join(' · ')}`
                       : `Services (${detail.services.length})`
                   })()}
                 />
@@ -182,9 +188,13 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
                   {detail.services.map((s) => {
                     const flags = s.quoteFlags ?? []
                     const isCatch = flags.includes('fallback_catch')
+                    const isCorrected = flags.includes('engine_corrected_parts')
                     const isRefused = flags.includes('fallback_only')
                     const otherFlags = flags.filter(
-                      (f) => f !== 'fallback_catch' && f !== 'fallback_only',
+                      (f) =>
+                        f !== 'fallback_catch' &&
+                        f !== 'engine_corrected_parts' &&
+                        f !== 'fallback_only',
                     )
                     const partsLow = s.engineBand?.partsLow
                     const partsHigh = s.engineBand?.partsHigh
@@ -199,11 +209,12 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
                           )
                         : null
                     return (
-                      <div key={String(s.id)} style={{ background:'#fff', border:`1px solid ${isCatch ? '#FED7AA' : 'var(--slate-200)'}`, borderRadius:8, padding:'8px 12px' }}>
+                      <div key={String(s.id)} style={{ background:'#fff', border:`1px solid ${isCatch ? '#FED7AA' : isCorrected ? '#A7F3D0' : 'var(--slate-200)'}`, borderRadius:8, padding:'8px 12px' }}>
                         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexWrap:'wrap' }}>
                           <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
                             <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{s.name}</span>
                             {isCatch && <Badge tone="orange">⚠ Fallback catch</Badge>}
+                            {isCorrected && <Badge tone="green">✓ Engine corrected</Badge>}
                             {isRefused && <Badge tone="red">Engine refused</Badge>}
                             {otherFlags.map((f) => (
                               <Badge key={f} tone="slate">{f}</Badge>
@@ -217,10 +228,11 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
                             Engine parts band {fmt(partsLow)}–{fmt(partsHigh)}
                             {linePrice != null && (
                               <>
-                                {' · '}booking line {fmt(linePrice)}
-                                {deltaPct != null && (
-                                  <> · {deltaPct > 0 ? '+' : ''}{deltaPct}% delta</>
-                                )}
+                                {' · '}
+                                {isCorrected
+                                  ? <>customer agreed to engine band ({fmt(linePrice)})</>
+                                  : <>booking line {fmt(linePrice)}{deltaPct != null && <> · {deltaPct > 0 ? '+' : ''}{deltaPct}% delta</>}</>
+                                }
                               </>
                             )}
                             {s.engineBand?.partsSource && (

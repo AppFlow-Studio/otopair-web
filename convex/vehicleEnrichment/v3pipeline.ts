@@ -1251,6 +1251,16 @@ export const enrichVehicleBatchV3 = internalAction({
       });
     }
 
+    // STEP 4c: Persist VDB-derived OEM brake tier (drives the Rotor Booking
+    // screen's pre-selection). Without this, the field stays undefined and
+    // every new config needs the backfill (convex/backfillVdbBrakes.ts).
+    if (vdbFields?.brakeSystemType) {
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
+        vehicle_config_id: vehicleConfigId,
+        brake_system_type: vdbFields.brakeSystemType,
+      });
+    }
+
     // STEP 5: Create enrichment run (now that vehicle_config_id is known)
     const runId = await ctx.runMutation(
       internal.vehicleEnrichment.v3mutations.createEnrichmentRun,

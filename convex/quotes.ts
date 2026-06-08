@@ -46,6 +46,15 @@ export const previewForBookingQuery = query({
     vehicle_owner_id: v.id("vehicle_owners"),
     service_ids: v.array(v.id("services")),
     shop_id: v.id("shops"),
+    /** Per-service booking positions for per_axle services. Map keys are
+     *  stringified service ids; values are 'front' | 'rear' | 'both'.
+     *  Optional — services not present default to 1 axle. */
+    service_positions: v.optional(
+      v.record(
+        v.string(),
+        v.union(v.literal("front"), v.literal("rear"), v.literal("both")),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const empty = {
@@ -92,6 +101,7 @@ export const previewForBookingQuery = query({
       vehicle_config_id: cfg._id,
       service_ids: args.service_ids,
       shop_id: args.shop_id,
+      service_positions: args.service_positions,
     });
     return { ok: true as const, ...series };
   },

@@ -115,6 +115,10 @@ export default defineSchema({
     oil_capacity_qts: v.optional(v.number()),
     coolant_type: v.optional(v.string()),
     coolant_capacity_qts: v.optional(v.number()),
+    // Pricing v2 per_unit_spec fluid capacities — feed serviceUnits.resolveServiceUnitCount
+    // for transmission_service / differential_service quantity scaling.
+    transmission_fluid_capacity_qts: v.optional(v.number()),
+    differential_fluid_capacity_qts: v.optional(v.number()),
     spark_plug_quantity: v.optional(v.number()),
     spark_plug_gap_mm: v.optional(v.number()),
     timing_idler_count: v.optional(v.number()),
@@ -785,6 +789,31 @@ export default defineSchema({
     requires_emissions_test: v.optional(v.boolean()),
     min_model_year: v.optional(v.number()),
     created_at: v.optional(v.number()),
+
+    // Pricing v2 — parts-quantity scaling kind. Tells the engine + mobile UI
+    // how the Camry-anchored band scales to other vehicles:
+    //   - 'labor_only'     : no parts; band is N/A
+    //   - 'per_axle'       : brake_pads, rotor — booking position drives count
+    //   - 'per_cylinder'   : spark_plugs — engines.spark_plug_quantity / cylinders
+    //   - 'per_unit_spec'  : oil/coolant/trans — engine capacity field
+    //   - 'per_wheel'      : tire_balance, tire_replacement — fixed 4
+    //   - 'fixed_kit'      : filter/battery/timing_belt/fuel_system — 1 service = 1 kit
+    parts_kind: v.optional(
+      v.union(
+        v.literal("labor_only"),
+        v.literal("per_axle"),
+        v.literal("per_cylinder"),
+        v.literal("per_unit_spec"),
+        v.literal("per_wheel"),
+        v.literal("fixed_kit"),
+      ),
+    ),
+    // Display label for the per-unit band: "axle" | "cyl" | "qt" | "wheel" | "kit"
+    parts_unit_label: v.optional(v.string()),
+    // For parts_kind='per_unit_spec', the engines table field to read for the
+    // per-vehicle quantity: "oil_capacity_qts" | "coolant_capacity_qts" |
+    // "transmission_fluid_capacity_qts" | "differential_fluid_capacity_qts".
+    parts_unit_spec_source: v.optional(v.string()),
   })
     .index("by_slug", ["slug"])
     .index("by_category", ["service_category_id"])
@@ -834,6 +863,11 @@ export default defineSchema({
     // parts_cost_low/high (above) hold the dealer parts-counter ±6% band.
     oem_part_number: v.optional(v.string()),
     parts_cost_basis: v.optional(v.string()),
+    // Pricing v2 parts-quantity scaling: how many units the Camry-anchored
+    // band represents on THIS spec row. Brake pads = 1 axle. Spark plugs
+    // on Camry A25A-FKS = 4 cylinders. Oil change on the Camry = ~5 qts.
+    // Other vehicles scale by (vehicle_unit_count / parts_baseline_unit_count).
+    parts_baseline_unit_count: v.optional(v.number()),
   })
     .index("by_engine_id", ["engine_id"])
     .index("by_service_id", ["service_id"])
@@ -2031,6 +2065,18 @@ export default defineSchema({
     incremented_total_cents: v.optional(v.number()),
     captured_amount_cents: v.optional(v.number()),
     reauth_payment_intent_id: v.optional(v.string()),
+
+    // How the customer originated this payment. Drives the reauth UX:
+    // 'card' = saved Stripe PaymentMethod on the customer (silent server-
+    // side reauth possible). 'apple_pay'/'google_pay' = one-time wallet
+    // token (reauth requires re-prompting the user via PlatformPay).
+    payment_origin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
 
     // Invoice PDF (generated server-side after capture). Identical layout to
     // the email attachment, stored once in Convex file storage and reused for

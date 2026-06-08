@@ -22,6 +22,7 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
+  query,
 } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { getStripe } from "../lib/stripe";
@@ -69,6 +70,36 @@ export const _getPaymentByBookingId = internalQuery({
       .query("payments")
       .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
       .unique();
+  },
+});
+
+/** Reactive query for the customer-side reauth screen to learn how the
+ *  active payment was originated. The reauth UI branches on this: card
+ *  → re-confirm with a saved PM; wallet → re-prompt PlatformPay to mint
+ *  a fresh one-time token (the original wallet PM is gone after first
+ *  use). Returns null when no payment row exists yet (booking still in
+ *  pre-PI state). Caller must own the booking. */
+export const getPaymentOriginForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<"card" | "apple_pay" | "google_pay" | null> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const me = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!me) throw new Error("User record not found.");
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    if (booking.user_id !== me._id) throw new Error("Not your booking.");
+    const payment = await ctx.db
+      .query("payments")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .unique();
+    return (payment?.payment_origin as "card" | "apple_pay" | "google_pay" | undefined) ?? null;
   },
 });
 
@@ -141,6 +172,16 @@ export const _recordPaymentIntent = internalMutation({
      *  total. Persists on payments.hold_amount_cents for downstream
      *  increment/capture decisions. */
     holdAmountCents: v.optional(v.number()),
+    /** Where the payment came from (saved card vs. wallet). Required for
+     *  routing the reauth fallback: card → silent server-side reauth;
+     *  wallet → re-prompt customer via PlatformPay. */
+    paymentOrigin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -159,6 +200,9 @@ export const _recordPaymentIntent = internalMutation({
         updated_at: now,
         ...(args.holdAmountCents != null
           ? { hold_amount_cents: args.holdAmountCents }
+          : {}),
+        ...(args.paymentOrigin != null
+          ? { payment_origin: args.paymentOrigin }
           : {}),
       });
       // Log the status change to history if it actually changed.
@@ -184,6 +228,9 @@ export const _recordPaymentIntent = internalMutation({
       created_at: now,
       updated_at: now,
       hold_amount_cents: args.holdAmountCents,
+      ...(args.paymentOrigin != null
+        ? { payment_origin: args.paymentOrigin }
+        : {}),
     });
     await ctx.scheduler.runAfter(0, internal.payment_status_history.log, {
       payment_id: paymentId,
@@ -616,6 +663,18 @@ export const createPaymentIntentForBooking = action({
   args: {
     bookingId: v.id("bookings"),
     paymentMethodId: v.string(),
+    /** Optional origin tag for the payment. Mobile passes 'apple_pay' or
+     *  'google_pay' for wallet flows so the reauth screen later knows to
+     *  re-prompt via PlatformPay instead of silently re-using a saved card.
+     *  Defaults are persisted by `_recordPaymentIntent`; omitting leaves
+     *  `payment_origin` unset on the row. */
+    paymentOrigin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
   },
   handler: async (
     ctx,
@@ -692,10 +751,17 @@ export const createPaymentIntentForBooking = action({
       throw new Error("Add a payment method before confirming.");
     }
 
-    // Verify ownership of the payment method.
+    // Verify ownership of the payment method. Saved cards are attached to
+    // the user's Stripe customer (pm.customer === user.stripe_customer_id).
+    // Wallet-minted PMs (Apple Pay / Google Pay via
+    // `createPlatformPayPaymentMethod`) come back unattached
+    // (pm.customer == null) — that's expected and safe: the wallet sheet
+    // authorization on the device is itself the authentication signal, and
+    // unattached PM ids are not enumerable. Reject only when the PM is
+    // attached to a *different* customer.
     const stripe = getStripe();
     const pm = await stripe.paymentMethods.retrieve(args.paymentMethodId);
-    if (pm.customer !== user.stripe_customer_id) {
+    if (pm.customer != null && pm.customer !== user.stripe_customer_id) {
       throw new Error("This card doesn't belong to you.");
     }
 
@@ -747,6 +813,13 @@ export const createPaymentIntentForBooking = action({
             destination: shop.stripe_connect_account_id,
           },
           automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+          // NOTE: `payment_method_options.card.request_incremental_authorization`
+          // would let Stripe lift the hold via `incrementAuthorization`
+          // instead of cancelling + recreating the PI, but it requires the
+          // platform Stripe account to be enrolled in Flexible Payments.
+          // Until that account capability is enabled, omit the opt-in;
+          // `adjustAuthorization` already handles the "increment not
+          // supported" fallback by running the reauth flow.
           metadata: {
             bookingId: String(args.bookingId),
             userId: String(user._id),
@@ -784,6 +857,9 @@ export const createPaymentIntentForBooking = action({
       status: mapped,
       idempotencyKey,
       holdAmountCents: amountCents,
+      ...(args.paymentOrigin != null
+        ? { paymentOrigin: args.paymentOrigin }
+        : {}),
     });
 
     return {
@@ -910,6 +986,17 @@ export const _recordAuthorizationAdjustment = internalMutation({
     bookingId: v.id("bookings"),
     incrementedTotalCents: v.number(),
     reauthPaymentIntentId: v.optional(v.string()),
+    /** Optional override of payment_origin. Set when a reauth swaps the
+     *  active PM (e.g., customer reauths with Apple Pay after the original
+     *  card flow); the row's origin must update so subsequent reauth UX
+     *  branches on the new wallet origin rather than the stale card. */
+    paymentOrigin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const payment = await ctx.db
@@ -924,6 +1011,9 @@ export const _recordAuthorizationAdjustment = internalMutation({
     if (args.reauthPaymentIntentId) {
       patch.reauth_payment_intent_id = args.reauthPaymentIntentId;
       patch.stripe_payment_intent_id = args.reauthPaymentIntentId;
+    }
+    if (args.paymentOrigin != null) {
+      patch.payment_origin = args.paymentOrigin;
     }
     await ctx.db.patch(payment._id, patch);
   },
@@ -1051,6 +1141,17 @@ export const resumeReauthFromMobile = action({
   args: {
     bookingId: v.id("bookings"),
     paymentMethodId: v.string(),
+    /** Origin of the *new* payment method for this reauth. Wallets always
+     *  mint a fresh one-time PM, so this should be passed when the customer
+     *  re-authorizes via Apple Pay / Google Pay. Used to stamp the payments
+     *  row so any future reauth on this booking re-uses the right UX. */
+    paymentOrigin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
   },
   handler: async (
     ctx,
@@ -1098,9 +1199,11 @@ export const resumeReauthFromMobile = action({
 
     const stripe = getStripe();
 
-    // PM-ownership check (mirrors createPaymentIntentForBooking).
+    // PM-ownership check (mirrors createPaymentIntentForBooking). Unattached
+    // PMs are wallet-minted one-time tokens — accept them; the wallet sheet
+    // authorization is the auth signal.
     const pm = await stripe.paymentMethods.retrieve(args.paymentMethodId);
-    if (pm.customer !== user.stripe_customer_id) {
+    if (pm.customer != null && pm.customer !== user.stripe_customer_id) {
       throw new Error("This card doesn't belong to you.");
     }
 
@@ -1130,6 +1233,8 @@ export const resumeReauthFromMobile = action({
         capture_method: "manual",
         transfer_data: { destination: shop.stripe_connect_account_id },
         automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+        // See note in createPaymentIntentForBooking: incremental auth opt-in
+        // is gated on platform Flexible Payments — omit until enabled.
         metadata: {
           bookingId: String(args.bookingId),
           userId: String(user._id),
@@ -1149,6 +1254,9 @@ export const resumeReauthFromMobile = action({
         bookingId: args.bookingId,
         incrementedTotalCents: targetCents,
         reauthPaymentIntentId: newPi.id,
+        ...(args.paymentOrigin != null
+          ? { paymentOrigin: args.paymentOrigin }
+          : {}),
       },
     );
     await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
@@ -1313,6 +1421,20 @@ async function reauthFlow(
   },
 ): Promise<{ status: string; targetCents?: number; reason?: string }> {
   const { booking, payment, targetCents, stripe } = args;
+  // Wallet-origin bookings cannot silently reauth — the original PM was a
+  // one-time wallet token and any saved card on file is not the customer's
+  // chosen payment for this booking. Push them through the customer-driven
+  // reauth flow (mobile screen presents a fresh wallet sheet) instead.
+  if (
+    payment?.payment_origin === "apple_pay" ||
+    payment?.payment_origin === "google_pay"
+  ) {
+    await ctx.runMutation(
+      internal.payments_stripe._revertBookingToPendingForReauth,
+      { bookingId: booking._id },
+    );
+    return { status: "reauth_failed", reason: "wallet origin requires user re-prompt" };
+  }
   try {
     // Step 1: cancel the existing PI (releases the $20 hold).
     try {

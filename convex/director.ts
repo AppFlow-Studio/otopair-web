@@ -438,6 +438,22 @@ export const recentBookingsList = query({
       const services = await Promise.all(
         b.service_ids.map(async (sid) => { const s = await ctx.db.get(sid); return s?.name ?? "—"; })
       );
+      // Pricing v2 fallback summary — mirrors the per-service classification
+      // BookingDetailModal already does, so list + modal stay in sync without
+      // a second round-trip when the director scans the table. Fixed-price
+      // modes (fixed_price_override, ccb_absolute_pricing) are set prices,
+      // not estimates — explicitly excluded from the fallback counters.
+      const flagRows = b.service_quote_flags ?? [];
+      let catches = 0;
+      let corrected = 0;
+      let refused = 0;
+      for (const row of flagRows) {
+        const f = row.flags ?? [];
+        if (f.includes("fixed_price_override") || f.includes("ccb_absolute_pricing")) continue;
+        if (f.includes("fallback_catch")) catches++;
+        if (f.includes("engine_corrected_parts")) corrected++;
+        if (f.includes("fallback_only")) refused++;
+      }
       return {
         id:        b._id,
         user:      user ? `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || user.email || "Unknown" : "Unknown",
@@ -447,6 +463,7 @@ export const recentBookingsList = query({
         time:      b.scheduled_time ?? "—",
         status:    b.status,
         total:     b.total_cost ?? 0,
+        fallback: { catches, corrected, refused, total: flagRows.length },
       };
     }));
   },

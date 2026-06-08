@@ -681,9 +681,20 @@ async function writeNormalizedData(
   wheelSizeSource?: string,
   /** Package-specific OEM parts: Map<package_code, Record<part_field_key, FieldResult>>. */
   packageParts?: Map<string, Record<string, FieldResult>>,
+  /**
+   * Write scope (additive). "full" (default) writes every section exactly as
+   * before. "parts" writes ONLY sections F + F2 (the upsertPartAndFitment parts
+   * writes) and skips A engine / B trans / C drivetrain / D trim / E vehicle_config
+   * / E2 chassis / G intervals / H evidence — used by the director PARTS-ONLY
+   * backfill. The parts sections depend only on vehicleConfigId + makeId + the
+   * parsed _oem fields (all passed in), so gating the others is safe.
+   */
+  writeScope: "full" | "parts" = "full",
 ) {
   const now = Date.now();
+  const partsOnly = writeScope === "parts";
 
+  if (!partsOnly) {
   // A. Engine specs — typed coercion
   const turboVal = fields.turbo?.value;
   let aspiration: string | undefined;
@@ -845,6 +856,7 @@ async function writeNormalizedData(
   } catch (e) {
     console.warn("[v8] chassis_specs write failed (non-fatal):", e);
   }
+  } // end if (!partsOnly) — sections A–E2 skipped under "parts" scope
 
   // F. OEM parts + fitments
   for (const [fieldKey, meta] of Object.entries(PART_FIELD_MAP)) {
@@ -931,6 +943,8 @@ async function writeNormalizedData(
       }
     }
   }
+
+  if (partsOnly) return; // "parts" scope: F/F2 done — skip G intervals + H evidence
 
   // G. Service intervals
   const intervalPrefixes = Object.keys(INTERVAL_TO_SERVICE);
@@ -1047,9 +1061,21 @@ export const enrichVehicleBatchV3 = internalAction({
     // vehicle_configs row in STAGE 4 so future VIN decodes can dedup against
     // it BEFORE Haiku engine code resolution. See vehicleEnrichment/types.ts.
     nhtsaVinKey: v.optional(v.string()),
+    // Director per-config backfill knobs (additive — default behavior is
+    // byte-identical to the signup path which passes neither). See
+    // directorConfigBackfills.ts.
+    //   force=true   → bypass the complete/verified cache short-circuits in
+    //                  STEP 0 so the run always re-executes (the IN_PROGRESS
+    //                  guard still holds, except the >4h stuck case).
+    //   writeScope="parts" → write ONLY parts (sections F/F2 in
+    //                  writeNormalizedData) and skip Batch-2 entirely, finalizing
+    //                  the run after Batch-1. "full" (default) is unchanged.
+    force: v.optional(v.boolean()),
+    writeScope: v.optional(v.union(v.literal("full"), v.literal("parts"))),
   },
   handler: async (ctx, args) => {
     const startTime = Date.now();
+    const scope = args.writeScope ?? "full";
     const vehicle: VehicleInput = {
       vehicleId: args.vehicleId,
       year: args.year,
@@ -1087,8 +1113,10 @@ export const enrichVehicleBatchV3 = internalAction({
         console.log(`[v8] Stale in-progress run for ${configKey} (${Math.round(runAge / 3600000)}h old), re-enriching`);
       }
 
-      // Complete/verified — use cache unless stale
-      if (status === "complete" || status === "verified") {
+      // Complete/verified — use cache unless stale.
+      // force=true (director backfill) bypasses BOTH cache short-circuits so the
+      // run always re-executes. The IN_PROGRESS guard above still holds.
+      if ((status === "complete" || status === "verified") && !args.force) {
         const STALE_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
         const lastEnriched = existingConfig.last_enriched_at;
         if (!lastEnriched || (Date.now() - lastEnriched) > STALE_MS) {
@@ -1559,6 +1587,7 @@ export const enrichVehicleBatchV3 = internalAction({
         wheelSizeSource: sources.wheelSizeResult?.sourceUrl ?? undefined,
         vdbRepairBlocks: vdbRepairRaw?.blocks ?? undefined,
         vdbRepairActions: vdbRepairRaw?.actions ?? undefined,
+        writeScope: scope,
       },
     );
 
@@ -1618,9 +1647,13 @@ export const _pollBatch1V3 = internalAction({
     wheelSizeSource: v.optional(v.string()),
     vdbRepairBlocks: v.optional(v.array(v.any())),
     vdbRepairActions: v.optional(v.array(v.string())),
+    // Director backfill scope (additive). "parts" → write only F/F2 parts and
+    // finalize after Batch-1 (no Batch-2). Defaults to "full".
+    writeScope: v.optional(v.union(v.literal("full"), v.literal("parts"))),
   },
   handler: async (ctx, args) => {
     const attempt = args.attempt ?? 1;
+    const writeScope = args.writeScope ?? "full";
     console.log(`[v8/_pollBatch1] Poll attempt ${attempt} for batchId=${args.batchId}`);
 
     const status = await getBatchStatus(args.batchId);
@@ -1780,7 +1813,56 @@ export const _pollBatch1V3 = internalAction({
       args.wheelSizeOptions,
       args.wheelSizeSource,
       packageParts,
+      writeScope,
     );
+
+    // PARTS-ONLY backfill: stop after the Batch-1 parts write. Do NOT submit
+    // Batch-2 (gap fill / pricing). Finalize the run the same terminal way
+    // _pollBatch2V3 does — mark the enrichment_run complete, recompute the
+    // normalized fill rate, and restore a terminal enrichment_status +
+    // last_enriched_at on the config — then return.
+    //
+    // STEP 4 of enrichVehicleBatchV3 clobbers the existing config to
+    // status="enriching" / fill_rate=0 on EVERY run (including this force/parts
+    // one), so we MUST restore a terminal status here or a previously-complete
+    // config would be left stuck "enriching". We recompute fill_rate and apply
+    // the SAME >=70 → "complete" / else "partial" rule the full path uses in
+    // _pollBatch2V3, so the config lands in a correct terminal state. No Batch-2,
+    // sibling backfill, notifications, or adversarial verification — this is a
+    // targeted parts refresh, not a full enrichment.
+    if (writeScope === "parts") {
+      const partsCallLog: CallLogEntry[] = callLog;
+      let partsFillRate = 0;
+      try {
+        const { rate } = await calculateV3FillRate(
+          ctx, args.vehicleConfigId, args.engineId, args.transmissionId,
+        );
+        partsFillRate = rate;
+      } catch (e) {
+        console.warn("[v8/_pollBatch1] parts-scope fill rate recompute failed (non-fatal):", e);
+      }
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+        run_id: args.runId,
+        status: "complete",
+        total_tokens_in: partsCallLog.reduce((s, c) => s + c.tokensIn, 0),
+        total_tokens_out: partsCallLog.reduce((s, c) => s + c.tokensOut, 0),
+        total_web_searches: partsCallLog.reduce((s, c) => s + c.webSearches, 0),
+        completed_at: Date.now(),
+        duration_ms: Date.now() - args.startTime,
+        fill_rate: partsFillRate,
+      });
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
+        vehicle_config_id: args.vehicleConfigId,
+        enrichment_status: partsFillRate >= 70 ? "complete" : "partial",
+        fill_rate: partsFillRate,
+        last_enriched_at: Date.now(),
+      });
+      console.log(
+        `[v8/_pollBatch1] PARTS-ONLY backfill complete for config ${args.vehicleConfigId} ` +
+        `— fill_rate=${partsFillRate}%, Batch-2 skipped`,
+      );
+      return;
+    }
 
     // Submit Batch 2
     const oemParts = getOemParts(fields);

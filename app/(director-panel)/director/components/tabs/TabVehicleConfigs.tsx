@@ -1,12 +1,12 @@
 'use client'
 
 import { useState, useEffect, useContext } from 'react'
-import { useQuery, useMutation } from 'convex/react'
+import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import {
   Badge, Button, Card, Input, Select, Modal, AuditButton,
-  tableStyles, IconSearch, IconX, IconCar,
+  tableStyles, IconSearch, IconX, IconCar, IconRefresh,
 } from '../Primitives'
 import { DirectorNotesPanel } from '../DirectorNotesPanel'
 import { SectionAnchor } from '../Shell'
@@ -332,6 +332,13 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   const updateChassisSpecs = useMutation(api.directorConfigActions.updateChassisSpecsFields)
   const updateTrimSpecs    = useMutation(api.directorConfigActions.updateTrimSpecsFields)
   const markVerified       = useMutation(api.directorConfigActions.markConfigVerified)
+  const reEnrichConfig     = useAction(api.directorConfigBackfills.reEnrichConfig)
+  const backfillConfigParts = useAction(api.directorConfigBackfills.backfillConfigParts)
+  const repriceConfigParts = useAction(api.directorConfigBackfills.repriceConfigParts)
+  // Independent busy flags so one running backfill doesn't grey out the others.
+  const [busyFull,   setBusyFull]   = useState(false)
+  const [busyParts,  setBusyParts]  = useState(false)
+  const [busyPrices, setBusyPrices] = useState(false)
 
   useEffect(() => {
     if (!toast) return
@@ -365,6 +372,50 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     if (!configId) return
     const res = await markVerified({ id: configId, actorName, actorId })
     setToast(`Config marked verified. Total: ${(res as any)?.verifications ?? '?'}.`)
+  }
+
+  // --- Backfill triggers -----------------------------------------------------
+  // Full + parts kick off an async enrichment job (Claude batch — completes in
+  // a few minutes); the toast confirms it was scheduled, the enrichment-runs
+  // panel shows progress. Prices runs inline and returns a live count.
+  const handleReEnrich = async () => {
+    if (!configId || busyFull) return
+    if (!window.confirm('Re-enrich the ENTIRE car? Re-runs the full pipeline (engine, transmission, parts, intervals, labor) and overwrites resolved specs. Costs an LLM batch and finishes in a few minutes.')) return
+    setBusyFull(true)
+    try {
+      const res = await reEnrichConfig({ id: configId, actorName, actorId }) as { status?: string; message?: string }
+      setToast(res?.status === 'scheduled'
+        ? 'Full re-enrich scheduled — check Enrichment runs in a few minutes.'
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+    } catch (e) {
+      setToast(`Re-enrich failed: ${(e as Error).message}`)
+    } finally { setBusyFull(false) }
+  }
+
+  const handleBackfillParts = async () => {
+    if (!configId || busyParts) return
+    if (!window.confirm('Re-discover only this car’s PARTS (which parts apply per service)? Preserves hand-edited engine/transmission/chassis specs. Costs an LLM batch and finishes in a few minutes. Prices are not changed — use "Reprice parts" for that.')) return
+    setBusyParts(true)
+    try {
+      const res = await backfillConfigParts({ id: configId, actorName, actorId }) as { status?: string; message?: string }
+      setToast(res?.status === 'scheduled'
+        ? 'Parts backfill scheduled — check Enrichment runs in a few minutes.'
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+    } catch (e) {
+      setToast(`Parts backfill failed: ${(e as Error).message}`)
+    } finally { setBusyParts(false) }
+  }
+
+  const handleRepriceParts = async () => {
+    if (!configId || busyPrices) return
+    setBusyPrices(true)
+    try {
+      const res = await repriceConfigParts({ id: configId, actorName, actorId }) as { status?: string; priced?: number; partsTotal?: number }
+      if (res?.status === 'no_parts') setToast('No parts on this config to reprice yet.')
+      else setToast(`Repriced ${res?.priced ?? 0} of ${res?.partsTotal ?? 0} parts from live sources.`)
+    } catch (e) {
+      setToast(`Reprice failed: ${(e as Error).message}`)
+    } finally { setBusyPrices(false) }
   }
 
   const ymmt = detail
@@ -744,6 +795,15 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                   <ActionRow label="Mark verified"
                     hint={`Bumps verification count (current: ${detail.enrichment.verificationCount ?? 0})`}
                     action={<Button size="sm" variant="primary" onClick={handleVerify}>Verify</Button>} />
+                  <ActionRow label="Re-enrich entire car"
+                    hint="Full pipeline re-run (specs + parts + intervals + labor). Async — a few minutes."
+                    action={<Button size="sm" disabled={busyFull} onClick={handleReEnrich}>{busyFull ? 'Scheduling…' : 'Re-enrich'}</Button>} />
+                  <ActionRow label="Backfill parts only"
+                    hint="Re-discover which parts apply per service. Keeps hand-edited specs. Async — a few minutes."
+                    action={<Button size="sm" disabled={busyParts} onClick={handleBackfillParts}>{busyParts ? 'Scheduling…' : 'Backfill parts'}</Button>} />
+                  <ActionRow label="Reprice parts only"
+                    hint="Re-scrape correct prices for the parts already on this car. Runs now."
+                    action={<Button size="sm" disabled={busyPrices} icon={<IconRefresh size={11} />} onClick={handleRepriceParts}>{busyPrices ? 'Repricing…' : 'Reprice parts'}</Button>} />
                 </AdminActionPanel>
               </div>
 

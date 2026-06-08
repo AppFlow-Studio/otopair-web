@@ -176,6 +176,65 @@ export const getVehicleConfigById = internalQuery({
   },
 });
 
+/**
+ * Resolve everything the director per-config backfills need from a single
+ * vehicle_config_id: the resolved YMMT strings the pipeline expects (year,
+ * make name, model name, trim, engine code, displacement string, drivetrain),
+ * the engine/transmission/make IDs, and the first vehicles row attached to this
+ * config (via the by_vehicle_config index). Returns null if the config is gone.
+ *
+ * `displacement` is returned as a STRING (the pipeline's VehicleInput.displacement
+ * is a string). vehicleId is null when no vehicles row references this config —
+ * the caller surfaces that as a "no_vehicle" status because the vehicle-keyed
+ * pipeline can't run without one.
+ */
+export const resolveConfigForBackfill = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const config = await ctx.db.get(args.vehicleConfigId);
+    if (!config) return null;
+    const cfg = config as any;
+
+    const [make, model, engine] = await Promise.all([
+      cfg.make_id ? ctx.db.get(cfg.make_id) : null,
+      cfg.model_id ? ctx.db.get(cfg.model_id) : null,
+      cfg.engine_id ? ctx.db.get(cfg.engine_id) : null,
+    ]);
+
+    // displacement → string. Prefer numeric displacement_l, fall back to the
+    // legacy displacement_liters (string|number). Empty string when unknown —
+    // buildEngineKey() drops empty parts so this stays consistent with the
+    // signup-time enrichment path.
+    const rawDisp =
+      (engine as any)?.displacement_l ?? (engine as any)?.displacement_liters ?? null;
+    const displacement =
+      rawDisp == null ? "" : typeof rawDisp === "string" ? rawDisp : String(rawDisp);
+
+    // First vehicles row attached to this config (the vehicle-keyed pipeline needs one).
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vehicle_config", (q) =>
+        q.eq("vehicle_config_id", args.vehicleConfigId),
+      )
+      .first();
+
+    return {
+      vehicleConfigId: args.vehicleConfigId,
+      year: (cfg.year as number) ?? 0,
+      make: (make as any)?.name ?? "",
+      model: (model as any)?.name ?? "",
+      trim: (cfg.trim_name as string) ?? "",
+      engineCode: (engine as any)?.engine_code ?? "",
+      displacement,
+      drivetrain: (cfg.drivetrain as string) ?? undefined,
+      makeId: cfg.make_id ?? null,
+      engineId: cfg.engine_id ?? null,
+      transmissionId: cfg.transmission_id ?? null,
+      vehicleId: vehicle?._id ?? null,
+    };
+  },
+});
+
 /** Resolve year/make/model/trim strings from a vehicle_config_id. */
 export const getVehicleLabels = internalQuery({
   args: { vehicleConfigId: v.id("vehicle_configs") },

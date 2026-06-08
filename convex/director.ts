@@ -464,7 +464,16 @@ export const bookingDetail = query({
     ]);
 
     // Service rows — keep id + description so we can show the form filled
-    // per-service (selected option, tire spec, etc.).
+    // per-service (selected option, tire spec, etc.). Joins Pricing v2
+    // per-service flags so the director modal can render a "Fallback catch"
+    // pill next to lines the engine flagged.
+    const serviceFlagsByServiceId = new Map<
+      string,
+      NonNullable<typeof booking.service_quote_flags>[number]
+    >();
+    for (const row of booking.service_quote_flags ?? []) {
+      serviceFlagsByServiceId.set(String(row.service_id), row);
+    }
     const services = await Promise.all(
       booking.service_ids.map(async (sid) => {
         const s = await ctx.db.get(sid);
@@ -473,12 +482,24 @@ export const bookingDetail = query({
           const cat = await ctx.db.get(s.service_category_id);
           category = cat?.name;
         }
+        const flagRow = serviceFlagsByServiceId.get(String(sid));
         return {
           id:          sid,
           name:        s?.name ?? "—",
           slug:        s?.slug,
           description: s?.description,
           category,
+          quoteFlags:  flagRow?.flags ?? [],
+          engineBand: flagRow
+            ? {
+                partsLow:    flagRow.engine_parts_low ?? null,
+                partsHigh:   flagRow.engine_parts_high ?? null,
+                laborHours:  flagRow.engine_labor_hours ?? null,
+                laborSource: flagRow.engine_labor_source ?? null,
+                partsSource: flagRow.parts_source ?? null,
+              }
+            : null,
+          bookingLinePartsCost: flagRow?.booking_line_parts_cost ?? null,
         };
       })
     );
@@ -593,6 +614,9 @@ export const bookingDetail = query({
       recommendedScheduledTime: booking.recommended_scheduled_time,
       parentJobId:         booking.parent_job_id,
       refundReason:        booking.refund_reason,
+      quoteFlags:          booking.quote_flags ?? [],
+      quoteFallbackLow:    booking.quote_fallback_low ?? null,
+      quoteFallbackHigh:   booking.quote_fallback_high ?? null,
 
       statusHistory: statusHistory.map((h) => ({
         status:    h.new_status,

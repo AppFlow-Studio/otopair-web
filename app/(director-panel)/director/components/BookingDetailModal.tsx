@@ -168,17 +168,74 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
             <div style={{ padding:22, borderRight:'1px solid var(--slate-100)' }}>
               {/* Services */}
               <div style={{ marginBottom:18 }}>
-                <SectionTitle label={`Services (${detail.services.length})`} />
+                <SectionTitle
+                  label={(() => {
+                    const catches = detail.services.filter((s) =>
+                      (s.quoteFlags ?? []).includes('fallback_catch'),
+                    ).length
+                    return catches > 0
+                      ? `Services (${detail.services.length}) · ${catches} fallback catch${catches > 1 ? 'es' : ''}`
+                      : `Services (${detail.services.length})`
+                  })()}
+                />
                 <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                  {detail.services.map((s) => (
-                    <div key={String(s.id)} style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:8, padding:'8px 12px' }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-                        <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{s.name}</span>
-                        {s.category && <Badge tone="slate">{s.category}</Badge>}
+                  {detail.services.map((s) => {
+                    const flags = s.quoteFlags ?? []
+                    const isCatch = flags.includes('fallback_catch')
+                    const isRefused = flags.includes('fallback_only')
+                    const otherFlags = flags.filter(
+                      (f) => f !== 'fallback_catch' && f !== 'fallback_only',
+                    )
+                    const partsLow = s.engineBand?.partsLow
+                    const partsHigh = s.engineBand?.partsHigh
+                    const linePrice = s.bookingLinePartsCost
+                    const fmt = (n: number) => `$${n.toFixed(2)}`
+                    const deltaPct =
+                      partsLow != null && partsHigh != null && linePrice != null && partsLow > 0
+                        ? Math.round(
+                            ((linePrice - (partsLow + partsHigh) / 2) /
+                              ((partsLow + partsHigh) / 2)) *
+                              100,
+                          )
+                        : null
+                    return (
+                      <div key={String(s.id)} style={{ background:'#fff', border:`1px solid ${isCatch ? '#FED7AA' : 'var(--slate-200)'}`, borderRadius:8, padding:'8px 12px' }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
+                            <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{s.name}</span>
+                            {isCatch && <Badge tone="orange">⚠ Fallback catch</Badge>}
+                            {isRefused && <Badge tone="red">Engine refused</Badge>}
+                            {otherFlags.map((f) => (
+                              <Badge key={f} tone="slate">{f}</Badge>
+                            ))}
+                          </div>
+                          {s.category && <Badge tone="slate">{s.category}</Badge>}
+                        </div>
+                        {s.description && <div style={{ fontSize:11, color:'var(--slate-500)', marginTop:3 }}>{s.description}</div>}
+                        {partsLow != null && partsHigh != null && (
+                          <div style={{ fontSize:11, color:'var(--slate-500)', marginTop:4, fontFamily:'var(--mono)' }}>
+                            Engine parts band {fmt(partsLow)}–{fmt(partsHigh)}
+                            {linePrice != null && (
+                              <>
+                                {' · '}booking line {fmt(linePrice)}
+                                {deltaPct != null && (
+                                  <> · {deltaPct > 0 ? '+' : ''}{deltaPct}% delta</>
+                                )}
+                              </>
+                            )}
+                            {s.engineBand?.partsSource && (
+                              <> · <span style={{ color:'var(--slate-400)' }}>{s.engineBand.partsSource}</span></>
+                            )}
+                          </div>
+                        )}
+                        {isRefused && (
+                          <div style={{ fontSize:11, color:'var(--red-700)', marginTop:4 }}>
+                            Engine refused this service — routed to booking_approvals.
+                          </div>
+                        )}
                       </div>
-                      {s.description && <div style={{ fontSize:11, color:'var(--slate-500)', marginTop:3 }}>{s.description}</div>}
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
 

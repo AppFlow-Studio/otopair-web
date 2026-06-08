@@ -1873,6 +1873,26 @@ export default defineSchema({
     quote_flags: v.optional(v.array(v.string())),
     quote_fallback_low: v.optional(v.float64()),
     quote_fallback_high: v.optional(v.float64()),
+    // Per-service sibling to `quote_flags`. One row per service id with the
+    // engine's per-quote flags + a `fallback_catch` marker when the booking
+    // line for that service falls outside the engine's per-service band
+    // (the case where AI-enriched parts prices were materially wrong and
+    // the multiplier engine corrected them). Drives the director-side
+    // "Fallback catch" pill so admins can audit which line was caught.
+    service_quote_flags: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          flags: v.array(v.string()),
+          engine_parts_low: v.optional(v.float64()),
+          engine_parts_high: v.optional(v.float64()),
+          engine_labor_hours: v.optional(v.float64()),
+          engine_labor_source: v.optional(v.string()),
+          parts_source: v.optional(v.string()),
+          booking_line_parts_cost: v.optional(v.float64()),
+        }),
+      ),
+    ),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])

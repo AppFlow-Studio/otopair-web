@@ -81,6 +81,27 @@ export type FixedPriceLine = {
   price_cents: number;
 };
 
+/** Per-service projection of the quote-engine result for the booking.
+ *  One row per service id in the booking, in the same order as
+ *  `args.services`. Lets `createBatch` compare per-line costs against the
+ *  engine's per-service band and stamp `fallback_catch` on the service
+ *  rows that diverge (the case where AI-enriched parts prices were wrong
+ *  and the multiplier engine corrected them). Persisted on the booking
+ *  row as `service_quote_flags` so the director panel can render a
+ *  per-line "Fallback catch" pill. */
+export type PerServiceQuoteFlags = {
+  service_id: Id<"services">;
+  /** Engine flags for this service, possibly augmented with 'fallback_catch'
+   *  in createBatch when the per-line cost falls outside the engine band.
+   *  When the engine refused this service, contains ['fallback_only']. */
+  flags: string[];
+  engine_parts_low: number | null;
+  engine_parts_high: number | null;
+  engine_labor_hours: number | null;
+  engine_labor_source: string | null;
+  parts_source: string | null;
+};
+
 export type ComputeDisclosedRangeResult = {
   low_cents: number;
   high_cents: number;
@@ -107,6 +128,11 @@ export type ComputeDisclosedRangeResult = {
    *  band sits from the engine's confidence-weighted fallback. */
   quote_fallback_low_dollars: number | null;
   quote_fallback_high_dollars: number | null;
+  /** Per-service engine projection in the same order as `args.services`.
+   *  Empty when the caller didn't supply shop_id + vehicle_config_id.
+   *  Consumed by createBatch to detect per-line `fallback_catch` and by
+   *  director.bookingDetail to surface per-service flags. */
+  service_quote_flags: PerServiceQuoteFlags[];
 };
 
 const dollarsToCents = (d: number) => Math.round(d * 100);
@@ -230,22 +256,50 @@ export async function computeDisclosedRange(
   const quote_flags_set = new Set<string>();
   let quote_fallback_low_dollars: number | null = null;
   let quote_fallback_high_dollars: number | null = null;
+  const service_quote_flags: PerServiceQuoteFlags[] = [];
   if (args.shop_id && args.vehicle_config_id) {
     const series = await resolveQuoteSeries(ctx, {
       vehicle_config_id: args.vehicle_config_id,
       service_ids: args.services.map((s) => s.service_id),
       shop_id: args.shop_id,
     });
-    if (series.quotes.some((q) => !q.ok)) {
+    const anyRefused = series.quotes.some((q) => !q.ok);
+    if (anyRefused) {
       quote_flags_set.add("fallback_only");
       quote_flags_set.add("tier_estimate");
     } else {
-      for (const q of series.quotes) {
-        if (!q.ok) continue;
-        for (const f of q.flags) quote_flags_set.add(f);
-      }
       quote_fallback_low_dollars = series.total_low;
       quote_fallback_high_dollars = series.total_high;
+    }
+    // Build the per-service projection regardless of whether any service
+    // refused — directors still want to see which lines the engine refused
+    // and which it cleared. Order matches args.services (same as the input
+    // service_ids passed to resolveQuoteSeries).
+    for (let i = 0; i < args.services.length; i++) {
+      const svc = args.services[i];
+      const q = series.quotes[i];
+      if (q && q.ok) {
+        for (const f of q.flags) quote_flags_set.add(f);
+        service_quote_flags.push({
+          service_id: svc.service_id,
+          flags: [...q.flags],
+          engine_parts_low: q.parts.low,
+          engine_parts_high: q.parts.high,
+          engine_labor_hours: q.labor.hours,
+          engine_labor_source: q.labor.hours_source,
+          parts_source: q.parts.source,
+        });
+      } else {
+        service_quote_flags.push({
+          service_id: svc.service_id,
+          flags: ["fallback_only"],
+          engine_parts_low: null,
+          engine_parts_high: null,
+          engine_labor_hours: null,
+          engine_labor_source: null,
+          parts_source: null,
+        });
+      }
     }
   }
 
@@ -258,6 +312,7 @@ export async function computeDisclosedRange(
     quote_flags: Array.from(quote_flags_set),
     quote_fallback_low_dollars,
     quote_fallback_high_dollars,
+    service_quote_flags,
   };
 }
 

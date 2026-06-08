@@ -1372,13 +1372,53 @@ export const createBatch = mutation({
       vehicle_config_id: vehicle.vehicle_config_id ?? null,
     });
 
-    // Pricing v2 fallback-band sanity: union of engine-derived flags from
-    // computeDisclosedRange + price_outside_fallback_band when the shop-
-    // supplied (labor + parts) total falls outside −5% / +8% of the engine
-    // [low, high]. Persisted on the booking row; the mobile review screen
-    // renders an "Estimate" pill when non-empty.
+    // Per-service `fallback_catch` detection: walk args.services alongside
+    // disclosedRange.service_quote_flags (same order) and append a
+    // 'fallback_catch' flag to any line whose client-supplied parts_cost
+    // falls outside the engine's per-service parts band. This is what
+    // surfaces the Alfa-Stelvio bug-class case (AI-enriched parts $25 vs
+    // engine multiplier band $148.50–$167.40) on the director side.
+    const serviceQuoteFlagsForBooking = disclosedRange.service_quote_flags.map(
+      (row, idx) => {
+        const svc = args.services[idx];
+        const partsCost = svc?.parts_cost ?? 0;
+        const flagsSet = new Set(row.flags);
+        if (
+          row.engine_parts_low != null &&
+          row.engine_parts_high != null &&
+          row.engine_parts_low > 0
+        ) {
+          const bandLow = row.engine_parts_low * 0.95; // −5%
+          const bandHigh = row.engine_parts_high * 1.08; // +8%
+          if (partsCost < bandLow || partsCost > bandHigh) {
+            flagsSet.add("fallback_catch");
+            console.warn(
+              `[createBatch] per-service fallback catch service=${svc?.service_id} ` +
+                `client_parts=$${partsCost.toFixed(2)} ` +
+                `engine_band=[$${row.engine_parts_low.toFixed(2)}, $${row.engine_parts_high.toFixed(2)}] ` +
+                `vin=${normalizedVin}`,
+            );
+          }
+        }
+        return {
+          ...row,
+          flags: Array.from(flagsSet),
+          booking_line_parts_cost: partsCost,
+        };
+      },
+    );
+
+    // Booking-level aggregate: union of computeDisclosedRange engine flags +
+    // any per-service `fallback_catch` we just detected + the booking-total
+    // price_outside_fallback_band check from Phase 2. Persisted on the
+    // booking row; the mobile review screen renders an "Estimate" pill when
+    // non-empty.
+    const aggregatedFlags = new Set<string>(disclosedRange.quote_flags);
+    for (const row of serviceQuoteFlagsForBooking) {
+      for (const f of row.flags) aggregatedFlags.add(f);
+    }
     const quoteFlagsForBooking = computeQuoteFallbackFlags({
-      baseFlags: disclosedRange.quote_flags,
+      baseFlags: Array.from(aggregatedFlags),
       fallbackLow: disclosedRange.quote_fallback_low_dollars,
       fallbackHigh: disclosedRange.quote_fallback_high_dollars,
       clientTotalDollars: labor_cost + parts_cost,
@@ -1480,6 +1520,19 @@ export const createBatch = mutation({
         disclosedRange.quote_fallback_low_dollars ?? undefined,
       quote_fallback_high:
         disclosedRange.quote_fallback_high_dollars ?? undefined,
+      service_quote_flags:
+        serviceQuoteFlagsForBooking.length > 0
+          ? serviceQuoteFlagsForBooking.map((r) => ({
+              service_id: r.service_id,
+              flags: r.flags,
+              engine_parts_low: r.engine_parts_low ?? undefined,
+              engine_parts_high: r.engine_parts_high ?? undefined,
+              engine_labor_hours: r.engine_labor_hours ?? undefined,
+              engine_labor_source: r.engine_labor_source ?? undefined,
+              parts_source: r.parts_source ?? undefined,
+              booking_line_parts_cost: r.booking_line_parts_cost ?? undefined,
+            }))
+          : undefined,
     });
 
     await logBookingStatusChange(

@@ -72,12 +72,13 @@ export interface PriorConversationFact {
 /**
  * Map the onboarding car-knowledge self-rating to a coarse label Oto can act
  * on. The onboarding question stores a NUMBER (onboarding_questions_answers
- * .car_knowledge_level). The only value seen in the wild so far is 1, so the
- * thresholds below assume a 1–3 self-rating (1 = beginner … 3 = experienced);
- * AB owns the onboarding scale — confirm/adjust if it's 1–5. Strings are also
- * accepted (forward-compat) and matched by keyword. Null/unknown → null, which
- * the envelope omits entirely so Oto stays at its friendly baseline (no
- * behavior change for users who never answered).
+ * .car_knowledge_level). CONFIRMED 1–3 scale from production (temurbek) data:
+ *   1 = "I prefer things explained to me"  → beginner
+ *   2 = "I know some stuff"                → intermediate
+ *   3 = "I'm car-savvy"                    → experienced
+ * Strings are also accepted (forward-compat) and matched by keyword.
+ * Null/unknown → null, which the envelope omits entirely so Oto stays at its
+ * friendly baseline (no behavior change for users who never answered).
  */
 export function knowledgeLabel(
   level: number | string | null | undefined,

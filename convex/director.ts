@@ -447,12 +447,16 @@ export const recentBookingsList = query({
       let catches = 0;
       let corrected = 0;
       let refused = 0;
+      let laborFloored = 0;
+      let laborAbove = 0;
       for (const row of flagRows) {
         const f = row.flags ?? [];
         if (f.includes("fixed_price_override") || f.includes("ccb_absolute_pricing")) continue;
         if (f.includes("fallback_catch")) catches++;
         if (f.includes("engine_corrected_parts")) corrected++;
         if (f.includes("fallback_only")) refused++;
+        if (f.includes("labor_below_tier_floor")) laborFloored++;
+        if (f.includes("labor_above_tier_expected")) laborAbove++;
       }
       // Booking-level "labor cost above engine" — server soft-flagged because
       // the customer's labor cost landed >8% above the engine's expected
@@ -480,6 +484,8 @@ export const recentBookingsList = query({
           refused,
           aboveEngine,
           aboveEngineDeltaDollars,
+          laborFloored,
+          laborAbove,
           total: flagRows.length,
         },
       };

@@ -175,6 +175,24 @@ const FIXTURES: ReadonlyArray<Fixture> = [
     make: "Alfa Romeo", model: "Stelvio", trim: "Ti", year: 2024,
     tier: "T2c",
   },
+
+  // ── Round 6: Below-floor labor (D) ───────────────────────────────────────
+  // VDB row passes the quality gate (confidence 0.92, data_quality OK) but
+  // book_hours = 0.3 is below the Camry × tier-multiplier floor of 0.6
+  // (Camry oil 0.5h × T2c labor mult 1.2). Expect: source stays "vdb",
+  // hours bumped to 0.6, `labor_below_tier_floor` flag fires.
+  {
+    config_key: "spec_v2_validation_d1_below_tier_floor",
+    make: "BMW", model: "5 Series", trim: "535i", year: 2022,
+    tier: "T2c",
+    real_labor: {
+      service_slug: "oil_change",
+      book_hours: 0.3,
+      source: "vdb",
+      confidence: 0.92,
+      data_quality: "enriched",
+    },
+  },
 ];
 
 type Expected = {
@@ -341,6 +359,26 @@ const EXPECTATIONS: ReadonlyArray<Expected> = [
     tier: "T2c",
     market_low: 300, market_high: 700,
     must_source: "tier_estimate", // confirms Layer 5 fires (no labor_times for this fixture)
+  },
+
+  // ── Round 6: below-floor labor reconciliation (D) ────────────────────────
+  // High-quality VDB row reports 0.3hr — well below the Camry × T2c floor
+  // (0.5 × 1.2 = 0.6hr). Engine should: (a) accept the source as vdb
+  // (quality gate passes), (b) substitute 0.6hr as the customer-facing
+  // value, (c) emit `labor_below_tier_floor`.
+  //
+  //   Labor: 0.6hr × $185 = $111.00
+  //   Parts: $12–18 × T2c oil parts mult 2.0 = $24–36
+  //   Total: $135.00 – $147.00
+  {
+    example: "D — high-quality vdb below tier floor → floor substitutes, labor_below_tier_floor fires",
+    vehicle_config_key: "spec_v2_validation_d1_below_tier_floor",
+    service_slug: "oil_change",
+    tier: "T2c",
+    expected_low: 135.0,
+    expected_high: 147.0,
+    must_source: "vdb",
+    must_flag: "labor_below_tier_floor",
   },
 ];
 

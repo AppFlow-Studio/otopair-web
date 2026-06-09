@@ -1029,15 +1029,15 @@ function PostJobSurveyDialogBody({
     }
     if (requiresParts && !isEstimateCycle) list.push("parts_accuracy");
     if (updatePrompts.length > 0 && !isEstimateCycle) list.push("vehicle_updates");
-    list.push("flag");
-    // Optional steps follow — each shows a Skip button in the top-right.
+    // Estimate cycles skip the post-job survey ritual (flag, photos, tip,
+    // recommendations, time/difficulty). The 3-step "Adjust quote" flow is:
+    // Parts → Labor → Summary (which doubles as the reasoning + send screen).
     if (!isEstimateCycle) {
+      list.push("flag");
       list.push("time_check");
       if (timeVariance && timeVariance !== "on_time") list.push("time_reason");
       list.push("difficulty");
-    }
-    list.push("photos");
-    if (!isEstimateCycle) {
+      list.push("photos");
       list.push("tip");
       list.push("recommendations");
     }
@@ -2245,6 +2245,8 @@ function StepContent(props: {
             laborMinutes={props.actualLaborMinutes}
             laborRateCents={props.laborRateCents}
             totals={props.liveTotals}
+            technicianNotes={props.technicianNotes}
+            setTechnicianNotes={props.setTechnicianNotes}
           />
         );
       }
@@ -4373,6 +4375,8 @@ function EstimateSummary({
   laborMinutes,
   laborRateCents,
   totals,
+  technicianNotes,
+  setTechnicianNotes,
 }: {
   cycle: PostJobSurveyCycle;
   bookingLabel: string;
@@ -4387,14 +4391,23 @@ function EstimateSummary({
     feeCents: number;
     totalCents: number;
   };
+  technicianNotes?: string;
+  setTechnicianNotes?: (value: string) => void;
 }) {
-  const eyebrow = "Review and send";
+  const eyebrow = "Reasoning · review · send";
   const question =
     cycle === "post_job_reapproval"
       ? "Confirm the final billing"
       : cycle === "mid_job"
-        ? "Confirm the added scope"
-        : "Confirm your price";
+        ? "Why the added scope?"
+        : "Why this adjustment?";
+  const reasoningHint =
+    cycle === "post_job_reapproval"
+      ? "Optional — explain anything the customer should know."
+      : cycle === "mid_job"
+        ? 'e.g. "Found a seized caliper that needs replacing in addition to the pads."'
+        : 'e.g. "OEM pads were back-ordered; substituting Akebono ceramic at higher cost."';
+  const showReasoning = typeof setTechnicianNotes === "function";
   const minutesNum = Number(laborMinutes) || 0;
   const hours = minutesNum > 0 ? minutesNum / 60 : 0;
   return (
@@ -4408,6 +4421,22 @@ function EstimateSummary({
       <p className="mt-1 text-center text-[12px] text-muted-foreground">
         {bookingSubLabel || bookingLabel}
       </p>
+
+      {showReasoning ? (
+        <div className="mt-6">
+          <textarea
+            value={technicianNotes ?? ""}
+            onChange={(event) => setTechnicianNotes?.(event.target.value)}
+            placeholder={reasoningHint}
+            autoFocus
+            className="min-h-[120px] w-full resize-y rounded-xl border border-primary/15 bg-background px-4 py-3 text-[14px] leading-relaxed outline-none focus:border-primary"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Sent to the customer alongside the new total so they know why
+            you&apos;re adjusting.
+          </p>
+        </div>
+      ) : null}
 
       <div className="mt-6 overflow-hidden rounded-xl border border-primary/10">
         <div className="bg-primary/[0.025] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">

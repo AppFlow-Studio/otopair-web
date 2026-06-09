@@ -73,6 +73,7 @@ import type * as lib_haloVariantRules from "../lib/haloVariantRules.js";
 import type * as lib_intervals from "../lib/intervals.js";
 import type * as lib_job_actuals from "../lib/job_actuals.js";
 import type * as lib_late_start from "../lib/late_start.js";
+import type * as lib_mechanic_verifications from "../lib/mechanic_verifications.js";
 import type * as lib_modifiers from "../lib/modifiers.js";
 import type * as lib_notificationScope from "../lib/notificationScope.js";
 import type * as lib_packageRules from "../lib/packageRules.js";
@@ -357,6 +358,7 @@ declare const fullApi: ApiFromModules<{
   "lib/intervals": typeof lib_intervals;
   "lib/job_actuals": typeof lib_job_actuals;
   "lib/late_start": typeof lib_late_start;
+  "lib/mechanic_verifications": typeof lib_mechanic_verifications;
   "lib/modifiers": typeof lib_modifiers;
   "lib/notificationScope": typeof lib_notificationScope;
   "lib/packageRules": typeof lib_packageRules;

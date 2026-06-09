@@ -36,6 +36,15 @@ export type LaborHoursForService = {
   empiricalHours?: number;
   empiricalSampleSize?: number;
   confidence?: number;
+  /** Raw hours from the upstream layer before the Camry × tier floor bumped
+   *  them up. Only set when `tierFloorApplied` is true. */
+  rawHours?: number;
+  /** True when raw hours were below the tier floor and got substituted.
+   *  Drives the `labor_below_tier_floor` quote flag downstream. */
+  tierFloorApplied?: boolean;
+  /** True when raw hours exceeded the tier floor — informational only.
+   *  Drives the `labor_above_tier_expected` quote flag downstream. */
+  aboveTierFloor?: boolean;
 };
 
 /** Ceil hours up to the nearest 15-minute slot. 0.6h (36m) → 0.75h (45m). */
@@ -106,6 +115,9 @@ export const getLaborHoursForServices = query({
       // Only reachable when we have both a config and a tier.
       let resolvedHours: number | null = null;
       let resolvedSource: LaborHoursForService["source"] | null = null;
+      let resolvedRawHours: number | undefined;
+      let resolvedTierFloorApplied: boolean | undefined;
+      let resolvedAboveTierFloor: boolean | undefined;
       if (configId && vehicleTier) {
         const engineResult = await resolveLaborHours(ctx, {
           vehicle_config_id: configId,
@@ -114,6 +126,9 @@ export const getLaborHoursForServices = query({
         });
         if (engineResult.ok) {
           resolvedHours = engineResult.hours;
+          resolvedRawHours = engineResult.raw_hours;
+          resolvedTierFloorApplied = engineResult.tier_floor_applied;
+          resolvedAboveTierFloor = engineResult.above_tier_floor;
           // Map engine sources to the user-facing source taxonomy. Anything
           // vehicle-grounded (direct VDB, empirical, sibling chassis, Camry
           // anchor row when the user IS a Camry) reads as vehicle_specific.
@@ -165,6 +180,9 @@ export const getLaborHoursForServices = query({
         ...base,
         hours: finalHours,
         source: resolvedSource!,
+        rawHours: resolvedRawHours,
+        tierFloorApplied: resolvedTierFloorApplied,
+        aboveTierFloor: resolvedAboveTierFloor,
       });
     }
 

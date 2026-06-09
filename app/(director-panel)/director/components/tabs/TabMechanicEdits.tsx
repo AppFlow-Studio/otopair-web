@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useContext } from 'react'
+import { useState, useContext, useEffect, useMemo } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
-import { Badge, Button, Avatar, Modal, AuditButton, tableStyles } from '../Primitives'
+import { Badge, Button, Avatar, Modal, AuditButton, Select, Input, tableStyles } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { useQuery as useAuditQuery } from 'convex/react'
@@ -14,6 +14,14 @@ type VerificationField = {
   our_value: unknown
   corrected_value: unknown
   status: 'confirmed' | 'corrected' | 'unknown'
+  notes?: string
+}
+
+type DecisionAction = 'accept' | 'skip' | 'override'
+
+type ReviewDecisionState = {
+  action: DecisionAction
+  override_value?: string
 }
 
 type PendingRow = {
@@ -99,12 +107,15 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
   const actorName = session?.name ?? 'Director'
   const actorId   = session?.userId as Id<'director_users'> | undefined
 
-  const accept = useMutation(api.director_mechanic_verifications.acceptVerification)
+  const acceptPartial = useMutation(api.director_mechanic_verifications.acceptVerificationPartial)
   const reject = useMutation(api.director_mechanic_verifications.rejectVerification)
   const undo   = useMutation(api.undoMechanicVerification.undoById)
   const [busy, setBusy]           = useState(false)
   const [confirming, setConfirming] = useState<'accept' | 'reject' | 'undo' | null>(null)
   const [auditOpen, setAuditOpen]   = useState(false)
+  // Per-field accept/skip/override choices. Keyed by field_name; only the
+  // non-unknown fields participate (unknown can't be applied).
+  const [decisions, setDecisions] = useState<Record<string, ReviewDecisionState>>({})
 
   const rawAudit = useAuditQuery(
     api.audit_log.listByEntity,
@@ -115,11 +126,56 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
     action: e.action, actor: e.actor, detail: e.detail ?? '',
   }))
 
+  // Seed decisions whenever a new pending row is selected. Default every
+  // non-unknown field to "accept"; unknown fields are excluded (display-only).
+  useEffect(() => {
+    if (!row) return
+    if (row.status !== 'pending') {
+      setDecisions({})
+      return
+    }
+    const seeded: Record<string, ReviewDecisionState> = {}
+    for (const f of row.fields) {
+      if (f.status === 'unknown') continue
+      seeded[f.field_name] = { action: 'accept' }
+    }
+    setDecisions(seeded)
+  }, [row?._id])
+
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  const decisionCounts = useMemo(() => {
+    let accept = 0, override = 0, skip = 0, acceptConfirmed = 0, acceptCorrected = 0
+    if (!row) return { accept, override, skip, acceptConfirmed, acceptCorrected }
+    for (const f of row.fields) {
+      if (f.status === 'unknown') continue
+      const d = decisions[f.field_name]
+      if (!d) continue
+      if (d.action === 'skip') skip++
+      else if (d.action === 'override') override++
+      else {
+        accept++
+        if (f.status === 'confirmed') acceptConfirmed++
+        else acceptCorrected++
+      }
+    }
+    return { accept, override, skip, acceptConfirmed, acceptCorrected }
+  }, [row, decisions])
+
   if (!row) return null
 
   const handleAccept = async () => {
     setBusy(true)
-    await accept({ id: row._id, actorName, actorId })
+    // Build the decisions[] payload from state. Unknown fields are excluded
+    // entirely so the server doesn't have to filter them out.
+    const payload = row.fields
+      .filter(f => f.status !== 'unknown')
+      .map(f => {
+        const d = decisions[f.field_name] ?? { action: 'accept' as const }
+        return d.action === 'override'
+          ? { field_name: f.field_name, action: 'override' as const, override_value: d.override_value ?? '' }
+          : { field_name: f.field_name, action: d.action }
+      })
+    await acceptPartial({ id: row._id, decisions: payload, actorName, actorId })
     setBusy(false)
     setConfirming(null)
     onClose()
@@ -160,7 +216,10 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
           <div style={{ display:'flex', alignItems:'center', gap:8, width:'100%' }}>
             <span style={{ fontSize:13, color:'var(--slate-600)', flex:1 }}>
               {confirming === 'accept'
-                ? `This will apply ${corrected.length} correction${corrected.length !== 1 ? 's' : ''} and ${confirmed.length} confirmation${confirmed.length !== 1 ? 's' : ''} to the vehicle config.`
+                ? `This will apply ${decisionCounts.accept} field${decisionCounts.accept !== 1 ? 's' : ''}`
+                  + (decisionCounts.override > 0 ? `, override ${decisionCounts.override}` : '')
+                  + (decisionCounts.skip > 0 ? `, and skip ${decisionCounts.skip}` : '')
+                  + ' on the vehicle config.'
                 : confirming === 'reject'
                 ? 'This will reject the submission and no data will be written.'
                 : `This will revert ${corrected.length + confirmed.length} field${corrected.length + confirmed.length !== 1 ? 's' : ''} on the vehicle config back to their previous values.`}
@@ -233,7 +292,7 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
             <thead>
               <tr style={{ background:'var(--slate-50)', borderBottom:'1px solid var(--slate-200)' }}>
-                {(['Field', 'Our value', "Mechanic's value", 'Status'] as const).map(h => (
+                {(['Field', 'Our value', "Mechanic's value", 'Status', ...(isPending ? ['Decision'] : [])] as const).map(h => (
                   <th key={h} style={{ padding:'8px 16px', textAlign:'left', fontSize:11, fontWeight:600,
                     color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.06em', whiteSpace:'nowrap' }}>{h}</th>
                 ))}
@@ -242,31 +301,89 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
             <tbody>
               {[...corrected, ...confirmed, ...unknown].map((field, i) => {
                 const changed = field.status === 'corrected' && fmtValue(field.our_value) !== fmtValue(field.corrected_value)
+                const decision = decisions[field.field_name]
+                const isOverride = isPending && decision?.action === 'override'
+                const isSkip = isPending && decision?.action === 'skip'
+                const isUnknown = field.status === 'unknown'
                 return (
                   <tr key={i} style={{ borderBottom:'1px solid var(--slate-100)',
-                    background: field.status === 'corrected' ? 'var(--orange-25, #fff9f0)' : 'transparent' }}>
-                    <td style={{ padding:'10px 16px', fontWeight:500, color:'var(--slate-700)', whiteSpace:'nowrap' }}>
+                    background: field.status === 'corrected' ? 'var(--orange-25, #fff9f0)' :
+                                isSkip ? 'var(--slate-50)' : 'transparent',
+                    opacity: isSkip ? 0.6 : 1 }}>
+                    <td style={{ padding:'10px 16px', fontWeight:500, color:'var(--slate-700)', whiteSpace:'nowrap', verticalAlign:'top' }}>
                       {fmtFieldName(field.field_name)}
+                      {field.notes && (
+                        <div style={{ marginTop:4, fontSize:11, fontWeight:400, fontStyle:'italic',
+                          color:'var(--slate-500)', whiteSpace:'normal', maxWidth:200 }}>
+                          “{field.notes}”
+                        </div>
+                      )}
                     </td>
-                    <td style={{ padding:'10px 16px', fontFamily:'monospace', fontSize:12,
+                    <td style={{ padding:'10px 16px', fontFamily:'monospace', fontSize:12, verticalAlign:'top',
                       color: changed ? 'var(--slate-400)' : 'var(--slate-700)',
                       textDecoration: changed ? 'line-through' : 'none' }}>
                       {fmtValue(field.our_value)}
                     </td>
-                    <td style={{ padding:'10px 16px', fontFamily:'monospace', fontSize:12,
+                    <td style={{ padding:'10px 16px', fontFamily:'monospace', fontSize:12, verticalAlign:'top',
                       color: field.status === 'corrected' ? 'var(--orange-700)' : 'var(--slate-700)',
                       fontWeight: field.status === 'corrected' ? 600 : 400 }}>
                       {field.status === 'confirmed' ? fmtValue(field.our_value) : fmtValue(field.corrected_value)}
                     </td>
-                    <td style={{ padding:'10px 16px' }}>
+                    <td style={{ padding:'10px 16px', verticalAlign:'top' }}>
                       <StatusPill status={field.status} />
                     </td>
+                    {isPending && (
+                      <td style={{ padding:'8px 16px', verticalAlign:'top', minWidth:170 }}>
+                        {isUnknown ? (
+                          <span style={{ fontSize:11, color:'var(--slate-400)' }}>—</span>
+                        ) : (
+                          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                            <Select
+                              value={decision?.action ?? 'accept'}
+                              onChange={(e) => {
+                                const next = e.target.value as DecisionAction
+                                setDecisions(prev => ({
+                                  ...prev,
+                                  [field.field_name]: next === 'override'
+                                    ? {
+                                        action: 'override',
+                                        override_value:
+                                          prev[field.field_name]?.override_value ??
+                                          (field.status === 'corrected'
+                                            ? fmtValue(field.corrected_value)
+                                            : fmtValue(field.our_value)),
+                                      }
+                                    : { action: next },
+                                }))
+                              }}
+                              options={[
+                                { value:'accept',   label:'Accept' },
+                                { value:'skip',     label:'Skip' },
+                                { value:'override', label:'Override' },
+                              ]}
+                              style={{ height:30, fontSize:12 }}
+                            />
+                            {isOverride && (
+                              <Input
+                                value={decision?.override_value ?? ''}
+                                onChange={(e) => setDecisions(prev => ({
+                                  ...prev,
+                                  [field.field_name]: { action:'override', override_value: e.target.value },
+                                }))}
+                                placeholder="Override value"
+                                style={{ height:30, fontSize:12 }}
+                              />
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 )
               })}
               {row.fields.length === 0 && (
                 <tr>
-                  <td colSpan={4} style={{ padding:'24px 16px', textAlign:'center', fontSize:13, color:'var(--slate-400)' }}>
+                  <td colSpan={isPending ? 5 : 4} style={{ padding:'24px 16px', textAlign:'center', fontSize:13, color:'var(--slate-400)' }}>
                     No field data in this submission
                   </td>
                 </tr>
@@ -312,11 +429,27 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
 
           <div style={{ marginTop:'auto', padding:'12px 14px', background:'#fff', border:'1px solid var(--slate-200)', borderRadius:8, fontSize:12, color:'var(--slate-600)', lineHeight:1.6 }}>
             <strong style={{ display:'block', marginBottom:4, color:'var(--slate-700)' }}>On accept:</strong>
-            {corrected.length > 0 && <div>· Write {corrected.length} correction{corrected.length !== 1 ? 's' : ''} to enrichment evidence (0.99 confidence)</div>}
-            {confirmed.length > 0 && <div>· Log {confirmed.length} confirmation{confirmed.length !== 1 ? 's' : ''} (0.98 confidence)</div>}
-            <div>· Increment verification count → {row.verificationCount + 1}</div>
-            {row.verificationCount + 1 >= 3 && row.enrichmentStatus !== 'verified' && (
-              <div style={{ color:'var(--green-700)', fontWeight:500 }}>· Config flips to "verified"</div>
+            {isPending ? (
+              <>
+                {decisionCounts.acceptCorrected > 0 && (
+                  <div>· Apply {decisionCounts.acceptCorrected} correction{decisionCounts.acceptCorrected !== 1 ? 's' : ''} (0.99 confidence)</div>
+                )}
+                {decisionCounts.acceptConfirmed > 0 && (
+                  <div>· Log {decisionCounts.acceptConfirmed} confirmation{decisionCounts.acceptConfirmed !== 1 ? 's' : ''} (0.98 confidence)</div>
+                )}
+                {decisionCounts.override > 0 && (
+                  <div>· Write {decisionCounts.override} director override{decisionCounts.override !== 1 ? 's' : ''} (0.99 confidence)</div>
+                )}
+                {decisionCounts.skip > 0 && (
+                  <div style={{ color:'var(--slate-500)' }}>· Skip {decisionCounts.skip} field{decisionCounts.skip !== 1 ? 's' : ''}</div>
+                )}
+                <div>· Increment verification count → {row.verificationCount + 1}</div>
+                {row.verificationCount + 1 >= 3 && row.enrichmentStatus !== 'verified' && (
+                  <div style={{ color:'var(--green-700)', fontWeight:500 }}>· Config flips to &quot;verified&quot;</div>
+                )}
+              </>
+            ) : (
+              <div style={{ color:'var(--slate-500)' }}>Review-only — no decision changes available.</div>
             )}
           </div>
         </div>

@@ -1,6 +1,23 @@
 import { v } from "convex/values";
 import { internalMutation } from "../_generated/server";
 
+// Schema stores overall_accuracy as a v.number() (0–1 float) so the director
+// panel's AccuracyBar can render a percentage. The mechanic app submits the
+// human-friendly enum below — keep it at the API boundary, map to a number
+// before insert. If you add/rename an enum value, update this map.
+const ACCURACY_BY_ENUM: Record<string, number> = {
+  accurate: 1.0,
+  mostly_accurate: 0.85,
+  needs_correction: 0.5,
+};
+
+function accuracyEnumToNumber(value: string): number {
+  const n = ACCURACY_BY_ENUM[value];
+  // Fall back to 0 instead of NaN so the row still renders and downstream
+  // logic that compares against thresholds doesn't break.
+  return typeof n === "number" ? n : 0;
+}
+
 /**
  * Stores a mechanic's post-job verification submission as "pending".
  * Review and application of corrections is handled externally.
@@ -53,9 +70,7 @@ export const processMechanicVerification = internalMutation({
       verifications: args.verifications,
       actual_labor_hours: args.actual_labor_hours,
       parts_used_correct: args.parts_used_correct,
-      // TODO(ts-fix): mechanic_verifications.overall_accuracy is `number` in schema but caller sends string enum
-      //   ("accurate" | "mostly_accurate" | "needs_correction"). Verify intent (rename/migrate/add to schema).
-      overall_accuracy: args.overall_accuracy as any,
+      overall_accuracy: accuracyEnumToNumber(args.overall_accuracy),
       status: "pending",
       verified_at: now,
       created_at: now,

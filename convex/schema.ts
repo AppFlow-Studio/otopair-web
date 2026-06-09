@@ -787,6 +787,12 @@ export default defineSchema({
     labor_multiplier_category_id: v.optional(v.id("pricing_labor_categories")),
     display_order: v.optional(v.number()),
     default_labor_hours: v.optional(v.number()),
+    // Labor sourcing: which platform dimension determines this service's labor,
+    // and the RepairPal estimator slug (null = no RepairPal page, e.g. fluids).
+    labor_determinant: v.optional(
+      v.union(v.literal("engine"), v.literal("chassis"), v.literal("both")),
+    ),
+    repairpal_slug: v.optional(v.union(v.string(), v.null())),
     has_options: v.optional(v.boolean()),
     is_labor_only: v.optional(v.boolean()),
     requires_parts: v.optional(v.boolean()),
@@ -905,6 +911,9 @@ export default defineSchema({
     tier: v.string(), // "catalog" (book-time sources) | "empirical" (reserved)
     weight: v.number(), // catalog trust weight (vdb 0.4, llm 0.3, …)
     observed_at: v.number(),
+    // Provenance when sourced from a platform-equivalent sibling (RepairPal).
+    sibling_slug: v.optional(v.string()), // e.g. "550i-xdrive"
+    match_key: v.optional(v.string()), // "engine_family:N63" | "chassis_code:G30" | "exact"
   })
     .index("by_config_service", ["vehicle_config_id", "service_id"])
     .index("by_config_service_source", ["vehicle_config_id", "service_id", "source"])

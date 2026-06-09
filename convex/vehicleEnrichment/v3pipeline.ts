@@ -28,6 +28,8 @@ import { submitBatch, getBatchStatus, getBatchResults } from "./utils/batchClien
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
+import { repairpalUrl, repairpalModelCandidates } from "./repairpalLabor";
+import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { runSanityChecks } from "./validation/sanityChecks";
 import { validateAllOemParts } from "./validation/oemValidation";
 import { BLOCKED_DOMAINS } from "./sourceRegistry";
@@ -1717,16 +1719,16 @@ export const _pollBatch1V3 = internalAction({
             { slug },
           );
           if (!svc) continue;
-          // VDB is now ONE of N inputs into the labor median — no longer the
-          // de-facto source of truth via "highest confidence wins". (The 0.4
-          // weight is informational; the median itself is unweighted — see
-          // labor_aggregation.ts.) book_only skips the empirical job_actuals scan.
+          // VDB labor is verified-bad (too generic per car) — kept at near-zero
+          // weight as a last-resort tiebreaker only. The weighted median now
+          // honors weights (labor_aggregation.ts), so RepairPal/LLM dominate.
+          // book_only skips the empirical job_actuals scan.
           await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
             vehicle_config_id: args.vehicleConfigId,
             service_id: svc._id,
             hours,
             source: "vdb_repair_estimates",
-            weight: 0.4,
+            weight: 0.05,
             tier: "catalog",
           });
           await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
@@ -2112,6 +2114,39 @@ export const _pollBatch2V3 = internalAction({
           service_id: serviceId,
           book_only: true,
         });
+
+        // RepairPal (MOTOR) labor — best-effort over trim/model nameplate
+        // candidates. Dark behind LABOR_SOURCE_REPAIRPAL. Scrapes safe-fail to
+        // null; first live nameplate wins. Sibling resolution for the empties
+        // (e.g. M550i) is wired in a later change.
+        const laborCfg = LABOR_SERVICE_CONFIG[slug];
+        if (process.env.LABOR_SOURCE_REPAIRPAL === "on" && laborCfg?.repairpal_slug) {
+          for (const nameplate of repairpalModelCandidates(args.model, args.trim ?? "")) {
+            const url = repairpalUrl(args.make, nameplate, laborCfg.repairpal_slug);
+            const rp = await ctx.runAction(
+              internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
+              { url },
+            );
+            if (!rp) continue;
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
+              vehicle_config_id: args.vehicleConfigId,
+              service_id: serviceId,
+              hours: rp.hours,
+              source: "repairpal_motor",
+              weight: 0.8,
+              tier: "catalog",
+              engine_family: engineDoc?.engine_family,
+              match_key: "exact",
+              sibling_slug: nameplate,
+            });
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
+              vehicle_config_id: args.vehicleConfigId,
+              service_id: serviceId,
+              book_only: true,
+            });
+            break; // first live nameplate wins
+          }
+        }
       }
 
       // Write part prices from Batch 2 pricing.

@@ -29,6 +29,29 @@ export function repairpalUrl(
   return parts.join("/");
 }
 
+/**
+ * RepairPal keys URLs by NAMEPLATE (e.g. "550i-xdrive", "750i", "x5"), but our
+ * config stores model = the model LINE ("5 Series") and trim = the variant
+ * ("M550i xDrive"). The nameplate is usually trim-derived for sedans and
+ * model-derived for SUVs, so we produce ordered candidate slugs (most specific
+ * first) and let the safe-failing scrape pick the live one. e.g.
+ *   ("7 Series", "750i xDrive") → ["750i-xdrive", "750i", "7-series"]
+ *   ("X5", "xDrive40i")         → ["xdrive40i", "40i", "x5"]
+ */
+export function repairpalModelCandidates(model: string, trim: string): string[] {
+  const cands: string[] = [];
+  const add = (s: string) => {
+    const v = slugify(s);
+    if (v && !cands.includes(v)) cands.push(v);
+  };
+  if (trim) {
+    add(trim);
+    add(trim.replace(/xdrive/i, "").trim());
+  }
+  add(model);
+  return cands;
+}
+
 export type LaborRange = { laborLow: number; laborHigh: number };
 
 export function parseRepairpalLabor(markdown: string): LaborRange | null {

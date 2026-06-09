@@ -8,10 +8,31 @@
 import { describe, expect, it } from "vitest";
 import {
   repairpalUrl,
+  repairpalModelCandidates,
   parseRepairpalLabor,
   recoverHours,
   REPAIRPAL_RATE_RATIO,
 } from "../convex/vehicleEnrichment/repairpalLabor";
+
+describe("repairpalModelCandidates", () => {
+  it("sedan: trim-derived nameplate first, model line last", () => {
+    expect(repairpalModelCandidates("7 Series", "750i xDrive")).toEqual([
+      "750i-xdrive",
+      "750i",
+      "7-series",
+    ]);
+  });
+  it("niche trim still produces the right primary candidate", () => {
+    expect(repairpalModelCandidates("5 Series", "M550i xDrive")).toEqual([
+      "m550i-xdrive",
+      "m550i",
+      "5-series",
+    ]);
+  });
+  it("SUV with no useful trim falls back to the model line", () => {
+    expect(repairpalModelCandidates("X5", "")).toEqual(["x5"]);
+  });
+});
 
 describe("repairpalUrl", () => {
   it("builds model + service slug, lowercased", () => {

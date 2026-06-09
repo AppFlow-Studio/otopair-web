@@ -728,6 +728,8 @@ export const upsertLaborObservation = internalMutation({
     weight: v.float64(),
     tier: v.optional(v.string()),
     engine_family: v.optional(v.string()),
+    sibling_slug: v.optional(v.string()),
+    match_key: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const tier = args.tier ?? "catalog";
@@ -747,6 +749,8 @@ export const upsertLaborObservation = internalMutation({
         weight: args.weight,
         tier,
         engine_family: args.engine_family,
+        sibling_slug: args.sibling_slug,
+        match_key: args.match_key,
         observed_at: now,
       });
       return existing._id;
@@ -759,6 +763,8 @@ export const upsertLaborObservation = internalMutation({
       source: args.source,
       tier,
       weight: args.weight,
+      sibling_slug: args.sibling_slug,
+      match_key: args.match_key,
       observed_at: now,
     });
   },

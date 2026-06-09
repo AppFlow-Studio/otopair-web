@@ -30,6 +30,7 @@ import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
 import { repairpalUrl, repairpalModelCandidates } from "./repairpalLabor";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
+import { deriveEngineFamily } from "./laborSibling";
 import { runSanityChecks } from "./validation/sanityChecks";
 import { validateAllOemParts } from "./validation/oemValidation";
 import { BLOCKED_DOMAINS } from "./sourceRegistry";
@@ -2077,6 +2078,35 @@ export const _pollBatch2V3 = internalAction({
         console.log(`[v8] ${deterministicPrices.size} deterministic JSON-LD prices for ${args.make} ${args.model}`);
       }
 
+      // ── RepairPal labor setup (ONCE per car). Resolve the car's own nameplate
+      //    via an oil-change probe; cache per-determinant siblings so we don't
+      //    re-probe dead nameplates for every service. Dark behind the flag.
+      const rpEnabled = process.env.LABOR_SOURCE_REPAIRPAL === "on";
+      let rpOwnNameplate: string | null = null;
+      let rpEngineDoc: any = null;
+      let rpChassisCode: string | undefined;
+      const rpSibling = new Map<string, { nameplate: string; match_key: string } | null>();
+      if (rpEnabled) {
+        rpEngineDoc = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getEngine,
+          { engineId: args.engineId },
+        );
+        rpChassisCode = await ctx.runQuery(
+          internal.vehicleEnrichment.laborSibling.getConfigChassisCode,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        for (const cand of repairpalModelCandidates(args.model, args.trim ?? "")) {
+          const probe = await ctx.runAction(
+            internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
+            { url: repairpalUrl(args.make, cand, "oil-change") },
+          );
+          if (probe) { rpOwnNameplate = cand; break; }
+        }
+        console.log(
+          `[v8/labor] RepairPal nameplate for ${args.make} ${args.model} ${args.trim ?? ""}: ${rpOwnNameplate ?? "(none → siblings)"}`,
+        );
+      }
+
       // Write labor times from Batch 2 pricing
       for (const svc of services) {
         if (!svc.is_applicable) continue;
@@ -2115,36 +2145,70 @@ export const _pollBatch2V3 = internalAction({
           book_only: true,
         });
 
-        // RepairPal (MOTOR) labor — best-effort over trim/model nameplate
-        // candidates. Dark behind LABOR_SOURCE_REPAIRPAL. Scrapes safe-fail to
-        // null; first live nameplate wins. Sibling resolution for the empties
-        // (e.g. M550i) is wired in a later change.
+        // RepairPal (MOTOR) labor: own nameplate first, else a verified sibling
+        // (resolved ONCE per determinant, cached in rpSibling). Dark behind the
+        // flag. All scrapes safe-fail to null → service falls back to the LLM obs.
         const laborCfg = LABOR_SERVICE_CONFIG[slug];
-        if (process.env.LABOR_SOURCE_REPAIRPAL === "on" && laborCfg?.repairpal_slug) {
-          for (const nameplate of repairpalModelCandidates(args.model, args.trim ?? "")) {
-            const url = repairpalUrl(args.make, nameplate, laborCfg.repairpal_slug);
+        if (rpEnabled && laborCfg?.repairpal_slug) {
+          let rpHours: number | null = null;
+          let rpMatchKey = "exact";
+          let rpSiblingSlug: string | undefined;
+
+          if (rpOwnNameplate) {
             const rp = await ctx.runAction(
               internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-              { url },
+              { url: repairpalUrl(args.make, rpOwnNameplate, laborCfg.repairpal_slug) },
             );
-            if (!rp) continue;
+            if (rp) { rpHours = rp.hours; rpSiblingSlug = rpOwnNameplate; }
+          }
+
+          if (rpHours == null) {
+            const det = laborCfg.determinant;
+            if (!rpSibling.has(det)) {
+              rpSibling.set(
+                det,
+                await ctx.runAction(
+                  internal.vehicleEnrichment.laborSibling.resolveLaborSibling,
+                  {
+                    make: args.make,
+                    model: args.model,
+                    trim: args.trim,
+                    year: args.year,
+                    chassis_code: rpChassisCode,
+                    engine_family:
+                      rpEngineDoc?.engine_family ?? deriveEngineFamily(rpEngineDoc?.engine_code),
+                    determinant: det,
+                  },
+                ),
+              );
+            }
+            const sib = rpSibling.get(det);
+            if (sib) {
+              const rp = await ctx.runAction(
+                internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
+                { url: repairpalUrl(args.make, sib.nameplate, laborCfg.repairpal_slug) },
+              );
+              if (rp) { rpHours = rp.hours; rpMatchKey = sib.match_key; rpSiblingSlug = sib.nameplate; }
+            }
+          }
+
+          if (rpHours != null) {
             await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
               vehicle_config_id: args.vehicleConfigId,
               service_id: serviceId,
-              hours: rp.hours,
+              hours: rpHours,
               source: "repairpal_motor",
               weight: 0.8,
               tier: "catalog",
-              engine_family: engineDoc?.engine_family,
-              match_key: "exact",
-              sibling_slug: nameplate,
+              engine_family: rpEngineDoc?.engine_family ?? deriveEngineFamily(rpEngineDoc?.engine_code),
+              match_key: rpMatchKey,
+              sibling_slug: rpSiblingSlug,
             });
             await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
               vehicle_config_id: args.vehicleConfigId,
               service_id: serviceId,
               book_only: true,
             });
-            break; // first live nameplate wins
           }
         }
       }

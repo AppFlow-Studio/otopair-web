@@ -84,6 +84,15 @@ const determinantValidator = v.union(
   v.literal("both"),
 );
 
+/** chassis_code for a vehicle_config (needed for sibling resolution). */
+export const getConfigChassisCode = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, { vehicleConfigId }): Promise<string | undefined> => {
+    const c = (await ctx.db.get(vehicleConfigId)) as any;
+    return c?.chassis_code ?? undefined;
+  },
+});
+
 /**
  * Sibling candidates from OUR OWN catalog: other vehicle_configs sharing the
  * target's chassis_code and/or engine family. Free, deterministic, grows with

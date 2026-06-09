@@ -375,9 +375,10 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   }
 
   // --- Backfill triggers -----------------------------------------------------
-  // Full + parts kick off an async enrichment job (Claude batch — completes in
-  // a few minutes); the toast confirms it was scheduled, the enrichment-runs
-  // panel shows progress. Prices runs inline and returns a live count.
+  // All three kick off async jobs and return immediately so the click can't time
+  // out; the toast confirms scheduling. Full + parts run a Claude batch (progress
+  // in the enrichment-runs panel). Reprice runs a live scrape in a scheduled
+  // internal action and records the priced count in the audit log when it lands.
   const handleReEnrich = async () => {
     if (!configId || busyFull) return
     if (!window.confirm('Re-enrich the ENTIRE car? Re-runs the full pipeline (engine, transmission, parts, intervals, labor) and overwrites resolved specs. Costs an LLM batch and finishes in a few minutes.')) return
@@ -410,9 +411,10 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     if (!configId || busyPrices) return
     setBusyPrices(true)
     try {
-      const res = await repriceConfigParts({ id: configId, actorName, actorId }) as { status?: string; priced?: number; partsTotal?: number }
-      if (res?.status === 'no_parts') setToast('No parts on this config to reprice yet.')
-      else setToast(`Repriced ${res?.priced ?? 0} of ${res?.partsTotal ?? 0} parts from live sources.`)
+      const res = await repriceConfigParts({ id: configId, actorName, actorId }) as { status?: string; message?: string }
+      setToast(res?.status === 'scheduled'
+        ? 'Reprice started — the priced count lands in the audit log in a moment.'
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
     } catch (e) {
       setToast(`Reprice failed: ${(e as Error).message}`)
     } finally { setBusyPrices(false) }
@@ -802,7 +804,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                     hint="Re-discover which parts apply per service. Keeps hand-edited specs. Async — a few minutes."
                     action={<Button size="sm" disabled={busyParts} onClick={handleBackfillParts}>{busyParts ? 'Scheduling…' : 'Backfill parts'}</Button>} />
                   <ActionRow label="Reprice parts only"
-                    hint="Re-scrape correct prices for the parts already on this car. Runs now."
+                    hint="Re-scrape correct prices for the parts already on this car. Async — the priced count lands in the audit log."
                     action={<Button size="sm" disabled={busyPrices} icon={<IconRefresh size={11} />} onClick={handleRepriceParts}>{busyPrices ? 'Repricing…' : 'Reprice parts'}</Button>} />
                 </AdminActionPanel>
               </div>

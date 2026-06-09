@@ -16,7 +16,7 @@
  */
 
 import { v } from "convex/values";
-import { action, internalMutation } from "./_generated/server";
+import { action, internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { VehicleInput } from "./vehicleEnrichment/types";
 import { scrapeVehicleSources } from "./vehicleEnrichment/scraper";
@@ -167,6 +167,16 @@ export const backfillConfigParts = action({
 // later LLM estimate.
 //
 // Runs live on an explicit director click — NOT gated on BACKFILL_PARTS_PRICES.
+//
+// SHAPE (fixed 2026-06-09): the live multi-page scrape used to run SYNCHRONOUSLY
+// inside this public action, so a slow/erroring config timed out the click
+// ("Your request couldn't be completed") AND — because the only audit row was
+// written on SUCCESS at the very end — left NO trace that the button was pressed.
+// Now the public action is fire-and-return (mirrors reEnrichConfig above): it
+// writes a "scheduled" audit row IMMEDIATELY (so every click is recorded), then
+// hands the heavy scrape to the _repriceConfigPartsRun internal action below,
+// which writes its own completion/error audit row. The click can no longer time
+// out, and a failed scrape is recorded instead of vanishing.
 
 export const repriceConfigParts = action({
   args: backfillArgs,
@@ -179,101 +189,154 @@ export const repriceConfigParts = action({
       return { status: "not_found" as const, message: "Vehicle config not found" };
     }
 
-    // (a) Load this config's existing fitments → distinct part_ids → oem_parts.
-    const fitments = await ctx.runQuery(
-      internal.vehicleEnrichment.v3queries.getPartFitments,
-      { vehicleConfigId: args.id },
-    );
-    // Dedup part_ids (a part can have multiple fitments — base + package variants).
-    const partIdById = new Map<string, (typeof fitments)[number]["part_id"]>();
-    for (const f of fitments) {
-      partIdById.set(String(f.part_id), f.part_id);
-    }
-    if (partIdById.size === 0) {
-      return { status: "no_parts" as const, priced: 0 };
-    }
+    const label =
+      `${resolved.year} ${resolved.make} ${resolved.model} ${resolved.trim}`.trim();
 
-    // Hydrate each distinct part → its OEM number (the join key for pricing).
-    const existingParts: Array<{
-      part_id: (typeof fitments)[number]["part_id"];
-      oem_part_number: string | null;
-    }> = [];
-    for (const partId of partIdById.values()) {
-      const part = await ctx.runQuery(
-        internal.vehicleEnrichment.v3queries.getOemPartById,
-        { partId },
-      );
-      if (!part) continue;
-      existingParts.push({
-        part_id: partId,
-        oem_part_number: (part as any).oem_part_number ?? null,
-      });
-    }
-    if (existingParts.length === 0) {
-      return { status: "no_parts" as const, priced: 0 };
-    }
-
-    // (b) Resolve the YMMT into the VehicleInput shape scrapeVehicleSources wants,
-    // then scrape. scrapeVehicleSources caches + returns deterministic prices.
-    const vehicle: VehicleInput = {
-      vehicleId: resolved.vehicleId ? String(resolved.vehicleId) : "",
-      year: resolved.year,
-      make: resolved.make,
-      model: resolved.model,
-      trim: resolved.trim,
-      engineCode: resolved.engineCode,
-      displacement: resolved.displacement,
-    };
-    const sources = await scrapeVehicleSources(ctx, vehicle);
-
-    // Build the deterministic price Map exactly like the v3pipeline loop:
-    // key = normalizeOemNumber(oem_part_number) → { price, source_domain, source_url }.
-    const deterministicPrices = new Map<
-      string,
-      { price: number; source_domain: string; source_url: string }
-    >();
-    for (const p of sources.partPrices ?? []) {
-      if (p?.oem_part_number && typeof p.price === "number" && p.price > 0) {
-        deterministicPrices.set(normalizeOemNumber(p.oem_part_number), {
-          price: p.price,
-          source_domain: p.source_domain,
-          source_url: p.source_url,
-        });
-      }
-    }
-
-    // Match this config's existing parts against the deterministic map and write
-    // the authoritative "sale" price for each hit.
-    let priced = 0;
-    for (const part of existingParts) {
-      if (!part.oem_part_number) continue;
-      const dp = deterministicPrices.get(normalizeOemNumber(part.oem_part_number));
-      if (!dp) continue;
-      await ctx.runMutation(
-        internal.vehicleEnrichment.v3mutations.upsertPartPrice,
-        {
-          part_id: part.part_id,
-          price: dp.price,
-          price_type: "sale",
-          source_url: dp.source_url,
-          source_domain: dp.source_domain,
-        },
-      );
-      priced++;
-    }
-
-    // (c) Audit-log with the count.
+    // (a) Record EVERY click immediately, BEFORE the heavy scrape — so a timeout
+    //     or error downstream can never swallow the fact that reprice was run.
     await ctx.runMutation(internal.directorConfigBackfills._writeBackfillAudit, {
       id: args.id,
       actorName: args.actorName,
       actorId: args.actorId,
-      detail: `Repriced parts (deterministic): ${priced}/${existingParts.length} priced for ${resolved.year} ${resolved.make} ${resolved.model} ${resolved.trim}`.trim(),
+      detail: `Reprice parts scheduled (deterministic) for ${label}`.trim(),
     });
 
-    return {
-      status: "done" as const,
-      priced,
-      partsTotal: existingParts.length,
-    };
+    // (b) Fire-and-return: do the live scrape + price writes in a scheduled
+    //     internal action so this click can't time out. That action writes a
+    //     completion (or error) audit row with the priced count.
+    await ctx.scheduler.runAfter(
+      0,
+      internal.directorConfigBackfills._repriceConfigPartsRun,
+      { id: args.id, actorName: args.actorName, actorId: args.actorId },
+    );
+
+    return { status: "scheduled" as const, scope: "reprice" as const };
+  },
+});
+
+// The heavy lifting, isolated in a scheduled internal action so it can run for
+// as long as the scrape needs without timing out the director's click. The
+// ENTIRE body is wrapped so any failure (scrape error, source timeout, missing
+// config) is recorded as an audit row instead of vanishing silently.
+export const _repriceConfigPartsRun = internalAction({
+  args: backfillArgs,
+  handler: async (ctx, args) => {
+    const audit = (detail: string) =>
+      ctx.runMutation(internal.directorConfigBackfills._writeBackfillAudit, {
+        id: args.id,
+        actorName: args.actorName,
+        actorId: args.actorId,
+        detail,
+      });
+
+    const resolved = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
+      { vehicleConfigId: args.id },
+    );
+    const label = resolved
+      ? `${resolved.year} ${resolved.make} ${resolved.model} ${resolved.trim}`.trim()
+      : String(args.id);
+
+    try {
+      if (!resolved) {
+        await audit(`Reprice parts failed: config not found (${args.id})`);
+        return;
+      }
+
+      // (1) Load this config's existing fitments → distinct part_ids → oem_parts.
+      const fitments = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getPartFitments,
+        { vehicleConfigId: args.id },
+      );
+      // Dedup part_ids (a part can have multiple fitments — base + package variants).
+      const partIdById = new Map<string, (typeof fitments)[number]["part_id"]>();
+      for (const f of fitments) {
+        partIdById.set(String(f.part_id), f.part_id);
+      }
+      if (partIdById.size === 0) {
+        await audit(`Reprice parts complete: no parts on this config (${label})`);
+        return;
+      }
+
+      // Hydrate each distinct part → its OEM number (the join key for pricing).
+      const existingParts: Array<{
+        part_id: (typeof fitments)[number]["part_id"];
+        oem_part_number: string | null;
+      }> = [];
+      for (const partId of partIdById.values()) {
+        const part = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getOemPartById,
+          { partId },
+        );
+        if (!part) continue;
+        existingParts.push({
+          part_id: partId,
+          oem_part_number: (part as any).oem_part_number ?? null,
+        });
+      }
+      if (existingParts.length === 0) {
+        await audit(`Reprice parts complete: no parts on this config (${label})`);
+        return;
+      }
+
+      // (2) Resolve the YMMT into the VehicleInput shape scrapeVehicleSources wants,
+      // then scrape. scrapeVehicleSources caches + returns deterministic prices.
+      const vehicle: VehicleInput = {
+        vehicleId: resolved.vehicleId ? String(resolved.vehicleId) : "",
+        year: resolved.year,
+        make: resolved.make,
+        model: resolved.model,
+        trim: resolved.trim,
+        engineCode: resolved.engineCode,
+        displacement: resolved.displacement,
+      };
+      const sources = await scrapeVehicleSources(ctx, vehicle);
+
+      // Build the deterministic price Map exactly like the v3pipeline loop:
+      // key = normalizeOemNumber(oem_part_number) → { price, source_domain, source_url }.
+      const deterministicPrices = new Map<
+        string,
+        { price: number; source_domain: string; source_url: string }
+      >();
+      for (const p of sources.partPrices ?? []) {
+        if (p?.oem_part_number && typeof p.price === "number" && p.price > 0) {
+          deterministicPrices.set(normalizeOemNumber(p.oem_part_number), {
+            price: p.price,
+            source_domain: p.source_domain,
+            source_url: p.source_url,
+          });
+        }
+      }
+
+      // Match this config's existing parts against the deterministic map and write
+      // the authoritative "sale" price for each hit.
+      let priced = 0;
+      for (const part of existingParts) {
+        if (!part.oem_part_number) continue;
+        const dp = deterministicPrices.get(normalizeOemNumber(part.oem_part_number));
+        if (!dp) continue;
+        await ctx.runMutation(
+          internal.vehicleEnrichment.v3mutations.upsertPartPrice,
+          {
+            part_id: part.part_id,
+            price: dp.price,
+            price_type: "sale",
+            source_url: dp.source_url,
+            source_domain: dp.source_domain,
+          },
+        );
+        priced++;
+      }
+
+      // (3) Audit the outcome with the count.
+      await audit(
+        `Reprice parts complete (deterministic): ${priced}/${existingParts.length} priced for ${label}`.trim(),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await audit(`Reprice parts failed for ${label}: ${msg}`);
+      // Re-throw so the failure also surfaces in the Convex function logs.
+      throw err;
+    }
   },
 });

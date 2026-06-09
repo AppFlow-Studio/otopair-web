@@ -52,13 +52,16 @@ type BaselineSpec = {
 const BASELINE: ReadonlyArray<BaselineSpec> = [
   {
     service_slug: "oil_change",
-    parts_low: 50, parts_high: 56,
+    // Single OEM oil filter — shops supply the engine oil from stock, so
+    // it's not billed as a customer line item. Reclassified to fixed_kit
+    // on 2026-06-09; the previous (50, 56) band reflected oil + filter +
+    // gasket combined, which was multiplied by oil_capacity_qts at quote
+    // time and produced the "$110/qt" bug on the Stelvio.
+    parts_low: 12, parts_high: 18,
     oem_part_number: "04152-YZZA1",
-    parts_cost_basis: "4.8qt 0W-16 + cartridge + gasket (NYC dealer parts-counter, ±6%)",
+    parts_cost_basis: "1× Toyota cartridge oil filter (NYC parts-counter, ±20%)",
     applies_to: "shared",
-    // Camry A25A-FKS sump = 4.8qt — round to 5 for the unit baseline so
-    // per_unit_spec scaling maths divides cleanly against engines.oil_capacity_qts.
-    parts_baseline_unit_count: 5,
+    parts_baseline_unit_count: 1,
   },
   {
     service_slug: "filter_replacement",

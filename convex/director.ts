@@ -454,6 +454,17 @@ export const recentBookingsList = query({
         if (f.includes("engine_corrected_parts")) corrected++;
         if (f.includes("fallback_only")) refused++;
       }
+      // Booking-level "labor cost above engine" — server soft-flagged because
+      // the customer's labor cost landed >8% above the engine's expected
+      // cost (paying more is consensual, but worth surfacing).
+      const aboveEngine = (b.quote_flags ?? []).includes(
+        "labor_cost_above_engine",
+      )
+        ? 1
+        : 0;
+      const aboveEngineDeltaDollars = aboveEngine
+        ? b.labor_cost_delta_above_engine_dollars ?? null
+        : null;
       return {
         id:        b._id,
         user:      user ? `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || user.email || "Unknown" : "Unknown",
@@ -463,7 +474,14 @@ export const recentBookingsList = query({
         time:      b.scheduled_time ?? "—",
         status:    b.status,
         total:     b.total_cost ?? 0,
-        fallback: { catches, corrected, refused, total: flagRows.length },
+        fallback: {
+          catches,
+          corrected,
+          refused,
+          aboveEngine,
+          aboveEngineDeltaDollars,
+          total: flagRows.length,
+        },
       };
     }));
   },
@@ -634,6 +652,8 @@ export const bookingDetail = query({
       quoteFlags:          booking.quote_flags ?? [],
       quoteFallbackLow:    booking.quote_fallback_low ?? null,
       quoteFallbackHigh:   booking.quote_fallback_high ?? null,
+      laborCostDeltaAboveEngineDollars:
+        booking.labor_cost_delta_above_engine_dollars ?? null,
 
       statusHistory: statusHistory.map((h) => ({
         status:    h.new_status,

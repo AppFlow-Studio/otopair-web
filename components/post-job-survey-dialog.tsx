@@ -774,6 +774,8 @@ export default function PostJobSurveyDialog({
   laborCostDollars,
   shopState,
   shopZip,
+  lockBilling,
+  quotedParts,
 }: {
   open: boolean;
   bookingId?: string | null;
@@ -803,6 +805,20 @@ export default function PostJobSurveyDialog({
    *  computeBookingTax signature. */
   shopState?: string | null;
   shopZip?: string | null;
+  /** Final post-job submission: parts/labor were locked when the customer
+   *  confirmed the quote. Surfaces a banner directing mechanics to back out
+   *  and use Add unforeseen scope (mid-job) for any pricing change. Only
+   *  honored when `cycle` is undefined (the legacy post-job completion path);
+   *  the cycle paths (pre_job/mid_job) are themselves the change-request
+   *  flow and must remain editable. */
+  lockBilling?: boolean;
+  /** Parts actually quoted on this booking (mapped from
+   *  `bookings.priced_parts_snapshot`). When the dialog opens in the pre_job
+   *  cycle ("Adjust quote"), seed the editable parts list from this rather
+   *  than the broader prefill cascade (`prefillData.suggestedParts`) so the
+   *  mechanic adjusts the parts ACTUALLY on the quote — not every part the
+   *  catalog suggests for this service. */
+  quotedParts?: JobActualPartPayload[] | null;
 }) {
   return (
     <PostJobSurveyDialogBody
@@ -825,6 +841,8 @@ export default function PostJobSurveyDialog({
       laborCostDollars={laborCostDollars ?? null}
       shopState={shopState ?? null}
       shopZip={shopZip ?? null}
+      lockBilling={lockBilling ?? false}
+      quotedParts={quotedParts ?? null}
     />
   );
 }
@@ -848,6 +866,8 @@ function PostJobSurveyDialogBody({
   laborCostDollars,
   shopState,
   shopZip,
+  lockBilling,
+  quotedParts,
 }: {
   open: boolean;
   bookingId: string | null;
@@ -871,6 +891,8 @@ function PostJobSurveyDialogBody({
   laborCostDollars: number | null;
   shopState: string | null;
   shopZip: string | null;
+  lockBilling: boolean;
+  quotedParts: JobActualPartPayload[] | null;
 }) {
   // Phase 2 — Pre-Job Approval mutation handles (only invoked when cycle is set).
   const submitPreJobEstimate = useMutation(
@@ -948,9 +970,15 @@ function PostJobSurveyDialogBody({
       ? String(Math.round(passportData.passport.mileage))
       : ""
   );
-  const [parts, setParts] = useState<PartRowState[]>(
-    buildPartRows(prefillData?.suggestedParts ?? [])
-  );
+  const [parts, setParts] = useState<PartRowState[]>(() => {
+    // Pre-job ("Adjust quote") seeds from the parts ACTUALLY on this
+    // booking's quote, not the cascade's broader suggestions. Falls back to
+    // the cascade if the booking has no priced parts snapshot yet.
+    if (cycle === "pre_job" && quotedParts && quotedParts.length > 0) {
+      return buildPartRows(quotedParts);
+    }
+    return buildPartRows(prefillData?.suggestedParts ?? []);
+  });
   const [vehicleUpdates, setVehicleUpdates] = useState<
     Record<string, string | boolean>
   >(
@@ -1546,6 +1574,24 @@ function PostJobSurveyDialogBody({
                   {passportData.vehicle_spec_label}
                 </p>
               ) : null}
+            </div>
+          ) : null}
+
+          {lockBilling && !cycle ? (
+            <div className="mx-auto mb-6 w-full max-w-xl rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                Billing locked
+              </p>
+              <p className="mt-1 text-sm leading-relaxed">
+                Parts and labor were locked when the customer confirmed the
+                quote. Use this survey to record what you found, vehicle
+                condition, and recommendations only.
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-amber-800">
+                Need to change parts or labor? Back out and use{" "}
+                <span className="font-semibold">Add unforeseen scope</span>{" "}
+                before marking the job completed.
+              </p>
             </div>
           ) : null}
 

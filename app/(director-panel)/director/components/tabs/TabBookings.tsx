@@ -27,7 +27,7 @@ export const TabBookings = () => {
     if (statusFilter !== 'all' && b.status !== statusFilter) return false
     if (shopFilter && !b.shop.toLowerCase().includes(shopFilter.toLowerCase())) return false
     if (untaggedOnly && b.status !== 'refunded') return false
-    if (fallbackOnly && (b.fallback.catches + b.fallback.corrected + b.fallback.refused) === 0) return false
+    if (fallbackOnly && (b.fallback.catches + b.fallback.corrected + b.fallback.refused + b.fallback.aboveEngine) === 0) return false
     return true
   })
 
@@ -71,11 +71,18 @@ export const TabBookings = () => {
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{b.shop}</td>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)', fontSize:12 }}>{b.services.join(', ') || '—'}</td>
                     <td style={tableStyles.td}>
-                      {(b.fallback.catches + b.fallback.corrected + b.fallback.refused) === 0 ? null : (
+                      {(b.fallback.catches + b.fallback.corrected + b.fallback.refused + b.fallback.aboveEngine) === 0 ? null : (
                         <span style={{ display:'inline-flex', gap:4, flexWrap:'wrap' }}>
                           {b.fallback.catches > 0 && <Badge tone="orange">⚠{b.fallback.catches}</Badge>}
                           {b.fallback.corrected > 0 && <Badge tone="green">✓{b.fallback.corrected}</Badge>}
                           {b.fallback.refused > 0 && <Badge tone="red">✗{b.fallback.refused}</Badge>}
+                          {b.fallback.aboveEngine > 0 && (
+                            <Badge tone="blue">
+                              {b.fallback.aboveEngineDeltaDollars != null
+                                ? `$+${b.fallback.aboveEngineDeltaDollars.toFixed(0)}`
+                                : "$+"}
+                            </Badge>
+                          )}
                         </span>
                       )}
                     </td>

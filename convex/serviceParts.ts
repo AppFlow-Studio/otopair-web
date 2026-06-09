@@ -27,6 +27,30 @@ export const PART_CONFIDENCE_GATE_THRESHOLD = 0.7;
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
+/**
+ * Per-service allowlist of OEM `subcategory` values that count as billable
+ * customer-facing parts. The enrichment pipeline extracts everything OEM-known
+ * for the vehicle (oil filter, drain plug gasket, engine oil, etc.) — useful
+ * for the vehicle profile, but shops keep consumables like drain plug gaskets
+ * and engine oil in stock and never line-item them to the customer. This
+ * allowlist is the booking-time billing filter.
+ *
+ * Service slugs missing from this map preserve existing behavior (no
+ * subcategory filter — all matching fitments are eligible).
+ */
+const BILLABLE_SUBCATEGORIES_BY_SERVICE: Record<string, ReadonlySet<string>> = {
+  oil_change: new Set(["oil_filter"]),
+};
+
+function isBillableSubcategory(
+  serviceSlug: string,
+  subcategory: string | undefined | null,
+): boolean {
+  const allow = BILLABLE_SUBCATEGORIES_BY_SERVICE[serviceSlug];
+  if (!allow) return true;
+  return subcategory != null && allow.has(subcategory);
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface PackageQuestion {
@@ -132,11 +156,14 @@ export const getPartsForService = query({
       (f) => f.package_code == null || confirmed.has(f.package_code),
     );
 
-    // 3. Hydrate the part info for each fitment.
+    // 3. Hydrate the part info for each fitment. Drop subcategories that
+    //    aren't billable for this service (e.g. drain plug gaskets on
+    //    oil_change — see BILLABLE_SUBCATEGORIES_BY_SERVICE).
     const resolved: ResolvedFitment[] = [];
     for (const f of applicable) {
       const part = await ctx.db.get(f.part_id);
       if (!part) continue;
+      if (!isBillableSubcategory(args.serviceSlug, part.subcategory)) continue;
       resolved.push({
         fitment_id: f._id,
         part_id: f.part_id,
@@ -198,6 +225,7 @@ export const getOemPartsForBooking = query({
       for (const f of base) {
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
+        if (!isBillableSubcategory(service.slug, part.subcategory)) continue;
         resolved.push({
           fitment_id: f._id,
           part_id: f.part_id,
@@ -367,10 +395,16 @@ export async function resolveWinningPartForService(
   // pipeline writes subcategory reliably (e.g. "front_brake_pad" /
   // "rear_brake_pad") but `position` is only set on the OEM seed map and
   // can be missing on older fitment rows.
+  //
+  // Billing-subcategory gate: drop fitments whose subcategory isn't on the
+  // service's billable allowlist (e.g. oil_change excludes drain_plug_gasket
+  // and engine_oil — see BILLABLE_SUBCATEGORIES_BY_SERVICE). Pipeline still
+  // stores these for the vehicle profile; we just don't price them.
   const hydratedAll: WinnerCandidate[] = [];
   for (const f of packageGated) {
     const part = await ctx.db.get(f.part_id);
     if (!part) continue;
+    if (!isBillableSubcategory(args.serviceSlug, part.subcategory)) continue;
     const priceSummary = await summarizePartPrices(ctx, f.part_id);
     hydratedAll.push({ fitment: f, part, priceSummary });
   }

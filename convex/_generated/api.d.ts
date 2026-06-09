@@ -40,6 +40,7 @@ import type * as directorCars from "../directorCars.js";
 import type * as directorConfigActions from "../directorConfigActions.js";
 import type * as directorOverview from "../directorOverview.js";
 import type * as directorPricing from "../directorPricing.js";
+import type * as directorSettings from "../directorSettings.js";
 import type * as directorShopActions from "../directorShopActions.js";
 import type * as directorStripe from "../directorStripe.js";
 import type * as directorStripeLive from "../directorStripeLive.js";
@@ -275,6 +276,7 @@ import type * as vehicleEnrichment_v3queries from "../vehicleEnrichment/v3querie
 import type * as vehicleEnrichment_validation_oemValidation from "../vehicleEnrichment/validation/oemValidation.js";
 import type * as vehicleEnrichment_validation_sanityChecks from "../vehicleEnrichment/validation/sanityChecks.js";
 import type * as vehicleEnrichment_verificationApi from "../vehicleEnrichment/verificationApi.js";
+import type * as vehicle_history from "../vehicle_history.js";
 import type * as vehicle_mutations from "../vehicle_mutations.js";
 import type * as vehicle_owners from "../vehicle_owners.js";
 import type * as vehicle_pipeline from "../vehicle_pipeline.js";
@@ -322,6 +324,7 @@ declare const fullApi: ApiFromModules<{
   directorConfigActions: typeof directorConfigActions;
   directorOverview: typeof directorOverview;
   directorPricing: typeof directorPricing;
+  directorSettings: typeof directorSettings;
   directorShopActions: typeof directorShopActions;
   directorStripe: typeof directorStripe;
   directorStripeLive: typeof directorStripeLive;
@@ -557,6 +560,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/validation/oemValidation": typeof vehicleEnrichment_validation_oemValidation;
   "vehicleEnrichment/validation/sanityChecks": typeof vehicleEnrichment_validation_sanityChecks;
   "vehicleEnrichment/verificationApi": typeof vehicleEnrichment_verificationApi;
+  vehicle_history: typeof vehicle_history;
   vehicle_mutations: typeof vehicle_mutations;
   vehicle_owners: typeof vehicle_owners;
   vehicle_pipeline: typeof vehicle_pipeline;

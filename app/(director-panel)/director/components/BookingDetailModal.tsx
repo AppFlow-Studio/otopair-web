@@ -176,9 +176,20 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
                     const corrected = detail.services.filter((s) =>
                       (s.quoteFlags ?? []).includes('engine_corrected_parts'),
                     ).length
+                    const aboveEngine = (detail.quoteFlags ?? []).includes(
+                      'labor_cost_above_engine',
+                    )
                     const parts: string[] = []
                     if (catches > 0) parts.push(`${catches} fallback catch${catches > 1 ? 'es' : ''}`)
                     if (corrected > 0) parts.push(`${corrected} engine-corrected`)
+                    if (aboveEngine) {
+                      const delta = detail.laborCostDeltaAboveEngineDollars
+                      parts.push(
+                        delta != null
+                          ? `labor $+${delta.toFixed(2)} over engine`
+                          : 'labor above engine',
+                      )
+                    }
                     return parts.length > 0
                       ? `Services (${detail.services.length}) · ${parts.join(' · ')}`
                       : `Services (${detail.services.length})`

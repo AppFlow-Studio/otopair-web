@@ -202,18 +202,19 @@ const EXPECTATIONS: ReadonlyArray<Expected> = [
     vehicle_config_key: CAMRY_FWD_CONFIG_KEY,
     service_slug: "oil_change",
     tier: "T1",
-    // Anchor: 0.5hr × $135 + Camry parts $50–56 × T1 mult 1.0
-    expected_low: 117.5,
-    expected_high: 123.5,
+    // Anchor: 0.5hr × $135 + Camry filter-only parts $12–18 × T1 mult 1.0.
+    // Engine oil is shop-stock (not billed) — see seedServiceParts (2026-06-09).
+    expected_low: 79.5,
+    expected_high: 85.5,
   },
   {
     example: "B — BMW 330i (B48) oil @ T2c (real labor, parts multiplier)",
     vehicle_config_key: "spec_v2_validation_bmw_330i",
     service_slug: "oil_change",
     tier: "T2c",
-    // 0.5hr × $185 + Camry parts $50–56 × T2c mult 2.0
-    expected_low: 192.5,
-    expected_high: 204.5,
+    // 0.5hr × $185 + Camry filter-only $12–18 × T2c mult 2.0.
+    expected_low: 116.5,
+    expected_high: 128.5,
   },
   {
     example: "C — Audi RS6 spark plugs @ T3a (full fallback fires)",
@@ -226,59 +227,59 @@ const EXPECTATIONS: ReadonlyArray<Expected> = [
   },
 
   // ── Cross-tier validation table (in-range vs RepairPal market) ───────────
+  // NOTE: 2026-06-09 — oil_change reclassified to filter-only (shops supply
+  // engine oil from stock). Our customer-facing quote is intentionally
+  // BELOW the market_low these fixtures were calibrated against, because
+  // competitor shops bill oil while we don't. market_low is dropped on
+  // oil_change rows; market_high stays as an upper-bound sanity check.
   {
-    example: "Honda Civic oil @ T1 → market $118–145",
+    example: "Honda Civic oil @ T1 → market top $145 (no floor, oil not billed)",
     vehicle_config_key: "spec_v2_validation_honda_civic",
     service_slug: "oil_change",
     tier: "T1",
-    market_low: 118, market_high: 145,
+    market_high: 145,
   },
   {
-    example: "Subaru Outback AWD oil @ T2a → market ~$110–160",
+    example: "Subaru Outback AWD oil @ T2a → market top $160",
     vehicle_config_key: "spec_v2_validation_subaru_outback",
     service_slug: "oil_change",
     tier: "T2a",
-    market_low: 110, market_high: 160,
+    market_high: 160,
   },
   {
-    example: "VW GTI oil @ T2b → market $157–199",
+    example: "VW GTI oil @ T2b → market top $199",
     vehicle_config_key: "spec_v2_validation_vw_gti",
     service_slug: "oil_change",
     tier: "T2b",
-    market_low: 157, market_high: 199,
+    market_high: 199,
   },
   {
-    example: "BMW 330i oil @ T2c (Layer 5) → market $163–196",
+    example: "BMW 330i oil @ T2c (Layer 5) → market top $196",
     vehicle_config_key: "spec_v2_validation_bmw_330i",
     service_slug: "oil_change",
     tier: "T2c",
-    // Note: Example B uses real labor (0.5h); Layer 1 fires; same quote.
-    market_low: 163, market_high: 196,
+    market_high: 196,
   },
   {
-    example: "BMW M340i oil @ T3a → NYC indie specialist $280–380",
+    example: "BMW M340i oil @ T3a → NYC indie top $380",
     vehicle_config_key: "spec_v2_validation_bmw_m340i",
     service_slug: "oil_change",
     tier: "T3a",
-    // NYC reality (BMW specialist): $280-380. RepairPal national avg ($259-287)
-    // is below NYC; widened to match locked Camry parts-counter baseline.
-    market_low: 280, market_high: 380,
+    market_high: 380,
   },
   {
-    example: "Porsche 911 oil @ T3b → NYC dealer $400–600",
+    example: "Porsche 911 oil @ T3b → NYC dealer top $600",
     vehicle_config_key: "spec_v2_validation_porsche_911",
     service_slug: "oil_change",
     tier: "T3b",
-    // NYC reality: Porsche dealer $450-600, specialist $350-500.
-    // Original $375-475 was midpoint; widened to match locked Camry baseline.
-    market_low: 400, market_high: 600,
+    market_high: 600,
   },
   {
-    example: "Ferrari 488 oil @ T4 → dealer $500–900 (floor only)",
+    example: "Ferrari 488 oil @ T4 → dealer top $900",
     vehicle_config_key: "spec_v2_validation_ferrari_488",
     service_slug: "oil_change",
     tier: "T4",
-    market_low: 500, market_high: 900,
+    market_high: 900,
   },
   {
     example: "BMW 330i battery (parts-heavy) @ T2c → dealer $300–435",

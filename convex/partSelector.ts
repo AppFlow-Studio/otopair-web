@@ -5,6 +5,19 @@
  * Deterministic: same input → same output, always. The trace surfaces *why* a
  * candidate won so the mechanic / director side can audit and override.
  *
+ * Layer order is fitment-first: we'd rather quote a confident, OEM-quality
+ * part with weaker price data than a well-priced part we're less sure fits.
+ *   0 mechanic_verified (short-circuit)
+ *   gate confidence ≥ threshold (drops low-conf; falls back to full pool if
+ *        none clear, and flags low_confidence)
+ *   1 fitment confidence
+ *   2 data quality (oem > dealer > aftermarket > generic)
+ *   3 price source count
+ *   4 price stability (CV)
+ *   5 recency
+ *   6 median-price proximity
+ *   7 lexicographic (always decisive)
+ *
  * No Convex imports here. Callers (serviceParts.ts, booking_quotes.ts) hydrate
  * candidates from part_fitments + part_prices and pass them in. Keeps this module
  * unit-testable without spinning up a Convex env.
@@ -121,18 +134,10 @@ export function enrichCandidate(c: CandidateInput): EnrichedCandidate {
   };
 }
 
-function formatScore(v: number, layer: TraceLayer): string {
-  if (layer === 1) return `${v} sources`;
-  if (layer === 2) return v.toFixed(2);
-  if (layer === 3) return `CV ${v.toFixed(3)}`;
-  if (layer === 4) return `${v}d ago`;
-  if (layer === 5) return `$${v.toFixed(2)} away`;
-  if (layer === 6) {
-    const found = Object.entries(QUALITY_RANK).find(([, r]) => r === v);
-    return found ? found[0] : "—";
-  }
-  return String(v);
-}
+const formatQualityRank = (v: number): string => {
+  const found = Object.entries(QUALITY_RANK).find(([, r]) => r === v);
+  return found ? found[0] : "—";
+};
 
 export function selectPart(
   candidates: CandidateInput[],
@@ -203,11 +208,13 @@ export function selectPart(
     }
   }
 
-  // Generic layer runner — mutates `pool` in place.
+  // Generic layer runner — mutates `pool` in place. Caller supplies a
+  // formatter so the layer ordering is independent of presentation.
   const runLayer = (
     n: number,
     name: string,
     score: (c: EnrichedCandidate) => number,
+    format: (v: number) => string,
     asc = false,
   ): boolean => {
     const scores = pool.map(score);
@@ -220,44 +227,56 @@ export function selectPart(
       decisive,
       survivor_part_ids: survivors.map((c) => c.part_id),
       reason: decisive
-        ? `${survivors[0].part_id} wins. ${name} value: ${formatScore(target, n)}`
-        : `${survivors.length} candidates tied at ${formatScore(target, n)}.`,
+        ? `${survivors[0].part_id} wins. ${name} value: ${format(target)}`
+        : `${survivors.length} candidates tied at ${format(target)}.`,
     });
     pool = survivors;
     return decisive;
   };
 
-  if (runLayer(1, "Price Source Count", (c) => c.price_count)) {
+  // Fitment-first ordering: we'd rather show a confident, OEM-quality part
+  // with sparse pricing than a well-priced part we're less sure fits this
+  // car. Price-derived tiebreaks only kick in once fitment certainty is tied.
+  if (runLayer(1, "Fitment Confidence", (c) => c.confidence, (v) => v.toFixed(2))) {
     return { winner: pool[0], trace, eliminatedByGate, low_confidence };
   }
-  if (runLayer(2, "Fitment Confidence", (c) => c.confidence)) {
+  if (
+    runLayer(
+      2,
+      "Data Quality",
+      (c) => QUALITY_RANK[c.data_quality] ?? 99,
+      formatQualityRank,
+      true,
+    )
+  ) {
     return { winner: pool[0], trace, eliminatedByGate, low_confidence };
   }
-  if (runLayer(3, "Price Stability (CV)", (c) => c.price_cv ?? 999, true)) {
+  if (runLayer(3, "Price Source Count", (c) => c.price_count, (v) => `${v} sources`)) {
     return { winner: pool[0], trace, eliminatedByGate, low_confidence };
   }
-  if (runLayer(4, "Recency (price freshness)", (c) => c.most_recent_price_days_ago ?? 9999, true)) {
+  if (runLayer(4, "Price Stability (CV)", (c) => c.price_cv ?? 999, (v) => `CV ${v.toFixed(3)}`, true)) {
     return { winner: pool[0], trace, eliminatedByGate, low_confidence };
   }
-
-  // Layer 5: distance from category median of trimmed medians.
-  const catMed = pool.reduce((s, c) => s + (c.price_trimmed_median ?? 0), 0) / pool.length;
   if (
     runLayer(
       5,
-      `Median-Price Proximity (cat $${catMed.toFixed(2)})`,
-      (c) => Math.abs((c.price_trimmed_median ?? 0) - catMed),
+      "Recency (price freshness)",
+      (c) => c.most_recent_price_days_ago ?? 9999,
+      (v) => `${v}d ago`,
       true,
     )
   ) {
     return { winner: pool[0], trace, eliminatedByGate, low_confidence };
   }
 
+  // Layer 6: distance from category median of trimmed medians.
+  const catMed = pool.reduce((s, c) => s + (c.price_trimmed_median ?? 0), 0) / pool.length;
   if (
     runLayer(
       6,
-      "Data Quality",
-      (c) => QUALITY_RANK[c.data_quality] ?? 99,
+      `Median-Price Proximity (cat $${catMed.toFixed(2)})`,
+      (c) => Math.abs((c.price_trimmed_median ?? 0) - catMed),
+      (v) => `$${v.toFixed(2)} away`,
       true,
     )
   ) {

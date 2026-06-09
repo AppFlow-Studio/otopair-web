@@ -1907,6 +1907,12 @@ export default defineSchema({
     quote_flags: v.optional(v.array(v.string())),
     quote_fallback_low: v.optional(v.float64()),
     quote_fallback_high: v.optional(v.float64()),
+    // Dollar delta when the customer's labor cost lands above the engine's
+    // expected labor cost by more than ±8% — paired with the
+    // `labor_cost_above_engine` flag on `quote_flags`. Server still books
+    // (customer consented to the higher number), but the director panel
+    // surfaces it so we can audit shops that consistently bill above engine.
+    labor_cost_delta_above_engine_dollars: v.optional(v.float64()),
     // Per-service sibling to `quote_flags`. One row per service id with the
     // engine's per-quote flags + a `fallback_catch` marker when the booking
     // line for that service falls outside the engine's per-service band
@@ -2686,6 +2692,18 @@ export default defineSchema({
   })
     .index("by_token", ["token"])
     .index("by_user_id", ["user_id"]),
+
+  // Singleton row of director-controlled global feature flags. Keyed
+  // `"global"` so the row is fetched by a stable lookup; future booleans get
+  // appended as new optional fields. Default behavior when the row is absent
+  // is decided per-flag at the call site (e.g. round_labor_times_to_15min
+  // defaults to true).
+  director_settings: defineTable({
+    key: v.string(),
+    round_labor_times_to_15min: v.boolean(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("director_users")),
+  }).index("by_key", ["key"]),
 
   // ==========================================================================
   // Scheduling-overhaul tables — late-start monitoring, no-show monitoring,

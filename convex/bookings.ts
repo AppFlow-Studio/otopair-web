@@ -850,7 +850,7 @@ export const create = mutation({
       serverMinutes: serverDerivedMinutes,
     });
 
-    await assertLaborCostMatchesDuration(ctx, {
+    const laborCostCheck = await assertLaborCostMatchesDuration(ctx, {
       shopId: args.shop_id,
       vin: normalizedVin,
       serviceIds: [args.service_id],
@@ -892,6 +892,10 @@ export const create = mutation({
       created_at: now,
       updated_at: now,
       source_recommendation_id: args.source_recommendation_id,
+      quote_flags: laborCostCheck ? ["labor_cost_above_engine"] : undefined,
+      labor_cost_delta_above_engine_dollars: laborCostCheck
+        ? laborCostCheck.aboveEngineByDollars
+        : undefined,
     });
 
     await logBookingStatusChange(
@@ -1032,6 +1036,17 @@ const FALLBACK_LABOR_RATE_DOLLARS = 120;
  * Pass `expectMinutes = undefined` to no-op (used during the optional-arg
  * rollout window).
  */
+/**
+ * Returns `{ aboveEngineByDollars, expectedDollars }` when the client's
+ * labor_cost is above the engine's expectation beyond ±8% — the caller
+ * should stamp `labor_cost_above_engine` on the booking + the delta. Returns
+ * `undefined` for the silent-pass cases (no config, refused service, within
+ * tolerance). Still throws when the client is materially BELOW the engine.
+ */
+type LaborCostCheckResult =
+  | { aboveEngineByDollars: number; expectedDollars: number }
+  | undefined;
+
 async function assertLaborCostMatchesDuration(
   ctx: any,
   args: {
@@ -1041,8 +1056,8 @@ async function assertLaborCostMatchesDuration(
     laborCostDollars: number;
     expectMinutes: number | undefined;
   },
-) {
-  if (args.expectMinutes == null || args.expectMinutes <= 0) return;
+): Promise<LaborCostCheckResult> {
+  if (args.expectMinutes == null || args.expectMinutes <= 0) return undefined;
 
   // Server-side Yassin recomputation: tier-aware labor rate + Camry-anchored
   // labor hours (with the new quality gate disqualifying low-trust vdb rows).
@@ -1073,10 +1088,29 @@ async function assertLaborCostMatchesDuration(
     return;
   }
 
-  const expectedLaborCost = series.labor_cost_total;
+  // Mirror the client's labor-hours rounding when the director toggle is on
+  // (laborTimes.ts ceil-to-15). Without this mirror the server computes raw
+  // hours (e.g. 0.6h) while the client submits the rounded value (0.75h),
+  // which makes a legitimate ±8% check fail at the boundary.
+  const settingsRow = await ctx.db
+    .query("director_settings")
+    .withIndex("by_key", (q: any) => q.eq("key", "global"))
+    .first();
+  const roundTo15 = settingsRow?.round_labor_times_to_15min ?? true;
+  const expectedLaborCost = roundTo15
+    ? Math.round(
+        series.quotes.reduce((sum, q) => {
+          if (!q.ok) return sum;
+          const roundedHours =
+            (Math.ceil((q.labor.hours * 60) / 15) * 15) / 60;
+          return sum + roundedHours * q.labor.rate;
+        }, 0) * 100,
+      ) / 100
+    : series.labor_cost_total;
   if (expectedLaborCost <= 0) return;
   const tolerance = expectedLaborCost * 0.08; // ±8% band per Pricing v2 spec
-  const delta = Math.abs(args.laborCostDollars - expectedLaborCost);
+  const signedDelta = args.laborCostDollars - expectedLaborCost;
+  const delta = Math.abs(signedDelta);
 
   // Telemetry: warn between 5% and 8% so we can audit drift before tightening.
   if (delta > expectedLaborCost * 0.05 && delta <= tolerance) {
@@ -1088,13 +1122,35 @@ async function assertLaborCostMatchesDuration(
   }
 
   if (delta > tolerance) {
+    // Directional reject. Customer paying MORE than the engine says they
+    // should (e.g. shop rounded up, fixed-price override, customer accepted
+    // a higher quote) is not a schedule/price desync — they consented to
+    // that number. Track it as a warning flag and continue.
+    //
+    // Customer paying LESS than expected by >8% is still a hard reject:
+    // either the client UI is stale, or someone is stripping price downward,
+    // and either way we shouldn't book on undercharged terms.
+    if (signedDelta >= 0) {
+      console.warn(
+        `[assertLaborCostMatchesDuration] labor_cost_above_engine: ` +
+          `client=$${args.laborCostDollars.toFixed(2)} ` +
+          `server=$${expectedLaborCost.toFixed(2)} delta=+$${delta.toFixed(2)} ` +
+          `(±8% = $${tolerance.toFixed(2)}). Customer agreed; tracking as flag, not rejecting. ` +
+          `vin=${args.vin}`,
+      );
+      return {
+        aboveEngineByDollars: Math.round(delta * 100) / 100,
+        expectedDollars: expectedLaborCost,
+      };
+    }
     throw new Error(
       `LABOR_COST_TIER_MISMATCH: client labor_cost=$${args.laborCostDollars.toFixed(2)} ` +
         `vs Yassin server cost=$${expectedLaborCost.toFixed(2)} ` +
-        `(±8% = $${tolerance.toFixed(2)}, delta=$${delta.toFixed(2)}). ` +
-        `Booking rejected to prevent schedule/price desync.`,
+        `(±8% = $${tolerance.toFixed(2)}, delta=-$${delta.toFixed(2)}). ` +
+        `Booking rejected — client cost is materially below engine.`,
     );
   }
+  return undefined;
 }
 
 /**
@@ -1340,7 +1396,7 @@ export const createBatch = mutation({
       serverMinutes: enrichmentLaborMinutes,
     });
 
-    await assertLaborCostMatchesDuration(ctx, {
+    const laborCostCheck = await assertLaborCostMatchesDuration(ctx, {
       shopId: args.shop_id,
       vin: normalizedVin,
       serviceIds: args.services.map((s) => s.service_id),
@@ -1488,6 +1544,7 @@ export const createBatch = mutation({
     for (const row of serviceQuoteFlagsForBooking) {
       for (const f of row.flags) aggregatedFlags.add(f);
     }
+    if (laborCostCheck) aggregatedFlags.add("labor_cost_above_engine");
     const quoteFlagsForBooking = computeQuoteFallbackFlags({
       baseFlags: Array.from(aggregatedFlags),
       fallbackLow: disclosedRange.quote_fallback_low_dollars,
@@ -1570,6 +1627,9 @@ export const createBatch = mutation({
         disclosedRange.quote_fallback_low_dollars ?? undefined,
       quote_fallback_high:
         disclosedRange.quote_fallback_high_dollars ?? undefined,
+      labor_cost_delta_above_engine_dollars: laborCostCheck
+        ? laborCostCheck.aboveEngineByDollars
+        : undefined,
       service_quote_flags:
         serviceQuoteFlagsForBooking.length > 0
           ? serviceQuoteFlagsForBooking.map((r) => ({

@@ -945,6 +945,7 @@ export default function MechanicDashboard() {
             }),
           )
         }
+        lockBilling
       />
 
       {/* Pre-Job Approval — auto-chained from the inspection dialog. Same

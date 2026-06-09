@@ -52,7 +52,11 @@ const SPECS: ServiceSpec[] = [
   { slug: "spark_plugs",             parts_kind: "per_cylinder",   parts_unit_label: "cyl" },
 
   // ── Per-unit-spec — engine capacity field ────────────────────────────
-  { slug: "oil_change",              parts_kind: "per_unit_spec",  parts_unit_label: "qt", parts_unit_spec_source: "oil_capacity_qts" },
+  // oil_change moved out of per_unit_spec on 2026-06-09: shops provide
+  // engine oil from stock, so the only billable part is the oil_filter
+  // (single piece). Scaling by oil_capacity_qts was multiplying the filter
+  // price by 5.5×, producing the "$110/qt" bug. Treat oil_change as a
+  // fixed_kit instead — one filter, one price, no spec scaling.
   { slug: "coolant_flush",           parts_kind: "per_unit_spec",  parts_unit_label: "qt", parts_unit_spec_source: "coolant_capacity_qts" },
   { slug: "transmission_service",    parts_kind: "per_unit_spec",  parts_unit_label: "qt", parts_unit_spec_source: "transmission_fluid_capacity_qts" },
 
@@ -62,6 +66,7 @@ const SPECS: ServiceSpec[] = [
 
   // ── Fixed kit — 1 service = 1 kit (system capacity doesn't vary
   //                materially across cars; the kit IS the scaling unit) ─
+  { slug: "oil_change",              parts_kind: "fixed_kit",      parts_unit_label: "filter" },
   { slug: "filter_replacement",      parts_kind: "fixed_kit",      parts_unit_label: "kit" },
   { slug: "timing_belt",             parts_kind: "fixed_kit",      parts_unit_label: "kit" },
   { slug: "battery_replacement",     parts_kind: "fixed_kit",      parts_unit_label: "kit" },

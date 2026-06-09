@@ -21,7 +21,8 @@ import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dia
 import PostjobReportSection from "@/components/booking/postjob-report-section";
 import SendReceiptCard from "@/components/booking/send-receipt-card";
 import type { JobActualsPayload } from "@/lib/job-actuals";
-import VehiclePassportSection from "@/components/vehicle-passport-section";
+import VehiclePassportCard from "@/components/vehicle-passport-card";
+import JobStepIndicator from "@/components/job-step-indicator";
 import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
@@ -59,7 +60,7 @@ import {
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
 import { StatusPill } from "@/components/status-pill";
-import { BOOKING_STATUS_VISUALS } from "@/lib/booking-status";
+import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
 import type {
   PostJobSurveyPayload,
   PreJobSurveyPayload,
@@ -778,6 +779,35 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const declineTextareaRef = useRef<HTMLTextAreaElement>(null);
     const cancelTextareaRef = useRef<HTMLTextAreaElement>(null);
     const copyEmailTimeoutRef = useRef<number | null>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const [isStepIndicatorCompact, setIsStepIndicatorCompact] = useState(false);
+
+    useEffect(() => {
+      const el = scrollContainerRef.current;
+      if (!el) return;
+      // Wide hysteresis so the indicator's own height change (which shifts
+      // content as it transitions) can't bounce scrollTop back across the
+      // threshold and re-toggle compact mode mid-animation.
+      const COLLAPSE_AT = 96;
+      const EXPAND_AT = 16;
+      let raf = 0;
+      const onScroll = () => {
+        if (raf) return;
+        raf = window.requestAnimationFrame(() => {
+          raf = 0;
+          const top = el.scrollTop;
+          setIsStepIndicatorCompact((prev) =>
+            prev ? top > EXPAND_AT : top > COLLAPSE_AT,
+          );
+        });
+      };
+      onScroll();
+      el.addEventListener("scroll", onScroll, { passive: true });
+      return () => {
+        if (raf) window.cancelAnimationFrame(raf);
+        el.removeEventListener("scroll", onScroll);
+      };
+    }, [job?._id]);
 
     const markNotificationsRead = useMutation(
       api.notifications.markShopNotificationsReadForBooking,
@@ -1582,7 +1612,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           </div>
 
           {/* Body */}
-          <div className="flex-1 overflow-y-auto px-5 py-5">
+          <div
+            ref={scrollContainerRef}
+            className="flex-1 overflow-y-auto px-5 pb-5"
+          >
             {job === undefined ? (
               <div className="space-y-3">
                 {Array.from({ length: 8 }).map((_, i) => (
@@ -1599,9 +1632,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               </p>
             ) : (
               <div className="space-y-6">
-                <VehiclePassportSection
-                  data={vehiclePassport}
-                  bookingServices={job.serviceNames}
+                <div className="sticky top-0 z-20 -mx-5 -mt-5 bg-background/95 px-5 pt-5 pb-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+                  <JobStepIndicator
+                    currentStep={getJobStep(job.status)}
+                    status={job.status}
+                    compact={isStepIndicatorCompact}
+                  />
+                </div>
+
+                <VehiclePassportCard
+                  job={job}
+                  passport={vehiclePassport ?? null}
                 />
 
                 {/* Booking info grid */}
@@ -1993,11 +2034,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   ) : null
                 ) : null}
 
-                {/* Status transitions */}
+                {/* Status transitions — grouped by 4-step mechanic flow */}
                 {(() => {
                   const s = job.status;
+                  const step = getJobStep(s);
                   const canAccept =
                     s === "pending" || s === "pending_shop_acceptance";
+                  const canAdjustQuote = canAccept;
                   const canComplete = s === "in_progress";
                   const canMarkVehicleHere = s === "confirmed";
                   const canStartJob = s === "vehicle_at_shop";
@@ -2012,23 +2055,46 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     !!onRequestReschedule &&
                     (s === "pending" ||
                       s === "pending_shop_acceptance" ||
-                      s === "confirmed");
+                      s === "confirmed" ||
+                      s === "vehicle_at_shop" ||
+                      s === "in_progress");
+                  const canAdjustMidJob =
+                    s === "in_progress" &&
+                    (job as any).hasDisclosedRange &&
+                    ((job as any).paymentApprovalState === "in_range" ||
+                      (job as any).paymentApprovalState === "pre_job_approved" ||
+                      (job as any).paymentApprovalState === "mid_job_approved" ||
+                      (job as any).paymentApprovalState === "captured");
 
                   if (
                     !canAccept &&
+                    !canAdjustQuote &&
                     !canMarkVehicleHere &&
                     !canComplete &&
                     !canDecline &&
                     !canCancel &&
                     !canMarkNoShow &&
-                    !canReschedule
+                    !canReschedule &&
+                    !canAdjustMidJob
                   )
                     return null;
+
+                  const stepLabel =
+                    step === 1
+                      ? "Step 1 · Incoming"
+                      : step === 2
+                        ? "Step 2 · Confirmed"
+                        : step === 3
+                          ? "Step 3 · Vehicle here"
+                          : step === 4
+                            ? "Step 4 · Active job"
+                            : "Actions";
+
                   return (
                     <div className="rounded-2xl bg-muted/20 p-4">
                       <div className="mb-3 flex items-center justify-between gap-2">
                         <DrawerFieldLabel className="mb-0">
-                          Actions
+                          {stepLabel}
                         </DrawerFieldLabel>
                         {canComplete && job.status === "confirmed" && (
                           <DropdownMenu>
@@ -2083,6 +2149,19 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             )}
                           </button>
                         )}
+                        {canAdjustQuote &&
+                          (job as any).paymentApprovalState !==
+                            "pre_job_pending" && (
+                            <button
+                              type="button"
+                              onClick={() => setShowPrejobEstimateDialog(true)}
+                              disabled={isActioning}
+                              className={drawerSecondaryButtonClassName}
+                              title="Change parts, labor, or price before accepting — sends a confirmation request to the customer with your reasoning."
+                            >
+                              Adjust quote
+                            </button>
+                          )}
                         {canStartJob && (
                           <button
                             onClick={handleStartJob}
@@ -2834,6 +2913,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           isSubmitting={isSubmittingPostjob}
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
+          lockBilling
         />
 
         {/* Pre-Job Approval — auto-chained from the inspection dialog. */}
@@ -2865,6 +2945,21 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           laborCostDollars={(job as any)?.laborCost ?? null}
           shopState={(job as any)?.shopState ?? null}
           shopZip={(job as any)?.shopZip ?? null}
+          quotedParts={
+            job?.pricedPartsSnapshot && job.pricedPartsSnapshot.length > 0
+              ? job.pricedPartsSnapshot.map((p) => ({
+                  part_name: p.part_name,
+                  brand: p.brand ?? null,
+                  oem_number: p.oem_number,
+                  cost: p.unit_price_cents / 100,
+                  quantity: p.quantity,
+                  supplied_by: "shop",
+                  part_tier: p.part_tier ?? "oem",
+                  service_id: p.service_id ?? null,
+                  source: "catalog",
+                }))
+              : null
+          }
         />
 
         {/* Mid-Job Approval — "Add unforeseen scope" while in_progress. */}

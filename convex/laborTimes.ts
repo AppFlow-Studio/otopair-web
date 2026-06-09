@@ -1,21 +1,29 @@
 /**
  * convex/laborTimes.ts — Booking-time labor-hour resolver.
  *
- * Returns vehicle-specific labor hours for each requested service. Looks up
- * `labor_times` by (vehicle_config_id, service_id) and prefers
- * `empirical_hours` (mechanic-logged actuals from sources like
- * `vdb_repair_estimates`) over `book_hours` (manufacturer/manual estimate).
- * Falls back to `services.default_labor_hours` when no row exists.
+ * Returns vehicle-specific labor hours for each requested service. Resolution
+ * order (consolidated in `quoteEngine.resolveLaborHours`):
  *
- * Why empirical first: actuals reflect real shop conditions on the specific
- * engine/trim — book times often underestimate on harder packages. We surface
- * `confidence` and `empirical_sample_size` so the UI can warn on thin data,
- * but we don't gate on sample size — empirical is the source of truth.
+ *   1. Vehicle-specific empirical hours (`labor_times.empirical_hours`).
+ *   2. Vehicle-specific book/VDB hours (`labor_times.book_hours`).
+ *   3. Sibling-chassis vehicle's book hours.
+ *   4. Camry baseline × tier multiplier (Pricing v2 `tier_estimate`).
+ *   5. `services.default_labor_hours`.
+ *
+ * Layers 1–4 are owned by `quoteEngine.resolveLaborHours`; we fall through to
+ * layer 5 (the catalog default) only when the engine refuses (no tier, no
+ * Camry seed, etc.).
+ *
+ * If `director_settings.round_labor_times_to_15min` is true (default), the
+ * final hours are rounded UP to the nearest 15-min slot at this layer — so
+ * the displayed duration on every screen (service card, mechanic time-slot,
+ * Review & Pay) and the persisted `bookings.estimated_labor_minutes` agree.
  */
 
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
+import { detectTier, resolveLaborHours } from "./lib/quoteEngine";
 
 export type LaborHoursForService = {
   serviceId: Id<"services">;
@@ -29,6 +37,14 @@ export type LaborHoursForService = {
   empiricalSampleSize?: number;
   confidence?: number;
 };
+
+/** Ceil hours up to the nearest 15-minute slot. 0.6h (36m) → 0.75h (45m). */
+function roundUpTo15(hours: number): number {
+  if (!Number.isFinite(hours) || hours <= 0) return hours;
+  const minutes = hours * 60;
+  const rounded = Math.ceil(minutes / 15) * 15;
+  return rounded / 60;
+}
 
 export const getLaborHoursForServices = query({
   args: {
@@ -46,6 +62,18 @@ export const getLaborHoursForServices = query({
       .withIndex("by_vin", (q) => q.eq("vin", owner.vin))
       .first();
     const configId = vehicle?.vehicle_config_id;
+    const vehicleConfig = configId ? await ctx.db.get(configId) : null;
+    const vehicleTier = vehicleConfig
+      ? await detectTier(ctx, vehicleConfig)
+      : null;
+
+    // Read the director toggle once. Default to true when the singleton row
+    // hasn't been written yet (mirrors directorSettings.getGlobal default).
+    const settingsRow = await ctx.db
+      .query("director_settings")
+      .withIndex("by_key", (q) => q.eq("key", "global"))
+      .first();
+    const roundTo15 = settingsRow?.round_labor_times_to_15min ?? true;
 
     const out: LaborHoursForService[] = [];
 
@@ -54,7 +82,7 @@ export const getLaborHoursForServices = query({
       if (!service?.slug) continue;
 
       const defaultHours = service.default_labor_hours ?? 0;
-      const row: Doc<"labor_times"> | null = configId
+      const directRow: Doc<"labor_times"> | null = configId
         ? await ctx.db
             .query("labor_times")
             .withIndex("by_vehicle_config_and_service", (q) =>
@@ -67,34 +95,76 @@ export const getLaborHoursForServices = query({
         serviceId,
         serviceName: service.name,
         serviceSlug: service.slug,
-        bookHours: row?.book_hours,
-        empiricalHours: row?.empirical_hours,
-        empiricalSampleSize: row?.empirical_sample_size,
-        confidence: row?.confidence,
+        bookHours: directRow?.book_hours,
+        empiricalHours: directRow?.empirical_hours,
+        empiricalSampleSize: directRow?.empirical_sample_size,
+        confidence: directRow?.confidence,
       };
 
-      if (row && typeof row.empirical_hours === "number" && row.empirical_hours > 0) {
-        out.push({
-          ...base,
-          hours: row.empirical_hours,
-          source: "vehicle_specific_empirical",
+      // Try the consolidated engine resolver first — it handles direct
+      // empirical/book, sibling chassis, and Camry-baseline × tier estimate.
+      // Only reachable when we have both a config and a tier.
+      let resolvedHours: number | null = null;
+      let resolvedSource: LaborHoursForService["source"] | null = null;
+      if (configId && vehicleTier) {
+        const engineResult = await resolveLaborHours(ctx, {
+          vehicle_config_id: configId,
+          service_id: serviceId,
+          vehicle_tier: vehicleTier,
         });
-        continue;
+        if (engineResult.ok) {
+          resolvedHours = engineResult.hours;
+          // Map engine sources to the user-facing source taxonomy. Anything
+          // vehicle-grounded (direct VDB, empirical, sibling chassis, Camry
+          // anchor row when the user IS a Camry) reads as vehicle_specific.
+          // The Camry × tier multiplier path is an interpolation — surface
+          // it as `default` so the existing `hasFallback` Estimate-pill
+          // logic on the mobile review screen still fires.
+          if (engineResult.source === "empirical") {
+            resolvedSource = "vehicle_specific_empirical";
+          } else if (
+            engineResult.source === "vdb" ||
+            engineResult.source === "vdb_camry_baseline" ||
+            engineResult.source === "sibling"
+          ) {
+            resolvedSource = "vehicle_specific_book";
+          } else {
+            // "tier_estimate" — Camry baseline × multiplier
+            resolvedSource = "default";
+          }
+        }
       }
 
-      if (row && typeof row.book_hours === "number" && row.book_hours > 0) {
-        out.push({
-          ...base,
-          hours: row.book_hours,
-          source: "vehicle_specific_book",
-        });
-        continue;
+      // Engine refused (no tier, no Camry seed, no multiplier row). Fall
+      // back to the legacy direct-row path, then catalog default. Preserves
+      // behavior for shops/vehicles that pre-date Pricing v2.
+      if (resolvedHours == null) {
+        if (
+          directRow &&
+          typeof directRow.empirical_hours === "number" &&
+          directRow.empirical_hours > 0
+        ) {
+          resolvedHours = directRow.empirical_hours;
+          resolvedSource = "vehicle_specific_empirical";
+        } else if (
+          directRow &&
+          typeof directRow.book_hours === "number" &&
+          directRow.book_hours > 0
+        ) {
+          resolvedHours = directRow.book_hours;
+          resolvedSource = "vehicle_specific_book";
+        } else {
+          resolvedHours = defaultHours;
+          resolvedSource = "default";
+        }
       }
+
+      const finalHours = roundTo15 ? roundUpTo15(resolvedHours) : resolvedHours;
 
       out.push({
         ...base,
-        hours: defaultHours,
-        source: "default",
+        hours: finalHours,
+        source: resolvedSource!,
       });
     }
 

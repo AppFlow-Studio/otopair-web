@@ -137,24 +137,36 @@ export async function resolveLaborHours(
       .collect();
     for (const sib of siblings) {
       if (sib._id === args.vehicle_config_id) continue;
+      // Same-chassis-code rows on the live DB span multiple makes when
+      // enrichment hallucinates a generic placeholder (e.g. "THE" appearing
+      // on a Stelvio, a Ford Ranger, an Audi Q5, and a Malibu). Without a
+      // make match, Layer 3 inherits an unrelated vehicle's labor row.
+      // Require same make_id to count as a legit chassis sibling.
+      if (sib.make_id !== cfg.make_id) continue;
       const sibLabor = await ctx.db
         .query("labor_times")
         .withIndex("by_vehicle_config_and_service", (q) =>
           q.eq("vehicle_config_id", sib._id).eq("service_id", args.service_id),
         )
         .first();
+      if (!sibLabor) continue;
+      // Apply the same quality gates as Layer 1 — chassis_clone / training
+      // data on a sibling is still chassis-cloned, not real per-vehicle data.
       if (
-        sibLabor?.book_hours != null &&
-        sibLabor.book_hours > 0 &&
-        sibLabor.source !== "tier_estimate"
+        sibLabor.book_hours == null ||
+        sibLabor.book_hours <= 0 ||
+        sibLabor.source === "tier_estimate"
       ) {
-        return {
-          ok: true,
-          hours: sibLabor.book_hours,
-          source: "sibling",
-          confidence: 0.7,
-        };
+        continue;
       }
+      if (DISQUALIFIED_DATA_QUALITY.has(sibLabor.data_quality ?? "")) continue;
+      if ((sibLabor.confidence ?? 0) < MIN_VDB_CONFIDENCE) continue;
+      return {
+        ok: true,
+        hours: sibLabor.book_hours,
+        source: "sibling",
+        confidence: 0.7,
+      };
     }
   }
 

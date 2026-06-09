@@ -51,3 +51,28 @@ export function recoverHours(range: LaborRange, rateMid: number): number | null 
   const hours = mid / rateMid;
   return Math.round(hours * 100) / 100;
 }
+
+// ---------------------------------------------------------------------------
+// Scrape action (network) — uses the existing Firecrawl module + the dev/prod
+// FIRECRAWL_API_KEY. Returns recovered hours or null (no estimate / format drift
+// / fetch failure). Pure helpers above stay independently unit-tested.
+// ---------------------------------------------------------------------------
+
+import { internalAction } from "../_generated/server";
+import { v } from "convex/values";
+import { fetchUrl } from "./firecrawl";
+
+/** National-average labor rate used to convert RepairPal labor$ → hours. */
+const RATE_MID = () => Number(process.env.REPAIRPAL_LABOR_RATE ?? 130);
+
+export const scrapeRepairpalHours = internalAction({
+  args: { url: v.string() },
+  handler: async (_ctx, { url }): Promise<{ hours: number } | null> => {
+    const md = await fetchUrl(url);
+    if (!md) return null;
+    const range = parseRepairpalLabor(md);
+    if (!range) return null;
+    const hours = recoverHours(range, RATE_MID());
+    return hours == null ? null : { hours };
+  },
+});

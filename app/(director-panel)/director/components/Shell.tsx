@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { id:'bugs',         label:'Bugs',         Icon:IconBug,     badge:'bugs' },
   { id:'feedback',     label:'Feedback',     Icon:IconMessage, badge:'feedback' },
   { id:'otoFeedback',  label:'Oto feedback', Icon:IconBolt,    badge:'otoFeedback' },
+  { id:'otoSim',       label:'Oto Sim',      Icon:IconBolt },
   { id:'stripe',       label:'Stripe',       Icon:IconStripe,  badge:'stripe' },
   { id:'audit',         label:'Audit log',       Icon:IconAudit },
   { id:'mechanicEdits', label:'Mechanic Edits',  Icon:IconCar,  badge:'mechanicEdits' },

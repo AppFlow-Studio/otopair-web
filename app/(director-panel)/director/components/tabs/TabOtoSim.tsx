@@ -1,0 +1,228 @@
+'use client'
+
+import { useState, useContext, useRef, useEffect } from 'react'
+import { useQuery, useAction } from 'convex/react'
+import { api } from '@/convex/_generated/api'
+import type { Id } from '@/convex/_generated/dataModel'
+import { Button, Input, Card, Badge, IconSearch, IconCar } from '../Primitives'
+import { SectionAnchor } from '../Shell'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
+
+type QuickReply = { id?: string; text: string; value?: string; variant?: string }
+type ChatMsg = { role: 'user' | 'assistant'; text: string; quickReplies?: QuickReply[] }
+type UserCar = { vehicleId: string | null; vin: string; ymm: string; nickname?: string; mileage?: number }
+
+const levelLabel = (lvl: number | string | null | undefined): string | null => {
+  if (lvl == null) return null
+  if (typeof lvl === 'number') return lvl <= 1 ? 'beginner' : lvl === 2 ? 'intermediate' : 'experienced'
+  return String(lvl)
+}
+
+export const TabOtoSim = () => {
+  const session = useContext(DirectorSessionCtx)
+  const token = session?.token ?? ''
+  const sim = useAction(api.oto.simulate.simulateOtoForDirector)
+
+  // ── user picker (reuses the Users-tab list + the same client filter) ──────
+  const users = useQuery(api.director.usersList)
+  const [q, setQ] = useState('')
+  const [selected, setSelected] = useState<{ id: string; name: string; email: string } | null>(null)
+
+  // ── selected user's detail → cars + onboarding level (mirrors Users tab) ──
+  const detail = useQuery(api.director.userDetail, selected ? { id: selected.id as Id<'users'> } : 'skip')
+  const level = useQuery(
+    api.onboarding_questions_answers.getCarKnowledgeLevelForUser,
+    selected ? { user_id: selected.id as Id<'users'> } : 'skip',
+  )
+  const cars: UserCar[] = (detail?.vehicles as UserCar[] | undefined) ?? []
+
+  const filtered = (users ?? []).filter(u => {
+    if (!q) return false
+    const n = q.toLowerCase()
+    return u.name.toLowerCase().includes(n) || u.email.toLowerCase().includes(n) || (u.phone ?? '').includes(q)
+  }).slice(0, 8)
+
+  // ── chat state ────────────────────────────────────────────────────────────
+  const [car, setCar] = useState<UserCar | null>(null)
+  const [convoId, setConvoId] = useState<Id<'ai_conversations'> | null>(null)
+  const [messages, setMessages] = useState<ChatMsg[]>([])
+  const [input, setInput] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const scrollRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }) }, [messages, busy])
+
+  const resetConversation = () => { setConvoId(null); setMessages([]); setError(null) }
+  const pickUser = (u: { id: string; name: string; email: string }) => { setSelected(u); setQ(''); setCar(null); resetConversation() }
+  const pickCar = (c: UserCar) => { setCar(c); resetConversation() }
+  const changeUser = () => { setSelected(null); setCar(null); resetConversation() }
+
+  const send = async (text: string) => {
+    const body = text.trim()
+    if (!selected || !car || !body || busy) return
+    setError(null)
+    setMessages(m => [...m, { role: 'user', text: body }])
+    setInput('')
+    setBusy(true)
+    try {
+      const res = await sim({
+        token,
+        userId: selected.id as Id<'users'>,
+        ...(convoId ? { conversationId: convoId } : {}),
+        message: body,
+        vehicleVin: car.vin, // a car is always selected before chatting (mirrors the app)
+      }) as { conversationId: Id<'ai_conversations'>; result?: { text?: string; quickReplies?: QuickReply[] } }
+      setConvoId(res.conversationId)
+      const r = res.result ?? {}
+      setMessages(m => [...m, { role: 'assistant', text: r.text ?? '(no text returned)', quickReplies: r.quickReplies ?? [] }])
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const lastChips = messages.length > 0 && messages[messages.length - 1].role === 'assistant'
+    ? (messages[messages.length - 1].quickReplies ?? [])
+    : []
+
+  const canChat = !!selected && !!car
+
+  return (
+    <SectionAnchor id="otoSim" title="Oto Sim"
+      subtitle="Chat with the in-app Oto as any user — real authenticated turns through the production agent. Pick a user, then a car (just like the app), then chat. Multi-turn; tagged 'simulation'.">
+
+      {/* ── 1. User selector ──────────────────────────────────────────── */}
+      <Card>
+        <div style={{ padding:14 }}>
+          <div style={{ fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:8 }}>1 · Chat as</div>
+          {selected ? (
+            <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+              <Badge tone="indigo">{selected.name}</Badge>
+              <span style={{ fontSize:12, color:'var(--slate-500)' }}>{selected.email}</span>
+              {levelLabel(level) && <Badge tone="blue">car knowledge: {levelLabel(level)}</Badge>}
+              {level === null && <span style={{ fontSize:11, color:'var(--slate-400)' }}>no onboarding level</span>}
+              <span style={{ flex:1 }} />
+              <Button size="sm" variant="ghost" onClick={changeUser}>Change user</Button>
+            </div>
+          ) : (
+            <div style={{ position:'relative' }}>
+              <Input icon={<IconSearch size={14} />} value={q} onChange={e => setQ(e.target.value)}
+                placeholder={users === undefined ? 'Loading users…' : 'Search by name, email, or phone…'} style={{ width:420 }} />
+              {q && (
+                <div style={{ marginTop:6, border:'1px solid var(--slate-200)', borderRadius:8, background:'#fff', maxHeight:260, overflowY:'auto' }}>
+                  {filtered.length === 0
+                    ? <div style={{ padding:10, fontSize:12, color:'var(--slate-400)' }}>No matches.</div>
+                    : filtered.map(u => (
+                      <div key={u.id} onClick={() => pickUser(u)}
+                        style={{ padding:'8px 10px', cursor:'pointer', borderBottom:'1px solid var(--slate-100)', display:'flex', justifyContent:'space-between', gap:10 }}
+                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--slate-25)'}
+                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = '#fff'}>
+                        <span style={{ fontSize:13, color:'var(--slate-800)' }}>{u.name}</span>
+                        <span style={{ fontSize:12, color:'var(--slate-500)' }}>{u.email}</span>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* ── 2. Car selector (required, mirrors the app) ──────────────────── */}
+      {selected && (
+        <div style={{ marginTop:14 }}>
+          <Card>
+            <div style={{ padding:14 }}>
+              <div style={{ fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:8 }}>2 · Select a car</div>
+              {detail === undefined ? (
+                <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading {selected.name}’s cars…</span>
+              ) : cars.length === 0 ? (
+                <span style={{ fontSize:12, color:'var(--slate-400)' }}>This user has no cars — Oto needs a car to chat about (just like the app). Pick a different user.</span>
+              ) : (
+                <div style={{ display:'flex', flexWrap:'wrap', gap:10 }}>
+                  {cars.map(c => {
+                    const active = car?.vin === c.vin
+                    return (
+                      <div key={c.vin} onClick={() => pickCar(c)}
+                        style={{ display:'flex', alignItems:'center', gap:8, padding:'9px 12px', cursor:'pointer', borderRadius:9,
+                          border:`1.5px solid ${active ? 'var(--blue-600, #2563eb)' : 'var(--slate-200)'}`,
+                          background: active ? 'var(--blue-50)' : '#fff' }}>
+                        <IconCar size={15} />
+                        <div style={{ display:'flex', flexDirection:'column' }}>
+                          <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-800)' }}>{c.nickname || c.ymm || c.vin}</span>
+                          <span className="mono" style={{ fontSize:11, color:'var(--slate-500)' }}>{c.vin}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ── 3. Chat ──────────────────────────────────────────────────────── */}
+      <div style={{ marginTop:14 }}>
+        <Card padded={false}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 14px', borderBottom:'1px solid var(--slate-200)' }}>
+            <span style={{ fontSize:12, color:'var(--slate-500)' }}>
+              {!selected ? 'Pick a user to start'
+                : !car ? 'Select a car to start'
+                : convoId ? `Live conversation · ${car.nickname || car.ymm || car.vin}`
+                : `Ready · chatting about ${car.nickname || car.ymm || car.vin}`}
+            </span>
+            <Button size="sm" variant="ghost" disabled={!convoId && messages.length === 0} onClick={resetConversation}>New conversation</Button>
+          </div>
+
+          <div ref={scrollRef} style={{ height:420, overflowY:'auto', padding:16, background:'var(--slate-25)', display:'flex', flexDirection:'column', gap:10 }}>
+            {messages.length === 0 && (
+              <div style={{ margin:'auto', fontSize:12, color:'var(--slate-400)', textAlign:'center', maxWidth:400 }}>
+                {!selected ? 'Select a user above, then a car, then send a message to drive a real Oto turn.'
+                  : !car ? 'Now select one of this user’s cars above.'
+                  : `Chatting as ${selected.name} about their ${car.nickname || car.ymm || car.vin}. Try “my brakes are squealing”, “my car won't turn over”, or “I want to chat with my mechanic”.`}
+              </div>
+            )}
+            {messages.map((m, i) => (
+              <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth:'78%' }}>
+                <div style={{
+                  padding:'9px 12px', borderRadius:12, fontSize:13, lineHeight:1.5, whiteSpace:'pre-wrap',
+                  ...(m.role === 'user'
+                    ? { background:'var(--blue-700)', color:'#fff', borderBottomRightRadius:4 }
+                    : { background:'#fff', color:'var(--slate-800)', border:'1px solid var(--slate-200)', borderBottomLeftRadius:4 }),
+                }}>{m.text}</div>
+              </div>
+            ))}
+            {busy && <div style={{ alignSelf:'flex-start', fontSize:12, color:'var(--slate-400)', padding:'4px 8px' }}>Oto is thinking…</div>}
+          </div>
+
+          {lastChips.length > 0 && !busy && (
+            <div style={{ display:'flex', flexWrap:'wrap', gap:8, padding:'10px 14px', borderTop:'1px solid var(--slate-200)' }}>
+              {lastChips.map((c, i) => (
+                <button key={c.id ?? i} onClick={() => send(c.value ?? c.text)}
+                  style={{ fontSize:12, padding:'6px 12px', borderRadius:999, cursor:'pointer',
+                    border:'1px solid var(--slate-300)', background: c.variant === 'outline' ? '#fff' : 'var(--slate-100)', color:'var(--slate-700)' }}>
+                  {c.text}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {error && <div style={{ padding:'8px 14px', fontSize:12, color:'var(--red-600, #dc2626)', borderTop:'1px solid var(--slate-200)' }}>Error: {error}</div>}
+
+          <div style={{ display:'flex', gap:8, padding:12, borderTop:'1px solid var(--slate-200)' }}>
+            <div style={{ flex:1 }} onKeyDown={e => { if (e.key === 'Enter') send(input) }}>
+              <Input value={input} onChange={e => setInput(e.target.value)} disabled={!canChat || busy}
+                placeholder={!selected ? 'Pick a user first' : !car ? 'Select a car first' : 'Message Oto…'} />
+            </div>
+            <Button variant="primary" disabled={!canChat || busy || !input.trim()} onClick={() => send(input)}>
+              {busy ? 'Sending…' : 'Send'}
+            </Button>
+          </div>
+        </Card>
+      </div>
+    </SectionAnchor>
+  )
+}

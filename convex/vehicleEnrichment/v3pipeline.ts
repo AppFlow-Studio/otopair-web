@@ -1075,6 +1075,11 @@ export const enrichVehicleBatchV3 = internalAction({
     //                  the run after Batch-1. "full" (default) is unchanged.
     force: v.optional(v.boolean()),
     writeScope: v.optional(v.union(v.literal("full"), v.literal("parts"))),
+    // Director re-enrich: PIN to this exact config_id instead of resolving by
+    // key. Prevents proliferation — re-enriching updates the triggered config in
+    // place (and reconciles its config_key) rather than spawning a duplicate.
+    // Omitted on the signup path → behavior is byte-identical.
+    targetConfigId: v.optional(v.id("vehicle_configs")),
   },
   handler: async (ctx, args) => {
     const startTime = Date.now();
@@ -1287,14 +1292,19 @@ export const enrichVehicleBatchV3 = internalAction({
     }
 
     // STEP 3b: Fuzzy dedup — if a config with the same engine+year+make exists
-    // under a slightly different key, reuse it instead of creating a duplicate
-    const possibleDupe = await ctx.runQuery(
-      internal.vehicleEnrichment.v3queries.findSimilarConfig,
-      { engine_id: vehicleDoc.engine_id, year: args.year, make_id: makeDoc._id },
-    );
-    if (possibleDupe && possibleDupe.config_key !== configKey) {
-      console.log(`[v8] Dedup: using existing key "${possibleDupe.config_key}" instead of "${configKey}"`);
-      configKey = possibleDupe.config_key;
+    // under a slightly different key, reuse it instead of creating a duplicate.
+    // SKIPPED when pinning (targetConfigId): the dedup keys on the vehicle's
+    // engine, which can be a placeholder that mismatches the pinned config's real
+    // engine and would redirect the key away from the config we mean to update.
+    if (!args.targetConfigId) {
+      const possibleDupe = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.findSimilarConfig,
+        { engine_id: vehicleDoc.engine_id, year: args.year, make_id: makeDoc._id },
+      );
+      if (possibleDupe && possibleDupe.config_key !== configKey) {
+        console.log(`[v8] Dedup: using existing key "${possibleDupe.config_key}" instead of "${configKey}"`);
+        configKey = possibleDupe.config_key;
+      }
     }
 
     // STEP 4: Upsert vehicle_config
@@ -1308,24 +1318,42 @@ export const enrichVehicleBatchV3 = internalAction({
     } else {
       console.log(`[v8] Drivetrain unknown — deferring to Batch 1B`);
     }
-    const vehicleConfigId = await ctx.runMutation(
-      internal.vehicleEnrichment.v3mutations.upsertVehicleConfig,
-      {
-        config_key: configKey,
-        nhtsa_vin_key: args.nhtsaVinKey,
-        year: args.year,
-        make_id: makeDoc._id,
-        model_id: modelDoc._id,
-        engine_id: vehicleDoc.engine_id,
-        transmission_id: transmissionId ?? undefined,
-        drivetrain: drivetrainVal,
-        trim_name: args.trim,
-        trim_slug: slugify(args.trim),
-        enrichment_status: "enriching",
-        fill_rate: 0,
-        enrichment_version: "v8",
-      },
-    );
+    let vehicleConfigId;
+    if (args.targetConfigId) {
+      // PIN: update the triggered config in place. Reconcile its config_key to
+      // match its real engine (fixing any prior key↔engine desync) but KEEP its
+      // existing engine_id (don't overwrite with the vehicle's placeholder).
+      await ctx.runMutation(
+        internal.vehicleEnrichment.v3mutations.reconcileConfigForReenrich,
+        {
+          config_id: args.targetConfigId,
+          config_key: configKey,
+          drivetrain: drivetrainVal,
+          nhtsa_vin_key: args.nhtsaVinKey,
+        },
+      );
+      vehicleConfigId = args.targetConfigId;
+      console.log(`[v8] PIN: enriching config ${args.targetConfigId} in place (key → ${configKey})`);
+    } else {
+      vehicleConfigId = await ctx.runMutation(
+        internal.vehicleEnrichment.v3mutations.upsertVehicleConfig,
+        {
+          config_key: configKey,
+          nhtsa_vin_key: args.nhtsaVinKey,
+          year: args.year,
+          make_id: makeDoc._id,
+          model_id: modelDoc._id,
+          engine_id: vehicleDoc.engine_id,
+          transmission_id: transmissionId ?? undefined,
+          drivetrain: drivetrainVal,
+          trim_name: args.trim,
+          trim_slug: slugify(args.trim),
+          enrichment_status: "enriching",
+          fill_rate: 0,
+          enrichment_version: "v8",
+        },
+      );
+    }
 
     // STEP 4b: Persist detected packages (if any) onto the vehicle_config row.
     // patchVehicleConfig is a no-op when packages_available is undefined, so this

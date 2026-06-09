@@ -815,6 +815,32 @@ export const recomputeRecentLabor = internalMutation({
   },
 });
 
+/**
+ * Reconcile a config for in-place director re-enrichment (PIN). Patches the
+ * config_key (fixing any prior key↔engine desync) + status/drivetrain/vin-key
+ * WITHOUT touching engine_id/model_id — so the triggered config keeps its real
+ * engine and the pipeline never spawns a duplicate. See enrichVehicleBatchV3
+ * `targetConfigId`.
+ */
+export const reconcileConfigForReenrich = internalMutation({
+  args: {
+    config_id: v.id("vehicle_configs"),
+    config_key: v.string(),
+    drivetrain: v.optional(v.string()),
+    nhtsa_vin_key: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const patch: any = {
+      config_key: args.config_key,
+      enrichment_status: "enriching",
+    };
+    if (args.drivetrain && args.drivetrain !== "unknown") patch.drivetrain = args.drivetrain;
+    if (args.nhtsa_vin_key) patch.nhtsa_vin_key = args.nhtsa_vin_key;
+    await ctx.db.patch(args.config_id, patch);
+    return args.config_id;
+  },
+});
+
 // ============================================================================
 // 10. addEvidenceBatch
 // ============================================================================

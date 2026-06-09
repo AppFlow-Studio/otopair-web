@@ -90,6 +90,7 @@ export const reEnrichConfig = action({
         drivetrain: resolved.drivetrain,
         force: true,
         writeScope: "full",
+        targetConfigId: args.id, // PIN: update THIS config in place (no duplicate)
       },
     );
 
@@ -139,6 +140,7 @@ export const backfillConfigParts = action({
         drivetrain: resolved.drivetrain,
         force: true,
         writeScope: "parts",
+        targetConfigId: args.id, // PIN: update THIS config in place (no duplicate)
       },
     );
 

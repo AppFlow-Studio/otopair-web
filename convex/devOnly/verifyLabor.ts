@@ -58,8 +58,17 @@ export const labor = internalQuery({
         });
       }
 
+      const vehicles = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vehicle_config", (q: any) => q.eq("vehicle_config_id", c._id))
+        .collect();
+
       out.push({
         configId: c._id,
+        config_key: c.config_key,
+        enrichment_status: c.enrichment_status,
+        last_enriched_at: c.last_enriched_at,
+        created_at: c._creationTime,
         year: c.year,
         make: (make as any)?.name,
         model: (model as any)?.name,
@@ -67,6 +76,8 @@ export const labor = internalQuery({
         chassis_code: c.chassis_code,
         engine_code: (engine as any)?.engine_code,
         engine_family: (engine as any)?.engine_family,
+        vehicleVins: (vehicles as any[]).map((v) => v.vin),
+        repairpalObsCount: laborObservations.filter((o) => o.source === "repairpal_motor").length,
         laborTimes,
         laborObservations,
       });

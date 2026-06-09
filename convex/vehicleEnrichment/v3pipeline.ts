@@ -2084,6 +2084,7 @@ export const _pollBatch2V3 = internalAction({
       const rpEnabled = process.env.LABOR_SOURCE_REPAIRPAL === "on";
       let rpOwnNameplate: string | null = null;
       let rpEngineDoc: any = null;
+      let rpEngineFamily: string | undefined;
       let rpChassisCode: string | undefined;
       const rpSibling = new Map<string, { nameplate: string; match_key: string } | null>();
       if (rpEnabled) {
@@ -2091,6 +2092,13 @@ export const _pollBatch2V3 = internalAction({
           internal.vehicleEnrichment.v3queries.getEngine,
           { engineId: args.engineId },
         );
+        // Engine family for sibling matching. The engine ROW can be a placeholder
+        // ("4.4l_8cyl") on a desynced config, so fall back to args.engineCode —
+        // the run's real input code ("N63B44O2") — which still derives the family.
+        rpEngineFamily =
+          rpEngineDoc?.engine_family ??
+          deriveEngineFamily(rpEngineDoc?.engine_code) ??
+          deriveEngineFamily(args.engineCode);
         rpChassisCode = await ctx.runQuery(
           internal.vehicleEnrichment.laborSibling.getConfigChassisCode,
           { vehicleConfigId: args.vehicleConfigId },
@@ -2175,8 +2183,7 @@ export const _pollBatch2V3 = internalAction({
                     trim: args.trim,
                     year: args.year,
                     chassis_code: rpChassisCode,
-                    engine_family:
-                      rpEngineDoc?.engine_family ?? deriveEngineFamily(rpEngineDoc?.engine_code),
+                    engine_family: rpEngineFamily,
                     determinant: det,
                   },
                 ),
@@ -2200,7 +2207,7 @@ export const _pollBatch2V3 = internalAction({
               source: "repairpal_motor",
               weight: 0.8,
               tier: "catalog",
-              engine_family: rpEngineDoc?.engine_family ?? deriveEngineFamily(rpEngineDoc?.engine_code),
+              engine_family: rpEngineFamily,
               match_key: rpMatchKey,
               sibling_slug: rpSiblingSlug,
             });

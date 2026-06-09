@@ -20,7 +20,8 @@ import { action, internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { VehicleInput } from "./vehicleEnrichment/types";
 import { scrapeVehicleSources } from "./vehicleEnrichment/scraper";
-import { normalizeOemNumber } from "./vehicleEnrichment/priceParser";
+import { normalizeOemNumber, parsePartPrices } from "./vehicleEnrichment/priceParser";
+import { fetchUrlWithHtml } from "./vehicleEnrichment/firecrawl";
 
 // ---------------------------------------------------------------------------
 // Audit-log writer (actions can't use ctx.db — go through a mutation).
@@ -310,9 +311,9 @@ export const _repriceConfigPartsRun = internalAction({
         }
       }
 
-      // Match this config's existing parts against the deterministic map and write
-      // the authoritative "sale" price for each hit.
+      // PASS 1: match against the vehicle-level scrape's deterministic map (cheap).
       let priced = 0;
+      const pricedIds = new Set<string>();
       for (const part of existingParts) {
         if (!part.oem_part_number) continue;
         const dp = deterministicPrices.get(normalizeOemNumber(part.oem_part_number));
@@ -327,7 +328,57 @@ export const _repriceConfigPartsRun = internalAction({
             source_domain: dp.source_domain,
           },
         );
+        pricedIds.add(String(part.part_id));
         priced++;
+      }
+
+      // PASS 2: for every still-unpriced part, RE-PARSE its EXISTING price source
+      // URLs with the deterministic parser. The original enrichment already found
+      // real product pages (partsgeek/autozone/…) for these parts — it just stored
+      // the buggy "online_discount" figure. Re-fetching those same pages and
+      // running parsePartPrices extracts the real "sale" price, so coverage jumps
+      // from "whatever the registry scrape surfaced" to "every part with a URL".
+      for (const part of existingParts) {
+        if (!part.oem_part_number || pricedIds.has(String(part.part_id))) continue;
+        const normOem = normalizeOemNumber(part.oem_part_number);
+        const existing = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getPricesForPart,
+          { partId: part.part_id },
+        );
+        const urls = Array.from(
+          new Set(
+            (existing as any[]).map((p) => p.source_url).filter((u): u is string => !!u),
+          ),
+        );
+        for (const url of urls) {
+          let html: string | null = null;
+          try {
+            ({ html } = await fetchUrlWithHtml(url));
+          } catch {
+            continue;
+          }
+          if (!html) continue;
+          const parsed = parsePartPrices(html, url);
+          // Prefer the exact OEM match; if the page is a single-product page, that
+          // product IS this part (the URL was stored for this part).
+          let match = parsed.find((p) => p.oem_part_number === normOem);
+          if (!match && parsed.length === 1) match = parsed[0];
+          if (match && match.price > 0) {
+            await ctx.runMutation(
+              internal.vehicleEnrichment.v3mutations.upsertPartPrice,
+              {
+                part_id: part.part_id,
+                price: match.price,
+                price_type: "sale",
+                source_url: match.source_url,
+                source_domain: match.source_domain,
+              },
+            );
+            pricedIds.add(String(part.part_id));
+            priced++;
+            break; // first URL that yields a real sale price wins
+          }
+        }
       }
 
       // (3) Audit the outcome with the count.

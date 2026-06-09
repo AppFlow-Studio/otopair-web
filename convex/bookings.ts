@@ -2499,6 +2499,12 @@ export const answerOverrunExtension = mutation({
   args: {
     bookingId: v.id("bookings"),
     extensionMinutes: v.number(),
+    // Blocking vs non-blocking extension (Dynamic Scheduling spec). true (or
+    // unset) = the bay stays occupied, so downstream same-bay bookings cascade.
+    // false = bay is free (waiting on a part/approval), so only this job's own
+    // end moves and nothing downstream is pushed.
+    blocksBay: v.optional(v.boolean()),
+    reasonCode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -2519,9 +2525,69 @@ export const answerOverrunExtension = mutation({
       extensionMinutes: args.extensionMinutes,
       source: getOverrunAnswerSource(shopUser),
       userId: user._id,
+      blocksBay: args.blocksBay,
+      reasonCode: args.reasonCode,
     });
 
     return checkin._id;
+  },
+});
+
+/**
+ * QUERY: previewOverrunCascade
+ * Read-only dry-run of the downstream cascade for the shop-portal "Extend"
+ * control, so the mechanic sees "this pushes N later appointments by Δ min"
+ * (or "no appointments affected") BEFORE confirming. Runs the same
+ * buildDownstreamMovementPlan logic without writing anything.
+ *
+ * Returns:
+ *   - affectedCount: downstream bookings that would move or laterally swap
+ *   - deltaMinutes: the overflow Δ (new projected end − original projected end)
+ *   - blocked: true when a guard (cap / outside-hours / unmovable) would route
+ *     to the manual scheduling queue instead of cascading silently
+ */
+export const previewOverrunCascade = query({
+  args: {
+    bookingId: v.id("bookings"),
+    extensionMinutes: v.number(),
+    blocksBay: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    // Non-blocking extension never cascades — the bay is free.
+    if (
+      !args.blocksBay ||
+      !booking.shop_id ||
+      !booking.mechanic_id ||
+      !booking.scheduled_date ||
+      !booking.scheduled_time
+    ) {
+      return { affectedCount: 0, deltaMinutes: 0, blocked: false };
+    }
+
+    const originalEstimate = booking.estimated_labor_minutes ?? 60;
+    const newEstimate = originalEstimate + args.extensionMinutes;
+    const originalEndMinutes = hhmmToMinutes(
+      getBookingEndTime(booking.scheduled_time, originalEstimate),
+    );
+    const projectedEndMinutes = hhmmToMinutes(
+      getBookingEndTime(booking.scheduled_time, newEstimate),
+    );
+
+    const plan = await buildDownstreamMovementPlan(ctx, {
+      upstreamBooking: booking,
+      projectedEndMinutes,
+    });
+
+    return {
+      affectedCount: plan.proposals.length,
+      deltaMinutes: projectedEndMinutes - originalEndMinutes,
+      blocked: Boolean(plan.blockingReason),
+    };
   },
 });
 
@@ -5288,6 +5354,14 @@ async function createManualSchedulingAlert(
   });
 }
 
+// Per-booking delay-cascade caps (Dynamic Scheduling spec). A downstream
+// booking may be auto-pushed at most this many times OR this many cumulative
+// minutes, whichever comes first; beyond that it routes to the manual
+// scheduling queue instead of being silently re-pushed. Stops the
+// "pushed at 9:00, again 9:20, again 9:50" spiral.
+const CASCADE_MAX_PUSHES_PER_BOOKING = 2;
+const CASCADE_MAX_PUSHED_MINUTES = 60;
+
 async function buildDownstreamMovementPlan(
   ctx: any,
   {
@@ -5387,6 +5461,20 @@ async function buildDownstreamMovementPlan(
       }
     }
 
+    // Per-booking delay cap: a booking that has already absorbed its allowed
+    // pushes is handed to manual rescheduling rather than silently pushed
+    // again. (Lateral swap above keeps the customer's time, so it isn't
+    // capped — only a real delay counts.)
+    const priorPushes = downstreamBooking.cascade_push_count ?? 0;
+    const priorPushedMinutes =
+      downstreamBooking.cascade_pushed_minutes_total ?? 0;
+    if (priorPushes >= CASCADE_MAX_PUSHES_PER_BOOKING) {
+      return {
+        proposals,
+        blockingReason: `A downstream booking has already been auto-pushed ${priorPushes} times and needs manual rescheduling.`,
+      };
+    }
+
     const pushedStartTime = await findEarliestStartOnMechanic(ctx, {
       shopId: upstreamBooking.shop_id,
       mechanicId: upstreamMechanicId,
@@ -5401,6 +5489,16 @@ async function buildDownstreamMovementPlan(
         proposals,
         blockingReason:
           "No safe downstream slot is available before close on the current mechanic.",
+      };
+    }
+
+    const proposedDeltaMinutes =
+      hhmmToMinutes(pushedStartTime) -
+      hhmmToMinutes(downstreamBooking.scheduled_time);
+    if (priorPushedMinutes + proposedDeltaMinutes > CASCADE_MAX_PUSHED_MINUTES) {
+      return {
+        proposals,
+        blockingReason: `A downstream booking would exceed the ${CASCADE_MAX_PUSHED_MINUTES}-minute cumulative delay cap and needs manual rescheduling.`,
       };
     }
 
@@ -5484,13 +5582,37 @@ async function applyDownstreamMovement(
   }
 
   for (const proposal of plan.proposals) {
-    await ctx.db.patch(proposal.booking._id, {
+    const minutesShifted =
+      hhmmToMinutes(proposal.proposedTime) -
+      hhmmToMinutes(proposal.originalTime ?? proposal.proposedTime);
+
+    const patch: any = {
       scheduled_date: proposal.proposedDate,
       scheduled_time: proposal.proposedTime,
       mechanic_id: proposal.proposedMechanicId,
       time_slot_id: undefined,
       updated_at: Date.now(),
-    });
+    };
+
+    // Real time push (vs. a same-time lateral mechanic swap): record the
+    // original slot + cascade provenance so the customer surface can show
+    // "was 3:45 PM → now 4:00 PM", and accrue the per-booking cap counters
+    // that stop the repeated-pushback spiral. A 0-minute lateral swap keeps
+    // the customer's time, so it neither sets shop_delay_cascade nor counts
+    // against the delay cap.
+    if (minutesShifted > 0) {
+      patch.previous_scheduled_date = proposal.originalDate;
+      patch.previous_scheduled_time = proposal.originalTime;
+      patch.previous_mechanic_id = proposal.originalMechanicId;
+      patch.schedule_change_mode = "shop_delay_cascade";
+      patch.schedule_change_source_booking_id = upstreamBooking._id;
+      patch.customer_can_restore_original = false;
+      patch.cascade_push_count = (proposal.booking.cascade_push_count ?? 0) + 1;
+      patch.cascade_pushed_minutes_total =
+        (proposal.booking.cascade_pushed_minutes_total ?? 0) + minutesShifted;
+    }
+
+    await ctx.db.patch(proposal.booking._id, patch);
 
     if (proposal.booking.time_slot_id) {
       await releaseBookingSlot(ctx, proposal.booking.time_slot_id);
@@ -5498,9 +5620,6 @@ async function applyDownstreamMovement(
 
     // R1.4 — audit each pushed downstream booking so the chain back to
     // the triggering upstream job is queryable from booking history.
-    const minutesShifted =
-      hhmmToMinutes(proposal.proposedTime) -
-      hhmmToMinutes(proposal.originalTime ?? proposal.proposedTime);
     await ctx.db.insert("booking_status_history", {
       booking_id: proposal.booking._id,
       old_status: proposal.booking.status ?? "confirmed",
@@ -5630,12 +5749,16 @@ async function applyOverrunExtension(
     extensionMinutes,
     source,
     userId,
+    blocksBay,
+    reasonCode,
   }: {
     checkin: any;
     booking: any;
     extensionMinutes: number;
     source: "mechanic" | "front_desk" | "system";
     userId?: any;
+    blocksBay?: boolean;
+    reasonCode?: string;
   },
 ) {
   const now = Date.now();
@@ -5644,11 +5767,19 @@ async function applyOverrunExtension(
   const newEndTimeHHMM = getBookingEndTime(booking.scheduled_time, newEstimate);
   const projectedEndMinutes = hhmmToMinutes(newEndTimeHHMM);
 
-  await applyDownstreamMovement(ctx, {
-    upstreamBooking: booking,
-    projectedEndMinutes,
-    source: "job_overrun",
-  });
+  // The single most important rule: a delay only cascades downstream if the
+  // bay is genuinely blocked. Unset defaults to blocking (conservative — also
+  // covers system auto-applied extensions where no mechanic answered). A
+  // non-blocking extension (bay free, e.g. waiting on a part) moves only this
+  // job's own end; nothing downstream is pushed.
+  const isBlocking = blocksBay ?? true;
+  if (isBlocking) {
+    await applyDownstreamMovement(ctx, {
+      upstreamBooking: booking,
+      projectedEndMinutes,
+      source: "job_overrun",
+    });
+  }
 
   // R1.1 — persist the extension on the upstream booking so future
   // re-arms, downstream re-cascades, and analytics see the new estimate.
@@ -5689,6 +5820,8 @@ async function applyOverrunExtension(
     answer_source: source,
     is_complete: false,
     extension_minutes: extensionMinutes,
+    blocks_bay: isBlocking,
+    reason_code: reasonCode,
     resolved_at_ms: now,
     updated_at: now,
   });
@@ -5736,6 +5869,10 @@ async function applyOverrunExtension(
     auto_apply_at_ms: nextDueAtMs + 6 * 60 * 1000,
     default_extension_minutes: checkin.default_extension_minutes,
     cascade_depth: cascadeDepth,
+    // Inherit the bay-free answer as the pre-selected default for the next
+    // prompt (the mechanic still confirms; system auto-apply uses it as-is).
+    blocks_bay: isBlocking,
+    reason_code: reasonCode,
     created_at: now,
     updated_at: now,
   } as any);

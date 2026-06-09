@@ -1710,6 +1710,16 @@ export default defineSchema({
     schedule_change_mode: v.optional(v.string()),
     schedule_change_source_booking_id: v.optional(v.id("bookings")),
     customer_can_restore_original: v.optional(v.boolean()),
+    // Per-booking delay-cascade cap tracking. Each time this booking is
+    // auto-pushed downstream by an upstream overrun, cascade_push_count is
+    // incremented and the shifted minutes accrue into
+    // cascade_pushed_minutes_total. Once a further push would exceed the cap
+    // (CASCADE_MAX_PUSHES_PER_BOOKING or CASCADE_MAX_PUSHED_MINUTES), the
+    // booking is routed to a manual scheduling alert instead of being moved
+    // silently again — stops the "pushed at 9:00, again 9:20, again 9:50"
+    // spiral. See buildDownstreamMovementPlan in convex/bookings.ts.
+    cascade_push_count: v.optional(v.number()),
+    cascade_pushed_minutes_total: v.optional(v.number()),
     custom_services: v.optional(
       v.array(
         v.object({
@@ -2743,6 +2753,15 @@ export default defineSchema({
     is_complete: v.optional(v.boolean()),
     extension_minutes: v.optional(v.number()),
     cascade_depth: v.optional(v.number()),
+    // Blocking vs non-blocking extension (Dynamic Scheduling spec). Captured at
+    // extension time: true = the bay stays occupied during the extra time, so
+    // downstream same-bay bookings cascade; false = the bay is free (mechanic
+    // waiting on a part/approval), so the job's own end moves but NOTHING
+    // downstream is pushed. Unset is treated as blocking (conservative default,
+    // also used for system auto-applied extensions). reason_code optionally
+    // drives the customer message + pre-selects the toggle default.
+    blocks_bay: v.optional(v.boolean()),
+    reason_code: v.optional(v.string()),
     resolved_at_ms: v.optional(v.number()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),

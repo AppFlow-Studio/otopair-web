@@ -358,27 +358,42 @@ export default function MechanicDashboard() {
     }
   }
 
-  async function handleOverrunAnswer(
+  async function handleOverrunComplete(bookingId: string) {
+    setBusyAction(`overrun:${bookingId}`);
+    try {
+      await answerOverrunCheckIn({
+        bookingId: bookingId as Id<"bookings">,
+        isComplete: true,
+      });
+      setToast("Overrun check-in closed");
+    } catch (error: unknown) {
+      setToast(error instanceof Error ? error.message : "Could not answer overrun check-in");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleOverrunExtend(
     bookingId: string,
-    action: "complete" | number,
+    minutes: number,
+    blocksBay: boolean,
+    reasonCode?: string,
   ) {
     setBusyAction(`overrun:${bookingId}`);
     try {
-      if (action === "complete") {
-        await answerOverrunCheckIn({
-          bookingId: bookingId as Id<"bookings">,
-          isComplete: true,
-        });
-        setToast("Overrun check-in closed");
-      } else {
-        await answerOverrunExtension({
-          bookingId: bookingId as Id<"bookings">,
-          extensionMinutes: action,
-        });
-        setToast(`Added ${action} minutes`);
-      }
+      await answerOverrunExtension({
+        bookingId: bookingId as Id<"bookings">,
+        extensionMinutes: minutes,
+        blocksBay,
+        reasonCode,
+      });
+      setToast(
+        blocksBay
+          ? `Added ${minutes} min — later appointments updated`
+          : `Added ${minutes} min — bay stays open, no one moved`,
+      );
     } catch (error: unknown) {
-      setToast(error instanceof Error ? error.message : "Could not answer overrun check-in");
+      setToast(error instanceof Error ? error.message : "Could not extend the job");
     } finally {
       setBusyAction(null);
     }
@@ -658,30 +673,24 @@ export default function MechanicDashboard() {
                     ) : null}
 
                     {overrunCheckin && job.status === "in_progress" ? (
-                      <div className="flex w-full flex-wrap items-center gap-2 rounded-xl border border-cyan-200 bg-cyan-50 p-3">
-                        <span className="text-xs font-semibold text-cyan-800">
-                          Overrun check
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => void handleOverrunAnswer(String(job._id), "complete")}
-                          disabled={busyAction === `overrun:${String(job._id)}`}
-                          className="rounded-lg bg-cyan-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
-                        >
-                          On track
-                        </button>
-                        {[15, 30, 45, 60].map((minutes) => (
-                          <button
-                            key={minutes}
-                            type="button"
-                            onClick={() => void handleOverrunAnswer(String(job._id), minutes)}
-                            disabled={busyAction === `overrun:${String(job._id)}`}
-                            className="rounded-lg border border-cyan-200 bg-white px-3 py-1.5 text-xs font-medium text-cyan-900 disabled:opacity-60"
-                          >
-                            +{minutes}m
-                          </button>
-                        ))}
-                      </div>
+                      <OverrunExtendCard
+                        bookingId={String(job._id)}
+                        busy={busyAction === `overrun:${String(job._id)}`}
+                        onComplete={() =>
+                          void handleOverrunComplete(String(job._id))
+                        }
+                        onExtend={(minutes, blocksBay, reasonCode) =>
+                          void handleOverrunExtend(
+                            String(job._id),
+                            minutes,
+                            blocksBay,
+                            reasonCode,
+                          )
+                        }
+                        onFinishEarly={() =>
+                          openWorkflowDialog(String(job._id), "postjob")
+                        }
+                      />
                     ) : null}
 
                     {job.status === "in_progress" ? (
@@ -997,6 +1006,193 @@ export default function MechanicDashboard() {
           {toast}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// Reason chips for an overrun extension. Tapping one pre-selects the bay-free
+// toggle default (per the Dynamic Scheduling spec) — the mechanic still
+// confirms; the reason is never inferred silently.
+const OVERRUN_REASONS: Array<{ code: string; label: string; blocks: boolean }> = [
+  { code: "waiting_on_part", label: "Waiting on part", blocks: false },
+  { code: "waiting_on_approval", label: "Waiting on approval", blocks: false },
+  { code: "job_more_complex", label: "More complex", blocks: true },
+  { code: "additional_issue_found", label: "Found another issue", blocks: true },
+];
+
+/**
+ * Two-step overrun extension control for the live job card.
+ *  1. On track / pick how much longer (+15/30/45/60) / Finish early.
+ *  2. Capture the bay-free toggle (the cascade-deciding signal), an optional
+ *     reason, and a live cascade preview before confirming.
+ */
+function OverrunExtendCard({
+  bookingId,
+  busy,
+  onComplete,
+  onExtend,
+  onFinishEarly,
+}: {
+  bookingId: string;
+  busy: boolean;
+  onComplete: () => void;
+  onExtend: (minutes: number, blocksBay: boolean, reasonCode?: string) => void;
+  onFinishEarly: () => void;
+}) {
+  const [minutes, setMinutes] = useState<number | null>(null);
+  const [blocksBay, setBlocksBay] = useState<boolean | null>(null);
+  const [reasonCode, setReasonCode] = useState<string | undefined>(undefined);
+
+  const preview = useQuery(
+    api.bookings.previewOverrunCascade,
+    minutes != null && blocksBay != null
+      ? {
+          bookingId: bookingId as Id<"bookings">,
+          extensionMinutes: minutes,
+          blocksBay,
+        }
+      : "skip",
+  );
+
+  function reset() {
+    setMinutes(null);
+    setBlocksBay(null);
+    setReasonCode(undefined);
+  }
+
+  // Step 1 — on track, or how much longer?
+  if (minutes == null) {
+    return (
+      <div className="flex w-full flex-wrap items-center gap-2 rounded-xl border border-cyan-200 bg-cyan-50 p-3">
+        <span className="text-xs font-semibold text-cyan-800">Overrun check</span>
+        <button
+          type="button"
+          onClick={onComplete}
+          disabled={busy}
+          className="rounded-lg bg-cyan-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+        >
+          On track
+        </button>
+        {[15, 30, 45, 60].map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMinutes(m)}
+            disabled={busy}
+            className="rounded-lg border border-cyan-200 bg-white px-3 py-1.5 text-xs font-medium text-cyan-900 disabled:opacity-60"
+          >
+            +{m}m
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={onFinishEarly}
+          disabled={busy}
+          className="ml-auto inline-flex items-center gap-1 rounded-lg border border-cyan-200 bg-white px-3 py-1.5 text-xs font-medium text-cyan-900 disabled:opacity-60"
+        >
+          <Wrench className="h-3.5 w-3.5" />
+          Finish early
+        </button>
+      </div>
+    );
+  }
+
+  // Step 2 — bay-free toggle + reason + cascade preview before confirm.
+  const previewLoading = preview === undefined && blocksBay != null;
+  return (
+    <div className="flex w-full flex-col gap-3 rounded-xl border border-cyan-200 bg-cyan-50 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-cyan-800">
+          Adding {minutes} min — is the bay free for the next job?
+        </span>
+        <button
+          type="button"
+          onClick={reset}
+          disabled={busy}
+          className="text-xs font-medium text-cyan-700 underline disabled:opacity-60"
+        >
+          Back
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setBlocksBay(false)}
+          disabled={busy}
+          className={`rounded-lg border px-3 py-1.5 text-xs font-medium disabled:opacity-60 ${
+            blocksBay === false
+              ? "border-cyan-700 bg-cyan-700 text-white"
+              : "border-cyan-200 bg-white text-cyan-900"
+          }`}
+        >
+          Bay is free
+        </button>
+        <button
+          type="button"
+          onClick={() => setBlocksBay(true)}
+          disabled={busy}
+          className={`rounded-lg border px-3 py-1.5 text-xs font-medium disabled:opacity-60 ${
+            blocksBay === true
+              ? "border-cyan-700 bg-cyan-700 text-white"
+              : "border-cyan-200 bg-white text-cyan-900"
+          }`}
+        >
+          Bay stays occupied
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {OVERRUN_REASONS.map((r) => (
+          <button
+            key={r.code}
+            type="button"
+            onClick={() => {
+              setReasonCode(r.code);
+              setBlocksBay(r.blocks);
+            }}
+            disabled={busy}
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium disabled:opacity-60 ${
+              reasonCode === r.code
+                ? "border-cyan-500 bg-cyan-100 text-cyan-900"
+                : "border-cyan-200 bg-white text-cyan-700"
+            }`}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+
+      {blocksBay != null ? (
+        <p className="flex items-center gap-1.5 text-xs text-cyan-800">
+          {preview?.blocked ? (
+            <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+          ) : null}
+          {previewLoading
+            ? "Checking the schedule…"
+            : preview?.blocked
+              ? "Can't auto-reschedule — this goes to the front desk to handle."
+              : !preview || preview.affectedCount === 0
+                ? "No appointments affected — your bay stays open."
+                : `Pushes ${preview.affectedCount} later appointment${
+                    preview.affectedCount === 1 ? "" : "s"
+                  } by ${preview.deltaMinutes} min.`}
+        </p>
+      ) : null}
+
+      <div>
+        <button
+          type="button"
+          onClick={() =>
+            blocksBay != null && onExtend(minutes, blocksBay, reasonCode)
+          }
+          disabled={busy || blocksBay == null}
+          className="inline-flex items-center gap-1 rounded-lg bg-cyan-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          Confirm +{minutes}m
+        </button>
+      </div>
     </div>
   );
 }

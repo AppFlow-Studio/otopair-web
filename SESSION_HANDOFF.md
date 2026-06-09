@@ -1,0 +1,50 @@
+# Session Handoff — otopair-web (Waleed)
+
+**Branch:** `waleed-flagship` · **Last updated:** 2026-06-09 · working tree clean
+**Dev deployment:** `flippant-mink-750` (what `.env.local` / localhost point at)
+**temurbek (prod-ish):** `ardent-crab-641` — read-only via the `claude_ai_Otopair-Convex` MCP (`get_data`, deployment `temurbek`). DO NOT deploy there.
+
+> ⚠️ **Access rule (user instruction):** do NOT use the Convex admin MCP (`runOneoffQuery`/`run`) to read/write data — that bypasses auth. Work through the **director auth gate** (token-validated functions) and the Playwright harness instead. Code reads, `npx convex dev --once` (CLI deploy), and `npx tsc -p convex` are fine.
+
+---
+
+## ✅ DONE & COMMITTED this session (in order)
+
+| Commit | What |
+|---|---|
+| `14b7e63` | Deterministic parts pricing (`priceParser.ts`) + robust-median labor times (`lib/labor_aggregation.ts`, `labor_observations`). Flag-gated (`PARTS_PRICE_SOURCE`). |
+| `f7d988a` | Merged `origin/temur-dev` (resolved conflicts; kept temur's per-part resolver + my median pricing). |
+| `9025ad0` | **Service Parts Reference** — per-ROLE parts resolution (was 1-winner-per-service), full fluid pricing (oil×capacity), labor-only enforcement, universal consumables. `lib/servicePartsReference.ts`, `lib/partRoleQuantity.ts`. 42 tests. |
+| `98bf93f` | **Director per-config backfill buttons** (Vehicle Configs → config → Admin controls): Re-enrich / Backfill parts / Reprice parts. `convex/directorConfigBackfills.ts`. |
+| `89c857a` | **In-app Oto beta-feedback fixes** + onboarding knowledge-level adaptation + **simulation harness** (`convex/oto/simulate.ts`). |
+| `f9ef474` | Oto **never impersonates a mechanic/shop**; confirmed onboarding scale is 1–3. |
+| `c463594` | Status doc update. |
+| `f795292` | Fixed director **audit log crash** (`TabAudit` EntityPreview on non-id `entity_id` like `"unknown"`). |
+| `70910a8` | **Oto Sim director tab** (`TabOtoSim.tsx`) — pick user → pick car → chat. Backend `simulateOtoForDirector` (director-token-gated). |
+| `1418f90` | Sim: attach `vehicle_id` to conversations; Oto resolves vehicles by `user._id` (works under impersonation). |
+| `ea63f4f` | **Faithful sim** — threaded acting user through Oto's tool data-reads via IDOR-safe internal `*ForUser` variants (`getVehicleHealthForUser`, `getBookingsForUser`, `getDueServicesForUser`, `getVehicleFactsForUser`, etc.). Sim now = real Oto (verified: returns the M550i's real health score 81 + overdue brakes). |
+
+**Docs in repo:** `WALEED_WORK_STATUS.md` (full done/partial/not-done + Notion sync), `SERVICE_PARTS_REFERENCE_DESIGN.md`, `PARTS_PRICING_VALIDATION.md`, `MECHANIC_EDITS_TECHNICAL_SPEC.md`, `presentation.md`, `FLAGSHIP_HERO_HANDOFF.md`.
+
+---
+
+## 🟡 OPEN / NEXT (in priority order)
+
+1. **`repriceConfigParts` fails from the UI** (user flagged): clicking "Reprice parts" → *"Your request couldn't be completed. Try again later."* and **no audit-log entry**. Root cause: the action does a live multi-page scrape synchronously (can time out / error on some configs) and only writes the audit row on SUCCESS. **Fix:** (a) write an audit-log row at TRIGGER time (so every click is recorded), (b) move the heavy scrape into a scheduled internal action (fire-and-return like `reEnrichConfig`) so the button can't time out, (c) graceful error/no-vehicle handling. File: `convex/directorConfigBackfills.ts`. Also confirm the audit tab shows `action:"backfill"` rows.
+2. **Optional: server-derive Oto conversation state** (mood/last_user_intent) per turn so sim (and real) conversations always carry it. Today it's empty when Haiku doesn't call `update_conversation_state` (same model under-call behind the server-derived polite-exit counter). This is a *deviation* from real Oto, useful for QA. Pattern: mirror the counter fix in `convex/oto/chat.ts` (~line 1590).
+3. **Rollout of parts/pricing/labor to temurbek/prod** (NOT a code task — ops): run live backfills in order (`backfillDeleteOrphanFitments` → `backfillStampServiceRoles` → `backfillFixMalformedPositions`), re-enrich so `sale` prices + the 16 new fluid fields populate, then flip `PARTS_PRICE_SOURCE=median`. Seeds: `seedUniversalConsumables` (already run on dev).
+4. **Labor-time validation** (Notion: In progress) — `labor_observations` is empty until enrichment re-runs; KBB validation + "data-good" signal still to build.
+5. **Mobile / app-team items** (NOT this repo): impersonation = remove "Chat with a mechanic" button + labeled "Oto Assistant" bubble; health-score "fake tips"; add-a-car jargon screens; Oto guided-experience chip/pinned-card UI.
+
+---
+
+## 🔑 KEY CONTEXT & TOOLS
+
+- **Director site:** `http://localhost:3000/director` (run `npm run dev`). Login = email + TOTP (Waleed's `mansourwaleed06` superadmin). The Next dev server may still be running in background.
+- **Playwright harness (gitignored, `.agent/pw/`):** drives + screenshots the director site as the logged-in director. `lib.mjs` (`open`/`shot`/`bodyText`), `oto-waleed.mjs` (drives Oto Sim). Run: `node .agent/pw/oto-waleed.mjs "your message"`. Auth via `.agent/pw/.token` (director session token — **expires**; re-grab from browser localStorage `otopair_director_token` if it 401s). `Read` the PNGs in `.agent/pw/out/` to see the UI.
+- **Oto Sim:** director tab "Oto Sim". Backend: `simulateOtoForDirector({token,userId,conversationId?,message,vehicleVin?,persist?})` (token-gated, public) + `simulateOtoMessage` (internalAction, MCP/scripts). Now faithful (sees user's real data via the `*ForUser` variants).
+- **Waleed dev account:** clerk `user_3E32y7t3nPgKOy5RGtTSgG5q3bi`, email `mansourwaleed06@gmail.com`, knowledge level **1 (beginner)**. Cars: **M2 CS** `WBS1J3C05L7H33327`, **5 Series = the M550i** `WBA13BK08MCF48255` (trim unresolved on dev), **7 Series** `WBA7U2C08LGM27817`.
+- **Oto prompt protocol:** edits to `convex/oto/prompt/stable.ts` need a 2-reviewer sign-off + cache invalidation per the file header; bump `STABLE_PROMPT_VERSION` (now `v0.28-stable`) / `VOLATILE_PROMPT_VERSION` (`v0.18-volatile`).
+- **Two Oto's, don't confuse:** in-app Oto (`convex/oto/*`, the target of all the fixes) vs the ElevenLabs marketing-hero Oto (`scripts/setup-oto-agent.mjs` + `components/flagship/*`, NOT touched).
+- **Notion:** plugin connected as Waleed (`mcp__plugin_Notion_notion__*`). No bulk row-query tool — search + per-page fetch only. 4 Oto cards already updated (status + progress notes).
+- **Commit messages:** PowerShell here-strings break on apostrophes/`->` — write the message to a temp file and `git commit -F`. End with the Co-Authored-By line.

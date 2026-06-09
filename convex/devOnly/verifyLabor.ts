@@ -43,6 +43,7 @@ export const labor = internalQuery({
           book_hours: t.book_hours,
           confidence: t.confidence,
           source: t.source,
+          data_quality: t.data_quality,
           empirical_hours: t.empirical_hours,
         });
       }

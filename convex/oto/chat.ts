@@ -655,9 +655,15 @@ export async function sendMessageHandlerCore(
   const conversationVehicleId = (conversation as Record<string, unknown>)
     .vehicle_id as string | undefined;
 
+  // Resolve owned vehicles by the ALREADY-resolved user._id, not via the
+  // request's auth identity. Behaviorally identical to getMyVehicles({}) for a
+  // real authenticated turn (same user), but it also works under the
+  // simulation harness (convex/oto/simulate.ts), where the fabricated identity
+  // reaches this handler's auth check but NOT auth-scoped sub-queries — so
+  // getMyVehicles({}) returned [] there, leaving Oto blind to the user's car.
   const ownedRaw: OwnedVehicleRow[] | null = await ctx.runQuery(
-    api.vehicles.getMyVehicles,
-    {},
+    api.vehicles.listVehiclesByUser,
+    { userId: user._id },
   );
   const ownedVehicles = ownedRaw ?? [];
   const activeRow = pickActiveVehicleRow(

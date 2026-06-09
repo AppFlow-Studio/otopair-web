@@ -49,11 +49,12 @@ export const TabOtoSim = () => {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [convoState, setConvoState] = useState<{ vehicleId: string | null; mood: string | null; lastUserIntent: string | null; arcSummary: string | null; establishedFacts: string[] } | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }) }, [messages, busy])
 
-  const resetConversation = () => { setConvoId(null); setMessages([]); setError(null) }
+  const resetConversation = () => { setConvoId(null); setMessages([]); setError(null); setConvoState(null) }
   const pickUser = (u: { id: string; name: string; email: string }) => { setSelected(u); setQ(''); setCar(null); resetConversation() }
   const pickCar = (c: UserCar) => { setCar(c); resetConversation() }
   const changeUser = () => { setSelected(null); setCar(null); resetConversation() }
@@ -72,10 +73,11 @@ export const TabOtoSim = () => {
         ...(convoId ? { conversationId: convoId } : {}),
         message: body,
         vehicleVin: car.vin, // a car is always selected before chatting (mirrors the app)
-      }) as { conversationId: Id<'ai_conversations'>; result?: { text?: string; quickReplies?: QuickReply[] } }
+      }) as { conversationId: Id<'ai_conversations'>; result?: { text?: string; quickReplies?: QuickReply[] }; convoState?: typeof convoState }
       setConvoId(res.conversationId)
       const r = res.result ?? {}
       setMessages(m => [...m, { role: 'assistant', text: r.text ?? '(no text returned)', quickReplies: r.quickReplies ?? [] }])
+      if (res.convoState) setConvoState(res.convoState)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -115,7 +117,7 @@ export const TabOtoSim = () => {
                   {filtered.length === 0
                     ? <div style={{ padding:10, fontSize:12, color:'var(--slate-400)' }}>No matches.</div>
                     : filtered.map(u => (
-                      <div key={u.id} onClick={() => pickUser(u)}
+                      <div key={u.id} onClick={() => pickUser(u)} data-testid="sim-user" data-email={u.email}
                         style={{ padding:'8px 10px', cursor:'pointer', borderBottom:'1px solid var(--slate-100)', display:'flex', justifyContent:'space-between', gap:10 }}
                         onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'var(--slate-25)'}
                         onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = '#fff'}>
@@ -145,7 +147,7 @@ export const TabOtoSim = () => {
                   {cars.map(c => {
                     const active = car?.vin === c.vin
                     return (
-                      <div key={c.vin} onClick={() => pickCar(c)}
+                      <div key={c.vin} onClick={() => pickCar(c)} data-testid="sim-car" data-vin={c.vin}
                         style={{ display:'flex', alignItems:'center', gap:8, padding:'9px 12px', cursor:'pointer', borderRadius:9,
                           border:`1.5px solid ${active ? 'var(--blue-600, #2563eb)' : 'var(--slate-200)'}`,
                           background: active ? 'var(--blue-50)' : '#fff' }}>
@@ -207,6 +209,17 @@ export const TabOtoSim = () => {
                   {c.text}
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* conversation-state debug strip — what actually persisted this turn */}
+          {convoState && (
+            <div data-testid="sim-convostate" style={{ display:'flex', flexWrap:'wrap', gap:12, padding:'8px 14px', borderTop:'1px solid var(--slate-200)', background:'var(--slate-25)', fontSize:11, color:'var(--slate-500)' }}>
+              <span>vehicle: <b style={{ color: convoState.vehicleId ? 'var(--green-700)' : 'var(--slate-400)' }}>{convoState.vehicleId ? '✓ attached' : '— none'}</b></span>
+              <span>mood: <b style={{ color:'var(--slate-700)' }}>{convoState.mood ?? '—'}</b></span>
+              <span>intent: <b style={{ color:'var(--slate-700)' }}>{convoState.lastUserIntent ?? '—'}</b></span>
+              <span>facts: <b style={{ color:'var(--slate-700)' }}>{convoState.establishedFacts?.length ?? 0}</b></span>
+              {convoState.arcSummary && <span style={{ flexBasis:'100%' }}>arc: {convoState.arcSummary}</span>}
             </div>
           )}
 

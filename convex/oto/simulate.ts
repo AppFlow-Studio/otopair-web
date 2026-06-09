@@ -21,9 +21,9 @@
 // the only thing standing in front of it (matches the panel's auth model).
 // =============================================================================
 
-import { action, internalAction } from "../_generated/server";
+import { action, internalAction, internalMutation } from "../_generated/server";
 import { v } from "convex/values";
-import { api } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 import { sendMessageHandlerCore } from "./chat";
 import type { Doc, Id } from "../_generated/dataModel";
 
@@ -31,7 +31,41 @@ export type SimulatedTurnResult = {
   conversationId: Id<"ai_conversations">;
   ranAs: { userId: Id<"users">; firstName: string | null };
   result: any;
+  // Conversation state AFTER the turn — so the sim looks like a real chat and
+  // the director can see what got persisted (vehicle anchor + mood/intent/arc/
+  // facts that Oto's update_conversation_state tool wrote this turn).
+  convoState: {
+    vehicleId: string | null;
+    mood: string | null;
+    lastUserIntent: string | null;
+    arcSummary: string | null;
+    establishedFacts: string[];
+  };
 };
+
+// Attach the selected vehicle to the conversation (idempotent), so simulated
+// conversations carry the same vehicle anchor a real chat does. The production
+// setVehicleId is auth-gated (Clerk identity) and a sub-mutation triggered from
+// an action doesn't inherit the sim's fabricated identity — so the sim uses
+// this internal, no-auth writer instead. Once set, envelope.ts
+// pickActiveVehicleRow prefers this column (one-chat-one-car anchor).
+export const _attachConversationVehicle = internalMutation({
+  args: { conversationId: v.id("ai_conversations"), vin: v.string() },
+  handler: async (ctx, args) => {
+    const convo = await ctx.db.get(args.conversationId);
+    if (!convo) return { ok: false as const, reason: "no_conversation" };
+    if ((convo as Record<string, unknown>).vehicle_id) {
+      return { ok: true as const, alreadySet: true };
+    }
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin))
+      .first();
+    if (!vehicle) return { ok: false as const, reason: "vehicle_not_found" };
+    await ctx.db.patch(args.conversationId, { vehicle_id: vehicle._id });
+    return { ok: true as const, vehicleId: String(vehicle._id) };
+  },
+});
 
 // Shared core: create-or-continue a conversation, fabricate the user's identity,
 // run ONE real Oto turn through the production handler, return the result.
@@ -65,6 +99,16 @@ async function runSimulatedTurn(
     });
   }
 
+  // Attach the picked vehicle to the conversation (mirrors a real chat's
+  // anchor). Idempotent + internal so it works under the sim's fabricated
+  // identity. Done BEFORE the turn so the envelope anchors to this car.
+  if (args.vehicleVin) {
+    await ctx.runMutation(internal.oto.simulate._attachConversationVehicle, {
+      conversationId,
+      vin: args.vehicleVin,
+    });
+  }
+
   // Fabricate the identity for THIS user only. sendMessageHandlerCore reads
   // exactly one thing off auth: `getUserIdentity().subject`. Proxy ctx so that
   // returns the target's clerk id while every other ctx capability passes
@@ -89,12 +133,27 @@ async function runSimulatedTurn(
     debug_skip_persist: !persist,
   });
 
+  // Read back the conversation AFTER the turn so the caller can see what
+  // persisted (vehicle anchor + the mood/intent/arc/facts Oto's
+  // update_conversation_state tool wrote). Not auth-gated.
+  const finalConvo = await ctx.runQuery(api.ai_conversations.getById, {
+    id: conversationId,
+  });
+  const fc = (finalConvo ?? {}) as Record<string, unknown>;
+
   // Trim the (large) trace unless explicitly requested.
   const { trace, ...rest } = result as Record<string, unknown>;
   return {
     conversationId,
     ranAs: { userId: user._id, firstName: user.first_name ?? null },
     result: args.includeTrace ? result : rest,
+    convoState: {
+      vehicleId: (fc.vehicle_id as string | undefined) ?? null,
+      mood: (fc.mood as string | undefined) ?? null,
+      lastUserIntent: (fc.last_user_intent as string | undefined) ?? null,
+      arcSummary: (fc.arc_summary as string | undefined) ?? null,
+      establishedFacts: (fc.established_facts as string[] | undefined) ?? [],
+    },
   };
 }
 

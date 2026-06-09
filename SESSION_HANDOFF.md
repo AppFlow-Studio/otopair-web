@@ -5,6 +5,26 @@
 **temurbek (prod-ish):** `ardent-crab-641` — read-only via the `claude_ai_Otopair-Convex` MCP (`get_data`, deployment `temurbek`). DO NOT deploy there.
 
 > ⚠️ **Access rule (user instruction):** do NOT use the Convex admin MCP (`runOneoffQuery`/`run`) to read/write data — that bypasses auth. Work through the **director auth gate** (token-validated functions) and the Playwright harness instead. Code reads, `npx convex dev --once` (CLI deploy), and `npx tsc -p convex` are fine.
+> Note: the Convex MCP plugin was disabled this session (it hung). Use `npx convex run <fn> 'json'` from the CLI for dev ops (PowerShell breaks on JSON with spaces — use the Bash tool for those). `LABOR_SOURCE_REPAIRPAL=on` on dev.
+
+---
+
+## 🆕 SESSION 2 (Jun 9, cont.) — Labor (RepairPal/MOTOR) + Parts repricing
+
+**DONE + committed + verified on dev:**
+- **Labor: RepairPal/MOTOR source.** Scrapes RepairPal, recovers hours from labor-$ (`hours = mid$ ÷ ~$130`; 1.47 high/low ratio guard), weighted-median aggregation (`repairpal_motor` 0.8 / llm 0.3–0.5 / **vdb 0.05**), data-good confidence (0.9/0.8/0.6/≤0.4). Quote engine (`quoteEngine.resolveLaborHours`) consumes it (passes `isHighQualityVdb`). Files: `repairpalLabor.ts`, `laborSibling.ts`, `lib/robustStats.ts` (`weightedMedian`), `lib/labor_aggregation.ts`, `services/laborDeterminant.ts`. 35 unit tests. Verified: 750i spark 3.5→3.3h conf 0.9.
+- **Labor sibling resolution** (niche cars): engine svc → same `engine_family` twin, chassis svc → same `chassis_code` twin; LLM proposes the RepairPal nameplate, code validates (platform + populated page) + probes; resolved once per (car, determinant). Verified: M550i engine←750i, chassis←530i.
+- **Enrichment proliferation fix**: director re-enrich now PINS to the config_id (`targetConfigId` in `enrichVehicleBatchV3` + `reconcileConfigForReenrich`) — updates the triggered config in place, reconciles its `config_key`, no duplicate spawned. Verified (config count held at 2). `devOnly/dedupeConfig` removed the one dupe.
+- **Parts reprice corrects existing prices IN PLACE**: `repriceConfigParts` re-reads every existing `part_prices` row's page, runs deterministic `parsePartPrices`, overwrites in place (`upsertPartPrice` keys by part_id+domain). Jetta: brake-pad partsgeek `$17.48 online_discount → $34.97 sale`, 19/35 rows corrected.
+
+**Specs/plans:** `docs/superpowers/specs/2026-06-09-labor-time-repairpal-source-design.md`, `docs/superpowers/plans/2026-06-09-labor-time-repairpal-source.md`, **`docs/superpowers/plans/2026-06-09-parts-price-reextraction.md`** (next-up).
+
+**🟡 OPEN (next session):**
+1. **Parts price re-extraction — ALL sites, NO per-domain hardcoding** (see the parts plan doc). 16/35 Jetta rows still wrong (`online_discount` from autozone/shopdap — no structured data). Fix = generic two-tier: `parsePartPrices` (JSON-LD/microdata) then an **LLM fallback** (explicitly: real price, not MSRP/"You Save") via `callClaudeExtractOnly`, with median guardrails; supersede unverifiable rows so they don't pollute the median. Integrate into BOTH the reprice action AND enrichment Batch-2.
+2. **Fold per-part re-extraction into enrichment Batch-2** so fresh enrichments never write `online_discount`.
+3. **Labor harden**: `recomputeLaborForConfigService` should set `data_quality` explicitly (currently passes the quote gate only because rows are blank — a stale `chassis_clone`/`training_data` stamp would silently disqualify MOTOR labor). Also surface the real source (it's mislabeled `"vdb"` in the quote result).
+4. **Labor coverage**: bulk `relabor` backfill + `(chassis|engine_family, service)` scrape cache (whole-catalog without LLM re-enrich); STEP 6d engine clone keyed on `engine_family` not `engine_id`; cross-make nameplate validation (only BMW verified); audit which of the 23 services map to RepairPal (only 7 mapped).
+5. **Residual**: placeholder engine rows (`4.4l_8cyl`) — extend STEP 1b to upgrade the vehicle's engine when it's a descriptor even if `args.engineCode` is real.
 
 ---
 

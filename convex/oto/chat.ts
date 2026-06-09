@@ -2086,7 +2086,10 @@ function buildCallables(
      */
     get_vehicle_health: async (input) => {
       const vehicleId = (input.vehicle_id ?? "") as string;
-      return await ctx.runQuery(api.oto.vehicleHealth.getVehicleHealth, {
+      // Resolve against the already-resolved acting user (works for real auth
+      // AND the simulation harness, where sub-query auth would be null).
+      return await ctx.runQuery(internal.oto.vehicleHealth.getVehicleHealthForUser, {
+        actingUserId: userId,
         vehicle_id: vehicleId,
       });
     },
@@ -2099,8 +2102,8 @@ function buildCallables(
       const vehicleId = (input.vehicle_id ?? "") as string;
       const itemId = (input.item_id ?? "") as string;
       return await ctx.runQuery(
-        api.oto.vehicleHealth.getProjectedHealthScore,
-        { vehicle_id: vehicleId, item_id: itemId },
+        internal.oto.vehicleHealth.getProjectedHealthScoreForUser,
+        { actingUserId: userId, vehicle_id: vehicleId, item_id: itemId },
       );
     },
 
@@ -2118,17 +2121,10 @@ function buildCallables(
         typeof input.limit === "number" && Number.isFinite(input.limit)
           ? (input.limit as number)
           : undefined;
-      // Vehicle-scoped questions: Haiku passes `vehicle_vin` from the
-      // <vehicle> block to filter to the active car. Cross-vehicle
-      // questions omit it and get every row.
-      const vehicleVinArg =
-        typeof input.vehicle_vin === "string" && input.vehicle_vin.trim().length > 0
-          ? (input.vehicle_vin as string)
-          : undefined;
-      return await ctx.runQuery(api.oto.bookings.getBookings, {
+      return await ctx.runQuery(internal.oto.bookings.getBookingsForUser, {
+        actingUserId: userId,
         status_filter: statusFilter,
         ...(limit !== undefined ? { limit } : {}),
-        ...(vehicleVinArg !== undefined ? { vehicle_vin: vehicleVinArg } : {}),
       });
     },
 
@@ -2144,13 +2140,9 @@ function buildCallables(
         typeof input.limit === "number" && Number.isFinite(input.limit)
           ? (input.limit as number)
           : undefined;
-      const vehicleVinArg =
-        typeof input.vehicle_vin === "string" && input.vehicle_vin.trim().length > 0
-          ? (input.vehicle_vin as string)
-          : undefined;
-      return await ctx.runQuery(api.oto.bookings.getPendingBookings, {
+      return await ctx.runQuery(internal.oto.bookings.getPendingBookingsForUser, {
+        actingUserId: userId,
         ...(limit !== undefined ? { limit } : {}),
-        ...(vehicleVinArg !== undefined ? { vehicle_vin: vehicleVinArg } : {}),
       });
     },
 
@@ -2161,7 +2153,8 @@ function buildCallables(
      */
     get_due_services: async (input) => {
       const vehicleId = (input.vehicle_id ?? "") as string;
-      return await ctx.runQuery(api.oto.dueServices.getDueServices, {
+      return await ctx.runQuery(internal.oto.dueServices.getDueServicesForUser, {
+        actingUserId: userId,
         vehicle_id: vehicleId,
       });
     },
@@ -2173,7 +2166,8 @@ function buildCallables(
      */
     get_vehicle_facts: async (input) => {
       const vehicleId = (input.vehicle_id ?? "") as string;
-      const result = await ctx.runQuery(api.oto.vehicleFacts.getVehicleFacts, {
+      const result = await ctx.runQuery(internal.oto.vehicleFacts.getVehicleFactsForUser, {
+        actingUserId: userId,
         vehicle_id: vehicleId,
       });
       // Wave 7.3 Option B: getVehicleFacts reads trim_specs (1 row) plus

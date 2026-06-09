@@ -12,6 +12,19 @@
 export type LaborDeterminant = "engine" | "chassis" | "both";
 export type PlatformKey = { chassis_code?: string; engine_family?: string };
 
+/**
+ * Derive the engine FAMILY from a full engine code when engine_family is unset
+ * (it's null on many dev rows). The family is the leading letter+number group:
+ * "N63B44O2" → "N63", "B58B30M0" → "B58". Returns undefined if unparseable.
+ * Family (not the sub-variant) is the right grain for labor — a water-pump job
+ * is identical across N63B44O2/T4. BMW-shaped; good enough for our fleet.
+ */
+export function deriveEngineFamily(engineCode?: string): string | undefined {
+  if (!engineCode) return undefined;
+  const m = engineCode.match(/^[A-Z]+\d+/);
+  return m ? m[0] : undefined;
+}
+
 /** Which platform key(s) a service's labor depends on. */
 export function matchKeyForDeterminant(
   d: LaborDeterminant,

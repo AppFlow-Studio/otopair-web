@@ -10,7 +10,26 @@ import { describe, expect, it } from "vitest";
 import {
   matchKeyForDeterminant,
   siblingMatches,
+  deriveEngineFamily,
 } from "../convex/vehicleEnrichment/laborSibling";
+
+describe("deriveEngineFamily", () => {
+  it("extracts the family prefix from a BMW engine code", () => {
+    expect(deriveEngineFamily("N63B44O2")).toBe("N63");
+    expect(deriveEngineFamily("N63B44T4")).toBe("N63");
+    expect(deriveEngineFamily("B58B30M0")).toBe("B58");
+    expect(deriveEngineFamily("S63B44T4")).toBe("S63");
+    expect(deriveEngineFamily("B46B20")).toBe("B46");
+  });
+  it("returns undefined for empty/unparseable", () => {
+    expect(deriveEngineFamily("")).toBeUndefined();
+    expect(deriveEngineFamily(undefined)).toBeUndefined();
+    expect(deriveEngineFamily("???")).toBeUndefined();
+  });
+  it("passes through an already-family-shaped code", () => {
+    expect(deriveEngineFamily("N63")).toBe("N63");
+  });
+});
 
 const target = { chassis_code: "G30", engine_family: "N63" };
 

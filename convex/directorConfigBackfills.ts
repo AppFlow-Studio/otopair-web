@@ -18,8 +18,6 @@
 import { v } from "convex/values";
 import { action, internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
-import type { VehicleInput } from "./vehicleEnrichment/types";
-import { scrapeVehicleSources } from "./vehicleEnrichment/scraper";
 import { normalizeOemNumber, parsePartPrices } from "./vehicleEnrichment/priceParser";
 import { fetchUrlWithHtml } from "./vehicleEnrichment/firecrawl";
 
@@ -282,108 +280,59 @@ export const _repriceConfigPartsRun = internalAction({
         return;
       }
 
-      // (2) Resolve the YMMT into the VehicleInput shape scrapeVehicleSources wants,
-      // then scrape. scrapeVehicleSources caches + returns deterministic prices.
-      const vehicle: VehicleInput = {
-        vehicleId: resolved.vehicleId ? String(resolved.vehicleId) : "",
-        year: resolved.year,
-        make: resolved.make,
-        model: resolved.model,
-        trim: resolved.trim,
-        engineCode: resolved.engineCode,
-        displacement: resolved.displacement,
-      };
-      const sources = await scrapeVehicleSources(ctx, vehicle);
-
-      // Build the deterministic price Map exactly like the v3pipeline loop:
-      // key = normalizeOemNumber(oem_part_number) → { price, source_domain, source_url }.
-      const deterministicPrices = new Map<
-        string,
-        { price: number; source_domain: string; source_url: string }
-      >();
-      for (const p of sources.partPrices ?? []) {
-        if (p?.oem_part_number && typeof p.price === "number" && p.price > 0) {
-          deterministicPrices.set(normalizeOemNumber(p.oem_part_number), {
-            price: p.price,
-            source_domain: p.source_domain,
-            source_url: p.source_url,
-          });
-        }
-      }
-
-      // PASS 1: match against the vehicle-level scrape's deterministic map (cheap).
-      let priced = 0;
-      const pricedIds = new Set<string>();
+      // (2) Re-read EACH existing price's page and correct it IN PLACE. We do NOT
+      // search for new sources or new parts — for every shop price already on a
+      // part (the buggy "online_discount" figures), we re-fetch that exact page,
+      // run the deterministic parser, and overwrite that row with the real "sale"
+      // price. upsertPartPrice keys by (part_id, source_domain), so passing the
+      // row's OWN domain PATCHES that row in place. Covers every part that has
+      // prices and every shop price on it (coolant, fluids, all of them).
+      let totalPrices = 0;
+      let fixed = 0;
       for (const part of existingParts) {
-        if (!part.oem_part_number) continue;
-        const dp = deterministicPrices.get(normalizeOemNumber(part.oem_part_number));
-        if (!dp) continue;
-        await ctx.runMutation(
-          internal.vehicleEnrichment.v3mutations.upsertPartPrice,
-          {
-            part_id: part.part_id,
-            price: dp.price,
-            price_type: "sale",
-            source_url: dp.source_url,
-            source_domain: dp.source_domain,
-          },
-        );
-        pricedIds.add(String(part.part_id));
-        priced++;
-      }
-
-      // PASS 2: for every still-unpriced part, RE-PARSE its EXISTING price source
-      // URLs with the deterministic parser. The original enrichment already found
-      // real product pages (partsgeek/autozone/…) for these parts — it just stored
-      // the buggy "online_discount" figure. Re-fetching those same pages and
-      // running parsePartPrices extracts the real "sale" price, so coverage jumps
-      // from "whatever the registry scrape surfaced" to "every part with a URL".
-      for (const part of existingParts) {
-        if (!part.oem_part_number || pricedIds.has(String(part.part_id))) continue;
-        const normOem = normalizeOemNumber(part.oem_part_number);
-        const existing = await ctx.runQuery(
+        const normOem = part.oem_part_number
+          ? normalizeOemNumber(part.oem_part_number)
+          : null;
+        const prices = await ctx.runQuery(
           internal.vehicleEnrichment.v3queries.getPricesForPart,
           { partId: part.part_id },
         );
-        const urls = Array.from(
-          new Set(
-            (existing as any[]).map((p) => p.source_url).filter((u): u is string => !!u),
-          ),
-        );
-        for (const url of urls) {
+        for (const row of prices as any[]) {
+          if (!row.source_url || !row.source_domain) continue;
+          totalPrices++;
           let html: string | null = null;
           try {
-            ({ html } = await fetchUrlWithHtml(url));
+            ({ html } = await fetchUrlWithHtml(row.source_url));
           } catch {
             continue;
           }
           if (!html) continue;
-          const parsed = parsePartPrices(html, url);
-          // Prefer the exact OEM match; if the page is a single-product page, that
-          // product IS this part (the URL was stored for this part).
-          let match = parsed.find((p) => p.oem_part_number === normOem);
+          const parsed = parsePartPrices(html, row.source_url);
+          // The page WAS this part's product page (the URL was stored for it), so
+          // match the OEM if the page exposes it, else use the single product price.
+          let match = normOem
+            ? parsed.find((p) => p.oem_part_number === normOem)
+            : undefined;
           if (!match && parsed.length === 1) match = parsed[0];
-          if (match && match.price > 0) {
-            await ctx.runMutation(
-              internal.vehicleEnrichment.v3mutations.upsertPartPrice,
-              {
-                part_id: part.part_id,
-                price: match.price,
-                price_type: "sale",
-                source_url: match.source_url,
-                source_domain: match.source_domain,
-              },
-            );
-            pricedIds.add(String(part.part_id));
-            priced++;
-            break; // first URL that yields a real sale price wins
-          }
+          if (!match || !(match.price > 0)) continue;
+          await ctx.runMutation(
+            internal.vehicleEnrichment.v3mutations.upsertPartPrice,
+            {
+              part_id: part.part_id,
+              price: match.price,
+              price_type: "sale",
+              // Row's OWN domain → patches THIS existing entry in place.
+              source_domain: row.source_domain,
+              source_url: row.source_url,
+            },
+          );
+          fixed++;
         }
       }
 
-      // (3) Audit the outcome with the count.
+      // (3) Audit the outcome — how many existing price rows we corrected.
       await audit(
-        `Reprice parts complete (deterministic): ${priced}/${existingParts.length} priced for ${label}`.trim(),
+        `Reprice parts complete: corrected ${fixed}/${totalPrices} existing prices for ${label}`.trim(),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

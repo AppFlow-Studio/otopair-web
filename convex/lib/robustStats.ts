@@ -23,6 +23,32 @@ export function median(values: number[]): number {
 }
 
 /**
+ * Weighted median: the value at which cumulative weight first reaches half the
+ * total. Runs outlier rejection (nonOutlierIndices) on the values first so a
+ * single absurd reading can't win on weight alone. Drops non-finite/<=0 values
+ * and <=0 weights. Returns 0 for empty input.
+ *
+ * NOTE: a high-weight source DOMINATES by design (e.g. repairpal_motor @0.8
+ * beats two llm @0.3). A wrong high-weight value is guarded at WRITE time by the
+ * sibling validation gate (laborSibling.ts), not here.
+ */
+export function weightedMedian(values: number[], weights?: number[]): number {
+  const pairs = values
+    .map((v, i) => ({ v, w: weights ? weights[i] ?? 1 : 1 }))
+    .filter((p) => Number.isFinite(p.v) && p.v > 0 && p.w > 0);
+  if (pairs.length === 0) return 0;
+  const keepIdx = nonOutlierIndices(pairs.map((p) => p.v));
+  const kept = keepIdx.map((i) => pairs[i]).sort((a, b) => a.v - b.v);
+  const total = kept.reduce((s, p) => s + p.w, 0);
+  let cum = 0;
+  for (const p of kept) {
+    cum += p.w;
+    if (cum >= total / 2) return p.v;
+  }
+  return kept[kept.length - 1].v;
+}
+
+/**
  * Percentile via linear interpolation, `p` in [0, 1]. Returns 0 for empty
  * input and the sole value for a single-element set.
  */

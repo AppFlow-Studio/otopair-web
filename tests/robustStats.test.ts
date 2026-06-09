@@ -11,6 +11,7 @@ import {
   percentile,
   nonOutlierIndices,
   summarizeObservations,
+  weightedMedian,
 } from "../convex/lib/robustStats";
 
 describe("median", () => {
@@ -70,5 +71,24 @@ describe("summarizeObservations", () => {
     const s = summarizeObservations([10, 20], [1, 3]);
     expect(s.median).toBe(15); // unweighted median
     expect(s.average).toBe(17.5); // weighted mean (10*1 + 20*3) / 4
+  });
+});
+
+describe("weightedMedian", () => {
+  it("returns the lone value", () => {
+    expect(weightedMedian([2.5], [0.8])).toBe(2.5);
+  });
+  it("equals plain median with equal weights", () => {
+    expect(weightedMedian([1, 2, 3], [1, 1, 1])).toBe(2);
+  });
+  it("lets a high-weight source dominate two low-weight ones", () => {
+    // repairpal 1.5 @0.8 vs two llm 3.0/3.2 @0.3 → cum weight crosses 50% at 1.5
+    expect(weightedMedian([3.0, 1.5, 3.2], [0.3, 0.8, 0.3])).toBe(1.5);
+  });
+  it("drops invalid (<=0 / NaN) and zero-weight values", () => {
+    expect(weightedMedian([1.5, 0, NaN, 9], [0.8, 1, 1, 0])).toBe(1.5);
+  });
+  it("returns 0 for empty", () => {
+    expect(weightedMedian([], [])).toBe(0);
   });
 });

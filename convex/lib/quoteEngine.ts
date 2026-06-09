@@ -621,13 +621,36 @@ export async function buildQuote(
   if (cfg.engine_id) {
     engineRow = (await ctx.db.get(cfg.engine_id)) ?? null;
   }
+
+  // Director-editable rule lookup: when qty_override is set, it wins over
+  // the per-vehicle resolver (intended for services that don't fit any of
+  // the six standard kinds). Loaded once here so we don't pay an extra DB
+  // round-trip on the hot path when no override exists.
+  const partsRule = service
+    ? await ctx.db
+        .query("service_parts_rules")
+        .withIndex("by_service", (q) =>
+          q.eq("service_id", args.service_id),
+        )
+        .first()
+    : null;
+  const qtyOverride = partsRule?.qty_override ?? null;
+
+  const baselineFromSpec = camrySpec?.parts_baseline_unit_count ?? null;
   const unitRes = service
-    ? resolveServiceUnitCount({
-        service,
-        engine: engineRow,
-        bookingPosition: args.booking_position ?? null,
-        baselineFromSpec: camrySpec?.parts_baseline_unit_count ?? null,
-      })
+    ? qtyOverride != null
+      ? {
+          count: qtyOverride,
+          label: service.parts_unit_label ?? null,
+          baseline: baselineFromSpec ?? 1,
+          is_estimate: false,
+        }
+      : resolveServiceUnitCount({
+          service,
+          engine: engineRow,
+          bookingPosition: args.booking_position ?? null,
+          baselineFromSpec,
+        })
     : {
         count: 1,
         label: null,

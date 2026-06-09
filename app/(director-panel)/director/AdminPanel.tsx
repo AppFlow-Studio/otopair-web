@@ -20,6 +20,7 @@ import { TabStripe }    from './components/tabs/TabStripe'
 import { TabAudit }     from './components/tabs/TabAudit'
 import { TabSettings }       from './components/tabs/TabSettings'
 import { TabMechanicEdits } from './components/tabs/TabMechanicEdits'
+import { TabServiceParts } from './components/tabs/TabServiceParts'
 
 const SESSION_KEY = 'otopair_director_token'
 
@@ -31,6 +32,7 @@ const TABS: Record<string, React.ComponentType> = {
   cars:        TabCars,
   configs:     TabVehicleConfigs,
   pricing:     TabPricing,
+  serviceParts: TabServiceParts,
   bugs:        TabBugs,
   feedback:    TabFeedback,
   otoFeedback: TabOtoFeedback,

@@ -63,6 +63,12 @@ interface VehiclePassportCardJob {
   laborCost: number;
   partsCost: number;
   estimatedLaborMinutes?: number | null;
+  quotedBreakdown?: {
+    parts_cents: number;
+    labor_cents: number;
+    tax_cents: number;
+    service_fee_cents: number;
+  } | null;
   pricedPartsSnapshot?: Array<{
     service_id: string;
     part_id?: string;
@@ -100,10 +106,12 @@ function formatLaborHours(minutes?: number | null): string {
   if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) {
     return "—";
   }
-  const hours = minutes / 60;
-  return hours >= 10
-    ? `${Math.round(hours)} hr`
-    : `${hours.toFixed(1)} hr`;
+  const total = Math.round(minutes);
+  if (total < 60) return `${total} min`;
+  const h = Math.floor(total / 60);
+  const m = total - h * 60;
+  if (m === 0) return `${h} hr`;
+  return `${h} hr ${m} min`;
 }
 
 function formatLaborMinutes(minutes?: number | null): string {
@@ -231,6 +239,24 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
             {formatCurrency(job.laborCost)}
           </span>
         </div>
+        {job.quotedBreakdown ? (
+          <>
+            <div className="mt-1 flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Tax</span>
+              <span className="tabular-nums text-foreground">
+                {formatCents(job.quotedBreakdown.tax_cents)}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">
+                Otopair service fee
+              </span>
+              <span className="tabular-nums text-foreground">
+                {formatCents(job.quotedBreakdown.service_fee_cents)}
+              </span>
+            </div>
+          </>
+        ) : null}
         <div className="mt-2 flex items-center justify-between text-sm font-semibold">
           <span className="text-foreground">Total</span>
           <span className="tabular-nums text-foreground">

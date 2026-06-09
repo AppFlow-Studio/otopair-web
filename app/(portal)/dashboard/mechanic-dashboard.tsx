@@ -63,9 +63,12 @@ function formatDate(dateString: string) {
 
 function formatMinutes(minutes?: number | null) {
   if (!minutes) return "Est. TBD";
-  if (minutes < 60) return `Est. ${minutes} min`;
-  const hours = minutes / 60;
-  return `Est. ${hours % 1 === 0 ? hours : hours.toFixed(1)} hr`;
+  const total = Math.round(minutes);
+  if (total < 60) return `Est. ${total} min`;
+  const h = Math.floor(total / 60);
+  const m = total - h * 60;
+  if (m === 0) return `Est. ${h} hr`;
+  return `Est. ${h} hr ${m} min`;
 }
 
 function getInitials(name: string) {

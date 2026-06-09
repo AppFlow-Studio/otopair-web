@@ -838,6 +838,45 @@ export default defineSchema({
     display_order: v.optional(v.number()),
   }).index("by_service_id", ["service_id"]),
 
+  // Director-editable parts rule per canonical service. One row per service.
+  // Replaces the hard-coded BILLABLE_SUBCATEGORIES_BY_SERVICE in serviceParts.ts
+  // and the static SPECS array in seeds/seedServiceParts.ts. Seeded from the
+  // May 2026 Service Parts Reference PDF via seeds/seedServicePartsRules.
+  service_parts_rules: defineTable({
+    service_id: v.id("services"),
+    // Mirror of services.parts_kind — kept in sync on every upsertRule write
+    // so the runtime resolver in lib/serviceUnits.ts keeps reading from the
+    // services doc unchanged.
+    parts_kind: v.union(
+      v.literal("labor_only"),
+      v.literal("per_axle"),
+      v.literal("per_cylinder"),
+      v.literal("per_unit_spec"),
+      v.literal("per_wheel"),
+      v.literal("fixed_kit"),
+    ),
+    parts_unit_label: v.optional(v.string()),
+    parts_unit_spec_source: v.optional(v.string()),
+    // Allowlist of oem_parts.subcategory values eligible for the invoice.
+    // The union of both arrays is the new billable filter.
+    core_subcategories: v.array(v.string()),
+    as_needed_subcategories: v.array(v.string()),
+    // OEM parts pinned to a subcategory role — these short-circuit the
+    // 7-layer selector. Empty array = resolver behavior unchanged.
+    pinned_parts: v.array(
+      v.object({
+        subcategory: v.string(),
+        part_id: v.id("oem_parts"),
+        is_core: v.boolean(),
+      }),
+    ),
+    // Quantity override that wins over serviceUnits.resolveServiceUnitCount.
+    // Null/undefined means "use the resolver."
+    qty_override: v.optional(v.number()),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  }).index("by_service", ["service_id"]),
+
   // [A] 17 fields (D had 7, W doesn't have this table)
   // Bridge table: long-term migrate to service_intervals + labor_times
   service_vehicle_specs: defineTable({
@@ -4182,6 +4221,38 @@ export default defineSchema({
     .index("by_tier", ["tier_id"])
     .index("by_category", ["pricing_category_id"])
     .index("by_tier_and_category", ["tier_id", "pricing_category_id"]),
+
+  // Append-only history of every fallback-spec edit (baselines, parts
+  // multipliers, labor multipliers, service default_labor_hours). One row
+  // per edit, captured BEFORE the patch lands so restore is exact. Drives
+  // the per-row History modal in the Pricing & Tiers director tab.
+  pricing_fallback_snapshots: defineTable({
+    entity_type: v.union(
+      v.literal("baseline"),
+      v.literal("parts_multiplier"),
+      v.literal("labor_multiplier"),
+      v.literal("service_labor_hours"),
+    ),
+    // Stringified Convex Id of the target row. We keep it as a string so a
+    // single table covers four target tables without a v.union of ids.
+    entity_id: v.string(),
+    // Display key — service slug or "category × tier" — so the history feed
+    // can group/label snapshots without hydrating every related row.
+    entity_label: v.string(),
+    // Full prior state of the target row at the moment of the snapshot.
+    // Stored as JSON-stringified payload so restore is exact and replay-safe.
+    payload: v.string(),
+    // Human-readable diff summary, e.g. "low: $80.00 → $95.00, source: manual → bookings".
+    changes_summary: v.string(),
+    // True when this snapshot was written as part of a Restore (so the UI
+    // can label it "Restore point" instead of "Edit").
+    is_restore: v.optional(v.boolean()),
+    actor_name: v.string(),
+    actor_id: v.optional(v.id("director_users")),
+    created_at: v.number(),
+  })
+    .index("by_entity", ["entity_type", "entity_id"])
+    .index("by_created_at", ["created_at"]),
 
   // Toyota Camry (T1) anchor price per service, in cents. is_real_data drives
   // lock/estimate routing — when both is_real_data AND the matching

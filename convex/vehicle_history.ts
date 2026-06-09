@@ -85,16 +85,22 @@ export const getServiceHistoryForVin = query({
     const vin = args.vin.trim().toUpperCase();
     const limit = args.limit ?? 10;
 
-    // Walk completed/in_progress bookings per accessible shop, filter by VIN.
-    // The shop-scoped index keeps this bounded; we then sort by completed_at
-    // and clip to `limit`.
+    // Walk completed bookings per accessible shop, filter by VIN. Cancelled,
+    // declined, no-show, and in-flight visits are excluded — the Vehicle
+    // Passport history is for real service performed on this VIN, not the
+    // intent that never made it past the schedule.
     const matched: any[] = [];
     for (const shopIdStr of accessibleShopIds) {
       const shopId = shopIdStr as Id<"shops">;
       const rows = await ctx.db
         .query("bookings")
         .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-        .filter((q: any) => q.eq(q.field("vin"), vin))
+        .filter((q: any) =>
+          q.and(
+            q.eq(q.field("vin"), vin),
+            q.eq(q.field("status"), "completed"),
+          ),
+        )
         .collect();
       for (const row of rows) {
         if (args.excludeBookingId && String(row._id) === String(args.excludeBookingId)) {

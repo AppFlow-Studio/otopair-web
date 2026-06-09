@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Badge, Button, Card } from '../../Primitives'
+import { Badge, Button, Card, IconClock } from '../../Primitives'
 
 export type MatrixColumn = { id: string; code: string; name: string }
 export type MatrixRow = { code: string; name?: string }
@@ -33,6 +33,7 @@ export const MultiplierMatrix = ({
   cells,
   supportsLock,
   onSave,
+  onShowHistory,
 }: {
   title: string
   subtitle?: string
@@ -41,6 +42,10 @@ export const MultiplierMatrix = ({
   cells: MatrixCell[]
   supportsLock?: boolean
   onSave: (payload: MatrixEditPayload) => Promise<void> | void
+  /** When provided, each cell renders a clock-icon button that opens the
+   *  history modal for that cell's underlying multiplier row. Omit for
+   *  matrices without snapshot capture (e.g. v1). */
+  onShowHistory?: (cell: MatrixCell) => void
 }) => {
   const lookup = useMemo(() => {
     const m = new Map<string, MatrixCell>()
@@ -177,6 +182,14 @@ export const MultiplierMatrix = ({
                             title={cell.isLocked ? 'Unlock' : 'Lock'}
                             style={{ border:'none', background:'transparent', cursor:'pointer', fontSize:11, padding:0, color: cell.isLocked ? 'var(--blue-700)' : 'var(--slate-400)' }}>
                             {cell.isLocked ? '🔒' : '🔓'}
+                          </button>
+                        )}
+                        {onShowHistory && (
+                          <button onClick={() => onShowHistory(cell)}
+                            title="View history"
+                            style={{ border:'none', background:'transparent', cursor:'pointer', padding:0,
+                              color:'var(--slate-400)', display:'inline-flex' }}>
+                            <IconClock size={12} />
                           </button>
                         )}
                       </div>

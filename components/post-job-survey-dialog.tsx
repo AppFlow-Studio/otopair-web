@@ -776,6 +776,7 @@ export default function PostJobSurveyDialog({
   shopZip,
   lockBilling,
   quotedParts,
+  isFixedPrice,
 }: {
   open: boolean;
   bookingId?: string | null;
@@ -795,6 +796,9 @@ export default function PostJobSurveyDialog({
     totalCents: number;
     ceilingCents: number;
   }) => void;
+  /** Customer agreed to a shop_service_fixed_prices flat rate. Parts/labor
+   *  edits are accepted (audit only) but won't move the customer total. */
+  isFixedPrice?: boolean;
   /** Shop's labor rate in cents/hour. Drives the running-total bar and the
    *  Labor step for cycle modes. */
   laborRateCents?: number | null;
@@ -843,6 +847,7 @@ export default function PostJobSurveyDialog({
       shopZip={shopZip ?? null}
       lockBilling={lockBilling ?? false}
       quotedParts={quotedParts ?? null}
+      isFixedPrice={isFixedPrice ?? false}
     />
   );
 }
@@ -868,6 +873,7 @@ function PostJobSurveyDialogBody({
   shopZip,
   lockBilling,
   quotedParts,
+  isFixedPrice,
 }: {
   open: boolean;
   bookingId: string | null;
@@ -893,6 +899,7 @@ function PostJobSurveyDialogBody({
   shopZip: string | null;
   lockBilling: boolean;
   quotedParts: JobActualPartPayload[] | null;
+  isFixedPrice: boolean;
 }) {
   // Phase 2 — Pre-Job Approval mutation handles (only invoked when cycle is set).
   const submitPreJobEstimate = useMutation(
@@ -1574,6 +1581,24 @@ function PostJobSurveyDialogBody({
                   {passportData.vehicle_spec_label}
                 </p>
               ) : null}
+            </div>
+          ) : null}
+
+          {isFixedPrice ? (
+            <div className="mx-auto mb-6 w-full max-w-xl rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                Fixed price service
+              </p>
+              <p className="mt-1 text-sm leading-relaxed">
+                Updating parts and time won&apos;t change the price. Edits are
+                logged for the audit trail only and will not affect this job.
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-amber-800">
+                Need to change what the customer pays? Update the{" "}
+                <span className="font-semibold">fixed price</span> in the
+                shop&apos;s service catalog — it applies to future bookings,
+                not this one.
+              </p>
             </div>
           ) : null}
 
@@ -4299,10 +4324,10 @@ function ApprovalStatusPanel({
 }
 
 /**
- * Labor step for estimate cycles. Mechanic enters labor hours; the
- * displayed labor cost is `hours × shop labor_rate`. The same rate is sent
- * to the submit mutation so the server's recomputation lands on the same
- * number the mechanic just saw.
+ * Labor step for estimate cycles. Mechanic enters labor minutes; the
+ * displayed labor cost is `(minutes/60) × shop labor_rate`. The same rate
+ * is sent to the submit mutation so the server's recomputation lands on
+ * the same number the mechanic just saw.
  */
 function LaborStep({
   minutes,
@@ -4323,7 +4348,7 @@ function LaborStep({
     <QuestionScreen
       eyebrow="Labor"
       question="How long will this take?"
-      hint={`Your shop's labor rate is $${ratePerHourDollars}/hr — we'll multiply by the hours you enter.`}
+      hint={`Your shop's labor rate is $${ratePerHourDollars}/hr — we'll calculate from the minutes you enter.`}
     >
       <div className="mx-auto flex w-full max-w-xs flex-col items-center gap-3">
         <div className="flex items-baseline gap-2">
@@ -4409,7 +4434,14 @@ function EstimateSummary({
         : 'e.g. "OEM pads were back-ordered; substituting Akebono ceramic at higher cost."';
   const showReasoning = typeof setTechnicianNotes === "function";
   const minutesNum = Number(laborMinutes) || 0;
-  const hours = minutesNum > 0 ? minutesNum / 60 : 0;
+  function laborDurationLabel(mins: number): string {
+    const total = Math.round(mins);
+    if (total < 60) return `${total} min`;
+    const h = Math.floor(total / 60);
+    const m = total - h * 60;
+    if (m === 0) return `${h} hr`;
+    return `${h} hr ${m} min`;
+  }
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col">
       <p className="text-center text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
@@ -4488,8 +4520,8 @@ function EstimateSummary({
             <div>
               <div className="font-medium text-foreground">Labor</div>
               <div className="text-[11px] text-muted-foreground">
-                {hours > 0
-                  ? `${hours.toFixed(2)} hr @ $${(laborRateCents / 100).toFixed(2)}/hr`
+                {minutesNum > 0
+                  ? `${laborDurationLabel(minutesNum)} @ $${(laborRateCents / 100).toFixed(2)}/hr`
                   : "—"}
               </div>
             </div>

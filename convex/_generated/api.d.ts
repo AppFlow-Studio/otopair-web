@@ -49,6 +49,7 @@ import type * as directorVehicleActions from "../directorVehicleActions.js";
 import type * as director_auth from "../director_auth.js";
 import type * as director_mechanic_verifications from "../director_mechanic_verifications.js";
 import type * as director_notes from "../director_notes.js";
+import type * as director_service_parts from "../director_service_parts.js";
 import type * as email_dispatcher from "../email_dispatcher.js";
 import type * as engines from "../engines.js";
 import type * as fitments from "../fitments.js";
@@ -68,6 +69,7 @@ import type * as lib_booking_field_redaction from "../lib/booking_field_redactio
 import type * as lib_checkin_questions from "../lib/checkin_questions.js";
 import type * as lib_classifier from "../lib/classifier.js";
 import type * as lib_email_provider from "../lib/email_provider.js";
+import type * as lib_fallbackSnapshots from "../lib/fallbackSnapshots.js";
 import type * as lib_haloVariantInference from "../lib/haloVariantInference.js";
 import type * as lib_haloVariantRules from "../lib/haloVariantRules.js";
 import type * as lib_intervals from "../lib/intervals.js";
@@ -77,6 +79,7 @@ import type * as lib_mechanic_verifications from "../lib/mechanic_verifications.
 import type * as lib_modifiers from "../lib/modifiers.js";
 import type * as lib_notificationScope from "../lib/notificationScope.js";
 import type * as lib_packageRules from "../lib/packageRules.js";
+import type * as lib_partSubcategories from "../lib/partSubcategories.js";
 import type * as lib_payment_constants from "../lib/payment_constants.js";
 import type * as lib_push_dispatcher from "../lib/push_dispatcher.js";
 import type * as lib_quoteEngine from "../lib/quoteEngine.js";
@@ -182,6 +185,7 @@ import type * as seeds_seedPricing from "../seeds/seedPricing.js";
 import type * as seeds_seedPricingV2 from "../seeds/seedPricingV2.js";
 import type * as seeds_seedServiceCategories from "../seeds/seedServiceCategories.js";
 import type * as seeds_seedServiceParts from "../seeds/seedServiceParts.js";
+import type * as seeds_seedServicePartsRules from "../seeds/seedServicePartsRules.js";
 import type * as seeds_seedServices from "../seeds/seedServices.js";
 import type * as seeds_seedShopLaborRates from "../seeds/seedShopLaborRates.js";
 import type * as seeds_seedTierAssignments from "../seeds/seedTierAssignments.js";
@@ -334,6 +338,7 @@ declare const fullApi: ApiFromModules<{
   director_auth: typeof director_auth;
   director_mechanic_verifications: typeof director_mechanic_verifications;
   director_notes: typeof director_notes;
+  director_service_parts: typeof director_service_parts;
   email_dispatcher: typeof email_dispatcher;
   engines: typeof engines;
   fitments: typeof fitments;
@@ -353,6 +358,7 @@ declare const fullApi: ApiFromModules<{
   "lib/checkin_questions": typeof lib_checkin_questions;
   "lib/classifier": typeof lib_classifier;
   "lib/email_provider": typeof lib_email_provider;
+  "lib/fallbackSnapshots": typeof lib_fallbackSnapshots;
   "lib/haloVariantInference": typeof lib_haloVariantInference;
   "lib/haloVariantRules": typeof lib_haloVariantRules;
   "lib/intervals": typeof lib_intervals;
@@ -362,6 +368,7 @@ declare const fullApi: ApiFromModules<{
   "lib/modifiers": typeof lib_modifiers;
   "lib/notificationScope": typeof lib_notificationScope;
   "lib/packageRules": typeof lib_packageRules;
+  "lib/partSubcategories": typeof lib_partSubcategories;
   "lib/payment_constants": typeof lib_payment_constants;
   "lib/push_dispatcher": typeof lib_push_dispatcher;
   "lib/quoteEngine": typeof lib_quoteEngine;
@@ -467,6 +474,7 @@ declare const fullApi: ApiFromModules<{
   "seeds/seedPricingV2": typeof seeds_seedPricingV2;
   "seeds/seedServiceCategories": typeof seeds_seedServiceCategories;
   "seeds/seedServiceParts": typeof seeds_seedServiceParts;
+  "seeds/seedServicePartsRules": typeof seeds_seedServicePartsRules;
   "seeds/seedServices": typeof seeds_seedServices;
   "seeds/seedShopLaborRates": typeof seeds_seedShopLaborRates;
   "seeds/seedTierAssignments": typeof seeds_seedTierAssignments;

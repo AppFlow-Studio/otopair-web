@@ -12,6 +12,7 @@ import { TierOverviewGrid } from './pricing/TierOverviewGrid'
 import { MultiplierMatrix, type MatrixCell, type MatrixColumn, type MatrixRow } from './pricing/MultiplierMatrix'
 import { BaselinesTable } from './pricing/BaselinesTable'
 import { VehicleConfigTierModal } from './pricing/VehicleConfigTierModal'
+import { FallbackHistoryModal } from './pricing/FallbackHistoryModal'
 
 type SubTab = 'overview' | 'multipliers' | 'baselines' | 'assignments'
 
@@ -82,12 +83,20 @@ export const TabPricing = () => {
 // Multipliers: switch between v1 (8-cat) / v2 parts (9-cat) / v2 labor (4-cat)
 // ---------------------------------------------------------------------------
 
+type HistoryTarget = {
+  entityType: 'parts_multiplier' | 'labor_multiplier'
+  entityId: string
+  title: string
+  subtitle: string
+}
+
 const MultipliersSection = () => {
   const [view, setView] = useState<'v1' | 'v2_parts' | 'v2_labor'>('v2_parts')
   const session   = useContext(DirectorSessionCtx)
   const actorName = session?.name ?? 'Director'
   const actorId   = session?.userId as Id<'director_users'> | undefined
   const [toast, setToast] = useState<string | null>(null)
+  const [history, setHistory] = useState<HistoryTarget | null>(null)
 
   const v1     = useQuery(api.directorPricing.multipliersV1)
   const v2p    = useQuery(api.directorPricing.multipliersV2Parts)
@@ -176,7 +185,7 @@ const MultipliersSection = () => {
           ? <LoadingBlock />
           : <MultiplierMatrix
               title="Pricing v2 — parts multipliers (May 29 2026 spec)"
-              subtitle="9 parts categories × 7 tiers. Applied to the Camry OEM dealer-counter baseline."
+              subtitle="9 parts categories × 7 tiers. Applied to the Camry OEM dealer-counter baseline. Click 🕐 to view history."
               rows={v2pMatrix.rows}
               columns={v2pMatrix.cols}
               cells={v2pMatrix.cells}
@@ -188,6 +197,15 @@ const MultipliersSection = () => {
                   actorName, actorId,
                 })
                 if (res.ok && res.changes) setToast(`v2 parts cell updated · ${payload.rowCode}`)
+              }}
+              onShowHistory={cell => {
+                const col = v2pMatrix.cols.find(c => c.id === cell.colId)
+                setHistory({
+                  entityType: 'parts_multiplier',
+                  entityId: cell.id,
+                  title: `History · Parts · ${col?.code ?? '?'} · ${cell.rowCode}`,
+                  subtitle: `Current multiplier: ${cell.multiplier.toFixed(3)}${cell.source ? ' · ' + cell.source : ''}`,
+                })
               }} />
       )}
 
@@ -196,7 +214,7 @@ const MultipliersSection = () => {
           ? <LoadingBlock />
           : <MultiplierMatrix
               title="Pricing v2 — labor multipliers (May 29 2026 spec)"
-              subtitle="4 labor categories × 7 tiers. Multiplied against Camry-anchored book hours."
+              subtitle="4 labor categories × 7 tiers. Multiplied against Camry-anchored book hours. Click 🕐 to view history."
               rows={v2lMatrix.rows}
               columns={v2lMatrix.cols}
               cells={v2lMatrix.cells}
@@ -208,10 +226,28 @@ const MultipliersSection = () => {
                   actorName, actorId,
                 })
                 if (res.ok && res.changes) setToast(`v2 labor cell updated · ${payload.rowCode}`)
+              }}
+              onShowHistory={cell => {
+                const col = v2lMatrix.cols.find(c => c.id === cell.colId)
+                setHistory({
+                  entityType: 'labor_multiplier',
+                  entityId: cell.id,
+                  title: `History · Labor · ${col?.code ?? '?'} · ${cell.rowCode}`,
+                  subtitle: `Current multiplier: ${cell.multiplier.toFixed(3)}${cell.source ? ' · ' + cell.source : ''}`,
+                })
               }} />
       )}
 
       <Toast msg={toast} onDismiss={() => setToast(null)} />
+      {history && (
+        <FallbackHistoryModal
+          entityType={history.entityType}
+          entityId={history.entityId}
+          title={history.title}
+          subtitle={history.subtitle}
+          onClose={() => setHistory(null)}
+        />
+      )}
     </>
   )
 }

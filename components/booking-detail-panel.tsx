@@ -257,6 +257,15 @@ function todayString() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function formatDurationMinutes(minutes: number): string {
+  const total = Math.round(minutes);
+  if (total < 60) return `${total} min`;
+  const h = Math.floor(total / 60);
+  const m = total - h * 60;
+  if (m === 0) return `${h} hr`;
+  return `${h} hr ${m} min`;
+}
+
 function formatTime(time: string): string {
   if (!time) return "";
   const [hours, minutes] = time.split(":").map(Number);
@@ -284,17 +293,18 @@ function formatBookingDate(
   return `${dateLabel}, ${timeLabel}`;
 }
 
+// Shops have 20 minutes to accept/decline an incoming booking before it shows
+// as overdue. Kept in sync with PENDING_SHOP_RESPONSE_MS in
+// booking-list-shared.ts so list views and the drawer countdown agree.
+const PENDING_SHOP_RESPONSE_MS = 20 * 60 * 1000;
+
 function pendingCountdown(creationTime: number): string | null {
   if (!creationTime || isNaN(creationTime)) return null;
-  const deadline = creationTime + 24 * 60 * 60 * 1000;
+  const deadline = creationTime + PENDING_SHOP_RESPONSE_MS;
   const remaining = deadline - Date.now();
   if (remaining <= 0) return null;
-  const hours = Math.floor(remaining / (1000 * 60 * 60));
-  const minutes = Math.floor(
-    (remaining % (1000 * 60 * 60)) / (1000 * 60),
-  );
-  if (hours > 0) return `${hours}h ${minutes}m left`;
-  return `${minutes}m left`;
+  const minutesLeft = Math.max(1, Math.ceil(remaining / 60_000));
+  return `${minutesLeft}m left`;
 }
 
 function isForcedDelayReason(reason?: string | null): boolean {
@@ -1730,10 +1740,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     </p>
                     {job.estimatedLaborMinutes != null && job.estimatedLaborMinutes > 0 && (
                       <p className="mt-1 text-sm text-muted-foreground">
-                        Est.{" "}
-                        {job.estimatedLaborMinutes < 60
-                          ? `${job.estimatedLaborMinutes}m`
-                          : `${(job.estimatedLaborMinutes / 60).toFixed(1).replace(/\.0$/, "")} hrs`}
+                        Est. {formatDurationMinutes(job.estimatedLaborMinutes)}
                       </p>
                     )}
                   </div>
@@ -2121,6 +2128,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           </DropdownMenu>
                         )}
                       </div>
+                      {job.isFixedPrice && (canAdjustQuote || canAdjustMidJob) ? (
+                        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                          <span className="font-semibold">Fixed price service.</span>{" "}
+                          Updating parts or time won&apos;t change the price — edits are logged but
+                          will not affect this job. To change what the customer pays, update the
+                          fixed price in the shop&apos;s service catalog.
+                        </div>
+                      ) : null}
                       <div className="flex flex-wrap gap-2">
                         {canAccept && (
                           <button
@@ -2914,6 +2929,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
           lockBilling
+          isFixedPrice={job?.isFixedPrice}
         />
 
         {/* Pre-Job Approval — auto-chained from the inspection dialog. */}
@@ -2960,6 +2976,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 }))
               : null
           }
+          isFixedPrice={job?.isFixedPrice}
         />
 
         {/* Mid-Job Approval — "Add unforeseen scope" while in_progress. */}
@@ -2991,6 +3008,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           laborCostDollars={(job as any)?.laborCost ?? null}
           shopState={(job as any)?.shopState ?? null}
           shopZip={(job as any)?.shopZip ?? null}
+          isFixedPrice={job?.isFixedPrice}
         />
 
         <ConfirmationDialog

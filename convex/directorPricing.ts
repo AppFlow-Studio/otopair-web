@@ -8,7 +8,16 @@
 
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Doc, Id } from "./_generated/dataModel";
 import { tierValidator, VEHICLE_TIERS, type VehicleTier } from "./lib/vehicleTiers";
+import {
+  buildEntityLabel,
+  diffChanges,
+  recordFallbackSnapshot,
+  serializeRow,
+  summarizeChanges,
+  type FallbackEntityType,
+} from "./lib/fallbackSnapshots";
 
 // ---------------------------------------------------------------------------
 // Shared patch helper (mirrors directorConfigActions.ts)
@@ -444,6 +453,18 @@ export const updateMultiplierV2Parts = mutation({
       Object.entries(fields) as Array<[string, unknown]>,
     );
     if (Object.keys(patch).length === 0) return { ok: true as const, changes: 0 };
+
+    const cat = await ctx.db.get(cur.parts_category_id);
+    await recordFallbackSnapshot(ctx, {
+      entity_type: "parts_multiplier",
+      entity_id: String(id),
+      entity_label: buildEntityLabel("parts_multiplier", cur, { category_code: cat?.code ?? null }),
+      prior_row: cur,
+      changes: diffChanges(cur as any, patch),
+      actor_name: actorName,
+      actor_id: actorId,
+    });
+
     const now = Date.now();
     await ctx.db.patch(id, { ...patch, updated_at: now } as any);
     await ctx.db.insert("audit_log", {
@@ -476,6 +497,18 @@ export const updateMultiplierV2Labor = mutation({
       Object.entries(fields) as Array<[string, unknown]>,
     );
     if (Object.keys(patch).length === 0) return { ok: true as const, changes: 0 };
+
+    const cat = await ctx.db.get(cur.labor_category_id);
+    await recordFallbackSnapshot(ctx, {
+      entity_type: "labor_multiplier",
+      entity_id: String(id),
+      entity_label: buildEntityLabel("labor_multiplier", cur, { category_code: cat?.code ?? null }),
+      prior_row: cur,
+      changes: diffChanges(cur as any, patch),
+      actor_name: actorName,
+      actor_id: actorId,
+    });
+
     const now = Date.now();
     await ctx.db.patch(id, { ...patch, updated_at: now } as any);
     await ctx.db.insert("audit_log", {
@@ -512,6 +545,21 @@ export const updateBaseline = mutation({
       Object.entries(fields) as Array<[string, unknown]>,
     );
     if (Object.keys(patch).length === 0) return { ok: true as const, changes: 0 };
+
+    // Capture snapshot of the PRIOR state before patching, so "Restore"
+    // can replay exactly. Compute the change diff from the same buildPatch
+    // output we just used so the summary stays in sync with the audit log.
+    const svc = await ctx.db.get(cur.service_id);
+    await recordFallbackSnapshot(ctx, {
+      entity_type: "baseline",
+      entity_id: String(id),
+      entity_label: buildEntityLabel("baseline", cur, { service_name: svc?.name ?? null }),
+      prior_row: cur,
+      changes: diffChanges(cur as any, patch),
+      actor_name: actorName,
+      actor_id: actorId,
+    });
+
     const now = Date.now();
     await ctx.db.patch(id, { ...patch, updated_at: now } as any);
     await ctx.db.insert("audit_log", {
@@ -602,5 +650,178 @@ export const overrideVehicleConfigTier = mutation({
     });
 
     return { ok: true as const, changes: 1, prevTier, newTier: args.newTier };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Fallback-spec history & restore
+// ---------------------------------------------------------------------------
+
+const fallbackEntityValidator = v.union(
+  v.literal("baseline"),
+  v.literal("parts_multiplier"),
+  v.literal("labor_multiplier"),
+  v.literal("service_labor_hours"),
+);
+
+/**
+ * Snapshots for a single fallback-spec entity, newest first. Powers the
+ * per-row History modal in the Baselines table (and any future History
+ * modal hung off the multiplier matrices).
+ */
+export const fallbackHistory = query({
+  args: {
+    entity_type: fallbackEntityValidator,
+    entity_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("pricing_fallback_snapshots")
+      .withIndex("by_entity", (q) =>
+        q.eq("entity_type", args.entity_type).eq("entity_id", args.entity_id),
+      )
+      .collect();
+    return rows
+      .slice()
+      .sort((a, b) => b.created_at - a.created_at)
+      .map((r) => ({
+        id: r._id,
+        entity_type: r.entity_type,
+        entity_id: r.entity_id,
+        entity_label: r.entity_label,
+        payload: r.payload,
+        changes_summary: r.changes_summary,
+        is_restore: r.is_restore ?? false,
+        actor_name: r.actor_name,
+        actor_id: r.actor_id ?? null,
+        created_at: r.created_at,
+      }));
+  },
+});
+
+/**
+ * Restore a fallback-spec entity to the values captured in a snapshot.
+ * Before patching, captures the CURRENT live state as a fresh snapshot so
+ * the restore itself is reversible. Audit_log entry credits the actor.
+ *
+ * Only baselines / parts multipliers / labor multipliers are restorable
+ * today (no edit mutation exists yet for service default_labor_hours).
+ */
+export const restoreFallbackSnapshot = mutation({
+  args: {
+    snapshot_id: v.id("pricing_fallback_snapshots"),
+    actorName: v.string(),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, { snapshot_id, actorName, actorId }) => {
+    const snap = await ctx.db.get(snapshot_id);
+    if (!snap) return { ok: false as const, reason: "snapshot_not_found" };
+
+    // Parse the prior-state payload (full row minus _id/_creationTime).
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(snap.payload);
+    } catch {
+      return { ok: false as const, reason: "snapshot_payload_corrupt" };
+    }
+
+    const entity_id = snap.entity_id;
+    const entity_type = snap.entity_type;
+
+    // Capture current state as a fresh snapshot, then patch.
+    if (entity_type === "baseline") {
+      const cur = (await ctx.db.get(entity_id as Id<"pricing_baselines">)) as Doc<"pricing_baselines"> | null;
+      if (!cur) return { ok: false as const, reason: "target_not_found" };
+      const svc = await ctx.db.get(cur.service_id);
+      await recordFallbackSnapshot(ctx, {
+        entity_type,
+        entity_id,
+        entity_label: buildEntityLabel(entity_type, cur, { service_name: svc?.name ?? null }),
+        prior_row: cur,
+        changes: diffChanges(cur as any, payload),
+        is_restore: true,
+        actor_name: actorName,
+        actor_id: actorId,
+      });
+      const now = Date.now();
+      const patch = { ...payload, updated_at: now } as any;
+      delete patch.service_id; // never reassign FK on restore
+      delete patch.created_at; // preserve original creation time
+      await ctx.db.patch(cur._id, patch);
+      await ctx.db.insert("audit_log", {
+        entity_type: "pricing_baseline",
+        entity_id,
+        action: "restore",
+        actor: actorName,
+        actor_id: actorId,
+        detail: `Baseline restored from snapshot ${new Date(snap.created_at).toISOString()}`,
+        created_at: now,
+      });
+      return { ok: true as const };
+    }
+
+    if (entity_type === "parts_multiplier") {
+      const cur = (await ctx.db.get(entity_id as Id<"pricing_parts_multipliers">)) as Doc<"pricing_parts_multipliers"> | null;
+      if (!cur) return { ok: false as const, reason: "target_not_found" };
+      const cat = await ctx.db.get(cur.parts_category_id);
+      await recordFallbackSnapshot(ctx, {
+        entity_type,
+        entity_id,
+        entity_label: buildEntityLabel(entity_type, cur, { category_code: cat?.code ?? null }),
+        prior_row: cur,
+        changes: diffChanges(cur as any, payload),
+        is_restore: true,
+        actor_name: actorName,
+        actor_id: actorId,
+      });
+      const now = Date.now();
+      const patch = { ...payload, updated_at: now } as any;
+      delete patch.parts_category_id;
+      delete patch.tier;
+      await ctx.db.patch(cur._id, patch);
+      await ctx.db.insert("audit_log", {
+        entity_type: "pricing_multiplier_v2_parts",
+        entity_id,
+        action: "restore",
+        actor: actorName,
+        actor_id: actorId,
+        detail: `Parts multiplier restored from snapshot ${new Date(snap.created_at).toISOString()}`,
+        created_at: now,
+      });
+      return { ok: true as const };
+    }
+
+    if (entity_type === "labor_multiplier") {
+      const cur = (await ctx.db.get(entity_id as Id<"pricing_labor_multipliers">)) as Doc<"pricing_labor_multipliers"> | null;
+      if (!cur) return { ok: false as const, reason: "target_not_found" };
+      const cat = await ctx.db.get(cur.labor_category_id);
+      await recordFallbackSnapshot(ctx, {
+        entity_type,
+        entity_id,
+        entity_label: buildEntityLabel(entity_type, cur, { category_code: cat?.code ?? null }),
+        prior_row: cur,
+        changes: diffChanges(cur as any, payload),
+        is_restore: true,
+        actor_name: actorName,
+        actor_id: actorId,
+      });
+      const now = Date.now();
+      const patch = { ...payload, updated_at: now } as any;
+      delete patch.labor_category_id;
+      delete patch.tier;
+      await ctx.db.patch(cur._id, patch);
+      await ctx.db.insert("audit_log", {
+        entity_type: "pricing_multiplier_v2_labor",
+        entity_id,
+        action: "restore",
+        actor: actorName,
+        actor_id: actorId,
+        detail: `Labor multiplier restored from snapshot ${new Date(snap.created_at).toISOString()}`,
+        created_at: now,
+      });
+      return { ok: true as const };
+    }
+
+    return { ok: false as const, reason: "restore_not_supported_for_entity_type" };
   },
 });

@@ -28,27 +28,62 @@ export const PART_CONFIDENCE_GATE_THRESHOLD = 0.7;
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
 
 /**
- * Per-service allowlist of OEM `subcategory` values that count as billable
- * customer-facing parts. The enrichment pipeline extracts everything OEM-known
- * for the vehicle (oil filter, drain plug gasket, engine oil, etc.) — useful
- * for the vehicle profile, but shops keep consumables like drain plug gaskets
- * and engine oil in stock and never line-item them to the customer. This
- * allowlist is the booking-time billing filter.
+ * Per-service parts rule. Replaces the legacy `BILLABLE_SUBCATEGORIES_BY_SERVICE`
+ * constant — director-editable via the Service Parts admin tab, seeded from the
+ * May 2026 PDF in seeds/seedServicePartsRules.ts.
  *
- * Service slugs missing from this map preserve existing behavior (no
- * subcategory filter — all matching fitments are eligible).
+ *   - `allowed` is the union of core + as-needed subcategories. Null means
+ *     "no rule row for this service" → preserve legacy "no filter" behavior.
+ *   - `pinnedPartIdsBySubcategory` maps subcategory → pinned oem_parts._id.
+ *     When the resolver finds a candidate whose subcategory has a pinned
+ *     entry, it short-circuits the 7-layer selector and picks the pin.
+ *   - `qtyOverride` (when set) wins over serviceUnits.resolveServiceUnitCount.
  */
-const BILLABLE_SUBCATEGORIES_BY_SERVICE: Record<string, ReadonlySet<string>> = {
-  oil_change: new Set(["oil_filter"]),
+type ServicePartsRuleSnapshot = {
+  allowed: Set<string> | null;
+  pinnedPartIdsBySubcategory: Map<string, Id<"oem_parts">>;
+  qtyOverride: number | null;
 };
 
-function isBillableSubcategory(
-  serviceSlug: string,
+async function loadServicePartsRule(
+  ctx: { db: any },
+  serviceId: Id<"services">,
+): Promise<ServicePartsRuleSnapshot> {
+  const rule = await ctx.db
+    .query("service_parts_rules")
+    .withIndex("by_service", (q: any) => q.eq("service_id", serviceId))
+    .first();
+  if (!rule) {
+    return {
+      allowed: null,
+      pinnedPartIdsBySubcategory: new Map(),
+      qtyOverride: null,
+    };
+  }
+  const allowed = new Set<string>([
+    ...rule.core_subcategories,
+    ...rule.as_needed_subcategories,
+  ]);
+  const pinnedPartIdsBySubcategory = new Map<string, Id<"oem_parts">>();
+  for (const p of rule.pinned_parts as Array<{
+    subcategory: string;
+    part_id: Id<"oem_parts">;
+  }>) {
+    pinnedPartIdsBySubcategory.set(p.subcategory, p.part_id);
+  }
+  return {
+    allowed,
+    pinnedPartIdsBySubcategory,
+    qtyOverride: rule.qty_override ?? null,
+  };
+}
+
+function isBillableSubcategoryViaRule(
+  rule: ServicePartsRuleSnapshot,
   subcategory: string | undefined | null,
 ): boolean {
-  const allow = BILLABLE_SUBCATEGORIES_BY_SERVICE[serviceSlug];
-  if (!allow) return true;
-  return subcategory != null && allow.has(subcategory);
+  if (rule.allowed == null) return true; // no rule row → legacy behavior
+  return subcategory != null && rule.allowed.has(subcategory);
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -156,14 +191,23 @@ export const getPartsForService = query({
       (f) => f.package_code == null || confirmed.has(f.package_code),
     );
 
+    // Load the director-editable rule once for this service so the per-fitment
+    // loop below can apply the subcategory allowlist without re-querying.
+    const serviceForRule = await ctx.db
+      .query("services")
+      .withIndex("by_slug", (q) => q.eq("slug", args.serviceSlug))
+      .first();
+    const rule = serviceForRule
+      ? await loadServicePartsRule(ctx, serviceForRule._id)
+      : { allowed: null, pinnedPartIdsBySubcategory: new Map(), qtyOverride: null };
+
     // 3. Hydrate the part info for each fitment. Drop subcategories that
-    //    aren't billable for this service (e.g. drain plug gaskets on
-    //    oil_change — see BILLABLE_SUBCATEGORIES_BY_SERVICE).
+    //    aren't billable for this service per service_parts_rules.
     const resolved: ResolvedFitment[] = [];
     for (const f of applicable) {
       const part = await ctx.db.get(f.part_id);
       if (!part) continue;
-      if (!isBillableSubcategory(args.serviceSlug, part.subcategory)) continue;
+      if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
       resolved.push({
         fitment_id: f._id,
         part_id: f.part_id,
@@ -221,11 +265,13 @@ export const getOemPartsForBooking = query({
       // gate on owner package answers here, just show the universal base parts.
       const base = fitments.filter((f) => f.package_code == null);
 
+      const rule = await loadServicePartsRule(ctx, serviceId);
+
       const resolved: ResolvedFitment[] = [];
       for (const f of base) {
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
-        if (!isBillableSubcategory(service.slug, part.subcategory)) continue;
+        if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
         resolved.push({
           fitment_id: f._id,
           part_id: f.part_id,
@@ -390,6 +436,11 @@ export async function resolveWinningPartForService(
       f.package_code == null || args.confirmedPackages.has(f.package_code),
   );
 
+  // Director-editable rule: subcategory allowlist + pinned parts. Loaded
+  // once per resolver call; null `allowed` preserves the legacy "no filter"
+  // behavior for any service without a rule row.
+  const rule = await loadServicePartsRule(ctx, args.serviceId);
+
   // Hydrate parts first — we need `oem_parts.subcategory` for position
   // matching as a fallback when `part_fitments.position` is null. The v3
   // pipeline writes subcategory reliably (e.g. "front_brake_pad" /
@@ -397,14 +448,13 @@ export async function resolveWinningPartForService(
   // can be missing on older fitment rows.
   //
   // Billing-subcategory gate: drop fitments whose subcategory isn't on the
-  // service's billable allowlist (e.g. oil_change excludes drain_plug_gasket
-  // and engine_oil — see BILLABLE_SUBCATEGORIES_BY_SERVICE). Pipeline still
+  // service's billable allowlist per service_parts_rules. Pipeline still
   // stores these for the vehicle profile; we just don't price them.
   const hydratedAll: WinnerCandidate[] = [];
   for (const f of packageGated) {
     const part = await ctx.db.get(f.part_id);
     if (!part) continue;
-    if (!isBillableSubcategory(args.serviceSlug, part.subcategory)) continue;
+    if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
     const priceSummary = await summarizePartPrices(ctx, f.part_id);
     hydratedAll.push({ fitment: f, part, priceSummary });
   }
@@ -427,6 +477,23 @@ export async function resolveWinningPartForService(
 
   if (hydrated.length === 0) {
     return { winner: null, losers: [], source: "no_candidates", lowConfidence: false };
+  }
+
+  // Director-pinned part — short-circuit the selector when one of the
+  // candidates' subcategory has a pinned oem_parts._id on this service's
+  // rule. Highest-priority signal: a director said "this exact part is the
+  // canonical OEM for this service-role". Skips both VIN-sticky and the
+  // 7-layer scorer.
+  if (rule.pinnedPartIdsBySubcategory.size > 0) {
+    const pinnedHit = hydrated.find((c) => {
+      const sub = c.part.subcategory ?? "";
+      const pinnedPartId = rule.pinnedPartIdsBySubcategory.get(sub);
+      return pinnedPartId != null && pinnedPartId === c.part._id;
+    });
+    if (pinnedHit) {
+      const losers = hydrated.filter((c) => c.part._id !== pinnedHit.part._id);
+      return { winner: pinnedHit, losers, source: "scored", lowConfidence: false };
+    }
   }
 
   // VIN-sticky check — prefer a previously installed part on this exact VIN.

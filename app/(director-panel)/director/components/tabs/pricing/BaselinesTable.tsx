@@ -7,6 +7,7 @@ import type { Id } from '@/convex/_generated/dataModel'
 import { Badge, Button, Card, Input, Select } from '../../Primitives'
 import { Toast } from '../../AdminActionPanel'
 import { DirectorSessionCtx } from '../../DirectorSessionCtx'
+import { FallbackHistoryModal } from './FallbackHistoryModal'
 
 type BaselineRow = {
   id: Id<'pricing_baselines'>
@@ -45,6 +46,7 @@ export const BaselinesTable = () => {
   const [q,       setQ]       = useState('')
   const [editing, setEditing] = useState<string | null>(null)
   const [toast,   setToast]   = useState<string | null>(null)
+  const [historyFor, setHistoryFor] = useState<BaselineRow | null>(null)
 
   // Local edit buffer
   const [low,    setLow]    = useState('')
@@ -175,7 +177,10 @@ export const BaselinesTable = () => {
                         <Button size="sm" variant="primary" onClick={() => saveEdit(r)}>Save</Button>
                       </div>
                     ) : (
-                      <Button size="sm" onClick={() => startEdit(r)}>Edit</Button>
+                      <div style={{ display:'inline-flex', gap:6 }}>
+                        <Button size="sm" onClick={() => setHistoryFor(r)}>History</Button>
+                        <Button size="sm" onClick={() => startEdit(r)}>Edit</Button>
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -185,6 +190,15 @@ export const BaselinesTable = () => {
         </table>
       </Card>
       <Toast msg={toast} onDismiss={() => setToast(null)} />
+      {historyFor && (
+        <FallbackHistoryModal
+          entityType="baseline"
+          entityId={String(historyFor.id)}
+          title={`History · ${historyFor.service_name}`}
+          subtitle={`Current: ${fmtMoney(historyFor.base_price_low_cents)} – ${fmtMoney(historyFor.base_price_high_cents)} · ${historyFor.data_source}${historyFor.is_real_data ? ' · real' : ' · estimate'}`}
+          onClose={() => setHistoryFor(null)}
+        />
+      )}
     </>
   )
 }

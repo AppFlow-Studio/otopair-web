@@ -92,3 +92,10 @@ describe("weightedMedian", () => {
     expect(weightedMedian([], [])).toBe(0);
   });
 });
+
+describe("weightedMedian — labor source contract", () => {
+  it("repairpal_motor(0.8) wins over vdb(0.05)+llm(0.3)", () => {
+    // hours: repairpal 2.1, llm 1.4, vdb 3.5
+    expect(weightedMedian([2.1, 1.4, 3.5], [0.8, 0.3, 0.05])).toBe(2.1);
+  });
+});

@@ -24,7 +24,7 @@
  * jobs complete — "our internal data is better" without re-enriching.
  */
 
-import { summarizeObservations } from "./robustStats";
+import { summarizeObservations, weightedMedian } from "./robustStats";
 
 /** Post-job actuals must reach this count before empirical overrides book time. */
 export const LABOR_EMPIRICAL_MIN_SAMPLES = 3;
@@ -108,15 +108,19 @@ export async function recomputeLaborForConfigService(
 
   let bookHours: number | undefined;
   let engineFamily: string | undefined;
-  let bookSources = 0;
+  let hasRepairpal = false;
   if (catalog.length > 0) {
-    const summary = summarizeObservations(
-      catalog.map((o: any) => o.hours as number),
-      catalog.map((o: any) => (o.weight ?? 1) as number),
+    // Weighted robust median: repairpal_motor (0.8) dominates LLM (0.3-0.5) and
+    // VDB (0.05). A wrong high-weight value is guarded at WRITE time by the
+    // sibling validation gate, not here.
+    bookHours = clampRound(
+      weightedMedian(
+        catalog.map((o: any) => o.hours as number),
+        catalog.map((o: any) => (o.weight ?? 1) as number),
+      ),
     );
-    bookHours = clampRound(summary.median);
-    bookSources = summary.sample_size;
     engineFamily = catalog.find((o: any) => o.engine_family)?.engine_family;
+    hasRepairpal = catalog.some((o: any) => o.source === "repairpal_motor");
   }
 
   // ── Empirical tier: post-job actuals, gated at the min sample size ──
@@ -134,8 +138,23 @@ export async function recomputeLaborForConfigService(
     }
   }
 
-  const confidence =
-    bookHours !== undefined ? Math.min(0.6, 0.3 + bookSources * 0.1) : undefined;
+  // Data-good signal (spec §3.7). RepairPal (MOTOR) is the high-trust anchor;
+  // corroboration by a second non-VDB source within 20% bumps it to 0.9.
+  const nonVdb = catalog.filter((o: any) => o.source !== "vdb_repair_estimates");
+  const agree = (a: number, b: number) => Math.abs(a - b) / Math.max(a, b) <= 0.2;
+  let confidence: number | undefined;
+  if (bookHours !== undefined) {
+    if (hasRepairpal) {
+      const corroborated = nonVdb.some(
+        (o: any) => o.source !== "repairpal_motor" && agree(o.hours, bookHours!),
+      );
+      confidence = corroborated ? 0.9 : 0.8;
+    } else if (nonVdb.length >= 2) {
+      confidence = 0.6;
+    } else {
+      confidence = 0.4;
+    }
+  }
 
   // ── Upsert the single labor_times row ──
   const existing = await ctx.db

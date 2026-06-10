@@ -940,6 +940,45 @@ export async function sendMessageHandlerCore(
     });
     const latencyMs = Date.now() - t0;
 
+    // ── B-P3: stop_reason handling ───────────────────────────────────────
+    // pause_turn: a server-side tool (web_search) hit its per-request limit
+    // mid-turn. Anthropic returns a PARTIAL assistant turn; the protocol is
+    // to echo that content back and continue so the search resumes. Before
+    // this, a paused turn carried no client tool_use and no final text, so it
+    // fell through to the empty-text fallback — the flagship "ask Oto
+    // something it has to look up" path dead-ended into the generic apology.
+    // Bounded by MAX_TOOL_ITERATIONS like every other continuation.
+    if (resp.stop_reason === "pause_turn") {
+      turnSamples.push({
+        usage: resp.usage,
+        latency_ms: latencyMs,
+        tool_names: [],
+        branch: "data_continue",
+      });
+      messages.push({ role: "assistant", content: resp.content });
+      if (iterations === MAX_TOOL_ITERATIONS) hitCap = true;
+      continue;
+    }
+    // max_tokens: the response was truncated mid-thought. Don't change flow
+    // (use whatever content arrived), but surface it so truncation is visible
+    // and tunable. Fire-and-forget.
+    if (resp.stop_reason === "max_tokens") {
+      ctx
+        .runMutation(internal.oto.reliability.recordReliabilityEvent, {
+          surface: "anthropic_max_tokens",
+          kind: "truncated",
+          user_id: user._id,
+          conversation_id: conversationId,
+          metadata: { iteration: iterations, model: turnModel },
+        })
+        .catch((e: unknown) =>
+          console.error(
+            "[oto/chat] max_tokens reliability event failed (silent):",
+            (e as { message?: string })?.message,
+          ),
+        );
+    }
+
     const toolUses: ToolUseBlock[] = resp.content.filter(
       (b): b is ToolUseBlock => b.type === "tool_use",
     );

@@ -8911,7 +8911,7 @@ export const createByShop = mutation({
     if (existingVehicle && !existingVehicle.vehicle_config_id) {
       await ctx.scheduler.runAfter(
         0,
-        api.vehicleEnrichment.runPublic.go,
+        internal.vehicleEnrichment.runPublic.go,
         { vin: canonicalVin },
       );
     }
@@ -9343,7 +9343,7 @@ export const backfillCompletedBooking = mutation({
       vehicle = await ctx.db.get(newVehicleId);
     }
     if (vehicle && !vehicle.vehicle_config_id) {
-      await ctx.scheduler.runAfter(0, api.vehicleEnrichment.runPublic.go, {
+      await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.runPublic.go, {
         vin: canonicalVin,
       });
     }

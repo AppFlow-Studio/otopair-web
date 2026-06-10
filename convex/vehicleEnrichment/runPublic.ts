@@ -1,19 +1,17 @@
 /**
- * vehicleEnrichment/runPublic.ts — Public action wrapper for triggering enrichment.
+ * vehicleEnrichment/runPublic.ts — admin action wrapper for triggering enrichment.
  *
- * Identical to runTest but:
- *   - Accepts VIN as an argument (no hardcoded VIN)
- *   - Exported as a public `action` so it's callable via the MCP connector
+ * Identical to runTest but accepts VIN as an argument (no hardcoded VIN).
  *
- * Usage via MCP connector:
- *   functionPath: "vehicleEnrichment/runPublic:go"
- *   args: { vin: "WDDYK8AA2LA025764" }
- *
- * ⚠️  This is a test/dev tool. Remove or gate behind auth before production.
+ * INTERNAL since Jun 9 2026 (review: these were anonymous public actions that
+ * could trigger LLM spend and — via purgeAndRerun — destructive purges). Admin
+ * use is unchanged: `npx convex run vehicleEnrichment/runPublic:go '{...}'`,
+ * the dashboard, and the MCP connector all run internal functions with the
+ * admin key. Server-side callers (bookings.ts) use internal.* references.
  */
 
 import { v } from "convex/values";
-import { action, internalMutation } from "../_generated/server";
+import { internalAction, internalMutation } from "../_generated/server";
 import { internal, api } from "../_generated/api";
 import { scrapeWheelSizeOptions } from "./utils/wheelSizeScraper";
 import { buildEngineKey } from "./types";
@@ -24,7 +22,7 @@ const MAX_POLL = 20 * 60 * 1000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export const go = action({
+export const go = internalAction({
   args: {
     vin: v.string(),
   },
@@ -164,7 +162,7 @@ export const go = action({
 });
 
 /** Diagnostic: show tire_options for a vehicle_config_id. */
-export const inspectTireOptions = action({
+export const inspectTireOptions = internalAction({
   args: { configId: v.string() },
   handler: async (ctx, args): Promise<any> => {
     const ts = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getTrimSpecs, {
@@ -194,7 +192,7 @@ export const inspectTireOptions = action({
  * Fetch + save tire options for an existing vehicle without re-running full enrichment.
  * Usage: npx convex run vehicleEnrichment/runPublic:refreshTireOptions '{"vin":"WBA13BK0XMCF98543"}'
  */
-export const refreshTireOptions = action({
+export const refreshTireOptions = internalAction({
   args: { vin: v.string() },
   handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();
@@ -242,7 +240,7 @@ export const refreshTireOptions = action({
 
 /** Insert a minimal user row for the test Clerk ID. */
 /** Purge all enrichment data for a VIN and re-run from scratch. */
-export const purgeAndRerun = action({
+export const purgeAndRerun = internalAction({
   args: { vin: v.string() },
   handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();
@@ -262,12 +260,12 @@ export const purgeAndRerun = action({
     const config = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfigByKey, { configKey });
     if (!config) return { status: "error", reason: "no_config_found", configKey };
 
-    await ctx.runMutation(api.vehicleEnrichment.v3mutations.purgeVehicleConfig, {
+    await ctx.runMutation(internal.vehicleEnrichment.v3mutations.purgeVehicleConfig, {
       vehicleConfigId: config._id,
     });
     console.log(`[purge] Wiped config for ${configKey}, re-running...`);
 
-    return await ctx.runAction(api.vehicleEnrichment.runPublic.go, { vin });
+    return await ctx.runAction(internal.vehicleEnrichment.runPublic.go, { vin });
   },
 });
 

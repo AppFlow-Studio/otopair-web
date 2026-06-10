@@ -313,6 +313,9 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   const session   = useContext(DirectorSessionCtx)
   const actorName = session?.name ?? 'Director'
   const actorId   = session?.userId as Id<'director_users'> | undefined
+  // The backfill actions validate this server-side and derive the audit actor
+  // from the session — actorName/actorId are no longer trusted args there.
+  const sessionToken = session?.token ?? ''
   const [auditOpen, setAuditOpen] = useState(false)
   const [editOpen,  setEditOpen]  = useState(false)
   const [engineOpen,  setEngineOpen]  = useState(false)
@@ -384,7 +387,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     if (!window.confirm('Re-enrich the ENTIRE car? Re-runs the full pipeline (engine, transmission, parts, intervals, labor) and overwrites resolved specs. Costs an LLM batch and finishes in a few minutes.')) return
     setBusyFull(true)
     try {
-      const res = await reEnrichConfig({ id: configId, actorName, actorId }) as { status?: string; message?: string }
+      const res = await reEnrichConfig({ id: configId, token: sessionToken }) as { status?: string; message?: string }
       setToast(res?.status === 'scheduled'
         ? 'Full re-enrich scheduled — check Enrichment runs in a few minutes.'
         : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
@@ -398,7 +401,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     if (!window.confirm('Re-discover only this car’s PARTS (which parts apply per service)? Preserves hand-edited engine/transmission/chassis specs. Costs an LLM batch and finishes in a few minutes. Prices are not changed — use "Reprice parts" for that.')) return
     setBusyParts(true)
     try {
-      const res = await backfillConfigParts({ id: configId, actorName, actorId }) as { status?: string; message?: string }
+      const res = await backfillConfigParts({ id: configId, token: sessionToken }) as { status?: string; message?: string }
       setToast(res?.status === 'scheduled'
         ? 'Parts backfill scheduled — check Enrichment runs in a few minutes.'
         : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
@@ -411,7 +414,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     if (!configId || busyPrices) return
     setBusyPrices(true)
     try {
-      const res = await repriceConfigParts({ id: configId, actorName, actorId }) as { status?: string; message?: string }
+      const res = await repriceConfigParts({ id: configId, token: sessionToken }) as { status?: string; message?: string }
       setToast(res?.status === 'scheduled'
         ? 'Reprice started — the priced count lands in the audit log in a moment.'
         : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)

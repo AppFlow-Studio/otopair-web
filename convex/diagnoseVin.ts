@@ -18,7 +18,13 @@
  *      fixed should show model="M3" with no m_sport (M3 ships M Performance hardware standard).
  */
 
-import { action, internalQuery, query } from "./_generated/server";
+// ACTIONS internal since Jun 9 2026 (review: the repair/backfill actions were
+// public, unauthenticated writers that can mint 'online_discount' price rows —
+// poison-excluded from quotes but still a foot-gun, and they could overwrite a
+// corrected 'sale' row via upsertPartPrice's (part, domain) patch semantics).
+// CLI/dashboard admin usage is unchanged. Read-only queries stay public.
+// Tracked follow-up: retire or route these writers through reextractPartPrice.
+import { internalAction, internalQuery, query } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
@@ -196,7 +202,7 @@ export const byVin = query({
  *
  *   npx convex run diagnoseVin:repairVin '{"vin":"WBS43AY0XNFM51260"}'
  */
-export const repairVin = action({
+export const repairVin = internalAction({
   args: { vin: v.string() },
   handler: async (ctx, { vin }): Promise<{
     status: "ok" | "no_vehicle" | "no_config" | "missing_labels" | "no_tire_data";
@@ -320,7 +326,7 @@ export const repairVin = action({
  *
  *   npx convex run diagnoseVin:repricePartsForVin '{"vin":"WBA13BK0XMCF98543"}'
  */
-export const repricePartsForVin = action({
+export const repricePartsForVin = internalAction({
   args: { vin: v.string() },
   handler: async (ctx, { vin }): Promise<{
     status: "ok" | "no_vehicle" | "no_config" | "missing_labels" | "no_fitments" | "no_anthropic_key" | "claude_failed";
@@ -521,7 +527,7 @@ Return JSON in this exact shape:
  *   npx convex run diagnoseVin:backfillEngineOilForVin '{"vin":"WBA13BK0XMCF98543"}'
  *   npx convex run diagnoseVin:backfillEngineOilForVin '{"vin":"...", "force": true}'
  */
-export const backfillEngineOilForVin = action({
+export const backfillEngineOilForVin = internalAction({
   args: { vin: v.string(), force: v.optional(v.boolean()) },
   handler: async (ctx, { vin, force }): Promise<{
     status: "ok" | "already_present" | "no_vehicle" | "no_config" | "missing_labels" | "no_anthropic_key" | "claude_failed" | "claude_unknown_sku";
@@ -795,7 +801,7 @@ type OilResolution = {
  * 5W-30 LL-04 gets the same SKU + price after one Claude call. Same engine code
  * across many vehicle_configs → one Claude hit.
  */
-export const backfillAllEngineOilFitments = action({
+export const backfillAllEngineOilFitments = internalAction({
   args: {
     limit:        v.optional(v.number()),
     skipExisting: v.optional(v.boolean()),
@@ -1131,7 +1137,7 @@ export const _listPartsMissingPrices = internalQuery({
  *   - `errored`          — Claude API or mutation failed for that part.
  *   - `dry_run`          — dryRun=true.
  */
-export const backfillAllPartPrices = action({
+export const backfillAllPartPrices = internalAction({
   args: {
     limit:        v.optional(v.number()),
     skipExisting: v.optional(v.boolean()),

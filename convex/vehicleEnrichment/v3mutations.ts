@@ -1611,8 +1611,13 @@ export const patchTrimSpecs = internalMutation({
 // purgeVehicleConfig — wipe all enrichment data for a config so it re-enriches
 // from scratch on next runPublic:go call. Keeps the vehicle_config row itself
 // but resets status so the cache guard lets it through.
+//
+// INTERNAL (Jun 9 2026 review, critical finding): this was a PUBLIC mutation —
+// an anonymous destructive wipe of any config's enrichment data. Admin use
+// still works via `npx convex run` / dashboard. Follow-up (deferred): snapshot
+// deleted rows before purging, like the price_backfill_log pattern.
 // ============================================================================
-export const purgeVehicleConfig = mutation({
+export const purgeVehicleConfig = internalMutation({
   args: { vehicleConfigId: v.id("vehicle_configs") },
   handler: async (ctx, args) => {
     const id = args.vehicleConfigId;
@@ -1632,6 +1637,10 @@ export const purgeVehicleConfig = mutation({
     await deleteByConfig("part_fitments");
     await deleteByConfig("service_intervals");
     await deleteByConfig("labor_times");
+    // Jun-9 review: labor_observations was missing from the purge — poisoned
+    // high-weight observations survived and immediately re-dominated the
+    // recompute after re-enrichment.
+    await deleteByConfig("labor_observations", "by_config_service");
 
     // Delete evidence via enrichment_run_id (no direct vehicle_config_id index)
     const runs = await ctx.db

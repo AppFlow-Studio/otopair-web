@@ -14,8 +14,13 @@
    `convex/vehicleEnrichment/scraperQueries.ts:17-19` — `buildCacheKey = make_model_year_sourceType`, but scraped content is trim-specific (registry URLs built from `modelSlugFn(model, trim)`). An M340i and a 330i share a cache row. This is the same root cause as the Notion "M3 Comp decoded as plain 3-series" tire bug, still alive one layer down.
    → Add trim slug (+engine) to the key, bump `CACHE_FORMAT_VERSION`.
 
-2. **`purgeVehicleConfig` is a PUBLIC mutation** — anonymous destructive wipe of a config's enrichment data (drivetrain_configs, trim_specs, part_fitments, service_intervals, labor_times, runs, evidence), no auth/dry-run/snapshot/audit. `convex/vehicleEnrichment/v3mutations.ts:1615`.
-   → `internalMutation` + snapshot-before-delete. Related: director backfill actions are also public with trusted `actorName` (`directorConfigBackfills.ts:63,114,185`) and `runPublic.ts` exports.
+2. ✅ **FIXED** (`security(enrichment): lock down public admin writers`, this branch) — ~~`purgeVehicleConfig` is a PUBLIC mutation~~ + the related public-writer cluster:
+   - `purgeVehicleConfig` → `internalMutation`, and it now also purges `labor_observations` (the medium "poison survives purge" finding below).
+   - Director backfills (`reEnrichConfig`/`backfillConfigParts`/`repriceConfigParts`) now **validate a director session token server-side** (`director_auth.validateSession`, same gate as `simulateOtoForDirector`) and derive the audit actor from the session — caller-supplied `actorName`/`actorId` no longer trusted. UI (`TabVehicleConfigs.tsx`) passes `session.token`.
+   - `runPublic.ts` ×4 (`go`/`inspectTireOptions`/`refreshTireOptions`/`purgeAndRerun`) → `internalAction` (its own header said "gate before production"); server-side callers in `bookings.ts` switched to `internal.*`.
+   - `diagnoseVin.ts` ×5 write actions → `internalAction` (see item 9).
+   - `backfillNhtsaVinKeys` → `internalAction` + `dryRun` default flipped to `true` (the low finding below).
+   **Deferred (tracked):** snapshot-before-purge; the same token-gate sweep for `directorConfigActions.ts` mutations (markVerified/updateConfigBasics/etc. still trust caller actor args). **Verify:** live click-through of the three director buttons (needs a fresh director session in the Playwright harness).
 
 ## HIGH (confirmed)
 
@@ -34,7 +39,7 @@
 8. ✅ **FIXED** (same commit) — ~~Batch-2 persists the raw web-search price as trusted `llm_estimate` even when re-extraction affirmatively failed~~ (e.g. `llm_ge_msrp` = positive evidence of a list-price grab). `v3pipeline.ts:2340-2350`.
    **Fix:** new pure `isAffirmativeRejection(reason)` (`llm_ge_msrp`/`llm_oem_mismatch`/`llm_above_median`/`llm_below_median`); when the flag-gated Batch-2 re-extraction affirmatively rejects, the entry is written `price_type: unverified` (kept for audit, excluded from the median) instead of `llm_estimate`. Passive failures keep the fail-open behavior. Tests: `tests/priceReextractOutcome.test.ts`.
 
-9. **`diagnoseVin`'s 4 `online_discount` writers can OVERWRITE corrected `sale` rows back to poison** (upsert patches by part+domain), and they're public unauthenticated actions. `diagnoseVin.ts:487,674,983,1296`.
+9. 🟡 **MITIGATED** (same security commit) — `diagnoseVin`'s 4 `online_discount` writers can OVERWRITE corrected `sale` rows back to poison (upsert patches by part+domain). ~~Public unauthenticated~~ → all 5 write actions are now `internalAction` (CLI/dashboard only). The overwrite foot-gun remains for a deliberate admin run — **retire or route through `reextractPartPrice` still open** (also: they spend Claude calls writing rows the aggregator now ignores — self-defeating).
 
 10. ✅ **FIXED (data contract)** (`fix(parts): price_unknown marker`, this branch) — ~~All-poison part bills $0 in the locked quote~~ — empty summary → `quoteUnitPrice` 0 → `unit_price=0` written into the booking snapshot; no fallback, no flag, nobody told (known issue 8). **Reproduced live on dev.**
     **Fix:** snapshot construction extracted to pure `snapshotRowsForResolution` (`booking_quotes.ts`); a locked role winner with `sample_size === 0` is now marked **`price_unknown: true`** (schema field added) and flips the result's `low_confidence` → persisted as `bookings.low_confidence_parts`. The line still contributes $0 to `quoted_set_price_cents` (no invented prices) but is now an explicit "price to be confirmed post-job" — the mechanic's post-job dialog hydrates from this snapshot. Tests: `tests/bookingPartsSnapshot.test.ts`.
@@ -78,7 +83,7 @@
 - Legacy untyped rows fully trusted while `backfills.ts` itself classifies some as legacy-poison; MAD no-op below n=4. `part_prices.ts:90-96`.
 - LLM sibling candidates self-validated (compares the LLM's own claimed chassis/engine); probe only checks the page parses. `laborSibling.ts:181-189`.
 - `hours = mid$/130` can't detect rate-LEVEL drift (only ratio drift); RATE_MID static. `repairpalLabor.ts:70-76`.
-- `purgeVehicleConfig` wipes `labor_times` but NOT `labor_observations` — poison survives purge and re-dominates recompute. `v3mutations.ts:1630-1634`.
+- ✅ FIXED (security commit) — ~~`purgeVehicleConfig` wipes `labor_times` but NOT `labor_observations`~~ — `labor_observations` added to the purge list.
 - Anti-bot pages stored as content: no challenge detection, no min length on the manual path; cached 30 days. `scraper.ts:361`.
 - Source discovery is a write-only dead end (promoted sources never scraped; `reliability_score` never read for selection). `sourceDiscovery.ts:421-444`.
 - Consensus: single 0.95 source still beats two agreeing 0.70 sources; source count never dedups domains (known issue 5 partially fixed — diversity weight raised 0.3→0.4). `services/consensus.ts:97-104`.
@@ -103,7 +108,7 @@
 - RepairPal scrapes never pass the year — multi-generation nameplate pages mix decades; model-line fallback recorded as `match_key='exact'` (verifier: severity up). `v3pipeline.ts:2138` et al.
 - Two parallel labor resolvers disagree (laborTimes.ts prefers empirical>0 ungated; quoteEngine gates n>=5). `laborTimes.ts:78-94`.
 - evidenceConsensus domain scoring compares RAW vs NORMALIZED values (would mis-block good domains if wired). `evidenceConsensus.ts:303-305`.
-- `backfillNhtsaVinKeys` defaults LIVE (`dryRun ?? false`) — only backfill inverting the convention. `backfillNhtsaKey.ts:119`.
+- ✅ FIXED (security commit) — ~~`backfillNhtsaVinKeys` defaults LIVE~~ — now `internalAction` with `dryRun ?? true`.
 - `validateQuoteEngine.runAll` mints fixture shops/configs in live tables with no teardown. `devOnly/validateQuoteEngine.ts:348`.
 
 ## UNVERIFIED (13 — verification agents hit the session limit; treat as probable, re-verify)

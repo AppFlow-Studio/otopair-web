@@ -6,18 +6,24 @@
  *   2. backfillConfigParts — PARTS-ONLY re-enrich (force=true, writeScope="parts")
  *   3. repriceConfigParts  — PRICES-ONLY, self-contained, no LLM / no pipeline
  *
- * All three follow the existing director convention (see directorConfigActions.ts):
- * NO ctx.auth — actorName/actorId are TRUSTED audit args supplied by the already
- * authenticated director panel. Each writes one audit_log row on success and
- * returns a small summary object for a UI toast.
+ * AUTH (hardened Jun 9 2026, review finding "Director backfill actions are
+ * public with trusted actorName"): all three validate a director session
+ * token server-side (director_auth.validateSession — same gate as
+ * simulateOtoForDirector) and derive the audit actor FROM the session. The
+ * old convention (NO ctx.auth, caller-supplied trusted actorName/actorId)
+ * let any anonymous caller burn LLM/scrape spend and forge audit attribution.
+ * NOTE: directorConfigActions.ts mutations still follow the old convention —
+ * sweeping those is a tracked follow-up in the Jun-9 review doc.
  *
- * Actions can't touch ctx.db, so the audit row is written through the
- * `_writeBackfillAudit` internalMutation below via ctx.runMutation.
+ * Each writes one audit_log row on success and returns a small summary object
+ * for a UI toast. Actions can't touch ctx.db, so the audit row is written
+ * through the `_writeBackfillAudit` internalMutation below via ctx.runMutation.
  */
 
 import { v } from "convex/values";
 import { action, internalAction, internalMutation } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { internal, api } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 import { normalizeOemNumber } from "./vehicleEnrichment/priceParser";
 import { fetchUrlWithHtml } from "./vehicleEnrichment/firecrawl";
 import { reextractPartPrice, structuredPriceFor } from "./vehicleEnrichment/priceReextract";
@@ -49,12 +55,35 @@ export const _writeBackfillAudit = internalMutation({
   },
 });
 
-// Shared args for all three director backfill actions.
+// Shared args for the three PUBLIC director backfill actions: the audit actor
+// is derived from the validated session, never trusted from the caller.
 const backfillArgs = {
+  id: v.id("vehicle_configs"),
+  /** Director session token (localStorage `otopair_director_token`) —
+   *  validated server-side via director_auth.validateSession. */
+  token: v.string(),
+} as const;
+
+// Args for the INTERNAL scheduled run — actor already validated by the public
+// action that scheduled it.
+const backfillRunArgs = {
   id: v.id("vehicle_configs"),
   actorName: v.string(),
   actorId: v.optional(v.id("director_users")),
 } as const;
+
+/** Validate the director session and return the audit actor. Throws on a
+ *  missing/expired session — mirrors oto/simulate.ts simulateOtoForDirector. */
+async function requireDirector(
+  ctx: { runQuery: (ref: any, args: any) => Promise<any> },
+  token: string,
+): Promise<{ name: string; userId: Id<"director_users"> }> {
+  const session = await ctx.runQuery(api.director_auth.validateSession, { token });
+  if (!session) {
+    throw new Error("unauthorized: invalid or expired director session");
+  }
+  return { name: session.name, userId: session.userId };
+}
 
 // ---------------------------------------------------------------------------
 // 1. reEnrichConfig — FULL re-enrich (force + writeScope="full")
@@ -63,6 +92,7 @@ const backfillArgs = {
 export const reEnrichConfig = action({
   args: backfillArgs,
   handler: async (ctx, args) => {
+    const actor = await requireDirector(ctx, args.token);
     const resolved = await ctx.runQuery(
       internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
       { vehicleConfigId: args.id },
@@ -98,8 +128,8 @@ export const reEnrichConfig = action({
 
     await ctx.runMutation(internal.directorConfigBackfills._writeBackfillAudit, {
       id: args.id,
-      actorName: args.actorName,
-      actorId: args.actorId,
+      actorName: actor.name,
+      actorId: actor.userId,
       detail: `Full re-enrich scheduled (force) for ${resolved.year} ${resolved.make} ${resolved.model} ${resolved.trim}`.trim(),
     });
 
@@ -114,6 +144,7 @@ export const reEnrichConfig = action({
 export const backfillConfigParts = action({
   args: backfillArgs,
   handler: async (ctx, args) => {
+    const actor = await requireDirector(ctx, args.token);
     const resolved = await ctx.runQuery(
       internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
       { vehicleConfigId: args.id },
@@ -148,8 +179,8 @@ export const backfillConfigParts = action({
 
     await ctx.runMutation(internal.directorConfigBackfills._writeBackfillAudit, {
       id: args.id,
-      actorName: args.actorName,
-      actorId: args.actorId,
+      actorName: actor.name,
+      actorId: actor.userId,
       detail: `Parts-only re-enrich scheduled (force) for ${resolved.year} ${resolved.make} ${resolved.model} ${resolved.trim}`.trim(),
     });
 
@@ -185,6 +216,7 @@ export const backfillConfigParts = action({
 export const repriceConfigParts = action({
   args: backfillArgs,
   handler: async (ctx, args) => {
+    const actor = await requireDirector(ctx, args.token);
     const resolved = await ctx.runQuery(
       internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
       { vehicleConfigId: args.id },
@@ -200,8 +232,8 @@ export const repriceConfigParts = action({
     //     or error downstream can never swallow the fact that reprice was run.
     await ctx.runMutation(internal.directorConfigBackfills._writeBackfillAudit, {
       id: args.id,
-      actorName: args.actorName,
-      actorId: args.actorId,
+      actorName: actor.name,
+      actorId: actor.userId,
       detail: `Reprice parts scheduled (deterministic) for ${label}`.trim(),
     });
 
@@ -211,7 +243,7 @@ export const repriceConfigParts = action({
     await ctx.scheduler.runAfter(
       0,
       internal.directorConfigBackfills._repriceConfigPartsRun,
-      { id: args.id, actorName: args.actorName, actorId: args.actorId },
+      { id: args.id, actorName: actor.name, actorId: actor.userId },
     );
 
     return { status: "scheduled" as const, scope: "reprice" as const };
@@ -223,7 +255,7 @@ export const repriceConfigParts = action({
 // ENTIRE body is wrapped so any failure (scrape error, source timeout, missing
 // config) is recorded as an audit row instead of vanishing silently.
 export const _repriceConfigPartsRun = internalAction({
-  args: backfillArgs,
+  args: backfillRunArgs,
   handler: async (ctx, args) => {
     const audit = (detail: string) =>
       ctx.runMutation(internal.directorConfigBackfills._writeBackfillAudit, {

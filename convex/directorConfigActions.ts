@@ -169,6 +169,12 @@ export const updateEngineFields = mutation({
     if (!cur) return { ok: false as const, reason: "engine_not_found" };
     const { patch, changes } = buildPatch(cur as any, Object.entries(fields) as Array<[string, unknown]>);
     if (Object.keys(patch).length === 0) return { ok: true as const, changes: 0 };
+    // Director-corrected fields are authoritative: stamp them verified so the
+    // enrichment pipeline can't write over them on the next re-enrich.
+    const verified = new Set(((cur as any).verified_fields ?? []) as string[]);
+    const changedCount = Object.keys(patch).length;
+    for (const key of Object.keys(patch)) verified.add(key);
+    (patch as any).verified_fields = [...verified];
     await ctx.db.patch(id, patch as any);
     await ctx.db.insert("audit_log", {
       entity_type: "engine", entity_id: String(id), action: "field_edit",
@@ -176,7 +182,7 @@ export const updateEngineFields = mutation({
       detail: `Engine updated · ${changes.join(", ")}`,
       created_at: Date.now(),
     });
-    return { ok: true as const, changes: Object.keys(patch).length };
+    return { ok: true as const, changes: changedCount };
   },
 });
 

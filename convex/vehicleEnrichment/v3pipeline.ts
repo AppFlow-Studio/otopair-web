@@ -34,7 +34,7 @@ import { deriveEngineFamily } from "./laborSibling";
 import { runSanityChecks } from "./validation/sanityChecks";
 import { validateAllOemParts } from "./validation/oemValidation";
 import { BLOCKED_DOMAINS } from "./sourceRegistry";
-import { applyApplicabilityRules } from "./applicabilityRules";
+import { applyApplicabilityRules, applyVerifiedEngineFields } from "./applicabilityRules";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
 import { reextractPartPrice, isAffirmativeRejection } from "./priceReextract";
@@ -1936,6 +1936,20 @@ async function runPollBatch1Body(
       year: args.year, make: args.make, model: args.model,
       trim: args.trim, engineCode: args.engineCode, displacement: args.displacement,
     };
+
+    // Human-verified engine fields override the fresh extraction BEFORE the
+    // applicability rules run — the chain rule keys off fields.timing_system,
+    // so a director-corrected belt car must not re-null its belt parts just
+    // because the LLM repeated its misclassification (Jetta, Jun 10 2026).
+    try {
+      const engineForVerified = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getEngine,
+        { engineId: args.engineId },
+      );
+      applyVerifiedEngineFields(fields, engineForVerified as any);
+    } catch (e) {
+      console.warn("[v8/_pollBatch1] verified-field override failed (non-fatal):", e);
+    }
 
     // Apply applicability rules
     const vPicData = args.vPicData as VehicleIdentity | null;

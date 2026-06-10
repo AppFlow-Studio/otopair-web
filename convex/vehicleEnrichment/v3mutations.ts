@@ -365,9 +365,14 @@ export const updateEngineSpecs = internalMutation({
   },
   handler: async (ctx, args) => {
     const { engine_id, ...fields } = args;
+    // Human-corrected fields are authoritative — the pipeline must not write
+    // over them (the Jetta's chain→belt fix was clobbered by a re-enrich,
+    // Jun 10 2026). See engines.verified_fields in schema.ts.
+    const existing = await ctx.db.get(engine_id);
+    const verified = new Set(((existing as any)?.verified_fields ?? []) as string[]);
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
-      if (value !== undefined) {
+      if (value !== undefined && !verified.has(key)) {
         patch[key] = value;
       }
     }

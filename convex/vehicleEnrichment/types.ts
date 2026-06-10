@@ -12,7 +12,7 @@ import type { Id } from "../_generated/dataModel";
 export interface FieldResult {
   value: string | number | boolean | null;
   source_url: string | null;
-  source_type: "web_search" | "scraped" | "training_data" | "sibling_engine" | "gap_fill" | "nhtsa" | null;
+  source_type: "web_search" | "scraped" | "training_data" | "sibling_engine" | "gap_fill" | "nhtsa" | "director_verified" | null;
   confidence: number | null; // 0.0–1.0
   flagged: boolean;
   flag_reason: string | null;

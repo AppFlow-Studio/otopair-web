@@ -120,6 +120,12 @@ export default defineSchema({
     timing_idler_count: v.optional(v.number()),
     water_pump_timing_driven: v.optional(v.boolean()),
     data_quality: v.optional(v.string()),
+    // Field names a HUMAN corrected (director edit / CLI data fix). The
+    // pipeline's updateEngineSpecs skips these keys, and _pollBatch1V3
+    // overrides the freshly-extracted batch fields with the verified values
+    // so applicability runs against the truth (a misclassified belt car
+    // could otherwise never get its belt parts — found live Jun 10 2026).
+    verified_fields: v.optional(v.array(v.string())),
     last_enriched_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })

@@ -72,6 +72,13 @@ export const fixEngineFields = internalMutation({
 
     if (Object.keys(patch).length === 0) return { ok: true as const, changes: 0 };
 
+    // Stamp the corrected fields as human-verified — the pipeline writer
+    // skips them and the batch field-merge honors them (otherwise the next
+    // re-enrich clobbers the fix, observed live on the Jetta Jun 10).
+    const verified = new Set(((engine as any).verified_fields ?? []) as string[]);
+    for (const key of Object.keys(patch)) verified.add(key);
+    (patch as any).verified_fields = [...verified];
+
     await ctx.db.patch(args.engine_id, patch as any);
     await ctx.db.insert("audit_log", {
       entity_type: "engine",
@@ -81,6 +88,6 @@ export const fixEngineFields = internalMutation({
       detail: `Engine data fix · ${changes.join(", ")} · reason: ${args.reason}`,
       created_at: Date.now(),
     });
-    return { ok: true as const, changes: Object.keys(patch).length };
+    return { ok: true as const, changes: changes.length };
   },
 });

@@ -31,6 +31,42 @@ function naField(): FieldResult {
 }
 
 /**
+ * Override freshly-extracted batch fields with HUMAN-VERIFIED engine values
+ * (engines.verified_fields) so the run behaves as if the LLM had extracted
+ * the corrected value — the chain rule below keys off fields.timing_system,
+ * so without this a belt car the LLM keeps misclassifying as "chain" can
+ * never get its belt parts (found live on the Jetta EA211, Jun 10 2026).
+ * Call BEFORE applyApplicabilityRules. Modifies fields in place.
+ */
+export function applyVerifiedEngineFields(
+  fields: Record<string, FieldResult>,
+  engine: {
+    verified_fields?: string[] | null;
+    [key: string]: unknown;
+  } | null,
+): Record<string, FieldResult> {
+  if (!engine?.verified_fields?.length) return fields;
+  for (const name of engine.verified_fields) {
+    const value = engine[name];
+    if (value == null) continue;
+    if (
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean"
+    ) continue;
+    fields[name] = {
+      value,
+      source_url: null,
+      source_type: "director_verified",
+      confidence: 1.0,
+      flagged: false,
+      flag_reason: null,
+    };
+  }
+  return fields;
+}
+
+/**
  * Apply applicability rules to fields based on vehicle identity.
  * Modifies fields in place — returns the same object for chaining.
  */

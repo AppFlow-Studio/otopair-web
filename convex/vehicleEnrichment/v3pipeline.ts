@@ -2299,19 +2299,24 @@ export const _pollBatch2V3 = internalAction({
         if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
           // Build a quick oem_number → part_id lookup. Same OEM may have
           // multiple fitments under one service (base + package variant) —
-          // every match gets the same per-unit price.
+          // every match gets the same per-unit price. Keys are NORMALIZED
+          // (mirrors the deterministic path above): the LLM frequently
+          // reformats numbers ("5Q0 698 451 A" vs stored "5Q0698451A"), and a
+          // raw-string match silently dropped those prices (Jun-9 review).
           const numberToPartIds = new Map<string, Id<"oem_parts">[]>();
           for (const f of fitments) {
             const num = (f as any).oem_part_number;
             if (!num) continue;
-            const arr = numberToPartIds.get(num) ?? [];
+            const key = normalizeOemNumber(num);
+            const arr = numberToPartIds.get(key) ?? [];
             arr.push(f.part_id);
-            numberToPartIds.set(num, arr);
+            numberToPartIds.set(key, arr);
           }
 
           for (const entry of svc.parts_breakdown) {
             if (entry.price_low == null) continue;
-            const partIds = numberToPartIds.get(entry.oem_part_number);
+            if (!entry.oem_part_number) continue;
+            const partIds = numberToPartIds.get(normalizeOemNumber(entry.oem_part_number));
             if (!partIds || partIds.length === 0) continue;
             const sourceDomain = entry.source_domain ?? extractDomain(entry.source_url ?? undefined) ?? "enrichment";
 

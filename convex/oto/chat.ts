@@ -1095,7 +1095,7 @@ export async function sendMessageHandlerCore(
           if (entityType !== null && entityId !== null) {
             try {
               await ctx.runMutation(
-                api.oto.memoryEditing.recordSelectionFact,
+                internal.oto.memoryEditing.recordSelectionFact,
                 {
                   conversation_id: conversationId,
                   entity_type: entityType,
@@ -1398,7 +1398,7 @@ export async function sendMessageHandlerCore(
       // User-turn row — role-conditional invariant: no model_used /
       // prompt_version / tool_calls. content is the raw user message
       // before envelope-wrapping (forensic preference per dispatch).
-      await ctx.runMutation(api.oto.memoryEditing.recordTurn, {
+      await ctx.runMutation(internal.oto.memoryEditing.recordTurn, {
         conversation_id: conversationId,
         turn_number: turnNumber,
         role: "user",
@@ -1433,7 +1433,7 @@ export async function sendMessageHandlerCore(
       // (Wave 5 telemetry-completion dispatch will wire that from
       // accumulatedResults); omitting keeps the row schema-valid since
       // tool_calls is optional.
-      await ctx.runMutation(api.oto.memoryEditing.recordTurn, {
+      await ctx.runMutation(internal.oto.memoryEditing.recordTurn, {
         conversation_id: conversationId,
         turn_number: turnNumber,
         role: "assistant",
@@ -1482,16 +1482,16 @@ export async function sendMessageHandlerCore(
     if (!skipPersist && modelShortLiteral === "sonnet") {
       try {
         await ctx.runMutation(
-          api.oto.memoryEditing.initEpisodicControl,
+          internal.oto.memoryEditing.initEpisodicControl,
           { conversation_id: conversationId },
         );
         const row: Doc<"conversation_episodic_control"> | null =
           await ctx.runQuery(
-            api.oto.memoryEditing.getEpisodicControl,
+            internal.oto.memoryEditing.getEpisodicControl,
             { conversation_id: conversationId },
           );
         if (row) {
-          await ctx.runMutation(api.oto.memoryEditing.commitControl, {
+          await ctx.runMutation(internal.oto.memoryEditing.commitControl, {
             conversation_id: conversationId,
             expected_turn: row.updated_by_turn,
             delta: {
@@ -1644,7 +1644,7 @@ export async function sendMessageHandlerCore(
   // pollute analytics with debug traffic.
   if (!skipPersist) {
     try {
-      await ctx.runMutation(api.oto.telemetry.recordTurn, {
+      await ctx.runMutation(internal.oto.telemetry.recordTurn, {
         conversation_id: conversationId,
         user_id: user._id,
         model: MODEL,
@@ -2179,7 +2179,7 @@ function buildCallables(
     lookup_vehicle_spec: async (input) => {
       const q = (input.query ?? "") as string;
       const result = await ctx.runQuery(
-        api.oto.lookupVehicleSpec.lookupVehicleSpec,
+        internal.oto.lookupVehicleSpec.lookupVehicleSpec,
         { query: q },
       );
       // Wave 7.3 Option B: lookupVehicleSpec scans the entire `makes` table
@@ -2261,7 +2261,7 @@ function buildCallables(
       };
       try {
         const cascadeResult = (await ctx.runAction(
-          api.oto.evalHarness.runFullCascade,
+          internal.oto.evalHarness.runFullCascade,
           {
             question_text,
             topic,
@@ -2431,7 +2431,7 @@ function buildCallables(
         }
       }
       return await ctx.runMutation(
-        api.oto.vehicleFactsEditing.recordVehicleFact,
+        internal.oto.vehicleFactsEditing.recordVehicleFact,
         args,
       );
     },
@@ -2581,7 +2581,7 @@ function buildCallables(
           // the model's anchor (per design §2.2).
           try {
             await ctx.runMutation(
-              api.oto.memoryEditing.reinforceUserSemanticFact,
+              internal.oto.memoryEditing.reinforceUserSemanticFact,
               { fact_id: existingFactId },
             );
             console.log(
@@ -2636,7 +2636,7 @@ function buildCallables(
             : {}),
         };
         const factId = await ctx.runMutation(
-          api.oto.memoryEditing.recordUserSemanticFact,
+          internal.oto.memoryEditing.recordUserSemanticFact,
           insertArgs,
         );
         return { ok: true, fact_id: factId, recorded: true };
@@ -2757,7 +2757,7 @@ function buildCallables(
           for (const factText of newEntries) {
             try {
               await ctx.runMutation(
-                api.oto.memoryEditing.recordConversationFact,
+                internal.oto.memoryEditing.recordConversationFact,
                 {
                   conversation_id: conversationId,
                   fact_type: "observation" as const,
@@ -2868,7 +2868,7 @@ function buildCallables(
           // seed. The bootstrap lives inside memoryEditing.ts so CI Rule 16
           // still defends the table from out-of-helper writes.
           await ctx.runMutation(
-            api.oto.memoryEditing.initEpisodicControl,
+            internal.oto.memoryEditing.initEpisodicControl,
             { conversation_id: conversationId },
           );
           // Read the row to learn the current updated_by_turn — the helper
@@ -2876,7 +2876,7 @@ function buildCallables(
           // detection. A fresh row is at turn 0; commitEpisodic advances it.
           const row: Doc<"conversation_episodic_control"> | null =
             await ctx.runQuery(
-              api.oto.memoryEditing.getEpisodicControl,
+              internal.oto.memoryEditing.getEpisodicControl,
               { conversation_id: conversationId },
             );
           if (!row) {
@@ -2918,7 +2918,7 @@ function buildCallables(
           if (arcChanged) {
             delta.arc_summary = newArc as string;
           }
-          await ctx.runMutation(api.oto.memoryEditing.commitEpisodic, {
+          await ctx.runMutation(internal.oto.memoryEditing.commitEpisodic, {
             conversation_id: conversationId,
             expected_turn: row.updated_by_turn,
             delta,
@@ -3014,16 +3014,16 @@ function buildCallables(
       // ── Wave 3 control-class mirror ──────────────────────────────────
       try {
         await ctx.runMutation(
-          api.oto.memoryEditing.initEpisodicControl,
+          internal.oto.memoryEditing.initEpisodicControl,
           { conversation_id: conversationId },
         );
         const row: Doc<"conversation_episodic_control"> | null =
           await ctx.runQuery(
-            api.oto.memoryEditing.getEpisodicControl,
+            internal.oto.memoryEditing.getEpisodicControl,
             { conversation_id: conversationId },
           );
         if (row) {
-          await ctx.runMutation(api.oto.memoryEditing.commitControl, {
+          await ctx.runMutation(internal.oto.memoryEditing.commitControl, {
             conversation_id: conversationId,
             expected_turn: row.updated_by_turn,
             delta: {
@@ -3109,16 +3109,16 @@ function buildCallables(
       // ── Wave 3 control-class mirror ──────────────────────────────────
       try {
         await ctx.runMutation(
-          api.oto.memoryEditing.initEpisodicControl,
+          internal.oto.memoryEditing.initEpisodicControl,
           { conversation_id: conversationId },
         );
         const row: Doc<"conversation_episodic_control"> | null =
           await ctx.runQuery(
-            api.oto.memoryEditing.getEpisodicControl,
+            internal.oto.memoryEditing.getEpisodicControl,
             { conversation_id: conversationId },
           );
         if (row) {
-          await ctx.runMutation(api.oto.memoryEditing.commitControl, {
+          await ctx.runMutation(internal.oto.memoryEditing.commitControl, {
             conversation_id: conversationId,
             expected_turn: row.updated_by_turn,
             delta: {
@@ -3240,7 +3240,7 @@ function buildCallables(
           return { ok: false, reason: "no matching active fact found" };
         }
         await ctx.runMutation(
-          api.oto.memoryEditing.retractUserSemanticFact,
+          internal.oto.memoryEditing.retractUserSemanticFact,
           { fact_id: matchedId, reason },
         );
         console.log(
@@ -3328,7 +3328,7 @@ function buildCallables(
           return { ok: false, reason: "no matching active fact found" };
         }
         await ctx.runMutation(
-          api.oto.memoryEditing.retractConversationFact,
+          internal.oto.memoryEditing.retractConversationFact,
           {
             fact_id: matchedId,
             reason,

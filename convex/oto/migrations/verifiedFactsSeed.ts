@@ -13,8 +13,8 @@
 //
 //   1. CANONICAL HELPER ROUTING — the seed never touches the vehicle_facts
 //      or vehicle_facts_audit table directly. Every write routes through
-//      api.oto.vehicleFactsEditing.recordVehicleFact and
-//      api.oto.vehicleFactsEditing.editVehicleFact via ctx.runMutation.
+//      internal.oto.vehicleFactsEditing.recordVehicleFact and
+//      internal.oto.vehicleFactsEditing.editVehicleFact via ctx.runMutation.
 //      The audit-row-atomicity contract is preserved because the helper
 //      itself writes the audit row in the same transaction. CI Rules 1
 //      (no direct patch on vehicle_facts) and 3 (no direct insert into
@@ -60,7 +60,7 @@
 
 import { v } from "convex/values";
 import { internalMutation } from "../../_generated/server";
-import { api } from "../../_generated/api";
+import { internal } from "../../_generated/api";
 import type { Id } from "../../_generated/dataModel";
 import { canonicalQuestionKey } from "../canonicalize";
 
@@ -225,7 +225,7 @@ export const seedEvalVerifiedFact = internalMutation({
     // Confidence floor / source validation / dedupe-on-canonical-key all
     // live inside recordVehicleFact. We just pass args through.
     const factId: Id<"vehicle_facts"> = await ctx.runMutation(
-      api.oto.vehicleFactsEditing.recordVehicleFact,
+      internal.oto.vehicleFactsEditing.recordVehicleFact,
       {
         topic: args.topic,
         topic_axis: topicAxis,
@@ -259,7 +259,7 @@ export const seedEvalVerifiedFact = internalMutation({
     // success path. Any other error re-throws.
     if (verify && args.editor_user_id) {
       try {
-        await ctx.runMutation(api.oto.vehicleFactsEditing.editVehicleFact, {
+        await ctx.runMutation(internal.oto.vehicleFactsEditing.editVehicleFact, {
           fact_id: factId,
           action: "verify" as const,
           editor_id: args.editor_user_id,

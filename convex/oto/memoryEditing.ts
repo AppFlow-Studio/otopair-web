@@ -61,10 +61,11 @@
 //
 // =============================================================================
 
+// Jun-10 IDOR sweep: every export here is internal-only. The sole runtime
+// caller is chat.ts (server-side tool dispatch); as public mutations these
+// let anonymous callers write any user's memory and the forensic audit log.
 import {
-  mutation,
   internalMutation,
-  query,
   internalQuery,
 } from "../_generated/server";
 import { v } from "convex/values";
@@ -238,7 +239,7 @@ const kbTopicCategoryValidator = v.union(
 //
 // Day 2 TODO: validate payload.kind matches fact_type, write the row.
 // -----------------------------------------------------------------------------
-export const recordConversationFact = mutation({
+export const recordConversationFact = internalMutation({
   args: {
     conversation_id: v.id("ai_conversations"),
     fact_type: conversationFactTypeValidator,
@@ -292,7 +293,7 @@ export const recordConversationFact = mutation({
 //
 // Day 2 TODO: build the payload from (entity_type, entity_id), insert.
 // -----------------------------------------------------------------------------
-export const recordSelectionFact = mutation({
+export const recordSelectionFact = internalMutation({
   args: {
     conversation_id: v.id("ai_conversations"),
     entity_type: v.string(),    // "mechanic" | "shop" | "vehicle" | "service"
@@ -343,7 +344,7 @@ export const recordSelectionFact = mutation({
 //
 // Day 2 TODO: read row, check not already retracted, patch the triple.
 // -----------------------------------------------------------------------------
-export const retractConversationFact = mutation({
+export const retractConversationFact = internalMutation({
   args: {
     fact_id: v.id("conversation_facts"),
     reason: v.string(),
@@ -470,7 +471,7 @@ function sanitizeSemanticPayload(payload: string): SanitizeResult {
 //
 // Day 2 TODO: validate the (source, written_by) matrix, insert row.
 // -----------------------------------------------------------------------------
-export const recordUserSemanticFact = mutation({
+export const recordUserSemanticFact = internalMutation({
   args: {
     user_id: v.id("users"),
     vehicle_id: v.optional(v.id("vehicles")),
@@ -543,7 +544,7 @@ export const recordUserSemanticFact = mutation({
 // Day 2 TODO: read row, validate not retracted, compute new confidence,
 // patch the triple.
 // -----------------------------------------------------------------------------
-export const reinforceUserSemanticFact = mutation({
+export const reinforceUserSemanticFact = internalMutation({
   args: {
     fact_id: v.id("user_semantic_facts"),
   },
@@ -595,7 +596,7 @@ export const reinforceUserSemanticFact = mutation({
 //
 // Day 2 TODO: read row, validate not already retracted, patch the triple.
 // -----------------------------------------------------------------------------
-export const retractUserSemanticFact = mutation({
+export const retractUserSemanticFact = internalMutation({
   args: {
     fact_id: v.id("user_semantic_facts"),
     reason: v.string(),
@@ -769,7 +770,7 @@ export const findUserSemanticFactByPayload = internalQuery({
 // Returns null when no row exists (pre-init). Wire-in code paths follow the
 // pattern: initEpisodicControl -> getEpisodicControl -> commit{Episodic,Control}.
 // -----------------------------------------------------------------------------
-export const getEpisodicControl = query({
+export const getEpisodicControl = internalQuery({
   args: {
     conversation_id: v.id("ai_conversations"),
   },
@@ -814,7 +815,7 @@ export const getEpisodicControl = query({
 // classes in a single insert. After the row exists, the field-class split
 // is enforced by the separate commit helpers as designed.
 // -----------------------------------------------------------------------------
-export const initEpisodicControl = mutation({
+export const initEpisodicControl = internalMutation({
   args: {
     conversation_id: v.id("ai_conversations"),
   },
@@ -878,7 +879,7 @@ export const initEpisodicControl = mutation({
 // Day 2 TODO: read row, validate expected_turn == updated_by_turn, patch
 // episodic delta + bump updated_at + updated_by_turn.
 // -----------------------------------------------------------------------------
-export const commitEpisodic = mutation({
+export const commitEpisodic = internalMutation({
   args: {
     conversation_id: v.id("ai_conversations"),
     expected_turn: v.number(),
@@ -959,7 +960,7 @@ export const commitEpisodic = mutation({
 // Day 2 TODO: read row, validate expected_turn, patch control delta + bump
 // updated_at + updated_by_turn.
 // -----------------------------------------------------------------------------
-export const commitControl = mutation({
+export const commitControl = internalMutation({
   args: {
     conversation_id: v.id("ai_conversations"),
     expected_turn: v.number(),
@@ -1080,7 +1081,7 @@ export const commitControl = mutation({
 // Day 2 TODO: enforce role-conditional invariants (prompt_version /
 // model_used required for assistant), insert.
 // -----------------------------------------------------------------------------
-export const recordTurn = mutation({
+export const recordTurn = internalMutation({
   args: {
     conversation_id: v.id("ai_conversations"),
     turn_number: v.number(),
@@ -1196,7 +1197,7 @@ export const recordTurn = mutation({
 //
 // Day 2 TODO: check admin allowlist, check duplicate key, insert.
 // -----------------------------------------------------------------------------
-export const registerKbTopic = mutation({
+export const registerKbTopic = internalMutation({
   args: {
     topic_key: v.string(),
     display_name: v.string(),
@@ -1259,7 +1260,7 @@ export const registerKbTopic = mutation({
 //
 // Day 2 TODO: read row, validate not already deprecated, patch the pair.
 // -----------------------------------------------------------------------------
-export const deprecateKbTopic = mutation({
+export const deprecateKbTopic = internalMutation({
   args: {
     topic_id: v.id("kb_topics"),
     reason: v.string(),
@@ -1782,15 +1783,12 @@ export const findActiveConversationFactForRetract = internalQuery({
 // Internal mutation surface (migrations + reconciliation only)
 // =============================================================================
 //
-// Migrations (convex/oto/migrations/wave3Backfill.ts) call the public
-// helpers above via ctx.runMutation(api.oto.memoryEditing.*). The
-// `internalMutation` symbol is pre-imported for future internal-only
-// helpers (e.g., reconciliation-driven retractions); Day 2 does not add
-// any. The `Doc` type is referenced inline by helper handlers via
-// ctx.db.get<...> return inference.
+// Migrations (convex/oto/migrations/wave3Backfill.ts) and chat.ts call the
+// helpers above via ctx.runMutation(internal.oto.memoryEditing.*) — every
+// export in this file is internal as of the Jun-10 IDOR sweep. The `Doc`
+// type is referenced inline by helper handlers via ctx.db.get<...> return
+// inference.
 // =============================================================================
-
-void internalMutation;
 void (undefined as unknown as Doc<"conversation_facts">);
 
 // =============================================================================

@@ -126,7 +126,7 @@ const CarModal = ({ carId, onClose }: { carId: Id<'vehicles'> | null; onClose: (
   }, [toast])
 
   const rawAudit = useQuery(api.audit_log.listByEntity,
-    carId ? { entity_type: 'vehicle', entity_id: carId } : 'skip')
+    carId ? { entity_type: 'vehicle', entity_id: carId, token: session?.token ?? '' } : 'skip')
   type AuditRow = { created_at: number; action: string; actor: string; detail?: string }
   const auditEntries = (rawAudit as AuditRow[] | undefined)?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),

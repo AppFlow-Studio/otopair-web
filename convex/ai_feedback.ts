@@ -9,33 +9,12 @@
 
 import { v } from "convex/values";
 import { internalQuery, mutation, query } from "./_generated/server";
-import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
-
-/**
- * Jun-10 IDOR sweep: every director-facing function below validates a
- * director session token SERVER-SIDE and derives the audit actor from the
- * session (mirrors convex/directorConfigActions.ts). The old surface let
- * anyone with the deployment URL read every user's transcript + email +
- * phone (getConversationForFeedback) and forge audit attribution via
- * caller-supplied actorName/actorId.
- */
-async function requireDirector(
-  ctx: QueryCtx | MutationCtx,
-  token: string,
-): Promise<{ name: string; userId: Id<"director_users"> }> {
-  if (token) {
-    const s = await ctx.db
-      .query("director_sessions")
-      .withIndex("by_token", (q) => q.eq("token", token))
-      .first();
-    if (s && s.expires_at >= Date.now()) {
-      const u = await ctx.db.get(s.user_id);
-      if (u) return { name: u.name, userId: u._id };
-    }
-  }
-  throw new Error("unauthorized: invalid or expired director session");
-}
+// Jun-10 IDOR sweep: every director-facing function below validates a
+// director session token SERVER-SIDE and derives the audit actor from the
+// session. The old surface let anyone with the deployment URL read every
+// user's transcript + email + phone (getConversationForFeedback) and forge
+// audit attribution via caller-supplied actorName/actorId.
+import { requireDirector } from "./directorGate";
 
 /**
  * submit — write a feedback row tied to the current Clerk-authenticated user.

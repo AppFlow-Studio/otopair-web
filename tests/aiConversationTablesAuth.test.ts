@@ -40,7 +40,6 @@ const MUST_BE_INTERNAL: Array<[string, Record<string, unknown>, string[]]> = [
       "updateState",
       "setCurrentModel",
       "setDiagnosticTurnCount",
-      "updateScenario",
       "incrementMessageCount",
       "createForUser",
     ],
@@ -52,7 +51,7 @@ const MUST_STAY_PUBLIC: Array<[string, Record<string, unknown>, string[]]> = [
   [
     "ai_conversations",
     aiConversations,
-    ["getBySessionId", "getByUserId", "create", "setVehicleId", "appendEstablishedFact", "linkBooking", "end"],
+    ["getBySessionId", "getByUserId", "create", "setVehicleId", "appendEstablishedFact", "updateScenario", "linkBooking", "end"],
   ],
 ];
 
@@ -165,13 +164,14 @@ describe("ai tables — owner gates on the public surface", () => {
       }),
     ).rejects.toThrow(/unauthenticated/);
 
-    await expect(
-      t
-        .withIdentity(identityFor(seed.intruderClerkId))
-        .query(api.ai_conversations.getBySessionId, {
-          sessionId: seed.sessionId,
-        }),
-    ).rejects.toThrow(/not authorized/);
+    // Foreign-owned sessions read as null — NOT a throw, which would hand
+    // authenticated users a session_id existence oracle.
+    const foreign = await t
+      .withIdentity(identityFor(seed.intruderClerkId))
+      .query(api.ai_conversations.getBySessionId, {
+        sessionId: seed.sessionId,
+      });
+    expect(foreign).toBeNull();
 
     const convo = await t
       .withIdentity(identityFor(seed.ownerClerkId))
@@ -179,6 +179,36 @@ describe("ai tables — owner gates on the public surface", () => {
         sessionId: seed.sessionId,
       });
     expect(convo?._id).toBe(seed.conversationId);
+  });
+
+  test("ai_conversations.updateScenario: owner-gated", async () => {
+    const t = makeT();
+    const seed = await seedTwoUsersAndConversation(t);
+
+    await expect(
+      t.mutation(api.ai_conversations.updateScenario, {
+        id: seed.conversationId,
+        scenario_detected: "forged",
+      }),
+    ).rejects.toThrow(/unauthenticated/);
+
+    await expect(
+      t
+        .withIdentity(identityFor(seed.intruderClerkId))
+        .mutation(api.ai_conversations.updateScenario, {
+          id: seed.conversationId,
+          scenario_detected: "forged",
+        }),
+    ).rejects.toThrow(/not authorized/);
+
+    await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .mutation(api.ai_conversations.updateScenario, {
+        id: seed.conversationId,
+        scenario_detected: "diagnostic",
+      });
+    const convo = await t.run(async (ctx) => ctx.db.get(seed.conversationId));
+    expect(convo!.scenario_detected).toBe("diagnostic");
   });
 
   test("ai_conversations.create: derives user from identity; rejects forged user_id", async () => {

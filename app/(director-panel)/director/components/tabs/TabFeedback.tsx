@@ -125,7 +125,7 @@ const FBModal = ({ fb, onClose }: { fb: Feedback | undefined; onClose: () => voi
   const [localCategory,  setLocalCategory]  = useState(fb?.category ?? 'general')
   const [localSentiment, setLocalSentiment] = useState(fb?.sentiment ?? 'neutral')
 
-  const rawAudit = useQuery(api.audit_log.listByEntity, fb ? { entity_type: 'feedback', entity_id: fb._id } : 'skip')
+  const rawAudit = useQuery(api.audit_log.listByEntity, fb ? { entity_type: 'feedback', entity_id: fb._id, token: session?.token ?? '' } : 'skip')
   const auditEntries = rawAudit?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
     action: e.action, actor: e.actor, detail: e.detail ?? '',

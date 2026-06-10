@@ -190,7 +190,7 @@ const OtoFBModal = ({ fb, onClose }: { fb: OtoFeedback | undefined; onClose: () 
     fb ? { feedbackId: fb._id, token } : 'skip')
 
   const rawAudit = useQuery(api.audit_log.listByEntity,
-    fb ? { entity_type: 'oto_feedback', entity_id: fb._id } : 'skip')
+    fb ? { entity_type: 'oto_feedback', entity_id: fb._id, token } : 'skip')
   type AuditRow = { created_at: number; action: string; actor: string; detail?: string }
   const auditEntries = (rawAudit as AuditRow[] | undefined)?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),

@@ -96,7 +96,7 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
     return () => clearTimeout(t)
   }, [toast])
 
-  const rawAudit = useQuery(api.audit_log.listByEntity, userId ? { entity_type: 'user', entity_id: userId } : 'skip')
+  const rawAudit = useQuery(api.audit_log.listByEntity, userId ? { entity_type: 'user', entity_id: userId, token: session?.token ?? '' } : 'skip')
   const auditEntries = rawAudit?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
     action: e.action, actor: e.actor, detail: e.detail ?? '',

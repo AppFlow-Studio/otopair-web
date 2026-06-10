@@ -3,11 +3,12 @@
 //
 // Jun-10 IDOR sweep. Two access tiers:
 //   - PUBLIC, owner-gated (the mobile surface): getByUserId, getBySessionId,
-//     create, setVehicleId, appendEstablishedFact, linkBooking, end.
-//     Identity always derives from ctx.auth; id args are ownership-checked.
+//     create, setVehicleId, appendEstablishedFact, updateScenario,
+//     linkBooking, end. Identity always derives from ctx.auth; id args are
+//     ownership-checked.
 //   - INTERNAL (server plumbing — chat.ts tool dispatch + the director sim):
 //     getById, createForUser, updateState, setCurrentModel,
-//     setDiagnosticTurnCount, updateScenario, incrementMessageCount.
+//     setDiagnosticTurnCount, incrementMessageCount.
 //     These are called via ctx.runMutation from the chat action, which has
 //     already ownership-checked the conversation. They must NOT read
 //     ctx.auth: runMutation does not inherit the director sim's proxied
@@ -66,8 +67,11 @@ export const getBySessionId = query({
       .query("ai_conversations")
       .withIndex("by_session_id", (q) => q.eq("session_id", args.sessionId))
       .unique();
-    if (!convo) return null;
-    if (convo.user_id !== user._id) throw new Error("not authorized");
+    // Foreign-owned reads return null rather than throwing: a throw would
+    // hand authenticated users a session_id existence oracle, and the old
+    // public query never threw (mobile callers treat the result as
+    // nullable data).
+    if (!convo || convo.user_id !== user._id) return null;
     return convo;
   },
 });
@@ -284,12 +288,16 @@ export const setDiagnosticTurnCount = internalMutation({
   },
 });
 
-export const updateScenario = internalMutation({
+// No in-repo callers — kept public + owner-gated for the mobile surface
+// (the only plausible historical caller of a public mutation with zero
+// server call sites).
+export const updateScenario = mutation({
   args: {
     id: v.id("ai_conversations"),
     scenario_detected: v.string(),
   },
   handler: async (ctx, args) => {
+    await requireConversationOwner(ctx, args.id);
     await ctx.db.patch(args.id, {
       scenario_detected: args.scenario_detected,
     });

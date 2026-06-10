@@ -363,7 +363,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   }
 
   const rawAudit = useQuery(api.audit_log.listByEntity,
-    configId ? { entity_type: 'vehicle_config', entity_id: configId } : 'skip')
+    configId ? { entity_type: 'vehicle_config', entity_id: configId, token: sessionToken } : 'skip')
   type AuditRow = { created_at: number; action: string; actor: string; detail?: string }
   const auditEntries = (rawAudit as AuditRow[] | undefined)?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),

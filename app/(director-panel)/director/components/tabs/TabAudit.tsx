@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useContext, useState, type ReactNode } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import type { Id } from '@/convex/_generated/dataModel'
 import type { AuditEntry } from '../../data'
 import { Badge, Button, Input, Select, Modal, Avatar, StatusBadge, GlobalAuditTable, auditMeta, IconSearch, IconExternal, IconBolt } from '../Primitives'
@@ -193,7 +194,8 @@ export const TabAudit = () => {
   const [actorFilter,  setActorFilter]  = useState('all')
   const [selected,     setSelected]     = useState<AuditEntry | null>(null)
 
-  const raw = useQuery(api.audit_log.listRecent)
+  const session = useContext(DirectorSessionCtx)
+  const raw = useQuery(api.audit_log.listRecent, { token: session?.token ?? '' })
   const entries = raw?.map(e => ({
     timestamp:  new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
     action:     e.action,

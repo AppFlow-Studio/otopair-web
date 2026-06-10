@@ -218,6 +218,14 @@ type VehicleScope = {
  * that matches on none of those three is treated as a different car's and
  * dropped (we'd rather miss a hash hit and fall through to STRUCT/TEXT/web
  * than serve the wrong car's number). Pure.
+ *
+ * Known limitation: facts are written single-axis (record_vehicle_fact scopes
+ * a write to one axis), so a read that supplies only a DIFFERENT axis than the
+ * fact was stored on misses it (a same-car cache miss, never a cross-car
+ * leak). The common case — same question, same car, same axis — hits. Closing
+ * the cross-axis miss requires passing the active vehicle's FULL identity
+ * (config + chassis + engine) at read time, NOT loosening this matcher (which
+ * would reintroduce leaks). Tracked as a follow-up.
  */
 export function factMatchesVehicleScope(
   fact: { vehicle_config_id?: unknown; chassis_code?: unknown; engine_code?: unknown },

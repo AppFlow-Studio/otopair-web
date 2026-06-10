@@ -122,3 +122,53 @@ describe("lookupFactsByCanonicalHash vehicle scoping", () => {
     expect(all).toHaveLength(2);
   });
 });
+
+// Honest single-axis behavior: facts are written along ONE axis
+// (record_vehicle_fact scopes a write to a single axis), so the matcher's
+// conservatism is intentional and worth pinning. A read that supplies the
+// fact's axis hits; a read that supplies only a DIFFERENT axis conservatively
+// misses (degrades to STRUCT/TEXT/web — never a cross-car leak). Closing that
+// miss requires passing the active vehicle's FULL identity at read time
+// (follow-up), not loosening the matcher (which would reintroduce leaks).
+describe("lookupFactsByCanonicalHash single-axis facts", () => {
+  async function seedEngineOnlyFact(t: ReturnType<typeof makeT>) {
+    return await t.run(async (ctx) => {
+      const key = "single_axis_oil_key";
+      await ctx.db.insert("vehicle_facts", {
+        topic: "oil_capacity",
+        topic_axis: "engine",
+        engine_code: "B58", // ONLY the engine axis is set (realistic write).
+        fact_text: "B58 takes 7.5 qt.",
+        question_text: "oil capacity",
+        canonical_question_key: key,
+        source: "manufacturer",
+        confidence: 0.95,
+        verification_status: "verified",
+        created_at: Date.now(),
+      } as any);
+      return { key };
+    });
+  }
+
+  test("a read on the fact's own axis hits (the common repeat-question case)", async () => {
+    const t = makeT();
+    const { key } = await seedEngineOnlyFact(t);
+    const hit = await t.query(internal.oto.vehicleFactsKB.lookupFactsByCanonicalHash, {
+      canonical_question_key: key,
+      engine_code: "B58",
+    });
+    expect(hit).toHaveLength(1);
+  });
+
+  test("a read on a DIFFERENT axis conservatively misses (no leak, re-derives)", async () => {
+    const t = makeT();
+    const { key } = await seedEngineOnlyFact(t);
+    // The engine-only fact has no chassis_code, so a chassis-axis read misses
+    // it even for the same physical car (the documented conservative gap).
+    const miss = await t.query(internal.oto.vehicleFactsKB.lookupFactsByCanonicalHash, {
+      canonical_question_key: key,
+      chassis_code: "G30",
+    });
+    expect(miss).toHaveLength(0);
+  });
+});

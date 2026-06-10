@@ -1011,11 +1011,17 @@ export async function sendMessageHandlerCore(
           id: conversationId,
         });
         const freshModel = ((fresh as any)?.current_model ?? null) as string | null;
-        const nextTurnModel = freshModel === "sonnet" ? SONNET_MODEL : HAIKU_MODEL;
-        escalatedToSonnetThisIteration =
-          turnModel !== SONNET_MODEL && nextTurnModel === SONNET_MODEL;
-        turnModel = nextTurnModel;
-        if (trace) trace.model = turnModel;
+        // ESCALATE-UP ONLY. A handoff (→sonnet) takes effect immediately so
+        // Sonnet answers the hard turn. A handback (→haiku) must NOT downgrade
+        // mid-turn: Sonnet finishes THIS turn, and Haiku resumes next turn via
+        // the turn-start read — preserving handback's original next-turn
+        // semantics and keeping telemetry/audit labelled with the model that
+        // actually answered.
+        if (freshModel === "sonnet" && turnModel !== SONNET_MODEL) {
+          escalatedToSonnetThisIteration = true;
+          turnModel = SONNET_MODEL;
+          if (trace) trace.model = turnModel;
+        }
       } catch (e: any) {
         console.error(
           "[oto/chat] model-routing re-read failed (swallowed):",

@@ -150,6 +150,28 @@
 
 ---
 
+## PDF COVERAGE REPORT (Jun 10 — vs `Otopair_Service_Parts_Reference (1).pdf`)
+
+The PDF at repo root is the canonical "parts we're supposed to get & price" (23 services; 8 labor-only, 15 parts-bearing). New read-only inspector **`devOnly/partsCoverage:coverage {configKey}`** runs the REAL production resolver per service and grades every PDF role: priced / unpriced (fitment exists, all price rows poison or absent → bills $0 with `price_unknown`) / missing (no fitment).
+
+**Reference-encoding diff (PDF vs `lib/servicePartsReference.ts`)** — the encode is faithful except: (a) tire-replacement items (TPMS valve kit/wheel, weights, disposal fee) punt to the dedicated tire flow — VERIFY that flow actually bills them; (b) CVT internal mesh screen + external filter deliberately deferred (noted in code); (c) PDF's battery "terminal clamp (if corroded)" has no role; (d) `oil_filter_housing_oring` (core on cartridge engines) has NO universal fallback (the washer does); (e) wheel-alignment's as-needed cam/alignment-bolt kit is unbillable because the service is laborOnly (documented as discovery-only).
+
+**Live coverage, locked-quote roles (core + default-kit), dev:**
+| Config | priced | unpriced ($0) | missing |
+|---|---|---|---|
+| 2022 Jetta S (EA211) | 21/30 | 0 | 9 |
+| 2020 750i xDrive (N63) | 22/30 | 4 | 4 |
+
+**Systemic gaps found (new findings):**
+1. **Core fluids missing per-car**: Jetta has NO `engine_oil` and NO `atf_fluid` fitment — an oil-change quote on the Jetta bills filter+washer but no oil (bug-card #9's "oil prices now collected" fix evidently needs the parts backfill/re-enrich to reach older configs; reprice alone can't create fitments).
+2. **Axle asymmetry in brakes, both cars**: Jetta missing FRONT pads (rear priced); 750i missing REAR pads/rotors/sensor (front priced). A rear brake job on the 750i has no parts rows at all. Brake hardware kits missing on both cars, both axles.
+3. **Garbage price survives with no sanity band**: Jetta drain-plug washer N0138157 priced **$54.31** (avg of 2 sources; real-world ~$1–3, universal fallback $4). Live proof of the "no part-price sanity rules" finding — a per-role price plausibility band (or fallback-beats-absurd-enriched rule) is needed.
+4. **Unpriced enriched fitment BLOCKS the universal fallback**: 750i `gear_oil` fitment has OEM `7512293972` (junk-looking) with zero price rows → bills $0 while the $22 fallback sits unused (fallback only fires when NO fitment group exists). This is the fix-C "deferred (a)" with live evidence — swap to the fallback when every candidate in a role group is unpriced.
+5. **Chain-engine timing-belt fitments**: the N63 (chain) has timing_belt-service fitments built from a chain part (tensioner 11317557741) — applicability leak into part_fitments; meanwhile the Jetta (EA211 = belt engine, where it matters) is MISSING belt/kit/water-pump. Worst of both directions.
+6. `intake_manifold_gasket`, `trans_filter` (Jetta), and brake hardware kits are never enriched anywhere — Batch-2 part discovery doesn't produce these subcategories.
+
+**How to use going forward:** run `partsCoverage` per config after the catalog-wide backfill/re-enrich; acceptance = locked roles `priced === total` (timing_belt roles exempt on chain engines once applicability is fixed).
+
 ## RECOMMENDED ORDER OF WORK
 
 1. **Labor gate cluster (Jun-10 freeze blocker)** — items 11+12: stamp `data_quality:'aggregated'` in recompute, check `source` in `isHighQualityVdb`, gate Layer-3 siblings, return real source label, decide the flag-off confidence story. Without this Temur's pricing can't consume validated labor even where it exists.

@@ -36,7 +36,9 @@
 
 9. **`diagnoseVin`'s 4 `online_discount` writers can OVERWRITE corrected `sale` rows back to poison** (upsert patches by part+domain), and they're public unauthenticated actions. `diagnoseVin.ts:487,674,983,1296`.
 
-10. **All-poison part bills $0 in the locked quote** — empty summary → `quoteUnitPrice` 0 → `unit_price=0` written into the booking snapshot; no fallback, no flag, nobody told (known issue 8). **Reproduced live on dev.** `serviceParts.ts:776-807`, `part_prices.ts:182`, `booking_quotes.ts:511-528`.
+10. ✅ **FIXED (data contract)** (`fix(parts): price_unknown marker`, this branch) — ~~All-poison part bills $0 in the locked quote~~ — empty summary → `quoteUnitPrice` 0 → `unit_price=0` written into the booking snapshot; no fallback, no flag, nobody told (known issue 8). **Reproduced live on dev.**
+    **Fix:** snapshot construction extracted to pure `snapshotRowsForResolution` (`booking_quotes.ts`); a locked role winner with `sample_size === 0` is now marked **`price_unknown: true`** (schema field added) and flips the result's `low_confidence` → persisted as `bookings.low_confidence_parts`. The line still contributes $0 to `quoted_set_price_cents` (no invented prices) but is now an explicit "price to be confirmed post-job" — the mechanic's post-job dialog hydrates from this snapshot. Tests: `tests/bookingPartsSnapshot.test.ts`.
+    **Deliberately deferred:** (a) selection-level fallback (swap an all-unpriced role winner for the role's priced `universalFallback` consumable) — mostly obviated by the pending catalog-wide reprice; (b) mobile UI rendering of `price_unknown`/`low_confidence_parts` (out of repo — flag to app team).
 
 11. ✅ **FIXED** (commit `8960661`) — ~~Labor quality-gate holes (known issue 13 confirmed, 4 ways)~~:
     - Legacy rows stamped `training_data`/`web_search` in `source` (with `data_quality` unset) passed `isHighQualityVdb` → **gate now mirrors the disqualified set onto `source`** (plain `vdb` stays eligible). `lib/quoteEngine.ts`.

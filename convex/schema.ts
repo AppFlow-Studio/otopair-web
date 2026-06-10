@@ -1842,6 +1842,11 @@ export default defineSchema({
           // How quantity was derived: "fitment" | "fixed:N" | "per_cylinder"
           // | "capacity:<field>=<value><unit>/<pkg>" | "unknown_capacity".
           quantity_basis: v.optional(v.string()),
+          // TRUE when the winner had no trustworthy price rows (empty
+          // summary): the line bills 0 in the locked quote and must be
+          // priced at the mechanic's post-job confirmation. Pairs with
+          // bookings.low_confidence_parts. (Jun-9 review, item 10.)
+          price_unknown: v.optional(v.boolean()),
         })
       )
     ),

@@ -39,6 +39,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { isServiceApplicable } from "./services/applicability";
 
 /**
  * QUERY: list
@@ -308,6 +309,41 @@ export const listBookableForVehicle = query({
       }
     }
 
+    // ── Structural applicability rows (Service Parts Reference N/A rules) ───
+    // Fetch the rows isServiceApplicable() needs ONCE, before the per-service
+    // loop. These encode the reference's "Not Applicable" gates: timing belt on
+    // a chain-driven engine, PS flush on electric power steering, any ICE
+    // service on an EV, differential service without a serviceable diff, tire
+    // rotation on staggered+directional fitments, OBD-II services below the
+    // min model year. isServiceApplicable fails OPEN on every missing input, so
+    // nulls here simply mean "don't gate on that dimension". The gate only runs
+    // when both engine and config (its two required, non-null inputs) exist.
+    const structuralEngine = engineId ? await ctx.db.get(engineId) : null;
+    const [structuralChassis, structuralDrivetrain, structuralTrim] = config
+      ? await Promise.all([
+          config.chassis_code
+            ? ctx.db
+                .query("chassis_specs")
+                .withIndex("by_chassis_code", (q) =>
+                  q.eq("chassis_code", config.chassis_code!),
+                )
+                .first()
+            : null,
+          ctx.db
+            .query("drivetrain_configs")
+            .withIndex("by_vehicle_config", (q) =>
+              q.eq("vehicle_config_id", config._id),
+            )
+            .first(),
+          ctx.db
+            .query("trim_specs")
+            .withIndex("by_vehicle_config", (q) =>
+              q.eq("vehicle_config_id", config._id),
+            )
+            .first(),
+        ])
+      : [null, null, null];
+
     const services = await ctx.db.query("services").collect();
     const out: Array<{
       service_id: Id<"services">;
@@ -324,6 +360,34 @@ export const listBookableForVehicle = query({
       const ownerOverride = ownerApplicableOverride.get(sid);
       if (ownerOverride === false) continue;
       if (ownerOverride === undefined && engineNonApplicable.has(sid)) continue;
+
+      // Structural N/A gate (Service Parts Reference). Excludes services the
+      // reference marks Not Applicable for this vehicle's hardware: timing belt
+      // on a chain-driven engine, power-steering flush on electric PS, ICE-only
+      // services on an EV, differential service without a serviceable diff,
+      // tire rotation on staggered+directional fitments, OBD-II services below
+      // the min model year. Same treatment as is_applicable === false: the
+      // service is excluded from results entirely.
+      //
+      // Precedence: an explicit owner override of is_applicable === true wins
+      // over this gate (the owner knows their car best), so we only consult the
+      // structural rules when there is NO owner override. The gate also needs
+      // both required inputs — isServiceApplicable fails open without them.
+      if (
+        ownerOverride === undefined &&
+        structuralEngine &&
+        config &&
+        !isServiceApplicable(
+          service,
+          structuralEngine,
+          structuralChassis,
+          structuralDrivetrain,
+          structuralTrim,
+          config,
+        )
+      ) {
+        continue;
+      }
 
       // Labor-only services bypass enrichment + fitment + package gates.
       // They need no parts data and can be booked the moment the vehicle exists.

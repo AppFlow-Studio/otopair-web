@@ -30,7 +30,7 @@
 
 import { v } from "convex/values";
 import {
-  action,
+  internalAction,
   internalMutation,
   internalQuery,
 } from "../_generated/server";
@@ -99,7 +99,10 @@ export const _setNhtsaVinKey = internalMutation({
   },
 });
 
-// ─── Public action ───────────────────────────────────────────────
+// ─── Admin action (internal since Jun 9 2026; was public + live-by-default,
+// the only backfill inverting the dryRun=true convention — review finding).
+// Run via `npx convex run vehicleEnrichment/backfillNhtsaKey:backfillNhtsaVinKeys`
+// or the dashboard; pass {"dryRun": false} explicitly to write. ───────────────
 
 // `@ts-expect-error TS2589` silences a known Convex+TypeScript quirk:
 // once this file is registered in api.d.ts, the `action({...})` generic
@@ -109,14 +112,14 @@ export const _setNhtsaVinKey = internalMutation({
 // TS2339 cascades from the same root — once TS bails, doc types
 // collapse to the union of all tables. Runtime is unaffected — Convex
 // validates via `convex dev`. Same remedy as `convex/oto/chat.ts:115`.
-export const backfillNhtsaVinKeys = action({
+export const backfillNhtsaVinKeys = internalAction({
   args: {
     limit: v.optional(v.number()),
     dryRun: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<any> => {
     const limit = args.limit ?? 100;
-    const dryRun = args.dryRun ?? false;
+    const dryRun = args.dryRun ?? true;
 
     const configs = await ctx.runQuery(
       internal.vehicleEnrichment.backfillNhtsaKey._listConfigsMissingNhtsaKey,

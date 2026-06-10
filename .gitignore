@@ -53,3 +53,6 @@ node_modules/
 /playwright/.cache/
 /playwright/.auth/
 .expo/
+
+# Agent browser-driving harness (local only — never committed)
+/.agent/

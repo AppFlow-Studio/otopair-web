@@ -14,10 +14,12 @@
 // get_vehicle_health and get_due_services. Identity comes from auth.
 // =============================================================================
 
-import { query } from "../_generated/server";
+import { query, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
+import type { QueryCtx } from "../_generated/server";
 import { isEvalTestMake } from "./evalTestFilter";
+import { resolveVehicleByIdOrVin } from "./resolveVehicle";
 
 export interface VehicleFactsResponse {
   display: string;
@@ -68,31 +70,32 @@ export interface VehicleFactsResponse {
   };
 }
 
-export const getVehicleFacts = query({
-  args: { vehicle_id: v.string() },
-  handler: async (ctx, { vehicle_id }): Promise<VehicleFactsResponse> => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("unauthenticated");
+/**
+ * Core vehicle-facts logic, keyed by an explicit `userId`. Shared by the
+ * public auth-scoped `getVehicleFacts` and the internal
+ * `getVehicleFactsForUser` variant (used by the director simulation harness,
+ * where the fabricated identity never reaches sub-queries). Behavior is
+ * identical to the original handler — only the user-resolution step is
+ * hoisted out; the VIN ownership check is preserved.
+ */
+async function _getVehicleFactsCore(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  { vehicle_id }: { vehicle_id: string },
+): Promise<VehicleFactsResponse> {
+  // B-P3: accept VIN-or-id (the tool descriptions disagree; Haiku passes
+  // either). resolveVehicleByIdOrVin never throws on a bad id.
+  const vehicle = await resolveVehicleByIdOrVin(ctx, vehicle_id);
+  if (!vehicle) throw new Error(`vehicle not found: ${vehicle_id}`);
 
-    const user: Doc<"users"> | null = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", identity.subject))
-      .unique();
-    if (!user) throw new Error("user not found");
-
-    const vehicle: Doc<"vehicles"> | null = await ctx.db.get(
-      vehicle_id as Id<"vehicles">,
-    );
-    if (!vehicle) throw new Error(`vehicle not found: ${vehicle_id}`);
-
-    // Authorize: verify the user actually owns this VIN.
-    const owner: Doc<"vehicle_owners"> | null = await ctx.db
-      .query("vehicle_owners")
-      .withIndex("by_vin_user", (q: any) =>
-        q.eq("vin", vehicle.vin).eq("user_id", user._id),
-      )
-      .unique();
-    if (!owner) throw new Error(`not authorized for vehicle ${vehicle_id}`);
+  // Authorize: verify the user actually owns this VIN.
+  const owner: Doc<"vehicle_owners"> | null = await ctx.db
+    .query("vehicle_owners")
+    .withIndex("by_vin_user", (q: any) =>
+      q.eq("vin", vehicle.vin).eq("user_id", userId),
+    )
+    .unique();
+  if (!owner) throw new Error(`not authorized for vehicle ${vehicle_id}`);
 
     // Pull the joined rows in parallel where possible. config first since
     // others key off it.
@@ -222,5 +225,36 @@ export const getVehicleFacts = query({
         ps_fluid_capacity_oz: config?.ps_fluid_capacity_oz ?? null,
       },
     };
+}
+
+export const getVehicleFacts = query({
+  args: { vehicle_id: v.string() },
+  handler: async (ctx, { vehicle_id }): Promise<VehicleFactsResponse> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("unauthenticated");
+
+    const user: Doc<"users"> | null = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!user) throw new Error("user not found");
+
+    return await _getVehicleFactsCore(ctx, user._id, { vehicle_id });
+  },
+});
+
+/**
+ * Internal-only variant: the acting user is passed explicitly instead of being
+ * derived from auth. Used by the Oto chat action's tool callables under the
+ * director simulation harness. NEVER expose `actingUserId` on the public query
+ * — that would be an IDOR hole.
+ */
+export const getVehicleFactsForUser = internalQuery({
+  args: { actingUserId: v.id("users"), vehicle_id: v.string() },
+  handler: async (
+    ctx,
+    { actingUserId, vehicle_id },
+  ): Promise<VehicleFactsResponse> => {
+    return await _getVehicleFactsCore(ctx, actingUserId, { vehicle_id });
   },
 });

@@ -133,7 +133,7 @@ const ShopModal = ({ shopId, onClose }: { shopId: Id<'shops'> | null; onClose: (
     return () => clearTimeout(t)
   }, [toast])
 
-  const rawAudit = useQuery(api.audit_log.listByEntity, shopId ? { entity_type: 'shop', entity_id: shopId } : 'skip')
+  const rawAudit = useQuery(api.audit_log.listByEntity, shopId ? { entity_type: 'shop', entity_id: shopId, token: session?.token ?? '' } : 'skip')
   const auditEntries = rawAudit?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
     action: e.action, actor: e.actor, detail: e.detail ?? '',

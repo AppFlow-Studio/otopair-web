@@ -11,6 +11,8 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { median, nonOutlierIndices } from "./lib/robustStats";
+import { isPoisonPriceType } from "./lib/priceTypes";
 
 export type PriceSummary = {
   part_id: Id<"oem_parts">;
@@ -40,47 +42,31 @@ export type PriceSummary = {
   }>;
 };
 
-function median(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[mid - 1] + sorted[mid]) / 2
-    : sorted[mid];
-}
+// `median` + `nonOutlierIndices` now live in ./lib/robustStats (shared with
+// labor-time aggregation). Imported above — behavior is unchanged.
+
+/** A part_prices row as far as aggregation cares (loose so callers can pass
+ *  raw docs or test fixtures). */
+export type PriceRowLike = {
+  price?: number | null;
+  price_type?: string | null;
+  source_domain?: string | null;
+  source_url?: string | null;
+  refreshed_at?: number | null;
+};
 
 /**
- * Robust outlier rejection using the modified z-score on MAD.
- * Threshold of 3.5 is the Iglewicz/Hoaglin recommendation.
- *
- * Returns the indices of values to KEEP. When sample is too small (< 4)
- * or MAD is zero (all values equal), keeps everything.
+ * PURE aggregator — the math half of summarizePartPrices, split out so it can be
+ * unit-tested without a db. It excludes POISON price_types (online_discount /
+ * you_save / unverified — the discount-capture bug and unverifiable rows) so a
+ * wrong figure that's only 20-40% off (and would survive MAD outlier rejection)
+ * can never drive the customer-facing median, average, or low/high band. Every
+ * trustworthy row (sale, llm_estimate, manual_seed, legacy untyped) still counts.
  */
-function nonOutlierIndices(values: number[]): number[] {
-  if (values.length < 4) return values.map((_, i) => i);
-  const med = median(values);
-  const absDev = values.map((v) => Math.abs(v - med));
-  const mad = median(absDev);
-  if (mad === 0) return values.map((_, i) => i);
-  const threshold = 3.5;
-  const kept: number[] = [];
-  for (let i = 0; i < values.length; i++) {
-    const score = (0.6745 * (values[i] - med)) / mad;
-    if (Math.abs(score) <= threshold) kept.push(i);
-  }
-  // Safety: if every point got rejected (degenerate), fall back to all.
-  return kept.length > 0 ? kept : values.map((_, i) => i);
-}
-
-export async function summarizePartPrices(
-  ctx: { db: any },
+export function summarizePriceRows(
   partId: Id<"oem_parts">,
-): Promise<PriceSummary> {
-  const rows = await ctx.db
-    .query("part_prices")
-    .withIndex("by_part", (q: any) => q.eq("part_id", partId))
-    .collect();
-
+  rows: PriceRowLike[],
+): PriceSummary {
   const empty: PriceSummary = {
     part_id: partId,
     sample_size: 0,
@@ -97,15 +83,19 @@ export async function summarizePartPrices(
     most_recent_refreshed_at: null,
     sources_used: [],
   };
-  if (rows.length === 0) return empty;
 
-  const prices: number[] = [];
-  for (const r of rows) {
-    if (typeof r.price === "number" && Number.isFinite(r.price) && r.price > 0) {
-      prices.push(r.price);
-    }
-  }
-  if (prices.length === 0) return empty;
+  // Keep only trustworthy, positive-priced rows. `validRows` and `prices` are
+  // built from the SAME filtered list in the same order, so keepIdx (computed
+  // over `prices`) indexes straight back into `validRows` for source metadata.
+  const validRows = rows.filter(
+    (r) =>
+      !isPoisonPriceType(r.price_type) &&
+      typeof r.price === "number" &&
+      Number.isFinite(r.price) &&
+      (r.price as number) > 0,
+  );
+  if (validRows.length === 0) return empty;
+  const prices = validRows.map((r) => r.price as number);
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
   const keepIdx = nonOutlierIndices(prices);
@@ -127,14 +117,6 @@ export async function summarizePartPrices(
       : kept;
   const trimmed_median = round2(median(trimmed));
 
-  // Map kept indices back to original rows so we can report sources used.
-  // The two arrays are aligned because we built `prices` in row order and
-  // skipped only invalid prices — but the index space is the filtered one.
-  // Rebuild a parallel valid-rows list to recover the source metadata.
-  const validRows = rows.filter(
-    (r: any) =>
-      typeof r.price === "number" && Number.isFinite(r.price) && r.price > 0,
-  );
   const sources_used = keepIdx.map((i) => ({
     price: validRows[i].price as number,
     source_domain: (validRows[i].source_domain as string | undefined) ?? null,
@@ -164,6 +146,40 @@ export async function summarizePartPrices(
     most_recent_refreshed_at,
     sources_used: sources_used.map((s) => ({ ...s, price: round2(s.price) })),
   };
+}
+
+export async function summarizePartPrices(
+  ctx: { db: any },
+  partId: Id<"oem_parts">,
+): Promise<PriceSummary> {
+  const rows = await ctx.db
+    .query("part_prices")
+    .withIndex("by_part", (q: any) => q.eq("part_id", partId))
+    .collect();
+  return summarizePriceRows(partId, rows as PriceRowLike[]);
+}
+
+/**
+ * Quote-time unit-price selector. The founder wants the median ACROSS SOURCES;
+ * we use the robust median once there are >= 3 sources (so a single per-pack vs
+ * per-unit listing can't swing it), else fall back to the outlier-rejected mean.
+ *
+ * Behind the PARTS_PRICE_SOURCE env flag so the cutover is reversible:
+ *   - unset / "average" → outlier-rejected mean (legacy; DEFAULT)
+ *   - "median"          → median @ >=3 sources, else average
+ *
+ * Flip to "median" only AFTER the price backfill prunes legacy rows and the
+ * shadow diff is signed off — `median` is NOT outlier-protected (only `average`
+ * is), so at small samples a stale row would otherwise drag it.
+ */
+export function quoteUnitPrice(p: {
+  average: number;
+  median: number;
+  sample_size: number;
+}): number {
+  const mode = process.env.PARTS_PRICE_SOURCE ?? "average";
+  if (mode === "median" && p.sample_size >= 3 && p.median > 0) return p.median;
+  return p.average > 0 ? p.average : p.median;
 }
 
 export const getAveragePrice = query({

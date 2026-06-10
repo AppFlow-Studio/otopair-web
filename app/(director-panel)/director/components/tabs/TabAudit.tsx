@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useContext, useState, type ReactNode } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import type { Id } from '@/convex/_generated/dataModel'
 import type { AuditEntry } from '../../data'
 import { Badge, Button, Input, Select, Modal, Avatar, StatusBadge, GlobalAuditTable, auditMeta, IconSearch, IconExternal, IconBolt } from '../Primitives'
@@ -23,6 +24,7 @@ const ACTION_LABELS: Record<string, string> = {
   view:             'Viewed',
   login:            'Login',
   logout:           'Logout',
+  login_failed:     'Login failed',
 }
 
 const ENTITY_TAB: Record<string, string> = {
@@ -41,13 +43,22 @@ const ENTITY_LABEL: Record<string, string> = {
   booking:  'Booking',
 }
 
+// Audit rows can carry a non-document entity_id sentinel (e.g. "unknown" for a
+// login event whose director_user wasn't resolved, or an entity that was since
+// deleted). Passing that straight into a `v.id(...)`-validated query throws an
+// ArgumentValidationError and crashes the modal. Gate every id-backed query on
+// the value actually looking like a Convex id (lowercase alnum, ~32 chars).
+const looksLikeId = (s: string) => /^[a-z0-9]{20,}$/.test(s)
+const ID_BACKED_TYPES = new Set(['shop', 'user', 'booking', 'bug', 'feedback', 'director'])
+
 const EntityPreview = ({ entityType, entityId }: { entityType: string; entityId: string }) => {
-  const shop     = useQuery(api.director.shopDetail,          entityType === 'shop'     ? { id: entityId as Id<'shops'> }           : 'skip')
-  const user     = useQuery(api.director.userDetail,          entityType === 'user'     ? { id: entityId as Id<'users'> }           : 'skip')
-  const booking  = useQuery(api.director.bookingDetail,       entityType === 'booking'  ? { id: entityId as Id<'bookings'> }        : 'skip')
-  const bug      = useQuery(api.bugs.getById,                 entityType === 'bug'      ? { id: entityId as Id<'bugs'> }            : 'skip')
-  const feedback = useQuery(api.app_feedback.getById,         entityType === 'feedback' ? { id: entityId as Id<'app_feedback'> }    : 'skip')
-  const director = useQuery(api.director_auth.getUserPreview, entityType === 'director' ? { id: entityId as Id<'director_users'> }  : 'skip')
+  const validId  = looksLikeId(entityId)
+  const shop     = useQuery(api.director.shopDetail,          entityType === 'shop'     && validId ? { id: entityId as Id<'shops'> }           : 'skip')
+  const user     = useQuery(api.director.userDetail,          entityType === 'user'     && validId ? { id: entityId as Id<'users'> }           : 'skip')
+  const booking  = useQuery(api.director.bookingDetail,       entityType === 'booking'  && validId ? { id: entityId as Id<'bookings'> }        : 'skip')
+  const bug      = useQuery(api.bugs.getById,                 entityType === 'bug'      && validId ? { id: entityId as Id<'bugs'> }            : 'skip')
+  const feedback = useQuery(api.app_feedback.getById,         entityType === 'feedback' && validId ? { id: entityId as Id<'app_feedback'> }    : 'skip')
+  const director = useQuery(api.director_auth.getUserPreview, entityType === 'director' && validId ? { id: entityId as Id<'director_users'> }  : 'skip')
 
   const row = (label: string, value: string | undefined | null, mono?: boolean) => value ? (
     <div style={{ display:'flex', gap:8, fontSize:12, lineHeight:1.5, padding:'3px 0', borderBottom:'1px solid var(--slate-100)' }}>
@@ -66,6 +77,16 @@ const EntityPreview = ({ entityType, entityId }: { entityType: string; entityId:
       </div>
     </div>
   )
+
+  // Sentinel / unresolved reference (e.g. "unknown" on a login event) — show a
+  // plain note instead of firing an id-validated query or spinning on Loading.
+  if (ID_BACKED_TYPES.has(entityType) && !validId) {
+    return wrap(ENTITY_LABEL[entityType] ?? 'Record', (
+      <span style={{ fontSize:12, color:'var(--slate-400)' }}>
+        No linked record{entityId && entityId !== 'unknown' ? ` (${entityId})` : ''}.
+      </span>
+    ))
+  }
 
   if (entityType === 'shop') {
     if (shop === undefined) return wrap('Shop', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
@@ -173,7 +194,8 @@ export const TabAudit = () => {
   const [actorFilter,  setActorFilter]  = useState('all')
   const [selected,     setSelected]     = useState<AuditEntry | null>(null)
 
-  const raw = useQuery(api.audit_log.listRecent)
+  const session = useContext(DirectorSessionCtx)
+  const raw = useQuery(api.audit_log.listRecent, { token: session?.token ?? '' })
   const entries = raw?.map(e => ({
     timestamp:  new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
     action:     e.action,

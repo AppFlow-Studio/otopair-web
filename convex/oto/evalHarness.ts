@@ -51,10 +51,10 @@
 // clean — this file holds zero patches, zero replaces, zero inserts.
 // =============================================================================
 
-import { action, internalQuery } from "../_generated/server";
+import { internalAction, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
-import { api, internal } from "../_generated/api";
+import { internal } from "../_generated/api";
 
 // ---------------------------------------------------------------------------
 // FullCascadeFactRow — the union shape across all three tiers.
@@ -569,15 +569,16 @@ function formatT1FactText(topic: string, value: unknown): string {
 // harness passes `no_web_search: true` for baseline runs.
 //
 // Action (not query) because Step B awaits `cascadeTier2` which itself is
-// an action (canonicalQuestionKey is async). Internal-flavored: callable
-// from the eval harness via `api.oto.evalHarness.runFullCascade`.
+// an action (canonicalQuestionKey is async). internalAction (Jun-10 IDOR
+// sweep): the only runtime caller is chat.ts; manual eval runs reach it via
+// `npx convex run` with deploy creds. Public, it was an anonymous compute
+// surface — and a money-burn surface once T3 web_search lands.
 //
 // `eval_user_id` is accepted for telemetry / future per-user T3 attribution
-// but is NOT used to gate access. The eval harness is internal — there's
-// no Clerk-auth check here. Production reads continue to go through
+// but is NOT used to gate access. Production reads continue to go through
 // chat.ts → retrieve_vehicle_facts which uses cascadeTier2 directly.
 
-export const runFullCascade = action({
+export const runFullCascade = internalAction({
   args: {
     question_text: v.string(),
     topic: v.string(),
@@ -648,7 +649,7 @@ export const runFullCascade = action({
           | "hash"
           | "text";
       }>;
-    } = await ctx.runAction(api.oto.vehicleFactsKB.cascadeTier2, {
+    } = await ctx.runAction(internal.oto.vehicleFactsKB.cascadeTier2, {
       question_text: args.question_text,
       topic: args.topic,
       topic_axis: args.topic_axis,

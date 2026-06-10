@@ -48,7 +48,7 @@
 //                              (Waleed or Temur only)
 // =============================================================================
 
-import { mutation } from "../_generated/server";
+import { internalMutation } from "../_generated/server";
 import { v } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
 import { queryMoat } from "./queryMoat";
@@ -115,7 +115,7 @@ const auditActionValidator = v.union(
 //   else                   → "verified"
 // -----------------------------------------------------------------------------
 
-export const recordVehicleFact = mutation({
+export const recordVehicleFact = internalMutation({
   args: {
     topic: v.string(),
     topic_axis: topicAxisValidator,
@@ -250,7 +250,7 @@ export const recordVehicleFact = mutation({
 // reason is required and non-empty.
 // -----------------------------------------------------------------------------
 
-export const editVehicleFact = mutation({
+export const editVehicleFact = internalMutation({
   args: {
     fact_id: v.id("vehicle_facts"),
     action: auditActionValidator,
@@ -386,7 +386,7 @@ export const editVehicleFact = mutation({
 // for editor mutations on the fact's content/status.
 // -----------------------------------------------------------------------------
 
-export const reportVehicleFact = mutation({
+export const reportVehicleFact = internalMutation({
   args: {
     fact_id: v.id("vehicle_facts"),
     conversation_id: v.id("ai_conversations"),
@@ -434,7 +434,7 @@ export const reportVehicleFact = mutation({
 // invariant is local).
 // -----------------------------------------------------------------------------
 
-export const resolveFactReport = mutation({
+export const resolveFactReport = internalMutation({
   args: {
     report_id: v.id("fact_reports"),
     resolver_id: v.id("users"),

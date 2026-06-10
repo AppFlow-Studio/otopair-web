@@ -900,7 +900,11 @@ export async function sendMessageHandlerCore(
   const conversationCurrentModel = ((conversation as any).current_model ?? null) as
     | string
     | null;
-  const turnModel =
+  // `let`, not const: B-P2 same-turn Sonnet escalation re-points this mid-loop
+  // when request_sonnet_handoff fires, so the hard turn that ASKED for Sonnet
+  // is answered by Sonnet THIS turn (previously it finished on Haiku and
+  // Sonnet only engaged the next turn).
+  let turnModel =
     conversationCurrentModel === "sonnet" ? SONNET_MODEL : HAIKU_MODEL;
   if (trace) trace.model = turnModel;
 
@@ -985,6 +989,36 @@ export async function sendMessageHandlerCore(
       stateToolUses.length > 0
         ? await Promise.all(stateToolUses.map((tu) => executeTool(tu, callables)))
         : [];
+
+    // ── B-P2: same-turn Sonnet escalation ────────────────────────────────
+    // The model-routing tools (request_sonnet_handoff / request_haiku_handback)
+    // write ai_conversations.current_model, but turnModel was fixed at turn
+    // start — so the hard turn that requested Sonnet used to be answered by
+    // Haiku, with Sonnet engaging only the NEXT turn. After a routing tool
+    // runs, re-read the persisted model (the SAME source of truth turn-start
+    // selection uses) and apply it to the remaining iterations of THIS turn.
+    // Only re-reads when a routing tool actually fired (rare — 15-25% of
+    // diagnostic turns), and the routing callables swallow write failures, so
+    // a failed handoff simply leaves current_model (and turnModel) unchanged.
+    let escalatedToSonnetThisIteration = false;
+    if (stateToolUses.some((tu) => OTO_TOOL_CATEGORY[tu.name] === "model_routing")) {
+      try {
+        const fresh = await ctx.runQuery(internal.ai_conversations.getById, {
+          id: conversationId,
+        });
+        const freshModel = ((fresh as any)?.current_model ?? null) as string | null;
+        const nextTurnModel = freshModel === "sonnet" ? SONNET_MODEL : HAIKU_MODEL;
+        escalatedToSonnetThisIteration =
+          turnModel !== SONNET_MODEL && nextTurnModel === SONNET_MODEL;
+        turnModel = nextTurnModel;
+        if (trace) trace.model = turnModel;
+      } catch (e: any) {
+        console.error(
+          "[oto/chat] model-routing re-read failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
 
     // One trace entry per Anthropic round-trip. Pushed here (before tool
     // dispatch) so even a thrown dispatch error still leaves the entry in
@@ -1205,11 +1239,14 @@ export async function sendMessageHandlerCore(
       //       throw downstream. Feed the state ack back and let Haiku try
       //       again. This recovers the "state-only-no-text" failure mode.
       const hasText = !!textBlock?.text?.trim();
-      if (!hasText && stateToolUses.length > 0) {
+      // B-P2: if Haiku escalated to Sonnet THIS iteration, do NOT let Haiku's
+      // (typically holding) text end the turn — feed the state ack back and
+      // continue so Sonnet produces the real answer same-turn. Otherwise the
+      // original state-only-no-text recovery (case c).
+      if (escalatedToSonnetThisIteration || (!hasText && stateToolUses.length > 0)) {
         // Continuation path: persist messages with state ack tool_results
-        // and let the loop iterate. Haiku gets another chance to emit text
-        // (and may emit more tools — that's fine; loop continues until
-        // text/render/cap).
+        // and let the loop iterate. The next call uses the (possibly
+        // escalated) turnModel — Sonnet answers if Haiku just handed off.
         messages.push({ role: "assistant", content: resp.content });
         messages.push({ role: "user", content: stateAckResults });
         if (iterations === MAX_TOOL_ITERATIONS) hitCap = true;
@@ -1266,7 +1303,10 @@ export async function sendMessageHandlerCore(
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: MODEL,
+          // turnModel, not the MODEL constant: an escalated turn (B-P2) that
+          // hits the iteration cap must force its final answer from Sonnet,
+          // not silently drop back to Haiku.
+          model: turnModel,
           max_tokens: MAX_TOKENS,
           // Plain system string, no cache_control, no tools — guarantees text.
           system: SYSTEM_PROMPT,

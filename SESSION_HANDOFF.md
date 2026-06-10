@@ -1,6 +1,8 @@
 # Session Handoff — otopair-web (Waleed)
 
-**Branch:** `waleed-flagship` · **Last updated:** 2026-06-09 · working tree clean
+**Branch:** `waleed-flagship` · **Last updated:** 2026-06-10 (session 3) · working tree clean · pushed to origin
+
+**📊 FINAL Jun-10 scoreboard:** parts coverage — 750i/M550i×2 **25/25**, Jetta S + R-line **28/30** (belt basis, timing belt + water pump priced at last), Civic 24/25, CR-V + Atlas 2.0T 23/25, Atlas V6 22/25 (no vehicle row), Accord 23/30. Poison: **127 → 1** rows catalog-wide. Labor: all 10 configs N-1/N quote-grade — single gap everywhere = `rotor_replacement` (Firecrawl can't read RepairPal's rotor pages). Remaining part-gap classes are structural (O-ring fallback, timing-kit discovery, old-Honda legacy fitments), not batch-fixable.
 **Dev deployment:** `flippant-mink-750` (what `.env.local` / localhost point at)
 **temurbek (prod-ish):** `ardent-crab-641` — read-only via the `claude_ai_Otopair-Convex` MCP (`get_data`, deployment `temurbek`). DO NOT deploy there.
 

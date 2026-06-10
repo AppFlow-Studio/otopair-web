@@ -7,8 +7,11 @@
 
 The Jun 9–10 sessions shipped 12 commits (labor quote-gate `8960661`, re-extraction feature `b597c4b` + outcome contract `3427406`, $0-parts `price_unknown` `0cd043d`, security lockdown `aff697e`, PDF coverage inspector `3413fde`, scrape time budget `41c07de`, **fresh-car pricing contract `7d9f01e`** (the big one — Batch-2 now prices self-discovered parts), axle retraction `f6c498c`, scrape-cache trim key `3e6f1b5`, fallback swap + sanity band `3849aa4`, applicability finality `1d6d02d`). All TDD'd, all live-verified on dev.
 
-**Coverage scoreboard (applicable locked PDF roles priced):** 750i **25/25** · Civic **24/25** · Jetta **24/25**.
-Measure with: `npx convex run devOnly/partsCoverage:coverage '{"configKey":"..."}'` (read-only; reports `timing_system` as its applicability basis). Acceptance for any backfill: priced === total on applicable roles.
+**Coverage scoreboard — FINAL Jun 10 session 3 (applicable locked PDF roles priced):**
+750i **25/25** · M550i-2020 **25/25** · M550i-2021 **25/25** · Civic 24/25 · CR-V 23/25 · Atlas 2.0T 23/25 · Atlas V6 22/25 (no vehicle row — can't run the vehicle-keyed pipeline) · **Jetta S 28/30** (belt basis at last — timing belt $30 + water pump $75 priced) · **R-line 28/30** · Accord 23/30 (2003 parts ecosystem thin: atf missing, rear pads/battery unpriced).
+Remaining gap classes are structural, not batch-fixable: `oil_filter_housing_oring` (no universal fallback — review item), `timing_kit` discovery, old-Honda unpriced legacy fitments, Atlas V6 vehicle row.
+**Labor:** all 10 configs N-1/N quote-grade; the single gap everywhere is `rotor_replacement` (Firecrawl can't read RepairPal's rotor pages in any URL shape).
+Measure with: `npx convex run devOnly/partsCoverage:coverage '{"configKey":"..."}'` + `npx convex run devOnly/laborValidation:report`.
 
 ## Remaining tasks, in order
 

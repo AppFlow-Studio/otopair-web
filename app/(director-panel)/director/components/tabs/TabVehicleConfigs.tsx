@@ -1,12 +1,12 @@
 'use client'
 
 import { useState, useEffect, useContext } from 'react'
-import { useQuery, useMutation } from 'convex/react'
+import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import {
   Badge, Button, Card, Input, Select, Modal, AuditButton,
-  tableStyles, IconSearch, IconX, IconCar,
+  tableStyles, IconSearch, IconX, IconCar, IconRefresh,
 } from '../Primitives'
 import { DirectorNotesPanel } from '../DirectorNotesPanel'
 import { SectionAnchor } from '../Shell'
@@ -311,8 +311,10 @@ const PartFitmentDrawerBody = ({ partId, configId, onClose }: {
 
 const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | null; onClose: () => void }) => {
   const session   = useContext(DirectorSessionCtx)
-  const actorName = session?.name ?? 'Director'
-  const actorId   = session?.userId as Id<'director_users'> | undefined
+  // Every config-edit mutation + backfill action validates this server-side
+  // and derives the audit actor from the session — actorName/actorId are no
+  // longer accepted args anywhere in this modal.
+  const sessionToken = session?.token ?? ''
   const [auditOpen, setAuditOpen] = useState(false)
   const [editOpen,  setEditOpen]  = useState(false)
   const [engineOpen,  setEngineOpen]  = useState(false)
@@ -332,6 +334,13 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   const updateChassisSpecs = useMutation(api.directorConfigActions.updateChassisSpecsFields)
   const updateTrimSpecs    = useMutation(api.directorConfigActions.updateTrimSpecsFields)
   const markVerified       = useMutation(api.directorConfigActions.markConfigVerified)
+  const reEnrichConfig     = useAction(api.directorConfigBackfills.reEnrichConfig)
+  const backfillConfigParts = useAction(api.directorConfigBackfills.backfillConfigParts)
+  const repriceConfigParts = useAction(api.directorConfigBackfills.repriceConfigParts)
+  // Independent busy flags so one running backfill doesn't grey out the others.
+  const [busyFull,   setBusyFull]   = useState(false)
+  const [busyParts,  setBusyParts]  = useState(false)
+  const [busyPrices, setBusyPrices] = useState(false)
 
   useEffect(() => {
     if (!toast) return
@@ -354,7 +363,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   }
 
   const rawAudit = useQuery(api.audit_log.listByEntity,
-    configId ? { entity_type: 'vehicle_config', entity_id: configId } : 'skip')
+    configId ? { entity_type: 'vehicle_config', entity_id: configId, token: sessionToken } : 'skip')
   type AuditRow = { created_at: number; action: string; actor: string; detail?: string }
   const auditEntries = (rawAudit as AuditRow[] | undefined)?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
@@ -363,8 +372,54 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
 
   const handleVerify = async () => {
     if (!configId) return
-    const res = await markVerified({ id: configId, actorName, actorId })
+    const res = await markVerified({ id: configId, token: sessionToken })
     setToast(`Config marked verified. Total: ${(res as any)?.verifications ?? '?'}.`)
+  }
+
+  // --- Backfill triggers -----------------------------------------------------
+  // All three kick off async jobs and return immediately so the click can't time
+  // out; the toast confirms scheduling. Full + parts run a Claude batch (progress
+  // in the enrichment-runs panel). Reprice runs a live scrape in a scheduled
+  // internal action and records the priced count in the audit log when it lands.
+  const handleReEnrich = async () => {
+    if (!configId || busyFull) return
+    if (!window.confirm('Re-enrich the ENTIRE car? Re-runs the full pipeline (engine, transmission, parts, intervals, labor) and overwrites resolved specs. Costs an LLM batch and finishes in a few minutes.')) return
+    setBusyFull(true)
+    try {
+      const res = await reEnrichConfig({ id: configId, token: sessionToken }) as { status?: string; message?: string }
+      setToast(res?.status === 'scheduled'
+        ? 'Full re-enrich scheduled — check Enrichment runs in a few minutes.'
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+    } catch (e) {
+      setToast(`Re-enrich failed: ${(e as Error).message}`)
+    } finally { setBusyFull(false) }
+  }
+
+  const handleBackfillParts = async () => {
+    if (!configId || busyParts) return
+    if (!window.confirm('Re-discover only this car’s PARTS (which parts apply per service)? Preserves hand-edited engine/transmission/chassis specs. Costs an LLM batch and finishes in a few minutes. Prices are not changed — use "Reprice parts" for that.')) return
+    setBusyParts(true)
+    try {
+      const res = await backfillConfigParts({ id: configId, token: sessionToken }) as { status?: string; message?: string }
+      setToast(res?.status === 'scheduled'
+        ? 'Parts backfill scheduled — check Enrichment runs in a few minutes.'
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+    } catch (e) {
+      setToast(`Parts backfill failed: ${(e as Error).message}`)
+    } finally { setBusyParts(false) }
+  }
+
+  const handleRepriceParts = async () => {
+    if (!configId || busyPrices) return
+    setBusyPrices(true)
+    try {
+      const res = await repriceConfigParts({ id: configId, token: sessionToken }) as { status?: string; message?: string }
+      setToast(res?.status === 'scheduled'
+        ? 'Reprice started — the priced count lands in the audit log in a moment.'
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+    } catch (e) {
+      setToast(`Reprice failed: ${(e as Error).message}`)
+    } finally { setBusyPrices(false) }
   }
 
   const ymmt = detail
@@ -744,6 +799,15 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                   <ActionRow label="Mark verified"
                     hint={`Bumps verification count (current: ${detail.enrichment.verificationCount ?? 0})`}
                     action={<Button size="sm" variant="primary" onClick={handleVerify}>Verify</Button>} />
+                  <ActionRow label="Re-enrich entire car"
+                    hint="Full pipeline re-run (specs + parts + intervals + labor). Async — a few minutes."
+                    action={<Button size="sm" disabled={busyFull} onClick={handleReEnrich}>{busyFull ? 'Scheduling…' : 'Re-enrich'}</Button>} />
+                  <ActionRow label="Backfill parts only"
+                    hint="Re-discover which parts apply per service. Keeps hand-edited specs. Async — a few minutes."
+                    action={<Button size="sm" disabled={busyParts} onClick={handleBackfillParts}>{busyParts ? 'Scheduling…' : 'Backfill parts'}</Button>} />
+                  <ActionRow label="Reprice parts only"
+                    hint="Re-scrape correct prices for the parts already on this car. Async — the priced count lands in the audit log."
+                    action={<Button size="sm" disabled={busyPrices} icon={<IconRefresh size={11} />} onClick={handleRepriceParts}>{busyPrices ? 'Repricing…' : 'Reprice parts'}</Button>} />
                 </AdminActionPanel>
               </div>
 
@@ -769,14 +833,14 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
           {/* Edit forms */}
           <ConfigEditModal open={editOpen} onClose={() => setEditOpen(false)}
             configId={configId} detail={detail}
-            actorName={actorName} actorId={actorId}
+            token={sessionToken}
             onSaved={(n) => { setEditOpen(false); setToast(n > 0 ? `Saved ${n} field${n === 1 ? '' : 's'}.` : 'No changes.') }}
             updateBasics={updateBasics} />
 
           {detail.engine && (
             <EngineEditModal open={engineOpen} onClose={() => setEngineOpen(false)}
               engineId={detail.engine.id} current={detail.engine}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setEngineOpen(false); setToast(n > 0 ? `Saved ${n} engine field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateEngine} />
           )}
@@ -784,7 +848,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
           {detail.transmission && (
             <TransmissionEditModal open={transOpen} onClose={() => setTransOpen(false)}
               transmissionId={detail.transmission.id} current={detail.transmission}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setTransOpen(false); setToast(n > 0 ? `Saved ${n} transmission field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateTransmission} />
           )}
@@ -793,7 +857,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
             <ChassisSpecsEditModal open={chassisOpen} onClose={() => setChassisOpen(false)}
               chassisCode={detail.chassisCode}
               current={detail.chassisSpecs ?? null}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setChassisOpen(false); setToast(n > 0 ? `Saved ${n} chassis-spec field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateChassisSpecs} />
           )}
@@ -802,7 +866,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
             <TrimSpecsEditModal open={trimOpen} onClose={() => setTrimOpen(false)}
               vehicleConfigId={configId}
               current={detail.trimSpecs ?? null}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setTrimOpen(false); setToast(n > 0 ? `Saved ${n} trim-spec field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateTrimSpecs} />
           )}
@@ -819,14 +883,13 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
 // ---------------------------------------------------------------------------
 
 const ConfigEditModal = ({
-  open, onClose, configId, detail, actorName, actorId, onSaved, updateBasics,
+  open, onClose, configId, detail, token, onSaved, updateBasics,
 }: {
   open: boolean
   onClose: () => void
   configId: Id<'vehicle_configs'> | null
   detail: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (changes: number) => void
   updateBasics: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateConfigBasics>>
 }) => {
@@ -860,8 +923,7 @@ const ConfigEditModal = ({
         brake_fluid_type:  brake,
         ps_fluid_type:     ps,
         enrichment_status: status,
-        actorName,
-        actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -923,14 +985,13 @@ const EditRow = ({ label, children }: { label: string; children: React.ReactNode
 // ---------------------------------------------------------------------------
 
 const EngineEditModal = ({
-  open, onClose, engineId, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, engineId, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   engineId: Id<'engines'>
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateEngineFields>>
 }) => {
@@ -997,7 +1058,7 @@ const EngineEditModal = ({
         spark_plug_gap_mm:        n(spGap),
         water_pump_timing_driven: wpTiming === '' ? undefined : wpTiming === 'true',
         data_quality:             dq,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -1046,14 +1107,13 @@ const EngineEditModal = ({
 // ---------------------------------------------------------------------------
 
 const TransmissionEditModal = ({
-  open, onClose, transmissionId, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, transmissionId, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   transmissionId: Id<'transmissions'>
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateTransmissionFields>>
 }) => {
@@ -1099,7 +1159,7 @@ const TransmissionEditModal = ({
         has_serviceable_filter: filter   === '' ? undefined : filter   === 'true',
         service_method: method,
         data_quality: dq,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -1148,14 +1208,13 @@ const TransmissionEditModal = ({
 // ---------------------------------------------------------------------------
 
 const ChassisSpecsEditModal = ({
-  open, onClose, chassisCode, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, chassisCode, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   chassisCode: string
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateChassisSpecsFields>>
 }) => {
@@ -1216,7 +1275,7 @@ const ChassisSpecsEditModal = ({
         has_rear_wiper:       hasRearWiper === '' ? undefined : hasRearWiper === 'true',
         has_brake_pad_sensor: hasPadSensor === '' ? undefined : hasPadSensor === 'true',
         data_quality: dq,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -1286,14 +1345,13 @@ const ChassisSpecsEditModal = ({
 // ---------------------------------------------------------------------------
 
 const TrimSpecsEditModal = ({
-  open, onClose, vehicleConfigId, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, vehicleConfigId, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   vehicleConfigId: Id<'vehicle_configs'>
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateTrimSpecsFields>>
 }) => {
@@ -1333,7 +1391,7 @@ const TrimSpecsEditModal = ({
         tire_directional: directional === '' ? undefined : directional === 'true',
         is_run_flat:      runFlat     === '' ? undefined : runFlat     === 'true',
         alignment_type:   alignment,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {

@@ -22,14 +22,15 @@ export const BATCH_2_SYSTEM = `You are a vehicle data specialist for Otopair. Yo
 
 JOB 1 — GAP FILL: Search the web for each field listed under "FIELDS NEEDING GAP FILL". Use 1-2 targeted queries per field: "[year] [make] [model] [field]". If you cannot find a value after 1-2 searches, return null. Do NOT do broad vehicle searches.
 
-JOB 2 — PRICING + LABOR: Look up current retail prices for each OEM part number provided. Use "[part_number] OEM price" as your query. Also determine labor hours for each applicable service.
+JOB 2 — PRICING + LABOR: Look up current retail prices for each OEM part number provided AND for every OEM part number you yourself report in this response (the *_oem fields / parts you discover). Use "[part_number] OEM price" as your query. Also determine labor hours for each applicable service.
 
 RULES:
 1. PRICES ARE PER-UNIT. Each OEM part is priced individually as the retail cost of ONE bottle / one filter / one pad set / one plug. Examples:
    - Spark plug: a V8 needs 8 plugs, but you return ~$15-25 (price of ONE plug), not $200.
    - Brake pads: OEM pads are sold as one axle SET, so the price is for that ONE set, not front+rear combined.
    - Oil filter / cabin filter / battery: one filter, one battery. Always per OEM part number.
-2. PREFERRED RESPONSE SHAPE: itemized parts_breakdown — one entry per OEM part number Batch 1 found, with that part's own per-unit price + source URL. Search per SKU ("<part_number> OEM price"), not per service. Multi-part services (oil_change has filter + drain plug gasket + engine oil bottle) MUST itemize — never collapse them into one service-level number.
+   REPORT THE PRICE THE CUSTOMER ACTUALLY PAYS NOW — the final/current sale price. NEVER the MSRP, the list/"was" price, a struck-through price, or the "You Save $X" amount.
+2. PREFERRED RESPONSE SHAPE: itemized parts_breakdown — one entry per OEM part number, covering BOTH the part numbers provided below AND every part number you yourself report in this response. On a fresh vehicle no part numbers are provided up front — the parts you discover ARE the pricing target; a discovered part without a parts_breakdown entry is incomplete work. Each entry carries that part's own per-unit price + source URL. Search per SKU ("<part_number> OEM price"), not per service. Multi-part services (oil_change has filter + drain plug gasket + engine oil bottle) MUST itemize — never collapse them into one service-level number.
 3. service-level parts_cost_low / parts_cost_high are now OPTIONAL — set them only as a redundant sanity-check sum. The parts_breakdown[] array is the authoritative source. If you can't itemize, you may omit parts_breakdown and fall back to a per-unit parts_cost_low/high, but prefer itemizing.
 4. Labor rate: $125/hr fixed. Do not search for this.
 5. Labor hours: use training knowledge for well-established book times (mark source_type: "training_data", confidence 0.75). Oil change is typically 0.5 hrs.
@@ -145,7 +146,7 @@ export function buildBatch2Prompt(
     ? Object.entries(oemParts)
         .map(([field, part]) => `- ${field}: "${part}"`)
         .join("\n")
-    : "(no part numbers available from Batch 1)";
+    : "(none provided — Batch 1 found no part numbers for this vehicle. You will discover the *_oem part numbers yourself in this response: price every part number you report by giving it a parts_breakdown entry in its service, same per-unit rules.)";
 
   const serviceSchemaExample = SERVICE_LIST.slice(0, 1)
     .map((s) => `    {

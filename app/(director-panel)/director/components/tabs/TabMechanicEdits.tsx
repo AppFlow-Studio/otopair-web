@@ -119,7 +119,7 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
 
   const rawAudit = useAuditQuery(
     api.audit_log.listByEntity,
-    row ? { entity_type: 'vehicle_config', entity_id: String(row.configId) } : 'skip'
+    row ? { entity_type: 'vehicle_config', entity_id: String(row.configId), token: session?.token ?? '' } : 'skip'
   )
   const auditEntries = rawAudit?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),

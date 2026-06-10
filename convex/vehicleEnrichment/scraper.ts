@@ -21,7 +21,7 @@
 
 import type { ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { fetchUrl, searchAndFetch } from "./firecrawl";
+import { fetchUrl, fetchUrlWithHtml, searchAndFetch } from "./firecrawl";
 import {
   getSourceConfig,
   getPartsPageUrls,
@@ -29,12 +29,18 @@ import {
   getManualSearchQueries,
   BLOCKED_DOMAINS,
 } from "./sourceRegistry";
+import { parsePartPrices, type ParsedPartPrice } from "./priceParser";
+import { CACHE_FORMAT_VERSION } from "./scraperQueries";
 import type { VehicleInput } from "./types";
 import { scrapeWheelSizeOptions, type WheelSizeResult } from "./utils/wheelSizeScraper";
 
 const TTL_PARTS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_MARKDOWN_CHARS = 40_000;
 const MAX_PER_PAGE_CHARS =  8_000; // per-page cap when concatenating multiple pages
+/** Wall-clock budget for the registry parts-fetch loop (see scrapePartsPages).
+ *  Leaves ample headroom inside the 600s action cap for chassis lookup, VDB,
+ *  the (parallel) manual scrape, the search fallback, and batch submission. */
+const PARTS_SCRAPE_BUDGET_MS = 210_000;
 
 export interface ScrapedSources {
   partsMarkdown: string;
@@ -42,7 +48,12 @@ export interface ScrapedSources {
   partsSourceUrls: string[];
   manualSourceUrls: string[];
   wheelSizeResult: WheelSizeResult | null;
+  /** Deterministic prices parsed from registry HTML (JSON-LD). Empty for the
+   *  open-web search path (markdown only — the LLM prices those). */
+  partPrices: ParsedPartPrice[];
 }
+
+type PartsScrapeResult = { markdown: string; urls: string[]; partPrices: ParsedPartPrice[] };
 
 // ─── Parts + Manual ──────────────────────────────────────────────
 
@@ -59,24 +70,30 @@ export async function scrapeVehicleSources(
     ? getManualSearchQueries(config, vehicle)
     : buildDefaultManualQueries(vehicle);
 
-  // Parts: try URL templates for BMW (known good), otherwise search the open web
-  let partsPromise: Promise<{ markdown: string; urls: string[] }>;
+  // Parts: ANY make with a registry template (the RevolutionParts family —
+  // *partsdeal.com / {brand}.oempartsonline.com) gets the structured direct-URL
+  // fetch; makes with no template fall back to open-web search. Previously this
+  // path was gated to BMW only, so Toyota/Honda/oempartsonline makes never hit
+  // their own registry — fixed here so the structured (JSON-LD) price path runs
+  // for every registered make. Template pages that return nothing still fall
+  // back to search.
+  let partsPromise: Promise<PartsScrapeResult>;
 
-  if (config && vehicle.make.toUpperCase() === "BMW") {
+  if (config) {
     const yearSpecificUrls = getPartsPageUrls(config, vehicle);
     const genericUrls = getGenericPartsPageUrls(config, vehicle);
     partsPromise = scrapePartsPages(ctx, vehicle, yearSpecificUrls, genericUrls).then(
       async (result) => {
-        // If BMW template returned nothing, fall back to search
+        // If the registry template returned nothing, fall back to open-web search.
         if (result.markdown.length === 0) {
-          console.log(`[scraper] BMW template returned 0 chars — falling back to search`);
+          console.log(`[scraper] ${vehicle.make} template returned 0 chars — falling back to search`);
           return searchPartsPages(ctx, vehicle);
         }
         return result;
       },
     );
   } else {
-    // All non-BMW makes: search the open web directly
+    // Makes with no registry template: search the open web directly.
     partsPromise = searchPartsPages(ctx, vehicle);
   }
 
@@ -88,7 +105,7 @@ export async function scrapeVehicleSources(
     scrapeManual(ctx, vehicle, manualQueries),
   ]);
 
-  const parts = partsResult.status === "fulfilled" ? partsResult.value : { markdown: "", urls: [] };
+  const parts = partsResult.status === "fulfilled" ? partsResult.value : { markdown: "", urls: [], partPrices: [] };
   const manual = manualResult.status === "fulfilled" ? manualResult.value : { markdown: "", urls: [] };
   const wheel = wheelResult;
 
@@ -106,6 +123,7 @@ export async function scrapeVehicleSources(
     partsSourceUrls:  parts.urls,
     manualSourceUrls: manual.urls,
     wheelSizeResult:  wheel,
+    partPrices:       parts.partPrices ?? [],
   };
 }
 
@@ -123,15 +141,21 @@ function buildDefaultManualQueries(vehicle: VehicleInput): string[] {
 async function searchPartsPages(
   ctx: ActionCtx,
   vehicle: VehicleInput,
-): Promise<{ markdown: string; urls: string[] }> {
+): Promise<PartsScrapeResult> {
   // Check cache first
   const cached = await ctx.runQuery(
     internal.vehicleEnrichment.scraperQueries.getCachedScrape,
-    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, sourceType: "parts_catalog" },
+    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: vehicle.trim ?? "", sourceType: "parts_catalog" },
   );
-  if (cached) {
+  // Only a CURRENT-format row is a price-complete hit — older markdown-only rows
+  // re-fetch so the open-web price path benefits from the format bump too.
+  if (cached && cached.format_version === CACHE_FORMAT_VERSION) {
     console.log(`[scraper] Cache hit: parts_catalog (search) for ${vehicle.year} ${vehicle.make}`);
-    return { markdown: cached.markdown, urls: [cached.url] };
+    let cachedPrices: ParsedPartPrice[] = [];
+    try {
+      cachedPrices = cached.part_prices_json ? JSON.parse(cached.part_prices_json) : [];
+    } catch { /* ignore corrupt cache json */ }
+    return { markdown: cached.markdown ?? "", urls: cached.url ? [cached.url] : [], partPrices: cachedPrices };
   }
 
   const v = `${vehicle.year} ${vehicle.make} ${vehicle.trim || vehicle.model}`;
@@ -147,16 +171,40 @@ async function searchPartsPages(
   const sourceUrls: string[] = [];
   let totalChars = 0;
 
+  const allPartPrices: ParsedPartPrice[] = [];
+  const seenNumbers = new Set<string>();
+
   for (const query of partsQueries) {
     if (totalChars >= MAX_MARKDOWN_CHARS) break;
 
     try {
-      const results = await searchAndFetch(query, 3);
+      // includeHtml=true so the deterministic parser can read structured data
+      // (JSON-LD/microdata) from WHATEVER domain the search surfaces — not just
+      // the registry family. This is what makes pricing "gather from anywhere".
+      const results = await searchAndFetch(query, 3, true);
       for (const r of results) {
-        if (!r.markdown || r.markdown.length < 200 || totalChars >= MAX_MARKDOWN_CHARS) continue;
-
         const host = (() => { try { return new URL(r.url).hostname.replace(/^www\./, ""); } catch { return ""; } })();
         if (BLOCKED_DOMAINS.some((d) => host === d || host.endsWith("." + d))) continue;
+
+        // Parse deterministic prices from the FULL raw HTML of any result that
+        // has structured data — each domain becomes its own price source.
+        if (r.html) {
+          try {
+            for (const p of parsePartPrices(r.html, r.url)) {
+              // Key by (OEM, domain) so EACH domain contributes its own price
+              // row — real multi-source breadth for the median, not first-wins.
+              const key = `${p.oem_part_number}|${p.source_domain}`;
+              if (!seenNumbers.has(key)) {
+                seenNumbers.add(key);
+                allPartPrices.push(p);
+              }
+            }
+          } catch (e) {
+            console.warn(`[scraper] price parse failed for ${r.url}:`, e);
+          }
+        }
+
+        if (!r.markdown || r.markdown.length < 200 || totalChars >= MAX_MARKDOWN_CHARS) continue;
 
         const chunk = r.markdown.slice(0, MAX_PER_PAGE_CHARS);
         markdownParts.push(`\n\n--- Source: ${r.url} ---\n${chunk}`);
@@ -171,7 +219,7 @@ async function searchPartsPages(
   const markdown = markdownParts.join("").trim();
   console.log(`[scraper] Parts search: ${sourceUrls.length} pages, ${markdown.length} chars`);
 
-  if (markdown.length > 0) {
+  if (markdown.length > 0 || allPartPrices.length > 0) {
     const now = Date.now();
     await ctx.runMutation(internal.vehicleEnrichment.scraperQueries.storeScrapeCache, {
       url: sourceUrls[0] ?? `search:${vehicle.make}:parts_catalog`,
@@ -180,12 +228,15 @@ async function searchPartsPages(
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleYear: vehicle.year,
+      vehicleTrim: vehicle.trim ?? "",
       sourceType: "parts_catalog",
       expiresAt: now + TTL_PARTS_MS,
+      partPricesJson: JSON.stringify(allPartPrices),
     });
   }
 
-  return { markdown, urls: sourceUrls };
+  console.log(`[scraper] Parts search: ${allPartPrices.length} deterministic prices across ${new Set(allPartPrices.map((p) => p.source_domain)).size} domains`);
+  return { markdown, urls: sourceUrls, partPrices: allPartPrices };
 }
 
 // ─── Parts: direct URL fetch with generic fallback ────────────────
@@ -195,15 +246,21 @@ async function scrapePartsPages(
   vehicle: VehicleInput,
   yearSpecificUrls: string[],
   genericUrls: string[],
-): Promise<{ markdown: string; urls: string[] }> {
-  // Check cache first
+): Promise<PartsScrapeResult> {
+  // Check cache first. Only a CURRENT-format row is a hit for the price path —
+  // older markdown-only rows (no part_prices_json) are treated as a miss so we
+  // re-fetch raw HTML and parse JSON-LD prices.
   const cached = await ctx.runQuery(
     internal.vehicleEnrichment.scraperQueries.getCachedScrape,
-    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, sourceType: "parts_catalog" },
+    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: vehicle.trim ?? "", sourceType: "parts_catalog" },
   );
-  if (cached) {
-    console.log(`[scraper] Cache hit: parts_catalog for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
-    return { markdown: cached.markdown, urls: [cached.url] };
+  if (cached && cached.format_version === CACHE_FORMAT_VERSION) {
+    let cachedPrices: ParsedPartPrice[] = [];
+    try {
+      cachedPrices = cached.part_prices_json ? JSON.parse(cached.part_prices_json) : [];
+    } catch { /* corrupt cache json — treat as no prices */ }
+    console.log(`[scraper] Cache hit: parts_catalog for ${vehicle.year} ${vehicle.make} ${vehicle.model} (${cachedPrices.length} prices)`);
+    return { markdown: cached.markdown ?? "", urls: cached.url ? [cached.url] : [], partPrices: cachedPrices };
   }
 
   const hostname = yearSpecificUrls[0] ? new URL(yearSpecificUrls[0]).hostname : vehicle.make;
@@ -211,21 +268,60 @@ async function scrapePartsPages(
 
   const markdownParts: string[] = [];
   const sourceUrls: string[] = [];
+  const allPartPrices: ParsedPartPrice[] = [];
+  const seenNumbers = new Set<string>();
   let totalChars = 0;
+
+  // Hard time budget for the registry fetch loop. The whole pre-batch phase
+  // (chassis lookup, VDB, wheel-size, this scrape, batch build) must fit the
+  // 600s Convex action cap — without a budget, a dead registry source (each
+  // page = up to 2 slow Firecrawl attempts) eats the entire cap before the
+  // batch is even submitted, and the config is left stuck 'enriching' with no
+  // failure handler (observed live: 2018 Civic vs a TLS-dead retailer, twice,
+  // Jun 10 2026). On budget exhaustion we stop fetching and proceed — Batch 2
+  // fills the gaps via web_search, and the search fallback still runs if the
+  // registry produced nothing at all.
+  const deadlineAt = Date.now() + PARTS_SCRAPE_BUDGET_MS;
 
   for (let i = 0; i < yearSpecificUrls.length; i++) {
     if (totalChars >= MAX_MARKDOWN_CHARS) break;
+    if (Date.now() >= deadlineAt) {
+      console.warn(
+        `[scraper] Parts scrape budget (${PARTS_SCRAPE_BUDGET_MS / 1000}s) exhausted after ${i}/${yearSpecificUrls.length} pages — skipping the rest (Batch 2 fills via web_search)`,
+      );
+      break;
+    }
 
     // Try year-specific URL first, fall back to generic if empty/blocked
-    let md = await fetchUrl(yearSpecificUrls[i]);
+    let fetched = await fetchUrlWithHtml(yearSpecificUrls[i]);
     let usedUrl = yearSpecificUrls[i];
 
-    if ((!md || md.length < 100) && genericUrls[i]) {
-      console.warn(`[scraper] Year-specific URL empty (${md?.length ?? 0} chars), trying generic: ${genericUrls[i]}`);
-      md = await fetchUrl(genericUrls[i]);
+    if (
+      (!fetched.markdown || fetched.markdown.length < 100) &&
+      genericUrls[i] &&
+      Date.now() < deadlineAt
+    ) {
+      console.warn(`[scraper] Year-specific URL empty (${fetched.markdown?.length ?? 0} chars), trying generic: ${genericUrls[i]}`);
+      fetched = await fetchUrlWithHtml(genericUrls[i]);
       usedUrl = genericUrls[i];
     }
 
+    // Parse deterministic prices from the FULL raw HTML, BEFORE any markdown
+    // truncation — JSON-LD <script> blocks frequently sit past the 8k cut.
+    if (fetched.html) {
+      try {
+        for (const p of parsePartPrices(fetched.html, usedUrl)) {
+          if (!seenNumbers.has(p.oem_part_number)) {
+            seenNumbers.add(p.oem_part_number);
+            allPartPrices.push(p);
+          }
+        }
+      } catch (e) {
+        console.warn(`[scraper] price parse failed for ${usedUrl}:`, e);
+      }
+    }
+
+    const md = fetched.markdown;
     if (!md || md.length < 100) {
       console.warn(`[scraper] Both URLs returned short/empty content — skipping (Batch 2 will fill via web_search)`);
       continue;
@@ -238,9 +334,12 @@ async function scrapePartsPages(
   }
 
   const markdown = markdownParts.join("").trim();
-  console.log(`[scraper] Parts pages: ${sourceUrls.length}/${yearSpecificUrls.length} fetched, ${markdown.length} chars`);
+  console.log(`[scraper] Parts pages: ${sourceUrls.length}/${yearSpecificUrls.length} fetched, ${markdown.length} chars, ${allPartPrices.length} prices`);
 
-  if (markdown.length > 0) {
+  // Cache when we got markdown OR deterministic prices (a page may carry JSON-LD
+  // prices even if its markdown is thin). storeScrapeCache stamps the current
+  // format_version so subsequent runs hit the cache for the price path too.
+  if (markdown.length > 0 || allPartPrices.length > 0) {
     const now = Date.now();
     await ctx.runMutation(internal.vehicleEnrichment.scraperQueries.storeScrapeCache, {
       url: sourceUrls[0] ?? yearSpecificUrls[0],
@@ -249,12 +348,14 @@ async function scrapePartsPages(
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleYear: vehicle.year,
+      vehicleTrim: vehicle.trim ?? "",
       sourceType: "parts_catalog",
       expiresAt: now + TTL_PARTS_MS,
+      partPricesJson: JSON.stringify(allPartPrices),
     });
   }
 
-  return { markdown, urls: sourceUrls };
+  return { markdown, urls: sourceUrls, partPrices: allPartPrices };
 }
 
 // ─── Manual: search-based ─────────────────────────────────────────
@@ -266,7 +367,7 @@ async function scrapeManual(
 ): Promise<{ markdown: string; urls: string[] }> {
   const cached = await ctx.runQuery(
     internal.vehicleEnrichment.scraperQueries.getCachedScrape,
-    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, sourceType: "owner_manual" },
+    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: vehicle.trim ?? "", sourceType: "owner_manual" },
   );
   if (cached) {
     console.log(`[scraper] Cache hit: owner_manual for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
@@ -308,6 +409,7 @@ async function scrapeManual(
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleYear: vehicle.year,
+      vehicleTrim: vehicle.trim ?? "",
       sourceType: "owner_manual",
       expiresAt: now + TTL_PARTS_MS,
     });

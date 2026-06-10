@@ -38,6 +38,12 @@ import { computePlatformFeeDollars } from "../lib/platformFee";
 const STRIPE_API_VERSION = "2026-04-22.dahlia" as const;
 const APPLICATION_FEE_FLOOR_CENTS = 499; // $4.99 floor
 const APPLICATION_FEE_RATE = 0.07; // 7%
+/** Drift band before finalizeAndChargeForBooking falls back to opening a
+ *  post-job re-approval cycle. Covers Math.round rounding on the tax/fee
+ *  recompute and legacy approval rows whose labor_cents was never frozen.
+ *  Anything beyond $1 implies a real actuals divergence — let the customer
+ *  approve it. */
+const FINALIZE_DRIFT_TOLERANCE_CENTS = 100;
 
 // ─────────────────────────────────────────────────────────────
 // Internal queries (auth + lookups)
@@ -1605,11 +1611,31 @@ export const _computeFinalTotalForBooking = internalQuery({
       partsCents += Math.round((p?.cost ?? 0) * qty * 100);
     }
 
+    // Labor source: prefer the latest approved booking_approvals row's
+    // frozen labor_cents. The pre/mid-job dialog can override labor via
+    // laborHours × laborRateCents — that override goes into the approval row
+    // and into mechanic_set_price_cents, but it's never propagated back to
+    // booking.labor_cost. Reading from the approval row here keeps finalize
+    // aligned with the labor that fed mechanic_set, so a labor change in
+    // pre-job doesn't drift finalCents past mechanic_set and spuriously trip
+    // a post-job re-approval. Falls back to booking.labor_cost on legacy
+    // rows that lack the breakdown.
+    const approvals = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+    const latestApproved = approvals.find(
+      (r: any) =>
+        r.decision === "approved" ||
+        r.decision === "auto_approved_within_range" ||
+        r.decision === "fixed_price_informational",
+    );
     const laborCents =
-      actual?.actual_labor_minutes != null && booking.labor_cost != null
-        ? // Prefer the booking's labor cost — the actual_labor_minutes field
-          // is informational; payment uses the contracted labor.
-          Math.round((booking.labor_cost ?? 0) * 100)
+      latestApproved?.labor_cents != null
+        ? (latestApproved.labor_cents as number)
         : Math.round((booking.labor_cost ?? 0) * 100);
 
     return {
@@ -1693,6 +1719,7 @@ export const finalizeAndChargeForBooking = internalAction({
         captureCents,
         finalCents,
         partsSnapshot,
+        feeCents,
       );
     }
 
@@ -1746,11 +1773,32 @@ export const finalizeAndChargeForBooking = internalAction({
       // Capture at min(actuals, ceiling) — never above what the customer
       // implicitly authorized via the disclosed range.
       const capCents = Math.min(finalCents, safeCap);
-      return await captureAtAmount(ctx, args.bookingId, capCents, finalCents, partsSnapshot);
+      return await captureAtAmount(
+        ctx,
+        args.bookingId,
+        capCents,
+        finalCents,
+        partsSnapshot,
+        feeCents,
+      );
     }
 
-    if (finalCents <= mechanicSet) {
-      return await captureAtAmount(ctx, args.bookingId, finalCents, finalCents, partsSnapshot);
+    // Tolerance: tax/fee recompute can drift by a cent due to Math.round, and
+    // legacy approval rows without frozen labor_cents fall back to
+    // booking.labor_cost which may diverge from the submitted labor inputs.
+    // Within this band we capture at the approved ceiling instead of opening
+    // a spurious post-job re-approval cycle the customer would never see a
+    // reason to confirm.
+    if (finalCents <= mechanicSet + FINALIZE_DRIFT_TOLERANCE_CENTS) {
+      const captureCents = Math.min(finalCents, mechanicSet);
+      return await captureAtAmount(
+        ctx,
+        args.bookingId,
+        captureCents,
+        finalCents,
+        partsSnapshot,
+        feeCents,
+      );
     }
 
     // Actuals > approved set price → open post-job re-approval.
@@ -1775,6 +1823,7 @@ async function captureAtAmount(
   captureCents: number,
   finalCents: number,
   partsSnapshot: any,
+  applicationFeeCents?: number,
 ): Promise<{ status: string; reason?: string }> {
   const payment: any = await ctx.runQuery(
     internal.payments_stripe._getPaymentByBookingId,
@@ -1788,11 +1837,22 @@ async function captureAtAmount(
     return { status: "skipped", reason: "already completed" };
   }
   const stripe = getStripe();
-  try {
-    const pi = await stripe.paymentIntents.capture(
-      activePiId,
-      { amount_to_capture: Math.max(1, Math.round(captureCents)) },
+  const amountToCapture = Math.max(1, Math.round(captureCents));
+  const captureParams: Record<string, number> = {
+    amount_to_capture: amountToCapture,
+  };
+  // Reauth-minted PIs (wallet path) are created with no application_fee_amount
+  // — passing it at capture keeps the platform cut from leaking to the shop.
+  // Cap at amount_to_capture; Stripe rejects fees larger than the captured
+  // amount.
+  if (applicationFeeCents != null) {
+    captureParams.application_fee_amount = Math.max(
+      0,
+      Math.min(Math.round(applicationFeeCents), amountToCapture),
     );
+  }
+  try {
+    const pi = await stripe.paymentIntents.capture(activePiId, captureParams);
     await ctx.runMutation(internal.payments_stripe._patchBookingCaptured, {
       bookingId,
       finalTotalCents: finalCents,
@@ -1805,6 +1865,20 @@ async function captureAtAmount(
     });
     return { status: pi.status };
   } catch (err: any) {
+    // Mirror capturePaymentIntentForBooking: surface the failure on the row
+    // so the UI can react, instead of leaving the booking completed with an
+    // uncaptured authorization that nobody sees.
+    console.error(
+      `[captureAtAmount] capture failed booking=${String(bookingId)} pi=${activePiId} amount=${amountToCapture}: ${err?.message ?? err}`,
+    );
+    if (payment?._id) {
+      await ctx.runMutation(internal.payments_stripe._transitionPayment, {
+        paymentId: payment._id,
+        newStatus: "failed",
+        errorCode: err?.code,
+        errorMessage: err?.message?.slice(0, 500),
+      });
+    }
     return { status: "failed", reason: err?.message };
   }
 }

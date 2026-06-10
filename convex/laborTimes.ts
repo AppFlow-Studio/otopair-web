@@ -12,7 +12,14 @@
  *
  * Layers 1–4 are owned by `quoteEngine.resolveLaborHours`; we fall through to
  * layer 5 (the catalog default) only when the engine refuses (no tier, no
- * Camry seed, etc.).
+ * Camry seed, etc.). The engine internally applies the same quality gate
+ * (`isHighQualityVdb`) that this file used to apply directly, so clone /
+ * training-data / low-confidence rows still won't surface as vehicle-specific.
+ *
+ * Why empirical first: actuals reflect real shop conditions on the specific
+ * engine/trim — book times often underestimate on harder packages. Empirical
+ * is gated upstream (see `convex/lib/labor_aggregation.ts`) so a single padded
+ * estimate can't swing a quote.
  *
  * If `director_settings.round_labor_times_to_15min` is true (default), the
  * final hours are rounded UP to the nearest 15-min slot at this layer — so

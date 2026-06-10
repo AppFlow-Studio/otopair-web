@@ -2,6 +2,8 @@ import { v } from "convex/values";
 import { internalMutation, mutation } from "../_generated/server";
 import { updateSourceScores } from "../services/sourceScoring";
 import { enqueueNotificationOutbox } from "../bookings";
+import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
+import { isLaborOnlyService } from "../lib/servicePartsReference";
 
 // ============================================================================
 // 1. upsertVehicleConfig
@@ -370,9 +372,14 @@ export const updateEngineSpecs = internalMutation({
   },
   handler: async (ctx, args) => {
     const { engine_id, ...fields } = args;
+    // Human-corrected fields are authoritative — the pipeline must not write
+    // over them (the Jetta's chain→belt fix was clobbered by a re-enrich,
+    // Jun 10 2026). See engines.verified_fields in schema.ts.
+    const existing = await ctx.db.get(engine_id);
+    const verified = new Set(((existing as any)?.verified_fields ?? []) as string[]);
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
-      if (value !== undefined) {
+      if (value !== undefined && !verified.has(key)) {
         patch[key] = value;
       }
     }
@@ -431,12 +438,27 @@ export const upsertPartAndFitment = internalMutation({
     // Package this fitment is scoped to (see docs/PACKAGE_AWARE_PARTS.md).
     // null/undefined = base/default fitment.
     package_code: v.optional(v.string()),
+    // Service Parts Reference role: "core" | "as_needed" | "kit" (see
+    // lib/servicePartsReference.ts). Stamped on the fitment so the resolver can
+    // group/price by role without re-deriving. Optional — older callers omit it
+    // and the resolver falls back to roleForSubcategory.
+    service_role: v.optional(v.string()),
     confidence: v.float64(),
     source_domain: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
     console.log(`[v8-parts] upsertPartAndFitment: ${args.oem_part_number} (${args.subcategory}) for ${args.service_type}${args.package_code ? ` [package=${args.package_code}]` : ""}`);
+
+    // Defense in depth (design §5): labor-only services never carry parts. The
+    // enrichment write loops only pass parts-bearing service_types, so this
+    // should never fire in practice — but a labor-only service_type slipping in
+    // here would silently corrupt the invoice contract, so reject it loudly.
+    if (isLaborOnlyService(args.service_type)) {
+      throw new Error(
+        `[v8-parts] refusing to write part ${args.oem_part_number} (${args.subcategory}) to labor-only service "${args.service_type}" — labor-only services bill no parts`,
+      );
+    }
 
     // Upsert OEM part
     let part = await ctx.db
@@ -497,6 +519,9 @@ export const upsertPartAndFitment = internalMutation({
         confidence: args.confidence,
         last_confirmed_at: now,
         source_count: (existingFitment.source_count ?? 0) + 1,
+        // Backfill/refresh the reference role on re-confirm so older rows that
+        // predate role stamping pick it up. Only when the caller supplies one.
+        ...(args.service_role ? { service_role: args.service_role } : {}),
       });
     } else {
       fitmentId = await ctx.db.insert("part_fitments", {
@@ -506,6 +531,7 @@ export const upsertPartAndFitment = internalMutation({
         quantity_needed: args.quantity_needed,
         position: args.position,
         package_code: args.package_code,
+        service_role: args.service_role,
         confidence: args.confidence,
         source_count: 1,
         first_confirmed_at: now,
@@ -701,6 +727,133 @@ export const upsertLaborTime = internalMutation({
 });
 
 // ============================================================================
+// 9b. Labor observations + recompute (replaces upsertLaborTime's confidence-wins)
+// ============================================================================
+
+/** Append a per-source CATALOG labor observation (dedup by config+service+source). */
+export const upsertLaborObservation = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    hours: v.float64(),
+    source: v.string(),
+    weight: v.float64(),
+    tier: v.optional(v.string()),
+    engine_family: v.optional(v.string()),
+    sibling_slug: v.optional(v.string()),
+    match_key: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const tier = args.tier ?? "catalog";
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("labor_observations")
+      .withIndex("by_config_service_source", (q) =>
+        q
+          .eq("vehicle_config_id", args.vehicle_config_id)
+          .eq("service_id", args.service_id)
+          .eq("source", args.source),
+      )
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        hours: args.hours,
+        weight: args.weight,
+        tier,
+        engine_family: args.engine_family,
+        sibling_slug: args.sibling_slug,
+        match_key: args.match_key,
+        observed_at: now,
+      });
+      return existing._id;
+    }
+    return await ctx.db.insert("labor_observations", {
+      vehicle_config_id: args.vehicle_config_id,
+      service_id: args.service_id,
+      engine_family: args.engine_family,
+      hours: args.hours,
+      source: args.source,
+      tier,
+      weight: args.weight,
+      sibling_slug: args.sibling_slug,
+      match_key: args.match_key,
+      observed_at: now,
+    });
+  },
+});
+
+/** Recompute labor_times.book_hours/empirical for one (config, service).
+ *  bookOnly=true (the enrichment path) skips the empirical job_actuals scan. */
+export const recomputeLaborTime = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    book_only: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    await recomputeLaborForConfigService(ctx, {
+      vehicleConfigId: args.vehicle_config_id,
+      serviceId: args.service_id,
+      bookOnly: args.book_only,
+    });
+  },
+});
+
+/**
+ * Cron target: recompute empirical/catalog labor for any (config, service)
+ * touched by a labor_quote_snapshot in the last window — so internal data folds
+ * in continuously without re-enriching. No-op until real shop data accrues.
+ */
+export const recomputeRecentLabor = internalMutation({
+  args: { sinceMs: v.optional(v.float64()) },
+  handler: async (ctx, args) => {
+    const since = args.sinceMs ?? Date.now() - 7 * 60 * 60 * 1000;
+    const snaps = await ctx.db
+      .query("labor_quote_snapshots")
+      .withIndex("by_recorded_at", (q) => q.gte("recorded_at", since))
+      .collect();
+    const seen = new Set<string>();
+    for (const s of snaps) {
+      if (!s.vehicle_config_id || !s.service_id) continue;
+      const key = `${s.vehicle_config_id}|${s.service_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      await recomputeLaborForConfigService(ctx, {
+        vehicleConfigId: s.vehicle_config_id,
+        serviceId: s.service_id,
+      });
+    }
+    return { recomputed: seen.size };
+  },
+});
+
+/**
+ * Reconcile a config for in-place director re-enrichment (PIN). Patches the
+ * config_key (fixing any prior key↔engine desync) + status/drivetrain/vin-key
+ * WITHOUT touching engine_id/model_id — so the triggered config keeps its real
+ * engine and the pipeline never spawns a duplicate. See enrichVehicleBatchV3
+ * `targetConfigId`.
+ */
+export const reconcileConfigForReenrich = internalMutation({
+  args: {
+    config_id: v.id("vehicle_configs"),
+    config_key: v.string(),
+    drivetrain: v.optional(v.string()),
+    nhtsa_vin_key: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const patch: any = {
+      config_key: args.config_key,
+      enrichment_status: "enriching",
+    };
+    if (args.drivetrain && args.drivetrain !== "unknown") patch.drivetrain = args.drivetrain;
+    if (args.nhtsa_vin_key) patch.nhtsa_vin_key = args.nhtsa_vin_key;
+    await ctx.db.patch(args.config_id, patch);
+    return args.config_id;
+  },
+});
+
+// ============================================================================
 // 10. addEvidenceBatch
 // ============================================================================
 
@@ -780,6 +933,7 @@ export const updateEnrichmentRun = internalMutation({
   args: {
     run_id: v.id("enrichment_runs"),
     status: v.optional(v.string()),
+    last_heartbeat_at: v.optional(v.float64()),
     vehicle_config_id: v.optional(v.id("vehicle_configs")),
     total_tokens_in: v.optional(v.float64()),
     total_tokens_out: v.optional(v.float64()),
@@ -805,6 +959,59 @@ export const updateEnrichmentRun = internalMutation({
       }
     }
     await ctx.db.patch(run_id, patch);
+  },
+});
+
+// ============================================================================
+// 12b. failEnrichmentRun — terminal failure in ONE transaction
+// ============================================================================
+
+/**
+ * Failure handler for every batch error/timeout exit (Jun-9 review items 3+6).
+ * Marks the enrichment_run terminal AND restores the vehicle_config to a
+ * terminal status in one transaction — STEP 4 clobbers the config to
+ * 'enriching' on every run, and historically only the run row got marked
+ * failed, leaving the config stuck 'enriching' forever (breaking the booking
+ * soft-lock and blocking re-enrichment for 4h).
+ *
+ * config_status contract: 'pending' when batch-1 data was never written this
+ * run, 'partial' after. The config is only patched while still in an
+ * in-progress status — a config some other path already finalized
+ * (complete/verified/partial) is never clobbered.
+ */
+const CONFIG_IN_PROGRESS_STATUSES = new Set([
+  "enriching",
+  "scraping",
+  "batch1",
+  "batch2",
+  "started",
+]);
+
+export const failEnrichmentRun = internalMutation({
+  args: {
+    run_id: v.id("enrichment_runs"),
+    vehicle_config_id: v.id("vehicle_configs"),
+    run_status: v.string(), // "failed" | "timeout"
+    errors: v.array(v.string()),
+    config_status: v.string(), // "pending" | "partial"
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.run_id, {
+      status: args.run_status,
+      errors: args.errors,
+      completed_at: Date.now(),
+    });
+    const config = await ctx.db.get(args.vehicle_config_id);
+    if (
+      config &&
+      CONFIG_IN_PROGRESS_STATUSES.has((config as any).enrichment_status ?? "")
+    ) {
+      await ctx.db.patch(args.vehicle_config_id, {
+        enrichment_status: args.config_status,
+      });
+      return { config_restored: true };
+    }
+    return { config_restored: false };
   },
 });
 
@@ -1470,8 +1677,13 @@ export const patchTrimSpecs = internalMutation({
 // purgeVehicleConfig — wipe all enrichment data for a config so it re-enriches
 // from scratch on next runPublic:go call. Keeps the vehicle_config row itself
 // but resets status so the cache guard lets it through.
+//
+// INTERNAL (Jun 9 2026 review, critical finding): this was a PUBLIC mutation —
+// an anonymous destructive wipe of any config's enrichment data. Admin use
+// still works via `npx convex run` / dashboard. Follow-up (deferred): snapshot
+// deleted rows before purging, like the price_backfill_log pattern.
 // ============================================================================
-export const purgeVehicleConfig = mutation({
+export const purgeVehicleConfig = internalMutation({
   args: { vehicleConfigId: v.id("vehicle_configs") },
   handler: async (ctx, args) => {
     const id = args.vehicleConfigId;
@@ -1491,6 +1703,10 @@ export const purgeVehicleConfig = mutation({
     await deleteByConfig("part_fitments");
     await deleteByConfig("service_intervals");
     await deleteByConfig("labor_times");
+    // Jun-9 review: labor_observations was missing from the purge — poisoned
+    // high-weight observations survived and immediately re-dominated the
+    // recompute after re-enrichment.
+    await deleteByConfig("labor_observations", "by_config_service");
 
     // Delete evidence via enrichment_run_id (no direct vehicle_config_id index)
     const runs = await ctx.db

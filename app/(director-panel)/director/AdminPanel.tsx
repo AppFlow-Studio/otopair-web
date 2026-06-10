@@ -21,6 +21,8 @@ import { TabAudit }     from './components/tabs/TabAudit'
 import { TabSettings }       from './components/tabs/TabSettings'
 import { TabMechanicEdits } from './components/tabs/TabMechanicEdits'
 import { TabServiceParts } from './components/tabs/TabServiceParts'
+import { TabOtoSim }    from './components/tabs/TabOtoSim'
+import { TabOtoConversations } from './components/tabs/TabOtoConversations'
 
 const SESSION_KEY = 'otopair_director_token'
 
@@ -36,6 +38,8 @@ const TABS: Record<string, React.ComponentType> = {
   bugs:        TabBugs,
   feedback:    TabFeedback,
   otoFeedback: TabOtoFeedback,
+  otoSim:      TabOtoSim,
+  otoConversations: TabOtoConversations,
   stripe:      TabStripe,
   audit:          TabAudit,
   mechanicEdits:  TabMechanicEdits,

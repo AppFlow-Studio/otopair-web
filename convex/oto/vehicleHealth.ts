@@ -17,10 +17,11 @@
 //   • utils/healthScore.ts           — computeVehicleHealthScore + projected variant
 // =============================================================================
 
-import { query } from "../_generated/server";
+import { query, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import { isEvalTestMake } from "./evalTestFilter";
+import { resolveVehicleByIdOrVin } from "./resolveVehicle";
 import {
   ALL_MAINTENANCE_TYPES,
   MAINTENANCE_LABELS,
@@ -159,10 +160,12 @@ interface LoadedContext {
   provenanceByType: Map<MaintenanceType, RecordProvenance>;
 }
 
-async function loadVehicleContext(
-  ctx: any,
-  vehicleId: string,
-): Promise<LoadedContext> {
+// Auth resolver — the PUBLIC read path's identity step, factored out so the
+// internal *ForUser variants can bypass it and pass a users._id directly
+// (director simulation: the fabricated identity never reaches these queries).
+// Behavior is byte-for-byte what the public queries did inline before: same
+// null-handling, same error strings.
+async function resolveActingUserId(ctx: any): Promise<Id<"users">> {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new Error("unauthenticated");
 
@@ -171,20 +174,31 @@ async function loadVehicleContext(
     .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", identity.subject))
     .unique();
   if (!user) throw new Error("user not found in Convex");
+  return user._id;
+}
 
+// User-scoped core loader — identical logic to the old loadVehicleContext from
+// the user-resolution point onward, but takes `userId` explicitly instead of
+// deriving it from auth. The public read path resolves the user via
+// resolveActingUserId() then calls this; the internal *ForUser variants pass
+// actingUserId straight through.
+async function loadVehicleContextForUser(
+  ctx: any,
+  userId: Id<"users">,
+  vehicleId: string,
+): Promise<LoadedContext> {
   // The chat envelope's <vehicle> id field is a Convex `vehicles._id` (see
-  // chat.ts buildEnvelope). Resolve it directly with ctx.db.get, then look up
-  // the per-user owner row via the (vin, user_id) index. Querying
-  // `by_vin_user` with the raw _id (the previous behavior) always missed.
-  const vehicle: Doc<"vehicles"> | null = await ctx.db.get(
-    vehicleId as Id<"vehicles">,
-  );
+  // chat.ts buildEnvelope), but B-P3: accept VIN-or-id since the tool
+  // descriptions disagree and Haiku passes either. Then look up the per-user
+  // owner row via the (vin, user_id) index. resolveVehicleByIdOrVin never
+  // throws on a bad id.
+  const vehicle = await resolveVehicleByIdOrVin(ctx, vehicleId);
   if (!vehicle) throw new Error(`vehicle not found: ${vehicleId}`);
 
   const owner: Doc<"vehicle_owners"> | null = await ctx.db
     .query("vehicle_owners")
     .withIndex("by_vin_user", (q: any) =>
-      q.eq("vin", vehicle.vin).eq("user_id", user._id),
+      q.eq("vin", vehicle.vin).eq("user_id", userId),
     )
     .unique();
   if (!owner) throw new Error(`vehicle_owner not found for vehicle ${vehicleId}`);
@@ -403,24 +417,48 @@ function toAiShape(
 // QUERY: getVehicleHealth
 // -----------------------------------------------------------------------------
 
+// User-scoped core — takes an explicit users._id. Shared by the public query
+// (after it resolves the user from auth) and the internal *ForUser variant.
+async function _getVehicleHealthCore(
+  ctx: any,
+  userId: Id<"users">,
+  args: { vehicle_id: string },
+): Promise<VehicleHealthResponse> {
+  const { owner, enrichedItems, odometerMiles, knownIssues, provenanceByType } =
+    await loadVehicleContextForUser(ctx, userId, args.vehicle_id);
+
+  const score = computeVehicleHealthScore({
+    maintenanceItems: enrichedItems,
+    odometerMiles,
+    knownIssues,
+  });
+
+  return {
+    score,
+    score_is_estimated: owner.health_score_is_estimated ?? false,
+    items: enrichedItems.map((item) => toAiShape(item, provenanceByType)),
+    known_issues: describeKnownIssues(knownIssues),
+  };
+}
+
 export const getVehicleHealth = query({
   args: { vehicle_id: v.string() },
   handler: async (ctx, args): Promise<VehicleHealthResponse> => {
-    const { owner, enrichedItems, odometerMiles, knownIssues, provenanceByType } =
-      await loadVehicleContext(ctx, args.vehicle_id);
+    const userId = await resolveActingUserId(ctx);
+    return _getVehicleHealthCore(ctx, userId, args);
+  },
+});
 
-    const score = computeVehicleHealthScore({
-      maintenanceItems: enrichedItems,
-      odometerMiles,
-      knownIssues,
+// INTERNAL variant — same logic, but the acting user id is passed explicitly
+// instead of resolved from auth. Lets the director simulation drive this read
+// on behalf of a user whose fabricated identity never reaches sub-queries.
+// NEVER expose actingUserId on the public query (IDOR).
+export const getVehicleHealthForUser = internalQuery({
+  args: { actingUserId: v.id("users"), vehicle_id: v.string() },
+  handler: async (ctx, args): Promise<VehicleHealthResponse> => {
+    return _getVehicleHealthCore(ctx, args.actingUserId, {
+      vehicle_id: args.vehicle_id,
     });
-
-    return {
-      score,
-      score_is_estimated: owner.health_score_is_estimated ?? false,
-      items: enrichedItems.map((item) => toAiShape(item, provenanceByType)),
-      known_issues: describeKnownIssues(knownIssues),
-    };
   },
 });
 
@@ -428,27 +466,56 @@ export const getVehicleHealth = query({
 // QUERY: getProjectedHealthScore
 // -----------------------------------------------------------------------------
 
+// User-scoped core — takes an explicit users._id. Shared by the public query
+// (after it resolves the user from auth) and the internal *ForUser variant.
+async function _getProjectedHealthScoreCore(
+  ctx: any,
+  userId: Id<"users">,
+  args: { vehicle_id: string; item_id: string },
+): Promise<ProjectedHealthResponse> {
+  const { enrichedItems, odometerMiles, knownIssues } =
+    await loadVehicleContextForUser(ctx, userId, args.vehicle_id);
+
+  const input = {
+    maintenanceItems: enrichedItems,
+    odometerMiles,
+    knownIssues,
+  };
+
+  const current = computeVehicleHealthScore(input);
+  const projected = computeProjectedHealthScore(input, args.item_id);
+  const lift = Math.max(0, projected - current);
+
+  return {
+    current_score: current,
+    projected_score: projected,
+    lift,
+  };
+}
+
 export const getProjectedHealthScore = query({
   args: { vehicle_id: v.string(), item_id: v.string() },
   handler: async (ctx, args): Promise<ProjectedHealthResponse> => {
-    const { enrichedItems, odometerMiles, knownIssues } =
-      await loadVehicleContext(ctx, args.vehicle_id);
+    const userId = await resolveActingUserId(ctx);
+    return _getProjectedHealthScoreCore(ctx, userId, args);
+  },
+});
 
-    const input = {
-      maintenanceItems: enrichedItems,
-      odometerMiles,
-      knownIssues,
-    };
-
-    const current = computeVehicleHealthScore(input);
-    const projected = computeProjectedHealthScore(input, args.item_id);
-    const lift = Math.max(0, projected - current);
-
-    return {
-      current_score: current,
-      projected_score: projected,
-      lift,
-    };
+// INTERNAL variant — same logic, acting user id passed explicitly. Used by the
+// director simulation so the projected-score read resolves the right user's
+// vehicle even when the fabricated identity doesn't reach sub-queries.
+// NEVER expose actingUserId on the public query (IDOR).
+export const getProjectedHealthScoreForUser = internalQuery({
+  args: {
+    actingUserId: v.id("users"),
+    vehicle_id: v.string(),
+    item_id: v.string(),
+  },
+  handler: async (ctx, args): Promise<ProjectedHealthResponse> => {
+    return _getProjectedHealthScoreCore(ctx, args.actingUserId, {
+      vehicle_id: args.vehicle_id,
+      item_id: args.item_id,
+    });
   },
 });
 

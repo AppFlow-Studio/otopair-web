@@ -103,7 +103,7 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
   }, [String(bookingId)])
 
   const rawAudit = useQuery(api.audit_log.listByEntity,
-    bookingId ? { entity_type: 'booking', entity_id: bookingId } : 'skip')
+    bookingId ? { entity_type: 'booking', entity_id: bookingId, token: session?.token ?? '' } : 'skip')
   type AuditRow = { created_at: number; action: string; actor: string; detail?: string }
   const auditEntries = (rawAudit as AuditRow[] | undefined)?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),

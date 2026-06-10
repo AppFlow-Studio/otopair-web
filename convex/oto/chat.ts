@@ -44,6 +44,7 @@ import { v } from "convex/values";
 import {
   buildEnvelope,
   formatDisplayString,
+  knowledgeLabel,
   pickActiveVehicleRow,
   type DisplayInfo,
   type OwnedVehicleRow,
@@ -60,6 +61,12 @@ import {
 import { SYSTEM_PROMPT, SYSTEM_PROMPT_VERSION } from "./system_prompt";
 import { canonicalQuestionKey } from "./canonicalize";
 import { internal } from "../_generated/api";
+import {
+  assembleTelemetryRow,
+  shouldFlagStateSkip,
+  type TurnSample,
+} from "./telemetryAssembly";
+import { mapToolMoodToEpisodic } from "./moodMap";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -470,7 +477,10 @@ async function sendMessageHandler(
 // Core handler — owns the full chat turn. Wrapped by sendMessageHandler
 // above so retry-exhaust errors get translated to a friendly shape before
 // hitting the action's return validator.
-async function sendMessageHandlerCore(
+// Exported so the eval/simulation harness (convex/oto/simulate.ts) can drive a
+// full authenticated turn with a fabricated identity — see that file. NOT a
+// public API surface; the only public entry is the `sendMessage` action above.
+export async function sendMessageHandlerCore(
   // `ctx` typed `any` so this function's body doesn't drag the api tree into
   // its inferred type. Doc<…> annotations on each call-site result restore
   // type safety where it matters.
@@ -506,14 +516,14 @@ async function sendMessageHandlerCore(
 
   // ── 2. Load conversation + history, scoped by ownership ──────────────
   const conversation: Doc<"ai_conversations"> | null = await ctx.runQuery(
-    api.ai_conversations.getById,
+    internal.ai_conversations.getById,
     { id: conversationId },
   );
   if (!conversation) throw new Error("conversation not found");
   if (conversation.user_id !== user._id) throw new Error("not authorized");
 
   const allMessages: Array<Doc<"ai_messages">> = await ctx.runQuery(
-    api.ai_messages.getByConversationId,
+    internal.ai_messages.getByConversationIdInternal,
     { conversationId },
   );
   const sortedMessages = [...allMessages].sort((a, b) => a.timestamp - b.timestamp);
@@ -651,9 +661,15 @@ async function sendMessageHandlerCore(
   const conversationVehicleId = (conversation as Record<string, unknown>)
     .vehicle_id as string | undefined;
 
+  // Resolve owned vehicles by the ALREADY-resolved user._id, not via the
+  // request's auth identity. Behaviorally identical to getMyVehicles({}) for a
+  // real authenticated turn (same user), but it also works under the
+  // simulation harness (convex/oto/simulate.ts), where the fabricated identity
+  // reaches this handler's auth check but NOT auth-scoped sub-queries — so
+  // getMyVehicles({}) returned [] there, leaving Oto blind to the user's car.
   const ownedRaw: OwnedVehicleRow[] | null = await ctx.runQuery(
-    api.vehicles.getMyVehicles,
-    {},
+    api.vehicles.listVehiclesByUser,
+    { userId: user._id },
   );
   const ownedVehicles = ownedRaw ?? [];
   const activeRow = pickActiveVehicleRow(
@@ -691,9 +707,10 @@ async function sendMessageHandlerCore(
     last_user_intent: (conversation as any).last_user_intent ?? null,
     updated_at: (conversation as any).state_updated_at ?? null,
   };
-  // Polite-exit counter snapshot (Locked Principle #6). When >= 6 the
-  // envelope emits a polite_exit_required block and the prompt rule forces
-  // a not_sure diagnostic form on this turn.
+  // Polite-exit counter snapshot (Locked Principle #6). At >= the envelope's
+  // POLITE_EXIT_THRESHOLD (4 — lowered from 6 on beta feedback; see
+  // envelope.ts) it emits a polite_exit_required block and the prompt rule
+  // forces a not_sure diagnostic form on this turn.
   const diagnosticTurnCount = ((conversation as any).diagnostic_turn_count as number | undefined) ?? 0;
 
   // Wave 3 integration step 4 — cross-conversation memory READ path.
@@ -793,6 +810,13 @@ async function sendMessageHandlerCore(
     written_by: f.written_by,
     created_at: f.created_at,
   }));
+  // Onboarding car-knowledge level → scale Oto's answer complexity. Read once
+  // per turn; null when the user never answered (Oto stays at friendly
+  // baseline). See knowledgeLabel + the prompt's "Knowledge-level adaptation".
+  const rawKnowledgeLevel: number | string | null = await ctx.runQuery(
+    api.onboarding_questions_answers.getCarKnowledgeLevelForUser,
+    { user_id: user._id },
+  );
   const envelope = buildEnvelope({
     userFirstName: user.first_name ?? null,
     vehicle: activeVehicle,
@@ -801,8 +825,12 @@ async function sendMessageHandlerCore(
     conversationState: convoState,
     diagnosticTurnCount,
     priorConversationFacts: envelopePriorFacts,
+    knowledgeLevel: knowledgeLabel(rawKnowledgeLevel),
   });
-  console.log("[oto/chat] envelope sent to Haiku:\n" + envelope);
+  // B-P4: the envelope carries raw user PII (vehicle, history, message,
+  // established facts) — only log it on debug/harness runs, not every
+  // production turn (PII exposure + log volume).
+  if (debug) console.log("[oto/chat] envelope sent to Haiku:\n" + envelope);
 
   if (trace) {
     trace.system_prompt_version = SYSTEM_PROMPT_VERSION;
@@ -881,12 +909,20 @@ async function sendMessageHandlerCore(
   const conversationCurrentModel = ((conversation as any).current_model ?? null) as
     | string
     | null;
-  const turnModel =
+  // `let`, not const: B-P2 same-turn Sonnet escalation re-points this mid-loop
+  // when request_sonnet_handoff fires, so the hard turn that ASKED for Sonnet
+  // is answered by Sonnet THIS turn (previously it finished on Haiku and
+  // Sonnet only engaged the next turn).
+  let turnModel =
     conversationCurrentModel === "sonnet" ? SONNET_MODEL : HAIKU_MODEL;
   if (trace) trace.model = turnModel;
 
   const messages: AnthropicMessage[] = [{ role: "user", content: envelope }];
   const accumulatedResults: ToolResultBlock[] = [];
+
+  // B-P1: telemetry samples collected UNCONDITIONALLY (the debug trace only
+  // exists on harness runs — production rows used to record 0 tokens).
+  const turnSamples: TurnSample[] = [];
 
   let finalText = "";
   let iterations = 0;
@@ -908,6 +944,45 @@ async function sendMessageHandlerCore(
       model: turnModel,
     });
     const latencyMs = Date.now() - t0;
+
+    // ── B-P3: stop_reason handling ───────────────────────────────────────
+    // pause_turn: a server-side tool (web_search) hit its per-request limit
+    // mid-turn. Anthropic returns a PARTIAL assistant turn; the protocol is
+    // to echo that content back and continue so the search resumes. Before
+    // this, a paused turn carried no client tool_use and no final text, so it
+    // fell through to the empty-text fallback — the flagship "ask Oto
+    // something it has to look up" path dead-ended into the generic apology.
+    // Bounded by MAX_TOOL_ITERATIONS like every other continuation.
+    if (resp.stop_reason === "pause_turn") {
+      turnSamples.push({
+        usage: resp.usage,
+        latency_ms: latencyMs,
+        tool_names: [],
+        branch: "data_continue",
+      });
+      messages.push({ role: "assistant", content: resp.content });
+      if (iterations === MAX_TOOL_ITERATIONS) hitCap = true;
+      continue;
+    }
+    // max_tokens: the response was truncated mid-thought. Don't change flow
+    // (use whatever content arrived), but surface it so truncation is visible
+    // and tunable. Fire-and-forget.
+    if (resp.stop_reason === "max_tokens") {
+      ctx
+        .runMutation(internal.oto.reliability.recordReliabilityEvent, {
+          surface: "anthropic_max_tokens",
+          kind: "truncated",
+          user_id: user._id,
+          conversation_id: conversationId,
+          metadata: { iteration: iterations, model: turnModel },
+        })
+        .catch((e: unknown) =>
+          console.error(
+            "[oto/chat] max_tokens reliability event failed (silent):",
+            (e as { message?: string })?.message,
+          ),
+        );
+    }
 
     const toolUses: ToolUseBlock[] = resp.content.filter(
       (b): b is ToolUseBlock => b.type === "tool_use",
@@ -939,12 +1014,65 @@ async function sendMessageHandlerCore(
       } else terminalToolUses.push(tu); // render | navigation | unknown
     }
 
+    const iterBranch =
+      terminalToolUses.length > 0
+        ? ("terminal" as const)
+        : dataToolUses.length === 0
+          ? ("text_only" as const)
+          : ("data_continue" as const);
+    turnSamples.push({
+      usage: resp.usage,
+      latency_ms: latencyMs,
+      tool_names: [
+        ...dataToolUses.map((t) => t.name),
+        ...stateToolUses.map((t) => t.name),
+        ...terminalToolUses.map((t) => t.name),
+      ],
+      branch: iterBranch,
+    });
+
     // Side-effect: dispatch state tools eagerly (before branching), so
     // persistence happens even if the rest of the response throws.
     const stateAckResults =
       stateToolUses.length > 0
         ? await Promise.all(stateToolUses.map((tu) => executeTool(tu, callables)))
         : [];
+
+    // ── B-P2: same-turn Sonnet escalation ────────────────────────────────
+    // The model-routing tools (request_sonnet_handoff / request_haiku_handback)
+    // write ai_conversations.current_model, but turnModel was fixed at turn
+    // start — so the hard turn that requested Sonnet used to be answered by
+    // Haiku, with Sonnet engaging only the NEXT turn. After a routing tool
+    // runs, re-read the persisted model (the SAME source of truth turn-start
+    // selection uses) and apply it to the remaining iterations of THIS turn.
+    // Only re-reads when a routing tool actually fired (rare — 15-25% of
+    // diagnostic turns), and the routing callables swallow write failures, so
+    // a failed handoff simply leaves current_model (and turnModel) unchanged.
+    let escalatedToSonnetThisIteration = false;
+    if (stateToolUses.some((tu) => OTO_TOOL_CATEGORY[tu.name] === "model_routing")) {
+      try {
+        const fresh = await ctx.runQuery(internal.ai_conversations.getById, {
+          id: conversationId,
+        });
+        const freshModel = ((fresh as any)?.current_model ?? null) as string | null;
+        // ESCALATE-UP ONLY. A handoff (→sonnet) takes effect immediately so
+        // Sonnet answers the hard turn. A handback (→haiku) must NOT downgrade
+        // mid-turn: Sonnet finishes THIS turn, and Haiku resumes next turn via
+        // the turn-start read — preserving handback's original next-turn
+        // semantics and keeping telemetry/audit labelled with the model that
+        // actually answered.
+        if (freshModel === "sonnet" && turnModel !== SONNET_MODEL) {
+          escalatedToSonnetThisIteration = true;
+          turnModel = SONNET_MODEL;
+          if (trace) trace.model = turnModel;
+        }
+      } catch (e: any) {
+        console.error(
+          "[oto/chat] model-routing re-read failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
 
     // One trace entry per Anthropic round-trip. Pushed here (before tool
     // dispatch) so even a thrown dispatch error still leaves the entry in
@@ -971,11 +1099,7 @@ async function sendMessageHandlerCore(
           terminal_tool_uses: terminalToolUses,
           state_results: stateAckResults,
           tool_results: [] as ToolResultBlock[],
-          branch: terminalToolUses.length > 0
-            ? "terminal"
-            : dataToolUses.length === 0
-              ? "text_only"
-              : "data_continue",
+          branch: iterBranch,
         }
       : null;
     if (trace) trace.iterations.push(traceIter);
@@ -1077,7 +1201,7 @@ async function sendMessageHandlerCore(
           if (entityType !== null && entityId !== null) {
             try {
               await ctx.runMutation(
-                api.oto.memoryEditing.recordSelectionFact,
+                internal.oto.memoryEditing.recordSelectionFact,
                 {
                   conversation_id: conversationId,
                   entity_type: entityType,
@@ -1169,11 +1293,14 @@ async function sendMessageHandlerCore(
       //       throw downstream. Feed the state ack back and let Haiku try
       //       again. This recovers the "state-only-no-text" failure mode.
       const hasText = !!textBlock?.text?.trim();
-      if (!hasText && stateToolUses.length > 0) {
+      // B-P2: if Haiku escalated to Sonnet THIS iteration, do NOT let Haiku's
+      // (typically holding) text end the turn — feed the state ack back and
+      // continue so Sonnet produces the real answer same-turn. Otherwise the
+      // original state-only-no-text recovery (case c).
+      if (escalatedToSonnetThisIteration || (!hasText && stateToolUses.length > 0)) {
         // Continuation path: persist messages with state ack tool_results
-        // and let the loop iterate. Haiku gets another chance to emit text
-        // (and may emit more tools — that's fine; loop continues until
-        // text/render/cap).
+        // and let the loop iterate. The next call uses the (possibly
+        // escalated) turnModel — Sonnet answers if Haiku just handed off.
         messages.push({ role: "assistant", content: resp.content });
         messages.push({ role: "user", content: stateAckResults });
         if (iterations === MAX_TOOL_ITERATIONS) hitCap = true;
@@ -1230,7 +1357,10 @@ async function sendMessageHandlerCore(
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: MODEL,
+          // turnModel, not the MODEL constant: an escalated turn (B-P2) that
+          // hits the iteration cap must force its final answer from Sonnet,
+          // not silently drop back to Haiku.
+          model: turnModel,
           max_tokens: MAX_TOKENS,
           // Plain system string, no cache_control, no tools — guarantees text.
           system: SYSTEM_PROMPT,
@@ -1250,6 +1380,12 @@ async function sendMessageHandlerCore(
       (b): b is AnthropicTextBlock => b.type === "text",
     );
     finalText = forcedText?.text ?? "";
+    turnSamples.push({
+      usage: forced.usage,
+      latency_ms: forcedLatencyMs,
+      tool_names: [],
+      branch: "forced_final",
+    });
     if (trace) {
       trace.forced_final = {
         latency_ms: forcedLatencyMs,
@@ -1316,21 +1452,37 @@ async function sendMessageHandlerCore(
   // doesn't pollute the user's real conversation history.
   const skipPersist = debug === true && debug_skip_persist === true;
   if (!skipPersist) {
-    await ctx.runMutation(api.ai_messages.create, {
+    // B-P2: lock the conversation's vehicle anchor on first send. setVehicleId
+    // had ZERO production call sites, so ai_conversations.vehicle_id stayed
+    // null for every real chat — the viewer showed no car and a mid-chat
+    // global-picker drift could repoint the envelope. Idempotent anchor-lock;
+    // failure-isolated so it can never break the turn.
+    if (activeVehicle?.id && !conversationVehicleId) {
+      try {
+        await ctx.runMutation(internal.ai_conversations.setVehicleIdInternal, {
+          conversationId,
+          vehicleId: activeVehicle.id as Id<"vehicles">,
+        });
+      } catch (e: any) {
+        console.error("[oto/chat] vehicle anchor write failed (swallowed):", e?.message);
+      }
+    }
+
+    await ctx.runMutation(internal.ai_messages.create, {
       conversation_id: conversationId,
       role: "user",
       content: message,
     });
-    await ctx.runMutation(api.ai_messages.create, {
+    await ctx.runMutation(internal.ai_messages.create, {
       conversation_id: conversationId,
       role: "assistant",
       content: finalText,
     });
 
-    await ctx.runMutation(api.ai_conversations.incrementMessageCount, {
+    await ctx.runMutation(internal.ai_conversations.incrementMessageCount, {
       id: conversationId,
     });
-    await ctx.runMutation(api.ai_conversations.incrementMessageCount, {
+    await ctx.runMutation(internal.ai_conversations.incrementMessageCount, {
       id: conversationId,
     });
 
@@ -1380,7 +1532,7 @@ async function sendMessageHandlerCore(
       // User-turn row — role-conditional invariant: no model_used /
       // prompt_version / tool_calls. content is the raw user message
       // before envelope-wrapping (forensic preference per dispatch).
-      await ctx.runMutation(api.oto.memoryEditing.recordTurn, {
+      await ctx.runMutation(internal.oto.memoryEditing.recordTurn, {
         conversation_id: conversationId,
         turn_number: turnNumber,
         role: "user",
@@ -1415,7 +1567,7 @@ async function sendMessageHandlerCore(
       // (Wave 5 telemetry-completion dispatch will wire that from
       // accumulatedResults); omitting keeps the row schema-valid since
       // tool_calls is optional.
-      await ctx.runMutation(api.oto.memoryEditing.recordTurn, {
+      await ctx.runMutation(internal.oto.memoryEditing.recordTurn, {
         conversation_id: conversationId,
         turn_number: turnNumber,
         role: "assistant",
@@ -1464,16 +1616,16 @@ async function sendMessageHandlerCore(
     if (!skipPersist && modelShortLiteral === "sonnet") {
       try {
         await ctx.runMutation(
-          api.oto.memoryEditing.initEpisodicControl,
+          internal.oto.memoryEditing.initEpisodicControl,
           { conversation_id: conversationId },
         );
         const row: Doc<"conversation_episodic_control"> | null =
           await ctx.runQuery(
-            api.oto.memoryEditing.getEpisodicControl,
+            internal.oto.memoryEditing.getEpisodicControl,
             { conversation_id: conversationId },
           );
         if (row) {
-          await ctx.runMutation(api.oto.memoryEditing.commitControl, {
+          await ctx.runMutation(internal.oto.memoryEditing.commitControl, {
             conversation_id: conversationId,
             expected_turn: row.updated_by_turn,
             delta: {
@@ -1507,43 +1659,17 @@ async function sendMessageHandlerCore(
     }
   }
 
-  // Aggregate token + tool stats across the loop. Used by both the trace
-  // payload AND the telemetry insert.
-  let aggInputTokens = 0;
-  let aggOutputTokens = 0;
-  let aggCacheCreation = 0;
-  let aggCacheRead = 0;
-  let totalLatencyMs = 0;
-  const allToolsCalled: string[] = [];
-  let finalBranch: string = "text_only";
-  // Replay iterations recorded in trace (when debug) or reconstruct from
-  // accumulatedResults names (in production). Trace block guarantees order
-  // and is precise; without trace we fall back to result names.
-  if (trace?.iterations?.length) {
-    for (const it of trace.iterations) {
-      aggInputTokens += it.response?.usage?.input_tokens ?? 0;
-      aggOutputTokens += it.response?.usage?.output_tokens ?? 0;
-      aggCacheCreation += it.response?.usage?.cache_creation_input_tokens ?? 0;
-      aggCacheRead += it.response?.usage?.cache_read_input_tokens ?? 0;
-      totalLatencyMs += it.latency_ms ?? 0;
-      for (const t of it.data_tool_uses ?? []) allToolsCalled.push(t.name);
-      for (const t of it.state_tool_uses ?? []) allToolsCalled.push(t.name);
-      for (const t of it.terminal_tool_uses ?? []) allToolsCalled.push(t.name);
-      finalBranch = it.branch ?? finalBranch;
-    }
-    if (trace.forced_final?.response?.usage) {
-      aggInputTokens += trace.forced_final.response.usage.input_tokens ?? 0;
-      aggOutputTokens += trace.forced_final.response.usage.output_tokens ?? 0;
-      aggCacheCreation += trace.forced_final.response.usage.cache_creation_input_tokens ?? 0;
-      aggCacheRead += trace.forced_final.response.usage.cache_read_input_tokens ?? 0;
-      totalLatencyMs += trace.forced_final.latency_ms ?? 0;
-    }
-  } else {
-    // Best-effort tool names from accumulatedResults if trace is off.
-    for (const r of accumulatedResults) {
-      if ((r as any).name) allToolsCalled.push((r as any).name as string);
-    }
-  }
+  // B-P1: assemble token + tool stats from the unconditional turnSamples
+  // (pure function — tests/telemetryAssembly.test.ts). The old version
+  // replayed trace.iterations, which only exist on debug runs, so every
+  // PRODUCTION row recorded 0 tokens / 0 latency / constant branch — and
+  // stamped the MODEL constant instead of the routed turnModel.
+  const telemetryRow = assembleTelemetryRow(turnSamples, {
+    model: turnModel,
+    systemPromptVersion: SYSTEM_PROMPT_VERSION,
+    iterationsUsed: iterations,
+    hitCap,
+  });
 
   if (trace) {
     trace.hit_cap = hitCap;
@@ -1553,19 +1679,27 @@ async function sendMessageHandlerCore(
     trace.book_service = renderEnvelope.bookService ?? null;
     trace.persisted = !skipPersist;
     trace.usage_total = {
-      input_tokens: aggInputTokens,
-      output_tokens: aggOutputTokens,
-      cache_creation_tokens: aggCacheCreation,
-      cache_read_tokens: aggCacheRead,
+      input_tokens: telemetryRow.input_tokens,
+      output_tokens: telemetryRow.output_tokens,
+      cache_creation_tokens: telemetryRow.cache_creation_tokens ?? 0,
+      cache_read_tokens: telemetryRow.cache_read_tokens ?? 0,
     };
   }
 
-  // Polite-exit counter (Locked Principle #6) — server-managed.
-  // - Reset to 0 when this turn rendered a booking (any render_book_service
-  //   fire — diagnostic-scan or direct-service — resolves the narrowing).
-  // - Increment if Haiku's just-written last_user_intent starts with
-  //   "symptom_narrowing" (we're still narrowing this turn).
-  // - Leave alone otherwise.
+  // Polite-exit counter (Locked Principle #6) — server-managed, SERVER-DERIVED.
+  // Beta feedback: the over-interrogation→booking guardrail "isn't firing." Root
+  // cause: the count only advanced when Haiku self-tagged last_user_intent as
+  // "symptom_narrowing" every turn, which it often forgot to do — so the count
+  // never reached the threshold and the polite-exit block never appeared.
+  //
+  // We now derive "still interrogating" from observable turn shape instead of
+  // trusting the model to tag itself:
+  //   - rendered a booking this turn → narrowing resolved → reset to 0.
+  //   - else Oto's reply asked a question (a "?") AND we're in a diagnostic arc
+  //     (the model tagged a diagnostic/symptom intent, OR the count is already
+  //     advancing) → increment. Once the arc starts, every further question-turn
+  //     advances even if the model stops tagging.
+  //   - else Oto answered without asking → the narrowing arc resolved → reset.
   // Skip on harness debug runs.
   if (!skipPersist) {
     try {
@@ -1574,17 +1708,36 @@ async function sendMessageHandlerCore(
       if (renderedBooking) {
         nextCount = 0;
       } else {
-        // Re-read the conversation to see what Haiku just wrote via state tool.
-        const fresh = await ctx.runQuery(api.ai_conversations.getById, {
+        const fresh = await ctx.runQuery(internal.ai_conversations.getById, {
           id: conversationId,
         });
         const latestIntent = (fresh as any)?.last_user_intent as string | undefined;
-        if (latestIntent && latestIntent.startsWith("symptom_narrowing")) {
+        const askedQuestion = /\?/.test(finalText ?? "");
+        const modelTaggedNarrowing =
+          !!latestIntent &&
+          (latestIntent.startsWith("symptom_narrowing") ||
+            latestIntent.startsWith("diagnos"));
+        const alreadyNarrowing = diagnosticTurnCount > 0;
+        // A booking OFFER ("...want to book that service now?") ends in a "?"
+        // but is CONVERGENCE, not failed narrowing — the two-step
+        // offer→confirm→render pattern means render_book_service hasn't fired
+        // yet, so renderedBooking is still false this turn. Don't let the offer
+        // turn inflate the count (it would push a successful conversation into
+        // the forced not_sure exit one turn early). Hold the count on offer.
+        const offeringBooking =
+          /\b(book|booking|set (?:that|it) up|schedule)\b/i.test(finalText ?? "");
+        if (askedQuestion && !offeringBooking && (modelTaggedNarrowing || alreadyNarrowing)) {
           nextCount = diagnosticTurnCount + 1;
+        } else if (!askedQuestion && alreadyNarrowing) {
+          // Oto stopped asking — arc resolved or moved on. Decay so a later,
+          // unrelated clarifying question doesn't instantly re-trip the exit.
+          nextCount = 0;
         }
+        // offeringBooking turn → leave count unchanged (convergence, not a
+        // failed-narrowing turn).
       }
       if (nextCount !== null) {
-        await ctx.runMutation(api.ai_conversations.setDiagnosticTurnCount, {
+        await ctx.runMutation(internal.ai_conversations.setDiagnosticTurnCount, {
           id: conversationId,
           count: nextCount,
         });
@@ -1599,23 +1752,47 @@ async function sendMessageHandlerCore(
   // pollute analytics with debug traffic.
   if (!skipPersist) {
     try {
-      await ctx.runMutation(api.oto.telemetry.recordTurn, {
+      await ctx.runMutation(internal.oto.telemetry.recordTurn, {
         conversation_id: conversationId,
         user_id: user._id,
-        model: MODEL,
-        system_prompt_version: SYSTEM_PROMPT_VERSION,
-        iterations_used: iterations,
-        hit_cap: hitCap,
-        input_tokens: aggInputTokens,
-        output_tokens: aggOutputTokens,
-        cache_creation_tokens: aggCacheCreation || undefined,
-        cache_read_tokens: aggCacheRead || undefined,
-        total_latency_ms: totalLatencyMs,
-        tools_called: allToolsCalled,
-        final_branch: finalBranch,
+        ...telemetryRow,
       });
     } catch (e: any) {
       console.error("[oto/chat] telemetry insert failed (swallowed):", e?.message);
+    }
+
+    // B-P2: measure the state-tool contract. A non-trivial turn (a data tool
+    // fired — Oto engaged the user's real context) that never wrote
+    // conversation state is Haiku silently under-calling
+    // update_conversation_state. Fire a reliability event so the under-call
+    // rate is visible and tunable. Fire-and-forget; never breaks the turn.
+    const dataToolFired = telemetryRow.tools_called.some(
+      (n) => OTO_TOOL_CATEGORY[n] === "data",
+    );
+    if (
+      shouldFlagStateSkip({
+        stateCalled: telemetryRow.state_called,
+        dataToolFired,
+      })
+    ) {
+      ctx
+        .runMutation(internal.oto.reliability.recordReliabilityEvent, {
+          surface: "state_tool_undercall",
+          kind: "skipped",
+          user_id: user._id,
+          conversation_id: conversationId,
+          metadata: {
+            iterations_used: telemetryRow.iterations_used,
+            tools_called: telemetryRow.tools_called,
+            model: telemetryRow.model,
+          },
+        })
+        .catch((e: unknown) =>
+          console.error(
+            "[oto/chat] state-undercall reliability event failed (silent):",
+            (e as { message?: string })?.message,
+          ),
+        );
     }
   }
 
@@ -1830,13 +2007,25 @@ async function callAnthropic({
   // System prompt is the largest static block; wrap it as a single text
   // content block with cache_control: ephemeral. Anthropic returns the
   // cache_creation tokens on first call and cache_read tokens on every
-  // subsequent call within the 5-minute TTL. Cost on cached input drops
-  // ~90% relative to a normal input token.
-  const systemBlocks: Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> = [
+  // subsequent call within the TTL. Cost on cached input drops ~90% relative
+  // to a normal input token.
+  //
+  // B-P4: ttl "1h" (GA — no beta header). The default 5-minute TTL silently
+  // expires during normal conversation gaps (user reading/typing between
+  // turns), forcing a full-price re-read of the large system prompt + tools
+  // on the next turn. 1h survives those gaps; the doubled write cost (2x vs
+  // 1.25x) breaks even at 3 cache reads, which a multi-turn chat clears
+  // easily.
+  const CACHE_CONTROL = { type: "ephemeral", ttl: "1h" } as const;
+  const systemBlocks: Array<{
+    type: "text";
+    text: string;
+    cache_control?: { type: "ephemeral"; ttl?: string };
+  }> = [
     {
       type: "text",
       text: SYSTEM_PROMPT,
-      cache_control: { type: "ephemeral" },
+      cache_control: CACHE_CONTROL,
     },
   ];
   // Merge OUR tool schemas + server-managed (Anthropic-provided) tools.
@@ -1845,7 +2034,7 @@ async function callAnthropic({
   const ourTools = tools.length > 0
     ? tools.map((t, i) =>
         i === tools.length - 1
-          ? { ...(t as object), cache_control: { type: "ephemeral" } }
+          ? { ...(t as object), cache_control: CACHE_CONTROL }
           : t,
       )
     : tools;
@@ -1960,33 +2149,25 @@ function buildCallables(
   };
   return {
     /**
-     * list_services_for_vehicle — returns the full 23-service catalog.
-     *
-     * Schema Gap 4 (inventory.md): the real implementation should join
-     * vehicles → vehicle_configs → engines/chassis_specs/trim_specs and
-     * apply `requires_*` filters against the resolved spec set. That's a
-     * follow-up Convex query change; for this slice we surface raw data so
-     * the AI layer's loop can be validated end-to-end.
-     *
-     * The schema's `vehicle_id` arg is accepted-and-ignored. The AI still
-     * passes it because the inventory marks it required — preserving the
-     * contract means no schema churn when filtering lands.
+     * list_services_for_vehicle — the catalog filtered by the vehicle's
+     * structural applicability (Schema Gap 4 closed, Jun-10): joins the
+     * resolved vehicle_config through the SAME isServiceApplicable rules as
+     * the booking surface, so Oto can no longer offer a PS flush on an EPS
+     * car or an oil change on an EV. Fails open to the full catalog when the
+     * vehicle/config can't be resolved (see oto/applicableServices.ts).
      */
-    list_services_for_vehicle: async (_input) => {
-      const all: Array<Doc<"services">> = await ctx.runQuery(
-        api.services.list,
-        {},
+    list_services_for_vehicle: async (input) => {
+      const vehicleId = (input.vehicle_id ?? "") as string;
+      const listed = await ctx.runQuery(
+        internal.oto.applicableServices.listServicesForUserVehicle,
+        {
+          actingUserId: userId,
+          ...(vehicleId ? { vehicle_id: vehicleId } : {}),
+        },
       );
       // Wave 7.3 Option B: services is a moat table; bump counter by row count.
-      await bumpMoat("services", all?.length ?? 0);
-      return (all ?? []).map((s) => ({
-        slug: s.slug,
-        name: s.name,
-        description: s.description ?? null,
-        default_labor_hours: s.default_labor_hours ?? null,
-        has_options: s.has_options === true,
-        is_labor_only: s.is_labor_only === true,
-      }));
+      await bumpMoat("services", listed?.length ?? 0);
+      return listed;
     },
 
     /**
@@ -2041,7 +2222,10 @@ function buildCallables(
      */
     get_vehicle_health: async (input) => {
       const vehicleId = (input.vehicle_id ?? "") as string;
-      return await ctx.runQuery(api.oto.vehicleHealth.getVehicleHealth, {
+      // Resolve against the already-resolved acting user (works for real auth
+      // AND the simulation harness, where sub-query auth would be null).
+      return await ctx.runQuery(internal.oto.vehicleHealth.getVehicleHealthForUser, {
+        actingUserId: userId,
         vehicle_id: vehicleId,
       });
     },
@@ -2054,8 +2238,8 @@ function buildCallables(
       const vehicleId = (input.vehicle_id ?? "") as string;
       const itemId = (input.item_id ?? "") as string;
       return await ctx.runQuery(
-        api.oto.vehicleHealth.getProjectedHealthScore,
-        { vehicle_id: vehicleId, item_id: itemId },
+        internal.oto.vehicleHealth.getProjectedHealthScoreForUser,
+        { actingUserId: userId, vehicle_id: vehicleId, item_id: itemId },
       );
     },
 
@@ -2073,17 +2257,10 @@ function buildCallables(
         typeof input.limit === "number" && Number.isFinite(input.limit)
           ? (input.limit as number)
           : undefined;
-      // Vehicle-scoped questions: Haiku passes `vehicle_vin` from the
-      // <vehicle> block to filter to the active car. Cross-vehicle
-      // questions omit it and get every row.
-      const vehicleVinArg =
-        typeof input.vehicle_vin === "string" && input.vehicle_vin.trim().length > 0
-          ? (input.vehicle_vin as string)
-          : undefined;
-      return await ctx.runQuery(api.oto.bookings.getBookings, {
+      return await ctx.runQuery(internal.oto.bookings.getBookingsForUser, {
+        actingUserId: userId,
         status_filter: statusFilter,
         ...(limit !== undefined ? { limit } : {}),
-        ...(vehicleVinArg !== undefined ? { vehicle_vin: vehicleVinArg } : {}),
       });
     },
 
@@ -2099,13 +2276,9 @@ function buildCallables(
         typeof input.limit === "number" && Number.isFinite(input.limit)
           ? (input.limit as number)
           : undefined;
-      const vehicleVinArg =
-        typeof input.vehicle_vin === "string" && input.vehicle_vin.trim().length > 0
-          ? (input.vehicle_vin as string)
-          : undefined;
-      return await ctx.runQuery(api.oto.bookings.getPendingBookings, {
+      return await ctx.runQuery(internal.oto.bookings.getPendingBookingsForUser, {
+        actingUserId: userId,
         ...(limit !== undefined ? { limit } : {}),
-        ...(vehicleVinArg !== undefined ? { vehicle_vin: vehicleVinArg } : {}),
       });
     },
 
@@ -2116,7 +2289,8 @@ function buildCallables(
      */
     get_due_services: async (input) => {
       const vehicleId = (input.vehicle_id ?? "") as string;
-      return await ctx.runQuery(api.oto.dueServices.getDueServices, {
+      return await ctx.runQuery(internal.oto.dueServices.getDueServicesForUser, {
+        actingUserId: userId,
         vehicle_id: vehicleId,
       });
     },
@@ -2128,7 +2302,8 @@ function buildCallables(
      */
     get_vehicle_facts: async (input) => {
       const vehicleId = (input.vehicle_id ?? "") as string;
-      const result = await ctx.runQuery(api.oto.vehicleFacts.getVehicleFacts, {
+      const result = await ctx.runQuery(internal.oto.vehicleFacts.getVehicleFactsForUser, {
+        actingUserId: userId,
         vehicle_id: vehicleId,
       });
       // Wave 7.3 Option B: getVehicleFacts reads trim_specs (1 row) plus
@@ -2148,7 +2323,7 @@ function buildCallables(
     lookup_vehicle_spec: async (input) => {
       const q = (input.query ?? "") as string;
       const result = await ctx.runQuery(
-        api.oto.lookupVehicleSpec.lookupVehicleSpec,
+        internal.oto.lookupVehicleSpec.lookupVehicleSpec,
         { query: q },
       );
       // Wave 7.3 Option B: lookupVehicleSpec scans the entire `makes` table
@@ -2230,7 +2405,7 @@ function buildCallables(
       };
       try {
         const cascadeResult = (await ctx.runAction(
-          api.oto.evalHarness.runFullCascade,
+          internal.oto.evalHarness.runFullCascade,
           {
             question_text,
             topic,
@@ -2400,7 +2575,7 @@ function buildCallables(
         }
       }
       return await ctx.runMutation(
-        api.oto.vehicleFactsEditing.recordVehicleFact,
+        internal.oto.vehicleFactsEditing.recordVehicleFact,
         args,
       );
     },
@@ -2550,7 +2725,7 @@ function buildCallables(
           // the model's anchor (per design §2.2).
           try {
             await ctx.runMutation(
-              api.oto.memoryEditing.reinforceUserSemanticFact,
+              internal.oto.memoryEditing.reinforceUserSemanticFact,
               { fact_id: existingFactId },
             );
             console.log(
@@ -2605,7 +2780,7 @@ function buildCallables(
             : {}),
         };
         const factId = await ctx.runMutation(
-          api.oto.memoryEditing.recordUserSemanticFact,
+          internal.oto.memoryEditing.recordUserSemanticFact,
           insertArgs,
         );
         return { ok: true, fact_id: factId, recorded: true };
@@ -2703,7 +2878,7 @@ function buildCallables(
         | string
         | undefined;
       if (typeof intent === "string") args.last_user_intent = intent;
-      await ctx.runMutation(api.ai_conversations.updateState, args);
+      await ctx.runMutation(internal.ai_conversations.updateState, args);
 
       // ── Wave 3 mirror: diff new vs previous, append new facts as
       // typed conversation_facts rows. ──────────────────────────────────
@@ -2726,7 +2901,7 @@ function buildCallables(
           for (const factText of newEntries) {
             try {
               await ctx.runMutation(
-                api.oto.memoryEditing.recordConversationFact,
+                internal.oto.memoryEditing.recordConversationFact,
                 {
                   conversation_id: conversationId,
                   fact_type: "observation" as const,
@@ -2837,7 +3012,7 @@ function buildCallables(
           // seed. The bootstrap lives inside memoryEditing.ts so CI Rule 16
           // still defends the table from out-of-helper writes.
           await ctx.runMutation(
-            api.oto.memoryEditing.initEpisodicControl,
+            internal.oto.memoryEditing.initEpisodicControl,
             { conversation_id: conversationId },
           );
           // Read the row to learn the current updated_by_turn — the helper
@@ -2845,7 +3020,7 @@ function buildCallables(
           // detection. A fresh row is at turn 0; commitEpisodic advances it.
           const row: Doc<"conversation_episodic_control"> | null =
             await ctx.runQuery(
-              api.oto.memoryEditing.getEpisodicControl,
+              internal.oto.memoryEditing.getEpisodicControl,
               { conversation_id: conversationId },
             );
           if (!row) {
@@ -2855,27 +3030,15 @@ function buildCallables(
           }
           const delta: Record<string, unknown> = {};
           if (moodChanged) {
-            // Map the legacy free-string mood to the §2.3 enum. The legacy
-            // mood column on ai_conversations is v.optional(v.string()) —
-            // historically free-form. The §2.3 schema constrains it to a
-            // five-member union. We accept the exact-match values verbatim
-            // and route anything else through "neutral" (the safe default
-            // the seed uses). Logging the unmapped value preserves the
-            // forensic signal.
-            const allowedMoods = new Set([
-              "neutral",
-              "curious",
-              "concerned",
-              "frustrated",
-              "satisfied",
-            ]);
-            if (allowedMoods.has(newMood as string)) {
-              delta.mood = newMood as
-                | "neutral"
-                | "curious"
-                | "concerned"
-                | "frustrated"
-                | "satisfied";
+            // B-P5: map the tool's 7-value mood vocabulary to the §2.3
+            // five-member episodic enum BY VALENCE (moodMap.ts). The old code
+            // accepted only exact matches and flattened the other four tool
+            // moods (calm/worried/hyped/confused) to "neutral", destroying the
+            // signal — worried is really concerned, hyped is satisfied. An
+            // unrecognized value still logs + falls back to neutral.
+            const mapped = mapToolMoodToEpisodic(newMood as string);
+            if (mapped !== null) {
+              delta.mood = mapped;
             } else {
               console.warn(
                 `[oto/chat] commitEpisodic: unmapped mood "${newMood}"; ` +
@@ -2887,7 +3050,7 @@ function buildCallables(
           if (arcChanged) {
             delta.arc_summary = newArc as string;
           }
-          await ctx.runMutation(api.oto.memoryEditing.commitEpisodic, {
+          await ctx.runMutation(internal.oto.memoryEditing.commitEpisodic, {
             conversation_id: conversationId,
             expected_turn: row.updated_by_turn,
             delta,
@@ -2952,7 +3115,7 @@ function buildCallables(
       // loop knows the handoff didn't take + skip the mirror to avoid
       // canonical/mirror drift; user-facing turn continues normally.
       try {
-        await ctx.runMutation(api.ai_conversations.setCurrentModel, {
+        await ctx.runMutation(internal.ai_conversations.setCurrentModel, {
           id: conversationId,
           model: "sonnet",
         });
@@ -2983,16 +3146,16 @@ function buildCallables(
       // ── Wave 3 control-class mirror ──────────────────────────────────
       try {
         await ctx.runMutation(
-          api.oto.memoryEditing.initEpisodicControl,
+          internal.oto.memoryEditing.initEpisodicControl,
           { conversation_id: conversationId },
         );
         const row: Doc<"conversation_episodic_control"> | null =
           await ctx.runQuery(
-            api.oto.memoryEditing.getEpisodicControl,
+            internal.oto.memoryEditing.getEpisodicControl,
             { conversation_id: conversationId },
           );
         if (row) {
-          await ctx.runMutation(api.oto.memoryEditing.commitControl, {
+          await ctx.runMutation(internal.oto.memoryEditing.commitControl, {
             conversation_id: conversationId,
             expected_turn: row.updated_by_turn,
             delta: {
@@ -3047,7 +3210,7 @@ function buildCallables(
       // Convex hiccups so the chat turn continues; ok:false signals to the
       // model loop that the handback didn't take.
       try {
-        await ctx.runMutation(api.ai_conversations.setCurrentModel, {
+        await ctx.runMutation(internal.ai_conversations.setCurrentModel, {
           id: conversationId,
           model: "haiku",
         });
@@ -3078,16 +3241,16 @@ function buildCallables(
       // ── Wave 3 control-class mirror ──────────────────────────────────
       try {
         await ctx.runMutation(
-          api.oto.memoryEditing.initEpisodicControl,
+          internal.oto.memoryEditing.initEpisodicControl,
           { conversation_id: conversationId },
         );
         const row: Doc<"conversation_episodic_control"> | null =
           await ctx.runQuery(
-            api.oto.memoryEditing.getEpisodicControl,
+            internal.oto.memoryEditing.getEpisodicControl,
             { conversation_id: conversationId },
           );
         if (row) {
-          await ctx.runMutation(api.oto.memoryEditing.commitControl, {
+          await ctx.runMutation(internal.oto.memoryEditing.commitControl, {
             conversation_id: conversationId,
             expected_turn: row.updated_by_turn,
             delta: {
@@ -3209,7 +3372,7 @@ function buildCallables(
           return { ok: false, reason: "no matching active fact found" };
         }
         await ctx.runMutation(
-          api.oto.memoryEditing.retractUserSemanticFact,
+          internal.oto.memoryEditing.retractUserSemanticFact,
           { fact_id: matchedId, reason },
         );
         console.log(
@@ -3297,7 +3460,7 @@ function buildCallables(
           return { ok: false, reason: "no matching active fact found" };
         }
         await ctx.runMutation(
-          api.oto.memoryEditing.retractConversationFact,
+          internal.oto.memoryEditing.retractConversationFact,
           {
             fact_id: matchedId,
             reason,

@@ -10,9 +10,8 @@
 
 ## CRITICAL (confirmed)
 
-1. **`scrape_cache` key omits trim (and engine) — cross-trim parts/price contamination for 30 days.**
-   `convex/vehicleEnrichment/scraperQueries.ts:17-19` — `buildCacheKey = make_model_year_sourceType`, but scraped content is trim-specific (registry URLs built from `modelSlugFn(model, trim)`). An M340i and a 330i share a cache row. This is the same root cause as the Notion "M3 Comp decoded as plain 3-series" tire bug, still alive one layer down.
-   → Add trim slug (+engine) to the key, bump `CACHE_FORMAT_VERSION`.
+1. ✅ **FIXED** (`fix(enrichment): trim in scrape_cache key`, this branch) — ~~`scrape_cache` key omits trim — cross-trim parts/price contamination for 30 days~~ (an M340i and a 330i shared a cache row; same root cause as the "M3 Comp decoded as plain 3-series" tire bug).
+   **Fix:** `buildCacheKey` now includes the trim segment (`base` placeholder when empty; exported + unit-tested, `tests/scrapeCacheKey.test.ts`); `CACHE_FORMAT_VERSION` bumped to 3 — old keys never match again and the bump hard-invalidates pre-trim rows, which **also flushes the Jetta's poisoned $49-washer cached catalog**. All 7 call sites pass trim; `debugClearVehicleCache` internalized (was another public mutation). Engine-in-key deferred (trim covers the registry URL identity).
 
 2. ✅ **FIXED** (`security(enrichment): lock down public admin writers`, this branch) — ~~`purgeVehicleConfig` is a PUBLIC mutation~~ + the related public-writer cluster:
    - `purgeVehicleConfig` → `internalMutation`, and it now also purges `labor_observations` (the medium "poison survives purge" finding below).
@@ -203,7 +202,9 @@ Direct fitment queries show **all three cars have BOTH axles enriched with corre
 | 2022 Jetta (re-enriched) | **26/30** | 1 | 3 |
 | 2020 750i (legacy) | **25/30** | 4 | 1 |
 
-Rear pads/rotors priced on all three (Civic $57.16/$81.44, Jetta $39.99/$49.99, 750i $119.99/$97.99). **Real remaining gaps:** (a) the "missing" locked roles are timing belt/kit — genuine only on the Jetta (belt engine); chain cars need applicability-aware grading in the inspector — and the engine-conditional cartridge O-ring; (b) 750i's 4 unpriced are legacy junk fitments (washer/timing kit/water pump/gear oil) → catalog reprice/backfill; (c) **brake hardware kits are never discovered on any car** (as_needed, so not in the locked quote — but the PDF lists them); (d) the Jetta's cached $49.37 washer (sanity band); (e) as_needed/kit consumables without core-role fallback synthesis (flush chemical, terminal protection, induction/throttle sprays) are by-design unbilled until mechanic confirmation.
+Rear pads/rotors priced on all three (Civic $57.16/$81.44, Jetta $39.99/$49.99, 750i $119.99/$97.99). **Real remaining gaps:** (a) the "missing" locked roles are timing belt/kit — genuine only on the Jetta (belt engine); chain cars need applicability-aware grading in the inspector — and the engine-conditional cartridge O-ring; (b) ✅ 750i's unpriced legacy fitments → **fallback swap shipped** (see below): gear oil + washer now bill the priced seeds (750i 25→**27/30**); timing kit/water pump remain (chain-car pollution, no seeds — correct); (c) **brake hardware kits are never discovered on any car** (as_needed, so not in the locked quote — but the PDF lists them); (d) ✅ the $49.37 washer → **anchor sanity band shipped** (see below): Jetta washer now bills the $4 seed; (e) as_needed/kit consumables without core-role fallback synthesis (flush chemical, terminal protection, induction/throttle sprays) are by-design unbilled until mechanic confirmation.
+
+**Jun-10 follow-up fixes (`fix(parts): unusable-group fallback swap + anchor sanity band`):** `resolveWinningPartForService` now swaps a declared CORE role group to its priced universal seed when EVERY candidate is unusable for billing — unpriced (empty summary; the 750i junk gear-oil fitment used to block the $22 seed because synthesis fired only when NO fitment existed) or implausible (> 6× the role's `universalFallback.defaultPriceUsd` anchor; the $49 washer vs $4 — a captured MSRP/multi-pack figure MAD can't see at n<4). Anchors exist only on consumable roles, so real parts are never price-capped. Synthesis extracted to one helper used by both paths. Tests: `tests/universalFallbackSwap.test.ts` (4, TDD). **Verified live:** 750i gear oil $0→$22, both washers →$4, 750i 27/30 priced.
 
 ## RECOMMENDED ORDER OF WORK
 

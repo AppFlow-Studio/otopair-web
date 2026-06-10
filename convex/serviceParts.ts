@@ -427,6 +427,55 @@ async function fitmentsForServiceType(
   return fitments;
 }
 
+/** Plausibility cap for consumable roles: a candidate whose quote unit price
+ *  exceeds this multiple of the role's reference anchor (universalFallback
+ *  defaultPriceUsd) is treated as a captured MSRP/multi-pack/garbage figure
+ *  (e.g. the Jun-10 $49 crush washer vs its $4 anchor — 12×). 6× is generous
+ *  for genuine OEM-premium consumables while catching order-of-magnitude
+ *  grabs that MAD outlier rejection can't see at n<4 sources. */
+const PLAUSIBLE_ANCHOR_MULT = 6;
+
+/**
+ * Synthesize a role's universal-consumable candidate: the seeded oem_parts
+ * row (category "consumable", subcategory === roleKey) with a PRICED summary,
+ * or null when the seed is missing/unpriced. Used in two places:
+ *   1. CORE roles with NO enriched fitment (the original fallback), and
+ *   2. the all-unpriced SWAP (Jun-10 live finding, 750i gear oil): a junk
+ *      fitment with zero trustworthy price rows used to BLOCK the fallback —
+ *      synthesis only fired when no fitment group existed — so the role
+ *      billed $0 while a priced seed sat unused.
+ */
+async function synthesizeUniversalCandidate(
+  ctx: { db: any },
+  role: PartRoleSpec,
+  slug: string,
+  vehicleConfigId: Id<"vehicle_configs">,
+  serviceRole: ServiceRole,
+): Promise<WinnerCandidate | null> {
+  if (!role.universalFallback) return null;
+  const universalPart = await ctx.db
+    .query("oem_parts")
+    .withIndex("by_subcategory", (q: any) => q.eq("subcategory", role.roleKey))
+    .filter((q: any) => q.eq(q.field("category"), "consumable"))
+    .first();
+  if (!universalPart) return null; // seed not run yet — skip silently
+  const priceSummary = await summarizePartPrices(ctx, universalPart._id);
+  if (priceSummary.sample_size === 0) return null; // unpriced seed — skip
+  const stubFitment = {
+    _id: `virtual:${slug}:${role.roleKey}`,
+    part_id: universalPart._id,
+    vehicle_config_id: vehicleConfigId,
+    service_type: slug,
+    quantity_needed: undefined,
+    position: undefined,
+    package_code: undefined,
+    service_role: serviceRole,
+    confidence: 1, // deliberate fallback, not a low-confidence guess
+    mechanic_verified: false,
+  } as unknown as Doc<"part_fitments">;
+  return { fitment: stubFitment, part: universalPart, priceSummary };
+}
+
 /**
  * Core selection helper. Used at booking-create time (via
  * computePricedPartsSnapshot) and on the Review & Pay query.
@@ -602,30 +651,18 @@ export async function resolveWinningPartForService(
       ) {
         continue;
       }
-      const universalPart = await ctx.db
-        .query("oem_parts")
-        .withIndex("by_subcategory", (q: any) => q.eq("subcategory", role.roleKey))
-        .filter((q: any) => q.eq(q.field("category"), "consumable"))
-        .first();
-      if (!universalPart) continue; // seed not run yet — skip silently
-      const priceSummary = await summarizePartPrices(ctx, universalPart._id);
-      if (priceSummary.sample_size === 0) continue; // unpriced seed — skip
-      const stubFitment = {
-        _id: `virtual:${slug}:${role.roleKey}`,
-        part_id: universalPart._id,
-        vehicle_config_id: args.vehicleConfigId,
-        service_type: slug,
-        quantity_needed: undefined,
-        position: undefined,
-        package_code: undefined,
-        service_role: effectiveServiceRole(role, bundle),
-        confidence: 1, // deliberate fallback, not a low-confidence guess
-        mechanic_verified: false,
-      } as unknown as Doc<"part_fitments">;
+      const candidate = await synthesizeUniversalCandidate(
+        ctx,
+        role,
+        slug,
+        args.vehicleConfigId,
+        effectiveServiceRole(role, bundle),
+      );
+      if (!candidate) continue; // seed not run / unpriced — skip silently
       filteredGroups.push({
         roleKey: role.roleKey,
         role,
-        candidates: [{ fitment: stubFitment, part: universalPart, priceSummary }],
+        candidates: [candidate],
       });
       virtualRoleKeys.add(role.roleKey);
     }
@@ -666,6 +703,56 @@ export async function resolveWinningPartForService(
     })();
     const includeInLockedQuote =
       effRole === "core" || (effRole === "kit" && g.role?.includeByDefault === true);
+
+    // Unusable-group swap (Jun-10): when EVERY enriched candidate in a
+    // declared CORE role group is unusable for billing — either UNPRICED
+    // (empty summary → bills $0/price_unknown; the 750i's junk gear-oil
+    // fitment blocked a perfectly good $22 seed) or IMPLAUSIBLE (price
+    // > PLAUSIBLE_ANCHOR_MULT × the reference's defaultPriceUsd anchor; the
+    // Jetta's crush washer billed $49 against a $4 anchor — a captured
+    // MSRP/multi-pack/garbage figure that survives MAD at n<4) — swap to the
+    // priced universal seed. Anchors exist only on consumable roles (the
+    // roles that declare universalFallback), so real parts (pads, rotors,
+    // batteries) are never price-capped by this. Suppressed (rear) passes
+    // skip positionless roles, mirroring the virtual block, so shared
+    // consumables still bill once.
+    const anchorUsd = g.role?.universalFallback?.defaultPriceUsd;
+    const unusableForBilling = (c: WinnerCandidate) =>
+      c.priceSummary.sample_size === 0 ||
+      (anchorUsd != null &&
+        anchorUsd > 0 &&
+        quoteUnitPrice(c.priceSummary) > anchorUsd * PLAUSIBLE_ANCHOR_MULT);
+    if (
+      g.role?.universalFallback &&
+      effRole === "core" &&
+      !virtualRoleKeys.has(g.roleKey) &&
+      !(args.suppressSharedRoles && g.role.positionless) &&
+      g.candidates.length > 0 &&
+      g.candidates.every(unusableForBilling)
+    ) {
+      const swapped = await synthesizeUniversalCandidate(
+        ctx,
+        g.role,
+        slug,
+        args.vehicleConfigId,
+        effRole,
+      );
+      if (swapped) {
+        roleWinners.push({
+          roleKey: g.roleKey,
+          serviceRole: effRole,
+          candidate: swapped,
+          losers: g.candidates,
+          source: "universal_fallback",
+          lowConfidence: false,
+          quantity,
+          quantityBasis,
+          includeInLockedQuote,
+          virtual: true,
+        });
+        continue;
+      }
+    }
 
     // Virtual fallback group — single deliberate candidate, no scorer.
     if (virtualRoleKeys.has(g.roleKey)) {

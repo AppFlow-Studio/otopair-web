@@ -61,6 +61,7 @@ import {
 import { SYSTEM_PROMPT, SYSTEM_PROMPT_VERSION } from "./system_prompt";
 import { canonicalQuestionKey } from "./canonicalize";
 import { internal } from "../_generated/api";
+import { assembleTelemetryRow, type TurnSample } from "./telemetryAssembly";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -906,6 +907,10 @@ export async function sendMessageHandlerCore(
   const messages: AnthropicMessage[] = [{ role: "user", content: envelope }];
   const accumulatedResults: ToolResultBlock[] = [];
 
+  // B-P1: telemetry samples collected UNCONDITIONALLY (the debug trace only
+  // exists on harness runs — production rows used to record 0 tokens).
+  const turnSamples: TurnSample[] = [];
+
   let finalText = "";
   let iterations = 0;
   let hitCap = false;
@@ -957,6 +962,23 @@ export async function sendMessageHandlerCore(
       } else terminalToolUses.push(tu); // render | navigation | unknown
     }
 
+    const iterBranch =
+      terminalToolUses.length > 0
+        ? ("terminal" as const)
+        : dataToolUses.length === 0
+          ? ("text_only" as const)
+          : ("data_continue" as const);
+    turnSamples.push({
+      usage: resp.usage,
+      latency_ms: latencyMs,
+      tool_names: [
+        ...dataToolUses.map((t) => t.name),
+        ...stateToolUses.map((t) => t.name),
+        ...terminalToolUses.map((t) => t.name),
+      ],
+      branch: iterBranch,
+    });
+
     // Side-effect: dispatch state tools eagerly (before branching), so
     // persistence happens even if the rest of the response throws.
     const stateAckResults =
@@ -989,11 +1011,7 @@ export async function sendMessageHandlerCore(
           terminal_tool_uses: terminalToolUses,
           state_results: stateAckResults,
           tool_results: [] as ToolResultBlock[],
-          branch: terminalToolUses.length > 0
-            ? "terminal"
-            : dataToolUses.length === 0
-              ? "text_only"
-              : "data_continue",
+          branch: iterBranch,
         }
       : null;
     if (trace) trace.iterations.push(traceIter);
@@ -1268,6 +1286,12 @@ export async function sendMessageHandlerCore(
       (b): b is AnthropicTextBlock => b.type === "text",
     );
     finalText = forcedText?.text ?? "";
+    turnSamples.push({
+      usage: forced.usage,
+      latency_ms: forcedLatencyMs,
+      tool_names: [],
+      branch: "forced_final",
+    });
     if (trace) {
       trace.forced_final = {
         latency_ms: forcedLatencyMs,
@@ -1525,43 +1549,17 @@ export async function sendMessageHandlerCore(
     }
   }
 
-  // Aggregate token + tool stats across the loop. Used by both the trace
-  // payload AND the telemetry insert.
-  let aggInputTokens = 0;
-  let aggOutputTokens = 0;
-  let aggCacheCreation = 0;
-  let aggCacheRead = 0;
-  let totalLatencyMs = 0;
-  const allToolsCalled: string[] = [];
-  let finalBranch: string = "text_only";
-  // Replay iterations recorded in trace (when debug) or reconstruct from
-  // accumulatedResults names (in production). Trace block guarantees order
-  // and is precise; without trace we fall back to result names.
-  if (trace?.iterations?.length) {
-    for (const it of trace.iterations) {
-      aggInputTokens += it.response?.usage?.input_tokens ?? 0;
-      aggOutputTokens += it.response?.usage?.output_tokens ?? 0;
-      aggCacheCreation += it.response?.usage?.cache_creation_input_tokens ?? 0;
-      aggCacheRead += it.response?.usage?.cache_read_input_tokens ?? 0;
-      totalLatencyMs += it.latency_ms ?? 0;
-      for (const t of it.data_tool_uses ?? []) allToolsCalled.push(t.name);
-      for (const t of it.state_tool_uses ?? []) allToolsCalled.push(t.name);
-      for (const t of it.terminal_tool_uses ?? []) allToolsCalled.push(t.name);
-      finalBranch = it.branch ?? finalBranch;
-    }
-    if (trace.forced_final?.response?.usage) {
-      aggInputTokens += trace.forced_final.response.usage.input_tokens ?? 0;
-      aggOutputTokens += trace.forced_final.response.usage.output_tokens ?? 0;
-      aggCacheCreation += trace.forced_final.response.usage.cache_creation_input_tokens ?? 0;
-      aggCacheRead += trace.forced_final.response.usage.cache_read_input_tokens ?? 0;
-      totalLatencyMs += trace.forced_final.latency_ms ?? 0;
-    }
-  } else {
-    // Best-effort tool names from accumulatedResults if trace is off.
-    for (const r of accumulatedResults) {
-      if ((r as any).name) allToolsCalled.push((r as any).name as string);
-    }
-  }
+  // B-P1: assemble token + tool stats from the unconditional turnSamples
+  // (pure function — tests/telemetryAssembly.test.ts). The old version
+  // replayed trace.iterations, which only exist on debug runs, so every
+  // PRODUCTION row recorded 0 tokens / 0 latency / constant branch — and
+  // stamped the MODEL constant instead of the routed turnModel.
+  const telemetryRow = assembleTelemetryRow(turnSamples, {
+    model: turnModel,
+    systemPromptVersion: SYSTEM_PROMPT_VERSION,
+    iterationsUsed: iterations,
+    hitCap,
+  });
 
   if (trace) {
     trace.hit_cap = hitCap;
@@ -1571,10 +1569,10 @@ export async function sendMessageHandlerCore(
     trace.book_service = renderEnvelope.bookService ?? null;
     trace.persisted = !skipPersist;
     trace.usage_total = {
-      input_tokens: aggInputTokens,
-      output_tokens: aggOutputTokens,
-      cache_creation_tokens: aggCacheCreation,
-      cache_read_tokens: aggCacheRead,
+      input_tokens: telemetryRow.input_tokens,
+      output_tokens: telemetryRow.output_tokens,
+      cache_creation_tokens: telemetryRow.cache_creation_tokens ?? 0,
+      cache_read_tokens: telemetryRow.cache_read_tokens ?? 0,
     };
   }
 
@@ -1647,17 +1645,7 @@ export async function sendMessageHandlerCore(
       await ctx.runMutation(internal.oto.telemetry.recordTurn, {
         conversation_id: conversationId,
         user_id: user._id,
-        model: MODEL,
-        system_prompt_version: SYSTEM_PROMPT_VERSION,
-        iterations_used: iterations,
-        hit_cap: hitCap,
-        input_tokens: aggInputTokens,
-        output_tokens: aggOutputTokens,
-        cache_creation_tokens: aggCacheCreation || undefined,
-        cache_read_tokens: aggCacheRead || undefined,
-        total_latency_ms: totalLatencyMs,
-        tools_called: allToolsCalled,
-        final_branch: finalBranch,
+        ...telemetryRow,
       });
     } catch (e: any) {
       console.error("[oto/chat] telemetry insert failed (swallowed):", e?.message);

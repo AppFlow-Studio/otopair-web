@@ -21,13 +21,19 @@ All 6 mutations validate the director session token in-transaction and derive th
 ### 3. ✅ DONE (Jun 10 session 3) — Data fix: Jetta `engines.timing_system` (+ spot-check haul)
 Fixed via new audited `devOnly/dataFixes:fixEngineFields` (TDD'd): Jetta EA211 `chain→belt` + `cylinders 1.5→4`, then pinned force re-enrich kicked off. Spot-check (`devOnly/dataFixes:engineTimingAudit`) found and fixed a SECOND timing error — 2003 Accord J30A4 `chain→belt` (J-series V6 is belt-driven) — plus cylinder-held-displacement on the R-line Jetta/CR-V/Atlas VR6. Flagged, not fixed: Atlas 2.0T placeholder-engine attach, 14 stuck-'enriching' Ford configs, evaltest "DOHC". See SESSION_HANDOFF.md.
 
-### 4. Ops: catalog-wide reprice + parts backfill, then flags
+### 4. 🟡 MOSTLY DONE (Jun 10 session 3) — Ops: catalog-wide reprice + parts backfill, then flags
+**Done:** reprice swept all 9 enriched configs (`online_discount` 127→1 catalog-wide; sale rows ~tripled); parts-only backfills launched for the 5 configs with missing fitments (CR-V, Accord, Atlas ×2, R-line Jetta); coverage gauge run (BMWs 25/25, Civic 24/25 pre-backfill). `LABOR_SOURCE_REPAIRPAL` already on.
+**Remaining:** verify post-backfill coverage when the batches land; `PARTS_PRICE_SOURCE=median` needs Waleed's shadow-diff sign-off; `PARTS_REEXTRACT_BATCH2=on` deliberately NOT flipped — the Batch-2 reextract loop has no wall-clock budget (one 45s-timeout fetch per itemized part can breach the 10-min action cap on big configs); add a budget like the scrape one first.
+
+### 4-old. Ops: catalog-wide reprice + parts backfill, then flags (original)
 - Poison (`online_discount`) still live on ~7/9 enriched configs; `part_prices` hang off shared `oem_parts` rows so fresh cars INHERIT old poison (`purgeVehicleConfig` does not touch them). Run the director reprice per config (or a batch script over configs), and the parts backfill for configs missing fitments.
 - After backfill, run `partsCoverage` per config as the acceptance gauge.
 - **Flag order matters:** `LABOR_SOURCE_REPAIRPAL=on` **BEFORE** any catalog relabor/re-enrich (decision recorded in `convex/lib/labor_aggregation.ts` — flag-off aggregates are 0.6 confidence and fail the 0.75 quote gate by design). Then `PARTS_PRICE_SOURCE=median` after shadow-diff sign-off. Optional: `PARTS_REEXTRACT_BATCH2=on` (one fetch per itemized part; affirmative rejections now write `unverified`).
 
-### 5. Labor follow-through (Notion: "Labor-time validation + data-good signal", freeze-gated)
-`labor_observations` populated on only 3/9 configs — bulk relabor needed; KBB validation on the known-vehicle set; emit the data-good signal for Temur's pricing. Smaller code items from the review: RepairPal scrapes never pass the year (multi-generation page mixing); the two labor resolvers disagree (`laborTimes.ts` ungated vs `quoteEngine`); labor quote-results now report `'aggregated'` correctly.
+### 5. 🟡 MOSTLY DONE (Jun 10 session 3) — Labor follow-through
+**Done:** bulk relabor shipped (`vehicleEnrichment/relabor:relaborConfig`) + run over all 10 enriched configs (every car has `repairpal_motor` observations); both review code items fixed (RepairPal year-correct pages; booking-UI labor gate now mirrors the quote engine); data-good grading shipped (`devOnly/laborValidation:report`, applicability-aware).
+**Live state:** every config is **N-1/N quote-grade with the same single gap: `rotor_replacement`** — RepairPal's rotor page exists but has no labor sentence in raw HTML and Firecrawl 500s on it (the one systematic blocker to `labor_data_good=true`; rotors quote via tier_estimate meanwhile).
+**Remaining (needs Waleed/Temur):** the rotor-labor source decision; KBB cross-validation; the AI acceptability judge; the data-good signal's consumer contract for Temur's pricing.
 
 ### 6. Director-panel live verification
 The three backfill buttons now send `session.token` — needs one click each in the panel (`.agent/pw` harness token in `.agent/pw/.token` has likely expired; re-grab from browser localStorage `otopair_director_token`). Also verify a re-enrich completes end-to-end from the UI.

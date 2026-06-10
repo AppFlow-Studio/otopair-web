@@ -105,8 +105,16 @@ export async function searchAndFetch(
  * (PARTS_DIRECT_FETCH=on) with automatic fallback to Firecrawl on a short/blocked
  * body — off by default since direct fetch is unproven at volume / on ToS.
  */
+/** Default per-page cap for fetchUrlWithHtml. Without it, a dead upstream
+ *  (e.g. the retailer's site failing TLS while Firecrawl keeps retrying) holds
+ *  the request for minutes — observed eating the entire 600s Convex action
+ *  budget during the 2018-Civic fresh enrichment (Jun 10 2026) and leaving the
+ *  config stuck 'enriching'. */
+const FETCH_URL_TIMEOUT_MS = 45_000;
+
 export async function fetchUrlWithHtml(
   url: string,
+  timeoutMs: number = FETCH_URL_TIMEOUT_MS,
 ): Promise<{ markdown: string | null; html: string | null }> {
   if (process.env.PARTS_DIRECT_FETCH === "on") {
     try {
@@ -137,7 +145,11 @@ export async function fetchUrlWithHtml(
       body: JSON.stringify({
         url,
         formats: ["markdown", "rawHtml"],
+        // Firecrawl-side page-load cap, slightly under our abort so Firecrawl
+        // returns a clean error instead of us severing the connection.
+        timeout: Math.max(5_000, timeoutMs - 5_000),
       }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!response.ok) {

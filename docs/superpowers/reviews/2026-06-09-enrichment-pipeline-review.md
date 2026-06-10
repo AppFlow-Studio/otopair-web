@@ -172,6 +172,19 @@ The PDF at repo root is the canonical "parts we're supposed to get & price" (23 
 
 **How to use going forward:** run `partsCoverage` per config after the catalog-wide backfill/re-enrich; acceptance = locked roles `priced === total` (timing_belt roles exempt on chain engines once applicability is fixed).
 
+### Re-enrichment experiment (Jun 10, ~00:30–01:20)
+
+**Jetta full pinned re-enrich (force):** locked-role coverage 21 priced/0 unpriced/9 missing → **23/1/6**. Verdict per gap:
+- ✅ `engine_oil` (→$9.23), `atf_fluid` (→$40.47), front pads (→$46.98) + front wear sensor (→$9.99) all populated — the missing core fluids were **legacy-config rot**, fixed by re-enrichment.
+- ❌ **Brake axle FLIPPED, not completed**: rear pads were priced before, now front is priced and rear is GONE. Batch-2 part discovery yields ~one axle per run and full re-enrich REPLACES fitments — re-enriching can lose previously covered roles. (New finding: re-enrich is lossy across axles; prompt should require both axles or merge should preserve prior fitments.)
+- ❌ **$50 crush washer reproduced** ($54.31 → $49.37): the garbage source data came straight back from the 30-day `scrape_cache` (`Cache hit: parts_catalog (48 prices)`). Sanity band still needed; cache makes bad prices sticky.
+- Still missing on a belt engine: timing belt/kit (water pump now exists unpriced); rear rotors; trans pan parts; cartridge O-ring.
+
+**Fresh-car test (2018 Civic LX, generated VIN `19XFC2F58JE201234`):** could not initially complete AT ALL —
+- Attempts 1 & 2 both died at the **600s Convex action cap during the pre-batch scrape**: the Honda registry source (`hondapartsdeal.com`) is TLS-dead (curl exit 35), Firecrawl 500s after minutes per page, the registry loop has no time budget, and the batch was never submitted. Config left stuck `'enriching'` — **live reproduction of item 3**, twice. Sharper edge: STEP-0's `force` keeps the in-progress guard, so even a director cannot retry a stuck config for 4h (recovery required `purgeVehicleConfig`).
+- ✅ **FIXED** (`fix(enrichment): scrape time budget`): `fetchUrlWithHtml` now has a 45s abort + Firecrawl-side `timeout`; the registry fetch loop has a 210s wall-clock budget and proceeds to batch submission with whatever it has (Batch 2 fills via web_search). Attempt 3 ran with the fix — result recorded below/handoff.
+- Positive finding: engine-code resolution worked on the fresh VIN (NHTSA `2.0l_4cyl` descriptor → `K20C2`).
+
 ## RECOMMENDED ORDER OF WORK
 
 1. **Labor gate cluster (Jun-10 freeze blocker)** — items 11+12: stamp `data_quality:'aggregated'` in recompute, check `source` in `isHighQualityVdb`, gate Layer-3 siblings, return real source label, decide the flag-off confidence story. Without this Temur's pricing can't consume validated labor even where it exists.

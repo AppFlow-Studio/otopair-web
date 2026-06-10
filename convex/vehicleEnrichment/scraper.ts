@@ -37,6 +37,10 @@ import { scrapeWheelSizeOptions, type WheelSizeResult } from "./utils/wheelSizeS
 const TTL_PARTS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_MARKDOWN_CHARS = 40_000;
 const MAX_PER_PAGE_CHARS =  8_000; // per-page cap when concatenating multiple pages
+/** Wall-clock budget for the registry parts-fetch loop (see scrapePartsPages).
+ *  Leaves ample headroom inside the 600s action cap for chassis lookup, VDB,
+ *  the (parallel) manual scrape, the search fallback, and batch submission. */
+const PARTS_SCRAPE_BUDGET_MS = 210_000;
 
 export interface ScrapedSources {
   partsMarkdown: string;
@@ -267,14 +271,35 @@ async function scrapePartsPages(
   const seenNumbers = new Set<string>();
   let totalChars = 0;
 
+  // Hard time budget for the registry fetch loop. The whole pre-batch phase
+  // (chassis lookup, VDB, wheel-size, this scrape, batch build) must fit the
+  // 600s Convex action cap — without a budget, a dead registry source (each
+  // page = up to 2 slow Firecrawl attempts) eats the entire cap before the
+  // batch is even submitted, and the config is left stuck 'enriching' with no
+  // failure handler (observed live: 2018 Civic vs a TLS-dead retailer, twice,
+  // Jun 10 2026). On budget exhaustion we stop fetching and proceed — Batch 2
+  // fills the gaps via web_search, and the search fallback still runs if the
+  // registry produced nothing at all.
+  const deadlineAt = Date.now() + PARTS_SCRAPE_BUDGET_MS;
+
   for (let i = 0; i < yearSpecificUrls.length; i++) {
     if (totalChars >= MAX_MARKDOWN_CHARS) break;
+    if (Date.now() >= deadlineAt) {
+      console.warn(
+        `[scraper] Parts scrape budget (${PARTS_SCRAPE_BUDGET_MS / 1000}s) exhausted after ${i}/${yearSpecificUrls.length} pages — skipping the rest (Batch 2 fills via web_search)`,
+      );
+      break;
+    }
 
     // Try year-specific URL first, fall back to generic if empty/blocked
     let fetched = await fetchUrlWithHtml(yearSpecificUrls[i]);
     let usedUrl = yearSpecificUrls[i];
 
-    if ((!fetched.markdown || fetched.markdown.length < 100) && genericUrls[i]) {
+    if (
+      (!fetched.markdown || fetched.markdown.length < 100) &&
+      genericUrls[i] &&
+      Date.now() < deadlineAt
+    ) {
       console.warn(`[scraper] Year-specific URL empty (${fetched.markdown?.length ?? 0} chars), trying generic: ${genericUrls[i]}`);
       fetched = await fetchUrlWithHtml(genericUrls[i]);
       usedUrl = genericUrls[i];

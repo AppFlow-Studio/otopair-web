@@ -18,8 +18,8 @@ Shipped: transactional `failEnrichmentRun` wired into every exit (pending/partia
 ### 2. ✅ DONE (Jun 10 session 3) — `directorConfigActions.ts` token-gate sweep
 All 6 mutations validate the director session token in-transaction and derive the audit actor from it; `actorName`/`actorId` args removed; `TabVehicleConfigs.tsx` modals pass `token`. Tests: `tests/directorConfigActionsAuth.test.ts` (4, TDD). See SESSION_HANDOFF.md.
 
-### 3. Data fix: Jetta `engines.timing_system`
-Stored `"chain"` — wrong; the EA211 1.5 TSI is **belt**-driven (LLM misclassification). Fix via the director engine edit (or a one-off internal patch), then re-enrich the Jetta so its timing belt/kit/water-pump parts populate (the applicability rules will now allow them). The coverage inspector prints `timing_system` per car — spot-check other configs for the same error class.
+### 3. ✅ DONE (Jun 10 session 3) — Data fix: Jetta `engines.timing_system` (+ spot-check haul)
+Fixed via new audited `devOnly/dataFixes:fixEngineFields` (TDD'd): Jetta EA211 `chain→belt` + `cylinders 1.5→4`, then pinned force re-enrich kicked off. Spot-check (`devOnly/dataFixes:engineTimingAudit`) found and fixed a SECOND timing error — 2003 Accord J30A4 `chain→belt` (J-series V6 is belt-driven) — plus cylinder-held-displacement on the R-line Jetta/CR-V/Atlas VR6. Flagged, not fixed: Atlas 2.0T placeholder-engine attach, 14 stuck-'enriching' Ford configs, evaltest "DOHC". See SESSION_HANDOFF.md.
 
 ### 4. Ops: catalog-wide reprice + parts backfill, then flags
 - Poison (`online_discount`) still live on ~7/9 enriched configs; `part_prices` hang off shared `oem_parts` rows so fresh cars INHERIT old poison (`purgeVehicleConfig` does not touch them). Run the director reprice per config (or a batch script over configs), and the parts backfill for configs missing fitments.

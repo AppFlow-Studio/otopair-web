@@ -32,6 +32,7 @@ import type * as client_logs from "../client_logs.js";
 import type * as conversion_funnels from "../conversion_funnels.js";
 import type * as crons from "../crons.js";
 import type * as devOnly_auditConfigs from "../devOnly/auditConfigs.js";
+import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
 import type * as devOnly_dedupeConfig from "../devOnly/dedupeConfig.js";
 import type * as devOnly_partsCoverage from "../devOnly/partsCoverage.js";
 import type * as devOnly_validateQuoteEngine from "../devOnly/validateQuoteEngine.js";
@@ -325,6 +326,7 @@ declare const fullApi: ApiFromModules<{
   conversion_funnels: typeof conversion_funnels;
   crons: typeof crons;
   "devOnly/auditConfigs": typeof devOnly_auditConfigs;
+  "devOnly/dataFixes": typeof devOnly_dataFixes;
   "devOnly/dedupeConfig": typeof devOnly_dedupeConfig;
   "devOnly/partsCoverage": typeof devOnly_partsCoverage;
   "devOnly/validateQuoteEngine": typeof devOnly_validateQuoteEngine;

@@ -81,6 +81,12 @@
 - `TabVehicleConfigs.tsx`: all 5 edit modals + markVerified now pass `token={sessionToken}`; actorName/actorId plumbing deleted.
 - TDD: `tests/directorConfigActionsAuth.test.ts` (4 tests, watched 3 fail first): per-mutation invalid-token rejection (+ proof nothing was written), expired-session rejection, session-derived audit actor, forged-actorName arg rejection. Deployed to dev.
 
+**🟢 DONE (Jun 10 session 3) — engine data fixes (Jetta timing belt + the spot-check haul):**
+- New audited CLI fixer: `devOnly/dataFixes.ts` — `engineTimingAudit` (read-only sweep: every config's engine timing_system/cylinders/displacement + `cylinders_suspect` flag) and `fixEngineFields` (internalMutation; patches timing_system/cylinders, writes an `audit_log` `data_fix` row with before→after + reason; no-op without changes). TDD: `tests/dataFixes.test.ts` (2).
+- **Fixes applied on dev (all audited):** Jetta S EA211 `timing_system chain→belt` + `cylinders 1.5→4` (the known error); **2003 Accord J30A4 `chain→belt` + `cylinders 3→6`** (NEW — the spot-check found a second timing misclassification: Honda J-series V6 is belt-driven); Jetta 1.4T R-line `cylinders 1.4→4`; CR-V K24W9 `2.4→4`; Atlas VR6 `3.6→6`.
+- **Audit also surfaced (NOT fixed, flagged):** Atlas 2.0T SE has a placeholder 3.6L engine row attached (the known STEP-1b placeholder-engine residual — needs engine reattachment, not a field patch); **14 Ford configs stuck `enriching`** (pre-failure-handler stuck backlog — they'll re-enrich on next encounter >4h, or director force now works); evaltest fixture has `timing_system:"DOHC"` (junk but test-only).
+- Jetta pinned force re-enrich kicked off right after the fix (CLI → internal `enrichVehicleBatchV3`, `targetConfigId` pinned) so belt/kit/water-pump parts can populate now that applicability allows them.
+
 **🟡 STILL OPEN (next session):**
 0. **Retire/rewrite `diagnoseVin.ts`'s 4 `online_discount` writers** (lines ~493/680/989/1302) — now `internalAction` (no longer anonymously reachable) but still a foot-gun for a deliberate admin run: could overwrite corrected `sale` rows back to poison, and they spend Claude calls writing rows the aggregator ignores. Route through `reextractPartPrice` or delete. Low priority.
 0b. **Token-gate sweep for `directorConfigActions.ts`** — markVerified/updateConfigBasics/updateEngineFields/etc. still follow the old trusted-actor convention (public mutations, no server-side session check). Mirror the `requireDirector` pattern from `directorConfigBackfills.ts`.

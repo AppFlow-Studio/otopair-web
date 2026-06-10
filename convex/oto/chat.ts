@@ -1358,6 +1358,22 @@ export async function sendMessageHandlerCore(
   // doesn't pollute the user's real conversation history.
   const skipPersist = debug === true && debug_skip_persist === true;
   if (!skipPersist) {
+    // B-P2: lock the conversation's vehicle anchor on first send. setVehicleId
+    // had ZERO production call sites, so ai_conversations.vehicle_id stayed
+    // null for every real chat — the viewer showed no car and a mid-chat
+    // global-picker drift could repoint the envelope. Idempotent anchor-lock;
+    // failure-isolated so it can never break the turn.
+    if (activeVehicle?.id && !conversationVehicleId) {
+      try {
+        await ctx.runMutation(internal.ai_conversations.setVehicleIdInternal, {
+          conversationId,
+          vehicleId: activeVehicle.id as Id<"vehicles">,
+        });
+      } catch (e: any) {
+        console.error("[oto/chat] vehicle anchor write failed (swallowed):", e?.message);
+      }
+    }
+
     await ctx.runMutation(internal.ai_messages.create, {
       conversation_id: conversationId,
       role: "user",

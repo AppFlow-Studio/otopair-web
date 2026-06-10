@@ -174,6 +174,33 @@ export const setVehicleId = mutation({
 });
 
 /**
+ * setVehicleIdInternal — auth-free anchor writer for the server chat loop.
+ *
+ * B-P2: the public setVehicleId requires ctx.auth (mobile surface), but
+ * chat.ts runs the production turn from an action whose runMutation does NOT
+ * carry the caller identity (and the director sim's proxied identity reaches
+ * the action ctx, not sub-mutations). chat.ts calls this on first send with
+ * the already-resolved active vehicle's _id, so the "one chat, one car"
+ * anchor finally locks for real conversations (it had zero call sites). Same
+ * idempotent anchor-lock as setVehicleId / simulate._attachConversationVehicle.
+ */
+export const setVehicleIdInternal = internalMutation({
+  args: {
+    conversationId: v.id("ai_conversations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    const convo = await ctx.db.get(args.conversationId);
+    if (!convo) return { ok: false as const, reason: "no_conversation" as const };
+    if ((convo as Record<string, unknown>).vehicle_id) {
+      return { ok: true as const, alreadySet: true as const };
+    }
+    await ctx.db.patch(args.conversationId, { vehicle_id: args.vehicleId });
+    return { ok: true as const, alreadySet: false as const };
+  },
+});
+
+/**
  * updateState — Haiku-driven conversation state writeback.
  *
  * Called via the `update_conversation_state` tool on every Oto turn. Stores

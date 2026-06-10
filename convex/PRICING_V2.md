@@ -69,8 +69,13 @@ New entry point: **`quotes:previewForBooking`** (mutation) — takes `vin + serv
 `isHighQualityVdb()` disqualifies a `labor_times` row from Layer 1 if any of:
 
 - `data_quality ∈ { chassis_clone, engine_clone, training_data, default_fallback }` — inferred from siblings or generic per-service defaults; not real data for this config.
-- `confidence < 0.75` — belt-and-suspenders gate regardless of data_quality.
+- `source ∈ { training_data, web_search, chassis_clone, engine_clone, default_fallback }` — legacy pre-aggregation rows wrote their junk label into `source` with `data_quality` unset (e.g. `training_data` @ 0.75), so a data_quality-only gate let LLM guesses through. Plain `vdb` stays eligible. *(Jun 9 2026)*
+- `confidence < 0.75` — belt-and-suspenders gate regardless of data_quality. Note: `aggregated` rows without a `repairpal_motor` observation cap at 0.6 by design — LLM-only consensus does not quote; see `labor_aggregation.ts`.
 - (Empirical only) `empirical_sample_size < 5` — raised from the prior `≥2` threshold so a couple of outlier jobs can't drag the baseline.
+
+The same gate now also applies to **Layer 3 sibling rows** (previously any sibling row with `book_hours > 0` was accepted at a fabricated 0.7 confidence — the rows Layer 1 rejects walked back in through the sibling door). *(Jun 9 2026)*
+
+Accepted rows with `source='aggregated'` (RepairPal/MOTOR-driven weighted medians) report `hours_source='aggregated'`, not `'vdb'` — and `recomputeLaborForConfigService` stamps `data_quality='aggregated'` so a stale clone stamp can't veto a fresh aggregate. *(Jun 9 2026)*
 
 Disqualified rows emit a `console.warn` for prod auditability; the engine falls through to Layer 5 (Yassin tier_estimate, Camry-anchored).
 

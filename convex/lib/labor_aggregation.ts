@@ -140,6 +140,14 @@ export async function recomputeLaborForConfigService(
 
   // Data-good signal (spec §3.7). RepairPal (MOTOR) is the high-trust anchor;
   // corroboration by a second non-VDB source within 20% bumps it to 0.9.
+  //
+  // DECISION (Jun 9 2026 review): without a repairpal_motor observation the
+  // ceiling is 0.6, which is BELOW the quote gate's MIN_VDB_CONFIDENCE (0.75)
+  // — i.e. LLM-only consensus intentionally does NOT quote; the quote falls to
+  // the transparent tier_estimate layer instead. That also means recompute can
+  // downgrade an old VDB row (0.9) below the gate — accepted, that's the VDB
+  // de-throning. Rollout consequence: flip LABOR_SOURCE_REPAIRPAL=on BEFORE
+  // any catalog-wide re-enrich/relabor, or Layer-1 labor goes dark.
   const nonVdb = catalog.filter((o: any) => o.source !== "vdb_repair_estimates");
   const agree = (a: number, b: number) => Math.abs(a - b) / Math.max(a, b) <= 0.2;
   let confidence: number | undefined;
@@ -185,6 +193,10 @@ export async function recomputeLaborForConfigService(
       patch.book_hours = bookHours;
       patch.confidence = confidence;
       patch.source = "aggregated";
+      // Explicitly clear any stale clone/training stamp: the quote gate
+      // disqualifies on data_quality, and a leftover 'chassis_clone' would
+      // silently veto a freshly aggregated RepairPal/MOTOR value.
+      patch.data_quality = "aggregated";
       if (engineFamily) patch.engine_family = engineFamily;
     }
     if (Object.keys(patch).length > 0) await ctx.db.patch(existing._id, patch);
@@ -199,6 +211,7 @@ export async function recomputeLaborForConfigService(
     engine_family: engineFamily,
     book_hours: bookHours,
     source: bookHours !== undefined ? "aggregated" : undefined,
+    data_quality: bookHours !== undefined ? "aggregated" : undefined,
     confidence,
     empirical_hours: empirical ? empirical.hours : 0,
     empirical_sample_size: empirical ? empirical.n : empiricalCount,

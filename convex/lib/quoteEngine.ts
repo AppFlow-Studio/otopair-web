@@ -31,12 +31,24 @@ const DISQUALIFIED_DATA_QUALITY: ReadonlySet<string> = new Set([
   "training_data",
   "default_fallback",
 ]);
+// Legacy rows (pre-aggregation pipeline) wrote their junk label into `source`
+// with data_quality UNSET — e.g. source='training_data' confidence=0.75 — so a
+// data_quality-only gate let LLM guesses through as "vdb". Mirror the set on
+// source. Plain 'vdb' stays eligible (its bad rows carry clone stamps).
+const DISQUALIFIED_SOURCE: ReadonlySet<string> = new Set([
+  "training_data",
+  "web_search",
+  "chassis_clone",
+  "engine_clone",
+  "default_fallback",
+]);
 const MIN_VDB_CONFIDENCE = 0.75;
 const MIN_EMPIRICAL_SAMPLES = 5;
 
 function isHighQualityVdb(row: Doc<"labor_times">): boolean {
   if (row.book_hours == null || row.book_hours <= 0) return false;
   if (row.source === "tier_estimate") return false;
+  if (DISQUALIFIED_SOURCE.has(row.source ?? "")) return false;
   if (DISQUALIFIED_DATA_QUALITY.has(row.data_quality ?? "")) return false;
   if ((row.confidence ?? 0) < MIN_VDB_CONFIDENCE) return false;
   return true;
@@ -50,6 +62,7 @@ export type LaborHoursResult =
       hours: number;
       source:
         | "vdb"
+        | "aggregated"
         | "vdb_camry_baseline"
         | "empirical"
         | "sibling"
@@ -91,7 +104,9 @@ export async function resolveLaborHours(
       return {
         ok: true,
         hours: row.book_hours!,
-        source: "vdb",
+        // Report real provenance: RepairPal/MOTOR-driven medians are stamped
+        // source='aggregated' by labor_aggregation — don't relabel them "vdb".
+        source: row.source === "aggregated" ? "aggregated" : "vdb",
         confidence: row.confidence ?? 0.9,
       };
     }
@@ -142,14 +157,13 @@ export async function resolveLaborHours(
           q.eq("vehicle_config_id", sib._id).eq("service_id", args.service_id),
         )
         .first();
-      if (
-        sibLabor?.book_hours != null &&
-        sibLabor.book_hours > 0 &&
-        sibLabor.source !== "tier_estimate"
-      ) {
+      // Same quality gate as Layer 1: without it, the exact rows Layer 1
+      // rejects (chassis clones, training-data guesses) walk back in through
+      // the sibling door at a fabricated 0.7 confidence.
+      if (sibLabor != null && isHighQualityVdb(sibLabor)) {
         return {
           ok: true,
-          hours: sibLabor.book_hours,
+          hours: sibLabor.book_hours!,
           source: "sibling",
           confidence: 0.7,
         };

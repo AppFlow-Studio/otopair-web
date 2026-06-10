@@ -33,6 +33,7 @@ import type * as conversion_funnels from "../conversion_funnels.js";
 import type * as crons from "../crons.js";
 import type * as devOnly_auditConfigs from "../devOnly/auditConfigs.js";
 import type * as devOnly_dedupeConfig from "../devOnly/dedupeConfig.js";
+import type * as devOnly_partsCoverage from "../devOnly/partsCoverage.js";
 import type * as devOnly_validateQuoteEngine from "../devOnly/validateQuoteEngine.js";
 import type * as devOnly_verifyLabor from "../devOnly/verifyLabor.js";
 import type * as devOnly_verifyParts from "../devOnly/verifyParts.js";
@@ -325,6 +326,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   "devOnly/auditConfigs": typeof devOnly_auditConfigs;
   "devOnly/dedupeConfig": typeof devOnly_dedupeConfig;
+  "devOnly/partsCoverage": typeof devOnly_partsCoverage;
   "devOnly/validateQuoteEngine": typeof devOnly_validateQuoteEngine;
   "devOnly/verifyLabor": typeof devOnly_verifyLabor;
   "devOnly/verifyParts": typeof devOnly_verifyParts;

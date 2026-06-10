@@ -65,6 +65,13 @@ export const coverage = internalQuery({
         serviceSlug: spec.slug,
         vehicleConfigId: (cfg as any)._id,
         confirmedPackages: new Set<string>(),
+        // COVERAGE must grade BOTH axles. Without this, the resolver's
+        // deliberate front-default for dual-primary services (serviceParts.ts
+        // "Axle default" — a billing safety against silently charging both
+        // axles) filters out every rear_* role, which made all rear roles
+        // read "missing" in the Jun-10 reports even though the fitments
+        // existed with correct positions (the retracted "axle lossiness").
+        positionFilter: "both",
       });
 
       const winnerByRole = new Map(res.roleWinners.map((rw) => [rw.roleKey, rw]));

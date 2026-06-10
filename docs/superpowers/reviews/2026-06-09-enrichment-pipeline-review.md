@@ -190,7 +190,20 @@ The PDF at repo root is the canonical "parts we're supposed to get & price" (23 
 - The 7 `online_discount` rows on its parts were INHERITED, not written tonight: `oem_parts` are deduped by OEM number across cars, `part_prices` hang off the part, and `purgeVehicleConfig` doesn't touch them — the Civic reused parts (e.g. `15400-PLM-A02`) still carrying pre-fix poison from the 2003 Accord's May-30 enrichment. (Catalog-wide reprice covers this.)
 - **Root cause of zero prices:** Batch-2's pricing contract was scoped to "OEM part numbers **Batch 1 found**" (`getOemParts(fields)` → `buildBatch2Prompt`). On a fresh car with its registry source dead, Batch 1 finds no part numbers → Batch 2 is asked to price an EMPTY list → it discovers all the parts itself (`*_oem` fields, with citations) but returns no `parts_breakdown`, and prompt rule 6 forbids guessing. Re-enriched cars priced fine only because their pre-existing parts seeded the list — i.e. **first-pass cars systematically come out unpriced**, which explains much of the catalog's historical state.
 - ✅ **FIXED + VERIFIED LIVE** (`fix(enrichment): Batch-2 prices self-discovered parts`, commit `7d9f01e`): JOB-2/rule-2 contract now covers "every part number you yourself report in this response"; the empty-list fallback text instructs pricing discovered parts; plus the breakdown→fitment join now normalizes OEM numbers on both sides (the Jun-9 low finding — a raw-string mismatch silently dropped prices). Tests: `tests/batch2Prompt.test.ts` (4, TDD).
-  **Verification (Civic force re-enriched with the new prompt, Jun 10 03:38):** locked roles **8→23 priced** (1 unpriced, 6 missing), **15 `llm_estimate` rows written (was 0)**, fill 53%→82%, prices sane (filter $6.81, washer $0.49, oil $8.43/qt, battery $157.78, front pads $63.54). Remaining 6 missing are: rear pads ×2 / rear rotor (**axle lossiness reproduced a 3rd time** — the run before this one HAD rear pads; this re-enrich lost them again → per-axle discovery is the top remaining data gap), timing belt/kit (chain engine — correctly absent, though a water-pump fitment again leaked in), cartridge O-ring (likely genuinely not-equipped on K20C2).
+  **Verification (Civic force re-enriched with the new prompt, Jun 10 03:38):** locked roles **8→23 priced**, **15 `llm_estimate` rows written (was 0)**, fill 53%→82%, prices sane (filter $6.81, washer $0.49, oil $8.43/qt, battery $157.78, front pads $63.54).
+
+### ⚠️ RETRACTION — "axle lossiness" was the inspector's bug, not the pipeline's (Jun 10, 03:45)
+
+Direct fitment queries show **all three cars have BOTH axles enriched with correct positions** (pads, rotors; 750i even has front+rear wear sensors). The "missing rear" rows in every coverage table above were an artifact: `resolveWinningPartForService` **deliberately defaults to `positionFilter='front'`** for dual-primary services (serviceParts.ts "Axle default" — a billing safety so an omitted position can't silently charge both axles), so a positionless coverage call filtered out every `rear_*` role. The inspector now passes `positionFilter: "both"`. The earlier "axle flip"/"lossy re-enrich" claims in this section are **withdrawn**; no Batch-2 prompt change for axles is needed.
+
+**Corrected coverage (both-axle grading), locked roles:**
+| Config | priced | unpriced | missing |
+|---|---|---|---|
+| 2018 Civic (fresh, post-fix) | **26/30** | 1 | 3 |
+| 2022 Jetta (re-enriched) | **26/30** | 1 | 3 |
+| 2020 750i (legacy) | **25/30** | 4 | 1 |
+
+Rear pads/rotors priced on all three (Civic $57.16/$81.44, Jetta $39.99/$49.99, 750i $119.99/$97.99). **Real remaining gaps:** (a) the "missing" locked roles are timing belt/kit — genuine only on the Jetta (belt engine); chain cars need applicability-aware grading in the inspector — and the engine-conditional cartridge O-ring; (b) 750i's 4 unpriced are legacy junk fitments (washer/timing kit/water pump/gear oil) → catalog reprice/backfill; (c) **brake hardware kits are never discovered on any car** (as_needed, so not in the locked quote — but the PDF lists them); (d) the Jetta's cached $49.37 washer (sanity band); (e) as_needed/kit consumables without core-role fallback synthesis (flush chemical, terminal protection, induction/throttle sprays) are by-design unbilled until mechanic confirmation.
 
 ## RECOMMENDED ORDER OF WORK
 

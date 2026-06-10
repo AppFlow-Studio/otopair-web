@@ -120,6 +120,33 @@ export const _createSession = internalMutation({
   },
 });
 
+/**
+ * Records a failed login. The browser only ever sees a generic error (so we
+ * don't leak which accounts exist), but we keep the real reason in the audit
+ * log so the next lockout is diagnosable instead of "not reproducible".
+ */
+export const _logFailedLogin = internalMutation({
+  args: {
+    email: v.string(),
+    reason: v.union(v.literal("unknown_email"), v.literal("invalid_code")),
+    userId: v.optional(v.id("director_users")),
+    name: v.optional(v.string()),
+  },
+  handler: async (ctx, { email, reason, userId, name }) => {
+    await ctx.db.insert("audit_log", {
+      entity_type: "director",
+      entity_id: userId ? String(userId) : "unknown",
+      action: "login_failed",
+      actor: name ?? "Unknown",
+      actor_id: userId,
+      detail: `Failed director login for <${email}> — ${
+        reason === "unknown_email" ? "no account with that email" : "invalid 2FA code"
+      }`,
+      created_at: Date.now(),
+    });
+  },
+});
+
 export const _insertUser = internalMutation({
   args: {
     name: v.string(),
@@ -239,11 +266,20 @@ export const loginWithEmail = action({
     { success: true; token: string; name: string; role: string; userId: string }
   > => {
     const GENERIC_ERROR = "Invalid email or code";
+    const normalizedEmail = email.toLowerCase().trim();
     const user = await ctx.runQuery(internal.director_auth._getUserByEmail, {
-      email: email.toLowerCase().trim(),
+      email: normalizedEmail,
     });
-    if (!user) return { success: false, error: GENERIC_ERROR };
+    if (!user) {
+      await ctx.runMutation(internal.director_auth._logFailedLogin, {
+        email: normalizedEmail, reason: "unknown_email",
+      });
+      return { success: false, error: GENERIC_ERROR };
+    }
     if (!(await verifyTotp(user.totp_secret, code))) {
+      await ctx.runMutation(internal.director_auth._logFailedLogin, {
+        email: normalizedEmail, reason: "invalid_code", userId: user._id, name: user.name,
+      });
       return { success: false, error: GENERIC_ERROR };
     }
     const token = randomToken();
@@ -272,13 +308,37 @@ export const addUser = action({
     email: v.string(),
     actorName: v.string(),
     actorId: v.optional(v.id("director_users")),
+    // Set true to proceed past the same-name warning (names can legitimately repeat).
+    force: v.optional(v.boolean()),
   },
-  handler: async (ctx, { name, role, email, actorName, actorId }): Promise<{ id: string; totp_secret: string }> => {
+  handler: async (ctx, { name, role, email, actorName, actorId, force }): Promise<
+    | { ok: true; id: string; totp_secret: string }
+    | { ok: false; reason: "email_taken" }
+    | { ok: false; reason: "name_exists"; existingEmail?: string }
+  > => {
+    const normalizedEmail = email.toLowerCase().trim();
+    const trimmedName = name.trim();
+
+    // Hard block: one account per email (mirrors the invariant in setUserEmail).
+    const byEmail = await ctx.runQuery(internal.director_auth._getUserByEmail, { email: normalizedEmail });
+    if (byEmail) return { ok: false, reason: "email_taken" };
+
+    // Soft guard: warn if someone with the same name already exists. Re-creating a
+    // person under a new email (instead of editing their account) silently orphans
+    // their 2FA enrollment — this is exactly what broke the duplicate "Abubeckr".
+    if (!force) {
+      const all = await ctx.runQuery(api.director_auth.listUsers, {});
+      const dup = all.find(
+        (u: { name: string; email?: string }) => u.name.trim().toLowerCase() === trimmedName.toLowerCase(),
+      );
+      if (dup) return { ok: false, reason: "name_exists", existingEmail: dup.email };
+    }
+
     const secret = genBase32();
     const id = await ctx.runMutation(internal.director_auth._insertUser, {
-      name, role, totp_secret: secret, email, actorName, actorId,
+      name: trimmedName, role, totp_secret: secret, email: normalizedEmail, actorName, actorId,
     });
-    return { id: String(id), totp_secret: secret };
+    return { ok: true, id: String(id), totp_secret: secret };
   },
 });
 

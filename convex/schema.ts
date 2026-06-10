@@ -120,6 +120,12 @@ export default defineSchema({
     timing_idler_count: v.optional(v.number()),
     water_pump_timing_driven: v.optional(v.boolean()),
     data_quality: v.optional(v.string()),
+    // Field names a HUMAN corrected (director edit / CLI data fix). The
+    // pipeline's updateEngineSpecs skips these keys, and _pollBatch1V3
+    // overrides the freshly-extracted batch fields with the verified values
+    // so applicability runs against the truth (a misclassified belt car
+    // could otherwise never get its belt parts — found live Jun 10 2026).
+    verified_fields: v.optional(v.array(v.string())),
     last_enriched_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
@@ -398,6 +404,12 @@ export default defineSchema({
     // When set, this fitment only applies if the owner has confirmed this package
     // in vehicle_owner_specs.confirmed_packages.
     package_code: v.optional(v.string()),
+    // Role this part plays in the service per the Service Parts Reference:
+    // "core" (every invoice, locked) | "as_needed" (discovery — makes the
+    // quote a range) | "kit" (variant bundle). NOT oem_parts.part_tier
+    // (part quality) and NOT VehicleTier (pricing tier). Older rows lack it —
+    // resolver falls back to lib/servicePartsReference roleForSubcategory.
+    service_role: v.optional(v.string()),
     confidence: v.optional(v.number()),
     source_count: v.optional(v.number()),
     first_confirmed_at: v.optional(v.number()),
@@ -624,6 +636,11 @@ export default defineSchema({
     estimated_cost_usd: v.optional(v.number()),
     started_at: v.optional(v.number()),
     completed_at: v.optional(v.number()),
+    // Liveness heartbeat — stamped by each poll attempt (~60s cadence). The
+    // STEP 0 force-unstick path treats a live-status run with a stale
+    // heartbeat as a crashed chain (action killed at the 10-min cap, deploy
+    // restart) and lets a director force take it over.
+    last_heartbeat_at: v.optional(v.number()),
     duration_ms: v.optional(v.number()),
     fields_filled: v.optional(v.number()),
     fields_total: v.optional(v.number()),
@@ -684,10 +701,25 @@ export default defineSchema({
     scrape_success: v.optional(v.boolean()),
     http_status: v.optional(v.number()),
     created_at: v.optional(v.number()),
+    // Deterministic prices parsed from the raw HTML at scrape time (JSON-LD),
+    // serialized as ParsedPartPrice[]. Carries correct per-SKU prices from the
+    // scrape action to the price-write step. `format_version` lets the price
+    // path treat older markdown-only rows as a miss so they re-fetch HTML.
+    part_prices_json: v.optional(v.string()),
+    format_version: v.optional(v.number()),
   })
     .index("by_cache_key", ["cache_key"])
     .index("by_expires_at", ["expires_at"])
     .index("by_make_year", ["make_id", "year"]),
+
+  // Reversibility log for the price backfill: every legacy part_prices row the
+  // backfill deletes is snapshotted here first, so a prune can be undone.
+  price_backfill_log: defineTable({
+    part_id: v.id("oem_parts"),
+    deleted_row: v.any(), // the original part_prices document
+    batch: v.string(),
+    deleted_at: v.number(),
+  }).index("by_batch", ["batch"]),
 
   scrape_jobs: defineTable({
     source: v.string(),
@@ -772,6 +804,12 @@ export default defineSchema({
     labor_multiplier_category_id: v.optional(v.id("pricing_labor_categories")),
     display_order: v.optional(v.number()),
     default_labor_hours: v.optional(v.number()),
+    // Labor sourcing: which platform dimension determines this service's labor,
+    // and the RepairPal estimator slug (null = no RepairPal page, e.g. fluids).
+    labor_determinant: v.optional(
+      v.union(v.literal("engine"), v.literal("chassis"), v.literal("both")),
+    ),
+    repairpal_slug: v.optional(v.union(v.string(), v.null())),
     has_options: v.optional(v.boolean()),
     is_labor_only: v.optional(v.boolean()),
     requires_parts: v.optional(v.boolean()),
@@ -874,6 +912,29 @@ export default defineSchema({
     .index("by_vehicle_config", ["vehicle_config_id"])
     .index("by_vehicle_config_and_service", ["vehicle_config_id", "service_id"])
     .index("by_engine_family", ["engine_family"]),
+
+  // [W] Append-only per-source labor observations — mirror of part_prices for
+  // service times. Each source (VDB, LLM book-time, …) contributes one CATALOG
+  // row per (config, service); a weighted robust median over them produces
+  // labor_times.book_hours, so no single source (e.g. VDB) is the source of
+  // truth. Empirical post-job actuals are aggregated live from job_actuals, not
+  // stored here.
+  labor_observations: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    engine_family: v.optional(v.string()),
+    hours: v.number(),
+    source: v.string(), // "vdb_repair_estimates" | "llm_training" | "llm_web" | ...
+    tier: v.string(), // "catalog" (book-time sources) | "empirical" (reserved)
+    weight: v.number(), // catalog trust weight (vdb 0.4, llm 0.3, …)
+    observed_at: v.number(),
+    // Provenance when sourced from a platform-equivalent sibling (RepairPal).
+    sibling_slug: v.optional(v.string()), // e.g. "550i-xdrive"
+    match_key: v.optional(v.string()), // "engine_family:N63" | "chassis_code:G30" | "exact"
+  })
+    .index("by_config_service", ["vehicle_config_id", "service_id"])
+    .index("by_config_service_source", ["vehicle_config_id", "service_id", "source"])
+    .index("by_engine_family_service", ["engine_family", "service_id"]),
 
   // ===== VEHICLES & OWNERSHIP =====
 
@@ -1789,6 +1850,20 @@ export default defineSchema({
           quantity: v.number(),
           unit_price_cents: v.number(),
           line_total_cents: v.number(),
+          // Service Parts Reference role fields (additive, 2026-06). One
+          // snapshot row per ROLE winner (oil + filter + washer…), not one
+          // per service. core/kit rows only — as_needed stays out of the
+          // locked contract.
+          service_role: v.optional(v.string()),
+          role_key: v.optional(v.string()),
+          // How quantity was derived: "fitment" | "fixed:N" | "per_cylinder"
+          // | "capacity:<field>=<value><unit>/<pkg>" | "unknown_capacity".
+          quantity_basis: v.optional(v.string()),
+          // TRUE when the winner had no trustworthy price rows (empty
+          // summary): the line bills 0 in the locked quote and must be
+          // priced at the mechanic's post-job confirmation. Pairs with
+          // bookings.low_confidence_parts. (Jun-9 review, item 10.)
+          price_unknown: v.optional(v.boolean()),
         })
       )
     ),
@@ -1822,6 +1897,9 @@ export default defineSchema({
             ),
           ),
           eliminated_by_gate_part_ids: v.optional(v.array(v.id("oem_parts"))),
+          // Which part role within the service this trace entry scored
+          // (selection now runs per role group). Absent on legacy rows.
+          role_key: v.optional(v.string()),
         }),
       ),
     ),
@@ -2331,8 +2409,9 @@ export default defineSchema({
     // converging on a diagnostic form or direct service. chat.ts increments
     // when Haiku stays in narrowing mode (last_user_intent starts with
     // "symptom_narrowing") without rendering the form; resets when the form
-    // fires. At 6 the envelope emits a `<polite_exit_required>` block and
-    // the prompt rule forces Haiku to render the diagnostic form with not_sure.
+    // fires. At the envelope's POLITE_EXIT_THRESHOLD (4 — lowered from 6 on
+    // beta feedback) it emits a `<polite_exit_required>` block and the prompt
+    // rule forces Haiku to render the diagnostic form with not_sure.
     // -----------------------------------------------------------------------
     diagnostic_turn_count: v.optional(v.number()),
     // -----------------------------------------------------------------------
@@ -3366,6 +3445,10 @@ export default defineSchema({
     tools_called: v.array(v.string()),
     // Branch of the final iteration: "data_continue" | "terminal" | "text_only"
     final_branch: v.string(),
+    // B-P2: did the turn write conversation state (update_conversation_state)?
+    // Surfaces Haiku's state-contract under-calling. Optional — rows written
+    // before this field existed lack it.
+    state_called: v.optional(v.boolean()),
     // For ad-hoc cost analysis later.
     booking_id: v.optional(v.id("bookings")),
     error: v.optional(v.string()),

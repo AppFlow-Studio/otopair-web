@@ -161,4 +161,15 @@ crons.interval(
   (internal as any).lib.push_dispatcher.dispatchPendingPush,
 );
 
+// Labor times: fold freshly-recorded shop data into the labor median every 6h.
+// Job finalize already recomputes inline; this catches (config, service) pairs
+// touched by labor_quote_snapshots so empirical accrues continuously without a
+// re-enrich. No-op until real shop data exists.
+crons.interval(
+  "recompute-recent-labor",
+  { hours: 6 },
+  internal.vehicleEnrichment.v3mutations.recomputeRecentLabor,
+  {},
+);
+
 export default crons;

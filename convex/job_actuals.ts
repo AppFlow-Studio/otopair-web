@@ -11,7 +11,7 @@ import {
   reopenJobActuals,
   saveJobActualDraft,
 } from "./lib/job_actuals";
-import { summarizePartPrices } from "./part_prices";
+import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
@@ -668,13 +668,15 @@ export const getPrefillData = query({
         suggestedParts.push({
           part_name: part.part_name,
           oem_number: part.oem_part_number,
-          // Use `average_price` — the outlier-rejected mean from
-          // summarizePartPrices. Matches what the customer saw on the mobile
-          // Review & Pay screen (getPricedPartsForServices uses the same
-          // field). `median_price` is the naïve median and gets corrupted
-          // when scraped data mixes per-unit and per-pack listings for the
-          // same OEM (e.g., spark plugs sold individually AND as set-of-4).
-          cost: part.average_price > 0 ? part.average_price : part.median_price,
+          // Shared PARTS_PRICE_SOURCE selector — matches what the customer saw
+          // on the Review & Pay screen (serviceParts uses the same helper).
+          // Median across sources once flipped (>=3 sources), else the
+          // outlier-rejected mean. Default is average.
+          cost: quoteUnitPrice({
+            average: part.average_price,
+            median: part.median_price,
+            sample_size: part.price_sample_size ?? 0,
+          }),
           quantity: catalogQty,
           service_id: rec.service_id,
           // These rows didn't come from a learned preference — they're the

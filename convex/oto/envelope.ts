@@ -69,6 +69,35 @@ export interface PriorConversationFact {
   created_at: number;
 }
 
+/**
+ * Map the onboarding car-knowledge self-rating to a coarse label Oto can act
+ * on. The onboarding question stores a NUMBER (onboarding_questions_answers
+ * .car_knowledge_level). CONFIRMED 1–3 scale from production (temurbek) data:
+ *   1 = "I prefer things explained to me"  → beginner
+ *   2 = "I know some stuff"                → intermediate
+ *   3 = "I'm car-savvy"                    → experienced
+ * Strings are also accepted (forward-compat) and matched by keyword.
+ * Null/unknown → null, which the envelope omits entirely so Oto stays at its
+ * friendly baseline (no behavior change for users who never answered).
+ */
+export function knowledgeLabel(
+  level: number | string | null | undefined,
+): "beginner" | "intermediate" | "experienced" | null {
+  if (level == null) return null;
+  if (typeof level === "number") {
+    if (!Number.isFinite(level)) return null;
+    if (level <= 1) return "beginner";
+    if (level === 2) return "intermediate";
+    return "experienced";
+  }
+  const s = level.trim().toLowerCase();
+  if (!s) return null;
+  if (/(beginner|novice|new|1)/.test(s)) return "beginner";
+  if (/(intermediate|some|2)/.test(s)) return "intermediate";
+  if (/(experienced|expert|advanced|pro|enthusiast|3|4|5)/.test(s)) return "experienced";
+  return null;
+}
+
 interface BuildEnvelopeArgs {
   userFirstName: string | null;
   vehicle: ResolvedVehicle | null;
@@ -76,6 +105,10 @@ interface BuildEnvelopeArgs {
   userMessage: string;
   conversationState?: ConversationStateBlock | null;
   diagnosticTurnCount?: number;
+  // Onboarding car-knowledge level (already mapped via knowledgeLabel). Drives
+  // answer-complexity scaling in the prompt's "Knowledge-level adaptation"
+  // rule. Omitted from the <user> block when null.
+  knowledgeLevel?: "beginner" | "intermediate" | "experienced" | null;
   // Wave 3 integration step 4 — facts established in this user's OTHER
   // conversations, top_K most-recent first. Optional; skipped from the
   // envelope when empty or omitted. See PriorConversationFact above.
@@ -86,17 +119,32 @@ interface BuildEnvelopeArgs {
   now?: number;
 }
 
-const POLITE_EXIT_THRESHOLD = 6;
+// Lowered 6 → 4 (beta feedback: a stranded user hit "just get me a mechanic"
+// frustration well before six rounds of narrowing). Four unconverged
+// question-turns is enough signal to offer the booking exit.
+const POLITE_EXIT_THRESHOLD = 4;
 
 // -----------------------------------------------------------------------------
 // Pick the active vehicle for this conversation. Precedence:
-//   1. Explicit `preferredVin` from the client (frontend vehicle picker — wins
-//      whenever the user has manually selected one). Only honored if the user
-//      actually owns it; otherwise falls through to the next rule.
-//   2. `conversation.vehicle_id` if the column is present and the user owns it.
-//      (Forward-compat: the column doesn't exist on ai_conversations yet, so
-//      this rule is a no-op today.)
-//   3. Most-recently-added vehicle on the user's account.
+//   1. `conversation.vehicle_id` — the LOCKED anchor. Per the schema contract
+//      (ai_conversations.vehicle_id), this wins over the frontend picker once
+//      set, so resuming a chat later — when the global picker may have drifted
+//      to a different car — still rebinds to the chat's own car. This is the
+//      "one chat, one car" guarantee and the strongest guard against the
+//      "who is this Lexus?" wrong-car bug. (Latent until setVehicleId is wired:
+//      the column exists on ai_conversations but isn't written yet, so this
+//      rule is a no-op today and rule 2 effectively leads.)
+//   2. Explicit `preferredVin` from the client vehicle picker — honored
+//      whenever the user actually owns it (the first-message selection, before
+//      the anchor is set).
+//   2b. preferredVin supplied but NOT owned (stale pick / decode mismatch /
+//      ownership not yet written): DO NOT silently anchor to a different car.
+//      A single owned car is unambiguous, so use it; with multiple cars prefer
+//      the user's primary, otherwise return null so Oto asks which car rather
+//      than confidently discussing the wrong one.
+//   3. No explicit selection at all → the user's primary car, then the most
+//      recently added. (A user-designated primary is a more stable default
+//      than "whatever was added last".)
 //   4. Null (no <vehicle> block in the envelope).
 //
 // Returns the chosen OwnedVehicleRow (still carries vin + raw vehicle/ownership)
@@ -105,6 +153,12 @@ const POLITE_EXIT_THRESHOLD = 6;
 // string here — make/model/trim aren't on the vehicles row, they're foreign keys.
 // -----------------------------------------------------------------------------
 
+const hasVehicleId = (row: OwnedVehicleRow | undefined): row is OwnedVehicleRow =>
+  !!row?.vehicle?._id;
+
+const primaryOf = (owned: OwnedVehicleRow[]): OwnedVehicleRow | undefined =>
+  owned.find((row) => row.ownership?.is_primary);
+
 export function pickActiveVehicleRow(
   owned: OwnedVehicleRow[],
   conversationVehicleId: string | undefined,
@@ -112,23 +166,38 @@ export function pickActiveVehicleRow(
 ): OwnedVehicleRow | null {
   if (owned.length === 0) return null;
 
-  let chosen: OwnedVehicleRow | undefined;
-  if (preferredVin) {
-    chosen = owned.find((row) => row.vin === preferredVin);
-  }
-  if (!chosen && conversationVehicleId) {
-    chosen = owned.find((row) => row.vehicle?._id === conversationVehicleId);
-  }
-  if (!chosen) {
-    chosen = [...owned].sort((a, b) => {
-      const aAdded = a.ownership?.added_at ?? a.ownership?._creationTime ?? 0;
-      const bAdded = b.ownership?.added_at ?? b.ownership?._creationTime ?? 0;
-      return bAdded - aAdded; // newest first
-    })[0];
+  // 1. Locked conversation anchor wins once set (schema: vehicle_id beats the
+  //    picker so a chat stays on its car even if the global picker drifts).
+  //    If the anchor points at a car the user no longer owns, fall through.
+  if (conversationVehicleId) {
+    const pinned = owned.find((row) => row.vehicle?._id === conversationVehicleId);
+    if (hasVehicleId(pinned)) return pinned!;
   }
 
-  if (!chosen?.vehicle?._id) return null;
-  return chosen;
+  // 2. Explicit selection from the client vehicle picker.
+  if (preferredVin) {
+    const exact = owned.find((row) => row.vin === preferredVin);
+    if (exact) return hasVehicleId(exact) ? exact : null;
+
+    // 2b. Asked for a VIN we can't match to an owned row — never fall through
+    //     to a different car. One car → unambiguous; otherwise prefer primary,
+    //     else refuse to guess (Oto will ask which car).
+    if (owned.length === 1) return hasVehicleId(owned[0]) ? owned[0] : null;
+    const primary = primaryOf(owned);
+    return hasVehicleId(primary) ? primary! : null;
+  }
+
+  // 3. No explicit selection — prefer the user's primary, then newest-added.
+  const primary = primaryOf(owned);
+  if (hasVehicleId(primary)) return primary!;
+
+  const newest = [...owned].sort((a, b) => {
+    const aAdded = a.ownership?.added_at ?? a.ownership?._creationTime ?? 0;
+    const bAdded = b.ownership?.added_at ?? b.ownership?._creationTime ?? 0;
+    return bAdded - aAdded; // newest first
+  })[0];
+
+  return hasVehicleId(newest) ? newest : null;
 }
 
 // -----------------------------------------------------------------------------
@@ -184,14 +253,19 @@ export function buildEnvelope({
   conversationState,
   diagnosticTurnCount = 0,
   priorConversationFacts,
+  knowledgeLevel,
   now,
 }: BuildEnvelopeArgs): string {
   const blocks: string[] = [];
   const nowMs = typeof now === "number" ? now : Date.now();
 
-  blocks.push(
-    [`<user>`, `  name: ${userFirstName ?? "(unknown)"}`, `</user>`].join("\n"),
-  );
+  const userLines = [`<user>`, `  name: ${userFirstName ?? "(unknown)"}`];
+  // Onboarding car-knowledge level — present only when the user answered.
+  // Drives the prompt's "Knowledge-level adaptation" rule (beginner → plain
+  // + answer-first; experienced → can go more technical).
+  if (knowledgeLevel) userLines.push(`  car_knowledge: ${knowledgeLevel}`);
+  userLines.push(`</user>`);
+  blocks.push(userLines.join("\n"));
 
   if (vehicle) {
     const vehicleLines = [

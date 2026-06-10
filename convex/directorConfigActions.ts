@@ -4,10 +4,46 @@
  * Edits the platform-level vehicle_configs row + supports marking a config
  * verified (bumps verification_count + last_verified_at — both already
  * fields on the table).
+ *
+ * AUTH (hardened Jun 10 2026, the deferred sweep from the Jun-9 security
+ * commit): every mutation validates a director session token server-side
+ * (director_sessions lookup in the same transaction) and derives the audit
+ * actor FROM the session. The old convention (public mutations trusting
+ * caller-supplied actorName/actorId) let any anonymous caller edit platform
+ * vehicle data and forge audit attribution. Mirrors requireDirector in
+ * directorConfigBackfills.ts (which gates ACTIONS via
+ * api.director_auth.validateSession — mutations have ctx.db, so the lookup
+ * is direct and transactional here).
  */
 
 import { mutation } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
+
+/** Director session token arg — localStorage `otopair_director_token`. */
+const tokenArg = {
+  token: v.string(),
+} as const;
+
+/** Validate the director session and return the audit actor. Throws on a
+ *  missing/expired session. */
+async function requireDirector(
+  ctx: MutationCtx,
+  token: string,
+): Promise<{ name: string; userId: Id<"director_users"> }> {
+  if (token) {
+    const s = await ctx.db
+      .query("director_sessions")
+      .withIndex("by_token", (q) => q.eq("token", token))
+      .first();
+    if (s && s.expires_at >= Date.now()) {
+      const u = await ctx.db.get(s.user_id);
+      if (u) return { name: u.name, userId: u._id };
+    }
+  }
+  throw new Error("unauthorized: invalid or expired director session");
+}
 
 // ---------------------------------------------------------------------------
 // updateConfigBasics — patch the edit-friendly fields on vehicle_configs
@@ -22,10 +58,10 @@ export const updateConfigBasics = mutation({
     brake_fluid_type: v.optional(v.string()),
     ps_fluid_type:    v.optional(v.string()),
     enrichment_status: v.optional(v.string()),
-    actorName:        v.string(),
-    actorId:          v.optional(v.id("director_users")),
+    ...tokenArg,
   },
   handler: async (ctx, args) => {
+    const actor = await requireDirector(ctx, args.token);
     const cfg = await ctx.db.get(args.id);
     if (!cfg) return { ok: false as const, reason: "config_not_found" };
 
@@ -61,8 +97,8 @@ export const updateConfigBasics = mutation({
       entity_type: "vehicle_config",
       entity_id:   String(args.id),
       action:      "field_edit",
-      actor:       args.actorName,
-      actor_id:    args.actorId,
+      actor:       actor.name,
+      actor_id:    actor.userId,
       detail:      `Config updated · ${changes.join(", ")}`,
       created_at:  Date.now(),
     });
@@ -125,22 +161,28 @@ export const updateEngineFields = mutation({
     spark_plug_gap_mm:        v.optional(v.number()),
     water_pump_timing_driven: v.optional(v.boolean()),
     data_quality:             v.optional(v.string()),
-    actorName: v.string(),
-    actorId:   v.optional(v.id("director_users")),
+    ...tokenArg,
   },
-  handler: async (ctx, { id, actorName, actorId, ...fields }) => {
+  handler: async (ctx, { id, token, ...fields }) => {
+    const actor = await requireDirector(ctx, token);
     const cur = await ctx.db.get(id);
     if (!cur) return { ok: false as const, reason: "engine_not_found" };
     const { patch, changes } = buildPatch(cur as any, Object.entries(fields) as Array<[string, unknown]>);
     if (Object.keys(patch).length === 0) return { ok: true as const, changes: 0 };
+    // Director-corrected fields are authoritative: stamp them verified so the
+    // enrichment pipeline can't write over them on the next re-enrich.
+    const verified = new Set(((cur as any).verified_fields ?? []) as string[]);
+    const changedCount = Object.keys(patch).length;
+    for (const key of Object.keys(patch)) verified.add(key);
+    (patch as any).verified_fields = [...verified];
     await ctx.db.patch(id, patch as any);
     await ctx.db.insert("audit_log", {
       entity_type: "engine", entity_id: String(id), action: "field_edit",
-      actor: actorName, actor_id: actorId,
+      actor: actor.name, actor_id: actor.userId,
       detail: `Engine updated · ${changes.join(", ")}`,
       created_at: Date.now(),
     });
-    return { ok: true as const, changes: Object.keys(patch).length };
+    return { ok: true as const, changes: changedCount };
   },
 });
 
@@ -161,10 +203,10 @@ export const updateTransmissionFields = mutation({
     has_serviceable_filter:   v.optional(v.boolean()),
     service_method:           v.optional(v.string()),
     data_quality:             v.optional(v.string()),
-    actorName: v.string(),
-    actorId:   v.optional(v.id("director_users")),
+    ...tokenArg,
   },
-  handler: async (ctx, { id, actorName, actorId, ...fields }) => {
+  handler: async (ctx, { id, token, ...fields }) => {
+    const actor = await requireDirector(ctx, token);
     const cur = await ctx.db.get(id);
     if (!cur) return { ok: false as const, reason: "transmission_not_found" };
     const { patch, changes } = buildPatch(cur as any, Object.entries(fields) as Array<[string, unknown]>);
@@ -172,7 +214,7 @@ export const updateTransmissionFields = mutation({
     await ctx.db.patch(id, patch as any);
     await ctx.db.insert("audit_log", {
       entity_type: "transmission", entity_id: String(id), action: "field_edit",
-      actor: actorName, actor_id: actorId,
+      actor: actor.name, actor_id: actor.userId,
       detail: `Transmission updated · ${changes.join(", ")}`,
       created_at: Date.now(),
     });
@@ -203,10 +245,10 @@ export const updateChassisSpecsFields = mutation({
     parking_brake_type:            v.optional(v.string()),
     has_rear_wiper:                v.optional(v.boolean()),
     data_quality:                  v.optional(v.string()),
-    actorName: v.string(),
-    actorId:   v.optional(v.id("director_users")),
+    ...tokenArg,
   },
-  handler: async (ctx, { chassis_code, actorName, actorId, ...fields }) => {
+  handler: async (ctx, { chassis_code, token, ...fields }) => {
+    const actor = await requireDirector(ctx, token);
     let row = await ctx.db
       .query("chassis_specs")
       .withIndex("by_chassis_code", (q) => q.eq("chassis_code", chassis_code))
@@ -224,7 +266,7 @@ export const updateChassisSpecsFields = mutation({
     await ctx.db.patch(row._id, patch as any);
     await ctx.db.insert("audit_log", {
       entity_type: "chassis_specs", entity_id: String(row._id), action: "field_edit",
-      actor: actorName, actor_id: actorId,
+      actor: actor.name, actor_id: actor.userId,
       detail: `Chassis specs (${chassis_code}) updated · ${changes.join(", ")}`,
       created_at: Date.now(),
     });
@@ -247,10 +289,10 @@ export const updateTrimSpecsFields = mutation({
     tire_directional:                    v.optional(v.boolean()),
     is_run_flat:                         v.optional(v.boolean()),
     alignment_type:                      v.optional(v.string()),
-    actorName: v.string(),
-    actorId:   v.optional(v.id("director_users")),
+    ...tokenArg,
   },
-  handler: async (ctx, { vehicle_config_id, actorName, actorId, ...fields }) => {
+  handler: async (ctx, { vehicle_config_id, token, ...fields }) => {
+    const actor = await requireDirector(ctx, token);
     let row = await ctx.db
       .query("trim_specs")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", vehicle_config_id))
@@ -266,7 +308,7 @@ export const updateTrimSpecsFields = mutation({
     await ctx.db.patch(row._id, patch as any);
     await ctx.db.insert("audit_log", {
       entity_type: "trim_specs", entity_id: String(row._id), action: "field_edit",
-      actor: actorName, actor_id: actorId,
+      actor: actor.name, actor_id: actor.userId,
       detail: `Trim specs updated · ${changes.join(", ")}`,
       created_at: Date.now(),
     });
@@ -280,11 +322,11 @@ export const updateTrimSpecsFields = mutation({
 
 export const markConfigVerified = mutation({
   args: {
-    id:        v.id("vehicle_configs"),
-    actorName: v.string(),
-    actorId:   v.optional(v.id("director_users")),
+    id: v.id("vehicle_configs"),
+    ...tokenArg,
   },
-  handler: async (ctx, { id, actorName, actorId }) => {
+  handler: async (ctx, { id, token }) => {
+    const actor = await requireDirector(ctx, token);
     const cfg = await ctx.db.get(id);
     if (!cfg) return { ok: false as const, reason: "config_not_found" };
     const now = Date.now();
@@ -296,8 +338,8 @@ export const markConfigVerified = mutation({
       entity_type: "vehicle_config",
       entity_id:   String(id),
       action:      "status_change",
-      actor:       actorName,
-      actor_id:    actorId,
+      actor:       actor.name,
+      actor_id:    actor.userId,
       detail:      `Config marked verified (count → ${(cfg.verification_count ?? 0) + 1})`,
       created_at:  now,
     });

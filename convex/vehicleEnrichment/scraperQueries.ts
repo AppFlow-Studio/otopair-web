@@ -3,11 +3,34 @@
  */
 
 import { v } from "convex/values";
-import { internalQuery, internalMutation, mutation } from "../_generated/server";
+import { internalQuery, internalMutation } from "../_generated/server";
 
-/** Build a deterministic cache key from vehicle + source type. */
-function buildCacheKey(make: string, model: string, year: number, sourceType: string): string {
-  return `${make}_${model}_${year}_${sourceType}`.toLowerCase().replace(/\s+/g, "_");
+/**
+ * Cache format version. Bump when the price path needs to invalidate older rows.
+ * v2 introduced `part_prices_json` (deterministic JSON-LD prices). A parts_catalog
+ * row with `format_version` < this (or undefined) is treated as a miss by the
+ * price path so it re-fetches raw HTML and re-parses prices.
+ * v3 (Jun 10 2026): TRIM added to the cache key (critical review finding #1 —
+ * an M340i and a 330i shared one row for 30 days, and the Jetta's poisoned
+ * $49-washer catalog kept resurrecting from cache). Old keys simply never
+ * match again (rows expire on their own TTL); the bump also hard-invalidates
+ * any pre-trim row the price path might still reach.
+ */
+export const CACHE_FORMAT_VERSION = 3;
+
+/** Build a deterministic cache key from vehicle identity + source type.
+ *  Exported for unit tests — the key IS the contamination boundary. */
+export function buildCacheKey(
+  make: string,
+  model: string,
+  year: number,
+  sourceType: string,
+  trim: string,
+): string {
+  const trimSeg = trim.trim().length > 0 ? trim : "base";
+  return `${make}_${model}_${year}_${trimSeg}_${sourceType}`
+    .toLowerCase()
+    .replace(/\s+/g, "_");
 }
 
 /** Extract domain from a URL. */
@@ -25,6 +48,7 @@ export const getCachedScrape = internalQuery({
     vehicleMake: v.string(),
     vehicleModel: v.string(),
     vehicleYear: v.float64(),
+    vehicleTrim: v.string(),
     sourceType: v.union(
       v.literal("parts_catalog"),
       v.literal("owner_manual"),
@@ -33,7 +57,7 @@ export const getCachedScrape = internalQuery({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const cacheKey = buildCacheKey(args.vehicleMake, args.vehicleModel, args.vehicleYear, args.sourceType);
+    const cacheKey = buildCacheKey(args.vehicleMake, args.vehicleModel, args.vehicleYear, args.sourceType, args.vehicleTrim);
 
     const row = await ctx.db
       .query("scrape_cache")
@@ -56,19 +80,21 @@ export const getCachedScrape = internalQuery({
   },
 });
 
-/** [TEST] Delete all scrape cache entries for a vehicle. */
-export const debugClearVehicleCache = mutation({
+/** [TEST] Delete all scrape cache entries for a vehicle. Internal (was a
+ *  public mutation — same lockdown rationale as the Jun-9 security sweep). */
+export const debugClearVehicleCache = internalMutation({
   args: {
     vehicleMake: v.string(),
     vehicleModel: v.string(),
     vehicleYear: v.float64(),
+    vehicleTrim: v.string(),
   },
   handler: async (ctx, args) => {
     // Find all cache entries for this vehicle across all source types
     const sourceTypes = ["parts_catalog", "owner_manual", "pricing"] as const;
     let deleted = 0;
     for (const st of sourceTypes) {
-      const cacheKey = buildCacheKey(args.vehicleMake, args.vehicleModel, args.vehicleYear, st);
+      const cacheKey = buildCacheKey(args.vehicleMake, args.vehicleModel, args.vehicleYear, st, args.vehicleTrim);
       const row = await ctx.db
         .query("scrape_cache")
         .withIndex("by_cache_key", (q) => q.eq("cache_key", cacheKey))
@@ -91,15 +117,19 @@ export const storeScrapeCache = internalMutation({
     vehicleMake: v.string(),
     vehicleModel: v.string(),
     vehicleYear: v.float64(),
+    vehicleTrim: v.string(),
     sourceType: v.union(
       v.literal("parts_catalog"),
       v.literal("owner_manual"),
       v.literal("pricing"),
     ),
     expiresAt: v.float64(),
+    // Deterministic JSON-LD prices (ParsedPartPrice[] serialized). Only the
+    // registry parts-catalog path supplies this; other callers omit it.
+    partPricesJson: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const cacheKey = buildCacheKey(args.vehicleMake, args.vehicleModel, args.vehicleYear, args.sourceType);
+    const cacheKey = buildCacheKey(args.vehicleMake, args.vehicleModel, args.vehicleYear, args.sourceType, args.vehicleTrim);
     const ttlDays = args.sourceType === "owner_manual" ? 90 : args.sourceType === "pricing" ? 7 : 30;
     const domain = extractDomain(args.url);
     const now = Date.now();
@@ -119,6 +149,8 @@ export const storeScrapeCache = internalMutation({
         scraped_at: args.scrapedAt,
         expires_at: args.expiresAt,
         scrape_success: true,
+        part_prices_json: args.partPricesJson,
+        format_version: CACHE_FORMAT_VERSION,
       });
     } else {
       await ctx.db.insert("scrape_cache", {
@@ -134,6 +166,8 @@ export const storeScrapeCache = internalMutation({
         ttl_days: ttlDays,
         scrape_success: true,
         created_at: now,
+        part_prices_json: args.partPricesJson,
+        format_version: CACHE_FORMAT_VERSION,
       });
     }
   },

@@ -8,14 +8,17 @@
  * Falls back to `services.default_labor_hours` when no row exists.
  *
  * Why empirical first: actuals reflect real shop conditions on the specific
- * engine/trim — book times often underestimate on harder packages. We surface
- * `confidence` and `empirical_sample_size` so the UI can warn on thin data,
- * but we don't gate on sample size — empirical is the source of truth.
+ * engine/trim — book times often underestimate on harder packages. Empirical is
+ * gated upstream: the aggregator (convex/lib/labor_aggregation.ts) only writes
+ * `empirical_hours` once there are >= LABOR_EMPIRICAL_MIN_SAMPLES single-service
+ * post-job actuals, and clears it to 0 below that — so a single padded estimate
+ * can't swing a quote. Here we simply prefer empirical_hours when it is > 0.
  */
 
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
+import { isHighQualityVdb } from "./lib/quoteEngine";
 
 export type LaborHoursForService = {
   serviceId: Id<"services">;
@@ -82,10 +85,13 @@ export const getLaborHoursForServices = query({
         continue;
       }
 
-      if (row && typeof row.book_hours === "number" && row.book_hours > 0) {
+      // Same quality gate as the quote engine (lib/quoteEngine.ts): clone /
+      // training-data / low-confidence rows must not surface to the booking UI
+      // as vehicle-specific hours the quote engine would refuse to quote.
+      if (row && isHighQualityVdb(row)) {
         out.push({
           ...base,
-          hours: row.book_hours,
+          hours: row.book_hours!,
           source: "vehicle_specific_book",
         });
         continue;

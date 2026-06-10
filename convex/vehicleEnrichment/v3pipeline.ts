@@ -37,7 +37,8 @@ import { BLOCKED_DOMAINS } from "./sourceRegistry";
 import { applyApplicabilityRules } from "./applicabilityRules";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
-import { reextractPartPrice } from "./priceReextract";
+import { reextractPartPrice, isAffirmativeRejection } from "./priceReextract";
+import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
 import {
   advancedVinDecode,
@@ -2323,6 +2324,14 @@ export const _pollBatch2V3 = internalAction({
             // back to the unverified llm_estimate when off, unreachable, or
             // neither tier can trust the page.
             let verified: number | null = null;
+            // Affirmative rejection = the cited page itself testified AGAINST
+            // this number (price>=MSRP / wrong OEM / outside the median band).
+            // Persisting it as trusted 'llm_estimate' would feed a known-bad
+            // value into the customer median (Jun-9 review, item 8) — write it
+            // as UNVERIFIED instead (kept for audit, excluded from the median).
+            // Passive failures (empty page, no text, LLM error) keep the old
+            // fail-open llm_estimate behavior: we learned nothing new.
+            let affirmativeReject = false;
             if (process.env.PARTS_REEXTRACT_BATCH2 === "on" && entry.source_url) {
               try {
                 const outcome = await reextractPartPrice({
@@ -2331,7 +2340,18 @@ export const _pollBatch2V3 = internalAction({
                   source_url: entry.source_url,
                   crossSourceMedian: null,
                 });
-                if (outcome && outcome.status === "sale") verified = outcome.price;
+                if (outcome.status === "sale") {
+                  verified = outcome.price;
+                } else if (
+                  outcome.status === "unverified" &&
+                  isAffirmativeRejection(outcome.reason)
+                ) {
+                  affirmativeReject = true;
+                  console.warn(
+                    `[v8] Batch-2 price affirmatively rejected (${outcome.reason}) for ` +
+                      `${entry.oem_part_number} @ ${sourceDomain} — storing as unverified`,
+                  );
+                }
               } catch (e) {
                 console.warn("[v8] Batch-2 Tier-2 reextract failed (non-fatal):", e);
               }
@@ -2344,7 +2364,12 @@ export const _pollBatch2V3 = internalAction({
               await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
                 part_id:       partId,
                 price:         verified ?? entry.price_low,
-                price_type:    verified != null ? "sale" : "llm_estimate",
+                price_type:
+                  verified != null
+                    ? "sale"
+                    : affirmativeReject
+                      ? UNVERIFIED_PRICE_TYPE
+                      : "llm_estimate",
                 source_url:    entry.source_url ?? undefined,
                 source_domain: sourceDomain,
               });

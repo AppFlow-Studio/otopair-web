@@ -304,6 +304,7 @@ export const _repriceConfigPartsRun = internalAction({
       let totalPrices = 0;
       let fixed = 0;
       let markedUnverified = 0;
+      let fetchFailed = 0;
       for (const part of existingParts) {
         const normOem = part.oem_part_number
           ? normalizeOemNumber(part.oem_part_number)
@@ -343,7 +344,14 @@ export const _repriceConfigPartsRun = internalAction({
             crossSourceMedian: crossMedian,
             prefetched: fetched.get(row.source_url) ?? null,
           });
-          if (!outcome) continue; // transient fetch failure — leave row untouched
+          // Infra failure (page came back empty / fetch threw): we learned
+          // nothing about the page, so leave the existing row UNTOUCHED — a
+          // transient Firecrawl hiccup must never demote a verified 'sale'
+          // row to 'unverified' (Jun-9 review, item 7).
+          if (!outcome || outcome.status === "fetch_failed") {
+            fetchFailed++;
+            continue;
+          }
 
           if (outcome.status === "sale") {
             await ctx.runMutation(
@@ -379,9 +387,10 @@ export const _repriceConfigPartsRun = internalAction({
         }
       }
 
-      // (3) Audit the outcome — corrected vs marked-unverified across all rows.
+      // (3) Audit the outcome — corrected vs marked-unverified vs left-alone
+      // (fetch failures are skipped, not demoted) across all rows.
       await audit(
-        `Reprice parts complete: ${fixed}/${totalPrices} corrected (sale), ${markedUnverified} marked unverified for ${label}`.trim(),
+        `Reprice parts complete: ${fixed}/${totalPrices} corrected (sale), ${markedUnverified} marked unverified, ${fetchFailed} skipped (fetch failed, left untouched) for ${label}`.trim(),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

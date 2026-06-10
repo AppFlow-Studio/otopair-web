@@ -1120,7 +1120,47 @@ export const enrichVehicleBatchV3 = internalAction({
         // Check if it's been stuck for >4 hours (safety valve)
         const STUCK_MS = 4 * 60 * 60 * 1000;
         const runAge = Date.now() - (existingConfig.last_enriched_at ?? existingConfig._creationTime);
-        if (runAge < STUCK_MS) {
+        let bypassInProgress = runAge >= STUCK_MS;
+
+        // Director force-unstick (Jun-9 review item 3 follow-up): a crashed
+        // run (action killed at the 10-min cap, deploy restart) leaves the
+        // config 'enriching' with no live poll chain — previously
+        // unrecoverable for 4h even by force. A live chain stamps the run's
+        // last_heartbeat_at every poll attempt (~60s); when the latest run
+        // shows no activity inside the live window, force may take over. The
+        // dead run is marked failed so it can never read as live again.
+        // (Residual race: a final poll mid-processing with a heartbeat just
+        // over the window could be superseded — bounded by the 10-min action
+        // cap, director-triggered only, and upserts are idempotent.)
+        if (!bypassInProgress && args.force) {
+          const LIVE_WINDOW_MS = 15 * 60 * 1000; // > 10-min action cap + poll gap
+          const LIVE_RUN_STATUSES = new Set(["started", "scraping", "batch1", "batch2"]);
+          const latestRun = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+            { vehicleConfigId: existingConfig._id },
+          );
+          const lastActivity = latestRun
+            ? Math.max(latestRun.started_at ?? latestRun._creationTime, latestRun.last_heartbeat_at ?? 0)
+            : 0;
+          const isLive =
+            !!latestRun &&
+            LIVE_RUN_STATUSES.has(latestRun.status) &&
+            Date.now() - lastActivity < LIVE_WINDOW_MS;
+          if (!isLive) {
+            console.log(`[v8] Force-unstick: no live run for ${configKey} (status=${status}) — taking over`);
+            if (latestRun && LIVE_RUN_STATUSES.has(latestRun.status)) {
+              await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+                run_id: latestRun._id,
+                status: "failed",
+                errors: ["superseded_by_force_unstick"],
+                completed_at: Date.now(),
+              });
+            }
+            bypassInProgress = true;
+          }
+        }
+
+        if (!bypassInProgress) {
           console.log(`[v8] Enrichment already in progress for ${configKey} (status=${status}), skipping`);
           await ctx.runMutation(
             internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
@@ -1128,7 +1168,7 @@ export const enrichVehicleBatchV3 = internalAction({
           );
           return { status: "already_enriching" as const, configId: existingConfig._id };
         }
-        console.log(`[v8] Stale in-progress run for ${configKey} (${Math.round(runAge / 3600000)}h old), re-enriching`);
+        console.log(`[v8] Stale/dead in-progress run for ${configKey} (${Math.round(runAge / 60000)}min old), re-enriching`);
       }
 
       // Complete/verified — use cache unless stale.
@@ -1596,10 +1636,13 @@ export const enrichVehicleBatchV3 = internalAction({
       batchId = await submitBatch(batch1Requests);
     } catch (e) {
       console.error(`[v8] Batch 1 submission FAILED:`, e);
-      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+      // No batch-1 data was written this run → restore 'pending' (review item 3).
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
         run_id: runId,
-        status: "failed",
+        vehicle_config_id: vehicleConfigId,
+        run_status: "failed",
         errors: [`batch1_submission_failed: ${e}`],
+        config_status: "pending",
       });
       return { status: "error" as const, reason: "batch1_submission_failed" };
     }
@@ -1693,18 +1736,70 @@ export const _pollBatch1V3 = internalAction({
     writeScope: v.optional(v.union(v.literal("full"), v.literal("parts"))),
   },
   handler: async (ctx, args) => {
+    // Catch-all failure handler (Jun-9 review item 3): ANY unexpected throw in
+    // the poll body must restore the config to a terminal status — 'pending'
+    // before batch-1 data hit the normalized tables, 'partial' after — or the
+    // config is stuck 'enriching' forever (only the run row got marked).
+    const progress = { batch1DataWritten: false };
+    try {
+      return await runPollBatch1Body(ctx, args, progress);
+    } catch (e) {
+      console.error(`[v8/_pollBatch1] UNEXPECTED failure — restoring terminal status:`, e);
+      try {
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
+          run_id: args.runId,
+          vehicle_config_id: args.vehicleConfigId,
+          run_status: "failed",
+          errors: [`batch1_unexpected: ${e}`],
+          config_status: progress.batch1DataWritten ? "partial" : "pending",
+        });
+      } catch (e2) {
+        console.error(`[v8/_pollBatch1] failEnrichmentRun also failed:`, e2);
+      }
+    }
+  },
+});
+
+// Body of _pollBatch1V3, extracted so the handler can wrap it in a catch-all
+// failure handler. progress.batch1DataWritten flips once writeNormalizedData
+// lands, switching the restore status from 'pending' to 'partial'.
+async function runPollBatch1Body(
+  ctx: any,
+  args: any,
+  progress: { batch1DataWritten: boolean },
+): Promise<void> {
     const attempt = args.attempt ?? 1;
     const writeScope = args.writeScope ?? "full";
     console.log(`[v8/_pollBatch1] Poll attempt ${attempt} for batchId=${args.batchId}`);
 
-    const status = await getBatchStatus(args.batchId);
+    // Liveness heartbeat for the STEP 0 force-unstick probe — stamped every
+    // attempt so a crashed chain goes visibly stale within minutes.
+    try {
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+        run_id: args.runId,
+        last_heartbeat_at: Date.now(),
+      });
+    } catch (e) {
+      console.warn(`[v8/_pollBatch1] heartbeat stamp failed (non-fatal):`, e);
+    }
+
+    // A transient API error on a status poll must not kill a paid batch run —
+    // treat it as "not ended" and let the bounded retry loop continue.
+    let status: string | null = null;
+    try {
+      status = await getBatchStatus(args.batchId);
+    } catch (e) {
+      console.warn(`[v8/_pollBatch1] getBatchStatus failed (attempt ${attempt}) — treating as not-ended:`, e);
+    }
     if (status !== "ended") {
       if (attempt >= MAX_POLL_ATTEMPTS) {
         console.error(`[v8/_pollBatch1] Timed out after ${attempt} attempts`);
-        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
           run_id: args.runId,
-          status: "failed",
+          vehicle_config_id: args.vehicleConfigId,
+          run_status: "failed",
           errors: ["batch1_timeout"],
+          config_status: "pending",
         });
         return;
       }
@@ -1790,10 +1885,12 @@ export const _pollBatch1V3 = internalAction({
 
     if (!r1a) {
       console.error("[v8/_pollBatch1] No batch1a result — aborting");
-      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
         run_id: args.runId,
-        status: "failed",
+        vehicle_config_id: args.vehicleConfigId,
+        run_status: "failed",
         errors: ["no_batch1a_result"],
+        config_status: "pending",
       });
       return;
     }
@@ -1801,10 +1898,12 @@ export const _pollBatch1V3 = internalAction({
     // Fix #3: Detect errored/expired batch requests
     if (r1a.error) {
       console.error(`[v8/_pollBatch1] batch1a ${r1a.error} — aborting`);
-      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
         run_id: args.runId,
-        status: "failed",
+        vehicle_config_id: args.vehicleConfigId,
+        run_status: "failed",
         errors: [`batch1a_${r1a.error}`],
+        config_status: "pending",
       });
       return;
     }
@@ -1856,6 +1955,9 @@ export const _pollBatch1V3 = internalAction({
       packageParts,
       writeScope,
     );
+    // Batch-1 data is now in the normalized tables — a failure from here on
+    // restores 'partial', not 'pending' (see the catch-all in the handler).
+    progress.batch1DataWritten = true;
 
     // PARTS-ONLY backfill: stop after the Batch-1 parts write. Do NOT submit
     // Batch-2 (gap fill / pricing). Finalize the run the same terminal way
@@ -1933,10 +2035,13 @@ export const _pollBatch1V3 = internalAction({
       ]);
     } catch (e) {
       console.error(`[v8] Batch 2 submission FAILED:`, e);
-      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+      // Batch-1 data IS written by this point → 'partial' (review item 3).
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
         run_id: args.runId,
-        status: "failed",
+        vehicle_config_id: args.vehicleConfigId,
+        run_status: "failed",
         errors: [`batch2_submission_failed: ${e}`],
+        config_status: "partial",
       });
       return;
     }
@@ -1962,8 +2067,7 @@ export const _pollBatch1V3 = internalAction({
         attempt: 1,
       },
     );
-  },
-});
+}
 
 // ============================================================================
 // 3. _pollBatch2V3 — Poll Batch 2, gap fill + pricing + finalize
@@ -1982,13 +2086,61 @@ export const _pollBatch2V3 = internalAction({
     runId: v.id("enrichment_runs"),
   },
   handler: async (ctx, args) => {
+    // Catch-all failure handler (Jun-9 review item 3): batch-1 data is always
+    // written by the time this action runs, so any unexpected throw restores
+    // the config to 'partial' instead of leaving it stuck 'enriching'.
+    try {
+      return await runPollBatch2Body(ctx, args);
+    } catch (e) {
+      console.error(`[v8/_pollBatch2] UNEXPECTED failure — restoring terminal status:`, e);
+      try {
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
+          run_id: args.runId,
+          vehicle_config_id: args.vehicleConfigId,
+          run_status: "failed",
+          errors: [`batch2_unexpected: ${e}`],
+          config_status: "partial",
+        });
+      } catch (e2) {
+        console.error(`[v8/_pollBatch2] failEnrichmentRun also failed:`, e2);
+      }
+    }
+  },
+});
+
+// Body of _pollBatch2V3, extracted so the handler can wrap it in a catch-all
+// failure handler.
+async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     const attempt = args.attempt ?? 1;
     console.log(`[v8/_pollBatch2] Poll attempt ${attempt} for batchId=${args.batchId}`);
 
-    const status = await getBatchStatus(args.batchId);
+    // Liveness heartbeat for the STEP 0 force-unstick probe.
+    try {
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+        run_id: args.runId,
+        last_heartbeat_at: Date.now(),
+      });
+    } catch (e) {
+      console.warn(`[v8/_pollBatch2] heartbeat stamp failed (non-fatal):`, e);
+    }
+
+    // A transient API error on a status poll must not kill a paid batch run —
+    // treat it as "not ended" and let the bounded retry loop continue.
+    let status: string | null = null;
+    try {
+      status = await getBatchStatus(args.batchId);
+    } catch (e) {
+      console.warn(`[v8/_pollBatch2] getBatchStatus failed (attempt ${attempt}) — treating as not-ended:`, e);
+    }
+    // Review item 6: on timeout the batch has NOT ended — reading its results
+    // would throw (stuck config) or mis-mark the run 'complete'. Skip the
+    // results entirely, finalize with batch-1 data only (r2 undefined), and
+    // record the run as 'timeout'.
+    let timedOut = false;
     if (status !== "ended") {
       if (attempt >= MAX_POLL_ATTEMPTS) {
-        console.error("[v8/_pollBatch2] Timed out — storing partial results");
+        console.error("[v8/_pollBatch2] Timed out — finalizing with batch-1 data only");
+        timedOut = true;
       } else {
         await ctx.scheduler.runAfter(
           POLL_INTERVAL_MS,
@@ -1999,7 +2151,7 @@ export const _pollBatch2V3 = internalAction({
       }
     }
 
-    const results = await getBatchResults(args.batchId);
+    const results = timedOut ? {} : await getBatchResults(args.batchId);
     const r2 = results["batch2"];
 
     // Fix #3: Detect errored/expired batch2 request
@@ -2450,10 +2602,12 @@ export const _pollBatch2V3 = internalAction({
       console.log(`[v8] Confidence avg: ${confidenceAvg.toFixed(3)} from ${allEvidence.length} evidence rows`);
     }
 
-    // Update enrichment run
+    // Update enrichment run. A batch-2 timeout still finalizes (batch-1 data
+    // is real and the config gets its normal terminal status below) but the
+    // run records 'timeout' — not a fake 'complete' (review item 6).
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
       run_id: args.runId,
-      status: "complete",
+      status: timedOut ? "timeout" : "complete",
       total_tokens_in: totalTokensIn,
       total_tokens_out: totalTokensOut,
       total_web_searches: totalWebSearches,
@@ -2464,6 +2618,7 @@ export const _pollBatch2V3 = internalAction({
       fill_rate: fillRate,
       fields_changed: V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null),
       errors: [
+        ...(timedOut ? ["batch2_timeout"] : []),
         ...sanityFlags.map((f) => `sanity:${f.field}:${f.reason}`),
         ...oemFlags.map((f) => `oem:${f.field}:${f.reason}`),
       ],
@@ -2742,9 +2897,9 @@ export const _pollBatch2V3 = internalAction({
     }
 
     console.log(
-      `[v8] COMPLETE: ${buildEngineKey(vehicle)} — fillRate=${fillRate}% (flat=${flatFillRate}%), ` +
+      `[v8] ${timedOut ? "TIMEOUT (finalized with batch-1 data)" : "COMPLETE"}: ` +
+      `${buildEngineKey(vehicle)} — fillRate=${fillRate}% (flat=${flatFillRate}%), ` +
       `tokens=${totalTokensIn}in/${totalTokensOut}out, ` +
       `searches=${totalWebSearches}, time=${Math.round(durationMs / 1000)}s`,
     );
-  },
-});
+}

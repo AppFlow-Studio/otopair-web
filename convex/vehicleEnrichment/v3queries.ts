@@ -188,6 +188,24 @@ export const getVehicleConfigById = internalQuery({
  * the caller surfaces that as a "no_vehicle" status because the vehicle-keyed
  * pipeline can't run without one.
  */
+/**
+ * Latest enrichment_run for a config — the STEP 0 force-unstick liveness probe.
+ * A run counts as live only while its status is in-flight AND its heartbeat
+ * (stamped each poll attempt) or start time is recent; see enrichVehicleBatchV3.
+ */
+export const getLatestRunForConfig = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) =>
+        q.eq("vehicle_config_id", args.vehicleConfigId),
+      )
+      .order("desc")
+      .first();
+  },
+});
+
 export const resolveConfigForBackfill = internalQuery({
   args: { vehicleConfigId: v.id("vehicle_configs") },
   handler: async (ctx, args) => {

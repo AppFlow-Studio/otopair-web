@@ -921,6 +921,7 @@ export const updateEnrichmentRun = internalMutation({
   args: {
     run_id: v.id("enrichment_runs"),
     status: v.optional(v.string()),
+    last_heartbeat_at: v.optional(v.float64()),
     vehicle_config_id: v.optional(v.id("vehicle_configs")),
     total_tokens_in: v.optional(v.float64()),
     total_tokens_out: v.optional(v.float64()),
@@ -946,6 +947,59 @@ export const updateEnrichmentRun = internalMutation({
       }
     }
     await ctx.db.patch(run_id, patch);
+  },
+});
+
+// ============================================================================
+// 12b. failEnrichmentRun — terminal failure in ONE transaction
+// ============================================================================
+
+/**
+ * Failure handler for every batch error/timeout exit (Jun-9 review items 3+6).
+ * Marks the enrichment_run terminal AND restores the vehicle_config to a
+ * terminal status in one transaction — STEP 4 clobbers the config to
+ * 'enriching' on every run, and historically only the run row got marked
+ * failed, leaving the config stuck 'enriching' forever (breaking the booking
+ * soft-lock and blocking re-enrichment for 4h).
+ *
+ * config_status contract: 'pending' when batch-1 data was never written this
+ * run, 'partial' after. The config is only patched while still in an
+ * in-progress status — a config some other path already finalized
+ * (complete/verified/partial) is never clobbered.
+ */
+const CONFIG_IN_PROGRESS_STATUSES = new Set([
+  "enriching",
+  "scraping",
+  "batch1",
+  "batch2",
+  "started",
+]);
+
+export const failEnrichmentRun = internalMutation({
+  args: {
+    run_id: v.id("enrichment_runs"),
+    vehicle_config_id: v.id("vehicle_configs"),
+    run_status: v.string(), // "failed" | "timeout"
+    errors: v.array(v.string()),
+    config_status: v.string(), // "pending" | "partial"
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.run_id, {
+      status: args.run_status,
+      errors: args.errors,
+      completed_at: Date.now(),
+    });
+    const config = await ctx.db.get(args.vehicle_config_id);
+    if (
+      config &&
+      CONFIG_IN_PROGRESS_STATUSES.has((config as any).enrichment_status ?? "")
+    ) {
+      await ctx.db.patch(args.vehicle_config_id, {
+        enrichment_status: args.config_status,
+      });
+      return { config_restored: true };
+    }
+    return { config_restored: false };
   },
 });
 

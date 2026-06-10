@@ -12,9 +12,8 @@ Measure with: `npx convex run devOnly/partsCoverage:coverage '{"configKey":"..."
 
 ## Remaining tasks, in order
 
-### 1. Stuck-`enriching` failure handler (review item 3 + 6 — the last big code item)
-Every batch error/timeout exit leaves `vehicle_configs.enrichment_status='enriching'` forever (STEP 4 clobbers status; only the run row gets marked failed). Reproduced live twice (Civic, Jun 10). Exits to cover in `convex/vehicleEnrichment/v3pipeline.ts`: batch1 submit failure (~:1588), `_pollBatch1V3` timeout/error branches, `_pollBatch2V3` timeout fall-through (**item 6**: it calls `getBatchResults` on a NON-ended batch — throws or fakes 'complete'; instead skip results, finalize with `r2=undefined`, mark run 'timeout'), and unexpected throws (catch-all per poll action). Restore `'pending'` before batch-1 data is written, `'partial'` after. **Also:** `force` keeps the in-progress guard (STEP 0), so a stuck config is unrecoverable for 4h even by a director — add an unstick path (e.g. force bypasses 'enriching' older than N minutes with no live run).
-⚠ No pure-function seam — either introduce `convex-test` for the mutation layer or do it with careful review; flag the TDD exception to Waleed.
+### 1. ✅ DONE (Jun 10 session 3) — Stuck-`enriching` failure handler (review item 3 + 6)
+Shipped: transactional `failEnrichmentRun` wired into every exit (pending/partial contract), `_pollBatch2V3` timeout finalizes with batch-1 data + run `'timeout'`, `getBatchStatus` transient-error retry, poll heartbeats (`last_heartbeat_at`) + STEP 0 force-unstick (15-min liveness window, dead run marked `superseded_by_force_unstick`). The TDD-exception concern was moot — `convex-test` was already installed; `tests/enrichmentFailureHandler.test.ts` (7 tests) drives the real action through STEP 0. See SESSION_HANDOFF.md + review doc items 3/6.
 
 ### 2. `directorConfigActions.ts` token-gate sweep
 `markVerified`, `updateConfigBasics`, `updateEngineFields`, etc. are still public mutations trusting caller-supplied `actorName`/`actorId`. Mirror `requireDirector` from `convex/directorConfigBackfills.ts` (validate `director_auth.validateSession`, derive actor from session) + update the call sites in `TabVehicleConfigs.tsx` (it still computes `actorName`/`actorId` for these).

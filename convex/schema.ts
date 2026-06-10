@@ -624,6 +624,11 @@ export default defineSchema({
     estimated_cost_usd: v.optional(v.number()),
     started_at: v.optional(v.number()),
     completed_at: v.optional(v.number()),
+    // Liveness heartbeat — stamped by each poll attempt (~60s cadence). The
+    // STEP 0 force-unstick path treats a live-status run with a stale
+    // heartbeat as a crashed chain (action killed at the 10-min cap, deploy
+    // restart) and lets a director force take it over.
+    last_heartbeat_at: v.optional(v.number()),
     duration_ms: v.optional(v.number()),
     fields_filled: v.optional(v.number()),
     fields_total: v.optional(v.number()),

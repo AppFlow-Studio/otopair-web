@@ -23,14 +23,15 @@
 
 ## HIGH (confirmed)
 
-3. **Every error/timeout exit leaves `vehicle_configs` stuck in `'enriching'`** — STEP 4 clobbers status/fill_rate on every run; only `enrichment_runs` is marked failed. Batch submit failure, poll timeout, mid-run crash → config never gets a terminal status (known issue 10; this is what breaks the booking soft-lock). `v3pipeline.ts:1588-1596` et al.
-   → Failure handler restoring terminal status at every exit.
+3. ✅ **FIXED** (`fix(enrichment): stuck-'enriching' failure handler`, this branch) — ~~Every error/timeout exit leaves `vehicle_configs` stuck in `'enriching'`~~ — STEP 4 clobbers status/fill_rate on every run; only `enrichment_runs` was marked failed.
+   **Fix:** new transactional `failEnrichmentRun` mutation (marks the run failed AND restores the config in one transaction; never clobbers a config another path already finalized) wired into every exit: batch-1 submit failure → `'pending'`; `_pollBatch1V3` timeout / no-result / errored-batch → `'pending'`; batch-2 submit failure → `'partial'`; plus catch-all wrappers on BOTH poll actions (`'pending'`/`'partial'` switched by whether `writeNormalizedData` landed). `getBatchStatus` API hiccups now retry as "not ended" instead of killing a paid run. **Force-unstick:** polls stamp `enrichment_runs.last_heartbeat_at` (~60s); a director `force` may take over an in-progress config whose latest run shows no heartbeat for 15 min (crashed chain — the 600s-cap kill that a catch can't see), marking the dead run `superseded_by_force_unstick`. Tests: `tests/enrichmentFailureHandler.test.ts` (7, TDD via convex-test — first use of the action layer in tests).
 
 4. **`reconcileConfigForReenrich` can mint duplicate `config_key`s** — patches the pinned config's key with no `by_config_key` collision lookup; the desync case it was built for is exactly when a sibling already owns the computed key. `v3mutations.ts:825-842`.
 
 5. **Pinned-run finalize overwrites the pinned config's `engine_id` with the vehicle's placeholder engine** — undoing the reconcile guarantee (`v3pipeline.ts:1613` → finalize `:2441-2454`).
 
-6. **`_pollBatch2V3` timeout path reads results from a non-ended batch** — throws (stuck config) or marks the run `'complete'`. `v3pipeline.ts:1979-1993`.
+6. ✅ **FIXED** (same commit as item 3) — ~~`_pollBatch2V3` timeout path reads results from a non-ended batch~~ — throws (stuck config) or marks the run `'complete'`.
+   **Fix:** on timeout the poll now SKIPS `getBatchResults` entirely (`r2` stays undefined), finalizes with batch-1 data only (config gets its real terminal status from the fill-rate rule), and records the run as `'timeout'` with a `batch2_timeout` error — not a fake `'complete'`.
 
 7. ✅ **FIXED** (`fix(parts): re-extraction outcome contract`, this branch) — ~~Transient fetch/LLM failures DOWNGRADE good `sale` rows to `unverified`~~ — `fetchUrlWithHtml` never throws, so the "leave untouched" catch in `priceReextract.ts:81-99` was dead code; a Firecrawl hiccup during reprice deleted good data from the median.
    **Fix:** new `fetch_failed` outcome when the page comes back empty; the reprice loop skips those rows (counted in the audit message as "skipped (fetch failed, left untouched)"). Tests: `tests/priceReextractOutcome.test.ts`.

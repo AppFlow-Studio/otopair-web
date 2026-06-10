@@ -50,8 +50,17 @@ export const coverage = internalQuery({
     let coreUnpriced = 0;
     let coreMissing = 0;
 
+    // Applicability context: timing_belt service is N/A on chain engines —
+    // grade its roles "not_applicable" instead of counting them as misses
+    // (the chain cars' "missing timing belt" rows were noise in the Jun-10
+    // reports; only belt engines should be held to those roles).
+    const engine = (cfg as any).engine_id ? await ctx.db.get((cfg as any).engine_id) : null;
+    const timingSystem = String((engine as any)?.timing_system ?? "").toLowerCase();
+    const isChainEngine = timingSystem.includes("chain");
+
     for (const spec of Object.values(SERVICE_PARTS_REFERENCE)) {
       if (spec.laborOnly || spec.handledByDedicatedFlow) continue;
+      const serviceNotApplicable = spec.slug === "timing_belt" && isChainEngine;
 
       const svc = serviceBySlug.get(spec.slug);
       if (!svc) {
@@ -81,6 +90,13 @@ export const coverage = internalQuery({
         const isDiscovery = role.condition === "if_found_bad";
         let status: string;
         let detail: any = undefined;
+        if (serviceNotApplicable) {
+          // Roles still resolving here are leftover pollution worth seeing,
+          // but none of them count toward the locked totals.
+          status = rw ? "not_applicable_but_present" : "not_applicable";
+          roles.push({ roleKey: role.roleKey, serviceRole: role.serviceRole, status });
+          continue;
+        }
         if (rw) {
           const summary = rw.candidate.priceSummary;
           status = summary.sample_size > 0 ? "priced" : "unpriced";
@@ -132,6 +148,9 @@ export const coverage = internalQuery({
     return {
       configKey,
       configId: String((cfg as any)._id),
+      // Applicability basis for the timing_belt grading — surface it so a
+      // wrong engine classification is visible in every report.
+      timing_system: timingSystem || null,
       // Locked-quote coverage: core + default-kit roles (what the PDF says
       // must be on essentially every invoice).
       lockedRoles: { total: coreTotal, priced: corePriced, unpriced: coreUnpriced, missing: coreMissing },

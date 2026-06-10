@@ -266,8 +266,16 @@ function mergeBatch1(
   return merged;
 }
 
-function getNullFields(fields: Record<string, FieldResult>): string[] {
-  return V4_FIELD_KEYS.filter((k) => fields[k]?.value == null);
+/** Fields Batch 2 should gap-fill: null AND not deliberately nulled. A field
+ *  the applicability rules stamped flag_reason="not_applicable" is FINAL —
+ *  asking Batch 2 to re-search it resurrected impossible data (chain cars
+ *  grew timing-belt parts, and FWD diff fields could come back the same way).
+ *  Jun-9 review medium finding; exported for tests. */
+export function getNullFields(fields: Record<string, FieldResult>): string[] {
+  return V4_FIELD_KEYS.filter(
+    (k) =>
+      fields[k]?.value == null && fields[k]?.flag_reason !== "not_applicable",
+  );
 }
 
 function getOemParts(fields: Record<string, FieldResult>): Record<string, string> {

@@ -51,6 +51,13 @@ export function applyApplicabilityRules(
   // ── Chain engine: timing belt fields are N/A ──────────────────
   if (timingSystem && timingSystem.toLowerCase().includes("chain")) {
     fields.timing_belt_oem = naField();
+    // The whole timing-belt service KIT is belt-only per the Service Parts
+    // Reference (tensioner/idlers/seals + water pump replaced WITH the belt).
+    // On chain engines a water pump is a repair, not a maintenance part —
+    // leaving these searchable is how chain cars (N63, K20C2) grew
+    // timing-belt-service fitments (observed live Jun 10 2026).
+    fields.timing_kit_oem = naField();
+    fields.water_pump_oem = naField();
     // timing_service fields: chain engines have inspect-only or no service
     // We let Claude set these via Batch 1B; only null if not already set
     // to avoid overriding legitimate "inspect at X miles" chain guidance.

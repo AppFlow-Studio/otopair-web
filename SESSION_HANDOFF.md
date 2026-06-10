@@ -62,6 +62,13 @@
 - **Unusable-group fallback swap:** a junk/unpriced fitment no longer blocks the universal seed — CORE role groups where every candidate is unpriced swap to the priced seed. Live: 750i gear oil $0→$22, 750i now **27/30** locked roles priced.
 - **Anchor sanity band (the $49 washer):** consumable-role candidates priced > 6× their reference `defaultPriceUsd` anchor are treated as captured MSRP/multi-pack garbage and swap to the seed. Live: Jetta + 750i washers → $4. Real parts (pads/rotors/batteries) have no anchors — never capped. `convex/serviceParts.ts` (shared `synthesizeUniversalCandidate` helper). Tests: `tests/universalFallbackSwap.test.ts` (4, TDD).
 
+**🟢 DONE (this session) — applicability finality + chain-car timing pollution + applicability-aware coverage:**
+- **`getNullFields` now treats `not_applicable` nulls as FINAL** (review medium finding: Batch-2 was asked to re-search fields the rules deliberately nulled, resurrecting them — that's how chain cars grew timing-belt parts and FWD diff fields could return).
+- **Chain rule covers the whole timing kit**: `timing_kit_oem` + `water_pump_oem` now nulled alongside `timing_belt_oem` (water pump on a chain engine is a repair, not a maintenance part — per the PDF it belongs to the belt service only).
+- **Coverage inspector grades applicability**: timing-belt roles on chain engines report `not_applicable`/`not_applicable_but_present` (pollution stays visible, stops counting). Reports now include `timing_system` as the grading basis. **Final scores: 750i 25/25, Civic 24/25 (cartridge O-ring), Jetta 24/25.**
+- **⚠ Data fix needed (not code):** the Jetta's `engines.timing_system` is stored as **"chain" — wrong** (EA211 1.5 TSI is belt-driven; LLM misclassification). Correct via director engine edit, then re-enrich to get its belt/kit parts. The inspector surfacing `timing_system` makes this class of error visible per car.
+- Tests: `tests/applicabilityFinality.test.ts` (3, TDD). Full suite: 228 passed; only the pre-existing customer_late red.
+
 **🟡 STILL OPEN (next session):**
 0. **Retire/rewrite `diagnoseVin.ts`'s 4 `online_discount` writers** (lines ~493/680/989/1302) — now `internalAction` (no longer anonymously reachable) but still a foot-gun for a deliberate admin run: could overwrite corrected `sale` rows back to poison, and they spend Claude calls writing rows the aggregator ignores. Route through `reextractPartPrice` or delete. Low priority.
 0b. **Token-gate sweep for `directorConfigActions.ts`** — markVerified/updateConfigBasics/updateEngineFields/etc. still follow the old trusted-actor convention (public mutations, no server-side session check). Mirror the `requireDirector` pattern from `directorConfigBackfills.ts`.

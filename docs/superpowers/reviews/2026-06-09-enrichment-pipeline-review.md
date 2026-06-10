@@ -73,7 +73,7 @@
 
 - 60s × 180 polling with full state re-serialized through scheduler args every poll (known issue 2 unfixed). `v3pipeline.ts:59-60`.
 - Staleness is lazy-only (180d check fires only on re-encounter; no cron) and its corrective writes are broken — known issue 4 half-fixed. `cacheValidation.ts:141-147`.
-- Applicability nulls aren't final: Batch 2 re-searches `not_applicable` fields (no `flag_reason` check in `getNullFields`) and can resurrect them. `v3pipeline.ts:268`.
+- ✅ FIXED (`fix(enrichment): applicability nulls are final`) — ~~Applicability nulls aren't final: Batch 2 re-searches `not_applicable` fields and can resurrect them~~ — `getNullFields` now skips `flag_reason==='not_applicable'` (final); the chain rule also nulls `timing_kit_oem`+`water_pump_oem` (the live chain-car pollution route); coverage inspector grades timing-belt roles `not_applicable` on chain engines and surfaces `timing_system`. Note: the Jetta's stored `timing_system="chain"` is itself a data error (EA211 = belt) — needs a director engine-row correction + re-enrich. Tests: `tests/applicabilityFinality.test.ts`.
 - **Tier-1 bypasses ALL guardrails** + lone-product fallback can price the WRONG product as `sale` and then seed the n=1 "median" that validates other rows (verifier: severity up). `priceReextract.ts:56-58`.
 - Prompt injection: scraped markdown inlined with no "page text is data" hardening; injected price lands as top-trust `sale`. `priceParser.ts:260-265`.
 - Currency ignored end-to-end; no cents/placeholder sanity on Tier-1. `priceReextract.ts:49-59`.

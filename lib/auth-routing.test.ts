@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  getTrustedSavedOnboardingStep,
+  shouldRunStartupRedirect,
+  shouldRedirectCompletedOnboardingToHome,
   shouldRedirectSignedOutFromMainTabs,
   shouldUseInitialHomeBack,
 } from "./auth-routing.ts";
@@ -28,4 +31,77 @@ test("shouldRedirectSignedOutFromMainTabs redirects signed-out users after Clerk
 
 test("shouldRedirectSignedOutFromMainTabs allows signed-in users", () => {
   assert.equal(shouldRedirectSignedOutFromMainTabs(true, true), false);
+});
+
+test("shouldRunStartupRedirect waits for root navigation readiness", () => {
+  assert.equal(
+    shouldRunStartupRedirect({
+      authLoaded: true,
+      hasNavigated: false,
+      rootNavigationReady: false,
+    }),
+    false,
+  );
+});
+
+test("shouldRunStartupRedirect allows routing when auth and navigation are ready", () => {
+  assert.equal(
+    shouldRunStartupRedirect({
+      authLoaded: true,
+      hasNavigated: false,
+      rootNavigationReady: true,
+    }),
+    true,
+  );
+});
+
+test("shouldRedirectCompletedOnboardingToHome redirects fully completed onboarding", () => {
+  assert.equal(
+    shouldRedirectCompletedOnboardingToHome({
+      isSignedIn: true,
+      onboardingCompleted: true,
+      essentialOnboardingCompleted: false,
+    }),
+    true,
+  );
+});
+
+test("shouldRedirectCompletedOnboardingToHome redirects essential-complete onboarding", () => {
+  assert.equal(
+    shouldRedirectCompletedOnboardingToHome({
+      isSignedIn: true,
+      onboardingCompleted: false,
+      essentialOnboardingCompleted: true,
+    }),
+    true,
+  );
+});
+
+test("shouldRedirectCompletedOnboardingToHome ignores signed-out users", () => {
+  assert.equal(
+    shouldRedirectCompletedOnboardingToHome({
+      isSignedIn: false,
+      onboardingCompleted: true,
+      essentialOnboardingCompleted: true,
+    }),
+    false,
+  );
+});
+
+test("getTrustedSavedOnboardingStep ignores stale saved steps that are no longer incomplete", () => {
+  assert.equal(
+    getTrustedSavedOnboardingStep("phone", ["profilePhoto", "zipCode"]),
+    null,
+  );
+});
+
+test("getTrustedSavedOnboardingStep keeps saved steps that are still incomplete", () => {
+  assert.equal(
+    getTrustedSavedOnboardingStep("phone", ["phone", "profilePhoto"]),
+    "phone",
+  );
+});
+
+test("getTrustedSavedOnboardingStep ignores missing saved steps", () => {
+  assert.equal(getTrustedSavedOnboardingStep(null, ["phone"]), null);
 });

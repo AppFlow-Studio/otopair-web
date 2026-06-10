@@ -825,7 +825,10 @@ export async function sendMessageHandlerCore(
     priorConversationFacts: envelopePriorFacts,
     knowledgeLevel: knowledgeLabel(rawKnowledgeLevel),
   });
-  console.log("[oto/chat] envelope sent to Haiku:\n" + envelope);
+  // B-P4: the envelope carries raw user PII (vehicle, history, message,
+  // established facts) — only log it on debug/harness runs, not every
+  // production turn (PII exposure + log volume).
+  if (debug) console.log("[oto/chat] envelope sent to Haiku:\n" + envelope);
 
   if (trace) {
     trace.system_prompt_version = SYSTEM_PROMPT_VERSION;
@@ -2002,13 +2005,25 @@ async function callAnthropic({
   // System prompt is the largest static block; wrap it as a single text
   // content block with cache_control: ephemeral. Anthropic returns the
   // cache_creation tokens on first call and cache_read tokens on every
-  // subsequent call within the 5-minute TTL. Cost on cached input drops
-  // ~90% relative to a normal input token.
-  const systemBlocks: Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> = [
+  // subsequent call within the TTL. Cost on cached input drops ~90% relative
+  // to a normal input token.
+  //
+  // B-P4: ttl "1h" (GA — no beta header). The default 5-minute TTL silently
+  // expires during normal conversation gaps (user reading/typing between
+  // turns), forcing a full-price re-read of the large system prompt + tools
+  // on the next turn. 1h survives those gaps; the doubled write cost (2x vs
+  // 1.25x) breaks even at 3 cache reads, which a multi-turn chat clears
+  // easily.
+  const CACHE_CONTROL = { type: "ephemeral", ttl: "1h" } as const;
+  const systemBlocks: Array<{
+    type: "text";
+    text: string;
+    cache_control?: { type: "ephemeral"; ttl?: string };
+  }> = [
     {
       type: "text",
       text: SYSTEM_PROMPT,
-      cache_control: { type: "ephemeral" },
+      cache_control: CACHE_CONTROL,
     },
   ];
   // Merge OUR tool schemas + server-managed (Anthropic-provided) tools.
@@ -2017,7 +2032,7 @@ async function callAnthropic({
   const ourTools = tools.length > 0
     ? tools.map((t, i) =>
         i === tools.length - 1
-          ? { ...(t as object), cache_control: { type: "ephemeral" } }
+          ? { ...(t as object), cache_control: CACHE_CONTROL }
           : t,
       )
     : tools;

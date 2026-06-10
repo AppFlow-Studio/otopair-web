@@ -1246,6 +1246,74 @@ export const recordTireSetup = mutation({
 });
 
 /**
+ * Record the battery chemistry actually installed in the car. Customer
+ * picks Standard (flooded) / AGM / EFB in SingleServiceOptionsSheet; the
+ * label is mapped client-side to the enrichment vocabulary
+ * ("AGM" | "flooded" | "EFB" | "lithium-ion") and passed here.
+ *
+ * Mirrors recordTireSetup — stamps confirmed_at + source ("user" by
+ * default), upserts the vehicle_owner_specs row.
+ */
+export const recordBatteryType = mutation({
+  args: {
+    vehicleOwnerId: v.id("vehicle_owners"),
+    battery_type: v.string(),
+    source: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const owner = await ctx.db.get(args.vehicleOwnerId);
+    if (!owner) throw new Error("vehicle_owner not found");
+
+    const now = Date.now();
+    const battery = {
+      type: args.battery_type,
+      confirmed_at: now,
+      source: args.source ?? "user",
+    };
+
+    const existing = await ctx.db
+      .query("vehicle_owner_specs")
+      .withIndex("by_vehicle_owner", (q) =>
+        q.eq("vehicle_owner_id", args.vehicleOwnerId),
+      )
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        battery,
+        last_updated_at: now,
+      });
+    } else {
+      await ctx.db.insert("vehicle_owner_specs", {
+        vehicle_owner_id: args.vehicleOwnerId,
+        battery,
+        created_at: now,
+        last_updated_at: now,
+      });
+    }
+  },
+});
+
+/**
+ * Read the owner-confirmed battery field. Returns null if the
+ * vehicle_owner_specs row doesn't exist or hasn't recorded a battery yet.
+ * Used by the battery option-selection sheet to pre-fill the customer's
+ * prior choice ahead of falling back to chassis_specs.battery_type.
+ */
+export const getOwnerSpecBattery = query({
+  args: { vehicleOwnerId: v.id("vehicle_owners") },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("vehicle_owner_specs")
+      .withIndex("by_vehicle_owner", (q) =>
+        q.eq("vehicle_owner_id", args.vehicleOwnerId),
+      )
+      .first();
+    return row?.battery ?? null;
+  },
+});
+
+/**
  * Record an aftermarket modification on the vehicle (append).
  */
 export const recordModification = mutation({

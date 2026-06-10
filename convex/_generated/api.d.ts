@@ -244,6 +244,8 @@ import type * as undoMechanicVerification from "../undoMechanicVerification.js";
 import type * as urgency from "../urgency.js";
 import type * as userAddresses from "../userAddresses.js";
 import type * as users from "../users.js";
+import type * as vehicleDocuments from "../vehicleDocuments.js";
+import type * as vehicleDocuments_node from "../vehicleDocuments_node.js";
 import type * as vehicleEnrichment_adversarialVerification from "../vehicleEnrichment/adversarialVerification.js";
 import type * as vehicleEnrichment_anomalyDetection from "../vehicleEnrichment/anomalyDetection.js";
 import type * as vehicleEnrichment_applicabilityRules from "../vehicleEnrichment/applicabilityRules.js";
@@ -550,6 +552,8 @@ declare const fullApi: ApiFromModules<{
   urgency: typeof urgency;
   userAddresses: typeof userAddresses;
   users: typeof users;
+  vehicleDocuments: typeof vehicleDocuments;
+  vehicleDocuments_node: typeof vehicleDocuments_node;
   "vehicleEnrichment/adversarialVerification": typeof vehicleEnrichment_adversarialVerification;
   "vehicleEnrichment/anomalyDetection": typeof vehicleEnrichment_anomalyDetection;
   "vehicleEnrichment/applicabilityRules": typeof vehicleEnrichment_applicabilityRules;

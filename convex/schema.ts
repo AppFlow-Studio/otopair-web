@@ -115,6 +115,12 @@ export default defineSchema({
     oil_capacity_qts: v.optional(v.number()),
     coolant_type: v.optional(v.string()),
     coolant_capacity_qts: v.optional(v.number()),
+    // Fallback-spec branch: per_unit_spec fluid capacities used by
+    // serviceUnits.resolveServiceUnitCount. Kept here so docs already
+    // carrying these on the shared local dev deployment don't fail
+    // schema validation on temur-dev.
+    transmission_fluid_capacity_qts: v.optional(v.number()),
+    differential_fluid_capacity_qts: v.optional(v.number()),
     spark_plug_quantity: v.optional(v.number()),
     spark_plug_gap_mm: v.optional(v.number()),
     timing_idler_count: v.optional(v.number()),
@@ -823,6 +829,21 @@ export default defineSchema({
     requires_emissions_test: v.optional(v.boolean()),
     min_model_year: v.optional(v.number()),
     created_at: v.optional(v.number()),
+    // Fallback-spec branch: parts-quantity scaling kind + display label
+    // + per-unit spec source field on engines. Kept here as optional so
+    // legacy rows from that branch don't fail schema validation.
+    parts_kind: v.optional(
+      v.union(
+        v.literal("labor_only"),
+        v.literal("per_axle"),
+        v.literal("per_cylinder"),
+        v.literal("per_unit_spec"),
+        v.literal("per_wheel"),
+        v.literal("fixed_kit"),
+      ),
+    ),
+    parts_unit_label: v.optional(v.string()),
+    parts_unit_spec_source: v.optional(v.string()),
   })
     .index("by_slug", ["slug"])
     .index("by_category", ["service_category_id"])
@@ -872,6 +893,11 @@ export default defineSchema({
     // parts_cost_low/high (above) hold the dealer parts-counter ±6% band.
     oem_part_number: v.optional(v.string()),
     parts_cost_basis: v.optional(v.string()),
+    // Fallback-spec branch: unit count behind the Camry anchor's parts band.
+    // Other vehicles scale by (vehicle_unit_count / parts_baseline_unit_count).
+    // Kept as optional here so legacy rows that already carry the field
+    // don't fail schema validation on temur-dev.
+    parts_baseline_unit_count: v.optional(v.number()),
   })
     .index("by_engine_id", ["engine_id"])
     .index("by_service_id", ["service_id"])
@@ -1075,6 +1101,18 @@ export default defineSchema({
       ),
     ),
 
+    // Battery chemistry actually installed in the car. Mirrors tire_setup:
+    // "source" can be "user" (confirmed in the booking flow), "scan", or
+    // "inferred_from_oem". Takes precedence over chassis_specs.battery_type
+    // when present — that field is the OEM default, this one is the truth.
+    battery: v.optional(
+      v.object({
+        type: v.optional(v.string()), // "AGM" | "flooded" | "EFB" | "lithium-ion"
+        confirmed_at: v.optional(v.number()),
+        source: v.optional(v.string()), // "user" | "scan" | "inferred_from_oem"
+      }),
+    ),
+
     last_updated_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   }).index("by_vehicle_owner", ["vehicle_owner_id"]),
@@ -1262,6 +1300,62 @@ export default defineSchema({
   })
     .index("by_vehicle_owner", ["vehicleOwnerId"])
     .index("by_vehicle_and_type", ["vehicleOwnerId", "type"]),
+
+  // Uploaded shop receipts / invoices / inspection sheets. One row per file
+  // the user (or an inbound shop email, eventually) drops into the Cars-tab
+  // Service History flow. Reducto extraction lives in the sibling table so
+  // we can re-parse a doc on a new schema_version without rewriting the
+  // upload metadata.
+  vehicle_documents: defineTable({
+    user_id: v.id("users"),
+    vehicle_owner_id: v.id("vehicle_owners"),
+    vin: v.string(),
+    storage_id: v.id("_storage"),
+    mime_type: v.string(),
+    original_filename: v.string(),
+    size_bytes: v.number(),
+    uploaded_at: v.number(),
+    source: v.union(
+      v.literal("user_upload"),
+      v.literal("shop_email"),
+      v.literal("imported"),
+    ),
+    parse_status: v.union(
+      v.literal("queued"),
+      v.literal("parsing"),
+      v.literal("parsed"),
+      v.literal("needs_review"),
+      v.literal("failed"),
+    ),
+    parse_error: v.optional(v.string()),
+    reducto_job_id: v.optional(v.string()),
+    parsed_at: v.optional(v.number()),
+  })
+    .index("by_user", ["user_id"])
+    .index("by_vehicle_owner", ["vehicle_owner_id"])
+    .index("by_vin", ["vin"])
+    .index("by_parse_status", ["parse_status"]),
+
+  // Structured Reducto parse result for a vehicle_document. `payload` matches
+  // the Reducto extraction spec (document/shop/vehicle/line_items/safety
+  // measurements). `review_state` gates whether the derivation pipeline has
+  // already written into maintenance_records / vehicle_owners.mileage.
+  vehicle_document_extractions: defineTable({
+    document_id: v.id("vehicle_documents"),
+    schema_version: v.number(),
+    payload: v.any(),
+    overall_confidence: v.number(),
+    review_state: v.union(
+      v.literal("auto_accepted"),
+      v.literal("user_confirmed"),
+      v.literal("pending_review"),
+      v.literal("rejected"),
+    ),
+    created_at: v.number(),
+    reviewed_at: v.optional(v.number()),
+    reviewed_by: v.optional(v.id("users")),
+  })
+    .index("by_document", ["document_id"]),
 
   // ===== USERS & AUTH =====
 
@@ -1951,6 +2045,25 @@ export default defineSchema({
     quote_flags: v.optional(v.array(v.string())),
     quote_fallback_low: v.optional(v.float64()),
     quote_fallback_high: v.optional(v.float64()),
+    // Per-service sibling to `quote_flags`. One row per service id with the
+    // engine's per-quote flags + a `fallback_catch` marker when the booking
+    // line for that service falls outside the engine's per-service band.
+    // Written by the fallback-spec branch; kept here so legacy bookings
+    // that already carry the field don't fail schema validation.
+    service_quote_flags: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          flags: v.array(v.string()),
+          engine_parts_low: v.optional(v.float64()),
+          engine_parts_high: v.optional(v.float64()),
+          engine_labor_hours: v.optional(v.float64()),
+          engine_labor_source: v.optional(v.string()),
+          parts_source: v.optional(v.string()),
+          booking_line_parts_cost: v.optional(v.float64()),
+        }),
+      ),
+    ),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])
@@ -2089,6 +2202,18 @@ export default defineSchema({
     incremented_total_cents: v.optional(v.number()),
     captured_amount_cents: v.optional(v.number()),
     reauth_payment_intent_id: v.optional(v.string()),
+
+    // How the customer originated this payment. Drives the reauth UX:
+    // 'card' = saved Stripe PaymentMethod on the customer (silent server-
+    // side reauth possible). 'apple_pay'/'google_pay' = one-time wallet
+    // token (reauth requires re-prompting the user via PlatformPay).
+    payment_origin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
 
     // Invoice PDF (generated server-side after capture). Identical layout to
     // the email attachment, stored once in Convex file storage and reused for

@@ -2381,8 +2381,9 @@ export default defineSchema({
     // converging on a diagnostic form or direct service. chat.ts increments
     // when Haiku stays in narrowing mode (last_user_intent starts with
     // "symptom_narrowing") without rendering the form; resets when the form
-    // fires. At 6 the envelope emits a `<polite_exit_required>` block and
-    // the prompt rule forces Haiku to render the diagnostic form with not_sure.
+    // fires. At the envelope's POLITE_EXIT_THRESHOLD (4 — lowered from 6 on
+    // beta feedback) it emits a `<polite_exit_required>` block and the prompt
+    // rule forces Haiku to render the diagnostic form with not_sure.
     // -----------------------------------------------------------------------
     diagnostic_turn_count: v.optional(v.number()),
     // -----------------------------------------------------------------------

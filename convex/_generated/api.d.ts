@@ -138,6 +138,7 @@ import type * as oto_migrations_evalTenantsSeed from "../oto/migrations/evalTena
 import type * as oto_migrations_vehicleFactsReconciliation from "../oto/migrations/vehicleFactsReconciliation.js";
 import type * as oto_migrations_verifiedFactsSeed from "../oto/migrations/verifiedFactsSeed.js";
 import type * as oto_migrations_wave3Backfill from "../oto/migrations/wave3Backfill.js";
+import type * as oto_moodMap from "../oto/moodMap.js";
 import type * as oto_promptChangelog from "../oto/promptChangelog.js";
 import type * as oto_prompt_index from "../oto/prompt/index.js";
 import type * as oto_prompt_stable from "../oto/prompt/stable.js";
@@ -439,6 +440,7 @@ declare const fullApi: ApiFromModules<{
   "oto/migrations/vehicleFactsReconciliation": typeof oto_migrations_vehicleFactsReconciliation;
   "oto/migrations/verifiedFactsSeed": typeof oto_migrations_verifiedFactsSeed;
   "oto/migrations/wave3Backfill": typeof oto_migrations_wave3Backfill;
+  "oto/moodMap": typeof oto_moodMap;
   "oto/promptChangelog": typeof oto_promptChangelog;
   "oto/prompt/index": typeof oto_prompt_index;
   "oto/prompt/stable": typeof oto_prompt_stable;

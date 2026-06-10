@@ -66,6 +66,7 @@ import {
   shouldFlagStateSkip,
   type TurnSample,
 } from "./telemetryAssembly";
+import { mapToolMoodToEpisodic } from "./moodMap";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -706,9 +707,10 @@ export async function sendMessageHandlerCore(
     last_user_intent: (conversation as any).last_user_intent ?? null,
     updated_at: (conversation as any).state_updated_at ?? null,
   };
-  // Polite-exit counter snapshot (Locked Principle #6). When >= 6 the
-  // envelope emits a polite_exit_required block and the prompt rule forces
-  // a not_sure diagnostic form on this turn.
+  // Polite-exit counter snapshot (Locked Principle #6). At >= the envelope's
+  // POLITE_EXIT_THRESHOLD (4 — lowered from 6 on beta feedback; see
+  // envelope.ts) it emits a polite_exit_required block and the prompt rule
+  // forces a not_sure diagnostic form on this turn.
   const diagnosticTurnCount = ((conversation as any).diagnostic_turn_count as number | undefined) ?? 0;
 
   // Wave 3 integration step 4 — cross-conversation memory READ path.
@@ -3028,27 +3030,15 @@ function buildCallables(
           }
           const delta: Record<string, unknown> = {};
           if (moodChanged) {
-            // Map the legacy free-string mood to the §2.3 enum. The legacy
-            // mood column on ai_conversations is v.optional(v.string()) —
-            // historically free-form. The §2.3 schema constrains it to a
-            // five-member union. We accept the exact-match values verbatim
-            // and route anything else through "neutral" (the safe default
-            // the seed uses). Logging the unmapped value preserves the
-            // forensic signal.
-            const allowedMoods = new Set([
-              "neutral",
-              "curious",
-              "concerned",
-              "frustrated",
-              "satisfied",
-            ]);
-            if (allowedMoods.has(newMood as string)) {
-              delta.mood = newMood as
-                | "neutral"
-                | "curious"
-                | "concerned"
-                | "frustrated"
-                | "satisfied";
+            // B-P5: map the tool's 7-value mood vocabulary to the §2.3
+            // five-member episodic enum BY VALENCE (moodMap.ts). The old code
+            // accepted only exact matches and flattened the other four tool
+            // moods (calm/worried/hyped/confused) to "neutral", destroying the
+            // signal — worried is really concerned, hyped is satisfied. An
+            // unrecognized value still logs + falls back to neutral.
+            const mapped = mapToolMoodToEpisodic(newMood as string);
+            if (mapped !== null) {
+              delta.mood = mapped;
             } else {
               console.warn(
                 `[oto/chat] commitEpisodic: unmapped mood "${newMood}"; ` +

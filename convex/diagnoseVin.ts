@@ -23,11 +23,71 @@
 // poison-excluded from quotes but still a foot-gun, and they could overwrite a
 // corrected 'sale' row via upsertPartPrice's (part, domain) patch semantics).
 // CLI/dashboard admin usage is unchanged. Read-only queries stay public.
-// Tracked follow-up: retire or route these writers through reextractPartPrice.
+// Jun 10 2026: the 4 price writers now route through writeVerifiedLlmPrice
+// (the same two-tier contract as enrichment Batch-2) — no more poison minting.
 import { internalAction, internalQuery, query } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { reextractPartPrice, isAffirmativeRejection } from "./vehicleEnrichment/priceReextract";
+import { UNVERIFIED_PRICE_TYPE } from "./lib/priceTypes";
+
+/**
+ * Write an LLM web-search price through the SAME two-tier verification
+ * contract as enrichment Batch-2 (Jun-9 review item 9 follow-up):
+ *   - verified against its cited page → trusted 'sale'
+ *   - the page affirmatively testified AGAINST the number → 'unverified'
+ *     (kept for audit, excluded from the customer median)
+ *   - passive failure (no URL / fetch failed / LLM error) → fail-open
+ *     'llm_estimate' — we learned nothing new about the number.
+ * These writers used to stamp poison 'online_discount' rows the aggregator
+ * ignores — self-defeating Claude spend that could also overwrite corrected
+ * 'sale' rows via the (part, domain) upsert.
+ */
+async function writeVerifiedLlmPrice(
+  ctx: { runMutation: (ref: any, args: any) => Promise<any> },
+  args: {
+    part_id: Id<"oem_parts">;
+    price: number;
+    oem: string | null;
+    partName?: string | null;
+    source_url?: string | null;
+    source_domain: string;
+  },
+): Promise<"sale" | "unverified" | "llm_estimate"> {
+  let verified: number | null = null;
+  let affirmativeReject = false;
+  if (args.source_url) {
+    try {
+      const outcome = await reextractPartPrice({
+        oem: args.oem,
+        partName: args.partName ?? null,
+        source_url: args.source_url,
+        crossSourceMedian: null,
+      });
+      if (outcome.status === "sale") {
+        verified = outcome.price;
+      } else if (
+        outcome.status === "unverified" &&
+        isAffirmativeRejection(outcome.reason)
+      ) {
+        affirmativeReject = true;
+      }
+    } catch (e) {
+      console.warn("[diagnoseVin] reextract failed (non-fatal):", e);
+    }
+  }
+  const price_type =
+    verified != null ? "sale" : affirmativeReject ? UNVERIFIED_PRICE_TYPE : "llm_estimate";
+  await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+    part_id: args.part_id,
+    price: verified ?? args.price,
+    price_type,
+    source_url: args.source_url ?? undefined,
+    source_domain: args.source_domain,
+  });
+  return price_type;
+}
 
 /**
  * QA helper — at-a-glance lock state for a VIN. Returns just enough to verify
@@ -487,10 +547,12 @@ Return JSON in this exact shape:
         ? (sourceUrl.match(/^https?:\/\/([^/]+)/i)?.[1] ?? "reprice-action")
         : "reprice-action";
 
-      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+      const partInput0 = partInputs.find(p => p.partNumber === item.part_number);
+      await writeVerifiedLlmPrice(ctx, {
         part_id:       partId as any,
         price:         priceLow,
-        price_type:    "online_discount",
+        oem:           item.part_number ?? null,
+        partName:      (partInput0 as any)?.name ?? null,
         source_url:    sourceUrl,
         source_domain: sourceDomain,
       });
@@ -674,10 +736,11 @@ Return JSON:
     );
 
     if (Number.isFinite(pricePerQt) && pricePerQt > 0) {
-      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+      await writeVerifiedLlmPrice(ctx, {
         part_id:       partId,
         price:         pricePerQt,
-        price_type:    "online_discount",
+        oem:           oemPartNumber,
+        partName:      "Engine Oil",
         source_url:    sourceUrl,
         source_domain: sourceDomain,
       });
@@ -983,10 +1046,11 @@ RULES:
           },
         );
         if (resolved.price_per_qt != null) {
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+          await writeVerifiedLlmPrice(ctx, {
             part_id:       partId,
             price:         resolved.price_per_qt,
-            price_type:    "online_discount",
+            oem:           resolved.oem_part_number,
+            partName:      "Engine Oil",
             source_url:    resolved.source_url ?? undefined,
             source_domain: sourceDomain,
           });
@@ -1296,10 +1360,11 @@ Return JSON:
         const sourceDomain = resolvedSourceUrl
           ? (resolvedSourceUrl.match(/^https?:\/\/([^/]+)/i)?.[1] ?? "price-backfill")
           : "price-backfill";
-        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+        await writeVerifiedLlmPrice(ctx, {
           part_id:       c.part_id,
           price:         resolvedPrice,
-          price_type:    "online_discount",
+          oem:           c.oem_part_number,
+          partName:      c.name,
           source_url:    resolvedSourceUrl ?? undefined,
           source_domain: sourceDomain,
         });

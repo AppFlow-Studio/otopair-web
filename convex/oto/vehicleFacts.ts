@@ -19,6 +19,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { isEvalTestMake } from "./evalTestFilter";
+import { resolveVehicleByIdOrVin } from "./resolveVehicle";
 
 export interface VehicleFactsResponse {
   display: string;
@@ -82,9 +83,9 @@ async function _getVehicleFactsCore(
   userId: Id<"users">,
   { vehicle_id }: { vehicle_id: string },
 ): Promise<VehicleFactsResponse> {
-  const vehicle: Doc<"vehicles"> | null = await ctx.db.get(
-    vehicle_id as Id<"vehicles">,
-  );
+  // B-P3: accept VIN-or-id (the tool descriptions disagree; Haiku passes
+  // either). resolveVehicleByIdOrVin never throws on a bad id.
+  const vehicle = await resolveVehicleByIdOrVin(ctx, vehicle_id);
   if (!vehicle) throw new Error(`vehicle not found: ${vehicle_id}`);
 
   // Authorize: verify the user actually owns this VIN.

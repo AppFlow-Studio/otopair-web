@@ -21,6 +21,7 @@ import { query, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import { isEvalTestMake } from "./evalTestFilter";
+import { resolveVehicleByIdOrVin } from "./resolveVehicle";
 import {
   ALL_MAINTENANCE_TYPES,
   MAINTENANCE_LABELS,
@@ -187,12 +188,11 @@ async function loadVehicleContextForUser(
   vehicleId: string,
 ): Promise<LoadedContext> {
   // The chat envelope's <vehicle> id field is a Convex `vehicles._id` (see
-  // chat.ts buildEnvelope). Resolve it directly with ctx.db.get, then look up
-  // the per-user owner row via the (vin, user_id) index. Querying
-  // `by_vin_user` with the raw _id (the previous behavior) always missed.
-  const vehicle: Doc<"vehicles"> | null = await ctx.db.get(
-    vehicleId as Id<"vehicles">,
-  );
+  // chat.ts buildEnvelope), but B-P3: accept VIN-or-id since the tool
+  // descriptions disagree and Haiku passes either. Then look up the per-user
+  // owner row via the (vin, user_id) index. resolveVehicleByIdOrVin never
+  // throws on a bad id.
+  const vehicle = await resolveVehicleByIdOrVin(ctx, vehicleId);
   if (!vehicle) throw new Error(`vehicle not found: ${vehicleId}`);
 
   const owner: Doc<"vehicle_owners"> | null = await ctx.db

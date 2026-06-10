@@ -20,6 +20,7 @@
 import { internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
+import { resolveVehicleByIdOrVin } from "./resolveVehicle";
 import { getApplicableServices } from "../services/applicability";
 
 export type OtoServiceListing = {
@@ -53,12 +54,10 @@ export const listServicesForUserVehicle = internalQuery({
     if (!vehicle_id) return unfiltered;
 
     // Resolve + ownership-check the vehicle; every failure falls open.
-    let vehicle: Doc<"vehicles"> | null = null;
-    try {
-      vehicle = await ctx.db.get(vehicle_id as Id<"vehicles">);
-    } catch {
-      return unfiltered; // malformed id
-    }
+    // B-P3: accept VIN-or-id — the tool description tells Haiku to pass a VIN,
+    // which the old ctx.db.get(arg as Id) rejected, silently falling open to
+    // the full unfiltered catalog (the applicability filter never ran).
+    const vehicle = await resolveVehicleByIdOrVin(ctx, vehicle_id);
     if (!vehicle?.vehicle_config_id) return unfiltered;
 
     const owner = await ctx.db

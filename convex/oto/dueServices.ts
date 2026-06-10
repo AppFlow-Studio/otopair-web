@@ -19,6 +19,7 @@ import { query, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
+import { resolveVehicleByIdOrVin } from "./resolveVehicle";
 
 export interface OtoDueService {
   service_slug: string | null;
@@ -48,9 +49,9 @@ async function _getDueServicesCore(
   userId: Id<"users">,
   { vehicle_id }: { vehicle_id: string },
 ): Promise<OtoDueService[]> {
-  const vehicle: Doc<"vehicles"> | null = await ctx.db.get(
-    vehicle_id as Id<"vehicles">,
-  );
+  // B-P3: accept VIN-or-id (the tool descriptions disagree on which form;
+  // Haiku passes either). resolveVehicleByIdOrVin never throws on a bad id.
+  const vehicle = await resolveVehicleByIdOrVin(ctx, vehicle_id);
   if (!vehicle) throw new Error(`vehicle not found: ${vehicle_id}`);
 
   const owner: Doc<"vehicle_owners"> | null = await ctx.db

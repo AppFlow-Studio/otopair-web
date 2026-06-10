@@ -37,6 +37,7 @@ import { BLOCKED_DOMAINS } from "./sourceRegistry";
 import { applyApplicabilityRules } from "./applicabilityRules";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
+import { reextractPartPrice } from "./priceReextract";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
 import {
   advancedVinDecode,
@@ -2312,17 +2313,42 @@ export const _pollBatch2V3 = internalAction({
             const partIds = numberToPartIds.get(entry.oem_part_number);
             if (!partIds || partIds.length === 0) continue;
             const sourceDomain = entry.source_domain ?? extractDomain(entry.source_url ?? undefined) ?? "enrichment";
+
+            // FIX AT SOURCE: verify the web-search LLM's price against its own
+            // cited page via the shared two-tier re-extraction (Tier 1 structured
+            // → Tier 2 LLM that excludes MSRP/"was"/"You Save"). When it confirms
+            // a real price we store the verified "sale" value instead of the raw
+            // estimate, so a fresh enrichment never persists a discount/MSRP
+            // figure. Flag-gated because it adds a fetch per itemized part; falls
+            // back to the unverified llm_estimate when off, unreachable, or
+            // neither tier can trust the page.
+            let verified: number | null = null;
+            if (process.env.PARTS_REEXTRACT_BATCH2 === "on" && entry.source_url) {
+              try {
+                const outcome = await reextractPartPrice({
+                  oem: entry.oem_part_number,
+                  partName: (entry as any).part_name ?? null,
+                  source_url: entry.source_url,
+                  crossSourceMedian: null,
+                });
+                if (outcome && outcome.status === "sale") verified = outcome.price;
+              } catch (e) {
+                console.warn("[v8] Batch-2 Tier-2 reextract failed (non-fatal):", e);
+              }
+            }
+
             for (const partId of partIds) {
               // Deterministic JSON-LD price already owns this part — the LLM
               // estimate must not overwrite it or pollute the median.
               if (deterministicallyPriced.has(partId)) continue;
               await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
                 part_id:       partId,
-                price:         entry.price_low,
-                price_type:    "llm_estimate",
+                price:         verified ?? entry.price_low,
+                price_type:    verified != null ? "sale" : "llm_estimate",
                 source_url:    entry.source_url ?? undefined,
                 source_domain: sourceDomain,
               });
+              if (verified != null) deterministicallyPriced.add(partId);
             }
           }
           continue; // breakdown handled this service — don't fall through

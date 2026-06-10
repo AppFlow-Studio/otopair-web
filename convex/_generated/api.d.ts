@@ -80,6 +80,7 @@ import type * as lib_notificationScope from "../lib/notificationScope.js";
 import type * as lib_packageRules from "../lib/packageRules.js";
 import type * as lib_partRoleQuantity from "../lib/partRoleQuantity.js";
 import type * as lib_payment_constants from "../lib/payment_constants.js";
+import type * as lib_priceTypes from "../lib/priceTypes.js";
 import type * as lib_push_dispatcher from "../lib/push_dispatcher.js";
 import type * as lib_quoteEngine from "../lib/quoteEngine.js";
 import type * as lib_robustStats from "../lib/robustStats.js";
@@ -254,6 +255,7 @@ import type * as vehicleEnrichment_pipelineBatch from "../vehicleEnrichment/pipe
 import type * as vehicleEnrichment_pipelineTest from "../vehicleEnrichment/pipelineTest.js";
 import type * as vehicleEnrichment_priceParser from "../vehicleEnrichment/priceParser.js";
 import type * as vehicleEnrichment_pricePilot from "../vehicleEnrichment/pricePilot.js";
+import type * as vehicleEnrichment_priceReextract from "../vehicleEnrichment/priceReextract.js";
 import type * as vehicleEnrichment_prompts_batch1Prompt from "../vehicleEnrichment/prompts/batch1Prompt.js";
 import type * as vehicleEnrichment_prompts_batch1bPrompt from "../vehicleEnrichment/prompts/batch1bPrompt.js";
 import type * as vehicleEnrichment_prompts_batch2Prompt from "../vehicleEnrichment/prompts/batch2Prompt.js";
@@ -370,6 +372,7 @@ declare const fullApi: ApiFromModules<{
   "lib/packageRules": typeof lib_packageRules;
   "lib/partRoleQuantity": typeof lib_partRoleQuantity;
   "lib/payment_constants": typeof lib_payment_constants;
+  "lib/priceTypes": typeof lib_priceTypes;
   "lib/push_dispatcher": typeof lib_push_dispatcher;
   "lib/quoteEngine": typeof lib_quoteEngine;
   "lib/robustStats": typeof lib_robustStats;
@@ -544,6 +547,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/pipelineTest": typeof vehicleEnrichment_pipelineTest;
   "vehicleEnrichment/priceParser": typeof vehicleEnrichment_priceParser;
   "vehicleEnrichment/pricePilot": typeof vehicleEnrichment_pricePilot;
+  "vehicleEnrichment/priceReextract": typeof vehicleEnrichment_priceReextract;
   "vehicleEnrichment/prompts/batch1Prompt": typeof vehicleEnrichment_prompts_batch1Prompt;
   "vehicleEnrichment/prompts/batch1bPrompt": typeof vehicleEnrichment_prompts_batch1bPrompt;
   "vehicleEnrichment/prompts/batch2Prompt": typeof vehicleEnrichment_prompts_batch2Prompt;

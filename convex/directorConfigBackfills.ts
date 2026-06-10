@@ -18,8 +18,11 @@
 import { v } from "convex/values";
 import { action, internalAction, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { normalizeOemNumber, parsePartPrices } from "./vehicleEnrichment/priceParser";
+import { normalizeOemNumber } from "./vehicleEnrichment/priceParser";
 import { fetchUrlWithHtml } from "./vehicleEnrichment/firecrawl";
+import { reextractPartPrice, structuredPriceFor } from "./vehicleEnrichment/priceReextract";
+import { median } from "./lib/robustStats";
+import { UNVERIFIED_PRICE_TYPE } from "./lib/priceTypes";
 
 // ---------------------------------------------------------------------------
 // Audit-log writer (actions can't use ctx.db — go through a mutation).
@@ -259,10 +262,12 @@ export const _repriceConfigPartsRun = internalAction({
         return;
       }
 
-      // Hydrate each distinct part → its OEM number (the join key for pricing).
+      // Hydrate each distinct part → its OEM number (the join key for pricing)
+      // and a display name (a hint for the Tier-2 LLM extractor).
       const existingParts: Array<{
         part_id: (typeof fitments)[number]["part_id"];
         oem_part_number: string | null;
+        part_name: string | null;
       }> = [];
       for (const partId of partIdById.values()) {
         const part = await ctx.runQuery(
@@ -273,6 +278,7 @@ export const _repriceConfigPartsRun = internalAction({
         existingParts.push({
           part_id: partId,
           oem_part_number: (part as any).oem_part_number ?? null,
+          part_name: (part as any).part_name ?? (part as any).name ?? null,
         });
       }
       if (existingParts.length === 0) {
@@ -280,15 +286,24 @@ export const _repriceConfigPartsRun = internalAction({
         return;
       }
 
-      // (2) Re-read EACH existing price's page and correct it IN PLACE. We do NOT
+      // (2) Re-read EACH existing price's page and correct it IN PLACE via the
+      // shared two-tier re-extraction (Tier 1 structured data → Tier 2 LLM on the
+      // page's own text, domain-agnostic, with median guardrails). We do NOT
       // search for new sources or new parts — for every shop price already on a
-      // part (the buggy "online_discount" figures), we re-fetch that exact page,
-      // run the deterministic parser, and overwrite that row with the real "sale"
-      // price. upsertPartPrice keys by (part_id, source_domain), so passing the
-      // row's OWN domain PATCHES that row in place. Covers every part that has
-      // prices and every shop price on it (coolant, fluids, all of them).
+      // part (the buggy "online_discount" figures) we re-fetch that exact page
+      // and overwrite the row. upsertPartPrice keys by (part_id, source_domain),
+      // so passing the row's OWN domain PATCHES that row in place.
+      //
+      // Per part we do two passes so the Tier-2 outlier guardrail has a reference:
+      //   Pass 1 — fetch each row's page once; collect the Tier-1 structured
+      //            prices to compute a cross-source median for THIS part.
+      //   Pass 2 — run the two-tier helper on each row (reusing the fetched page);
+      //            a verified price is written "sale", and a row neither tier can
+      //            trust is marked "unverified" (kept for audit, excluded from the
+      //            customer-facing median) instead of leaving a known-wrong value.
       let totalPrices = 0;
       let fixed = 0;
+      let markedUnverified = 0;
       for (const part of existingParts) {
         const normOem = part.oem_part_number
           ? normalizeOemNumber(part.oem_part_number)
@@ -297,42 +312,76 @@ export const _repriceConfigPartsRun = internalAction({
           internal.vehicleEnrichment.v3queries.getPricesForPart,
           { partId: part.part_id },
         );
-        for (const row of prices as any[]) {
-          if (!row.source_url || !row.source_domain) continue;
-          totalPrices++;
-          let html: string | null = null;
+        const rows = (prices as any[]).filter(
+          (r) => r.source_url && r.source_domain,
+        );
+        if (rows.length === 0) continue;
+
+        // Pass 1 — fetch once per row; Tier-1 structured prices → cross-source median.
+        const fetched = new Map<string, { markdown: string | null; html: string | null }>();
+        const structured: number[] = [];
+        for (const row of rows) {
+          let page: { markdown: string | null; html: string | null } | null = null;
           try {
-            ({ html } = await fetchUrlWithHtml(row.source_url));
+            page = await fetchUrlWithHtml(row.source_url);
           } catch {
-            continue;
+            page = null;
           }
-          if (!html) continue;
-          const parsed = parsePartPrices(html, row.source_url);
-          // The page WAS this part's product page (the URL was stored for it), so
-          // match the OEM if the page exposes it, else use the single product price.
-          let match = normOem
-            ? parsed.find((p) => p.oem_part_number === normOem)
-            : undefined;
-          if (!match && parsed.length === 1) match = parsed[0];
-          if (!match || !(match.price > 0)) continue;
-          await ctx.runMutation(
-            internal.vehicleEnrichment.v3mutations.upsertPartPrice,
-            {
-              part_id: part.part_id,
-              price: match.price,
-              price_type: "sale",
-              // Row's OWN domain → patches THIS existing entry in place.
-              source_domain: row.source_domain,
-              source_url: row.source_url,
-            },
-          );
-          fixed++;
+          fetched.set(row.source_url, page ?? { markdown: null, html: null });
+          const sp = structuredPriceFor(page?.html ?? null, row.source_url, normOem);
+          if (sp != null) structured.push(sp);
+        }
+        const crossMedian = structured.length > 0 ? median(structured) : null;
+
+        // Pass 2 — two-tier re-extraction per row, reusing the fetched page.
+        for (const row of rows) {
+          totalPrices++;
+          const outcome = await reextractPartPrice({
+            oem: part.oem_part_number,
+            partName: part.part_name,
+            source_url: row.source_url,
+            crossSourceMedian: crossMedian,
+            prefetched: fetched.get(row.source_url) ?? null,
+          });
+          if (!outcome) continue; // transient fetch failure — leave row untouched
+
+          if (outcome.status === "sale") {
+            await ctx.runMutation(
+              internal.vehicleEnrichment.v3mutations.upsertPartPrice,
+              {
+                part_id: part.part_id,
+                price: outcome.price,
+                price_type: "sale",
+                source_domain: row.source_domain, // patches THIS row in place
+                source_url: row.source_url,
+              },
+            );
+            fixed++;
+          } else {
+            // Tier-3: neither tier could verify → mark the row unverified, keeping
+            // its existing price value for audit but dropping it from the median.
+            const existingPrice =
+              typeof row.price === "number" && Number.isFinite(row.price)
+                ? row.price
+                : 0;
+            await ctx.runMutation(
+              internal.vehicleEnrichment.v3mutations.upsertPartPrice,
+              {
+                part_id: part.part_id,
+                price: existingPrice,
+                price_type: UNVERIFIED_PRICE_TYPE,
+                source_domain: row.source_domain,
+                source_url: row.source_url,
+              },
+            );
+            markedUnverified++;
+          }
         }
       }
 
-      // (3) Audit the outcome — how many existing price rows we corrected.
+      // (3) Audit the outcome — corrected vs marked-unverified across all rows.
       await audit(
-        `Reprice parts complete: corrected ${fixed}/${totalPrices} existing prices for ${label}`.trim(),
+        `Reprice parts complete: ${fixed}/${totalPrices} corrected (sale), ${markedUnverified} marked unverified for ${label}`.trim(),
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

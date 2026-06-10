@@ -207,3 +207,108 @@ export function parsePartPrices(html: string, sourceUrl: string): ParsedPartPric
 
   return [...byNumber.values()];
 }
+
+// ===========================================================================
+// Tier-2 LLM fallback — PURE pieces (domain-agnostic, no network).
+//
+// When a page emits NO structured data (so parsePartPrices above returns
+// nothing) we read the page text with an LLM. These three pure functions are
+// the part that makes that safe and testable: the prompt that defeats the
+// original "discount" bug, the response coercion, and the guardrails. The
+// network/LLM orchestration that uses them lives in ./priceReextract.ts.
+// ===========================================================================
+
+export type LlmPriceFields = {
+  /** The price the customer pays now, coerced to a positive number, else null. */
+  price: number | null;
+  /** The list/"was"/MSRP price if the model reported one, else null. */
+  msrp: number | null;
+  /** The OEM/part number the model said the price was for (raw), else null. */
+  oem_seen: string | null;
+};
+
+/**
+ * Build the domain-agnostic Tier-2 price-extraction prompt.
+ *
+ * THIS IS THE CRUX of the parts-price fix: the original ad-hoc backfill prompt
+ * asked for the "best online/discount price", which let the model grab the
+ * MSRP, the struck-through "was" price, or the "You Save $X" figure. This
+ * prompt forbids every one of those traps explicitly and asks ONLY for the
+ * final price the customer pays right now — and makes the model echo the MSRP
+ * and the OEM it saw so `validateLlmPrice` can reject a list-price/wrong-part
+ * grab. No per-domain rules — it works off the page's own text.
+ */
+export function buildLlmPricePrompt(args: {
+  oem: string;
+  partName?: string | null;
+  pageText: string;
+}): { system: string; userPrompt: string } {
+  const system = `You are a parts-pricing extractor. You are given the text of ONE retailer's product page and a target OEM part number. Return ONLY the price the customer actually pays RIGHT NOW for THIS exact part — the final, current sale price after any automatic discount.
+
+Do NOT return any of these:
+- the MSRP, the "list" price, or the "was" price
+- a struck-through / strike-through / line-through price
+- the "You Save $X" amount or any discount / savings figure
+- shipping, tax, core charge, or a price for a DIFFERENT part or quantity
+
+If the page does not clearly sell THIS part, return price null. Never guess.
+
+Reply with VALID JSON only, no markdown fences:
+{"price": <number or null>, "msrp": <number or null — the list/was price if the page shows one>, "oem": "<the OEM/part number this price is for, exactly as shown on the page, or null>"}`;
+
+  const name = args.partName ? ` (${args.partName})` : "";
+  const userPrompt = `Target OEM part number: ${args.oem}${name}
+
+Product page text:
+"""
+${args.pageText}
+"""`;
+
+  return { system, userPrompt };
+}
+
+/** Coerce the model's JSON reply into typed price fields (lenient on strings). */
+export function parseLlmPriceResponse(data: any): LlmPriceFields {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return { price: null, msrp: null, oem_seen: null };
+  }
+  const oemRaw = data.oem ?? data.oem_part_number ?? null;
+  const oem_seen =
+    typeof oemRaw === "string" && oemRaw.trim().length > 0 ? oemRaw : null;
+  return {
+    price: coercePrice(data.price),
+    msrp: coercePrice(data.msrp),
+    oem_seen,
+  };
+}
+
+/**
+ * Guardrails so a hallucinated or mis-grabbed number can never re-poison the
+ * median. A price must be positive; if the model reported an MSRP, the price
+ * must be strictly below it (a price >= MSRP means it grabbed the list price);
+ * if it echoed an OEM, that OEM must match the target; and when a cross-source
+ * median is available the price must fall within [0.3x, 3x] of it.
+ */
+export function validateLlmPrice(args: {
+  price: number | null;
+  msrp?: number | null;
+  oemSeen?: string | null;
+  oem: string;
+  crossSourceMedian?: number | null;
+}): { ok: boolean; reason: string } {
+  const { price, msrp, oemSeen, oem, crossSourceMedian } = args;
+  if (price == null || !(price > 0)) return { ok: false, reason: "no_price" };
+  if (msrp != null && msrp > 0 && price >= msrp) {
+    return { ok: false, reason: "ge_msrp" };
+  }
+  if (oemSeen != null && oemSeen.trim().length > 0) {
+    if (normalizeOemNumber(oemSeen) !== normalizeOemNumber(oem)) {
+      return { ok: false, reason: "oem_mismatch" };
+    }
+  }
+  if (crossSourceMedian != null && crossSourceMedian > 0) {
+    if (price > crossSourceMedian * 3) return { ok: false, reason: "above_median" };
+    if (price < crossSourceMedian * 0.3) return { ok: false, reason: "below_median" };
+  }
+  return { ok: true, reason: "ok" };
+}

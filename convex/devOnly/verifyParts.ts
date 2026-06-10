@@ -39,11 +39,18 @@ export const parts = internalQuery({
       });
     }
     const allPrices = out.flatMap((p) => p.prices);
+    const countOf = (t: string) => allPrices.filter((p) => p.type === t).length;
     return {
       parts: out.length,
       priceRows: allPrices.length,
-      sale: allPrices.filter((p) => p.type === "sale").length,
-      online_discount: allPrices.filter((p) => p.type === "online_discount").length,
+      // Trustworthy (counts toward the customer median):
+      sale: countOf("sale"),
+      llm_estimate: countOf("llm_estimate"),
+      manual_seed: countOf("manual_seed"),
+      // Poison (excluded from the median):
+      online_discount: countOf("online_discount"),
+      you_save: countOf("you_save"),
+      unverified: countOf("unverified"),
       detail: out,
     };
   },

@@ -29,6 +29,7 @@ RULES:
    - Spark plug: a V8 needs 8 plugs, but you return ~$15-25 (price of ONE plug), not $200.
    - Brake pads: OEM pads are sold as one axle SET, so the price is for that ONE set, not front+rear combined.
    - Oil filter / cabin filter / battery: one filter, one battery. Always per OEM part number.
+   REPORT THE PRICE THE CUSTOMER ACTUALLY PAYS NOW — the final/current sale price. NEVER the MSRP, the list/"was" price, a struck-through price, or the "You Save $X" amount.
 2. PREFERRED RESPONSE SHAPE: itemized parts_breakdown — one entry per OEM part number Batch 1 found, with that part's own per-unit price + source URL. Search per SKU ("<part_number> OEM price"), not per service. Multi-part services (oil_change has filter + drain plug gasket + engine oil bottle) MUST itemize — never collapse them into one service-level number.
 3. service-level parts_cost_low / parts_cost_high are now OPTIONAL — set them only as a redundant sanity-check sum. The parts_breakdown[] array is the authoritative source. If you can't itemize, you may omit parts_breakdown and fall back to a per-unit parts_cost_low/high, but prefer itemizing.
 4. Labor rate: $125/hr fixed. Do not search for this.

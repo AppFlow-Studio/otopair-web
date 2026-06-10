@@ -12,6 +12,7 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { median, nonOutlierIndices } from "./lib/robustStats";
+import { isPoisonPriceType } from "./lib/priceTypes";
 
 export type PriceSummary = {
   part_id: Id<"oem_parts">;
@@ -44,15 +45,28 @@ export type PriceSummary = {
 // `median` + `nonOutlierIndices` now live in ./lib/robustStats (shared with
 // labor-time aggregation). Imported above — behavior is unchanged.
 
-export async function summarizePartPrices(
-  ctx: { db: any },
-  partId: Id<"oem_parts">,
-): Promise<PriceSummary> {
-  const rows = await ctx.db
-    .query("part_prices")
-    .withIndex("by_part", (q: any) => q.eq("part_id", partId))
-    .collect();
+/** A part_prices row as far as aggregation cares (loose so callers can pass
+ *  raw docs or test fixtures). */
+export type PriceRowLike = {
+  price?: number | null;
+  price_type?: string | null;
+  source_domain?: string | null;
+  source_url?: string | null;
+  refreshed_at?: number | null;
+};
 
+/**
+ * PURE aggregator — the math half of summarizePartPrices, split out so it can be
+ * unit-tested without a db. It excludes POISON price_types (online_discount /
+ * you_save / unverified — the discount-capture bug and unverifiable rows) so a
+ * wrong figure that's only 20-40% off (and would survive MAD outlier rejection)
+ * can never drive the customer-facing median, average, or low/high band. Every
+ * trustworthy row (sale, llm_estimate, manual_seed, legacy untyped) still counts.
+ */
+export function summarizePriceRows(
+  partId: Id<"oem_parts">,
+  rows: PriceRowLike[],
+): PriceSummary {
   const empty: PriceSummary = {
     part_id: partId,
     sample_size: 0,
@@ -69,15 +83,19 @@ export async function summarizePartPrices(
     most_recent_refreshed_at: null,
     sources_used: [],
   };
-  if (rows.length === 0) return empty;
 
-  const prices: number[] = [];
-  for (const r of rows) {
-    if (typeof r.price === "number" && Number.isFinite(r.price) && r.price > 0) {
-      prices.push(r.price);
-    }
-  }
-  if (prices.length === 0) return empty;
+  // Keep only trustworthy, positive-priced rows. `validRows` and `prices` are
+  // built from the SAME filtered list in the same order, so keepIdx (computed
+  // over `prices`) indexes straight back into `validRows` for source metadata.
+  const validRows = rows.filter(
+    (r) =>
+      !isPoisonPriceType(r.price_type) &&
+      typeof r.price === "number" &&
+      Number.isFinite(r.price) &&
+      (r.price as number) > 0,
+  );
+  if (validRows.length === 0) return empty;
+  const prices = validRows.map((r) => r.price as number);
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
   const keepIdx = nonOutlierIndices(prices);
@@ -99,14 +117,6 @@ export async function summarizePartPrices(
       : kept;
   const trimmed_median = round2(median(trimmed));
 
-  // Map kept indices back to original rows so we can report sources used.
-  // The two arrays are aligned because we built `prices` in row order and
-  // skipped only invalid prices — but the index space is the filtered one.
-  // Rebuild a parallel valid-rows list to recover the source metadata.
-  const validRows = rows.filter(
-    (r: any) =>
-      typeof r.price === "number" && Number.isFinite(r.price) && r.price > 0,
-  );
   const sources_used = keepIdx.map((i) => ({
     price: validRows[i].price as number,
     source_domain: (validRows[i].source_domain as string | undefined) ?? null,
@@ -136,6 +146,17 @@ export async function summarizePartPrices(
     most_recent_refreshed_at,
     sources_used: sources_used.map((s) => ({ ...s, price: round2(s.price) })),
   };
+}
+
+export async function summarizePartPrices(
+  ctx: { db: any },
+  partId: Id<"oem_parts">,
+): Promise<PriceSummary> {
+  const rows = await ctx.db
+    .query("part_prices")
+    .withIndex("by_part", (q: any) => q.eq("part_id", partId))
+    .collect();
+  return summarizePriceRows(partId, rows as PriceRowLike[]);
 }
 
 /**

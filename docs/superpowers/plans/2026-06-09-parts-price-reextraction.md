@@ -2,6 +2,15 @@
 
 > Handoff plan. Branch `waleed-flagship`. Author: prior session (Waleed).
 
+> **✅ IMPLEMENTED & VERIFIED (2026-06-09).** Two-tier `reextractPartPrice`
+> (`priceReextract.ts`) + pure helpers/guardrails (`priceParser.ts`, 11 tests)
+> wired into the reprice action and Batch-2 (`PARTS_REEXTRACT_BATCH2=on`);
+> aggregation excludes poison types (`part_prices.ts`/`lib/priceTypes.ts`).
+> Tier-3 decision = **mark `unverified`** (excluded from median, kept for audit).
+> Live on the Jetta: `online_discount` **16 → 0** (4 → sale, 12 → unverified),
+> sale 19 → 23. Remaining: retire `diagnoseVin`'s 4 legacy `online_discount`
+> writers (dead path, foot-gun). See `SESSION_HANDOFF.md`.
+
 ## The requirement (exact)
 
 Repricing must **correct every part_prices row that was falsely priced** by the

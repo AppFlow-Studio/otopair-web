@@ -40,7 +40,7 @@ describe("devOnly/dataFixes.fixEngineFields", () => {
     expect(audit[0].detail).toContain("EA211 1.5 TSI is belt-driven");
   });
 
-  test("no-op when values already match — no patch, no audit row", async () => {
+  test("matching values: no audit row, but the field is still stamped verified", async () => {
     const t = makeT();
     const engineId = await t.run(async (ctx) =>
       ctx.db.insert("engines", { engine_code: "EA211", timing_system: "belt" }),
@@ -49,11 +49,16 @@ describe("devOnly/dataFixes.fixEngineFields", () => {
     const res = await t.mutation(internal.devOnly.dataFixes.fixEngineFields, {
       engine_id: engineId,
       timing_system: "belt",
-      reason: "already correct",
+      reason: "already correct — stamping verified",
     });
     expect(res).toEqual({ ok: true, changes: 0 });
 
-    const audit = await t.run(async (ctx) => ctx.db.query("audit_log").collect());
-    expect(audit).toHaveLength(0);
+    const { audit, engine } = await t.run(async (ctx) => ({
+      audit: await ctx.db.query("audit_log").collect(),
+      engine: await ctx.db.get(engineId),
+    }));
+    expect(audit).toHaveLength(0); // nothing changed → nothing to audit
+    // ...but the confirmation is recorded so the pipeline can't clobber it.
+    expect(engine!.verified_fields).toEqual(["timing_system"]);
   });
 });

@@ -70,13 +70,22 @@ export const fixEngineFields = internalMutation({
     tryPatch("timing_system", args.timing_system);
     tryPatch("cylinders", args.cylinders);
 
-    if (Object.keys(patch).length === 0) return { ok: true as const, changes: 0 };
-
-    // Stamp the corrected fields as human-verified — the pipeline writer
-    // skips them and the batch field-merge honors them (otherwise the next
-    // re-enrich clobbers the fix, observed live on the Jetta Jun 10).
+    // Stamp every PROVIDED field as human-verified — including ones whose
+    // stored value already matched (confirming a value is itself a
+    // verification). The pipeline writer skips verified keys and the batch
+    // field-merge honors them; without the stamp the next re-enrich clobbers
+    // the fix (observed live on the Jetta, Jun 10).
     const verified = new Set(((engine as any).verified_fields ?? []) as string[]);
-    for (const key of Object.keys(patch)) verified.add(key);
+    const before = verified.size;
+    if (args.timing_system !== undefined) verified.add("timing_system");
+    if (args.cylinders !== undefined) verified.add("cylinders");
+
+    if (Object.keys(patch).length === 0) {
+      if (verified.size > before) {
+        await ctx.db.patch(args.engine_id, { verified_fields: [...verified] } as any);
+      }
+      return { ok: true as const, changes: 0 };
+    }
     (patch as any).verified_fields = [...verified];
 
     await ctx.db.patch(args.engine_id, patch as any);

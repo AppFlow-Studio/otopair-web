@@ -175,8 +175,9 @@ const ConversationTranscript = ({ messages, highlightId }: {
 
 const OtoFBModal = ({ fb, onClose }: { fb: OtoFeedback | undefined; onClose: () => void }) => {
   const session = useContext(DirectorSessionCtx)
-  const actorName = session?.name ?? 'Director'
-  const actorId   = session?.userId as Id<'director_users'> | undefined
+  // Server derives the audit actor from this session token (Jun-10 sweep) —
+  // actorName/actorId args are gone.
+  const token = session?.token ?? ''
   const [auditOpen,   setAuditOpen]   = useState(false)
   const [localStatus, setLocalStatus] = useState(fb?.review_status ?? 'new')
 
@@ -186,7 +187,7 @@ const OtoFBModal = ({ fb, onClose }: { fb: OtoFeedback | undefined; onClose: () 
   const archiveFb    = useMutation(api.ai_feedback.archive)
 
   const detail = useQuery(api.ai_feedback.getConversationForFeedback,
-    fb ? { feedbackId: fb._id } : 'skip')
+    fb ? { feedbackId: fb._id, token } : 'skip')
 
   const rawAudit = useQuery(api.audit_log.listByEntity,
     fb ? { entity_type: 'oto_feedback', entity_id: fb._id } : 'skip')
@@ -198,7 +199,7 @@ const OtoFBModal = ({ fb, onClose }: { fb: OtoFeedback | undefined; onClose: () 
 
   const handleSave = async () => {
     if (!fb) return
-    await updateStatus({ id: fb._id, status: localStatus, actorName, actorId })
+    await updateStatus({ id: fb._id, status: localStatus, token })
     onClose()
   }
 
@@ -332,7 +333,7 @@ const OtoFBModal = ({ fb, onClose }: { fb: OtoFeedback | undefined; onClose: () 
 
               <div style={{ borderTop:'1px solid var(--slate-200)', paddingTop:14, marginTop:4 }}>
                 <Button variant={fb.archived ? 'secondary' : 'danger'} style={{ width:'100%' }}
-                  onClick={async () => { await archiveFb({ id: fb._id, archived: !fb.archived, actorName, actorId }); onClose() }}>
+                  onClick={async () => { await archiveFb({ id: fb._id, archived: !fb.archived, token }); onClose() }}>
                   {fb.archived ? 'Restore from archive' : 'Archive feedback'}
                 </Button>
               </div>
@@ -346,8 +347,7 @@ const OtoFBModal = ({ fb, onClose }: { fb: OtoFeedback | undefined; onClose: () 
 
 export const TabOtoFeedback = () => {
   const session = useContext(DirectorSessionCtx)
-  const actorName = session?.name ?? 'Director'
-  const actorId   = session?.userId as Id<'director_users'> | undefined
+  const token = session?.token ?? ''
 
   const [expandedId,    setExpandedId]    = useState<string | null>(null)
   const [searchQ,       setSearchQ]       = useState('')
@@ -361,7 +361,7 @@ export const TabOtoFeedback = () => {
     if (goto) setExpandedId(goto.entityId)
   }, [])
 
-  const grouped      = useQuery(api.ai_feedback.listByStatus, { includeArchived: viewMode === 'archived' })
+  const grouped      = useQuery(api.ai_feedback.listByStatus, { token, includeArchived: viewMode === 'archived' })
   const updateStatus = useMutation(api.ai_feedback.updateStatus)
 
   const allFb: OtoFeedback[] = grouped ? (Object.values(grouped).flat() as OtoFeedback[]) : []
@@ -388,7 +388,7 @@ export const TabOtoFeedback = () => {
     if (!draggingId) return
     const fb = allFb.find(f => f._id === draggingId)
     if (fb && fb.review_status !== targetColId) {
-      updateStatus({ id: fb._id, status: targetColId, actorName, actorId })
+      updateStatus({ id: fb._id, status: targetColId, token })
     }
     setDraggingId(null)
     setDragOverCol(null)

@@ -122,6 +122,7 @@ import type * as oto_applicableServices from "../oto/applicableServices.js";
 import type * as oto_bookings from "../oto/bookings.js";
 import type * as oto_canonicalize from "../oto/canonicalize.js";
 import type * as oto_chat from "../oto/chat.js";
+import type * as oto_directorConversations from "../oto/directorConversations.js";
 import type * as oto_dispatcher from "../oto/dispatcher.js";
 import type * as oto_dueServices from "../oto/dueServices.js";
 import type * as oto_envelope from "../oto/envelope.js";
@@ -421,6 +422,7 @@ declare const fullApi: ApiFromModules<{
   "oto/bookings": typeof oto_bookings;
   "oto/canonicalize": typeof oto_canonicalize;
   "oto/chat": typeof oto_chat;
+  "oto/directorConversations": typeof oto_directorConversations;
   "oto/dispatcher": typeof oto_dispatcher;
   "oto/dueServices": typeof oto_dueServices;
   "oto/envelope": typeof oto_envelope;

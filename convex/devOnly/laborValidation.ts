@@ -32,12 +32,31 @@ export const report = internalQuery({
       if (!["complete", "verified", "partial"].includes(cfg.enrichment_status ?? "")) continue;
       if (String(cfg.config_key ?? "").includes("evaltest")) continue;
 
+      // Applicability basis: timing_belt on a chain engine is NOT a labor gap
+      // (RepairPal correctly has no page) — mirror the coverage inspector.
+      const engine = cfg.engine_id ? ((await ctx.db.get(cfg.engine_id)) as any) : null;
+      const timingSystem = engine?.timing_system ?? null;
+
       const rows: any[] = [];
       let mappedQuoteGrade = 0;
       let mappedTotal = 0;
       for (const [slug, sc] of Object.entries(LABOR_SERVICE_CONFIG)) {
         const svc = serviceBySlug.get(slug);
         if (!svc) continue;
+        if (slug === "timing_belt" && timingSystem != null && timingSystem !== "belt") {
+          rows.push({
+            slug,
+            mapped: !!sc.repairpal_slug,
+            hours: null,
+            source: null,
+            confidence: null,
+            observations: 0,
+            repairpal_observations: 0,
+            quote_grade: false,
+            reason: `not applicable (timing_system=${timingSystem})`,
+          });
+          continue; // excluded from mapped_total — can't count against data-good
+        }
         const lt = await ctx.db
           .query("labor_times")
           .withIndex("by_vehicle_config_and_service", (q: any) =>
@@ -83,6 +102,7 @@ export const report = internalQuery({
       out.push({
         config_key: cfg.config_key,
         enrichment_status: cfg.enrichment_status,
+        timing_system: timingSystem,
         mapped_quote_grade: mappedQuoteGrade,
         mapped_total: mappedTotal,
         labor_data_good: mappedTotal > 0 && mappedQuoteGrade === mappedTotal,

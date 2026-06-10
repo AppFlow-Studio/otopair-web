@@ -19,7 +19,7 @@ const MAPPED_SLUGS = Object.entries(LABOR_SERVICE_CONFIG)
 
 async function seedConfigWithLabor(
   t: ReturnType<typeof makeT>,
-  opts: { allGood: boolean },
+  opts: { allGood: boolean; timingSystem?: string; skipSlugs?: string[] },
 ) {
   return await t.run(async (ctx) => {
     const now = Date.now();
@@ -28,14 +28,29 @@ async function seedConfigWithLabor(
       make_id: makeId,
       name: "Testmodel",
     });
+    const engineId = await ctx.db.insert("engines", {
+      engine_code: "TESTENG",
+      ...(opts.timingSystem ? { timing_system: opts.timingSystem } : {}),
+    });
     const configId = await ctx.db.insert("vehicle_configs", {
       config_key: "2020_testmake_testmodel_base_x1",
       year: 2020,
       make_id: makeId,
       model_id: modelId,
+      engine_id: engineId,
       enrichment_status: "complete",
     });
     for (const [i, slug] of MAPPED_SLUGS.entries()) {
+      if (opts.skipSlugs?.includes(slug)) {
+        // services row still exists — only the labor data is absent.
+        await ctx.db.insert("services", {
+          name: slug,
+          slug,
+          default_labor_hours: 1,
+          created_at: now,
+        } as any);
+        continue;
+      }
       const serviceId = await ctx.db.insert("services", {
         name: slug,
         slug,
@@ -91,5 +106,22 @@ describe("devOnly/laborValidation report", () => {
     const weak = report[0].services.find((s: any) => !s.quote_grade);
     expect(weak).toBeDefined();
     expect(weak.reason).toContain("clone");
+  });
+
+  test("timing_belt missing on a CHAIN engine doesn't count against data-good", async () => {
+    const t = makeT();
+    // Chain car: no timing_belt labor anywhere (RepairPal correctly has no
+    // page) — the service is not applicable, so the rollup must skip it.
+    await seedConfigWithLabor(t, {
+      allGood: true,
+      timingSystem: "chain",
+      skipSlugs: ["timing_belt"],
+    });
+
+    const report = await t.query(internal.devOnly.laborValidation.report, {});
+    expect(report[0].mapped_total).toBe(MAPPED_SLUGS.length - 1);
+    expect(report[0].labor_data_good).toBe(true);
+    const tb = report[0].services.find((s: any) => s.slug === "timing_belt");
+    expect(tb.reason).toContain("not applicable");
   });
 });

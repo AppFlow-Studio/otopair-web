@@ -145,7 +145,7 @@ async function searchPartsPages(
   // Check cache first
   const cached = await ctx.runQuery(
     internal.vehicleEnrichment.scraperQueries.getCachedScrape,
-    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, sourceType: "parts_catalog" },
+    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: vehicle.trim ?? "", sourceType: "parts_catalog" },
   );
   // Only a CURRENT-format row is a price-complete hit — older markdown-only rows
   // re-fetch so the open-web price path benefits from the format bump too.
@@ -228,6 +228,7 @@ async function searchPartsPages(
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleYear: vehicle.year,
+      vehicleTrim: vehicle.trim ?? "",
       sourceType: "parts_catalog",
       expiresAt: now + TTL_PARTS_MS,
       partPricesJson: JSON.stringify(allPartPrices),
@@ -251,7 +252,7 @@ async function scrapePartsPages(
   // re-fetch raw HTML and parse JSON-LD prices.
   const cached = await ctx.runQuery(
     internal.vehicleEnrichment.scraperQueries.getCachedScrape,
-    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, sourceType: "parts_catalog" },
+    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: vehicle.trim ?? "", sourceType: "parts_catalog" },
   );
   if (cached && cached.format_version === CACHE_FORMAT_VERSION) {
     let cachedPrices: ParsedPartPrice[] = [];
@@ -347,6 +348,7 @@ async function scrapePartsPages(
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleYear: vehicle.year,
+      vehicleTrim: vehicle.trim ?? "",
       sourceType: "parts_catalog",
       expiresAt: now + TTL_PARTS_MS,
       partPricesJson: JSON.stringify(allPartPrices),
@@ -365,7 +367,7 @@ async function scrapeManual(
 ): Promise<{ markdown: string; urls: string[] }> {
   const cached = await ctx.runQuery(
     internal.vehicleEnrichment.scraperQueries.getCachedScrape,
-    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, sourceType: "owner_manual" },
+    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: vehicle.trim ?? "", sourceType: "owner_manual" },
   );
   if (cached) {
     console.log(`[scraper] Cache hit: owner_manual for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
@@ -407,6 +409,7 @@ async function scrapeManual(
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleYear: vehicle.year,
+      vehicleTrim: vehicle.trim ?? "",
       sourceType: "owner_manual",
       expiresAt: now + TTL_PARTS_MS,
     });

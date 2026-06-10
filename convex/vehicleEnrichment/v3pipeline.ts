@@ -2081,6 +2081,7 @@ export const _pollBatch2V3 = internalAction({
             vehicleMake: args.make,
             vehicleModel: args.model,
             vehicleYear: args.year,
+            vehicleTrim: args.trim ?? "",
             sourceType: "parts_catalog",
           },
         );

@@ -34,6 +34,7 @@ import type * as crons from "../crons.js";
 import type * as devOnly_auditConfigs from "../devOnly/auditConfigs.js";
 import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
 import type * as devOnly_dedupeConfig from "../devOnly/dedupeConfig.js";
+import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
 import type * as devOnly_partsCoverage from "../devOnly/partsCoverage.js";
 import type * as devOnly_validateQuoteEngine from "../devOnly/validateQuoteEngine.js";
 import type * as devOnly_verifyLabor from "../devOnly/verifyLabor.js";
@@ -329,6 +330,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/auditConfigs": typeof devOnly_auditConfigs;
   "devOnly/dataFixes": typeof devOnly_dataFixes;
   "devOnly/dedupeConfig": typeof devOnly_dedupeConfig;
+  "devOnly/laborValidation": typeof devOnly_laborValidation;
   "devOnly/partsCoverage": typeof devOnly_partsCoverage;
   "devOnly/validateQuoteEngine": typeof devOnly_validateQuoteEngine;
   "devOnly/verifyLabor": typeof devOnly_verifyLabor;

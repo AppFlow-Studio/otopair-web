@@ -201,23 +201,66 @@ function toTier2FactRow(
 // O(log n) on `by_canonical_question`. The caller (cascadeTier2) computes
 // the hash; this query only knows the key.
 
+/** Vehicle identity a fact can be scoped against. (config id compared as an
+ *  opaque string — the query-arg validator enforces the real Id type.) */
+type VehicleScope = {
+  vehicle_config_id?: string | null;
+  chassis_code?: string | null;
+  engine_code?: string | null;
+};
+
+/**
+ * B-P2: does a hash-matched fact actually belong to THIS vehicle? The
+ * canonical_question_key is just sha256(normalize(question)) — no vehicle
+ * identity — so without this gate a fact recorded for one car is served to
+ * any car asking the same question. A fact matches if it shares the current
+ * vehicle's config, chassis, OR engine. Conservative by construction: a fact
+ * that matches on none of those three is treated as a different car's and
+ * dropped (we'd rather miss a hash hit and fall through to STRUCT/TEXT/web
+ * than serve the wrong car's number). Pure.
+ */
+export function factMatchesVehicleScope(
+  fact: { vehicle_config_id?: unknown; chassis_code?: unknown; engine_code?: unknown },
+  scope: VehicleScope,
+): boolean {
+  if (scope.vehicle_config_id && fact.vehicle_config_id === scope.vehicle_config_id) {
+    return true;
+  }
+  if (scope.chassis_code && fact.chassis_code === scope.chassis_code) return true;
+  if (scope.engine_code && fact.engine_code === scope.engine_code) return true;
+  return false;
+}
+
 export const lookupFactsByCanonicalHash = internalQuery({
   args: {
     canonical_question_key: v.string(),
     limit: v.optional(v.number()),
+    // B-P2 vehicle scoping: when ANY of these is provided, a hash hit is
+    // returned only if it belongs to this vehicle (factMatchesVehicleScope).
+    // Omit all three to preserve the legacy unscoped read.
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    chassis_code: v.optional(v.string()),
+    engine_code: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<Tier2FactRow[]> => {
     const cap = Math.min(20, args.limit ?? 5);
+    const scoped = !!(
+      args.vehicle_config_id || args.chassis_code || args.engine_code
+    );
+    // Over-fetch to absorb retracted-row attrition AND (when scoping) other
+    // cars' rows sharing this canonical key, so the current car's fact isn't
+    // capped out before the vehicle filter runs. A point-key read stays cheap.
     const rows = await ctx.db
       .query("vehicle_facts")
       .withIndex("by_canonical_question", (q: any) =>
         q.eq("canonical_question_key", args.canonical_question_key),
       )
-      .take(cap * 4); // Over-fetch to absorb retracted-row attrition.
+      .take(scoped ? 200 : cap * 4);
 
     const out: Tier2FactRow[] = [];
     for (const r of rows) {
       if ((r.verification_status ?? "unverified") === "retracted") continue;
+      if (scoped && !factMatchesVehicleScope(r, args)) continue;
       out.push(toTier2FactRow(r, "hash"));
       if (out.length >= cap) break;
     }
@@ -376,7 +419,17 @@ export const cascadeTier2 = internalAction({
     const key = await canonicalQuestionKey(args.question_text);
     const hashHits: Tier2FactRow[] = await ctx.runQuery(
       internal.oto.vehicleFactsKB.lookupFactsByCanonicalHash,
-      { canonical_question_key: key, limit },
+      {
+        canonical_question_key: key,
+        limit,
+        // B-P2: scope the hash hit to THIS vehicle so one car's fact isn't
+        // served to another car's owner asking the same question.
+        ...(args.vehicle_config_id !== undefined
+          ? { vehicle_config_id: args.vehicle_config_id }
+          : {}),
+        ...(args.chassis_code !== undefined ? { chassis_code: args.chassis_code } : {}),
+        ...(args.engine_code !== undefined ? { engine_code: args.engine_code } : {}),
+      },
     );
     if (hashHits.length > 0) {
       return { tier: "T2_HASH", facts: hashHits };

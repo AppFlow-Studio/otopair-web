@@ -107,6 +107,10 @@
 - **Mechanism shipped (`engines.verified_fields`):** human writers (director `updateEngineFields`, `devOnly/dataFixes:fixEngineFields`) stamp every field they set (idempotently — confirming an already-correct value stamps too); the pipeline writer skips verified keys; `_pollBatch1V3` overrides extracted fields with verified values BEFORE applicability (`applyVerifiedEngineFields`, source_type `director_verified`, conf 1.0). TDD: `tests/verifiedEngineFields.test.ts` (5).
 - All five Jun-10 engine corrections re-stamped as verified; Jetta S re-enriched a second time under the protection (in flight at session end).
 
+**🟢 DONE (Jun 10 session 3) — director-panel live verification (token from Waleed):**
+- All three backfill buttons + Mark verified clicked live via the Playwright harness: **Reprice** (scheduled + "19/20 corrected" audit rows ~8s apart), **Re-enrich** (Civic — completed END-TO-END from the UI: run `complete`, fill 84%, coverage 24/25), **Backfill parts** (750i — complete, 25/25 held), **Mark verified** (count → 1). Every audit row attributes to "Waleed Mansour" **derived from the session server-side** — the token gates working exactly as designed.
+- New harness scripts (gitignored): `.agent/pw/mark-verified.mjs`, `.agent/pw/backfill-buttons.mjs` (accepts the confirm dialogs). Note: the panel toast auto-dismisses faster than the script screenshots — verify via the audit log, not the toast.
+
 **🟡 STILL OPEN (next session):**
 0. ~~Retire/rewrite `diagnoseVin.ts`'s 4 `online_discount` writers~~ ✅ DONE (Jun 10 session 3, see above) (lines ~493/680/989/1302) — now `internalAction` (no longer anonymously reachable) but still a foot-gun for a deliberate admin run: could overwrite corrected `sale` rows back to poison, and they spend Claude calls writing rows the aggregator ignores. Route through `reextractPartPrice` or delete. Low priority.
 0b. **Token-gate sweep for `directorConfigActions.ts`** — markVerified/updateConfigBasics/updateEngineFields/etc. still follow the old trusted-actor convention (public mutations, no server-side session check). Mirror the `requireDirector` pattern from `directorConfigBackfills.ts`.

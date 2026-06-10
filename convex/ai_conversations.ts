@@ -1,7 +1,57 @@
-import { query, mutation } from "./_generated/server";
+// =============================================================================
+// ai_conversations — one row per Oto chat.
+//
+// Jun-10 IDOR sweep. Two access tiers:
+//   - PUBLIC, owner-gated (the mobile surface): getByUserId, getBySessionId,
+//     create, setVehicleId, appendEstablishedFact, linkBooking, end.
+//     Identity always derives from ctx.auth; id args are ownership-checked.
+//   - INTERNAL (server plumbing — chat.ts tool dispatch + the director sim):
+//     getById, createForUser, updateState, setCurrentModel,
+//     setDiagnosticTurnCount, updateScenario, incrementMessageCount.
+//     These are called via ctx.runMutation from the chat action, which has
+//     already ownership-checked the conversation. They must NOT read
+//     ctx.auth: runMutation does not inherit the director sim's proxied
+//     identity, so the old auth checks threw "unauthenticated" on every sim
+//     turn and sim state never persisted.
+// =============================================================================
+import {
+  query,
+  mutation,
+  internalQuery,
+  internalMutation,
+} from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
+import type { Doc, Id } from "./_generated/dataModel";
 
-export const getById = query({
+/** Resolve the authed caller's users row, or throw. */
+async function requireUser(ctx: QueryCtx | MutationCtx): Promise<Doc<"users">> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("unauthenticated");
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+    .unique();
+  if (!user) throw new Error("user not found");
+  return user;
+}
+
+/** Resolve the authed caller and throw unless they own the conversation. */
+async function requireConversationOwner(
+  ctx: QueryCtx | MutationCtx,
+  conversationId: Id<"ai_conversations">,
+): Promise<{ user: Doc<"users">; convo: Doc<"ai_conversations"> }> {
+  const user = await requireUser(ctx);
+  const convo = await ctx.db.get(conversationId);
+  if (!convo) throw new Error("conversation not found");
+  if (convo.user_id !== user._id) throw new Error("not authorized");
+  return { user, convo };
+}
+
+// internalQuery: returns the full doc (established_facts, mood, arc — user
+// PII) for an arbitrary id. chat.ts ownership-checks after loading; the sim
+// reads back its own conversation.
+export const getById = internalQuery({
   args: { id: v.id("ai_conversations") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.id);
@@ -11,10 +61,14 @@ export const getById = query({
 export const getBySessionId = query({
   args: { sessionId: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const user = await requireUser(ctx);
+    const convo = await ctx.db
       .query("ai_conversations")
       .withIndex("by_session_id", (q) => q.eq("session_id", args.sessionId))
       .unique();
+    if (!convo) return null;
+    if (convo.user_id !== user._id) throw new Error("not authorized");
+    return convo;
   },
 });
 
@@ -40,19 +94,48 @@ export const getByUserId = query({
 
 export const create = mutation({
   args: {
-    user_id: v.id("users"),
+    // Back-compat: the mobile client passes its own user_id. It is verified
+    // against the session identity, never trusted — a mismatch throws.
+    user_id: v.optional(v.id("users")),
     session_id: v.string(),
     scenario_detected: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const user = await requireUser(ctx);
+    if (args.user_id !== undefined && args.user_id !== user._id) {
+      throw new Error("not authorized: user_id does not match session");
+    }
     const conversationId = await ctx.db.insert("ai_conversations", {
-      ...args,
+      user_id: user._id,
+      session_id: args.session_id,
+      ...(args.scenario_detected !== undefined
+        ? { scenario_detected: args.scenario_detected }
+        : {}),
       started_at: Date.now(),
       led_to_booking: false,
       message_count: 0,
     });
 
     return conversationId;
+  },
+});
+
+// internalMutation: the director sim bootstraps a conversation for the
+// impersonated user (no Clerk identity in that context; the sim action is
+// director-token-gated upstream).
+export const createForUser = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    session_id: v.string(),
+    scenario_detected: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("ai_conversations", {
+      ...args,
+      started_at: Date.now(),
+      led_to_booking: false,
+      message_count: 0,
+    });
   },
 });
 
@@ -75,17 +158,7 @@ export const setVehicleId = mutation({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("unauthenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-    if (!user) throw new Error("user not found");
-
-    const convo = await ctx.db.get(args.conversationId);
-    if (!convo) throw new Error("conversation not found");
-    if (convo.user_id !== user._id) throw new Error("not authorized");
+    const { convo } = await requireConversationOwner(ctx, args.conversationId);
 
     // Idempotent — anchor locks at first write. Don't rebind mid-lifetime.
     if ((convo as Record<string, unknown>).vehicle_id) {
@@ -108,7 +181,7 @@ export const setVehicleId = mutation({
  * current list each call — the prompt enforces this so we don't merge
  * deltas server-side).
  */
-export const updateState = mutation({
+export const updateState = internalMutation({
   args: {
     id: v.id("ai_conversations"),
     mood: v.optional(v.string()),
@@ -117,17 +190,8 @@ export const updateState = mutation({
     last_user_intent: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("unauthenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-    if (!user) throw new Error("user not found");
-
     const convo = await ctx.db.get(args.id);
     if (!convo) throw new Error("conversation not found");
-    if (convo.user_id !== user._id) throw new Error("not authorized");
 
     const patch: Record<string, unknown> = { state_updated_at: Date.now() };
     if (args.mood !== undefined) patch.mood = args.mood;
@@ -146,7 +210,7 @@ export const updateState = mutation({
  * cleared via Sonnet's request_haiku_handback tool. The cascade calibrates
  * against TestFlight data — target firing rate 15-25% of diagnostic turns.
  */
-export const setCurrentModel = mutation({
+export const setCurrentModel = internalMutation({
   args: {
     id: v.id("ai_conversations"),
     model: v.union(
@@ -156,16 +220,8 @@ export const setCurrentModel = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("unauthenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-    if (!user) throw new Error("user not found");
     const convo = await ctx.db.get(args.id);
     if (!convo) throw new Error("conversation not found");
-    if (convo.user_id !== user._id) throw new Error("not authorized");
     await ctx.db.patch(args.id, {
       current_model: args.model ?? undefined,
       state_updated_at: Date.now(),
@@ -195,16 +251,7 @@ export const appendEstablishedFact = mutation({
     fact: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("unauthenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-    if (!user) throw new Error("user not found");
-    const convo = await ctx.db.get(args.id);
-    if (!convo) throw new Error("conversation not found");
-    if (convo.user_id !== user._id) throw new Error("not authorized");
+    const { convo } = await requireConversationOwner(ctx, args.id);
     const cur = (convo as any).established_facts as string[] | undefined;
     const next = Array.isArray(cur) ? [...cur] : [];
     next.push(args.fact);
@@ -220,30 +267,24 @@ export const appendEstablishedFact = mutation({
 /**
  * setDiagnosticTurnCount — chat.ts uses this to bump or reset the
  * polite-exit counter (Locked Principle #6). The counter is server-managed,
- * NOT a Haiku-controlled state field, so Haiku can't game it.
+ * NOT a Haiku-controlled state field, so Haiku can't game it — which is
+ * also why it is internal: as a public mutation the conversation owner
+ * could game the counter from outside the chat loop.
  */
-export const setDiagnosticTurnCount = mutation({
+export const setDiagnosticTurnCount = internalMutation({
   args: {
     id: v.id("ai_conversations"),
     count: v.number(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("unauthenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
-      .unique();
-    if (!user) throw new Error("user not found");
     const convo = await ctx.db.get(args.id);
     if (!convo) throw new Error("conversation not found");
-    if (convo.user_id !== user._id) throw new Error("not authorized");
     await ctx.db.patch(args.id, { diagnostic_turn_count: Math.max(0, args.count) });
     return { ok: true };
   },
 });
 
-export const updateScenario = mutation({
+export const updateScenario = internalMutation({
   args: {
     id: v.id("ai_conversations"),
     scenario_detected: v.string(),
@@ -257,7 +298,7 @@ export const updateScenario = mutation({
   },
 });
 
-export const incrementMessageCount = mutation({
+export const incrementMessageCount = internalMutation({
   args: {
     id: v.id("ai_conversations"),
   },
@@ -281,6 +322,12 @@ export const linkBooking = mutation({
     booking_id: v.id("bookings"),
   },
   handler: async (ctx, args) => {
+    const { user } = await requireConversationOwner(ctx, args.id);
+    const booking = await ctx.db.get(args.booking_id);
+    if (!booking) throw new Error("booking not found");
+    if (booking.user_id !== user._id) {
+      throw new Error("not authorized: booking belongs to another user");
+    }
     await ctx.db.patch(args.id, {
       booking_id: args.booking_id,
       led_to_booking: true,
@@ -295,6 +342,7 @@ export const end = mutation({
     id: v.id("ai_conversations"),
   },
   handler: async (ctx, args) => {
+    await requireConversationOwner(ctx, args.id);
     await ctx.db.patch(args.id, {
       ended_at: Date.now(),
     });

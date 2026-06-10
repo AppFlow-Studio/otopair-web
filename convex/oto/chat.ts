@@ -510,14 +510,14 @@ export async function sendMessageHandlerCore(
 
   // ── 2. Load conversation + history, scoped by ownership ──────────────
   const conversation: Doc<"ai_conversations"> | null = await ctx.runQuery(
-    api.ai_conversations.getById,
+    internal.ai_conversations.getById,
     { id: conversationId },
   );
   if (!conversation) throw new Error("conversation not found");
   if (conversation.user_id !== user._id) throw new Error("not authorized");
 
   const allMessages: Array<Doc<"ai_messages">> = await ctx.runQuery(
-    api.ai_messages.getByConversationId,
+    internal.ai_messages.getByConversationIdInternal,
     { conversationId },
   );
   const sortedMessages = [...allMessages].sort((a, b) => a.timestamp - b.timestamp);
@@ -1334,21 +1334,21 @@ export async function sendMessageHandlerCore(
   // doesn't pollute the user's real conversation history.
   const skipPersist = debug === true && debug_skip_persist === true;
   if (!skipPersist) {
-    await ctx.runMutation(api.ai_messages.create, {
+    await ctx.runMutation(internal.ai_messages.create, {
       conversation_id: conversationId,
       role: "user",
       content: message,
     });
-    await ctx.runMutation(api.ai_messages.create, {
+    await ctx.runMutation(internal.ai_messages.create, {
       conversation_id: conversationId,
       role: "assistant",
       content: finalText,
     });
 
-    await ctx.runMutation(api.ai_conversations.incrementMessageCount, {
+    await ctx.runMutation(internal.ai_conversations.incrementMessageCount, {
       id: conversationId,
     });
-    await ctx.runMutation(api.ai_conversations.incrementMessageCount, {
+    await ctx.runMutation(internal.ai_conversations.incrementMessageCount, {
       id: conversationId,
     });
 
@@ -1600,7 +1600,7 @@ export async function sendMessageHandlerCore(
       if (renderedBooking) {
         nextCount = 0;
       } else {
-        const fresh = await ctx.runQuery(api.ai_conversations.getById, {
+        const fresh = await ctx.runQuery(internal.ai_conversations.getById, {
           id: conversationId,
         });
         const latestIntent = (fresh as any)?.last_user_intent as string | undefined;
@@ -1629,7 +1629,7 @@ export async function sendMessageHandlerCore(
         // failed-narrowing turn).
       }
       if (nextCount !== null) {
-        await ctx.runMutation(api.ai_conversations.setDiagnosticTurnCount, {
+        await ctx.runMutation(internal.ai_conversations.setDiagnosticTurnCount, {
           id: conversationId,
           count: nextCount,
         });
@@ -2734,7 +2734,7 @@ function buildCallables(
         | string
         | undefined;
       if (typeof intent === "string") args.last_user_intent = intent;
-      await ctx.runMutation(api.ai_conversations.updateState, args);
+      await ctx.runMutation(internal.ai_conversations.updateState, args);
 
       // ── Wave 3 mirror: diff new vs previous, append new facts as
       // typed conversation_facts rows. ──────────────────────────────────
@@ -2983,7 +2983,7 @@ function buildCallables(
       // loop knows the handoff didn't take + skip the mirror to avoid
       // canonical/mirror drift; user-facing turn continues normally.
       try {
-        await ctx.runMutation(api.ai_conversations.setCurrentModel, {
+        await ctx.runMutation(internal.ai_conversations.setCurrentModel, {
           id: conversationId,
           model: "sonnet",
         });
@@ -3078,7 +3078,7 @@ function buildCallables(
       // Convex hiccups so the chat turn continues; ok:false signals to the
       // model loop that the handback didn't take.
       try {
-        await ctx.runMutation(api.ai_conversations.setCurrentModel, {
+        await ctx.runMutation(internal.ai_conversations.setCurrentModel, {
           id: conversationId,
           model: "haiku",
         });

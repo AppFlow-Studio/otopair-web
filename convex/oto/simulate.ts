@@ -92,7 +92,7 @@ async function runSimulatedTurn(
   if (args.conversationId) {
     conversationId = args.conversationId;
   } else {
-    conversationId = await ctx.runMutation(api.ai_conversations.create, {
+    conversationId = await ctx.runMutation(internal.ai_conversations.createForUser, {
       user_id: user._id,
       session_id: `oto-sim-${Date.now()}`,
       scenario_detected: "simulation",
@@ -136,7 +136,7 @@ async function runSimulatedTurn(
   // Read back the conversation AFTER the turn so the caller can see what
   // persisted (vehicle anchor + the mood/intent/arc/facts Oto's
   // update_conversation_state tool wrote). Not auth-gated.
-  const finalConvo = await ctx.runQuery(api.ai_conversations.getById, {
+  const finalConvo = await ctx.runQuery(internal.ai_conversations.getById, {
     id: conversationId,
   });
   const fc = (finalConvo ?? {}) as Record<string, unknown>;

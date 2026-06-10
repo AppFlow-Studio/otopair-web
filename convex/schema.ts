@@ -3416,6 +3416,10 @@ export default defineSchema({
     tools_called: v.array(v.string()),
     // Branch of the final iteration: "data_continue" | "terminal" | "text_only"
     final_branch: v.string(),
+    // B-P2: did the turn write conversation state (update_conversation_state)?
+    // Surfaces Haiku's state-contract under-calling. Optional — rows written
+    // before this field existed lack it.
+    state_called: v.optional(v.boolean()),
     // For ad-hoc cost analysis later.
     booking_id: v.optional(v.id("bookings")),
     error: v.optional(v.string()),

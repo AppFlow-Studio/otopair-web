@@ -61,7 +61,11 @@ import {
 import { SYSTEM_PROMPT, SYSTEM_PROMPT_VERSION } from "./system_prompt";
 import { canonicalQuestionKey } from "./canonicalize";
 import { internal } from "../_generated/api";
-import { assembleTelemetryRow, type TurnSample } from "./telemetryAssembly";
+import {
+  assembleTelemetryRow,
+  shouldFlagStateSkip,
+  type TurnSample,
+} from "./telemetryAssembly";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -1705,6 +1709,40 @@ export async function sendMessageHandlerCore(
       });
     } catch (e: any) {
       console.error("[oto/chat] telemetry insert failed (swallowed):", e?.message);
+    }
+
+    // B-P2: measure the state-tool contract. A non-trivial turn (a data tool
+    // fired — Oto engaged the user's real context) that never wrote
+    // conversation state is Haiku silently under-calling
+    // update_conversation_state. Fire a reliability event so the under-call
+    // rate is visible and tunable. Fire-and-forget; never breaks the turn.
+    const dataToolFired = telemetryRow.tools_called.some(
+      (n) => OTO_TOOL_CATEGORY[n] === "data",
+    );
+    if (
+      shouldFlagStateSkip({
+        stateCalled: telemetryRow.state_called,
+        dataToolFired,
+      })
+    ) {
+      ctx
+        .runMutation(internal.oto.reliability.recordReliabilityEvent, {
+          surface: "state_tool_undercall",
+          kind: "skipped",
+          user_id: user._id,
+          conversation_id: conversationId,
+          metadata: {
+            iterations_used: telemetryRow.iterations_used,
+            tools_called: telemetryRow.tools_called,
+            model: telemetryRow.model,
+          },
+        })
+        .catch((e: unknown) =>
+          console.error(
+            "[oto/chat] state-undercall reliability event failed (silent):",
+            (e as { message?: string })?.message,
+          ),
+        );
     }
   }
 

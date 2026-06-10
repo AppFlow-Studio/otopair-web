@@ -29,6 +29,23 @@ export type TurnSample = {
   branch: "terminal" | "text_only" | "data_continue" | "forced_final";
 };
 
+/** The conversation-state writeback tool (Locked Principle: every
+ *  substantive turn should persist mood/arc/facts/intent). */
+export const STATE_TOOL_NAME = "update_conversation_state";
+
+/**
+ * B-P2: a turn that engaged real context (a data tool fired) but never wrote
+ * conversation state is an under-call — Haiku silently dropping the state
+ * contract. Flagging these makes the under-call rate visible and tunable.
+ * Pure; the caller supplies dataToolFired (it owns the tool-category map).
+ */
+export function shouldFlagStateSkip(args: {
+  stateCalled: boolean;
+  dataToolFired: boolean;
+}): boolean {
+  return args.dataToolFired && !args.stateCalled;
+}
+
 /** The oto_telemetry insert args minus the id fields chat.ts owns. */
 export type TelemetryRowCore = {
   model: string;
@@ -42,6 +59,8 @@ export type TelemetryRowCore = {
   total_latency_ms: number;
   tools_called: string[];
   final_branch: string;
+  /** B-P2: did the turn write conversation state at least once? */
+  state_called: boolean;
 };
 
 export function assembleTelemetryRow(
@@ -88,5 +107,6 @@ export function assembleTelemetryRow(
     total_latency_ms: totalLatencyMs,
     tools_called: toolsCalled,
     final_branch: finalBranch,
+    state_called: toolsCalled.includes(STATE_TOOL_NAME),
   };
 }

@@ -12,6 +12,8 @@
 import { describe, test, expect } from "vitest";
 import {
   assembleTelemetryRow,
+  shouldFlagStateSkip,
+  STATE_TOOL_NAME,
   type TurnSample,
 } from "../convex/oto/telemetryAssembly";
 
@@ -65,7 +67,22 @@ describe("assembleTelemetryRow", () => {
         "render_quick_replies",
       ],
       final_branch: "terminal",
+      state_called: true,
     });
+  });
+
+  test("state_called reflects whether the state tool appeared", () => {
+    const withState = assembleTelemetryRow(
+      [{ usage: null, latency_ms: 1, tool_names: [STATE_TOOL_NAME], branch: "text_only" }],
+      OPTS,
+    );
+    expect(withState.state_called).toBe(true);
+
+    const withoutState = assembleTelemetryRow(
+      [{ usage: null, latency_ms: 1, tool_names: ["get_vehicle_health"], branch: "data_continue" }],
+      OPTS,
+    );
+    expect(withoutState.state_called).toBe(false);
   });
 
   test("forced_final sample adds tokens/latency but never becomes final_branch", () => {
@@ -131,5 +148,17 @@ describe("assembleTelemetryRow", () => {
       model: "claude-sonnet-4-6",
     });
     expect(row.model).toBe("claude-sonnet-4-6");
+  });
+});
+
+describe("shouldFlagStateSkip", () => {
+  test("flags a non-trivial turn (data tool fired) that skipped state", () => {
+    expect(shouldFlagStateSkip({ stateCalled: false, dataToolFired: true })).toBe(true);
+  });
+  test("does NOT flag a turn that called state", () => {
+    expect(shouldFlagStateSkip({ stateCalled: true, dataToolFired: true })).toBe(false);
+  });
+  test("does NOT flag a trivial turn (no data tool) that skipped state", () => {
+    expect(shouldFlagStateSkip({ stateCalled: false, dataToolFired: false })).toBe(false);
   });
 });

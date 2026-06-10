@@ -31,6 +31,7 @@ export const recordTurn = internalMutation({
     total_latency_ms: v.number(),
     tools_called: v.array(v.string()),
     final_branch: v.string(),
+    state_called: v.optional(v.boolean()),
     booking_id: v.optional(v.id("bookings")),
     error: v.optional(v.string()),
   },

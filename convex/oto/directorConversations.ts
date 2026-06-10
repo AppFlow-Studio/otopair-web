@@ -210,6 +210,7 @@ export const getConversationDebug = query({
         total_latency_ms: t.total_latency_ms,
         tools_called: t.tools_called,
         final_branch: t.final_branch,
+        state_called: t.state_called ?? null,
         error: t.error ?? null,
       })),
     };

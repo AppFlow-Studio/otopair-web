@@ -9,6 +9,7 @@
 
 import { v } from "convex/values";
 import { internalQuery, internalMutation } from "../_generated/server";
+import { isPoisonPriceType } from "../lib/priceTypes";
 
 export const getVehicleConfigByKey = internalQuery({
   args: { configKey: v.string() },
@@ -369,11 +370,15 @@ export const getPricedPartCount = internalQuery({
       .collect();
     let priced = 0;
     for (const f of fitments) {
-      const price = await ctx.db
+      // A part is "priced" only when a row the aggregator TRUSTS exists —
+      // poison rows (online_discount / you_save / unverified) are excluded
+      // from the customer median, so counting them here inflated fill_rate
+      // and made backfills skip exactly the broken parts (Jun-9 review).
+      const rows = await ctx.db
         .query("part_prices")
         .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
-        .first();
-      if (price) priced++;
+        .collect();
+      if (rows.some((r) => !isPoisonPriceType((r as any).price_type))) priced++;
     }
     return priced;
   },

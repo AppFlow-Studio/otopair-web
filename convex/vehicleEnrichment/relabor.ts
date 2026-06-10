@@ -117,7 +117,9 @@ export const relaborConfig = internalAction({
                 model: resolved.model,
                 trim: resolved.trim,
                 year: resolved.year,
-                chassis_code: chassisCode,
+                // runQuery serializes an undefined return to null — and
+                // v.optional(v.string()) rejects null. Normalize.
+                chassis_code: chassisCode ?? undefined,
                 engine_family: engineFamily,
                 determinant: cfg.determinant,
               },

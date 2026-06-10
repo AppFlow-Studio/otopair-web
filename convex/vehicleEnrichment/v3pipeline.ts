@@ -2290,10 +2290,14 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           rpEngineDoc?.engine_family ??
           deriveEngineFamily(rpEngineDoc?.engine_code) ??
           deriveEngineFamily(args.engineCode);
-        rpChassisCode = await ctx.runQuery(
+        // runQuery serializes an undefined return to null — normalize, or the
+        // sibling resolver's v.optional(v.string()) validator throws for any
+        // car without a chassis code (latent stuck-config route, found via
+        // the Atlas relabor Jun-10).
+        rpChassisCode = (await ctx.runQuery(
           internal.vehicleEnrichment.laborSibling.getConfigChassisCode,
           { vehicleConfigId: args.vehicleConfigId },
-        );
+        )) ?? undefined;
         for (const cand of repairpalModelCandidates(args.model, args.trim ?? "")) {
           const probe = await ctx.runAction(
             internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,

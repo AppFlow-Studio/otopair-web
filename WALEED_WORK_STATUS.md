@@ -1,7 +1,7 @@
 # Otopair — Waleed Work Status
 
 **Owner:** Waleed Mansour (Notion accounts: `mrdogsog@gmail.com` + `mansourwaleed06@gmail.com` — both yours)
-**Last updated:** 2026-06-08
+**Last updated:** 2026-06-09
 **Branch:** `waleed-flagship`
 **Scope:** everything done on the `otopair-web` side (web app + Convex backend). Mobile-app items are flagged as out-of-repo.
 
@@ -52,6 +52,15 @@ This doc is the single source of truth for: ✅ done · 🟡 partial · ⬜ not 
 `convex/oto/simulate.ts` (`internalAction simulateOtoMessage`)
 - Drives a full, real Oto turn as any user by fabricating that user's identity, calling the same `sendMessageHandlerCore` production uses. Callable from Convex MCP / scripts / a future director test panel. Internal-only (never public) since it impersonates by design.
 
+### 7. Parts price re-extraction — domain-agnostic two-tier + poison-exclusion median  *(2026-06-09, dev-verified)*
+`convex/vehicleEnrichment/priceReextract.ts` (new), `priceParser.ts`, `part_prices.ts`, `convex/lib/priceTypes.ts` (new), `directorConfigBackfills.ts`, `v3pipeline.ts`, `prompts/batch2Prompt.ts`, `devOnly/verifyParts.ts`
+- **The fix for the remaining wrong prices.** §1's deterministic parser only covered sites with structured data (~19/35 on the test Jetta); the rest stayed `online_discount` (captured MSRP / "was" / "You Save"). New `reextractPartPrice` = Tier 1 `parsePartPrices` → **Tier 2 LLM** (`callClaudeExtractOnly` on the page's own markdown, prompted to reject MSRP/was/struck/"You Save", + guardrails: price>0, price<msrp, OEM match, [0.3×,3×] cross-source median). **NO per-domain rules.**
+- **Reprice action** now two-pass (build cross-source median, then re-extract each row): verified → `sale`, unverifiable → **`unverified`** (excluded from the median, kept for audit — the chosen Tier-3 policy).
+- **Aggregation guardrail:** `summarizePartPrices` (pure `summarizePriceRows`) excludes poison types (`online_discount`/`you_save`/`unverified`), keeps `sale`/`llm_estimate`/`manual_seed`/legacy-untyped — so a wrong row can no longer pollute any quote.
+- **Batch-2** routes itemized prices through the same helper behind **`PARTS_REEXTRACT_BATCH2=on`** (off by default; one fetch per itemized part) + unconditional Batch-2 prompt hardening.
+- **16 unit tests** (`tests/priceReextract.test.ts`, `tests/partPriceAggregation.test.ts`); `npx tsc -p convex` clean.
+- **Verified live (Jetta):** `online_discount` **16 → 0** (4 recovered to `sale`, 12 → `unverified`), `sale` 19 → 23. Per-row, not per-domain.
+
 ---
 
 ## 🟡 PARTIAL — started, with a clear remaining list
@@ -65,11 +74,14 @@ This doc is the single source of truth for: ✅ done · 🟡 partial · ⬜ not 
 - **Owner:** Waleed. Feeds Temur's "Pricing — build strictly to spec."
 
 ### B. Parts/pricing rollout (deploy + backfill)
-**Done:** all code + flags + reversible backfills, verified on dev.
+**Done:** all code + flags + reversible backfills, verified on dev. Plus (§7) the two-tier re-extraction that corrects `online_discount` rows in place + the poison-exclusion median — dev-verified on the Jetta (`online_discount` 16 → 0).
 **Left (in order):**
 - [ ] Run live backfills on `temurbek`/prod: orphan-fitment delete → service-role stamp → position fix.
-- [ ] Re-enrich (or batch-2 reprice) so `sale` prices replace the old `online_discount` rows and the 16 new fluid/part fields populate.
+- [ ] Run the per-config **reprice** across the catalog so the two-tier fix corrects every `online_discount` row (4→sale / rest→unverified), and re-enrich so the 16 new fluid/part fields populate.
 - [ ] Flip `PARTS_PRICE_SOURCE=median` after shadow-diff sign-off.
+- [ ] **(optional) `PARTS_REEXTRACT_BATCH2=on`** to also verify fresh-enrichment prices at the source (adds a fetch per itemized part).
+- [ ] **(optional) Retire/reroute `diagnoseVin.ts`'s 4 `online_discount` writers** — dead from the pipeline (CLI-only) but a foot-gun that would re-mint poison if run.
+- [ ] **(data-quality) Re-discover product `source_url`s** for the ~5 parts stuck `unverified` on `shop.advanceautoparts.com` etc. (their stored URLs look like category/anti-bot pages).
 - [ ] Deploy to `temurbek`/prod.
 
 ### C. Oto guided-experience  *(Notion: "Not started" — STALE, the logic half is done)*

@@ -45,7 +45,10 @@ const DISQUALIFIED_SOURCE: ReadonlySet<string> = new Set([
 const MIN_VDB_CONFIDENCE = 0.75;
 const MIN_EMPIRICAL_SAMPLES = 5;
 
-function isHighQualityVdb(row: Doc<"labor_times">): boolean {
+// Exported: laborTimes.ts (the booking-time UI resolver) applies the SAME
+// gate so the UI and the quote engine never tell different labor stories
+// (Jun-9 review: "the two labor resolvers disagree").
+export function isHighQualityVdb(row: Doc<"labor_times">): boolean {
   if (row.book_hours == null || row.book_hours <= 0) return false;
   if (row.source === "tier_estimate") return false;
   if (DISQUALIFIED_SOURCE.has(row.source ?? "")) return false;

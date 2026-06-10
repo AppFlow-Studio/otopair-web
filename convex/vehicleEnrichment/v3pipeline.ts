@@ -28,7 +28,7 @@ import { submitBatch, getBatchStatus, getBatchResults } from "./utils/batchClien
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
-import { repairpalUrl, repairpalModelCandidates } from "./repairpalLabor";
+import { repairpalUrlCandidates, repairpalModelCandidates } from "./repairpalLabor";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { deriveEngineFamily } from "./laborSibling";
 import { runSanityChecks } from "./validation/sanityChecks";
@@ -2297,7 +2297,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         for (const cand of repairpalModelCandidates(args.model, args.trim ?? "")) {
           const probe = await ctx.runAction(
             internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-            { url: repairpalUrl(args.make, cand, "oil-change") },
+            { urls: repairpalUrlCandidates(args.make, cand, "oil-change", args.year) },
           );
           if (probe) { rpOwnNameplate = cand; break; }
         }
@@ -2356,7 +2356,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           if (rpOwnNameplate) {
             const rp = await ctx.runAction(
               internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-              { url: repairpalUrl(args.make, rpOwnNameplate, laborCfg.repairpal_slug) },
+              { urls: repairpalUrlCandidates(args.make, rpOwnNameplate, laborCfg.repairpal_slug, args.year) },
             );
             if (rp) { rpHours = rp.hours; rpSiblingSlug = rpOwnNameplate; }
           }
@@ -2382,9 +2382,11 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             }
             const sib = rpSibling.get(det);
             if (sib) {
+              // The sibling is a different nameplate; OUR year still selects
+              // its same-generation page (e.g. 2021 M550i → 750i/2021).
               const rp = await ctx.runAction(
                 internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-                { url: repairpalUrl(args.make, sib.nameplate, laborCfg.repairpal_slug) },
+                { urls: repairpalUrlCandidates(args.make, sib.nameplate, laborCfg.repairpal_slug, args.year) },
               );
               if (rp) { rpHours = rp.hours; rpMatchKey = sib.match_key; rpSiblingSlug = sib.nameplate; }
             }

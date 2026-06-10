@@ -18,6 +18,7 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
+import { isHighQualityVdb } from "./lib/quoteEngine";
 
 export type LaborHoursForService = {
   serviceId: Id<"services">;
@@ -84,10 +85,13 @@ export const getLaborHoursForServices = query({
         continue;
       }
 
-      if (row && typeof row.book_hours === "number" && row.book_hours > 0) {
+      // Same quality gate as the quote engine (lib/quoteEngine.ts): clone /
+      // training-data / low-confidence rows must not surface to the booking UI
+      // as vehicle-specific hours the quote engine would refuse to quote.
+      if (row && isHighQualityVdb(row)) {
         out.push({
           ...base,
-          hours: row.book_hours,
+          hours: row.book_hours!,
           source: "vehicle_specific_book",
         });
         continue;

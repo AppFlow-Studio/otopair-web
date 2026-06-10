@@ -68,7 +68,7 @@ export function matchKeyString(d: LaborDeterminant, target: PlatformKey): string
 import { internalAction, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import { internal } from "../_generated/api";
-import { repairpalUrl, repairpalModelCandidates, slugify } from "./repairpalLabor";
+import { repairpalUrlCandidates, repairpalModelCandidates, slugify } from "./repairpalLabor";
 import { callClaudeExtractOnly } from "./utils/claudeClient";
 
 type SiblingCandidate = {
@@ -252,7 +252,9 @@ export const resolveLaborSibling = internalAction({
         if (!np) continue;
         const rp = await ctx.runAction(
           internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-          { url: repairpalUrl(a.make, np, calibrationSlug) },
+          // Our year on the sibling nameplate → its same-generation page;
+          // yearless fallback keeps the calibration probe permissive.
+          { urls: repairpalUrlCandidates(a.make, np, calibrationSlug, a.year) },
         );
         if (rp) {
           return { nameplate: np, match_key: matchKeyString(a.determinant, target) };

@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import {
   repairpalUrl,
+  repairpalUrlCandidates,
   repairpalModelCandidates,
   parseRepairpalLabor,
   recoverHours,
@@ -44,6 +45,24 @@ describe("repairpalUrl", () => {
     expect(repairpalUrl("BMW", "X5", "brake-pad-replacement", 2023)).toBe(
       "https://repairpal.com/estimator/bmw/x5/2023/brake-pad-replacement-cost",
     );
+  });
+});
+
+describe("repairpalUrlCandidates", () => {
+  it("year-specific page first (generation-correct labor), yearless fallback second", () => {
+    // Jun-9 review: the scrapes never passed the year, so a multi-generation
+    // nameplate page mixed labor across generations. Year page is preferred;
+    // the yearless page stays as fallback so coverage never regresses when
+    // RepairPal has no year-specific page.
+    expect(repairpalUrlCandidates("BMW", "750i", "oil-change", 2020)).toEqual([
+      "https://repairpal.com/estimator/bmw/750i/2020/oil-change-cost",
+      "https://repairpal.com/estimator/bmw/750i/oil-change-cost",
+    ]);
+  });
+  it("no year → just the yearless page", () => {
+    expect(repairpalUrlCandidates("BMW", "750i", "oil-change")).toEqual([
+      "https://repairpal.com/estimator/bmw/750i/oil-change-cost",
+    ]);
   });
 });
 

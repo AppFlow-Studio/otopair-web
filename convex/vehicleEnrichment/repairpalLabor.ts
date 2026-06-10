@@ -30,6 +30,23 @@ export function repairpalUrl(
 }
 
 /**
+ * Ordered scrape candidates: the year-specific page first (generation-correct
+ * labor — the yearless nameplate page mixes generations, Jun-9 review), the
+ * yearless page as fallback so coverage never regresses when RepairPal has no
+ * year page for this nameplate.
+ */
+export function repairpalUrlCandidates(
+  make: string,
+  model: string,
+  serviceSlug: string,
+  year?: number,
+): string[] {
+  const urls = year ? [repairpalUrl(make, model, serviceSlug, year)] : [];
+  urls.push(repairpalUrl(make, model, serviceSlug));
+  return urls;
+}
+
+/**
  * RepairPal keys URLs by NAMEPLATE (e.g. "550i-xdrive", "750i", "x5"), but our
  * config stores model = the model LINE ("5 Series") and trim = the variant
  * ("M550i xDrive"). The nameplate is usually trim-derived for sedans and
@@ -89,13 +106,22 @@ import { fetchUrl } from "./firecrawl";
 const RATE_MID = () => Number(process.env.REPAIRPAL_LABOR_RATE ?? 130);
 
 export const scrapeRepairpalHours = internalAction({
-  args: { url: v.string() },
-  handler: async (_ctx, { url }): Promise<{ hours: number } | null> => {
-    const md = await fetchUrl(url);
-    if (!md) return null;
-    const range = parseRepairpalLabor(md);
-    if (!range) return null;
-    const hours = recoverHours(range, RATE_MID());
-    return hours == null ? null : { hours };
+  args: {
+    url: v.optional(v.string()),
+    // Ordered candidates (year-specific page first, yearless fallback) — first
+    // page that parses wins. `url` kept for single-page callers.
+    urls: v.optional(v.array(v.string())),
+  },
+  handler: async (_ctx, { url, urls }): Promise<{ hours: number } | null> => {
+    const candidates = urls ?? (url ? [url] : []);
+    for (const u of candidates) {
+      const md = await fetchUrl(u);
+      if (!md) continue;
+      const range = parseRepairpalLabor(md);
+      if (!range) continue;
+      const hours = recoverHours(range, RATE_MID());
+      if (hours != null) return { hours };
+    }
+    return null;
   },
 });

@@ -67,6 +67,49 @@ export function applyVerifiedEngineFields(
 }
 
 /**
+ * Curated physical facts per engine family — applied over the LLM extraction
+ * the same way verified_fields are. verified_fields protects an EXISTING
+ * engine row a human corrected; this table protects FUTURE rows of the same
+ * family (the LLM misclassified the EA211 as "chain" twice in one day,
+ * Jun 10 2026 — physical facts about an engine family don't need a vote).
+ * Keep entries curated and sourced; prefix-matched against the engine code.
+ */
+const KNOWN_ENGINE_TIMING: Array<{ prefix: string; timing: string }> = [
+  // VW EA211 family (1.0/1.2/1.4/1.5 TSI): toothed belt, oil-bathed on some
+  // variants — belt service is real. Misclassified as chain by the LLM 2×.
+  { prefix: "EA211", timing: "belt" },
+  // Honda J-series V6 (J30/J32/J35): timing belt (fixed live on the 2003
+  // Accord J30A4, Jun-10 spot-check).
+  { prefix: "J30", timing: "belt" },
+  { prefix: "J32", timing: "belt" },
+  { prefix: "J35", timing: "belt" },
+];
+
+/**
+ * Override/seed fields.timing_system from the curated table when the engine
+ * code matches a known family. Modifies fields in place.
+ */
+export function applyKnownEngineFacts(
+  fields: Record<string, FieldResult>,
+  engineCode: string | null | undefined,
+): Record<string, FieldResult> {
+  if (!engineCode) return fields;
+  const code = engineCode.toUpperCase();
+  const fact = KNOWN_ENGINE_TIMING.find((f) => code.startsWith(f.prefix));
+  if (!fact) return fields;
+  if (fields.timing_system?.value === fact.timing) return fields;
+  fields.timing_system = {
+    value: fact.timing,
+    source_url: null,
+    source_type: "director_verified",
+    confidence: 1.0,
+    flagged: false,
+    flag_reason: null,
+  };
+  return fields;
+}
+
+/**
  * Apply applicability rules to fields based on vehicle identity.
  * Modifies fields in place — returns the same object for chaining.
  */

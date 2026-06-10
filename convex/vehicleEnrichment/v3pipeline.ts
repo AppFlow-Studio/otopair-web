@@ -34,7 +34,7 @@ import { deriveEngineFamily } from "./laborSibling";
 import { runSanityChecks } from "./validation/sanityChecks";
 import { validateAllOemParts } from "./validation/oemValidation";
 import { BLOCKED_DOMAINS } from "./sourceRegistry";
-import { applyApplicabilityRules, applyVerifiedEngineFields } from "./applicabilityRules";
+import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts } from "./applicabilityRules";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
 import { reextractPartPrice, isAffirmativeRejection } from "./priceReextract";
@@ -1941,6 +1941,9 @@ async function runPollBatch1Body(
     // applicability rules run — the chain rule keys off fields.timing_system,
     // so a director-corrected belt car must not re-null its belt parts just
     // because the LLM repeated its misclassification (Jetta, Jun 10 2026).
+    // Curated family facts run first (protects FUTURE engine rows of a known
+    // family); a per-row human stamp still wins over both.
+    applyKnownEngineFacts(fields, args.engineCode);
     try {
       const engineForVerified = await ctx.runQuery(
         internal.vehicleEnrichment.v3queries.getEngine,

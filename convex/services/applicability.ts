@@ -16,8 +16,14 @@ export function isServiceApplicable(
   trimSpecs: Doc<"trim_specs"> | null,
   vehicleConfig: Doc<"vehicle_configs">
 ): boolean {
-  // 1. ICE-only services don't apply to EVs
-  if (service.requires_ice_engine === true && engine.fuel_type === "electric") {
+  // 1. ICE-only services don't apply to EVs. NHTSA vPIC writes "Electric"
+  // (capitalized) — compare case-insensitively (Jun-9 review: the lowercase
+  // literal never fired). Exact match is deliberate: "Plug-in Hybrid
+  // Electric" / "Hybrid Electric" still HAVE an ICE.
+  if (
+    service.requires_ice_engine === true &&
+    (engine.fuel_type ?? "").toLowerCase() === "electric"
+  ) {
     return false;
   }
 
@@ -35,9 +41,10 @@ export function isServiceApplicable(
   }
 
   // 3. Hydraulic PS services don't apply to electric steering
+  // (case-insensitive — same NHTSA/VDB capitalization hazard as rule 1).
   if (
     service.requires_hydraulic_ps === true &&
-    chassisSpecs?.steering_type === "electric"
+    (chassisSpecs?.steering_type ?? "").toLowerCase() === "electric"
   ) {
     return false;
   }

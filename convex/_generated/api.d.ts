@@ -117,6 +117,7 @@ import type * as models from "../models.js";
 import type * as notifications from "../notifications.js";
 import type * as oemParts from "../oemParts.js";
 import type * as onboarding_questions_answers from "../onboarding_questions_answers.js";
+import type * as oto_applicableServices from "../oto/applicableServices.js";
 import type * as oto_bookings from "../oto/bookings.js";
 import type * as oto_canonicalize from "../oto/canonicalize.js";
 import type * as oto_chat from "../oto/chat.js";
@@ -413,6 +414,7 @@ declare const fullApi: ApiFromModules<{
   notifications: typeof notifications;
   oemParts: typeof oemParts;
   onboarding_questions_answers: typeof onboarding_questions_answers;
+  "oto/applicableServices": typeof oto_applicableServices;
   "oto/bookings": typeof oto_bookings;
   "oto/canonicalize": typeof oto_canonicalize;
   "oto/chat": typeof oto_chat;

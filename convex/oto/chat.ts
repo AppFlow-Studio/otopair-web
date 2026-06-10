@@ -2005,33 +2005,25 @@ function buildCallables(
   };
   return {
     /**
-     * list_services_for_vehicle — returns the full 23-service catalog.
-     *
-     * Schema Gap 4 (inventory.md): the real implementation should join
-     * vehicles → vehicle_configs → engines/chassis_specs/trim_specs and
-     * apply `requires_*` filters against the resolved spec set. That's a
-     * follow-up Convex query change; for this slice we surface raw data so
-     * the AI layer's loop can be validated end-to-end.
-     *
-     * The schema's `vehicle_id` arg is accepted-and-ignored. The AI still
-     * passes it because the inventory marks it required — preserving the
-     * contract means no schema churn when filtering lands.
+     * list_services_for_vehicle — the catalog filtered by the vehicle's
+     * structural applicability (Schema Gap 4 closed, Jun-10): joins the
+     * resolved vehicle_config through the SAME isServiceApplicable rules as
+     * the booking surface, so Oto can no longer offer a PS flush on an EPS
+     * car or an oil change on an EV. Fails open to the full catalog when the
+     * vehicle/config can't be resolved (see oto/applicableServices.ts).
      */
-    list_services_for_vehicle: async (_input) => {
-      const all: Array<Doc<"services">> = await ctx.runQuery(
-        api.services.list,
-        {},
+    list_services_for_vehicle: async (input) => {
+      const vehicleId = (input.vehicle_id ?? "") as string;
+      const listed = await ctx.runQuery(
+        internal.oto.applicableServices.listServicesForUserVehicle,
+        {
+          actingUserId: userId,
+          ...(vehicleId ? { vehicle_id: vehicleId } : {}),
+        },
       );
       // Wave 7.3 Option B: services is a moat table; bump counter by row count.
-      await bumpMoat("services", all?.length ?? 0);
-      return (all ?? []).map((s) => ({
-        slug: s.slug,
-        name: s.name,
-        description: s.description ?? null,
-        default_labor_hours: s.default_labor_hours ?? null,
-        has_options: s.has_options === true,
-        is_labor_only: s.is_labor_only === true,
-      }));
+      await bumpMoat("services", listed?.length ?? 0);
+      return listed;
     },
 
     /**

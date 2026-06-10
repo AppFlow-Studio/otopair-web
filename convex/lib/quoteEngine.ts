@@ -45,6 +45,18 @@ const DISQUALIFIED_SOURCE: ReadonlySet<string> = new Set([
 const MIN_VDB_CONFIDENCE = 0.75;
 const MIN_EMPIRICAL_SAMPLES = 5;
 
+/**
+ * Drivetrains with a separately serviceable differential: AWD/4WD (front +
+ * rear + transfer case) and RWD (rear diff). FWD transaxles integrate the
+ * final drive into the gearbox; unknown returns false (fail-safe).
+ */
+export function hasServiceableDifferential(
+  drivetrain: string | null | undefined,
+): boolean {
+  const d = (drivetrain ?? "").toUpperCase();
+  return d === "AWD" || d === "4WD" || d === "RWD" || d === "4X4";
+}
+
 // Exported: laborTimes.ts (the booking-time UI resolver) applies the SAME
 // gate so the UI and the quote engine never tell different labor stories
 // (Jun-9 review: "the two labor resolvers disagree").
@@ -347,11 +359,14 @@ export async function resolvePartsCost(
     flags.push("awd_surcharge_applied");
   }
 
-  // Differential service is AWD-only.
-  if (slug === "differential_service" && !isAwd) {
+  // Differential service: every drivetrain with a separately serviceable
+  // diff qualifies (Jun-9 review — the old `!isAwd` check refused RWD/4WD,
+  // which have differentials). FWD transaxles don't; unknown stays refused
+  // (fail-safe — never bill a service the car might not have).
+  if (slug === "differential_service" && !hasServiceableDifferential(cfg.drivetrain)) {
     return {
       ok: false,
-      reason: "differential service not applicable to FWD vehicle",
+      reason: `differential service not applicable to drivetrain=${cfg.drivetrain ?? "unknown"}`,
     };
   }
 

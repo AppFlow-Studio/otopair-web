@@ -102,6 +102,11 @@
 - **Booking-UI labor gate:** `laborTimes.getLaborHoursForServices` applies the quote engine's `isHighQualityVdb` (exported) — clones/training-data can't surface as "vehicle_specific_book". `tests/laborTimesGate.test.ts`.
 - **RepairPal year-correct pages:** `repairpalUrlCandidates` (year page first, yearless fallback) at all 4 scrape sites — no more multi-generation page mixing.
 
+**🟢 DONE (Jun 10 session 3) — verified engine fields (the session's second-biggest find):**
+- **The Jetta's chain→belt fix was CLOBBERED by its own re-enrich** — Batch-1 repeated the LLM misclassification and `updateEngineSpecs` wrote over the human correction. Worse: the applicability chain rule keys off Batch-1's OWN extraction and applicability nulls are final → a misclassified belt car could NEVER get belt parts by re-enriching, however many times the data was fixed.
+- **Mechanism shipped (`engines.verified_fields`):** human writers (director `updateEngineFields`, `devOnly/dataFixes:fixEngineFields`) stamp every field they set (idempotently — confirming an already-correct value stamps too); the pipeline writer skips verified keys; `_pollBatch1V3` overrides extracted fields with verified values BEFORE applicability (`applyVerifiedEngineFields`, source_type `director_verified`, conf 1.0). TDD: `tests/verifiedEngineFields.test.ts` (5).
+- All five Jun-10 engine corrections re-stamped as verified; Jetta S re-enriched a second time under the protection (in flight at session end).
+
 **🟡 STILL OPEN (next session):**
 0. ~~Retire/rewrite `diagnoseVin.ts`'s 4 `online_discount` writers~~ ✅ DONE (Jun 10 session 3, see above) (lines ~493/680/989/1302) — now `internalAction` (no longer anonymously reachable) but still a foot-gun for a deliberate admin run: could overwrite corrected `sale` rows back to poison, and they spend Claude calls writing rows the aggregator ignores. Route through `reextractPartPrice` or delete. Low priority.
 0b. **Token-gate sweep for `directorConfigActions.ts`** — markVerified/updateConfigBasics/updateEngineFields/etc. still follow the old trusted-actor convention (public mutations, no server-side session check). Mirror the `requireDirector` pattern from `directorConfigBackfills.ts`.

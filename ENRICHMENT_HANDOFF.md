@@ -15,8 +15,8 @@ Measure with: `npx convex run devOnly/partsCoverage:coverage '{"configKey":"..."
 ### 1. ✅ DONE (Jun 10 session 3) — Stuck-`enriching` failure handler (review item 3 + 6)
 Shipped: transactional `failEnrichmentRun` wired into every exit (pending/partial contract), `_pollBatch2V3` timeout finalizes with batch-1 data + run `'timeout'`, `getBatchStatus` transient-error retry, poll heartbeats (`last_heartbeat_at`) + STEP 0 force-unstick (15-min liveness window, dead run marked `superseded_by_force_unstick`). The TDD-exception concern was moot — `convex-test` was already installed; `tests/enrichmentFailureHandler.test.ts` (7 tests) drives the real action through STEP 0. See SESSION_HANDOFF.md + review doc items 3/6.
 
-### 2. `directorConfigActions.ts` token-gate sweep
-`markVerified`, `updateConfigBasics`, `updateEngineFields`, etc. are still public mutations trusting caller-supplied `actorName`/`actorId`. Mirror `requireDirector` from `convex/directorConfigBackfills.ts` (validate `director_auth.validateSession`, derive actor from session) + update the call sites in `TabVehicleConfigs.tsx` (it still computes `actorName`/`actorId` for these).
+### 2. ✅ DONE (Jun 10 session 3) — `directorConfigActions.ts` token-gate sweep
+All 6 mutations validate the director session token in-transaction and derive the audit actor from it; `actorName`/`actorId` args removed; `TabVehicleConfigs.tsx` modals pass `token`. Tests: `tests/directorConfigActionsAuth.test.ts` (4, TDD). See SESSION_HANDOFF.md.
 
 ### 3. Data fix: Jetta `engines.timing_system`
 Stored `"chain"` — wrong; the EA211 1.5 TSI is **belt**-driven (LLM misclassification). Fix via the director engine edit (or a one-off internal patch), then re-enrich the Jetta so its timing belt/kit/water-pump parts populate (the applicability rules will now allow them). The coverage inspector prints `timing_system` per car — spot-check other configs for the same error class.

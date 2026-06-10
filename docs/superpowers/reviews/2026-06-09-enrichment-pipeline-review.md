@@ -19,7 +19,7 @@
    - `runPublic.ts` ×4 (`go`/`inspectTireOptions`/`refreshTireOptions`/`purgeAndRerun`) → `internalAction` (its own header said "gate before production"); server-side callers in `bookings.ts` switched to `internal.*`.
    - `diagnoseVin.ts` ×5 write actions → `internalAction` (see item 9).
    - `backfillNhtsaVinKeys` → `internalAction` + `dryRun` default flipped to `true` (the low finding below).
-   **Deferred (tracked):** snapshot-before-purge; the same token-gate sweep for `directorConfigActions.ts` mutations (markVerified/updateConfigBasics/etc. still trust caller actor args). **Verify:** live click-through of the three director buttons (needs a fresh director session in the Playwright harness).
+   **Deferred (tracked):** snapshot-before-purge. ~~The same token-gate sweep for `directorConfigActions.ts` mutations~~ ✅ **DONE (Jun 10 session 3)** — all 6 mutations (`updateConfigBasics`/`updateEngineFields`/`updateTransmissionFields`/`updateChassisSpecsFields`/`updateTrimSpecsFields`/`markConfigVerified`) now validate the director session token in-transaction (`director_sessions` lookup, expiry checked) and derive the audit actor from the session; `actorName`/`actorId` args removed entirely (sending them is a validator error). `TabVehicleConfigs.tsx` modals pass `token` instead. Tests: `tests/directorConfigActionsAuth.test.ts` (4, TDD). **Verify:** live click-through of the three director buttons (needs a fresh director session in the Playwright harness).
 
 ## HIGH (confirmed)
 

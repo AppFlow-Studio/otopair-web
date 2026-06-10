@@ -13,6 +13,7 @@
  */
 import { describe, test, expect } from "vitest";
 import { internal } from "../convex/_generated/api";
+import type { Id } from "../convex/_generated/dataModel";
 import { makeT } from "./helpers";
 import { buildEngineKey } from "../convex/vehicleEnrichment/types";
 
@@ -75,7 +76,7 @@ async function seedConfig(t: ReturnType<typeof makeT>, opts: SeedOpts = {}) {
       fill_rate: 0,
       last_enriched_at: now - (opts.lastEnrichedAgoMs ?? 30 * MIN),
     });
-    let runId: any = null;
+    let runId: Id<"enrichment_runs"> | null = null;
     if (opts.run) {
       runId = await ctx.db.insert("enrichment_runs", {
         vehicle_config_id: configId,
@@ -99,7 +100,7 @@ describe("failEnrichmentRun", () => {
     });
 
     await t.mutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
-      run_id: runId,
+      run_id: runId!,
       vehicle_config_id: configId,
       run_status: "failed",
       errors: ["batch1_timeout"],
@@ -107,7 +108,7 @@ describe("failEnrichmentRun", () => {
     });
 
     const { run, config } = await t.run(async (ctx) => ({
-      run: await ctx.db.get(runId),
+      run: await ctx.db.get(runId!),
       config: await ctx.db.get(configId),
     }));
     expect(run!.status).toBe("failed");
@@ -123,7 +124,7 @@ describe("failEnrichmentRun", () => {
     });
 
     await t.mutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
-      run_id: runId,
+      run_id: runId!,
       vehicle_config_id: configId,
       run_status: "failed",
       errors: ["batch2_submission_failed: boom"],
@@ -142,7 +143,7 @@ describe("failEnrichmentRun", () => {
     });
 
     await t.mutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
-      run_id: runId,
+      run_id: runId!,
       vehicle_config_id: configId,
       run_status: "failed",
       errors: ["batch2_unexpected: boom"],
@@ -150,7 +151,7 @@ describe("failEnrichmentRun", () => {
     });
 
     const { run, config } = await t.run(async (ctx) => ({
-      run: await ctx.db.get(runId),
+      run: await ctx.db.get(runId!),
       config: await ctx.db.get(configId),
     }));
     expect(run!.status).toBe("failed"); // run still recorded
@@ -177,7 +178,7 @@ describe("STEP 0 force-unstick", () => {
     expect(result).toEqual({ status: "error", reason: "make_not_found" });
 
     // The dead run is marked failed so it can never read as live again.
-    const run = await t.run(async (ctx) => ctx.db.get(runId));
+    const run = await t.run(async (ctx) => ctx.db.get(runId!));
     expect(run!.status).toBe("failed");
     expect(run!.errors).toEqual(["superseded_by_force_unstick"]);
   });

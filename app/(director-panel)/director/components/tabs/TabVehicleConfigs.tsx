@@ -311,10 +311,9 @@ const PartFitmentDrawerBody = ({ partId, configId, onClose }: {
 
 const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | null; onClose: () => void }) => {
   const session   = useContext(DirectorSessionCtx)
-  const actorName = session?.name ?? 'Director'
-  const actorId   = session?.userId as Id<'director_users'> | undefined
-  // The backfill actions validate this server-side and derive the audit actor
-  // from the session — actorName/actorId are no longer trusted args there.
+  // Every config-edit mutation + backfill action validates this server-side
+  // and derives the audit actor from the session — actorName/actorId are no
+  // longer accepted args anywhere in this modal.
   const sessionToken = session?.token ?? ''
   const [auditOpen, setAuditOpen] = useState(false)
   const [editOpen,  setEditOpen]  = useState(false)
@@ -373,7 +372,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
 
   const handleVerify = async () => {
     if (!configId) return
-    const res = await markVerified({ id: configId, actorName, actorId })
+    const res = await markVerified({ id: configId, token: sessionToken })
     setToast(`Config marked verified. Total: ${(res as any)?.verifications ?? '?'}.`)
   }
 
@@ -834,14 +833,14 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
           {/* Edit forms */}
           <ConfigEditModal open={editOpen} onClose={() => setEditOpen(false)}
             configId={configId} detail={detail}
-            actorName={actorName} actorId={actorId}
+            token={sessionToken}
             onSaved={(n) => { setEditOpen(false); setToast(n > 0 ? `Saved ${n} field${n === 1 ? '' : 's'}.` : 'No changes.') }}
             updateBasics={updateBasics} />
 
           {detail.engine && (
             <EngineEditModal open={engineOpen} onClose={() => setEngineOpen(false)}
               engineId={detail.engine.id} current={detail.engine}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setEngineOpen(false); setToast(n > 0 ? `Saved ${n} engine field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateEngine} />
           )}
@@ -849,7 +848,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
           {detail.transmission && (
             <TransmissionEditModal open={transOpen} onClose={() => setTransOpen(false)}
               transmissionId={detail.transmission.id} current={detail.transmission}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setTransOpen(false); setToast(n > 0 ? `Saved ${n} transmission field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateTransmission} />
           )}
@@ -858,7 +857,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
             <ChassisSpecsEditModal open={chassisOpen} onClose={() => setChassisOpen(false)}
               chassisCode={detail.chassisCode}
               current={detail.chassisSpecs ?? null}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setChassisOpen(false); setToast(n > 0 ? `Saved ${n} chassis-spec field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateChassisSpecs} />
           )}
@@ -867,7 +866,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
             <TrimSpecsEditModal open={trimOpen} onClose={() => setTrimOpen(false)}
               vehicleConfigId={configId}
               current={detail.trimSpecs ?? null}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setTrimOpen(false); setToast(n > 0 ? `Saved ${n} trim-spec field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateTrimSpecs} />
           )}
@@ -884,14 +883,13 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
 // ---------------------------------------------------------------------------
 
 const ConfigEditModal = ({
-  open, onClose, configId, detail, actorName, actorId, onSaved, updateBasics,
+  open, onClose, configId, detail, token, onSaved, updateBasics,
 }: {
   open: boolean
   onClose: () => void
   configId: Id<'vehicle_configs'> | null
   detail: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (changes: number) => void
   updateBasics: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateConfigBasics>>
 }) => {
@@ -925,8 +923,7 @@ const ConfigEditModal = ({
         brake_fluid_type:  brake,
         ps_fluid_type:     ps,
         enrichment_status: status,
-        actorName,
-        actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -988,14 +985,13 @@ const EditRow = ({ label, children }: { label: string; children: React.ReactNode
 // ---------------------------------------------------------------------------
 
 const EngineEditModal = ({
-  open, onClose, engineId, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, engineId, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   engineId: Id<'engines'>
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateEngineFields>>
 }) => {
@@ -1062,7 +1058,7 @@ const EngineEditModal = ({
         spark_plug_gap_mm:        n(spGap),
         water_pump_timing_driven: wpTiming === '' ? undefined : wpTiming === 'true',
         data_quality:             dq,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -1111,14 +1107,13 @@ const EngineEditModal = ({
 // ---------------------------------------------------------------------------
 
 const TransmissionEditModal = ({
-  open, onClose, transmissionId, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, transmissionId, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   transmissionId: Id<'transmissions'>
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateTransmissionFields>>
 }) => {
@@ -1164,7 +1159,7 @@ const TransmissionEditModal = ({
         has_serviceable_filter: filter   === '' ? undefined : filter   === 'true',
         service_method: method,
         data_quality: dq,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -1213,14 +1208,13 @@ const TransmissionEditModal = ({
 // ---------------------------------------------------------------------------
 
 const ChassisSpecsEditModal = ({
-  open, onClose, chassisCode, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, chassisCode, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   chassisCode: string
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateChassisSpecsFields>>
 }) => {
@@ -1281,7 +1275,7 @@ const ChassisSpecsEditModal = ({
         has_rear_wiper:       hasRearWiper === '' ? undefined : hasRearWiper === 'true',
         has_brake_pad_sensor: hasPadSensor === '' ? undefined : hasPadSensor === 'true',
         data_quality: dq,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -1351,14 +1345,13 @@ const ChassisSpecsEditModal = ({
 // ---------------------------------------------------------------------------
 
 const TrimSpecsEditModal = ({
-  open, onClose, vehicleConfigId, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, vehicleConfigId, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   vehicleConfigId: Id<'vehicle_configs'>
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateTrimSpecsFields>>
 }) => {
@@ -1398,7 +1391,7 @@ const TrimSpecsEditModal = ({
         tire_directional: directional === '' ? undefined : directional === 'true',
         is_run_flat:      runFlat     === '' ? undefined : runFlat     === 'true',
         alignment_type:   alignment,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {

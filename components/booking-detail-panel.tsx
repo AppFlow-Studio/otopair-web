@@ -1732,10 +1732,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     ) : (
                       <>
                         <p className="text-[15px] font-medium text-foreground">
-                          ${job.totalCost.toFixed(2)} total
+                          ${(job.totalCost ?? 0).toFixed(2)} total
                         </p>
                         <p className="mt-1 text-sm text-muted-foreground">
-                          Labor ${job.laborCost.toFixed(2)} &middot; Parts ${job.partsCost.toFixed(2)}
+                          Labor ${(job.laborCost ?? 0).toFixed(2)} &middot; Parts ${(job.partsCost ?? 0).toFixed(2)}
                         </p>
                       </>
                     )}

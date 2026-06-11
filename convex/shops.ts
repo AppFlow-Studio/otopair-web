@@ -10,6 +10,7 @@ import {
   DEFAULT_OVERRUN_EXTENSION_PERCENT,
   validateNoShowThresholdMinutes,
 } from "../lib/scheduling-overhaul";
+import { detectTimezoneFromState } from "../lib/shopTimezone";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
@@ -863,6 +864,8 @@ export const upsertOnboardingShopDetails = mutation({
       throw new Error("This slug is already taken. Please choose another.");
     }
 
+    const detectedTimezone = detectTimezoneFromState(args.state);
+
     if (currentShop) {
       await ctx.db.patch(currentShop._id, {
         name: args.name,
@@ -873,6 +876,10 @@ export const upsertOnboardingShopDetails = mutation({
         zip: args.zipCode,
         phone: args.phone,
         onboarding_complete: false,
+        // Only backfill timezone — never overwrite a manually-set value.
+        ...(!currentShop.timezone && detectedTimezone
+          ? { timezone: detectedTimezone }
+          : {}),
       });
       return currentShop._id;
     }
@@ -890,6 +897,7 @@ export const upsertOnboardingShopDetails = mutation({
       owner_user_id: user._id,
       labor_rate: 150,
       onboarding_complete: false,
+      ...(detectedTimezone ? { timezone: detectedTimezone } : {}),
     });
 
     await ctx.db.insert("shop_users", {
@@ -1306,6 +1314,23 @@ export const updateShopHours = mutation({
     return primary.shop._id;
   },
 });;
+
+export const setShopTimezone = mutation({
+  args: { timezone: v.string() },
+  handler: async (ctx, args) => {
+    const { user } = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Only shop owners can update the timezone.");
+    }
+
+    await ctx.db.patch(primary.shop._id, { timezone: args.timezone });
+    return primary.shop._id;
+  },
+});
 
 export const updateShopOfferedServices = mutation({
   args: {

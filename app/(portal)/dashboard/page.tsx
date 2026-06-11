@@ -265,7 +265,9 @@ function OwnerDashboardPage({
   } | null;
 }) {
   const { user } = useUser();
-  const dashboard = useQuery(api.bookings.getMyOwnerDashboard);
+  const dashboard = useQuery(api.bookings.getMyOwnerDashboard, {
+    localDate: new Date().toLocaleDateString("en-CA"),
+  });
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [actualsBookingId, setActualsBookingId] = useState<Id<"bookings"> | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
@@ -748,7 +750,7 @@ function OwnerDashboardPage({
                   activeOverlayBookingIds.length > 0 && !isAlreadyOpen;
                 return (
                   <li
-                    key={String(column.mechanicId)}
+                    key={bookingIdStr}
                     className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
                   >
                     <div className="flex min-w-0 items-center gap-3">

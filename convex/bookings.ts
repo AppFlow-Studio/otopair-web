@@ -2666,14 +2666,17 @@ function toCanonicalVin(vin: string) {
   return vin.trim().toUpperCase();
 }
 
-function getTodayString() {
-  return new Date().toISOString().slice(0, 10);
+function getTodayString(timezone?: string | null) {
+  return new Date().toLocaleDateString("en-CA", {
+    timeZone: timezone ?? "UTC",
+  });
 }
 
-function getDateOffsetString(offsetDays: number) {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() + offsetDays);
-  return date.toISOString().slice(0, 10);
+function getDateOffsetString(offsetDays: number, timezone?: string | null) {
+  const d = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
+  return d.toLocaleDateString("en-CA", {
+    timeZone: timezone ?? "UTC",
+  });
 }
 
 function getStartOfCurrentWeekUtcMs() {
@@ -7081,7 +7084,8 @@ export const getActiveJobsByShop = query({
 export const getTodaysBookingsByShop = query({
   args: { shopId: v.id("shops") },
   handler: async (ctx, args) => {
-    const today = getTodayString();
+    const shop = await ctx.db.get(args.shopId);
+    const today = getTodayString(shop?.timezone);
 
     const bookings = await ctx.db
       .query("bookings")
@@ -7135,7 +7139,8 @@ export const getTodaysBookingsByShop = query({
 export const getCompletedTodayByShop = query({
   args: { shopId: v.id("shops") },
   handler: async (ctx, args) => {
-    const today = getTodayString();
+    const shop = await ctx.db.get(args.shopId);
+    const today = getTodayString(shop?.timezone);
     const bookings = await ctx.db
       .query("bookings")
       .withIndex("by_shop_and_date", (q) =>
@@ -7220,8 +7225,8 @@ export const getMyShopJobContext = query({
 });
 
 export const getMyOwnerDashboard = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { localDate: v.optional(v.string()) },
+  handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
     if (!user) return null;
 
@@ -7231,7 +7236,9 @@ export const getMyOwnerDashboard = query({
     const shop: any = await ctx.db.get(primary.shopId);
     if (!shop) return null;
 
-    const today = getTodayString();
+    const today = shop.timezone
+      ? getTodayString(shop.timezone)
+      : (args.localDate ?? getTodayString(null));
     const startOfWeekMs = getStartOfCurrentWeekUtcMs();
 
     const todayBookingsRaw = await ctx.db
@@ -7557,8 +7564,8 @@ export const listForMyMechanic = query({
 });
 
 export const getMyMechanicDashboard = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { localDate: v.optional(v.string()) },
+  handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
     if (!user) return null;
 
@@ -7576,10 +7583,13 @@ export const getMyMechanicDashboard = query({
     if (!shop) return null;
 
     const mechanicId = mechanicContext.mechanic._id;
-    const today = getTodayString();
-    const weekStart = getDateOffsetString(-6);
+    const tz = (shop as any).timezone ?? null;
+    const today = tz
+      ? getTodayString(tz)
+      : (args.localDate ?? getTodayString(null));
+    const weekStart = getDateOffsetString(-6, tz);
     const upcomingDates = Array.from({ length: 7 }, (_, index) =>
-      getDateOffsetString(index + 1)
+      getDateOffsetString(index + 1, tz)
     );
 
     const todaysJobsRaw = await ctx.db

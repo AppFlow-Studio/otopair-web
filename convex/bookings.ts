@@ -13028,3 +13028,63 @@ export const getReceipt = query({
     };
   },
 });
+
+/**
+ * QUERY: getTopBookedServicesByUser
+ *
+ * Returns the calling user's top-N most-frequently-booked services,
+ * ordered by raw count then most-recent-booking as tiebreak. Used by
+ * the Quick Book row on the new booking-flow entry screen.
+ *
+ * Counts each service_id across the user's bookings — a single
+ * 3-service booking contributes 1 to each of its 3 services.
+ *
+ * If the user has no bookings, returns an empty array. The caller
+ * (useUserTopBookedServices hook) substitutes the curated default
+ * chip set in that case.
+ */
+export const getTopBookedServicesByUser = query({
+  args: {
+    userId: v.id("users"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 6;
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.userId))
+      .collect();
+
+    if (bookings.length === 0) return [];
+
+    const counts = new Map<string, number>();
+    const mostRecent = new Map<string, number>();
+    for (const b of bookings) {
+      const createdAt = (b as { created_at?: number }).created_at ?? 0;
+      const ids = (b as { service_ids?: Id<"services">[] }).service_ids ?? [];
+      for (const id of ids) {
+        const key = String(id);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+        if (createdAt > (mostRecent.get(key) ?? 0)) {
+          mostRecent.set(key, createdAt);
+        }
+      }
+    }
+
+    const ranked = [...counts.entries()]
+      .sort((a, b) => {
+        const byCount = b[1] - a[1];
+        if (byCount !== 0) return byCount;
+        return (mostRecent.get(b[0]) ?? 0) - (mostRecent.get(a[0]) ?? 0);
+      })
+      .slice(0, limit);
+
+    const results = await Promise.all(
+      ranked.map(async ([id, count]) => {
+        const service = await ctx.db.get(id as Id<"services">);
+        return service ? { service, count } : null;
+      }),
+    );
+    return results.filter((r): r is NonNullable<typeof r> => r !== null);
+  },
+});

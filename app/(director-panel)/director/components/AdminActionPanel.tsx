@@ -25,7 +25,7 @@ export const AdminActionPanel = ({ title = 'Admin controls', subtitle, children 
 
 export const ActionRow = ({
   label, hint, action, danger,
-}: { label: string; hint?: string; action: ReactNode; danger?: boolean }) => (
+}: { label: string; hint?: ReactNode; action: ReactNode; danger?: boolean }) => (
   <div style={{
     display:'flex', alignItems:'center', justifyContent:'space-between', gap:10,
     background:'#fff', border:`1px solid ${danger ? '#FECACA' : 'var(--slate-200)'}`,

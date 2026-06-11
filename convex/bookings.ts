@@ -2583,8 +2583,21 @@ export const previewOverrunCascade = query({
       projectedEndMinutes,
     });
 
+    const pushedProposals = plan.proposals
+      .filter((p: any) => !p.usedAlternateMechanic && p.proposedTime)
+      .map((p: any) => ({
+        originalTime: p.originalTime as string,
+        proposedTime: p.proposedTime as string,
+      }));
+    const lateralCount = plan.proposals.filter(
+      (p: any) => p.usedAlternateMechanic,
+    ).length;
+
     return {
       affectedCount: plan.proposals.length,
+      pushedCount: pushedProposals.length,
+      pushedProposals,
+      lateralCount,
       deltaMinutes: projectedEndMinutes - originalEndMinutes,
       blocked: Boolean(plan.blockingReason),
     };
@@ -5402,9 +5415,17 @@ async function buildDownstreamMovementPlan(
     )
     .sort(compareBookingsBySchedule);
 
+  const upstreamStartMinutes = hhmmToMinutes(upstreamBooking.scheduled_time);
+
   for (const downstreamBooking of downstreamBookings) {
     const bookingStartMinutes = hhmmToMinutes(downstreamBooking.scheduled_time);
     if (bookingStartMinutes >= cursorEndMinutes) break;
+
+    // Skip bookings that started before the upstream job — they're in the
+    // past relative to the overflow and can never be pushed by it. Without
+    // this, a 4:30 AM booking (same mechanic, same day) would be caught by
+    // the loop and block a 3:00 PM cascade.
+    if (bookingStartMinutes < upstreamStartMinutes) continue;
 
     if (!DOWNSTREAM_MOVABLE_STATUSES.has(downstreamBooking.status)) {
       const customer = downstreamBooking.user_id
@@ -5427,11 +5448,19 @@ async function buildDownstreamMovementPlan(
     }
 
     if (downstreamBooking.status === "pending_customer_acceptance") {
-      return {
-        proposals,
-        blockingReason:
-          "A downstream booking already has a customer reschedule pending and needs manual review.",
-      };
+      // Only block if the pending reschedule came from a DIFFERENT source.
+      // If it came from this same upstream booking, the cascade is just
+      // updating its own earlier proposal — safe to continue.
+      const sameSource =
+        String(downstreamBooking.schedule_change_source_booking_id ?? "") ===
+        String(upstreamBooking._id);
+      if (!sameSource) {
+        return {
+          proposals,
+          blockingReason:
+            "A downstream booking already has a customer reschedule pending and needs manual review.",
+        };
+      }
     }
 
     const durationMinutes = downstreamBooking.estimated_labor_minutes ?? 60;
@@ -11659,6 +11688,11 @@ export const processOverrunCheckins = internalMutation({
           booking,
           extensionMinutes: checkin.default_extension_minutes,
           source: "system",
+          // Inherit the blocking signal from the re-armed check-in so the
+          // auto-apply respects the mechanic's last known bay-free answer.
+          // Falls back to true (conservative) if never answered.
+          blocksBay: checkin.blocks_bay ?? true,
+          reasonCode: checkin.reason_code,
         });
         continue;
       }

@@ -5,6 +5,50 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { AlertCircle, Loader2, Wrench } from "lucide-react";
+import { useEntityLabel } from "@/lib/use-entity-label";
+
+function fmt12h(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const d = new Date();
+  d.setHours(h, m, 0, 0);
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+}
+
+function buildPreviewMessage(
+  preview: {
+    pushedCount: number;
+    pushedProposals: { originalTime: string; proposedTime: string }[];
+    lateralCount: number;
+    deltaMinutes: number;
+  },
+  entitySingular: string,
+): string {
+  const { pushedCount, pushedProposals, lateralCount } = preview;
+  const mechLabel = entitySingular.toLowerCase();
+  const total = pushedCount + lateralCount;
+  const appt = total === 1 ? "appointment" : "appointments";
+
+  if (pushedCount > 0 && lateralCount === 0) {
+    if (pushedCount === 1 && pushedProposals[0]) {
+      const newTime = fmt12h(pushedProposals[0].proposedTime);
+      return `Pushes 1 later appointment to ${newTime}.`;
+    }
+    const times = pushedProposals.map((p) => fmt12h(p.proposedTime)).join(", ");
+    return `Pushes ${pushedCount} later ${appt} (${times}).`;
+  }
+
+  if (pushedCount === 0 && lateralCount > 0) {
+    return `Moves ${lateralCount} ${appt} to another ${mechLabel}.`;
+  }
+
+  // Mixed
+  const pushPart =
+    pushedCount === 1 && pushedProposals[0]
+      ? `1 to ${fmt12h(pushedProposals[0].proposedTime)}`
+      : `${pushedCount} pushed`;
+  const lateralPart = `${lateralCount} to another ${mechLabel}`;
+  return `Affects ${total} ${appt}: ${pushPart}, ${lateralPart}.`;
+}
 
 const OVERRUN_REASONS: Array<{ code: string; label: string; blocks: boolean }> = [
   { code: "waiting_on_part", label: "Waiting on part", blocks: false },
@@ -49,6 +93,7 @@ export default function OverrunExtendCard({
   const [blocksBay, setBlocksBay] = useState<boolean | null>(null);
   const [reasonCode, setReasonCode] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const entityLabel = useEntityLabel();
 
   const preview = useQuery(
     api.bookings.previewOverrunCascade,
@@ -193,7 +238,7 @@ export default function OverrunExtendCard({
               ? "Can't auto-reschedule — this goes to the front desk to handle."
               : !preview || preview.affectedCount === 0
                 ? "No appointments affected — your bay stays open."
-                : `Pushes ${preview.affectedCount} later appointment${preview.affectedCount === 1 ? "" : "s"} by ${preview.deltaMinutes} min.`}
+                : buildPreviewMessage(preview, entityLabel.singular)}
         </p>
       )}
 

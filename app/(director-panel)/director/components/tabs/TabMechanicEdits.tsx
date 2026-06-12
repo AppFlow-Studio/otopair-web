@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useContext, useEffect, useMemo } from 'react'
+import { useState, useContext, useEffect, useMemo, type ReactNode } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
@@ -39,6 +39,9 @@ type PendingRow = {
   confirmedCount: number
   correctedCount: number
   unknownCount: number
+  partEditCount: number
+  quoteCycleCount: number
+  laborEditCount: number
   submittedAt: number | null
   verifiedAt: number | null
   verificationCount: number
@@ -100,6 +103,82 @@ function StatusPill({ status }: { status: 'confirmed' | 'corrected' | 'unknown' 
   )
 }
 
+// ── Job-change helpers (parts / quote / labor) ────────────────────────────────
+
+function fmtCents(c: number | null | undefined): string {
+  if (typeof c !== 'number') return '—'
+  return `$${(c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function fmtMinutes(m: number | null | undefined): string {
+  if (typeof m !== 'number') return '—'
+  const sign = m < 0 ? '-' : ''
+  const abs = Math.abs(m)
+  const h = Math.floor(abs / 60)
+  const mm = abs % 60
+  return h > 0 ? `${sign}${h}h ${mm}m` : `${sign}${mm}m`
+}
+
+const EDIT_TYPE_META: Record<string, { label: string; tone: string; bg: string; border: string }> = {
+  added:       { label:'Added',    tone:'var(--green-700)',  bg:'var(--green-50)',  border:'var(--green-200)' },
+  removed:     { label:'Removed',  tone:'var(--red-600)',    bg:'var(--slate-50)',  border:'var(--slate-200)' },
+  price:       { label:'Price',    tone:'var(--orange-700)', bg:'var(--orange-50)', border:'var(--orange-200)' },
+  quantity:    { label:'Quantity', tone:'var(--blue-700)',   bg:'var(--slate-50)',  border:'var(--slate-200)' },
+  swap:        { label:'Swap',     tone:'var(--purple-700)', bg:'var(--slate-50)',  border:'var(--slate-200)' },
+  supplied_by: { label:'Supplier', tone:'var(--slate-600)',  bg:'var(--slate-50)',  border:'var(--slate-200)' },
+  not_used:    { label:'Not used', tone:'var(--slate-500)',  bg:'var(--slate-50)',  border:'var(--slate-200)' },
+}
+
+const CYCLE_META: Record<string, { label: string; tone: 'slate' | 'blue' | 'green' }> = {
+  pre_job:  { label:'Pre-job',  tone:'blue'  },
+  mid_job:  { label:'Mid-job',  tone:'slate' },
+  post_job: { label:'Post-job', tone:'green' },
+}
+
+function ChangeChip({ type }: { type: string }) {
+  const m = EDIT_TYPE_META[type] ?? { label: type, tone:'var(--slate-600)', bg:'var(--slate-50)', border:'var(--slate-200)' }
+  return (
+    <span style={{ fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:5,
+      background:m.bg, border:`1px solid ${m.border}`, color:m.tone,
+      textTransform:'uppercase', letterSpacing:'0.04em', whiteSpace:'nowrap' }}>
+      {m.label}
+    </span>
+  )
+}
+
+function CountPill({ n, label, tone }: { n: number; label: string; tone: 'parts' | 'quote' | 'labor' }) {
+  const map = {
+    parts: { bg:'var(--slate-50)',  border:'var(--slate-200)',  color:'var(--slate-700)' },
+    quote: { bg:'var(--slate-50)',  border:'var(--slate-200)',  color:'var(--blue-700)'  },
+    labor: { bg:'var(--orange-50)', border:'var(--orange-200)', color:'var(--orange-700)' },
+  }
+  const s = map[tone]
+  return (
+    <span title={`${n} ${label} change${n !== 1 ? 's' : ''}`}
+      style={{ fontSize:11, fontWeight:600, padding:'1px 6px', borderRadius:5,
+        background:s.bg, border:`1px solid ${s.border}`, color:s.color, whiteSpace:'nowrap' }}>
+      {n} {label}
+    </span>
+  )
+}
+
+function SectionHeading({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ fontSize:11, fontWeight:700, color:'var(--slate-500)', textTransform:'uppercase',
+      letterSpacing:'0.06em', marginBottom:10 }}>{children}</div>
+  )
+}
+
+function LaborStat({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <div>
+      <div style={{ fontSize:10, fontWeight:600, color:'var(--slate-400)', textTransform:'uppercase',
+        letterSpacing:'0.06em', marginBottom:4 }}>{label}</div>
+      <div style={{ fontSize:13, fontWeight:600, color: tone ?? 'var(--slate-700)' }}>{value}</div>
+    </div>
+  )
+}
+
 // ── Verification Detail Modal ─────────────────────────────────────────────────
 
 const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: () => void }) => {
@@ -125,6 +204,13 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
     action: e.action, actor: e.actor, detail: e.detail ?? '',
   }))
+
+  // Cross-cutting changes for this job — parts edits, quote cycles, labor.
+  // Keyed off the job_actual id the verification row stores in `jobId`.
+  const jobChanges = useQuery(
+    api.director_mechanic_edits.getJobChanges,
+    row?.jobId ? { jobId: row.jobId } : 'skip',
+  )
 
   // Seed decisions whenever a new pending row is selected. Default every
   // non-unknown field to "accept"; unknown fields are excluded (display-only).
@@ -390,6 +476,136 @@ const VerificationModal = ({ row, onClose }: { row: PendingRow | null; onClose: 
               )}
             </tbody>
           </table>
+
+          {/* Other changes on this job — parts / quote / labor (display-only) */}
+          {row.jobId && (
+            <div style={{ borderTop:'1px solid var(--slate-100)' }}>
+              {(jobChanges?.partEdits?.length ?? 0) > 0 && (
+                <div style={{ padding:'14px 22px' }}>
+                  <SectionHeading>Parts changes ({jobChanges!.partEdits.length})</SectionHeading>
+                  <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                    {jobChanges!.partEdits.map((p: any, i: number) => (
+                      <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:10, fontSize:12 }}>
+                        <ChangeChip type={p.edit_type} />
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontWeight:600, color:'var(--slate-700)' }}>
+                            {p.part_name ?? p.oem_number ?? '—'}
+                            {p.part_name && p.oem_number && (
+                              <span className="mono" style={{ marginLeft:6, fontSize:11, color:'var(--slate-400)' }}>{p.oem_number}</span>
+                            )}
+                          </div>
+                          {['price', 'quantity', 'supplied_by', 'swap'].includes(p.edit_type) &&
+                            (p.old_value != null || p.new_value != null) && (
+                            <div className="mono" style={{ fontSize:11, color:'var(--slate-500)', marginTop:2 }}>
+                              {p.old_value != null && (
+                                <span style={{ textDecoration:'line-through', color:'var(--slate-400)' }}>{p.old_value}</span>
+                              )}
+                              {p.old_value != null && p.new_value != null && <span style={{ margin:'0 6px' }}>→</span>}
+                              {p.new_value != null && <span style={{ color:'var(--slate-700)' }}>{p.new_value}</span>}
+                            </div>
+                          )}
+                        </div>
+                        <span style={{ fontSize:11, color:'var(--slate-400)', whiteSpace:'nowrap' }}>{timeAgo(p.edited_at)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(jobChanges?.quoteCycles?.length ?? 0) > 0 && (
+                <div style={{ padding:'14px 22px', borderTop:'1px solid var(--slate-100)' }}>
+                  <SectionHeading>Quote history ({jobChanges!.quoteCycles.length})</SectionHeading>
+                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                    <thead>
+                      <tr style={{ color:'var(--slate-400)', fontSize:10, textTransform:'uppercase', letterSpacing:'0.05em' }}>
+                        <th style={{ textAlign:'left',  padding:'4px 8px' }}>Cycle</th>
+                        <th style={{ textAlign:'right', padding:'4px 8px' }}>Total</th>
+                        <th style={{ textAlign:'right', padding:'4px 8px' }}>Parts</th>
+                        <th style={{ textAlign:'right', padding:'4px 8px' }}>Labor</th>
+                        <th style={{ textAlign:'left',  padding:'4px 8px' }}>Decision</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {jobChanges!.quoteCycles.map((q: any, i: number) => (
+                        <tr key={i} style={{ borderTop:'1px solid var(--slate-100)' }}>
+                          <td style={{ padding:'6px 8px' }}>
+                            <Badge tone={CYCLE_META[q.cycle ?? '']?.tone ?? 'slate'}>
+                              {CYCLE_META[q.cycle ?? '']?.label ?? (q.cycle ?? '—')}
+                            </Badge>
+                          </td>
+                          <td style={{ padding:'6px 8px', textAlign:'right', fontWeight:600, color:'var(--slate-800)' }}>{fmtCents(q.set_price_cents)}</td>
+                          <td style={{ padding:'6px 8px', textAlign:'right', color:'var(--slate-600)' }}>{fmtCents(q.parts_cents)}</td>
+                          <td style={{ padding:'6px 8px', textAlign:'right', color:'var(--slate-600)' }}>
+                            {fmtCents(q.labor_cents)}{typeof q.labor_hours === 'number' ? ` · ${q.labor_hours}h` : ''}
+                          </td>
+                          <td style={{ padding:'6px 8px' }}>
+                            <span style={{ fontSize:11, fontWeight:600,
+                              color: q.decision === 'declined' ? 'var(--red-600)' : q.decision ? 'var(--green-700)' : 'var(--slate-400)' }}>
+                              {q.decision ?? 'open'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {jobChanges && (jobChanges.labor || jobChanges.laborEdits.length > 0) && (
+                <div style={{ padding:'14px 22px', borderTop:'1px solid var(--slate-100)' }}>
+                  <SectionHeading>
+                    Labor time{jobChanges.laborEdits.length > 0
+                      ? ` · ${jobChanges.laborEdits.length} edit${jobChanges.laborEdits.length !== 1 ? 's' : ''}`
+                      : ''}
+                  </SectionHeading>
+                  {jobChanges.labor && (
+                    <div style={{ display:'flex', gap:28 }}>
+                      <LaborStat label="Estimated" value={fmtMinutes(jobChanges.labor.estimated_minutes)} />
+                      <LaborStat label="Actual" value={fmtMinutes(jobChanges.labor.actual_minutes)} />
+                      <LaborStat
+                        label="Delta"
+                        value={jobChanges.labor.delta_minutes != null
+                          ? `${jobChanges.labor.delta_minutes > 0 ? '+' : ''}${fmtMinutes(jobChanges.labor.delta_minutes)}`
+                          : '—'}
+                        tone={jobChanges.labor.delta_minutes != null
+                          ? (jobChanges.labor.delta_minutes > 0 ? 'var(--red-600)' : 'var(--green-700)')
+                          : undefined}
+                      />
+                    </div>
+                  )}
+                  {jobChanges.laborEdits.length > 0 && (
+                    <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop: jobChanges.labor ? 12 : 0 }}>
+                      {jobChanges.laborEdits.map((l: any, i: number) => (
+                        <div key={i} style={{ display:'flex', alignItems:'center', gap:10, fontSize:12 }}>
+                          <span style={{ fontSize:10, fontWeight:700, padding:'2px 7px', borderRadius:5,
+                            background:'var(--orange-50)', border:'1px solid var(--orange-200)', color:'var(--orange-700)',
+                            textTransform:'uppercase', letterSpacing:'0.04em', whiteSpace:'nowrap' }}>Labor</span>
+                          <div className="mono" style={{ flex:1, color:'var(--slate-600)' }}>
+                            {l.old_minutes != null && (
+                              <span style={{ textDecoration:'line-through', color:'var(--slate-400)' }}>{fmtMinutes(l.old_minutes)}</span>
+                            )}
+                            {l.old_minutes != null && <span style={{ margin:'0 6px' }}>→</span>}
+                            <span style={{ color:'var(--slate-700)', fontWeight:600 }}>{fmtMinutes(l.new_minutes)}</span>
+                          </div>
+                          <span style={{ fontSize:11, color:'var(--slate-400)', whiteSpace:'nowrap' }}>{timeAgo(l.edited_at)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {jobChanges &&
+                jobChanges.partEdits.length === 0 &&
+                jobChanges.quoteCycles.length === 0 &&
+                jobChanges.laborEdits.length === 0 &&
+                !jobChanges.labor && (
+                  <div style={{ padding:'14px 22px', fontSize:12, color:'var(--slate-400)' }}>
+                    No parts, quote, or labor changes recorded for this job.
+                  </div>
+                )}
+            </div>
+          )}
         </div>
 
         {/* Right — meta panel */}
@@ -583,7 +799,7 @@ export const TabMechanicEdits = () => {
             <table style={{ ...tableStyles.table, fontSize:13 }}>
               <thead>
                 <tr>
-                  {(['Status', 'Vehicle', 'Mechanic', 'Submitted', 'Accuracy', 'Fields', 'Parts OK', 'Labor', ''] as const).map(h => (
+                  {(['Status', 'Vehicle', 'Mechanic', 'Submitted', 'Accuracy', 'Fields', 'Changes', 'Parts OK', 'Labor', ''] as const).map(h => (
                     <th key={h} style={{ ...tableStyles.th }}>{h}</th>
                   ))}
                 </tr>
@@ -636,6 +852,17 @@ export const TabMechanicEdits = () => {
                         {row.confirmedCount > 0 && <span style={{ color:'var(--green-700)', fontWeight:600 }}>{row.confirmedCount}✓ </span>}
                         {row.unknownCount > 0 && <span style={{ color:'var(--slate-400)' }}>{row.unknownCount}? </span>}
                         {row.fields.length === 0 && <span style={{ color:'var(--slate-300)' }}>—</span>}
+                      </td>
+
+                      <td style={{ ...tableStyles.td }}>
+                        <div style={{ display:'flex', gap:4, flexWrap:'wrap', maxWidth:160 }}>
+                          {row.partEditCount > 0 && <CountPill n={row.partEditCount} label="parts" tone="parts" />}
+                          {row.quoteCycleCount > 0 && <CountPill n={row.quoteCycleCount} label="quote" tone="quote" />}
+                          {row.laborEditCount > 0 && <CountPill n={row.laborEditCount} label="labor" tone="labor" />}
+                          {row.partEditCount === 0 && row.quoteCycleCount === 0 && row.laborEditCount === 0 && (
+                            <span style={{ color:'var(--slate-300)' }}>—</span>
+                          )}
+                        </div>
                       </td>
 
                       <td style={{ ...tableStyles.td }}>

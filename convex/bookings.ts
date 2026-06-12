@@ -53,6 +53,7 @@ import {
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
+import { logPrejobMechanicVerification } from "./lib/mechanic_verification_logging";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   addMinutesToHHMM,
@@ -4571,6 +4572,16 @@ async function persistPrejobSurvey(
     patch: buildPassportPatchFromPrejob(prejob, passportView.passport),
     now,
     markConfirmed: true,
+  });
+
+  // Log the mechanic's spec review/corrections to the Director "Mechanic Edits"
+  // page (mechanic_verifications). Best-effort — never blocks the pre-job save.
+  await logPrejobMechanicVerification(ctx, {
+    booking,
+    passportView,
+    prejob,
+    jobActualId: jobActual._id,
+    now,
   });
 }
 

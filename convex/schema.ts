@@ -2575,6 +2575,22 @@ export default defineSchema({
     .index("by_job_actual_id", ["job_actual_id"])
     .index("by_edited_at", ["edited_at"]),
 
+  // Append-only audit log of mechanic labor-time changes on a job_actual —
+  // the labor counterpart to job_actual_part_edits. One row per change to
+  // actual_labor_minutes that the mechanic explicitly submits (auto-derived
+  // labor from elapsed time is not logged). old/new are minutes.
+  job_actual_labor_edits: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.id("job_actuals"),
+    old_minutes: v.optional(v.number()),
+    new_minutes: v.optional(v.number()),
+    edited_by_user_id: v.id("users"),
+    edited_at: v.number(),
+  })
+    .index("by_booking_id", ["booking_id"])
+    .index("by_job_actual_id", ["job_actual_id"])
+    .index("by_edited_at", ["edited_at"]),
+
   // ===== AI & ANALYTICS =====
 
   // [I]

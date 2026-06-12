@@ -31,6 +31,48 @@ async function mapRow(ctx: any, row: any) {
     ? row.verifications
     : [];
 
+  // Cross-cutting change counts for the list-row badges. Resolve the
+  // job_actual from row.job_id, then count parts / quote / labor edits.
+  let partEditCount = 0;
+  let quoteCycleCount = 0;
+  let laborEditCount = 0;
+  if (row.job_id) {
+    let jobActual: any = null;
+    try {
+      jobActual = await ctx.db.get(row.job_id as any);
+    } catch {
+      jobActual = null;
+    }
+    if (jobActual) {
+      partEditCount = (
+        await ctx.db
+          .query("job_actual_part_edits")
+          .withIndex("by_job_actual_id", (q: any) =>
+            q.eq("job_actual_id", jobActual._id),
+          )
+          .collect()
+      ).length;
+      laborEditCount = (
+        await ctx.db
+          .query("job_actual_labor_edits")
+          .withIndex("by_job_actual_id", (q: any) =>
+            q.eq("job_actual_id", jobActual._id),
+          )
+          .collect()
+      ).length;
+      if (jobActual.booking_id) {
+        quoteCycleCount = (
+          await ctx.db
+            .query("booking_approvals")
+            .withIndex("by_booking_and_cycle", (q: any) =>
+              q.eq("booking_id", jobActual.booking_id),
+            )
+            .collect()
+        ).length;
+      }
+    }
+  }
+
   return {
     _id: row._id,
     configId: row.vehicle_config_id,
@@ -51,6 +93,9 @@ async function mapRow(ctx: any, row: any) {
     confirmedCount: fields.filter((f) => f.status === "confirmed").length,
     correctedCount: fields.filter((f) => f.status === "corrected").length,
     unknownCount: fields.filter((f) => f.status === "unknown").length,
+    partEditCount,
+    quoteCycleCount,
+    laborEditCount,
     submittedAt: row.created_at ?? null,
     verifiedAt: row.verified_at ?? null,
     verificationCount: config?.verification_count ?? 0,

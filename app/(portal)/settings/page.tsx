@@ -9,6 +9,8 @@ import { api } from "@/convex/_generated/api";
 import { Clock, LogOut, MapPin, Phone, Globe, Mail, ExternalLink, Loader2, Save, Zap } from "lucide-react";
 import {
   DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
+  DEFAULT_OVERRUN_AUTO_APPLY_MINUTES,
+  DEFAULT_OVERRUN_ESCALATION_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_PERCENT,
 } from "@/lib/scheduling-overhaul";
@@ -29,6 +31,8 @@ export default function SettingsPage() {
   const [noShowThreshold, setNoShowThreshold] = useState(DEFAULT_NO_SHOW_THRESHOLD_MINUTES);
   const [overrunPercent, setOverrunPercent] = useState(DEFAULT_OVERRUN_EXTENSION_PERCENT);
   const [overrunFloor, setOverrunFloor] = useState(DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
+  const [overrunEscalationMinutes, setOverrunEscalationMinutes] = useState(DEFAULT_OVERRUN_ESCALATION_MINUTES);
+  const [overrunAutoApplyMinutes, setOverrunAutoApplyMinutes] = useState(DEFAULT_OVERRUN_AUTO_APPLY_MINUTES);
   const [bufferMinutes, setBufferMinutes] = useState(10);
   const [maxPerMechanic, setMaxPerMechanic] = useState(2);
   const [entityLabelMode, setEntityLabelMode] = useState<"mechanic" | "bay">("mechanic");
@@ -45,6 +49,8 @@ export default function SettingsPage() {
     setNoShowThreshold(shop.no_show_threshold_minutes ?? DEFAULT_NO_SHOW_THRESHOLD_MINUTES);
     setOverrunPercent(shop.overrun_default_extension_percent ?? DEFAULT_OVERRUN_EXTENSION_PERCENT);
     setOverrunFloor(shop.overrun_extension_floor_minutes ?? DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
+    setOverrunEscalationMinutes(shop.overrun_escalation_minutes ?? DEFAULT_OVERRUN_ESCALATION_MINUTES);
+    setOverrunAutoApplyMinutes(shop.overrun_auto_apply_minutes ?? DEFAULT_OVERRUN_AUTO_APPLY_MINUTES);
     setBufferMinutes(shop.buffer_minutes ?? 10);
     setMaxPerMechanic(shop.max_bookings_per_mechanic_rolling_hour ?? 2);
     setEntityLabelMode(shop.entity_label_mode === "bay" ? "bay" : "mechanic");
@@ -94,6 +100,8 @@ export default function SettingsPage() {
         maxBookingsPerMechanicRollingHour: maxPerMechanic,
         entityLabelMode,
         appointmentReminderLeadMinutes: reminderLeadMinutes,
+        overrunEscalationMinutes,
+        overrunAutoApplyMinutes,
       });
       setSettingsMessage("Scheduling settings saved.");
     } catch (error: unknown) {
@@ -332,6 +340,38 @@ export default function SettingsPage() {
                   className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
                 />
                 <span className="mt-1 block text-xs text-gray-500">Minimum minutes applied by system default</span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Front desk escalation</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  step={1}
+                  value={overrunEscalationMinutes}
+                  onChange={(event) => setOverrunEscalationMinutes(Number(event.target.value))}
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                />
+                <span className="mt-1 block text-xs text-gray-500">
+                  Minutes after an overrun before the front desk is alerted.
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Auto-apply extension</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  step={1}
+                  value={overrunAutoApplyMinutes}
+                  onChange={(event) => setOverrunAutoApplyMinutes(Number(event.target.value))}
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                />
+                <span className="mt-1 block text-xs text-gray-500">
+                  Minutes after an overrun before the system auto-applies the default extension. Must be at or after front desk escalation.
+                </span>
               </label>
 
               <label className="block">

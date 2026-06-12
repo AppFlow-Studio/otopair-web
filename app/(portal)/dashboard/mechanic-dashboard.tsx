@@ -23,7 +23,6 @@ import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
-import OverrunExtendCard from "@/components/mechanic/overrun-extend-card";
 import type {
   PostJobSurveyPayload,
   PreJobSurveyPayload,
@@ -630,16 +629,6 @@ export default function MechanicDashboard() {
                           return "Start Booking";
                         })()}
                       </button>
-                    ) : null}
-
-                    {job.status === "in_progress" ? (
-                      <OverrunExtendCard
-                        bookingId={job._id}
-                        onFinishEarly={() =>
-                          openWorkflowDialog(String(job._id), "postjob")
-                        }
-                        onToast={setToast}
-                      />
                     ) : null}
 
                     {job.status === "in_progress" ? (

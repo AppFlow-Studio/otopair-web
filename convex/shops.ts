@@ -8,7 +8,10 @@ import {
   DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_PERCENT,
+  normalizeOverrunAutoApplyMinutes,
+  normalizeOverrunEscalationMinutes,
   validateNoShowThresholdMinutes,
+  validateOverrunTimingMinutes,
 } from "../lib/scheduling-overhaul";
 import { detectTimezoneFromState } from "../lib/shopTimezone";
 
@@ -433,6 +436,8 @@ export const updateMySchedulingSettings = mutation({
     maxBookingsPerMechanicRollingHour: v.optional(v.number()),
     entityLabelMode: v.optional(v.string()),
     appointmentReminderLeadMinutes: v.optional(v.number()),
+    overrunEscalationMinutes: v.optional(v.number()),
+    overrunAutoApplyMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await getCurrentUser(ctx);
@@ -469,6 +474,21 @@ export const updateMySchedulingSettings = mutation({
       );
     }
 
+    let overrunEscalationMinutes: number | undefined;
+    let overrunAutoApplyMinutes: number | undefined;
+    if (
+      args.overrunEscalationMinutes != null ||
+      args.overrunAutoApplyMinutes != null
+    ) {
+      overrunEscalationMinutes = normalizeOverrunEscalationMinutes(
+        args.overrunEscalationMinutes ?? primary.shop.overrun_escalation_minutes,
+      );
+      overrunAutoApplyMinutes = normalizeOverrunAutoApplyMinutes(
+        args.overrunAutoApplyMinutes ?? primary.shop.overrun_auto_apply_minutes,
+      );
+      validateOverrunTimingMinutes(overrunEscalationMinutes, overrunAutoApplyMinutes);
+    }
+
     await ctx.db.patch(primary.shop._id, {
       no_show_threshold_minutes: Number.isFinite(args.noShowThresholdMinutes)
         ? Math.round(args.noShowThresholdMinutes)
@@ -503,6 +523,12 @@ export const updateMySchedulingSettings = mutation({
               args.appointmentReminderLeadMinutes,
             ),
           }
+        : {}),
+      ...(overrunEscalationMinutes != null
+        ? { overrun_escalation_minutes: overrunEscalationMinutes }
+        : {}),
+      ...(overrunAutoApplyMinutes != null
+        ? { overrun_auto_apply_minutes: overrunAutoApplyMinutes }
         : {}),
     });
 

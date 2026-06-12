@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { AlertCircle, Loader2, Wrench } from "lucide-react";
+import { AlertCircle, Clock, Loader2, Wrench } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
 
 function fmt12h(hhmm: string): string {
@@ -66,8 +66,9 @@ const OVERRUN_REASONS: Array<{ code: string; label: string; blocks: boolean }> =
  * Wires its own Convex mutations so it can be dropped into any surface
  * (mechanic dashboard inline card, NowWorking overlay, etc.).
  *
- * variant="dark"  → for the NowWorking dark overlay
- * variant="light" → (default) for the Dashboard cyan-on-white card
+ * variant="dark"   → for the NowWorking dark overlay
+ * variant="light"  → (default) for the Dashboard cyan-on-white card
+ * variant="orange" → for the front-desk/owner booking detail panel
  */
 export default function OverrunExtendCard({
   bookingId,
@@ -78,7 +79,7 @@ export default function OverrunExtendCard({
   bookingId: Id<"bookings">;
   onFinishEarly: () => void;
   onToast?: (msg: string) => void;
-  variant?: "light" | "dark";
+  variant?: "light" | "dark" | "orange";
 }) {
   const checkin = useQuery(
     (api as any).bookings.getActiveOverrunCheckinForBooking,
@@ -106,7 +107,8 @@ export default function OverrunExtendCard({
   if (
     !checkin ||
     (checkin.status !== "mechanic_prompted" &&
-      checkin.status !== "awaiting_extension")
+      checkin.status !== "awaiting_extension" &&
+      checkin.status !== "front_desk_escalated")
   ) {
     return null;
   }
@@ -151,39 +153,81 @@ export default function OverrunExtendCard({
 
   // ── Style tokens by variant ──────────────────────────────────────────────
   const d = variant === "dark";
-  const wrap      = d ? "rounded-xl border border-cyan-500/30 bg-cyan-950/40 p-3"          : "rounded-xl border border-cyan-200 bg-cyan-50 p-3";
-  const label     = d ? "text-xs font-semibold text-cyan-300"                               : "text-xs font-semibold text-cyan-800";
-  const primaryBtn = d ? "rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-cyan-500 disabled:opacity-60" : "rounded-lg bg-cyan-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60";
-  const chipBtn   = d ? "rounded-lg border border-cyan-500/30 bg-white/5 px-3 py-1.5 text-xs font-medium text-cyan-200 disabled:opacity-60"  : "rounded-lg border border-cyan-200 bg-white px-3 py-1.5 text-xs font-medium text-cyan-900 disabled:opacity-60";
-  const toggleSelected = d ? "border-cyan-400 bg-cyan-600 text-white" : "border-cyan-700 bg-cyan-700 text-white";
-  const toggleIdle     = d ? "border-cyan-500/30 bg-white/5 text-cyan-200" : "border-cyan-200 bg-white text-cyan-900";
-  const reasonSelected = d ? "border-cyan-400/60 bg-cyan-800/60 text-cyan-100" : "border-cyan-500 bg-cyan-100 text-cyan-900";
-  const reasonIdle     = d ? "border-cyan-500/30 bg-white/5 text-cyan-300" : "border-cyan-200 bg-white text-cyan-700";
-  const previewText    = d ? "text-xs text-cyan-300" : "text-xs text-cyan-800";
-  const backBtn        = d ? "text-xs font-medium text-cyan-400 underline disabled:opacity-60" : "text-xs font-medium text-cyan-700 underline disabled:opacity-60";
+  const o = variant === "orange";
+  const wrap      = o ? "rounded-md border border-orange-300 bg-orange-50 p-3" : d ? "rounded-xl border border-cyan-500/30 bg-cyan-950/40 p-3"          : "rounded-xl border border-cyan-200 bg-cyan-50 p-3";
+  const label     = o ? "text-xs font-semibold text-orange-800" : d ? "text-xs font-semibold text-cyan-300"                               : "text-xs font-semibold text-cyan-800";
+  const primaryBtn = o ? "rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-60" : d ? "rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-cyan-500 disabled:opacity-60" : "rounded-lg bg-cyan-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60";
+  const chipBtn   = o ? "rounded-lg border border-orange-200 bg-white px-3 py-1.5 text-xs font-medium text-orange-900 disabled:opacity-60" : d ? "rounded-lg border border-cyan-500/30 bg-white/5 px-3 py-1.5 text-xs font-medium text-cyan-200 disabled:opacity-60"  : "rounded-lg border border-cyan-200 bg-white px-3 py-1.5 text-xs font-medium text-cyan-900 disabled:opacity-60";
+  const toggleSelected = o ? "border-orange-700 bg-orange-700 text-white" : d ? "border-cyan-400 bg-cyan-600 text-white" : "border-cyan-700 bg-cyan-700 text-white";
+  const toggleIdle     = o ? "border-orange-200 bg-white text-orange-900" : d ? "border-cyan-500/30 bg-white/5 text-cyan-200" : "border-cyan-200 bg-white text-cyan-900";
+  const reasonSelected = o ? "border-orange-500 bg-orange-100 text-orange-900" : d ? "border-cyan-400/60 bg-cyan-800/60 text-cyan-100" : "border-cyan-500 bg-cyan-100 text-cyan-900";
+  const reasonIdle     = o ? "border-orange-200 bg-white text-orange-700" : d ? "border-cyan-500/30 bg-white/5 text-cyan-300" : "border-cyan-200 bg-white text-cyan-700";
+  const previewText    = o ? "text-xs text-orange-800" : d ? "text-xs text-cyan-300" : "text-xs text-cyan-800";
+  const backBtn        = o ? "text-xs font-medium text-orange-700 underline disabled:opacity-60" : d ? "text-xs font-medium text-cyan-400 underline disabled:opacity-60" : "text-xs font-medium text-cyan-700 underline disabled:opacity-60";
 
   // ── Step 1 ───────────────────────────────────────────────────────────────
   if (minutes == null) {
     return (
-      <div className={`flex w-full flex-wrap items-center gap-2 ${wrap}`}>
-        <span className={label}>Overrun check</span>
-        <button type="button" onClick={() => void handleComplete()} disabled={busy} className={primaryBtn}>
-          On track
-        </button>
-        {[15, 30, 45, 60].map((m) => (
-          <button key={m} type="button" onClick={() => setMinutes(m)} disabled={busy} className={chipBtn}>
-            +{m}m
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={onFinishEarly}
-          disabled={busy}
-          className={`ml-auto inline-flex items-center gap-1 ${chipBtn}`}
-        >
-          <Wrench className="h-3.5 w-3.5" />
-          Finish early
-        </button>
+      <div className={`flex w-full flex-col gap-3 ${wrap}`}>
+        {o ? (
+          <div className="flex items-start gap-3">
+            <Clock className="h-4 w-4 mt-0.5 text-orange-700 shrink-0" />
+            <div className="flex flex-1 flex-col gap-3">
+              <div>
+                <p className="text-sm font-medium text-orange-900">Overrun check-in pending</p>
+                <p className="mt-0.5 text-xs text-orange-700">
+                  The mechanic has been prompted. If they need more time, they&apos;ll extend
+                  from their dashboard — or the system will auto-apply at{" "}
+                  {new Date(checkin.auto_apply_at_ms).toLocaleTimeString("en-US", {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                  . But you can extend the booking now.
+                </p>
+              </div>
+              <div className="flex w-full flex-wrap items-center gap-2">
+                <button type="button" onClick={() => void handleComplete()} disabled={busy} className={primaryBtn}>
+                  On track
+                </button>
+                {[15, 30, 45, 60].map((m) => (
+                  <button key={m} type="button" onClick={() => setMinutes(m)} disabled={busy} className={chipBtn}>
+                    +{m}m
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={onFinishEarly}
+                  disabled={busy}
+                  className={`ml-auto inline-flex items-center gap-1 ${chipBtn}`}
+                >
+                  <Wrench className="h-3.5 w-3.5" />
+                  Finish early
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex w-full flex-wrap items-center gap-2">
+            <span className={label}>Overrun check</span>
+            <button type="button" onClick={() => void handleComplete()} disabled={busy} className={primaryBtn}>
+              On track
+            </button>
+            {[15, 30, 45, 60].map((m) => (
+              <button key={m} type="button" onClick={() => setMinutes(m)} disabled={busy} className={chipBtn}>
+                +{m}m
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={onFinishEarly}
+              disabled={busy}
+              className={`ml-auto inline-flex items-center gap-1 ${chipBtn}`}
+            >
+              <Wrench className="h-3.5 w-3.5" />
+              Finish early
+            </button>
+          </div>
+        )}
       </div>
     );
   }

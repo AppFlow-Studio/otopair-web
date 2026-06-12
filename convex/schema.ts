@@ -1375,6 +1375,8 @@ export default defineSchema({
     no_show_threshold_minutes: v.optional(v.number()),
     overrun_default_extension_percent: v.optional(v.number()),
     overrun_extension_floor_minutes: v.optional(v.number()),
+    overrun_escalation_minutes: v.optional(v.number()),
+    overrun_auto_apply_minutes: v.optional(v.number()),
     buffer_minutes: v.optional(v.number()),
     max_bookings_per_mechanic_rolling_hour: v.optional(v.number()),
     entity_label_mode: v.optional(v.string()),

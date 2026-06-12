@@ -85,6 +85,8 @@ import {
   getDefaultOverrunExtensionMinutes,
   normalizeAssignmentPreference,
   normalizeNoShowThresholdMinutes,
+  normalizeOverrunAutoApplyMinutes,
+  normalizeOverrunEscalationMinutes,
   roundUpToQuarterMinutes,
 } from "../lib/scheduling-overhaul";
 import { computeBookingTax } from "../lib/tax";
@@ -2828,6 +2830,12 @@ async function getShopSchedulingSettings(ctx: any, shopId: any) {
       Number.isFinite(shop.overrun_extension_floor_minutes)
         ? shop.overrun_extension_floor_minutes
         : DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
+    overrunEscalationMinutes: normalizeOverrunEscalationMinutes(
+      shop?.overrun_escalation_minutes,
+    ),
+    overrunAutoApplyMinutes: normalizeOverrunAutoApplyMinutes(
+      shop?.overrun_auto_apply_minutes,
+    ),
   };
 }
 
@@ -5758,8 +5766,8 @@ async function upsertOverrunCheckinForBooking(
     mechanic_id: booking.mechanic_id,
     status: "scheduled",
     due_at_ms: dueAtMs,
-    escalation_due_at_ms: dueAtMs + 3 * 60 * 1000,
-    auto_apply_at_ms: dueAtMs + 6 * 60 * 1000,
+    escalation_due_at_ms: dueAtMs + settings.overrunEscalationMinutes * 60 * 1000,
+    auto_apply_at_ms: dueAtMs + settings.overrunAutoApplyMinutes * 60 * 1000,
     default_extension_minutes: getDefaultOverrunExtensionMinutes({
       estimatedMinutes,
       percent: settings.overrunDefaultExtensionPercent,
@@ -5891,14 +5899,15 @@ async function applyOverrunExtension(
     5 * 60 * 1000,
     Math.floor(extensionMinutes * 0.75 * 60 * 1000),
   );
+  const rearmSettings = await getShopSchedulingSettings(ctx, checkin.shop_id);
   await ctx.db.insert("overrun_checkins", {
     shop_id: checkin.shop_id,
     booking_id: checkin.booking_id,
     mechanic_id: checkin.mechanic_id,
     status: "scheduled",
     due_at_ms: nextDueAtMs,
-    escalation_due_at_ms: nextDueAtMs + 3 * 60 * 1000,
-    auto_apply_at_ms: nextDueAtMs + 6 * 60 * 1000,
+    escalation_due_at_ms: nextDueAtMs + rearmSettings.overrunEscalationMinutes * 60 * 1000,
+    auto_apply_at_ms: nextDueAtMs + rearmSettings.overrunAutoApplyMinutes * 60 * 1000,
     default_extension_minutes: checkin.default_extension_minutes,
     cascade_depth: cascadeDepth,
     // Inherit the bay-free answer as the pre-selected default for the next
@@ -10892,6 +10901,9 @@ export const getOpenFrontDeskOverrunAlerts = query({
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
     const scope = await getCurrentNotificationScope(ctx);
+    // Front-desk escalations are for front desk / owner only — never the
+    // mechanic, even for their own booking.
+    if (scope?.kind === "mechanic") return [];
 
     const rows = await ctx.db
       .query("overrun_checkins")
@@ -11010,6 +11022,9 @@ export const getOpenManualSchedulingAlerts = query({
     const primary = await getPrimaryAuthorizedShop(ctx, user._id);
     if (!primary) return [];
     const scope = await getCurrentNotificationScope(ctx);
+    // Manual scheduling review is for front desk / owner only — never the
+    // mechanic, even for their own booking.
+    if (scope?.kind === "mechanic") return [];
 
     const rows = await ctx.db
       .query("notification_outbox")
@@ -11636,7 +11651,27 @@ export const processOverrunCheckins = internalMutation({
         continue;
       }
 
+      const settings = await getShopSchedulingSettings(ctx, checkin.shop_id);
+      let escalationDueAtMs = checkin.escalation_due_at_ms;
+      let promptedAtMs = checkin.mechanic_prompted_at_ms ?? null;
+
       if (now >= checkin.due_at_ms && checkin.status === "scheduled") {
+        // Anchor both the escalation and auto-apply deadlines to the same
+        // reference point so their configured gap is preserved. Normally
+        // that's "now" (the prompt moment), giving the mechanic their full
+        // configured response window even if this pass was cron-lagged.
+        // But if we're catching up on a check-in that's already overdue by
+        // more than the escalation window, anchor to due_at_ms instead so
+        // escalation (and, if warranted, auto-apply) can resolve in this
+        // same pass rather than restarting the clock from "now".
+        const overdueMs = now - checkin.due_at_ms;
+        promptedAtMs =
+          overdueMs >= settings.overrunEscalationMinutes * 60 * 1000
+            ? checkin.due_at_ms
+            : now;
+        escalationDueAtMs =
+          promptedAtMs + settings.overrunEscalationMinutes * 60 * 1000;
+
         await enqueueNotificationOutbox(ctx, {
           shopId: checkin.shop_id,
           bookingId: checkin.booking_id,
@@ -11651,13 +11686,23 @@ export const processOverrunCheckins = internalMutation({
         });
         await ctx.db.patch(checkin._id, {
           status: "mechanic_prompted",
-          mechanic_prompted_at_ms: now,
+          mechanic_prompted_at_ms: promptedAtMs,
+          escalation_due_at_ms: escalationDueAtMs,
           updated_at: now,
         });
+        checkin.status = "mechanic_prompted";
       }
 
+      // Recompute from the prompt time + the shop's current auto-apply
+      // setting on every pass, so a settings change takes effect for
+      // already-open check-ins (not just newly-created ones), and so it
+      // stays anchored to the same reference point as escalationDueAtMs.
+      const autoApplyAtMs =
+        (promptedAtMs ?? checkin.due_at_ms) +
+        settings.overrunAutoApplyMinutes * 60 * 1000;
+
       if (
-        now >= checkin.escalation_due_at_ms &&
+        now >= escalationDueAtMs &&
         (checkin.status === "mechanic_prompted" ||
           checkin.status === "awaiting_extension")
       ) {
@@ -11666,8 +11711,8 @@ export const processOverrunCheckins = internalMutation({
           bookingId: checkin.booking_id,
           channel: "front_desk",
           category: "overrun_front_desk_escalation",
-          dedupeKey: `overrun-frontdesk:${String(checkin._id)}:${checkin.escalation_due_at_ms}`,
-          scheduledForMs: checkin.escalation_due_at_ms,
+          dedupeKey: `overrun-frontdesk:${String(checkin._id)}:${escalationDueAtMs}`,
+          scheduledForMs: escalationDueAtMs,
           payload: {
             defaultExtensionMinutes: checkin.default_extension_minutes,
           },
@@ -11677,10 +11722,11 @@ export const processOverrunCheckins = internalMutation({
           frontdesk_escalated_at_ms: now,
           updated_at: now,
         });
+        checkin.status = "front_desk_escalated";
       }
 
       if (
-        now >= checkin.auto_apply_at_ms &&
+        now >= autoApplyAtMs &&
         OPEN_OVERRUN_CHECKIN_STATUSES.has(checkin.status)
       ) {
         await applyOverrunExtension(ctx, {
@@ -11701,10 +11747,10 @@ export const processOverrunCheckins = internalMutation({
         checkin.status === "scheduled" ? checkin.due_at_ms : null,
         checkin.status === "mechanic_prompted" ||
         checkin.status === "awaiting_extension"
-          ? checkin.escalation_due_at_ms
+          ? escalationDueAtMs
           : null,
         OPEN_OVERRUN_CHECKIN_STATUSES.has(checkin.status)
-          ? checkin.auto_apply_at_ms
+          ? autoApplyAtMs
           : null,
       ]) {
         if (typeof dueAtMs === "number" && dueAtMs > now) {

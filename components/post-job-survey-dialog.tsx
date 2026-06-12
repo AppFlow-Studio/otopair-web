@@ -114,6 +114,10 @@ type LockedQuote = {
    *  adjustment changed the price, so the confirmation can show original →
    *  new. Null when the quote was never adjusted. */
   originalTotalCents?: number | null;
+  /** Whether partsCents/laborCents/taxCents/feeCents reconcile to totalCents.
+   *  False in the robust fallback where only the agreed TOTAL is known (the
+   *  per-line breakdown isn't available) — callers hide the per-line rows. */
+  hasBreakdown?: boolean;
 };
 
 type PriorOpenRecommendation = {
@@ -2648,11 +2652,12 @@ function PartsStep({
   // tax/fee → total flow read-only.
   if (readOnly) {
     const usedParts = parts.filter((p) => p.not_used !== true);
-    // Drive every line from the single locked-quote source so the breakdown
-    // reconciles (parts + labor + tax/fee = total). Fall back to the summed
-    // rows only when no breakdown was passed.
-    const partsCents = lockedQuote
-      ? lockedQuote.partsCents
+    // Per-line breakdown reconciles only when the locked quote carries it
+    // (hasBreakdown). In the robust fallback (only the agreed TOTAL is known)
+    // we show the total + the summed rows for Parts, and hide labor/tax/fee.
+    const showBreakdown = lockedQuote?.hasBreakdown === true;
+    const partsCents = showBreakdown
+      ? lockedQuote!.partsCents
       : Math.round(partsCostSum * 100);
     const totalCents = lockedQuote
       ? lockedQuote.totalCents
@@ -2720,7 +2725,7 @@ function PartsStep({
                   ${(partsCents / 100).toFixed(2)}
                 </span>
               </div>
-              {lockedQuote ? (
+              {showBreakdown && lockedQuote ? (
                 <>
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Labor</span>

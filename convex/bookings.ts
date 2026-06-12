@@ -13395,22 +13395,45 @@ export const getReceipt = query({
       }
     }
 
-    // Parts line items — from job_actuals.parts_used (mechanic-confirmed
-    // actual list, NOT the quoted estimate).
+    // Parts line items — prefer the approved pre-job estimate snapshot, which
+    // carries the prices + quantities the customer agreed to (including any
+    // mechanic price adjustment). That snapshot is what `parts_subtotal_cents`
+    // on the same approval row is computed from, so each line's total
+    // reconciles exactly with the "Parts" aggregate below. Fall back to
+    // job_actuals.parts_used for legacy bookings with no approval row.
+    //
+    // `cost` is the LINE TOTAL (unit_cost × quantity); `unit_cost` + `quantity`
+    // are carried so the UI can render "4 × $39.48". Mirror the exact filtering
+    // in partsSubtotalCents (booking_approvals.ts): drop not-used and
+    // customer-supplied rows so the lines sum to the aggregate.
     type PartLine = {
       type: "part";
       name: string;
       oem_number: string | null;
+      quantity: number;
+      unit_cost: number | null;
       cost: number | null;
     };
-    const partLines: PartLine[] = Array.isArray(jobActual?.parts_used)
-      ? (jobActual!.parts_used as any[]).map((p: any) => ({
-          type: "part",
+    const partsLineSource: any[] =
+      finalApproval != null && Array.isArray((finalApproval as any).parts_snapshot)
+        ? ((finalApproval as any).parts_snapshot as any[])
+        : Array.isArray(jobActual?.parts_used)
+          ? (jobActual!.parts_used as any[])
+          : [];
+    const partLines: PartLine[] = partsLineSource
+      .filter((p: any) => p?.not_used !== true && p?.supplied_by !== "customer")
+      .map((p: any) => {
+        const unit = typeof p.cost === "number" ? p.cost : null;
+        const qty = Math.max(0, typeof p.quantity === "number" ? p.quantity : 1);
+        return {
+          type: "part" as const,
           name: p.part_name ?? "Part",
           oem_number: p.oem_number ?? null,
-          cost: typeof p.cost === "number" ? p.cost : null,
-        }))
-      : [];
+          quantity: qty,
+          unit_cost: unit,
+          cost: unit != null ? Math.round(unit * qty * 100) / 100 : null,
+        };
+      });
 
     // Totals stack. Prefer the frozen breakdown on the final approval row
     // (parts / labor / tax / fee all captured at submit-time, summing exactly

@@ -931,6 +931,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     // original quote. originalTotalCents is set only when an adjustment moved
     // the price, so the confirmation can show original → new.
     const lockedQuote = useMemo(() => {
+      const APPROVED = new Set([
+        "pre_job_approved",
+        "mid_job_approved",
+        "post_job_approved",
+        "captured",
+      ]);
       const originalCents =
         job?.quotedSetPriceDollars != null
           ? Math.round(job.quotedSetPriceDollars * 100)
@@ -940,6 +946,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               job.quotedBreakdown.tax_cents +
               job.quotedBreakdown.service_fee_cents
             : null;
+      // 1. Approved adjustment WITH its frozen breakdown — reconciles exactly.
       if (effectiveQuote) {
         return {
           partsCents: effectiveQuote.partsCents,
@@ -951,8 +958,33 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             originalCents != null && originalCents !== effectiveQuote.totalCents
               ? originalCents
               : null,
+          hasBreakdown: true,
         };
       }
+      // 2. Robust fallback — the booking row itself records an approved
+      //    adjustment (mechanic_set_price_cents). Surface the NEW total +
+      //    original even when the detailed breakdown query isn't available;
+      //    per-line breakdown is suppressed (hasBreakdown:false) since we can't
+      //    reconcile it without the frozen approval row.
+      const agreedCents = job?.mechanicSetPriceCents ?? null;
+      if (
+        !job?.isFixedPrice &&
+        agreedCents != null &&
+        APPROVED.has(job?.paymentApprovalState ?? "") &&
+        originalCents != null &&
+        agreedCents !== originalCents
+      ) {
+        return {
+          partsCents: 0,
+          laborCents: 0,
+          taxCents: 0,
+          feeCents: 0,
+          totalCents: agreedCents,
+          originalTotalCents: originalCents,
+          hasBreakdown: false,
+        };
+      }
+      // 3. No adjustment — original quote breakdown.
       const bd = job?.quotedBreakdown;
       if (!bd) return null;
       const sumCents =
@@ -964,8 +996,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         feeCents: bd.service_fee_cents,
         totalCents: originalCents ?? sumCents,
         originalTotalCents: null,
+        hasBreakdown: true,
       };
-    }, [job?.quotedBreakdown, job?.quotedSetPriceDollars, effectiveQuote]);
+    }, [
+      job?.quotedBreakdown,
+      job?.quotedSetPriceDollars,
+      job?.mechanicSetPriceCents,
+      job?.paymentApprovalState,
+      job?.isFixedPrice,
+      effectiveQuote,
+    ]);
     // Parts shown in the locked confirmation. When an adjustment was approved,
     // these are its frozen parts_snapshot (matches the breakdown). Otherwise
     // the booking's original priced snapshot, UNSCOPED — so the rows reconcile
@@ -1957,11 +1997,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             </p>
                           )}
                         </div>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          Parts ${(lockedQuote.partsCents / 100).toFixed(2)} &middot;{" "}
-                          Labor ${(lockedQuote.laborCents / 100).toFixed(2)} &middot;{" "}
-                          Tax+Fee ${((lockedQuote.taxCents + lockedQuote.feeCents) / 100).toFixed(2)}
-                        </p>
+                        {lockedQuote.hasBreakdown ? (
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            Parts ${(lockedQuote.partsCents / 100).toFixed(2)} &middot;{" "}
+                            Labor ${(lockedQuote.laborCents / 100).toFixed(2)} &middot;{" "}
+                            Tax+Fee ${((lockedQuote.taxCents + lockedQuote.feeCents) / 100).toFixed(2)}
+                          </p>
+                        ) : null}
                         <p className="mt-1 text-[12px] text-muted-foreground">
                           Customer approved this adjusted total.
                         </p>
@@ -3069,6 +3111,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           passportData={vehiclePassport ?? null}
           prefillData={job?.jobActuals?.prejobReport ?? null}
           oemPartsByService={oemPartsByService ?? null}
+          lockedQuote={lockedQuote}
           isSubmitting={isSubmittingPrejob}
           onClose={() => setShowPrejobDialog(false)}
           onSubmit={handleStartWithPrejob}

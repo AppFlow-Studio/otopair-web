@@ -461,6 +461,19 @@ export type PreJobOemPartsForService = {
   parts: PreJobOemPart[];
 };
 
+/** Locked/agreed quote summary for the pre-job header. Mirrors the post-job
+ *  `LockedQuote` shape. When `originalTotalCents` differs from `totalCents`, the
+ *  customer approved a price adjustment — shown as original → new. */
+export type PreJobLockedQuote = {
+  totalCents: number;
+  originalTotalCents?: number | null;
+  hasBreakdown?: boolean;
+  partsCents: number;
+  laborCents: number;
+  taxCents: number;
+  feeCents: number;
+};
+
 export default function PreJobSurveyDialog({
   open,
   bookingId,
@@ -470,6 +483,7 @@ export default function PreJobSurveyDialog({
   passportData,
   prefillData,
   oemPartsByService,
+  lockedQuote,
   isSubmitting,
   onClose,
   onSubmit,
@@ -482,6 +496,7 @@ export default function PreJobSurveyDialog({
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
   oemPartsByService?: PreJobOemPartsForService[] | null;
+  lockedQuote?: PreJobLockedQuote | null;
   isSubmitting: boolean;
   onClose: () => void;
   onSubmit: (payload: PreJobSurveyPayload, action: SubmitIntent) => Promise<void>;
@@ -497,6 +512,7 @@ export default function PreJobSurveyDialog({
       passportData={passportData ?? null}
       prefillData={prefillData ?? null}
       oemPartsByService={oemPartsByService ?? null}
+      lockedQuote={lockedQuote ?? null}
       isSubmitting={isSubmitting}
       onClose={onClose}
       onSubmit={onSubmit}
@@ -513,6 +529,7 @@ function PreJobSurveyDialogBody({
   passportData,
   prefillData,
   oemPartsByService,
+  lockedQuote,
   isSubmitting,
   onClose,
   onSubmit,
@@ -525,6 +542,7 @@ function PreJobSurveyDialogBody({
   passportData: VehiclePassportData | null;
   prefillData: PreJobSurveyPayload | null;
   oemPartsByService: PreJobOemPartsForService[] | null;
+  lockedQuote: PreJobLockedQuote | null;
   isSubmitting: boolean;
   onClose: () => void;
   onSubmit: (payload: PreJobSurveyPayload, action: SubmitIntent) => Promise<void>;
@@ -1272,6 +1290,51 @@ function PreJobSurveyDialogBody({
               bookingId={bookingId}
               vin={passportData.vin}
             />
+          ) : null}
+
+          {lockedQuote ? (
+            (() => {
+              const adjusted =
+                lockedQuote.originalTotalCents != null &&
+                lockedQuote.originalTotalCents !== lockedQuote.totalCents;
+              return (
+                <section className="rounded-lg border border-primary/15 bg-card p-3.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                      {adjusted ? "Agreed price" : "Quoted price"}
+                      {adjusted ? (
+                        <span className="inline-flex items-center rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-success">
+                          Adjusted
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="flex items-baseline gap-2">
+                      {adjusted && lockedQuote.originalTotalCents != null ? (
+                        <span className="text-[12px] font-medium tabular-nums text-muted-foreground line-through">
+                          ${(lockedQuote.originalTotalCents / 100).toFixed(2)}
+                        </span>
+                      ) : null}
+                      <span className="text-[16px] font-bold tabular-nums text-foreground">
+                        ${(lockedQuote.totalCents / 100).toFixed(2)}
+                      </span>
+                    </span>
+                  </div>
+                  {lockedQuote.hasBreakdown ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Parts ${(lockedQuote.partsCents / 100).toFixed(2)} ·{" "}
+                      Labor ${(lockedQuote.laborCents / 100).toFixed(2)} ·{" "}
+                      Tax+Fee $
+                      {((lockedQuote.taxCents + lockedQuote.feeCents) / 100).toFixed(2)}
+                    </p>
+                  ) : null}
+                  {adjusted ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Customer approved this adjusted total.
+                    </p>
+                  ) : null}
+                </section>
+              );
+            })()
           ) : null}
 
           {oemPartsByService && oemPartsByService.length > 0 ? (

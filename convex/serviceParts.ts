@@ -32,6 +32,13 @@ import {
   roleApplies,
   type VehicleSpecBundle,
 } from "./lib/partRoleQuantity";
+import {
+  axleForBrakeService,
+  axlePositionByServiceId,
+  fitmentMatchesPosition,
+  isBrakeSlug,
+  type BrakeScope,
+} from "./lib/brakeScope";
 
 /** Confidence floor for the selector's confidence gate. Below this a fitment
  *  can still win, but only after the gate has eliminated everyone and the
@@ -263,9 +270,23 @@ export const getOemPartsForBooking = query({
     const configId = vehicle.vehicle_config_id;
     const out: OemPartsForService[] = [];
 
+    // Customer's axle choice per service (brake pads front/rear/both). Drives
+    // the position filter below so the card shows only what was booked — a
+    // "Rear pads only" job must not list front pads.
+    const axleByServiceId = axlePositionByServiceId(booking);
+
     for (const serviceId of booking.service_ids ?? []) {
       const service = await ctx.db.get(serviceId);
       if (!service?.slug) continue;
+
+      const position = isBrakeSlug(service.slug)
+        ? axleForBrakeService(
+            booking,
+            String(serviceId),
+            service.slug,
+            axleByServiceId,
+          )
+        : undefined;
 
       const fitments = await ctx.db
         .query("part_fitments")
@@ -285,6 +306,11 @@ export const getOemPartsForBooking = query({
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
         if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
+        // Scope to the booked axle. Position-neutral parts (hardware kits,
+        // grease) survive a single-axle filter; "both"/unspecified keeps all.
+        if (!fitmentMatchesPosition(f.position, part.subcategory, position)) {
+          continue;
+        }
         resolved.push({
           fitment_id: f._id,
           part_id: f.part_id,
@@ -308,6 +334,50 @@ export const getOemPartsForBooking = query({
     }
 
     return out;
+  },
+});
+
+/**
+ * The brake axle(s) a booking actually covers — drives the pre-job brakes
+ * section so a "Rear pads only" job hides the front-pad field (and vice
+ * versa). Union across every brake/rotor service on the booking. When a brake
+ * service carries no explicit axle option (legacy booking), we fall back to
+ * "both" so nothing is hidden by mistake. Returns hasBrakeWork:false for
+ * non-brake bookings — the dialog then keeps both pad fields visible as
+ * optional passport capture.
+ */
+export const getBrakeScopeForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args): Promise<BrakeScope> => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return { hasBrakeWork: false, front: false, rear: false };
+
+    const axleByServiceId = axlePositionByServiceId(booking);
+    let hasBrakeWork = false;
+    let sawAxleSignal = false;
+    let front = false;
+    let rear = false;
+
+    for (const serviceId of booking.service_ids ?? []) {
+      const service = await ctx.db.get(serviceId);
+      if (!service?.slug || !isBrakeSlug(service.slug)) continue;
+      hasBrakeWork = true;
+      const axle = axleForBrakeService(
+        booking,
+        String(serviceId),
+        service.slug,
+        axleByServiceId,
+      );
+      if (!axle) continue;
+      sawAxleSignal = true;
+      if (axle === "front" || axle === "both") front = true;
+      if (axle === "rear" || axle === "both") rear = true;
+    }
+
+    if (!hasBrakeWork) return { hasBrakeWork: false, front: false, rear: false };
+    // Default to both axles when the booking recorded no axle option.
+    if (!sawAxleSignal) return { hasBrakeWork: true, front: true, rear: true };
+    return { hasBrakeWork: true, front, rear };
   },
 });
 

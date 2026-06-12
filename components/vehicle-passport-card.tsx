@@ -172,7 +172,66 @@ function Section({
 }
 
 function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
-  const parts = job.pricedPartsSnapshot ?? [];
+  // The effective AGREED quote — the latest customer-approved mechanic
+  // adjustment, if any. When present its frozen breakdown (which reconciles to
+  // its total) replaces the original so the scope reflects what the customer
+  // actually agreed to, with original → adjusted on the total.
+  const effectiveQuote = useQuery(
+    (api as any).booking_approvals.getEffectiveQuoteForBooking,
+    { bookingId: job._id },
+  ) as
+    | {
+        totalCents: number;
+        partsCents: number;
+        laborCents: number;
+        taxCents: number;
+        feeCents: number;
+        partsSnapshot: Array<{
+          part_name: string;
+          brand?: string | null;
+          oem_number: string;
+          cost: number;
+          quantity?: number;
+        }>;
+      }
+    | null
+    | undefined;
+
+  const partsRows = effectiveQuote
+    ? effectiveQuote.partsSnapshot.map((p) => ({
+        part_name: p.part_name,
+        oem_number: p.oem_number,
+        brand: p.brand ?? null,
+        quantity: p.quantity ?? 1,
+        lineCents: Math.round((p.cost ?? 0) * (p.quantity ?? 1) * 100),
+      }))
+    : (job.pricedPartsSnapshot ?? []).map((p) => ({
+        part_name: p.part_name,
+        oem_number: p.oem_number,
+        brand: p.brand ?? null,
+        quantity: p.quantity,
+        lineCents: p.line_total_cents,
+      }));
+
+  const partsCents = effectiveQuote
+    ? effectiveQuote.partsCents
+    : Math.round(job.partsCost * 100);
+  const laborCents = effectiveQuote
+    ? effectiveQuote.laborCents
+    : Math.round(job.laborCost * 100);
+  const taxCents = effectiveQuote
+    ? effectiveQuote.taxCents
+    : (job.quotedBreakdown?.tax_cents ?? null);
+  const feeCents = effectiveQuote
+    ? effectiveQuote.feeCents
+    : (job.quotedBreakdown?.service_fee_cents ?? null);
+  const totalCents = effectiveQuote
+    ? effectiveQuote.totalCents
+    : Math.round(job.totalCost * 100);
+  const originalTotalCents = Math.round(job.totalCost * 100);
+  const wasAdjusted =
+    effectiveQuote != null && originalTotalCents !== totalCents;
+
   return (
     <div className="space-y-4 text-sm">
       <div>
@@ -193,14 +252,21 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
       </div>
 
       <div>
-        <p className="text-[10px] font-bold tracking-widest text-muted-foreground">
-          PARTS
-        </p>
-        {parts.length === 0 ? (
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] font-bold tracking-widest text-muted-foreground">
+            PARTS
+          </p>
+          {wasAdjusted ? (
+            <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+              Quote adjusted
+            </span>
+          ) : null}
+        </div>
+        {partsRows.length === 0 ? (
           <p className="mt-1 text-muted-foreground">No parts on this quote.</p>
         ) : (
           <ul className="mt-1 divide-y divide-border">
-            {parts.map((p, i) => (
+            {partsRows.map((p, i) => (
               <li
                 key={`${p.oem_number}-${i}`}
                 className="flex items-start justify-between gap-3 py-2 first:pt-0 last:pb-0"
@@ -216,7 +282,7 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
                   </p>
                 </div>
                 <p className="shrink-0 tabular-nums text-foreground">
-                  {formatCents(p.line_total_cents)}
+                  {formatCents(p.lineCents)}
                 </p>
               </li>
             ))}
@@ -228,7 +294,7 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">Parts subtotal</span>
           <span className="tabular-nums text-foreground">
-            {formatCurrency(job.partsCost)}
+            {formatCents(partsCents)}
           </span>
         </div>
         <div className="mt-1 flex items-center justify-between text-sm">
@@ -236,33 +302,43 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
             Labor ({formatLaborHours(job.estimatedLaborMinutes)})
           </span>
           <span className="tabular-nums text-foreground">
-            {formatCurrency(job.laborCost)}
+            {formatCents(laborCents)}
           </span>
         </div>
-        {job.quotedBreakdown ? (
-          <>
-            <div className="mt-1 flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Tax</span>
-              <span className="tabular-nums text-foreground">
-                {formatCents(job.quotedBreakdown.tax_cents)}
-              </span>
-            </div>
-            <div className="mt-1 flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">
-                Otopair service fee
-              </span>
-              <span className="tabular-nums text-foreground">
-                {formatCents(job.quotedBreakdown.service_fee_cents)}
-              </span>
-            </div>
-          </>
+        {taxCents != null ? (
+          <div className="mt-1 flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Tax</span>
+            <span className="tabular-nums text-foreground">
+              {formatCents(taxCents)}
+            </span>
+          </div>
+        ) : null}
+        {feeCents != null ? (
+          <div className="mt-1 flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Otopair service fee</span>
+            <span className="tabular-nums text-foreground">
+              {formatCents(feeCents)}
+            </span>
+          </div>
         ) : null}
         <div className="mt-2 flex items-center justify-between text-sm font-semibold">
           <span className="text-foreground">Total</span>
-          <span className="tabular-nums text-foreground">
-            {formatCurrency(job.totalCost)}
+          <span className="flex items-baseline gap-2">
+            {wasAdjusted ? (
+              <span className="text-xs font-medium tabular-nums text-muted-foreground line-through">
+                {formatCents(originalTotalCents)}
+              </span>
+            ) : null}
+            <span className="tabular-nums text-foreground">
+              {formatCents(totalCents)}
+            </span>
           </span>
         </div>
+        {wasAdjusted ? (
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Customer approved an adjustment from the original quote.
+          </p>
+        ) : null}
       </div>
     </div>
   );

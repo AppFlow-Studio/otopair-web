@@ -62,6 +62,7 @@ import {
 import { StatusPill } from "@/components/status-pill";
 import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
 import type {
+  JobActualPartPayload,
   PostJobSurveyPayload,
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
@@ -612,6 +613,13 @@ export interface JobDetailData {
     tax_cents: number;
     service_fee_cents: number;
   } | null;
+  /** Orthogonal payment-approval sub-state ("pre_job_approved",
+   *  "mid_job_approved", "captured", …). Drives the "new agreed price" pill. */
+  paymentApprovalState?: string | null;
+  /** Mechanic's current target price in cents. Once the customer approves a
+   *  pre/mid-job adjustment this is the NEW agreed total — shown in place of
+   *  the original quote. */
+  mechanicSetPriceCents?: number | null;
   pricedPartsSnapshot?: Array<{
     service_id: string;
     part_id?: string;
@@ -849,6 +857,148 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       api.serviceParts.getOemPartsForBooking,
       job ? { bookingId: job._id } : "skip"
     );
+    // Brake axle scope for this booking — used to keep the snapshot-seeded
+    // parts list from listing an axle the customer didn't book (older
+    // snapshots could freeze front pads regardless of the chosen axle).
+    const brakeScope = useQuery(
+      api.serviceParts.getBrakeScopeForBooking,
+      job ? { bookingId: job._id } : "skip"
+    );
+    // The effective AGREED quote — the latest customer-approved mechanic
+    // adjustment with its frozen breakdown. When present it's the single source
+    // of truth for the locked post-job confirmation (parts + breakdown all
+    // reconcile to its total). Null when the quote was never adjusted.
+    const effectiveQuote = useQuery(
+      (api as any).booking_approvals.getEffectiveQuoteForBooking,
+      job ? { bookingId: job._id } : "skip"
+    ) as
+      | {
+          cycle: string;
+          totalCents: number;
+          partsCents: number;
+          laborCents: number;
+          taxCents: number;
+          feeCents: number;
+          partsSnapshot: Array<{
+            part_name: string;
+            brand?: string | null;
+            oem_number: string;
+            cost: number;
+            quantity?: number;
+            supplied_by?: string;
+            part_tier?: string;
+            service_id?: string | null;
+            source?: "catalog" | "manual";
+          }>;
+        }
+      | null
+      | undefined;
+    // The parts ACTUALLY quoted on this booking, scoped to the booked axle.
+    // This is the source of truth the pre/post-job dialogs seed from — what we
+    // quoted, not the catalog's broader suggestions. Null when the booking has
+    // no snapshot (walk-ins) or nothing survives the axle filter, so the
+    // dialog falls back to its catalog prefill.
+    const scopedQuotedParts = useMemo<JobActualPartPayload[] | null>(() => {
+      const snapshot = job?.pricedPartsSnapshot;
+      if (!snapshot || snapshot.length === 0) return null;
+      const rows: JobActualPartPayload[] = snapshot
+        .filter((p) => {
+          if (!brakeScope?.hasBrakeWork) return true;
+          if (brakeScope.front && brakeScope.rear) return true;
+          const n = p.part_name.toLowerCase();
+          const hasFront = /\bfront\b/.test(n);
+          const hasRear = /\brear\b/.test(n);
+          if (hasFront && !hasRear) return brakeScope.front;
+          if (hasRear && !hasFront) return brakeScope.rear;
+          return true;
+        })
+        .map((p) => ({
+          part_name: p.part_name,
+          brand: p.brand ?? null,
+          oem_number: p.oem_number,
+          cost: p.unit_price_cents / 100,
+          quantity: p.quantity,
+          supplied_by: "shop" as const,
+          part_tier: p.part_tier ?? "oem",
+          service_id: p.service_id ?? null,
+          source: "catalog" as const,
+        }));
+      return rows.length > 0 ? rows : null;
+    }, [job?.pricedPartsSnapshot, brakeScope]);
+    // The locked, customer-approved quote breakdown (cents) that drives the
+    // read-only post-job confirmation. An approved mechanic adjustment wins
+    // (its frozen breakdown reconciles exactly); otherwise the booking's
+    // original quote. originalTotalCents is set only when an adjustment moved
+    // the price, so the confirmation can show original → new.
+    const lockedQuote = useMemo(() => {
+      const originalCents =
+        job?.quotedSetPriceDollars != null
+          ? Math.round(job.quotedSetPriceDollars * 100)
+          : job?.quotedBreakdown
+            ? job.quotedBreakdown.parts_cents +
+              job.quotedBreakdown.labor_cents +
+              job.quotedBreakdown.tax_cents +
+              job.quotedBreakdown.service_fee_cents
+            : null;
+      if (effectiveQuote) {
+        return {
+          partsCents: effectiveQuote.partsCents,
+          laborCents: effectiveQuote.laborCents,
+          taxCents: effectiveQuote.taxCents,
+          feeCents: effectiveQuote.feeCents,
+          totalCents: effectiveQuote.totalCents,
+          originalTotalCents:
+            originalCents != null && originalCents !== effectiveQuote.totalCents
+              ? originalCents
+              : null,
+        };
+      }
+      const bd = job?.quotedBreakdown;
+      if (!bd) return null;
+      const sumCents =
+        bd.parts_cents + bd.labor_cents + bd.tax_cents + bd.service_fee_cents;
+      return {
+        partsCents: bd.parts_cents,
+        laborCents: bd.labor_cents,
+        taxCents: bd.tax_cents,
+        feeCents: bd.service_fee_cents,
+        totalCents: originalCents ?? sumCents,
+        originalTotalCents: null,
+      };
+    }, [job?.quotedBreakdown, job?.quotedSetPriceDollars, effectiveQuote]);
+    // Parts shown in the locked confirmation. When an adjustment was approved,
+    // these are its frozen parts_snapshot (matches the breakdown). Otherwise
+    // the booking's original priced snapshot, UNSCOPED — so the rows reconcile
+    // with the quote breakdown rather than mixing a scoped subset with the
+    // full total.
+    const lockedQuoteParts = useMemo<JobActualPartPayload[] | null>(() => {
+      if (effectiveQuote && effectiveQuote.partsSnapshot.length > 0) {
+        return effectiveQuote.partsSnapshot.map((p) => ({
+          part_name: p.part_name,
+          brand: p.brand ?? null,
+          oem_number: p.oem_number,
+          cost: p.cost,
+          quantity: p.quantity,
+          supplied_by: p.supplied_by === "customer" ? "customer" : "shop",
+          part_tier: p.part_tier ?? "oem",
+          service_id: p.service_id ?? null,
+          source: p.source ?? "catalog",
+        }));
+      }
+      const snapshot = job?.pricedPartsSnapshot;
+      if (!snapshot || snapshot.length === 0) return null;
+      return snapshot.map((p) => ({
+        part_name: p.part_name,
+        brand: p.brand ?? null,
+        oem_number: p.oem_number,
+        cost: p.unit_price_cents / 100,
+        quantity: p.quantity,
+        supplied_by: "shop" as const,
+        part_tier: p.part_tier ?? "oem",
+        service_id: p.service_id ?? null,
+        source: "catalog" as const,
+      }));
+    }, [effectiveQuote, job?.pricedPartsSnapshot]);
     const postjobReport = useQuery(
       api.job_actuals.getPostjobReportForBooking,
       job ? { bookingId: job._id } : "skip"
@@ -976,6 +1126,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     async function handleStatusAction(action: "accept") {
       if (!job?._id) return;
+      if ((job as any).paymentApprovalState === "pre_job_pending") {
+        setActionError(
+          "Your quote is awaiting the customer's approval. You can accept once they approve or decline it.",
+        );
+        return;
+      }
       setActionError("");
       setIsActioning(true);
       try {
@@ -1755,18 +1911,67 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                       </span>
                     )}
                   </div>
+                  {(() => {
+                    // When the customer approved a pre/mid-job adjustment, the
+                    // mechanic's set price becomes the NEW agreed total. Show it
+                    // in place of the original quote, with the prior figure
+                    // struck through and an "Agreed price" pill, so the booking
+                    // drawer reflects what the customer actually agreed to.
+                    const APPROVED = new Set([
+                      "pre_job_approved",
+                      "mid_job_approved",
+                      "post_job_approved",
+                      "captured",
+                    ]);
+                    const agreedCents = job.mechanicSetPriceCents ?? null;
+                    const originalCents =
+                      job.quotedSetPriceDollars != null
+                        ? Math.round(job.quotedSetPriceDollars * 100)
+                        : null;
+                    const hasNewAgreedPrice =
+                      !job.isFixedPrice &&
+                      agreedCents != null &&
+                      APPROVED.has(job.paymentApprovalState ?? "") &&
+                      (originalCents == null || agreedCents !== originalCents);
+                    return (
                   <div className={drawerInfoCardClassName}>
                     <div className="flex items-center gap-2 flex-wrap">
                       <DrawerFieldLabel>
-                        {job.isFixedPrice ? "Fixed price" : "Quoted price"}
+                        {job.isFixedPrice
+                          ? "Fixed price"
+                          : hasNewAgreedPrice
+                            ? "Agreed price"
+                            : "Quoted price"}
                       </DrawerFieldLabel>
                       {job.isFixedPrice && (
                         <span className="inline-flex items-center rounded-md bg-[#EFF6FF] px-2 py-0.5 text-[11px] font-semibold text-[#5299FE]">
                           Fixed price
                         </span>
                       )}
+                      {hasNewAgreedPrice && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
+                          <Check className="h-3 w-3" strokeWidth={3} />
+                          New agreed price
+                        </span>
+                      )}
                     </div>
-                    {job.quotedSetPriceDollars != null && job.quotedBreakdown ? (
+                    {hasNewAgreedPrice && agreedCents != null ? (
+                      <>
+                        <div className="flex items-baseline gap-2">
+                          <p className="text-[15px] font-semibold text-foreground">
+                            ${(agreedCents / 100).toFixed(2)}
+                          </p>
+                          {originalCents != null && (
+                            <p className="text-[12px] text-muted-foreground line-through">
+                              ${(originalCents / 100).toFixed(2)}
+                            </p>
+                          )}
+                        </div>
+                        <p className="mt-1 text-[12px] text-muted-foreground">
+                          Customer approved this adjusted total.
+                        </p>
+                      </>
+                    ) : job.quotedSetPriceDollars != null && job.quotedBreakdown ? (
                       <>
                         <p className="text-[15px] font-medium text-foreground">
                           ${job.quotedSetPriceDollars.toFixed(2)}
@@ -1794,12 +1999,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                       </p>
                     )}
                   </div>
+                    );
+                  })()}
                   <div className={drawerInfoCardClassName}>
                     <DrawerFieldLabel>Status</DrawerFieldLabel>
                     <div className="flex items-center gap-2 flex-wrap">
                       <StatusPill status={job.status} />
                       {(job.status === "pending" ||
                         job.status === "pending_shop_acceptance") &&
+                        (job as any).paymentApprovalState !==
+                          "pre_job_pending" &&
                         (() => {
                           const cd = pendingCountdown(job._creationTime);
                           return cd ? (
@@ -2050,21 +2259,28 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 {(() => {
                   const s = job.status;
                   const step = getJobStep(s);
-                  const canAccept =
+                  // A pre-job quote is sitting with the customer. The booking
+                  // status is still pending_shop_acceptance, but the shop's
+                  // turn is over until the customer approves or declines —
+                  // block the response actions in the meantime.
+                  const quoteAwaitingCustomer =
+                    (job as any).paymentApprovalState === "pre_job_pending";
+                  const isPendingIncoming =
                     s === "pending" || s === "pending_shop_acceptance";
-                  const canAdjustQuote = canAccept;
+                  const canAccept = isPendingIncoming && !quoteAwaitingCustomer;
+                  const canAdjustQuote = isPendingIncoming;
                   const canComplete = s === "in_progress";
                   const canMarkVehicleHere = s === "confirmed";
                   const canStartJob = s === "vehicle_at_shop";
                   const canMarkNoShow = s === "confirmed";
-                  const canDecline =
-                    s === "pending" || s === "pending_shop_acceptance";
+                  const canDecline = isPendingIncoming && !quoteAwaitingCustomer;
                   const canCancel =
                     s === "confirmed" ||
                     s === "vehicle_at_shop" ||
                     s === "in_progress";
                   const canReschedule =
                     !!onRequestReschedule &&
+                    !quoteAwaitingCustomer &&
                     (s === "pending" ||
                       s === "pending_shop_acceptance" ||
                       s === "confirmed" ||
@@ -2139,6 +2355,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           Updating parts or time won&apos;t change the price — edits are logged but
                           will not affect this job. To change what the customer pays, update the
                           fixed price in the shop&apos;s service catalog.
+                        </div>
+                      ) : null}
+                      {quoteAwaitingCustomer ? (
+                        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                          <span className="font-semibold">
+                            Waiting on the customer.
+                          </span>{" "}
+                          Your quote was sent for approval. You can&apos;t
+                          accept, decline, or reschedule this booking until the
+                          customer approves or declines it.
                         </div>
                       ) : null}
                       <div className="flex flex-wrap gap-2">
@@ -2934,6 +3160,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
           lockBilling
+          quotedParts={lockedQuoteParts}
+          lockedQuote={lockedQuote}
           isFixedPrice={job?.isFixedPrice}
         />
 
@@ -2966,21 +3194,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           laborCostDollars={(job as any)?.laborCost ?? null}
           shopState={(job as any)?.shopState ?? null}
           shopZip={(job as any)?.shopZip ?? null}
-          quotedParts={
-            job?.pricedPartsSnapshot && job.pricedPartsSnapshot.length > 0
-              ? job.pricedPartsSnapshot.map((p) => ({
-                  part_name: p.part_name,
-                  brand: p.brand ?? null,
-                  oem_number: p.oem_number,
-                  cost: p.unit_price_cents / 100,
-                  quantity: p.quantity,
-                  supplied_by: "shop",
-                  part_tier: p.part_tier ?? "oem",
-                  service_id: p.service_id ?? null,
-                  source: "catalog",
-                }))
-              : null
-          }
+          quotedParts={scopedQuotedParts}
           isFixedPrice={job?.isFixedPrice}
         />
 

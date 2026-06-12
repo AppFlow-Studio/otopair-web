@@ -598,7 +598,12 @@ export default function BookingsPage() {
                           const isFocused = focusedRowIndex === idx;
                           const isPending =
                             job.status === "pending" || job.status === "pending_shop_acceptance";
-                          const countdown = isPending
+                          // A pre-job quote pending the customer's decision is
+                          // the customer's turn, not the shop's — don't run the
+                          // "shop needs to respond" countdown for it.
+                          const awaitingCustomerQuote =
+                            (job as any).paymentApprovalState === "pre_job_pending";
+                          const countdown = isPending && !awaitingCustomerQuote
                             ? pendingCountdown(job._creationTime)
                             : null;
                           return (

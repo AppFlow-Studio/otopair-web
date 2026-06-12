@@ -46,6 +46,7 @@ import {
   computeQuotedSetPrice,
   reconcileDisclosedCeilingWithQuote,
 } from "./booking_quotes";
+import { deriveServiceVariantsFromOptions } from "./lib/brakeScope";
 import {
   detectTier,
   resolveLaborHours,
@@ -1450,10 +1451,17 @@ export const createBatch = mutation({
       vehicleConfigId: vehicle.vehicle_config_id ?? null,
       vin: normalizedVin,
       confirmedPackages: new Set(ownerSpecs?.confirmed_packages ?? []),
-      serviceVariants: args.service_variants?.map((v) => ({
-        serviceId: v.service_id,
-        position: v.position,
-      })),
+      // Prefer the explicit per-service variants the client sent; otherwise
+      // derive axle scope from the customer's selected_service_options so the
+      // snapshot (→ locked quote + post-job parts) reflects the booked axle
+      // instead of defaulting a multi-axle service to front.
+      serviceVariants:
+        args.service_variants && args.service_variants.length > 0
+          ? args.service_variants.map((v) => ({
+              serviceId: v.service_id,
+              position: v.position,
+            }))
+          : deriveServiceVariantsFromOptions(args.selected_service_options),
     });
     const pricedPartsSnapshot = pricedPartsResult.rows;
 
@@ -6899,6 +6907,9 @@ export const backfillPricedPartsSnapshot = internalMutation({
         vehicleConfigId: vehicle.vehicle_config_id,
         vin: (booking as any).vin,
         confirmedPackages: new Set(ownerSpecs?.confirmed_packages ?? []),
+        serviceVariants: deriveServiceVariantsFromOptions(
+          (booking as any).selected_service_options,
+        ),
       });
 
       if (result.rows.length === 0) {
@@ -10445,6 +10456,16 @@ export const accept = mutation({
       throw new Error("Only pending bookings can be accepted");
     }
 
+    // A pre-job quote that's out of the customer's disclosed range is awaiting
+    // the customer's decision. Until they approve or decline it, the price is
+    // unsettled — the shop must not be able to accept the booking out from
+    // under the open approval.
+    if ((booking as any).payment_approval_state === "pre_job_pending") {
+      throw new Error(
+        "Your quote is awaiting the customer's approval. You can accept once they approve or decline it.",
+      );
+    }
+
     return await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "confirmed",
@@ -13253,6 +13274,40 @@ export const getReceipt = query({
       .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
       .first();
 
+    // Authoritative final breakdown — the frozen parts/labor/tax/fee on the
+    // last agreed booking_approvals row (same source the activity log prints).
+    // Without it the totals below fall back to deriving tax as a leftover of
+    // the booking's stale total_cost, which collapses tax to $0 and makes the
+    // receipt total disagree with what the customer actually approved.
+    const approvalRows = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", booking._id),
+      )
+      .collect();
+    const CYCLE_RANK: Record<string, number> = {
+      pre_job: 1,
+      mid_job: 2,
+      post_job: 3,
+    };
+    const finalApproval = approvalRows
+      .filter(
+        (a) =>
+          a.parts_subtotal_cents != null &&
+          a.labor_cents != null &&
+          a.tax_cents != null &&
+          a.service_fee_cents != null &&
+          a.decision !== "declined" &&
+          a.decision !== "withdrawn",
+      )
+      .sort((a, b) => {
+        const byCycle =
+          (CYCLE_RANK[a.cycle] ?? 0) - (CYCLE_RANK[b.cycle] ?? 0);
+        if (byCycle !== 0) return byCycle;
+        return a.submitted_at_ms - b.submitted_at_ms;
+      })
+      .pop();
+
     const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
     const mechanic = booking.mechanic_id
       ? await ctx.db.get(booking.mechanic_id)
@@ -13300,7 +13355,14 @@ export const getReceipt = query({
         rawServices.push({ name: svc.name ?? "Service", hours });
       }
     }
-    const bookingLaborCost = booking.labor_cost ?? null;
+    // Labor to split across service lines — the agreed approval labor when
+    // present, else the booking's labor_cost. Keeps each service row's labor
+    // consistent with the Labor row in the totals stack below.
+    const laborSubtotal: number | null =
+      finalApproval != null
+        ? finalApproval.labor_cents! / 100
+        : (booking.labor_cost ?? null);
+    const bookingLaborCost = laborSubtotal;
     for (const s of rawServices) {
       let lineCost: number | null = null;
       if (
@@ -13350,28 +13412,42 @@ export const getReceipt = query({
         }))
       : [];
 
-    // Totals stack.
-    const laborSubtotal = booking.labor_cost ?? null;
-    const partsSubtotalActual: number =
-      typeof jobActual?.actual_parts_cost === "number"
-        ? jobActual!.actual_parts_cost!
-        : (booking.parts_cost ?? 0);
+    // Totals stack. Prefer the frozen breakdown on the final approval row
+    // (parts / labor / tax / fee all captured at submit-time, summing exactly
+    // to the agreed total). Fall back to the legacy derivation only for old
+    // bookings that predate the frozen breakdown.
     const partsSubtotalQuoted: number = booking.parts_cost ?? 0;
+    let partsSubtotalActual: number;
+    let platformFee: number;
+    let taxRemainder: number;
+    let grandTotal: number;
+
+    if (finalApproval != null) {
+      partsSubtotalActual = finalApproval.parts_subtotal_cents! / 100;
+      platformFee = finalApproval.service_fee_cents! / 100;
+      taxRemainder = finalApproval.tax_cents! / 100;
+      grandTotal = finalApproval.mechanic_set_price_cents / 100;
+    } else {
+      partsSubtotalActual =
+        typeof jobActual?.actual_parts_cost === "number"
+          ? jobActual!.actual_parts_cost!
+          : (booking.parts_cost ?? 0);
+      platformFee =
+        laborSubtotal != null
+          ? computePlatformFeeDollars(laborSubtotal + partsSubtotalActual)
+          : 0;
+      grandTotal =
+        typeof booking.total_cost === "number"
+          ? booking.total_cost
+          : (laborSubtotal ?? 0) + partsSubtotalActual + platformFee;
+      // Tax isn't tracked discretely on legacy rows — derive the remainder so
+      // the four-row stack still sums to the captured total.
+      taxRemainder = Math.max(
+        0,
+        grandTotal - (laborSubtotal ?? 0) - partsSubtotalActual - platformFee,
+      );
+    }
     const partsSaved = Math.max(0, partsSubtotalQuoted - partsSubtotalActual);
-    const platformFee =
-      laborSubtotal != null
-        ? computePlatformFeeDollars(laborSubtotal + partsSubtotalActual)
-        : 0;
-    const grandTotal =
-      typeof booking.total_cost === "number"
-        ? booking.total_cost
-        : (laborSubtotal ?? 0) + partsSubtotalActual + platformFee;
-    // Tax isn't tracked as a discrete field — derive what's left over so the
-    // four-row stack still sums to the captured total.
-    const taxRemainder = Math.max(
-      0,
-      grandTotal - (laborSubtotal ?? 0) - partsSubtotalActual - platformFee,
-    );
 
     return {
       receipt_number: `OTP-${booking._id.slice(-8).toUpperCase()}`,

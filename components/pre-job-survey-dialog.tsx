@@ -12,6 +12,7 @@ import {
 import { Check, Loader2 } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import {
@@ -530,6 +531,19 @@ function PreJobSurveyDialogBody({
 }) {
   const serviceFlags = getBookingServiceFlags(bookingServices);
 
+  // Which brake axle(s) this booking actually covers. A "Rear pads only" job
+  // hides the front-pad field (and vice versa) so the mechanic only measures
+  // what's in scope. Falls back to both axles while loading, for non-brake
+  // bookings, and for legacy bookings with no recorded axle option.
+  const brakeScope = useQuery(
+    api.serviceParts.getBrakeScopeForBooking,
+    open && bookingId ? ({ bookingId } as { bookingId: Id<"bookings"> }) : "skip",
+  );
+  const padScope =
+    serviceFlags.hasBrakeWork && brakeScope?.hasBrakeWork
+      ? { front: brakeScope.front, rear: brakeScope.rear }
+      : { front: true, rear: true };
+
   const initialMileage =
     typeof prefillData?.mileage === "number" && Number.isFinite(prefillData.mileage)
       ? String(Math.round(prefillData.mileage))
@@ -874,14 +888,16 @@ function PreJobSurveyDialogBody({
     }
     if (serviceFlags.hasBrakeWork) {
       if (
-        typeof payload.brakes?.front_pad_mm !== "number" ||
-        !Number.isFinite(payload.brakes.front_pad_mm)
+        padScope.front &&
+        (typeof payload.brakes?.front_pad_mm !== "number" ||
+          !Number.isFinite(payload.brakes.front_pad_mm))
       ) {
         throw new Error("Front pad thickness is required for brake-related work.");
       }
       if (
-        typeof payload.brakes?.rear_pad_mm !== "number" ||
-        !Number.isFinite(payload.brakes.rear_pad_mm)
+        padScope.rear &&
+        (typeof payload.brakes?.rear_pad_mm !== "number" ||
+          !Number.isFinite(payload.brakes.rear_pad_mm))
       ) {
         throw new Error("Rear pad thickness is required for brake-related work.");
       }
@@ -1557,41 +1573,50 @@ function PreJobSurveyDialogBody({
               accent={serviceFlags.hasBrakeWork ? "required" : "muted"}
             >
               <div className="grid gap-2 sm:grid-cols-2">
-                <SelectableFieldCard
-                  label={
-                    serviceFlags.hasBrakeWork ? (
-                      <RequiredLabel text="Front pad thickness" />
-                    ) : (
-                      "Front pad thickness"
-                    )
-                  }
-                  value={frontPadMm}
-                  onChange={setFrontPadMm}
-                  options={PAD_THICKNESS_OPTIONS}
-                  placeholder="Select mm…"
-                  otherPlaceholder="mm"
-                  otherInputMode="decimal"
-                  otherSanitize={keepNumericInput}
-                  helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
-                />
-                <SelectableFieldCard
-                  label={
-                    serviceFlags.hasBrakeWork ? (
-                      <RequiredLabel text="Rear pad thickness" />
-                    ) : (
-                      "Rear pad thickness"
-                    )
-                  }
-                  value={rearPadMm}
-                  onChange={setRearPadMm}
-                  options={PAD_THICKNESS_OPTIONS}
-                  placeholder="Select mm…"
-                  otherPlaceholder="mm"
-                  otherInputMode="decimal"
-                  otherSanitize={keepNumericInput}
-                  helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
-                />
+                {padScope.front ? (
+                  <SelectableFieldCard
+                    label={
+                      serviceFlags.hasBrakeWork ? (
+                        <RequiredLabel text="Front pad thickness" />
+                      ) : (
+                        "Front pad thickness"
+                      )
+                    }
+                    value={frontPadMm}
+                    onChange={setFrontPadMm}
+                    options={PAD_THICKNESS_OPTIONS}
+                    placeholder="Select mm…"
+                    otherPlaceholder="mm"
+                    otherInputMode="decimal"
+                    otherSanitize={keepNumericInput}
+                    helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
+                  />
+                ) : null}
+                {padScope.rear ? (
+                  <SelectableFieldCard
+                    label={
+                      serviceFlags.hasBrakeWork ? (
+                        <RequiredLabel text="Rear pad thickness" />
+                      ) : (
+                        "Rear pad thickness"
+                      )
+                    }
+                    value={rearPadMm}
+                    onChange={setRearPadMm}
+                    options={PAD_THICKNESS_OPTIONS}
+                    placeholder="Select mm…"
+                    otherPlaceholder="mm"
+                    otherInputMode="decimal"
+                    otherSanitize={keepNumericInput}
+                    helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
+                  />
+                ) : null}
               </div>
+              {serviceFlags.hasBrakeWork && !(padScope.front && padScope.rear) ? (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Scoped to this booking — {padScope.front ? "front" : "rear"} axle only.
+                </p>
+              ) : null}
               <FieldRow
                 label={
                   serviceFlags.hasBrakeWork ? (

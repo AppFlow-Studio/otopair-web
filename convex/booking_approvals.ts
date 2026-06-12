@@ -727,6 +727,68 @@ export const getOpenApprovalForBooking = query({
   },
 });
 
+/**
+ * Shop-facing: the EFFECTIVE agreed quote for a booking — the latest approved
+ * mechanic adjustment (pre/mid-job) if any, with its frozen breakdown. Drives
+ * the read-only post-job confirmation so it shows the price the customer
+ * actually agreed to (parts → labor → tax/fee → total), all from one source so
+ * the numbers reconcile. Returns null when no adjustment was approved (the
+ * caller then falls back to the booking's original quote).
+ */
+export const getEffectiveQuoteForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    // Soft shop-staff check — mirror getActiveJobConflict's read-only style.
+    const membership = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .collect();
+    const inShop = membership.some(
+      (m: any) => String(m.shop_id) === String((booking as any).shop_id),
+    );
+    if (!inShop) return null;
+
+    const rows = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+
+    const APPROVED = new Set([
+      "approved",
+      "auto_approved_within_range",
+    ]);
+    // Latest approved row wins (rows are newest-first).
+    const eff = rows.find(
+      (r: any) =>
+        APPROVED.has(r.decision ?? "") &&
+        r.parts_subtotal_cents != null &&
+        r.labor_cents != null,
+    );
+    if (!eff) return null;
+
+    const partsCents = eff.parts_subtotal_cents ?? 0;
+    const laborCents = eff.labor_cents ?? 0;
+    const taxCents = eff.tax_cents ?? 0;
+    const feeCents = eff.service_fee_cents ?? 0;
+    return {
+      cycle: eff.cycle as string,
+      totalCents: eff.mechanic_set_price_cents,
+      partsCents,
+      laborCents,
+      taxCents,
+      feeCents,
+      partsSnapshot: eff.parts_snapshot ?? [],
+    };
+  },
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // SLA expiry (cron-triggered)
 // ─────────────────────────────────────────────────────────────────────────

@@ -12,6 +12,14 @@ import {
   saveJobActualDraft,
 } from "./lib/job_actuals";
 import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
+import {
+  axleForBrakeService,
+  axlePositionByServiceId,
+  fitmentMatchesPosition,
+  isBrakeSlug,
+  partNameAxle,
+  type AxlePosition,
+} from "./lib/brakeScope";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
@@ -374,6 +382,24 @@ export const getPrefillData = query({
 
     const suggestedParts: SuggestedPart[] = [];
 
+    // Per-service axle scope (front/rear/both) from the customer's chosen
+    // options. Drives the brake-pad/rotor scoping below so a "Rear pads only"
+    // job doesn't pre-list front pads. Services with no axle signal stay
+    // undefined → no filtering (both axles shown).
+    const axleByServiceId = axlePositionByServiceId(booking);
+    const brakeAxleByServiceId = new Map<string, AxlePosition>();
+    for (const sid of booking.service_ids ?? []) {
+      const svc: any = await ctx.db.get(sid);
+      if (!svc?.slug || !isBrakeSlug(svc.slug)) continue;
+      const axle = axleForBrakeService(
+        booking,
+        String(sid),
+        svc.slug,
+        axleByServiceId,
+      );
+      if (axle) brakeAxleByServiceId.set(String(sid), axle);
+    }
+
     // Pre-Job Approval flow: when the booking was created with a priced
     // parts snapshot (frozen per-unit prices from `getPricedPartsForServices`
     // at booking time), seed `suggestedParts` from that first. This is the
@@ -470,18 +496,23 @@ export const getPrefillData = query({
             });
           }
         } else if (slug === "brake-pads") {
-          suggestedParts.push({
-            part_name: "Front Brake Pads",
-            oem_number: s.front_brake_pad_oem ?? "",
-            cost: 45,
-            service_id: sid,
-          });
-          suggestedParts.push({
-            part_name: "Rear Brake Pads",
-            oem_number: s.rear_brake_pad_oem ?? "",
-            cost: 40,
-            service_id: sid,
-          });
+          const axle = brakeAxleByServiceId.get(String(sid));
+          if (axle !== "rear") {
+            suggestedParts.push({
+              part_name: "Front Brake Pads",
+              oem_number: s.front_brake_pad_oem ?? "",
+              cost: 45,
+              service_id: sid,
+            });
+          }
+          if (axle !== "front") {
+            suggestedParts.push({
+              part_name: "Rear Brake Pads",
+              oem_number: s.rear_brake_pad_oem ?? "",
+              cost: 40,
+              service_id: sid,
+            });
+          }
         } else if (slug === "engine-air-filter" && s.engine_air_filter_oem) {
           suggestedParts.push({
             part_name: "Engine Air Filter",
@@ -516,13 +547,16 @@ export const getPrefillData = query({
             service_id: sid,
           });
         } else if (slug === "brake-rotors" && s.front_brake_rotor_oem) {
-          suggestedParts.push({
-            part_name: "Front Brake Rotors",
-            oem_number: s.front_brake_rotor_oem ?? "",
-            cost: 85,
-            service_id: sid,
-          });
-          if (s.rear_brake_rotor_oem) {
+          const axle = brakeAxleByServiceId.get(String(sid));
+          if (axle !== "rear") {
+            suggestedParts.push({
+              part_name: "Front Brake Rotors",
+              oem_number: s.front_brake_rotor_oem ?? "",
+              cost: 85,
+              service_id: sid,
+            });
+          }
+          if (axle !== "front" && s.rear_brake_rotor_oem) {
             suggestedParts.push({
               part_name: "Rear Brake Rotors",
               oem_number: s.rear_brake_rotor_oem,
@@ -606,11 +640,19 @@ export const getPrefillData = query({
               .eq("service_type", svc.slug!),
           )
           .collect();
+        const recPosition = isBrakeSlug(svc.slug)
+          ? brakeAxleByServiceId.get(String(sid))
+          : undefined;
         const parts: OemRecommendationPart[] = [];
         for (const f of fitments) {
           if (f.package_code != null) continue;
           const part = await ctx.db.get(f.part_id);
           if (!part) continue;
+          // Scope to the booked axle — position-neutral parts (hardware,
+          // grease) survive a single-axle filter.
+          if (!fitmentMatchesPosition(f.position, part.subcategory, recPosition)) {
+            continue;
+          }
           const priceSummary = await summarizePartPrices(ctx, f.part_id);
           parts.push({
             part_id: f.part_id,
@@ -721,6 +763,19 @@ export const getPrefillData = query({
       }),
     );
 
+    // Final axle net: drop any brake suggestion whose name names the OTHER
+    // axle than the booking covers. Catches rows from sources that don't carry
+    // a subcategory — the priced-snapshot seed (which can mis-default to front
+    // on older bookings) and the learned cascade. Position-neutral names are
+    // kept (partNameAxle returns null).
+    const scopedSuggestedParts = suggestedParts.filter((p) => {
+      const sid = p.service_id ? String(p.service_id) : null;
+      const axle = sid ? brakeAxleByServiceId.get(sid) : undefined;
+      if (!axle || axle === "both") return true;
+      const nameAxle = partNameAxle(p.part_name);
+      return nameAxle == null || nameAxle === axle;
+    });
+
     return {
       vehicleLabel,
       serviceName: service?.name ?? "",
@@ -729,7 +784,7 @@ export const getPrefillData = query({
       engineId: engine._id,
       serviceId,
       mechanicName,
-      suggestedParts,
+      suggestedParts: scopedSuggestedParts,
       oemRecommendations,
       vehicleConfigId: vehicle.vehicle_config_id ?? null,
       priorOpenRecommendations,

@@ -24,15 +24,51 @@
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { canonicalQuestionKey } from "./oto/canonicalize";
 
 const REDUCTO_BASE = "https://platform.reducto.ai";
 const REQUEST_TIMEOUT_MS = 60_000;
+const CLASSIFY_TIMEOUT_MS = 30_000;
 const REQUIRED_FIELDS_FOR_CONFIDENCE = [
   "document_type",
   "service_date",
   "shop.name",
   "vehicle.odometer_in",
   "total_cents",
+] as const;
+
+// ───────────────────────────────────────────────────────────────────────────
+// Pre-parse classification (A2) — a cheap /classify call gates the expensive
+// /extract. If a document is confidently NOT vehicle-related, we short-circuit
+// before spending extract credits. The gate is fail-OPEN: any classify error,
+// ambiguity, or unexpected response shape proceeds to extract, so a real
+// receipt is never dropped on a classifier hiccup.
+// ───────────────────────────────────────────────────────────────────────────
+
+const VEHICLE_DOC_CATEGORY = "vehicle_service_document";
+const OTHER_DOC_CATEGORY = "other_document";
+// Only reject when the winning category is "other" with at least this much
+// confidence. Tuned above the ~0.5 a blank/ambiguous doc scores so uncertain
+// scans fall through to extract rather than being rejected.
+const CLASSIFY_REJECT_CONFIDENCE = 0.6;
+
+const CLASSIFICATION_CATEGORIES = [
+  {
+    category: VEHICLE_DOC_CATEGORY,
+    criteria: [
+      "mentions a vehicle, car, truck, VIN, license plate, or odometer reading",
+      "lists automotive repair or maintenance services, parts, or labor",
+      "issued by an auto repair shop, dealership, tire shop, or service center",
+      "is a state vehicle inspection or emissions report",
+    ],
+  },
+  {
+    category: OTHER_DOC_CATEGORY,
+    criteria: [
+      "not related to vehicles, auto repair, or maintenance",
+      "e.g. a utility bill, restaurant receipt, medical record, or general retail purchase",
+    ],
+  },
 ] as const;
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -402,13 +438,17 @@ async function callReductoExtract(
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
+      // NOTE: Reducto's published HTTP docs show `instructions.schema` +
+      // `settings.{array_extract, citations}` nesting, but the live API
+      // (ExtractConfigNew Pydantic model) rejects that with
+      // 422 "Field required: schema". Flat body matches the MCP
+      // `extract_data` tool signature, which is the contract that actually
+      // works against `https://platform.reducto.ai/extract`.
       body: JSON.stringify({
         input: documentUrl,
-        instructions: { schema: RECEIPT_EXTRACTION_SCHEMA },
-        settings: {
-          array_extract: { enabled: true },
-          citations: { enabled: true },
-        },
+        schema: RECEIPT_EXTRACTION_SCHEMA,
+        array_extract: true,
+        citations: true,
       }),
       signal: controller.signal,
     });
@@ -476,6 +516,111 @@ function computeOverallConfidence(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Reducto classify call (A2 pre-parse gate)
+// ───────────────────────────────────────────────────────────────────────────
+
+interface CategoryConfidence {
+  category: string;
+  confidence: number;
+}
+
+/** Pull a flat [{category, confidence}] list out of whatever shape the
+ *  /classify endpoint returns (raw shape isn't pinned in the docs). Handles:
+ *  a top-level `category_confidences` array, a `result` array, a
+ *  `result.category_confidences`, or a single `{category}` + `response_confidence`. */
+function readCategoryConfidences(body: Record<string, unknown>): CategoryConfidence[] {
+  const coerce = (arr: unknown): CategoryConfidence[] =>
+    Array.isArray(arr)
+      ? arr
+          .map((e) => {
+            const o = (e ?? {}) as Record<string, unknown>;
+            const category = typeof o.category === "string" ? o.category : undefined;
+            const confidence =
+              typeof o.confidence === "number" ? o.confidence : undefined;
+            return category !== undefined && confidence !== undefined
+              ? { category, confidence }
+              : null;
+          })
+          .filter((x): x is CategoryConfidence => x !== null)
+      : [];
+
+  const top = coerce(body.category_confidences);
+  if (top.length) return top;
+
+  const result = body.result as Record<string, unknown> | unknown[] | undefined;
+  if (Array.isArray(result)) {
+    const fromResult = coerce(result);
+    if (fromResult.length) return fromResult;
+  } else if (result && typeof result === "object") {
+    const nested = coerce((result as Record<string, unknown>).category_confidences);
+    if (nested.length) return nested;
+    const category =
+      typeof (result as Record<string, unknown>).category === "string"
+        ? ((result as Record<string, unknown>).category as string)
+        : undefined;
+    const confidence =
+      typeof body.response_confidence === "number" ? body.response_confidence : 1;
+    if (category) return [{ category, confidence }];
+  }
+
+  // Top-level single-category fallback.
+  if (typeof body.category === "string") {
+    const confidence =
+      typeof body.response_confidence === "number" ? body.response_confidence : 1;
+    return [{ category: body.category, confidence }];
+  }
+  return [];
+}
+
+/** Fail-open classify: returns whether to reject the doc as non-vehicle.
+ *  Never throws — on any error/timeout/odd-shape it returns { reject:false }. */
+async function classifyDocument(
+  apiKey: string,
+  documentUrl: string,
+): Promise<{ reject: boolean; category?: string; confidence?: number; jobId?: string }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CLASSIFY_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${REDUCTO_BASE}/classify`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      // Mirrors the working extract contract: flat body with the same field
+      // names the Reducto MCP / published curl example use.
+      body: JSON.stringify({
+        document_url: documentUrl,
+        categories: CLASSIFICATION_CATEGORIES,
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      console.warn(`[vehicleDocuments] classify ${res.status}; proceeding to extract`);
+      return { reject: false };
+    }
+    const body = (await res.json()) as Record<string, unknown>;
+    const confidences = readCategoryConfidences(body);
+    if (confidences.length === 0) {
+      console.warn("[vehicleDocuments] classify returned no usable categories; proceeding");
+      return { reject: false };
+    }
+    const winner = confidences.reduce((a, b) => (b.confidence > a.confidence ? b : a));
+    const jobId = typeof body.job_id === "string" ? body.job_id : undefined;
+    const reject =
+      winner.category === OTHER_DOC_CATEGORY &&
+      winner.confidence >= CLASSIFY_REJECT_CONFIDENCE;
+    return { reject, category: winner.category, confidence: winner.confidence, jobId };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[vehicleDocuments] classify failed (${message}); proceeding to extract`);
+    return { reject: false };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // ACTION
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -509,6 +654,20 @@ export const parseDocument = internalAction({
       documentId,
       parseStatus: "parsing",
     });
+
+    // A2 — pre-parse classification gate. Reject confidently non-vehicle docs
+    // (e.g. a phone bill uploaded by mistake) before paying for /extract.
+    // Fail-open: classifyDocument never throws, so a classifier hiccup just
+    // falls through to extract.
+    const classification = await classifyDocument(apiKey, meta.url);
+    if (classification.reject) {
+      await ctx.runMutation(internal.vehicleDocuments.internalSetParseStatus, {
+        documentId,
+        parseStatus: "failed",
+        parseError: "Not a vehicle service document",
+      });
+      return;
+    }
 
     try {
       const { payload, confidenceMap, jobId } = await callReductoExtract(
@@ -550,6 +709,170 @@ export const parseDocument = internalAction({
         parseStatus: "failed",
         parseError: message.slice(0, 500),
       });
+    }
+  },
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// SEMANTIC DERIVATION (V2 Wave 1 — B6 + B1/B10)
+//
+// Runs after internalDeriveMaintenance (scheduled from its tail). Two writes:
+//   B1/B10 — customer_concern + technician_findings → user_semantic_facts
+//            (surfaces in Oto's <recent_context> with no prompt change).
+//   B6     — engine_code + oil viscosity → vehicle_facts canonical KB.
+//
+// This lives in the node action (not the mutation) because canonical_question_key
+// needs async SHA-256 and the semantic-fact helper runs a payload sanitizer that
+// throws. Each write is scheduled (runAfter 0) so a single rejection is isolated
+// and can't roll back the maintenance/odometer writes that already committed.
+// ───────────────────────────────────────────────────────────────────────────
+
+const SEMANTIC_PAYLOAD_MAX = 480;
+
+function str(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function datePrefix(serviceDate: unknown): string {
+  const d = str(serviceDate);
+  return d ? `[${d}] ` : "";
+}
+
+export const internalDeriveSemantics = internalAction({
+  args: { documentId: v.id("vehicle_documents") },
+  handler: async (ctx, { documentId }) => {
+    const input = await ctx.runQuery(
+      internal.vehicleDocuments.internalGetSemanticInput,
+      { documentId },
+    );
+    if (!input) return;
+    // Only derive from extractions the system or the user has accepted.
+    if (
+      input.reviewState !== "auto_accepted" &&
+      input.reviewState !== "user_confirmed"
+    ) {
+      return;
+    }
+
+    const payload = (input.payload ?? {}) as Record<string, any>;
+    const vehicle = (payload.vehicle ?? {}) as Record<string, any>;
+    const vehicleId = input.vehicleId ?? undefined;
+    const vehicleConfigId = input.vehicleConfigId ?? undefined;
+
+    // ── B1/B10 — verbatim findings + concern → user_semantic_facts ──────────
+    const semanticWrites: Array<{ label: string; text: string }> = [];
+    const concern = str(payload.customer_concern);
+    if (concern) {
+      semanticWrites.push({
+        label: "Customer concern",
+        text: concern,
+      });
+    }
+    const findings = str(payload.technician_findings);
+    if (findings) {
+      semanticWrites.push({
+        label: "Mechanic findings",
+        text: findings,
+      });
+    }
+    for (const w of semanticWrites) {
+      const body = `${datePrefix(payload.service_date)}${w.label}: ${w.text}`;
+      const payloadText = body.slice(0, SEMANTIC_PAYLOAD_MAX);
+      // Scheduled — recordUserSemanticFact sanitizes and may throw; isolate it.
+      await ctx.scheduler.runAfter(
+        0,
+        internal.oto.memoryEditing.recordUserSemanticFact,
+        {
+          user_id: input.userId,
+          ...(vehicleId ? { vehicle_id: vehicleId } : {}),
+          fact_type: "history_anchor" as const,
+          payload: payloadText,
+          source: "inferred_behavior" as const,
+          written_by: "system" as const,
+        },
+      );
+    }
+
+    // ── B6 — confirmed hardware/fluid specs → vehicle_facts canonical KB ─────
+    // Require make + model so question_text encodes vehicle identity; the KB
+    // dedups globally on canonical_question_key, so a generic question would
+    // collide across vehicles. Scope fields (config id, engine, make/model/year)
+    // mirror the chat-agent writer in oto/chat.ts.
+    const make = str(vehicle.make);
+    const model = str(vehicle.model);
+    const year =
+      typeof vehicle.year === "number" && Number.isFinite(vehicle.year)
+        ? vehicle.year
+        : undefined;
+
+    if (make && model) {
+      const vehicleLabel = `${year ? `${year} ` : ""}${make} ${model}`;
+      const scope = {
+        ...(vehicleConfigId ? { vehicle_config_id: vehicleConfigId } : {}),
+        make,
+        model,
+        ...(year !== undefined ? { year_min: year, year_max: year } : {}),
+      };
+
+      const factWrites: Array<{
+        topic: string;
+        topic_axis: "vehicle" | "engine";
+        question_text: string;
+        fact_text: string;
+        engine_code?: string;
+      }> = [];
+
+      const engineCode = str(vehicle.engine_code);
+      if (engineCode) {
+        factWrites.push({
+          topic: "engine_code",
+          topic_axis: "engine",
+          question_text: `What engine code does the ${vehicleLabel} use?`,
+          fact_text: `Engine code ${engineCode}, confirmed from the owner's shop invoice.`,
+          engine_code: engineCode,
+        });
+      }
+
+      // Oil viscosity from the engine_oil line item (B6).
+      const lineItems: any[] = Array.isArray(payload.line_items)
+        ? payload.line_items
+        : [];
+      const oilLine = lineItems.find((i) => i?.fluid_type === "engine_oil");
+      const viscosity = str(oilLine?.viscosity);
+      if (viscosity) {
+        const spec = str(oilLine?.spec);
+        factWrites.push({
+          topic: "fluid_spec_oil",
+          topic_axis: "vehicle",
+          question_text: `What engine oil viscosity does the ${vehicleLabel} use?`,
+          fact_text: `Owner's shop invoice lists ${viscosity} engine oil${
+            spec ? ` (${spec})` : ""
+          }.`,
+        });
+      }
+
+      for (const f of factWrites) {
+        const key = await canonicalQuestionKey(f.question_text);
+        await ctx.scheduler.runAfter(
+          0,
+          internal.oto.vehicleFactsEditing.recordVehicleFact,
+          {
+            topic: f.topic,
+            topic_axis: f.topic_axis,
+            question_text: f.question_text,
+            fact_text: f.fact_text,
+            canonical_question_key: key,
+            source: "user_confirmed" as const,
+            written_by: "system" as const,
+            confidence: 0.9,
+            ...(f.engine_code ? { engine_code: f.engine_code } : {}),
+            ...scope,
+            asked_by_user_id: input.userId,
+          },
+        );
+      }
     }
   },
 });

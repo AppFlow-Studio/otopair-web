@@ -332,7 +332,7 @@ export default function MyBookingsPage() {
                           {formatJobDate(job.scheduledDate, job.scheduledTime)}
                         </td>
                         <td className="px-3 py-4 text-right pr-5 font-medium text-foreground">
-                          ${job.totalCost.toFixed(2)}
+                          ${(job.totalCost ?? 0).toFixed(2)}
                         </td>
                       </tr>
                     );

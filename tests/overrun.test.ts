@@ -167,14 +167,18 @@ describe("OVER-* job overrun flow", () => {
 
     const downstream = await t.run((ctx) => ctx.db.get(fx.downstreamBookingId));
     expect(String((downstream as any)?.mechanic_id)).toBe(String(fx.alice));
-    expect((downstream as any)?.scheduled_time).toBe("16:00");
+    // Upstream's new end is 15:55; with the shop's default 10-min buffer the
+    // next slot is 16:15 (16:00 would leave only a 5-min gap).
+    expect((downstream as any)?.scheduled_time).toBe("16:15");
 
     const bHistory = await getHistory(t, fx.downstreamBookingId);
     const pushRow = bHistory.find((h: any) =>
       h.reason?.startsWith("pushed_by_upstream_job_overrun:"),
     );
     expect(pushRow).toBeDefined();
-    expect((pushRow as any).reason).toContain(":15min");
+    // The downstream slot moved 15:45 -> 16:15 (a 30-min shift), even though
+    // the upstream extension itself was 15 min — the buffer adds the rest.
+    expect((pushRow as any).reason).toContain(":30min");
 
     const bPush = await getOutboxByCategory(
       t,
@@ -183,7 +187,7 @@ describe("OVER-* job overrun flow", () => {
     );
     expect(bPush).toHaveLength(1);
     expect((bPush[0] as any).payload.usedAlternateMechanic).toBe(false);
-    expect((bPush[0] as any).payload.newTime).toBe("16:00");
+    expect((bPush[0] as any).payload.newTime).toBe("16:15");
   });
 
   test("OVER-LATERAL-02b: when Bob is busy at 15:45, even 'any' booking falls back to forward push on Alice", async () => {
@@ -204,7 +208,9 @@ describe("OVER-* job overrun flow", () => {
 
     const downstream = await t.run((ctx) => ctx.db.get(fx.downstreamBookingId));
     expect(String((downstream as any)?.mechanic_id)).toBe(String(fx.alice));
-    expect((downstream as any)?.scheduled_time).toBe("16:00");
+    // Upstream's new end is 15:55; with the shop's default 10-min buffer the
+    // next slot is 16:15 (16:00 would leave only a 5-min gap).
+    expect((downstream as any)?.scheduled_time).toBe("16:15");
   });
 
   test("OVER-CASCADE-01: re-arm fires with cascade_depth=1 and caps the chain", async () => {

@@ -8,8 +8,12 @@ import {
   DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_PERCENT,
+  normalizeOverrunAutoApplyMinutes,
+  normalizeOverrunEscalationMinutes,
   validateNoShowThresholdMinutes,
+  validateOverrunTimingMinutes,
 } from "../lib/scheduling-overhaul";
+import { detectTimezoneFromState } from "../lib/shopTimezone";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
@@ -432,6 +436,8 @@ export const updateMySchedulingSettings = mutation({
     maxBookingsPerMechanicRollingHour: v.optional(v.number()),
     entityLabelMode: v.optional(v.string()),
     appointmentReminderLeadMinutes: v.optional(v.number()),
+    overrunEscalationMinutes: v.optional(v.number()),
+    overrunAutoApplyMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await getCurrentUser(ctx);
@@ -468,6 +474,21 @@ export const updateMySchedulingSettings = mutation({
       );
     }
 
+    let overrunEscalationMinutes: number | undefined;
+    let overrunAutoApplyMinutes: number | undefined;
+    if (
+      args.overrunEscalationMinutes != null ||
+      args.overrunAutoApplyMinutes != null
+    ) {
+      overrunEscalationMinutes = normalizeOverrunEscalationMinutes(
+        args.overrunEscalationMinutes ?? primary.shop.overrun_escalation_minutes,
+      );
+      overrunAutoApplyMinutes = normalizeOverrunAutoApplyMinutes(
+        args.overrunAutoApplyMinutes ?? primary.shop.overrun_auto_apply_minutes,
+      );
+      validateOverrunTimingMinutes(overrunEscalationMinutes, overrunAutoApplyMinutes);
+    }
+
     await ctx.db.patch(primary.shop._id, {
       no_show_threshold_minutes: Number.isFinite(args.noShowThresholdMinutes)
         ? Math.round(args.noShowThresholdMinutes)
@@ -502,6 +523,12 @@ export const updateMySchedulingSettings = mutation({
               args.appointmentReminderLeadMinutes,
             ),
           }
+        : {}),
+      ...(overrunEscalationMinutes != null
+        ? { overrun_escalation_minutes: overrunEscalationMinutes }
+        : {}),
+      ...(overrunAutoApplyMinutes != null
+        ? { overrun_auto_apply_minutes: overrunAutoApplyMinutes }
         : {}),
     });
 
@@ -863,6 +890,8 @@ export const upsertOnboardingShopDetails = mutation({
       throw new Error("This slug is already taken. Please choose another.");
     }
 
+    const detectedTimezone = detectTimezoneFromState(args.state);
+
     if (currentShop) {
       await ctx.db.patch(currentShop._id, {
         name: args.name,
@@ -873,6 +902,10 @@ export const upsertOnboardingShopDetails = mutation({
         zip: args.zipCode,
         phone: args.phone,
         onboarding_complete: false,
+        // Only backfill timezone — never overwrite a manually-set value.
+        ...(!currentShop.timezone && detectedTimezone
+          ? { timezone: detectedTimezone }
+          : {}),
       });
       return currentShop._id;
     }
@@ -890,6 +923,7 @@ export const upsertOnboardingShopDetails = mutation({
       owner_user_id: user._id,
       labor_rate: 150,
       onboarding_complete: false,
+      ...(detectedTimezone ? { timezone: detectedTimezone } : {}),
     });
 
     await ctx.db.insert("shop_users", {
@@ -1306,6 +1340,23 @@ export const updateShopHours = mutation({
     return primary.shop._id;
   },
 });;
+
+export const setShopTimezone = mutation({
+  args: { timezone: v.string() },
+  handler: async (ctx, args) => {
+    const { user } = await getCurrentUser(ctx);
+    if (!user) throw new Error("Not authenticated");
+
+    const primary = await getPrimaryShopForUser(ctx, user._id);
+    if (!primary?.shop) throw new Error("Shop not found.");
+    if (!OWNER_ROLES.has(primary.membershipRole)) {
+      throw new Error("Only shop owners can update the timezone.");
+    }
+
+    await ctx.db.patch(primary.shop._id, { timezone: args.timezone });
+    return primary.shop._id;
+  },
+});
 
 export const updateShopOfferedServices = mutation({
   args: {

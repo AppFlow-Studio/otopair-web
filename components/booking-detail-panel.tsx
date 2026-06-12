@@ -15,7 +15,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { ArrowRight, Bell, Car, Check, Clock, Copy, DollarSign, Ellipsis, FileText, History, Loader2, MessageSquare, RotateCcw, Wrench, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
-import OverrunCheckInCard from "@/components/overrun-checkin-card";
+import OverrunExtendCard from "@/components/mechanic/overrun-extend-card";
 import InvoiceNumberField from "@/components/invoice-number-field";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import PostjobReportSection from "@/components/booking/postjob-report-section";
@@ -1780,10 +1780,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     ) : (
                       <>
                         <p className="text-[15px] font-medium text-foreground">
-                          ${job.totalCost.toFixed(2)} total
+                          ${(job.totalCost ?? 0).toFixed(2)} total
                         </p>
                         <p className="mt-1 text-sm text-muted-foreground">
-                          Labor ${job.laborCost.toFixed(2)} &middot; Parts ${job.partsCost.toFixed(2)}
+                          Labor ${(job.laborCost ?? 0).toFixed(2)} &middot; Parts ${(job.partsCost ?? 0).toFixed(2)}
                         </p>
                       </>
                     )}
@@ -1857,7 +1857,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 </div>
 
                 {job.status === "in_progress" && (
-                  <OverrunCheckInCard bookingId={job._id as Id<"bookings">} />
+                  <OverrunExtendCard
+                    bookingId={job._id as Id<"bookings">}
+                    onFinishEarly={openPostjobDialog}
+                    onToast={(msg) => onSuccess?.(msg)}
+                    variant="orange"
+                  />
                 )}
 
                 <InvoiceNumberField

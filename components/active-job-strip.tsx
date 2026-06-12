@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "convex/react";
 import { Maximize2, Wrench } from "lucide-react";
@@ -8,6 +8,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ElapsedTimer from "./mechanic/elapsed-timer";
 import NowWorkingOverlay from "./mechanic/now-working-overlay";
+import OverrunExtendCard from "./mechanic/overrun-extend-card";
 
 function shortBookingCode(id: string) {
   return `BKG-${id.slice(-4).toUpperCase()}`;
@@ -17,6 +18,13 @@ export default function ActiveJobStrip() {
   const header = useQuery(api.bookings.getActiveJobsForHeader);
   const router = useRouter();
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   if (!header) return null;
 
@@ -26,6 +34,7 @@ export default function ActiveJobStrip() {
     return (
       <>
         <div className="mb-3 overflow-hidden rounded-xl border border-emerald-400/30 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_60%),linear-gradient(180deg,_#0f172a,_#0b1220)] px-4 py-2.5 text-slate-50 shadow-[0_4px_14px_rgba(15,23,42,0.12)]">
+          {/* Header row — always visible */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
               <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
@@ -64,6 +73,20 @@ export default function ActiveJobStrip() {
               </button>
             </div>
           </div>
+
+          {/* Overrun card — expands inline when a check-in is active */}
+          <div className="mt-2.5">
+            <OverrunExtendCard
+              bookingId={bookingId}
+              onFinishEarly={() => router.push(`/dashboard?postjob=${String(bookingId)}`)}
+              onToast={setToast}
+              variant="dark"
+            />
+          </div>
+
+          {toast ? (
+            <p className="mt-2 text-xs text-emerald-300">{toast}</p>
+          ) : null}
         </div>
 
         <NowWorkingOverlay

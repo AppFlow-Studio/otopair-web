@@ -1913,26 +1913,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   </div>
                   {(() => {
                     // When the customer approved a pre/mid-job adjustment, the
-                    // mechanic's set price becomes the NEW agreed total. Show it
-                    // in place of the original quote, with the prior figure
-                    // struck through and an "Agreed price" pill, so the booking
-                    // drawer reflects what the customer actually agreed to.
-                    const APPROVED = new Set([
-                      "pre_job_approved",
-                      "mid_job_approved",
-                      "post_job_approved",
-                      "captured",
-                    ]);
-                    const agreedCents = job.mechanicSetPriceCents ?? null;
-                    const originalCents =
-                      job.quotedSetPriceDollars != null
-                        ? Math.round(job.quotedSetPriceDollars * 100)
-                        : null;
+                    // effective quote (from the approved booking_approvals row)
+                    // becomes the NEW agreed total. Show its breakdown in place
+                    // of the original quote, with the prior figure struck
+                    // through and a "New agreed price" pill, so the drawer
+                    // reflects what the customer actually agreed to.
                     const hasNewAgreedPrice =
                       !job.isFixedPrice &&
-                      agreedCents != null &&
-                      APPROVED.has(job.paymentApprovalState ?? "") &&
-                      (originalCents == null || agreedCents !== originalCents);
+                      lockedQuote != null &&
+                      lockedQuote.originalTotalCents != null &&
+                      lockedQuote.originalTotalCents !== lockedQuote.totalCents;
                     return (
                   <div className={drawerInfoCardClassName}>
                     <div className="flex items-center gap-2 flex-wrap">
@@ -1955,18 +1945,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         </span>
                       )}
                     </div>
-                    {hasNewAgreedPrice && agreedCents != null ? (
+                    {hasNewAgreedPrice && lockedQuote != null ? (
                       <>
                         <div className="flex items-baseline gap-2">
                           <p className="text-[15px] font-semibold text-foreground">
-                            ${(agreedCents / 100).toFixed(2)}
+                            ${(lockedQuote.totalCents / 100).toFixed(2)}
                           </p>
-                          {originalCents != null && (
+                          {lockedQuote.originalTotalCents != null && (
                             <p className="text-[12px] text-muted-foreground line-through">
-                              ${(originalCents / 100).toFixed(2)}
+                              ${(lockedQuote.originalTotalCents / 100).toFixed(2)}
                             </p>
                           )}
                         </div>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Parts ${(lockedQuote.partsCents / 100).toFixed(2)} &middot;{" "}
+                          Labor ${(lockedQuote.laborCents / 100).toFixed(2)} &middot;{" "}
+                          Tax+Fee ${((lockedQuote.taxCents + lockedQuote.feeCents) / 100).toFixed(2)}
+                        </p>
                         <p className="mt-1 text-[12px] text-muted-foreground">
                           Customer approved this adjusted total.
                         </p>

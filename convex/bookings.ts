@@ -56,6 +56,7 @@ import {
   EARLY_PUSH_THRESHOLD_MS,
   addMinutesToHHMM,
   getBookingEndTime,
+  normalizeBufferMinutes,
   roundDownToFiveMinutes,
 } from "./lib/schedule_overlap";
 import {
@@ -2212,6 +2213,138 @@ export const rescheduleFromNoShowAlert = mutation({
       changedBy: user._id,
       reason: "post_threshold_rescheduled_by_front_desk",
     });
+  },
+});
+
+// Front desk resolving a `manual_scheduling_required` alert by picking a new
+// slot for the blocked booking. Unlike `proposeReschedule`, this mirrors the
+// automatic cascade push: the booking is moved directly (status untouched,
+// no customer acceptance step) and the customer gets a courtesy
+// notification — the same `schedule_courtesy_update` push the automatic
+// cascade sends — so they can reschedule or cancel on their end if the new
+// time doesn't work.
+export const rescheduleFromManualSchedulingAlert = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    newScheduledDate: v.string(),
+    newScheduledTime: v.string(),
+    newMechanicId: v.optional(v.id("mechanics")),
+    assignmentPreference: v.optional(
+      v.union(v.literal("any"), v.literal("specific_mechanic")),
+    ),
+    allowOutsideShopHours: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking: any = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    if (!DOWNSTREAM_MOVABLE_STATUSES.has(booking.status)) {
+      const statusLabel =
+        BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
+        String(booking.status).replace(/_/g, " ");
+      throw new Error(`This booking can't be moved while it's ${statusLabel}.`);
+    }
+
+    const durationMinutes = booking.estimated_labor_minutes ?? 60;
+    const preference =
+      args.assignmentPreference === "specific_mechanic" || args.newMechanicId
+        ? "specific_mechanic"
+        : normalizeAssignmentPreference(booking.assignment_preference);
+    const targetMechanicId = await resolveMechanicForWindow(ctx, {
+      shopId: booking.shop_id,
+      date: args.newScheduledDate,
+      startTime: args.newScheduledTime,
+      durationMinutes,
+      preferredMechanicId:
+        preference === "specific_mechanic"
+          ? args.newMechanicId ?? booking.mechanic_id ?? undefined
+          : undefined,
+      excludeBookingId: String(booking._id),
+      allowAfterClose: args.allowOutsideShopHours === true,
+    });
+
+    const minutesShifted =
+      hhmmToMinutes(args.newScheduledTime) - hhmmToMinutes(booking.scheduled_time);
+
+    const patch: any = {
+      scheduled_date: args.newScheduledDate,
+      scheduled_time: args.newScheduledTime,
+      mechanic_id: targetMechanicId,
+      time_slot_id: undefined,
+      assignment_preference: preference,
+      updated_at: Date.now(),
+    };
+
+    if (
+      args.newScheduledDate !== booking.scheduled_date ||
+      args.newScheduledTime !== booking.scheduled_time ||
+      String(targetMechanicId) !== String(booking.mechanic_id)
+    ) {
+      patch.previous_scheduled_date = booking.scheduled_date;
+      patch.previous_scheduled_time = booking.scheduled_time;
+      patch.previous_mechanic_id = booking.mechanic_id;
+      patch.schedule_change_mode = "shop_delay_cascade";
+      patch.customer_can_restore_original = false;
+      if (minutesShifted > 0) {
+        patch.cascade_push_count = (booking.cascade_push_count ?? 0) + 1;
+        patch.cascade_pushed_minutes_total =
+          (booking.cascade_pushed_minutes_total ?? 0) + minutesShifted;
+      }
+    }
+
+    await ctx.db.patch(booking._id, patch);
+
+    if (booking.time_slot_id) {
+      await releaseBookingSlot(ctx, booking.time_slot_id);
+    }
+
+    await ctx.db.insert("booking_status_history", {
+      booking_id: booking._id,
+      old_status: booking.status,
+      new_status: booking.status,
+      changed_by: user._id,
+      reason: `pushed_by_front_desk_manual_review:${minutesShifted}min`,
+      changed_at: Date.now(),
+    } as any);
+
+    await enqueueNotificationOutbox(ctx, {
+      shopId: booking.shop_id,
+      bookingId: booking._id,
+      userId: booking.user_id,
+      channel: "push",
+      category: "schedule_courtesy_update",
+      dedupeKey: `schedule-courtesy:${String(booking._id)}:front_desk_manual:${args.newScheduledDate}:${args.newScheduledTime}:${String(targetMechanicId)}`,
+      payload: {
+        source: "front_desk_manual",
+        originalDate: booking.scheduled_date,
+        originalTime: booking.scheduled_time,
+        originalMechanicId: String(booking.mechanic_id ?? ""),
+        newDate: args.newScheduledDate,
+        newTime: args.newScheduledTime,
+        newMechanicId: String(targetMechanicId),
+        usedAlternateMechanic: String(targetMechanicId) !== String(booking.mechanic_id),
+      },
+    });
+
+    await resolveManualSchedulingAlertsForBooking(ctx, booking);
+
+    await syncBookingAssignments(ctx, [
+      {
+        shopId: booking.shop_id,
+        mechanicId: booking.mechanic_id,
+        date: booking.scheduled_date,
+      },
+      {
+        shopId: booking.shop_id,
+        mechanicId: targetMechanicId,
+        date: args.newScheduledDate,
+      },
+    ]);
+
+    return { success: true };
   },
 });
 
@@ -5279,15 +5412,43 @@ async function buildLateStartReviewPlan(
 // confirmed slot, cancelled, declined, marked no-show, or completed).
 async function resolveManualSchedulingAlertsForBooking(
   ctx: any,
-  bookingId: any,
+  booking: any,
 ) {
+  const bookingId = booking?._id;
   if (!bookingId) return;
-  const rows = await ctx.db
+  const directRows = await ctx.db
     .query("notification_outbox")
     .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
     .collect();
+
+  // A blocked cascade's alert is attached to the downstream booking it's
+  // blocked on, not the upstream booking that triggered it — so also resolve
+  // alerts whose `payload.upstreamBookingId` matches this booking when the
+  // upstream itself resolves (completed/cancelled/etc.).
+  const shopRows = booking.shop_id
+    ? await ctx.db
+        .query("notification_outbox")
+        .withIndex("by_shop_and_status", (q: any) =>
+          q.eq("shop_id", booking.shop_id).eq("status", "pending"),
+        )
+        .collect()
+    : [];
+
+  const seen = new Set<string>();
+  const candidates = [...directRows, ...shopRows].filter((row: any) => {
+    if (
+      String(row.booking_id ?? "") !== String(bookingId) &&
+      String(row.payload?.upstreamBookingId ?? "") !== String(bookingId)
+    ) {
+      return false;
+    }
+    if (seen.has(String(row._id))) return false;
+    seen.add(String(row._id));
+    return true;
+  });
+
   const now = Date.now();
-  for (const row of rows) {
+  for (const row of candidates) {
     if (
       (row as any).channel !== "front_desk" ||
       (row as any).category !== "manual_scheduling_required" ||
@@ -5409,7 +5570,12 @@ async function buildDownstreamMovementPlan(
 
   const upstreamMechanicId = upstreamBooking.mechanic_id;
   const date = upstreamBooking.scheduled_date;
-  let cursorEndMinutes = projectedEndMinutes;
+  const shop = await ctx.db.get(upstreamBooking.shop_id);
+  const bufferMinutes = normalizeBufferMinutes(shop?.buffer_minutes);
+  // A downstream booking that starts within the shop's buffer window after
+  // the extended end time still needs to move — it just wouldn't show as
+  // "overlapping" the raw new end time.
+  let cursorEndMinutes = projectedEndMinutes + bufferMinutes;
 
   const downstreamBookings = (await getBlockingBookingsForShopDate(
     ctx,
@@ -5452,6 +5618,7 @@ async function buildDownstreamMovementPlan(
       return {
         proposals,
         blockingReason: `${customerName}'s booking${timeLabel} is already ${statusLabel} and can't be moved automatically. Please reschedule it manually.`,
+        blockedBookingId: downstreamBooking._id,
       };
     }
 
@@ -5467,6 +5634,7 @@ async function buildDownstreamMovementPlan(
           proposals,
           blockingReason:
             "A downstream booking already has a customer reschedule pending and needs manual review.",
+          blockedBookingId: downstreamBooking._id,
         };
       }
     }
@@ -5512,6 +5680,7 @@ async function buildDownstreamMovementPlan(
       return {
         proposals,
         blockingReason: `A downstream booking has already been auto-pushed ${priorPushes} times and needs manual rescheduling.`,
+        blockedBookingId: downstreamBooking._id,
       };
     }
 
@@ -5529,6 +5698,7 @@ async function buildDownstreamMovementPlan(
         proposals,
         blockingReason:
           "No safe downstream slot is available before close on the current mechanic.",
+        blockedBookingId: downstreamBooking._id,
       };
     }
 
@@ -5539,6 +5709,7 @@ async function buildDownstreamMovementPlan(
       return {
         proposals,
         blockingReason: `A downstream booking would exceed the ${CASCADE_MAX_PUSHED_MINUTES}-minute cumulative delay cap and needs manual rescheduling.`,
+        blockedBookingId: downstreamBooking._id,
       };
     }
 
@@ -5589,20 +5760,19 @@ async function applyDownstreamMovement(
 
   if (plan.blockingReason) {
     // Prefer the actually-blocked downstream booking as the alert subject so
-    // the front-desk banner identifies the booking that needs manual review.
-    const blockedProposal =
-      plan.proposals.find((p: any) => p.blocked_reason) ?? null;
-    const subjectBookingId =
-      blockedProposal?.booking?._id ?? upstreamBooking._id;
-    const subjectBooking: any = blockedProposal
-      ? await ctx.db.get(blockedProposal.booking._id)
-      : upstreamBooking;
+    // the front-desk banner highlights the booking that needs manual review,
+    // not the upstream job that triggered the cascade.
+    const subjectBookingId = plan.blockedBookingId ?? upstreamBooking._id;
+    const subjectBooking: any =
+      plan.blockedBookingId != null
+        ? await ctx.db.get(plan.blockedBookingId)
+        : upstreamBooking;
     const subjectTime12h = formatHHMMto12h(
       subjectBooking?.scheduled_time ?? null,
     );
     const upstreamHandle = shortBookingHandle(upstreamBooking._id);
     const subjectHandle = shortBookingHandle(subjectBookingId);
-    const reasonPrefix = blockedProposal
+    const reasonPrefix = plan.blockedBookingId != null
       ? `Booking ${subjectHandle}${subjectTime12h ? ` (${subjectTime12h})` : ""} couldn't be auto-rescheduled after overrun on ${upstreamHandle}.`
       : `Cascade from ${upstreamHandle} blocked.`;
     await createManualSchedulingAlert(ctx, {
@@ -6845,7 +7015,7 @@ export async function applyBookingStatusTransition(
       newStatus,
     )
   ) {
-    await resolveManualSchedulingAlertsForBooking(ctx, booking._id);
+    await resolveManualSchedulingAlertsForBooking(ctx, booking);
   }
 
   if (newStatus === "in_progress") {
@@ -10230,7 +10400,7 @@ async function proposeRescheduleImpl(
 
   // Front-desk has proposed a manual reschedule — the corresponding
   // manual_scheduling_required alert (if any) is now stale.
-  await resolveManualSchedulingAlertsForBooking(ctx, booking._id);
+  await resolveManualSchedulingAlertsForBooking(ctx, booking);
 
   if (booking.status === "pending_customer_acceptance") {
     if (booking.time_slot_id) {
@@ -11661,12 +11831,15 @@ export const processOverrunCheckins = internalMutation({
         // that's "now" (the prompt moment), giving the mechanic their full
         // configured response window even if this pass was cron-lagged.
         // But if we're catching up on a check-in that's already overdue by
-        // more than the escalation window, anchor to due_at_ms instead so
-        // escalation (and, if warranted, auto-apply) can resolve in this
-        // same pass rather than restarting the clock from "now".
+        // more than the full auto-apply window (e.g. the cron was stalled),
+        // anchor to due_at_ms instead so escalation and auto-apply can
+        // resolve in this same pass rather than restarting the clock from
+        // "now". A normal single cron-tick's worth of lag is far smaller
+        // than the auto-apply window, so this won't trigger in the
+        // ordinary case.
         const overdueMs = now - checkin.due_at_ms;
         promptedAtMs =
-          overdueMs >= settings.overrunEscalationMinutes * 60 * 1000
+          overdueMs >= settings.overrunAutoApplyMinutes * 60 * 1000
             ? checkin.due_at_ms
             : now;
         escalationDueAtMs =

@@ -131,7 +131,9 @@ describe("OVER-BLOCK-* blocking vs non-blocking extension gate", () => {
       });
 
     const downstream = await t.run((ctx) => ctx.db.get(fx.downstreamBookingId));
-    expect((downstream as any)?.scheduled_time).toBe("16:00");
+    // Upstream's new end is 15:55; with the shop's default 10-min buffer the
+    // next slot is 16:15 (16:00 would leave only a 5-min gap).
+    expect((downstream as any)?.scheduled_time).toBe("16:15");
 
     const checkins = await getCheckins(t, fx.upstreamBookingId);
     const answered = checkins.find((c: any) => c.extension_minutes === 15);
@@ -158,8 +160,9 @@ describe("OVER-FIELDS-* honest original→new persistence on push", () => {
     const downstream: any = await t.run((ctx) =>
       ctx.db.get(fx.downstreamBookingId),
     );
-    // Moved 15:45 -> 16:00 (a 15-min shift).
-    expect(downstream?.scheduled_time).toBe("16:00");
+    // Moved 15:45 -> 16:15 (a 30-min shift): upstream's new end is 15:55,
+    // and the shop's default 10-min buffer pushes the next slot to 16:15.
+    expect(downstream?.scheduled_time).toBe("16:15");
     // Original slot preserved so the customer app/web can show "was 15:45".
     expect(downstream?.previous_scheduled_time).toBe("15:45");
     expect(downstream?.previous_scheduled_date).toBe(fx.scheduledDate);
@@ -173,7 +176,7 @@ describe("OVER-FIELDS-* honest original→new persistence on push", () => {
     expect(downstream?.customer_can_restore_original).toBe(false);
     // Per-booking cap counters.
     expect(downstream?.cascade_push_count).toBe(1);
-    expect(downstream?.cascade_pushed_minutes_total).toBe(15);
+    expect(downstream?.cascade_pushed_minutes_total).toBe(30);
   });
 });
 

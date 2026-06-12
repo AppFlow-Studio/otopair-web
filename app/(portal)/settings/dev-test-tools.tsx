@@ -116,7 +116,9 @@ export default function DevTestTools({ shopId }: { shopId: Id<"shops"> }) {
     customerLate:     makeEmptyState(todayISO(), nowPlusHHMM(0)),
     reschedule:       makeEmptyState(tomorrowISO(), "12:00"),
     mechanicActiveJob: makeEmptyState(todayISO(), nowPlusHHMM(0)),
-    jobOverrun:       makeEmptyState(todayISO(), nowPlusHHMM(0), nowPlusHHMM(30)),
+    // Left blank so Setup uses the backend default: upstream end + the
+    // shop's buffer (see setupJobOverrunScenario).
+    jobOverrun:       makeEmptyState(todayISO(), nowPlusHHMM(0), ""),
   }));
   const [selectedMechanicId, setSelectedMechanicId] =
     useState<Id<"mechanics"> | null>(null);
@@ -268,7 +270,7 @@ export default function DevTestTools({ shopId }: { shopId: Id<"shops"> }) {
         customerLate:      makeEmptyState(todayISO(), nowPlusHHMM(0)),
         reschedule:        makeEmptyState(tomorrowISO(), "12:00"),
         mechanicActiveJob: makeEmptyState(todayISO(), nowPlusHHMM(0)),
-        jobOverrun:        makeEmptyState(todayISO(), nowPlusHHMM(0), nowPlusHHMM(30)),
+        jobOverrun:        makeEmptyState(todayISO(), nowPlusHHMM(0), ""),
       });
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -595,7 +597,12 @@ function ScenarioCard({
         />
         {downstreamTime !== undefined && (
           <>
-            <label className="text-xs text-gray-500 shrink-0">Downstream time:</label>
+            <label className="text-xs text-gray-500 shrink-0">
+              Downstream time:
+              {downstreamTime === "" && (
+                <span className="ml-1 text-gray-400">(auto: upstream end + buffer)</span>
+              )}
+            </label>
             <input
               type="time"
               value={downstreamTime}

@@ -16,6 +16,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { mutation, query, type MutationCtx } from "./_generated/server";
+import { normalizeBufferMinutes } from "./lib/schedule_overlap";
 
 const TEST_VIN_PREFIX = "TESTVIN";
 
@@ -780,7 +781,9 @@ export const setupJobOverrunScenario = mutation({
     assertDevEnv();
     const user = await getCurrentUser(ctx);
     await requireShopStaff(ctx, user._id, args.shopId);
-    const tz = ((await ctx.db.get(args.shopId)) as any)?.timezone ?? "UTC";
+    const shop: any = await ctx.db.get(args.shopId);
+    const tz = shop?.timezone ?? "UTC";
+    const bufferMinutes = normalizeBufferMinutes(shop?.buffer_minutes);
 
     const mechanicId = await pickMechanicForShop(ctx, args.shopId, args.mechanicId);
     const customer = await getOrCreateTestCustomer(ctx);
@@ -789,10 +792,11 @@ export const setupJobOverrunScenario = mutation({
     const scheduledDate = args.scheduledDate ?? todayInTz(tz);
     const upstreamTime = args.upstreamTime ?? nowHHMMInTz(tz);
 
-    // Downstream defaults to 30 min after upstream (upstream job is 30 min).
+    // Downstream defaults to right after the upstream job ends (30 min),
+    // plus the shop's buffer — matching the gap real bookings would have.
     const downstreamTime = args.downstreamTime ?? (() => {
       const [h, m] = upstreamTime.split(":").map(Number);
-      const total = h * 60 + m + 30;
+      const total = h * 60 + m + 30 + bufferMinutes;
       return `${pad2(Math.floor(total / 60) % 24)}:${pad2(total % 60)}`;
     })();
 

@@ -57,25 +57,33 @@ export const olpRelaborConfig = internalAction({
     if (!res.resolved) return { config_key: inp.config_key, resolved: false, error: res.error };
 
     let written = 0;
+    const failed: string[] = [];
     for (const [slug, hours] of Object.entries(res.services as Record<string, number>)) {
       const serviceId = inp.serviceIdBySlug[slug];
       if (!serviceId) continue;
-      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
-        vehicle_config_id: args.vehicleConfigId,
-        service_id: serviceId,
-        hours: hours as number,
-        source: "olp_labor",
-        weight: 0.8,
-        tier: "catalog",
-        engine_family: inp.engine_family,
-      });
-      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
-        vehicle_config_id: args.vehicleConfigId,
-        service_id: serviceId,
-        book_only: true,
-      });
-      written++;
+      // Per-service isolation: one failing write must not strand the rest of
+      // the config. The upsert keys by (config, service, source), so a re-run
+      // safely retries any service recorded in `failed`.
+      try {
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
+          vehicle_config_id: args.vehicleConfigId,
+          service_id: serviceId,
+          hours: hours as number,
+          source: "olp_labor",
+          weight: 0.8,
+          tier: "catalog",
+          engine_family: inp.engine_family,
+        });
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
+          vehicle_config_id: args.vehicleConfigId,
+          service_id: serviceId,
+          book_only: true,
+        });
+        written++;
+      } catch {
+        failed.push(slug);
+      }
     }
-    return { config_key: inp.config_key, resolved: true, olp_url: res.olp_url, written };
+    return { config_key: inp.config_key, resolved: true, olp_url: res.olp_url, written, failed };
   },
 });

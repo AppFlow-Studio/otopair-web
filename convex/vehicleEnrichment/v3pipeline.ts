@@ -28,8 +28,6 @@ import { submitBatch, getBatchStatus, getBatchResults } from "./utils/batchClien
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
-import { repairpalUrlCandidates, repairpalModelCandidates } from "./repairpalLabor";
-import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { deriveEngineFamily } from "./laborSibling";
 import { runSanityChecks } from "./validation/sanityChecks";
 import { validateAllOemParts } from "./validation/oemValidation";
@@ -2296,45 +2294,36 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         console.log(`[v8] ${deterministicPrices.size} deterministic JSON-LD prices for ${args.make} ${args.model}`);
       }
 
-      // ── RepairPal labor setup (ONCE per car). Resolve the car's own nameplate
-      //    via an oil-change probe; cache per-determinant siblings so we don't
-      //    re-probe dead nameplates for every service. Dark behind the flag.
-      const rpEnabled = process.env.LABOR_SOURCE_REPAIRPAL === "on";
-      let rpOwnNameplate: string | null = null;
-      let rpEngineDoc: any = null;
-      let rpEngineFamily: string | undefined;
-      let rpChassisCode: string | undefined;
-      const rpSibling = new Map<string, { nameplate: string; match_key: string } | null>();
-      if (rpEnabled) {
-        rpEngineDoc = await ctx.runQuery(
-          internal.vehicleEnrichment.v3queries.getEngine,
-          { engineId: args.engineId },
-        );
-        // Engine family for sibling matching. The engine ROW can be a placeholder
-        // ("4.4l_8cyl") on a desynced config, so fall back to args.engineCode —
-        // the run's real input code ("N63B44O2") — which still derives the family.
-        rpEngineFamily =
-          rpEngineDoc?.engine_family ??
-          deriveEngineFamily(rpEngineDoc?.engine_code) ??
-          deriveEngineFamily(args.engineCode);
-        // runQuery serializes an undefined return to null — normalize, or the
-        // sibling resolver's v.optional(v.string()) validator throws for any
-        // car without a chassis code (latent stuck-config route, found via
-        // the Atlas relabor Jun-10).
-        rpChassisCode = (await ctx.runQuery(
-          internal.vehicleEnrichment.laborSibling.getConfigChassisCode,
-          { vehicleConfigId: args.vehicleConfigId },
-        )) ?? undefined;
-        for (const cand of repairpalModelCandidates(args.model, args.trim ?? "")) {
-          const probe = await ctx.runAction(
-            internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-            { urls: repairpalUrlCandidates(args.make, cand, "oil-change", args.year) },
+      // ── OLP labor (ONCE per car). Resolve the config to its OLP page and get
+      //    scope-correct hours per service. On-by-default; disable with
+      //    LABOR_SOURCE_OLP="off". A config OLP can't resolve simply gets no
+      //    olp_labor observation and degrades to the LLM layer (no sibling routing).
+      const olpEnabled = process.env.LABOR_SOURCE_OLP !== "off";
+      const olpEngineDoc: any = olpEnabled
+        ? await ctx.runQuery(internal.vehicleEnrichment.v3queries.getEngine, { engineId: args.engineId })
+        : null;
+      const olpEngineFamily =
+        olpEngineDoc?.engine_family ??
+        deriveEngineFamily(olpEngineDoc?.engine_code) ??
+        deriveEngineFamily(args.engineCode);
+      let olpHours: Record<string, number> = {};
+      if (olpEnabled) {
+        const bid = await ctx.runAction(internal.vehicleEnrichment.olpLaborScrape.resolveBuildId, {});
+        if (bid.buildId) {
+          const rawDisp = olpEngineDoc?.displacement_l ?? olpEngineDoc?.displacement_liters ?? null;
+          const olp: any = await ctx.runAction(
+            internal.vehicleEnrichment.olpLaborScrape.resolveOlpLaborForConfig,
+            {
+              buildId: bid.buildId, make: args.make, model: args.model, trim: args.trim ?? "",
+              year: args.year,
+              displacementL: rawDisp == null ? null : Number(rawDisp) || null,
+              cylinders: olpEngineDoc?.cylinders ?? null,
+              turbo: olpEngineDoc?.aspiration != null ? /turbo|supercharg/i.test(olpEngineDoc.aspiration) : null,
+            },
           );
-          if (probe) { rpOwnNameplate = cand; break; }
+          if (olp.resolved) olpHours = olp.services;
+          console.log(`[v8/labor] OLP for ${args.make} ${args.model} ${args.trim ?? ""}: ${olp.resolved ? `${Object.keys(olpHours).length} services` : "(unresolved)"}`);
         }
-        console.log(
-          `[v8/labor] RepairPal nameplate for ${args.make} ${args.model} ${args.trim ?? ""}: ${rpOwnNameplate ?? "(none → siblings)"}`,
-        );
       }
 
       // Write labor times from Batch 2 pricing
@@ -2375,72 +2364,24 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           book_only: true,
         });
 
-        // RepairPal (MOTOR) labor: own nameplate first, else a verified sibling
-        // (resolved ONCE per determinant, cached in rpSibling). Dark behind the
-        // flag. All scrapes safe-fail to null → service falls back to the LLM obs.
-        const laborCfg = LABOR_SERVICE_CONFIG[slug];
-        if (rpEnabled && laborCfg?.repairpal_slug) {
-          let rpHours: number | null = null;
-          let rpMatchKey = "exact";
-          let rpSiblingSlug: string | undefined;
-
-          if (rpOwnNameplate) {
-            const rp = await ctx.runAction(
-              internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-              { urls: repairpalUrlCandidates(args.make, rpOwnNameplate, laborCfg.repairpal_slug, args.year) },
-            );
-            if (rp) { rpHours = rp.hours; rpSiblingSlug = rpOwnNameplate; }
-          }
-
-          if (rpHours == null) {
-            const det = laborCfg.determinant;
-            if (!rpSibling.has(det)) {
-              rpSibling.set(
-                det,
-                await ctx.runAction(
-                  internal.vehicleEnrichment.laborSibling.resolveLaborSibling,
-                  {
-                    make: args.make,
-                    model: args.model,
-                    trim: args.trim,
-                    year: args.year,
-                    chassis_code: rpChassisCode,
-                    engine_family: rpEngineFamily,
-                    determinant: det,
-                  },
-                ),
-              );
-            }
-            const sib = rpSibling.get(det);
-            if (sib) {
-              // The sibling is a different nameplate; OUR year still selects
-              // its same-generation page (e.g. 2021 M550i → 750i/2021).
-              const rp = await ctx.runAction(
-                internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-                { urls: repairpalUrlCandidates(args.make, sib.nameplate, laborCfg.repairpal_slug, args.year) },
-              );
-              if (rp) { rpHours = rp.hours; rpMatchKey = sib.match_key; rpSiblingSlug = sib.nameplate; }
-            }
-          }
-
-          if (rpHours != null) {
-            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
-              vehicle_config_id: args.vehicleConfigId,
-              service_id: serviceId,
-              hours: rpHours,
-              source: "repairpal_motor",
-              weight: 0.8,
-              tier: "catalog",
-              engine_family: rpEngineFamily,
-              match_key: rpMatchKey,
-              sibling_slug: rpSiblingSlug,
-            });
-            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
-              vehicle_config_id: args.vehicleConfigId,
-              service_id: serviceId,
-              book_only: true,
-            });
-          }
+        // OLP (real per-vehicle flat-rate hours) → one CATALOG observation at
+        // anchor weight. Drives book_hours + quote-grade confidence (0.8/0.9).
+        const olpH = olpHours[slug];
+        if (olpH != null) {
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
+            vehicle_config_id: args.vehicleConfigId,
+            service_id: serviceId,
+            hours: olpH,
+            source: "olp_labor",
+            weight: 0.8,
+            tier: "catalog",
+            engine_family: olpEngineFamily,
+          });
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
+            vehicle_config_id: args.vehicleConfigId,
+            service_id: serviceId,
+            book_only: true,
+          });
         }
       }
 

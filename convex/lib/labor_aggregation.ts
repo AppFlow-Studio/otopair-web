@@ -7,14 +7,13 @@
  * internal/empirical data preferred as it accrues.
  *
  * recomputeLaborForConfigService recomputes ONE (vehicle_config, service):
- *   - book_hours      = robust (UNWEIGHTED) median of CATALOG observations (VDB,
- *                       LLM book times, …), clamped to sane bounds, rounded 0.1h.
- *                       VDB is de-throned by being ONE of N median inputs (no
- *                       longer the highest-confidence winner), NOT by the per-
- *                       source `weight` — weights are currently informational
- *                       (reserved for future source-scoring) and do not bias the
- *                       median. With a lone VDB source, book_hours is VDB's value
- *                       (clamped); it's diluted as soon as a second source exists.
+ *   - book_hours      = robust WEIGHTED median of CATALOG observations (OLP,
+ *                       LLM book times, VDB, …), clamped to sane bounds, rounded
+ *                       0.1h. Each source's `weight` biases the result
+ *                       (weightedMedian walks the cumulative-weight frontier), so
+ *                       the high-trust anchor olp_labor (0.8) dominates LLM
+ *                       (0.3-0.5) and VDB (0.05). With a lone source, book_hours
+ *                       is that source's value (clamped).
  *   - empirical_hours = robust median of POST-JOB actual durations from
  *                       SINGLE-service bookings, but only once there are
  *                       >= LABOR_EMPIRICAL_MIN_SAMPLES of them (else cleared).

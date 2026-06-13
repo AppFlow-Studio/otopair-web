@@ -354,24 +354,29 @@ export const _repriceConfigPartsRun = internalAction({
           totalPrices++;
           const o = row.outcome;
           if (o.status === "fetch_failed") { fetchFailed++; continue; }
+          // Patch the EXISTING row in place: upsertPartPrice keys on
+          // (part_id, source_domain), so we must reuse the DB's stored
+          // source_domain — domainOf(url) can differ (www-stripping) and would
+          // otherwise insert a duplicate row instead of updating.
+          const existingRow = (prices as any[]).find((r) => r.source_url === row.source_url);
+          const source_domain = (existingRow?.source_domain as string) ?? row.source_domain;
           if (o.status === "sale") {
             await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
               part_id: part.part_id,
               price: o.price,
               price_type: "sale",
-              source_domain: row.source_domain,
+              source_domain,
               source_url: row.source_url,
               msrp: o.msrp ?? undefined,
               discount: o.discount ?? undefined,
             });
             fixed++;
           } else {
-            const existingRow = (prices as any[]).find((r) => r.source_url === row.source_url);
             await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
               part_id: part.part_id,
               price: typeof existingRow?.price === "number" ? existingRow.price : 0,
               price_type: UNVERIFIED_PRICE_TYPE,
-              source_domain: row.source_domain,
+              source_domain,
               source_url: row.source_url,
             });
             markedUnverified++;

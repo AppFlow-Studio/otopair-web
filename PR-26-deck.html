@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PR #26 — waleed-flagship → temur-dev · Engineering Briefing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0c0f; --bg2:#0e1217; --panel:#12161c; --panel2:#161b22;
+    --ink:#ECEAE3; --ink-dim:#9aa3ad; --ink-faint:#5b646e;
+    --line:rgba(232,234,227,.08); --line2:rgba(232,234,227,.14);
+    --amber:#E8B84B; --amber-d:#caa033;
+    --red:#E5645B; --red-bg:rgba(229,100,91,.10); --red-bd:rgba(229,100,91,.34);
+    --grn:#5FCF8E; --grn-bg:rgba(95,207,142,.09); --grn-bd:rgba(95,207,142,.32);
+    --cyan:#7FB8D6;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --sans:'Archivo',system-ui,sans-serif;
+    --serif:'Newsreader',Georgia,serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--ink); font-family:var(--sans);
+    overflow:hidden; -webkit-font-smoothing:antialiased;
+  }
+  /* ── atmosphere ───────────────────────────────────── */
+  .grid-bg{position:fixed; inset:0; z-index:0; pointer-events:none;
+    background-image:
+      linear-gradient(var(--line) 1px,transparent 1px),
+      linear-gradient(90deg,var(--line) 1px,transparent 1px);
+    background-size:64px 64px; mask-image:radial-gradient(120% 100% at 70% 0%,#000 35%,transparent 100%);}
+  .glow{position:fixed; z-index:0; pointer-events:none; filter:blur(90px); opacity:.5;}
+  .glow.a{width:50vw;height:50vw;left:-12vw;top:-18vw;background:radial-gradient(circle,rgba(232,184,75,.16),transparent 60%);}
+  .glow.b{width:48vw;height:48vw;right:-14vw;bottom:-22vw;background:radial-gradient(circle,rgba(127,184,214,.12),transparent 60%);}
+  .grain{position:fixed; inset:0; z-index:60; pointer-events:none; opacity:.045; mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+
+  /* ── chrome ───────────────────────────────────────── */
+  .progress{position:fixed; top:0; left:0; height:2px; background:linear-gradient(90deg,var(--amber),var(--amber-d)); z-index:80; transition:width .5s cubic-bezier(.2,.8,.2,1); box-shadow:0 0 12px rgba(232,184,75,.6);}
+  .topbar{position:fixed; top:0; left:0; right:0; z-index:70; display:flex; justify-content:space-between; align-items:center; padding:18px 30px; font-family:var(--mono); font-size:11px; letter-spacing:.12em; color:var(--ink-faint); text-transform:uppercase;}
+  .topbar .brand{color:var(--ink-dim);} .topbar .brand b{color:var(--amber); font-weight:700;}
+  .counter{position:fixed; bottom:20px; right:30px; z-index:70; font-family:var(--mono); font-size:12px; color:var(--ink-faint); letter-spacing:.1em;}
+  .counter b{color:var(--ink); font-weight:700;}
+  .nav-hint{position:fixed; bottom:20px; left:30px; z-index:70; font-family:var(--mono); font-size:11px; color:var(--ink-faint); letter-spacing:.08em; display:flex; gap:14px; align-items:center;}
+  .key{display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 5px; border:1px solid var(--line2); border-radius:5px; color:var(--ink-dim); font-size:11px;}
+  .dots{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:70; display:flex; gap:7px;}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--line2); cursor:pointer; transition:.3s;}
+  .dot.on{background:var(--amber); box-shadow:0 0 8px rgba(232,184,75,.7); transform:scale(1.25);}
+
+  /* ── slide system ─────────────────────────────────── */
+  .deck{position:relative; z-index:10; height:100vh; width:100vw;}
+  .slide{position:absolute; inset:0; display:flex; flex-direction:column; justify-content:flex-start;
+    padding:96px clamp(40px,7vw,120px) 80px; opacity:0; visibility:hidden;
+    transform:translateY(14px) scale(.992); transition:opacity .5s ease, transform .6s cubic-bezier(.2,.8,.2,1), visibility .5s;}
+  .slide.center{justify-content:center;}
+  .slide.active{opacity:1; visibility:visible; transform:none;}
+  /* pins a block to the bottom so content fills the frame */
+  .pin{margin-top:auto;}
+  /* oversized ghost numeral — visual signature on content slides */
+  .ghost{position:absolute; right:3vw; bottom:2vh; z-index:-1; font-weight:900; font-size:min(46vh,420px);
+    line-height:.8; letter-spacing:-.04em; color:rgba(232,234,227,.028); user-select:none; pointer-events:none;
+    font-family:var(--sans);}
+  .slide.active .rise{animation:rise .7s cubic-bezier(.2,.85,.25,1) both;}
+  .slide.active .rise:nth-child(1){animation-delay:.05s}
+  .slide.active .rise:nth-child(2){animation-delay:.13s}
+  .slide.active .rise:nth-child(3){animation-delay:.21s}
+  .slide.active .rise:nth-child(4){animation-delay:.29s}
+  .slide.active .rise:nth-child(5){animation-delay:.37s}
+  .slide.active .rise:nth-child(6){animation-delay:.45s}
+  @keyframes rise{from{opacity:0; transform:translateY(20px)} to{opacity:1; transform:none}}
+
+  /* ── type ─────────────────────────────────────────── */
+  .kicker{font-family:var(--mono); font-size:12px; letter-spacing:.28em; text-transform:uppercase; color:var(--amber); display:flex; align-items:center; gap:12px; margin-bottom:22px;}
+  .kicker::before{content:''; width:26px; height:1px; background:var(--amber); opacity:.7;}
+  .kicker .ph{color:var(--ink-faint); letter-spacing:.18em;}
+  h1{font-weight:900; font-size:clamp(40px,7.4vw,108px); line-height:.94; letter-spacing:-.025em;}
+  h2{font-weight:800; font-size:clamp(30px,4.6vw,62px); line-height:1.0; letter-spacing:-.02em; max-width:18ch;}
+  h2 .hl{color:var(--amber)} h1 .hl{color:var(--amber)}
+  .lede{font-family:var(--serif); font-style:italic; font-size:clamp(18px,2.1vw,27px); line-height:1.4; color:var(--ink-dim); max-width:40ch; margin-top:22px;}
+  .sub{color:var(--ink-dim); font-size:clamp(15px,1.5vw,18px); line-height:1.55; max-width:54ch; margin-top:18px;}
+  .mono{font-family:var(--mono);}
+  .chip{display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px; color:var(--ink-dim); background:var(--panel); border:1px solid var(--line2); border-radius:6px; padding:5px 9px;}
+  .chip .h{color:var(--amber); font-weight:700;}
+
+  /* ── components ───────────────────────────────────── */
+  .wb-grid{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:30px; max-width:1100px;}
+  .card{background:var(--panel); border:1px solid var(--line2); border-radius:14px; padding:22px 24px; position:relative; overflow:hidden;}
+  .card .tag{font-family:var(--mono); font-size:11px; letter-spacing:.18em; text-transform:uppercase; display:flex; align-items:center; gap:8px; margin-bottom:13px;}
+  .card .tag::before{content:''; width:7px;height:7px;border-radius:2px;}
+  .card.why{border-color:rgba(232,184,75,.25); background:linear-gradient(180deg,rgba(232,184,75,.05),transparent);}
+  .card.why .tag{color:var(--amber)} .card.why .tag::before{background:var(--amber)}
+  .card.ben{border-color:var(--grn-bd); background:linear-gradient(180deg,var(--grn-bg),transparent);}
+  .card.ben .tag{color:var(--grn)} .card.ben .tag::before{background:var(--grn)}
+  .card p{font-size:16px; line-height:1.5; color:var(--ink);}
+  .card.why p,.card.ben p{color:var(--ink-dim)} .card p b{color:var(--ink); font-weight:600;}
+
+  .ba{display:grid; grid-template-columns:1fr auto 1fr; gap:20px; align-items:stretch; margin-top:28px; max-width:1080px;}
+  .ba .panel-x{border-radius:14px; padding:20px 22px; border:1px solid;}
+  .ba .before{background:var(--red-bg); border-color:var(--red-bd);}
+  .ba .after{background:var(--grn-bg); border-color:var(--grn-bd);}
+  .ba .lab{font-family:var(--mono); font-size:11px; letter-spacing:.2em; text-transform:uppercase; margin-bottom:12px;}
+  .ba .before .lab{color:var(--red)} .ba .after .lab{color:var(--grn)}
+  .ba .panel-x p{font-size:15.5px; line-height:1.5; color:var(--ink-dim)} .ba .panel-x p b{color:var(--ink)}
+  .ba .arrow{display:flex; align-items:center; color:var(--amber); font-size:30px;}
+
+  .stat-row{display:flex; flex-wrap:wrap; gap:14px; margin-top:34px;}
+  .stat{background:var(--panel); border:1px solid var(--line2); border-radius:14px; padding:22px 26px; min-width:160px; flex:1;}
+  .stat .n{font-weight:900; font-size:clamp(34px,4.2vw,56px); line-height:1; letter-spacing:-.03em;}
+  .stat .n.amber{color:var(--amber)} .stat .n.grn{color:var(--grn)} .stat .n.red{color:var(--red)}
+  .stat .l{font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint); margin-top:10px;}
+
+  .phases{display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-top:36px;}
+  .phase{background:var(--panel); border:1px solid var(--line2); border-radius:13px; padding:20px 18px; position:relative;}
+  .phase .id{font-family:var(--mono); font-size:11px; color:var(--ink-faint); letter-spacing:.12em;}
+  .phase .ttl{font-weight:700; font-size:17px; margin-top:9px; line-height:1.15;}
+  .phase .d{color:var(--ink-dim); font-size:13px; line-height:1.45; margin-top:9px;}
+  .phase .bar{position:absolute; top:0; left:0; right:0; height:3px; border-radius:13px 13px 0 0;}
+
+  ul.feat{list-style:none; margin-top:28px; display:flex; flex-direction:column; gap:18px; max-width:78ch;}
+  ul.feat li{position:relative; padding-left:26px; font-size:18px; line-height:1.52; color:var(--ink-dim);}
+  ul.feat li b{color:var(--ink); font-weight:600;}
+  ul.feat li::before{content:''; position:absolute; left:0; top:.62em; width:9px;height:9px;border-radius:2px; background:var(--amber); box-shadow:0 0 8px rgba(232,184,75,.5);}
+  ul.feat.grn li::before{background:var(--grn); box-shadow:0 0 8px rgba(95,207,142,.5);}
+  /* two-column feature list — wide measure, no cramping */
+  ul.feat.cols{max-width:1200px; display:grid; grid-template-columns:1fr 1fr; gap:22px 56px;}
+  ul.feat.cols li{font-size:16.5px; line-height:1.5;}
+
+  .hash{font-family:var(--mono); font-size:11px; color:var(--amber); background:rgba(232,184,75,.08); border:1px solid rgba(232,184,75,.22); padding:2px 6px; border-radius:5px; white-space:nowrap;}
+  code{font-family:var(--mono); font-size:.84em; color:var(--cyan); background:rgba(127,184,214,.09); padding:1px 6px; border-radius:4px; white-space:nowrap;}
+  .ba .panel-x code, .card code{color:#9fcde2;}
+
+  .title-stats{display:flex; gap:34px; margin-top:46px; flex-wrap:wrap;}
+  .title-stats .ts .n{font-weight:900; font-size:clamp(28px,3.4vw,44px); letter-spacing:-.03em;}
+  .title-stats .ts .l{font-family:var(--mono); font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint); margin-top:7px;}
+  .flow{font-family:var(--mono); font-size:clamp(13px,1.5vw,17px); color:var(--ink-dim); margin-top:8px; letter-spacing:.04em;}
+  .flow b{color:var(--ink)} .flow .arr{color:var(--amber); margin:0 10px;}
+
+  .two-col{display:grid; grid-template-columns:1.1fr .9fr; gap:48px; align-items:center;}
+  @media(max-width:900px){.wb-grid,.phases{grid-template-columns:1fr} .two-col{grid-template-columns:1fr} .ba{grid-template-columns:1fr} .ba .arrow{transform:rotate(90deg)}}
+
+  .startcue{margin-top:40px; font-family:var(--mono); font-size:12px; color:var(--ink-faint); letter-spacing:.1em; display:flex; align-items:center; gap:10px; animation:pulse 2.4s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:.45}50%{opacity:1}}
+</style>
+</head>
+<body>
+<div class="grid-bg"></div><div class="glow a"></div><div class="glow b"></div>
+<div class="progress" id="prog"></div>
+<div class="topbar">
+  <div class="brand"><b>OTOPAIR</b> · ENGINEERING BRIEFING</div>
+  <div>PR #26 — waleed-flagship → temur-dev</div>
+</div>
+<div class="grain"></div>
+
+<div class="deck" id="deck">
+
+  <!-- 1 · TITLE -->
+  <section class="slide center">
+    <div class="rise kicker">Pull Request #26 <span class="ph">// 94 commits</span></div>
+    <h1 class="rise">A pricing engine,<br>a security pass,<br>and an <span class="hl">Oto overhaul.</span></h1>
+    <div class="rise flow"><b>waleed-flagship</b><span class="arr">→</span><b>temur-dev</b></div>
+    <div class="rise title-stats">
+      <div class="ts"><div class="n hl">94</div><div class="l">commits</div></div>
+      <div class="ts"><div class="n">184</div><div class="l">files touched</div></div>
+      <div class="ts"><div class="n" style="color:var(--grn)">+23.8k</div><div class="l">insertions</div></div>
+      <div class="ts"><div class="n" style="color:var(--red)">−2.4k</div><div class="l">deletions</div></div>
+      <div class="ts"><div class="n">39</div><div class="l">new test files</div></div>
+    </div>
+    <div class="rise startcue">PRESS <span class="key">→</span> TO BEGIN THE WALKTHROUGH</div>
+  </section>
+
+  <!-- 2 · THE MAP -->
+  <section class="slide center">
+    <div class="rise kicker">The shape of the work</div>
+    <h2 class="rise">Five workstreams, one branch.</h2>
+    <div class="rise phases">
+      <div class="phase"><div class="bar" style="background:var(--amber)"></div><div class="id">PHASE 1–2</div><div class="ttl">Pricing foundation + Oto Sim</div><div class="d">Per-role parts pricing; a director harness to drive Oto as any user.</div></div>
+      <div class="phase"><div class="bar" style="background:var(--cyan)"></div><div class="id">PHASE 3</div><div class="ttl">Labor times</div><div class="d">MOTOR-grade book hours from RepairPal + platform-sibling resolution.</div></div>
+      <div class="phase"><div class="bar" style="background:var(--cyan)"></div><div class="id">PHASE 4</div><div class="ttl">Robustness + security</div><div class="d">Price re-extraction, stuck-run recovery, and locking the admin surface.</div></div>
+      <div class="phase"><div class="bar" style="background:var(--grn)"></div><div class="id">PHASE 4</div><div class="ttl">Data correctness</div><div class="d">Human-verified fields that survive re-enrichment; curated engine facts.</div></div>
+      <div class="phase"><div class="bar" style="background:#c77dff"></div><div class="id">PHASE 5</div><div class="ttl">Oto health sweep</div><div class="d">IDOR lockdown, real telemetry, the conversation viewer, memory wiring.</div></div>
+    </div>
+    <div class="rise sub">Each change below is framed the same way the dev team will judge it: <b style="color:var(--ink)">what changed</b>, <b style="color:var(--amber)">why</b>, and <b style="color:var(--grn)">the benefit</b>.</div>
+  </section>
+
+  <!-- 3 · NUMBERS -->
+  <section class="slide center">
+    <div class="ghost">94</div>
+    <div class="rise kicker">By the numbers</div>
+    <h2 class="rise">Big surface, <span class="hl">tightly tested.</span></h2>
+    <div class="rise stat-row">
+      <div class="stat"><div class="n amber">30</div><div class="l">new Convex modules</div></div>
+      <div class="stat"><div class="n">13</div><div class="l">flagship UI components</div></div>
+      <div class="stat"><div class="n grn">39</div><div class="l">new test files</div></div>
+      <div class="stat"><div class="n">2</div><div class="l">adversarial review passes</div></div>
+    </div>
+    <div class="rise sub" style="margin-top:30px">The heaviest areas: <code>tests/</code> (+5,064), <code>components/flagship/</code> (+4,006), <code>convex/vehicleEnrichment/</code> (+3,155), and <code>convex/oto/</code> (+1,812). Every code fix was written test-first — the test was watched failing before the fix landed.</div>
+  </section>
+
+  <!-- 4 · PARTS PRICING -->
+  <section class="slide">
+    <div class="ghost">P1</div>
+    <div class="rise kicker">Enrichment · Parts pricing <span class="ph">// 14b7e63 · 9025ad0</span></div>
+    <h2 class="rise">Quotes that match the real invoice.</h2>
+    <div class="rise ba">
+      <div class="panel-x before"><div class="lab">Before</div>
+        <p>The parser read <b>flattened markdown</b>, where the sale price, the struck MSRP and "You Save $X" collapse into one blob — so it quoted <b>$11 instead of $104</b>. And one "winner" was chosen across <b>all</b> of a service's parts, so an oil change billed <b>a single bottle</b>, no filter, no washer.</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="panel-x after"><div class="lab">After</div>
+        <p>A pure extractor reads <b>raw HTML / JSON-LD</b> and deliberately never touches MSRP or "You Save." Parts resolve <b>per role</b> from a canonical 23-service reference, and <b>fluids price by capacity</b> (4.8 qt → 5 bottles). Every line on the quote is auditable.</p>
+      </div>
+    </div>
+    <div class="rise wb-grid pin">
+      <div class="card why"><div class="tag">Why it mattered</div><p>Customers were shown prices that were simply wrong — sometimes off by <b>10×</b> — and multi-part jobs were structurally under-quoted.</p></div>
+      <div class="card ben"><div class="tag">Benefit</div><p>The quote now reflects <b>every part at the right quantity</b> at the price a buyer actually pays. Backed by a 22-test parser suite + a reference-contract suite.</p></div>
+    </div>
+  </section>
+
+  <!-- 5 · PRICE RE-EXTRACTION -->
+  <section class="slide">
+    <div class="ghost">P2</div>
+    <div class="rise kicker">Enrichment · Price re-extraction <span class="ph">// b597c4b · 3427406 · 0cd043d</span></div>
+    <h2 class="rise">One contract for every price writer.</h2>
+    <ul class="rise feat">
+      <li><b>Two-tier extraction</b> — structured JSON-LD first (free, exact), then an LLM fallback whose prompt explicitly forbids MSRP / "was" / struck-through figures and echoes back what it saw so guardrails can reject a wrong grab.</li>
+      <li><b>Poison-exclusion median</b> — bad price types are filtered <i>before</i> the math, so a figure only 20–40% off (which survives outlier rejection) can never drive the customer price.</li>
+      <li><b>A strict outcome contract</b> — <code>sale</code> / <code>unverified</code> / <code>fetch_failed</code>. A transient scrape failure no longer deletes a good price; a page that contradicts its own number is marked, not trusted.</li>
+      <li><b>No silent $0</b> — an unpriceable part is flagged <code>price_unknown</code> ("confirmed post-job") instead of billing $0 as if it were real.</li>
+    </ul>
+    <div class="rise wb-grid pin">
+      <div class="card why"><div class="tag">Why it mattered</div><p>Four separate paths wrote prices and could drift; transient failures were quietly <b>erasing verified prices</b>.</p></div>
+      <div class="card ben"><div class="tag">Benefit</div><p>Director reprice, enrichment, admin backfills and the aggregator now share <b>one verified contract</b>. Live: a Jetta's poison rows went <b>16 → 0</b>.</p></div>
+    </div>
+  </section>
+
+  <!-- 6 · LABOR -->
+  <section class="slide">
+    <div class="ghost">P3</div>
+    <div class="rise kicker">Enrichment · Labor times <span class="ph">// RepairPal source</span></div>
+    <h2 class="rise">MOTOR-grade labor, <span class="hl">even for niche cars.</span></h2>
+    <ul class="rise feat cols">
+      <li>RepairPal exposes labor <b>dollars</b> at a fixed national rate — the high/low ratio is a constant <b>~1.47</b>, so hours are recoverable arithmetically (<code>hours = midpoint ÷ rate</code>).</li>
+      <li>A <b>source-weighted median</b> means no single bad reading dominates; the old VDB "winner" is demoted to a tiebreaker.</li>
+      <li><b>Sibling resolution</b> — labor is a function of chassis + engine, not the nameplate. A niche M550i inherits from a <b>validated twin</b>: <code>750i</code> (same N63) or <code>530i</code> (same G30).</li>
+      <li>The <b>LLM is a router, not a source</b> — it only picks which page to read; three validation gates mean a wrong sibling can never supply a number.</li>
+    </ul>
+    <div class="rise wb-grid pin">
+      <div class="card why"><div class="tag">Why it mattered</div><p>Labor times were dictated by a <b>single unvalidated source</b>, with no way for real shop data to correct them — and the lowest-volume cars had no coverage at all.</p></div>
+      <div class="card ben"><div class="tag">Benefit</div><p>A tiered <b>"data-good"</b> confidence signal the quote engine can gate on. Real shop jobs silently take over once 3+ complete.</p></div>
+    </div>
+  </section>
+
+  <!-- 7 · ROBUSTNESS -->
+  <section class="slide">
+    <div class="ghost">P4</div>
+    <div class="rise kicker">Enrichment · Robustness <span class="ph">// 41c07de · 56e1d51 · 3e6f1b5</span></div>
+    <h2 class="rise">Runs that finish. Cars that come out priced.</h2>
+    <div class="rise ba">
+      <div class="panel-x before"><div class="lab">The failure modes</div>
+        <p>A TLS-dead supplier made the scraper burn the <b>full 600s action cap</b> before any work landed — leaving the car <b>stuck "enriching" forever</b>, blocking bookings. Fresh cars came out <b>fully discovered yet fully unpriced</b>. An M340i and a 330i <b>shared one cache</b> for 30 days.</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="panel-x after"><div class="lab">The fixes</div>
+        <p>A <b>scrape time-budget</b> caps each page and the loop. A <b>failure handler + force-unstick</b> always restores the car to a terminal state and lets a director take over a dead run. Batch-2 now <b>prices the parts it discovers itself</b>. <b>Trim</b> is in the cache key.</p>
+      </div>
+    </div>
+    <div class="rise wb-grid pin">
+      <div class="card why"><div class="tag">Why it mattered</div><p>A stuck config <b>breaks the booking soft-lock</b>, and an unpriced car can't be quoted at all.</p></div>
+      <div class="card ben"><div class="tag">Benefit</div><p>First convex-test coverage of the enrichment action layer (7 tests). Live: a Civic that failed twice now completes and prices <b>8 → 23</b> parts.</p></div>
+    </div>
+  </section>
+
+  <!-- 8 · DATA CORRECTNESS -->
+  <section class="slide">
+    <div class="ghost">P4</div>
+    <div class="rise kicker">Enrichment · Data correctness <span class="ph">// ca40fae · ce6b386</span></div>
+    <h2 class="rise">Human fixes that <span class="hl">stick.</span></h2>
+    <ul class="rise feat">
+      <li>An engine field a human corrected (the EA211 is <b>belt</b>, not chain) was <b>silently overwritten</b> on the next re-enrich — and because applicability nulls are final, a misclassified car could <b>never</b> get its belt parts.</li>
+      <li>Now every human-changed field is stamped <code>verified_fields</code>; the pipeline <b>skips verified keys</b> and applies them <i>before</i> the applicability rules run.</li>
+      <li>A small <b>curated engine-facts table</b> protects <i>future</i> cars of the same family — physical facts about an engine don't need an LLM vote.</li>
+    </ul>
+    <div class="rise wb-grid pin">
+      <div class="card why"><div class="tag">Why it mattered</div><p>Correct data was being <b>clobbered by the very process meant to refresh it</b> — and the dependent parts (belt + kit + water pump) could never populate.</p></div>
+      <div class="card ben"><div class="tag">Benefit</div><p>Verified data now <b>steers</b> re-enrichment instead of being overwritten by it. Every fix is audit-logged with a before→after diff.</p></div>
+    </div>
+  </section>
+
+  <!-- 9 · SECURITY -->
+  <section class="slide">
+    <div class="ghost">SEC</div>
+    <div class="rise kicker">Security <span class="ph">// aff697e · f13dea5 · d5cab59 · 845edbb · aa0d79c · 0a5c891</span></div>
+    <h2 class="rise">Closing an <span class="hl">IDOR class.</span></h2>
+    <div class="rise ba">
+      <div class="panel-x before"><div class="lab">The exposure</div>
+        <p>~13 public, unauthenticated mutations let <b>anyone with the URL</b> write any user's persistent memory (durable <b>stored prompt injection</b> at confidence 1.0), the shared knowledge base, and the forensic audit log. Director panels leaked <b>email + phone + full transcripts</b>. The audit log leaked <b>director emails</b>. The MCP DB route <b>failed open</b>.</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="panel-x after"><div class="lab">The lockdown</div>
+        <p>Server-side writers → <code>internalMutation</code> (every caller is server-side). User tables → <b>owner-gated</b> on <code>ctx.auth</code>. Director surfaces → <b>session-token gated</b>, audit actor derived from the session (no forgery). The MCP route now <b>fails closed</b>.</p>
+      </div>
+    </div>
+    <div class="rise wb-grid pin">
+      <div class="card why"><div class="tag">Why it mattered</div><p>Same bug class we'd closed on enrichment, swept across Oto + the admin surface. Verified by a <b>6-agent caller audit</b> — zero client callers, so nothing breaks.</p></div>
+      <div class="card ben"><div class="tag">Benefit</div><p>A whole exploit class — memory poisoning, PII leaks, forged audit trails — is closed, each with a dedicated auth-gate test suite.</p></div>
+    </div>
+  </section>
+
+  <!-- 10 · DIRECTOR -->
+  <section class="slide">
+    <div class="ghost">DX</div>
+    <div class="rise kicker">Director panel <span class="ph">// 70910a8 · 98bf93f · df67f77</span></div>
+    <h2 class="rise">Operator tools for Oto + the catalog.</h2>
+    <ul class="rise feat grn">
+      <li><b>Oto Sim tab</b> — chat with the in-app Oto <i>as any user</i>, through the real production agent, to reproduce and debug their exact experience.</li>
+      <li><b>Per-config backfill buttons</b> — re-enrich, parts-only (preserving hand-edited specs), or reprice a single car without re-running the whole corpus.</li>
+      <li><b>Oto History viewer</b> — a read-only, token-gated view of any user's past production conversations: transcript plus per-turn debug (model, tools, tokens, latency).</li>
+    </ul>
+    <div class="rise card ben pin" style="max-width:820px"><div class="tag">Benefit</div><p>The qualitative companion to the now-real telemetry — <b>"is Oto good?" becomes inspectable</b>, per user, per conversation. Built like the one panel surface that actually checks auth, not like the leaky readers it replaces.</p></div>
+  </section>
+
+  <!-- 11 · OTO SWEEP OVERVIEW -->
+  <section class="slide center">
+    <div class="rise kicker">Oto health sweep <span class="ph">// Phase 5 — P1 → B-P5</span></div>
+    <h2 class="rise">The behavior was good.<br>The <span class="hl">plumbing was leaky.</span></h2>
+    <div class="rise sub">A live health review + a 21-agent code review found Oto's conversation behavior genuinely strong — but a systemic IDOR class and <b style="color:var(--ink)">fabricated telemetry</b>. The sweep worked the prioritized fix list end to end:</div>
+    <div class="rise phases" style="margin-top:30px; grid-template-columns:repeat(5,1fr)">
+      <div class="phase"><div class="bar" style="background:var(--red)"></div><div class="id">P1</div><div class="ttl">Lock the IDOR</div></div>
+      <div class="phase"><div class="bar" style="background:var(--amber)"></div><div class="id">B-P1</div><div class="ttl">Real telemetry</div></div>
+      <div class="phase"><div class="bar" style="background:var(--cyan)"></div><div class="id">A · B-P2</div><div class="ttl">Viewer + memory</div></div>
+      <div class="phase"><div class="bar" style="background:var(--cyan)"></div><div class="id">B-P3</div><div class="ttl">Tool-schema truth</div></div>
+      <div class="phase"><div class="bar" style="background:var(--grn)"></div><div class="id">B-P4·5</div><div class="ttl">Cost + polish</div></div>
+    </div>
+  </section>
+
+  <!-- 12 · TELEMETRY -->
+  <section class="slide">
+    <div class="ghost">B1</div>
+    <div class="rise kicker">Oto · Telemetry <span class="ph">// c46b1c7</span></div>
+    <h2 class="rise">Making "is Oto good?" <span class="hl">measurable.</span></h2>
+    <div class="rise ba">
+      <div class="panel-x before"><div class="lab">Before</div>
+        <p>Every production telemetry row recorded <b>0 tokens</b>, an <b>empty tool list</b>, and <b>model = "haiku"</b> regardless of what actually ran — because the aggregation only worked on debug runs, and the insert stamped a constant. Cost-per-booking was <b>literally unmeasurable.</b></p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="panel-x after"><div class="lab">After</div>
+        <p>A pure assembler sums real per-turn samples collected <b>unconditionally</b> inside the tool loop, and stamps the <b>routed model</b>. Tokens, latency, tools, branch — all real, all per turn.</p>
+      </div>
+    </div>
+    <div class="rise card ben pin" style="max-width:820px"><div class="tag">Benefit</div><p>The whole question the review was built to answer — quality and cost — is now <b>backed by real numbers</b>, surfaced in the new viewer's debug pane.</p></div>
+  </section>
+
+  <!-- 13 · SONNET + MEMORY -->
+  <section class="slide center">
+    <div class="ghost">B2</div>
+    <div class="rise kicker">Oto · Routing &amp; memory <span class="ph">// 7c0d078 · 8b390fe · 307f159</span></div>
+    <h2 class="rise">The smart model answers the hard turn.</h2>
+    <ul class="rise feat cols">
+      <li><b>Same-turn Sonnet escalation</b> — the turn that <i>asked</i> for Sonnet was still answered by Haiku; Sonnet only engaged the next turn. Now it answers the hard diagnostic turn it was escalated for.</li>
+      <li><b>The vehicle anchor finally fires</b> — "one chat, one car" had <b>zero production call sites</b>, so every conversation's car was blank. Now locked on first send.</li>
+      <li><b>No cross-car fact bleed</b> — the knowledge-base cache keyed only on the question, so <b>one car's fact was served to another car's owner</b>. Now scoped by chassis / engine / config.</li>
+      <li><b>The state contract is now measured</b> — a reliability event fires when a substantive turn skips writing its memory, so under-calling is visible and tunable.</li>
+    </ul>
+  </section>
+
+  <!-- 14 · TOOL SCHEMA -->
+  <section class="slide">
+    <div class="ghost">B3</div>
+    <div class="rise kicker">Oto · Tool-schema truth <span class="ph">// 593b155 · 9236179 · e2a07a2</span></div>
+    <h2 class="rise">Tools that tell the truth.</h2>
+    <div class="rise ba">
+      <div class="panel-x before"><div class="lab">Before</div>
+        <p>Tool descriptions disagreed — some said "VIN", the code expected an id — so a VIN threw and <code>list_services_for_vehicle</code> <b>silently fell open to the unfiltered catalog</b> (offering an oil change on an EV). Live descriptions pointed at <b>dead tools</b>, so Oto <b>fabricated mechanic ids</b>. Web-search pauses <b>dead-ended</b> into a generic apology.</p>
+      </div>
+      <div class="arrow">→</div>
+      <div class="panel-x after"><div class="lab">After</div>
+        <p>One resolver accepts <b>VIN-or-id</b> everywhere. The 9 dead tools are stripped and the fabricated-id descriptions rewritten. <code>pause_turn</code> now <b>continues the search</b> instead of giving up.</p>
+      </div>
+    </div>
+    <div class="rise card ben pin" style="max-width:820px"><div class="tag">Benefit</div><p>The last real correctness bug — applicability silently failing open — is closed, plus the "ask Oto to look something up" path no longer dead-ends. Guarded by a regression test that fails if any description references a removed tool.</p></div>
+  </section>
+
+  <!-- 15 · QUALITY -->
+  <section class="slide center">
+    <div class="rise kicker">How it was built</div>
+    <h2 class="rise">Test-first, <span class="hl">adversarially checked.</span></h2>
+    <div class="rise stat-row">
+      <div class="stat"><div class="n grn">39</div><div class="l">test files, watched red first</div></div>
+      <div class="stat"><div class="n amber">2</div><div class="l">adversarial review passes</div></div>
+      <div class="stat"><div class="n">100%</div><div class="l">deployed + live-driven on dev</div></div>
+    </div>
+    <ul class="rise feat" style="margin-top:30px">
+      <li>Every code fix was written <b>test-first</b> — the failing test was the spec.</li>
+      <li>The security sweep and the memory changes each went through an <b>independent adversarial review</b>; both rounds' findings were fixed before this PR.</li>
+      <li>The Oto changes were <b>deployed to dev and live-driven</b> through the Sim harness — real authenticated turns, confirming behavior, the anchor, applicability, and the cache.</li>
+      <li>The only red tests are <b>two known booking-subsystem flakes</b>, pre-existing and unrelated.</li>
+    </ul>
+  </section>
+
+  <!-- 16 · IMPACT -->
+  <section class="slide center">
+    <div class="rise kicker">The takeaway</div>
+    <h2 class="rise">Correct prices. A locked surface.<br>A <span class="hl">measurable Oto.</span></h2>
+    <div class="rise wb-grid" style="grid-template-columns:1fr 1fr 1fr; max-width:1180px">
+      <div class="card ben"><div class="tag">Money</div><p>Quotes match the real invoice — right parts, right quantities, real prices — with no silent $0 and no MSRP grabs.</p></div>
+      <div class="card ben"><div class="tag">Safety</div><p>A full IDOR class closed: no memory poisoning, no PII leaks, no forged audit trails, no fail-open backdoor.</p></div>
+      <div class="card ben"><div class="tag">Visibility</div><p>Real telemetry + a conversation viewer make Oto's quality and cost inspectable for the first time.</p></div>
+    </div>
+    <div class="rise sub" style="margin-top:34px">All 94 commits are documented to the code level in <code>PR-26-temur-dev-review.md</code> — what, why, how, and the test that covers each.</div>
+    <div class="rise" style="margin-top:30px"><span class="chip"><span class="h">PR #26</span> github.com/AppFlow-Studio/otopair-web/pull/26</span></div>
+  </section>
+
+</div>
+
+<div class="counter"><b id="cur">01</b> / <span id="tot">16</span></div>
+<div class="nav-hint"><span class="key">←</span><span class="key">→</span> navigate <span style="opacity:.5">·</span> <span class="key">F</span> fullscreen</div>
+<div class="dots" id="dots"></div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const dotsWrap=document.getElementById('dots');
+  const prog=document.getElementById('prog');
+  const cur=document.getElementById('cur'), tot=document.getElementById('tot');
+  let i=0; tot.textContent=String(slides.length).padStart(2,'0');
+  slides.forEach((_,k)=>{const d=document.createElement('div');d.className='dot';d.onclick=()=>go(k);dotsWrap.appendChild(d);});
+  const dots=[...dotsWrap.children];
+  function go(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    dots.forEach((d,k)=>d.classList.toggle('on',k===i));
+    prog.style.width=((i)/(slides.length-1)*100)+'%';
+    cur.textContent=String(i+1).padStart(2,'0');
+  }
+  function next(){go(i+1)} function prev(){go(i-1)}
+  document.addEventListener('keydown',e=>{
+    if(['ArrowRight','ArrowDown',' ','PageDown'].includes(e.key)){e.preventDefault();next();}
+    else if(['ArrowLeft','ArrowUp','PageUp'].includes(e.key)){e.preventDefault();prev();}
+    else if(e.key==='Home'){go(0)} else if(e.key==='End'){go(slides.length-1)}
+    else if(e.key==='f'||e.key==='F'){if(!document.fullscreenElement)document.documentElement.requestFullscreen();else document.exitFullscreen();}
+  });
+  let sx=0;
+  document.addEventListener('click',e=>{ if(e.target.closest('.dot'))return; (e.clientX>innerWidth*0.5)?next():prev(); });
+  addEventListener('touchstart',e=>sx=e.touches[0].clientX,{passive:true});
+  addEventListener('touchend',e=>{const dx=e.changedTouches[0].clientX-sx; if(Math.abs(dx)>50)(dx<0?next():prev());},{passive:true});
+  go(0);
+</script>
+</body>
+</html>

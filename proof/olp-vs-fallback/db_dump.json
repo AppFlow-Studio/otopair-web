@@ -1,0 +1,2612 @@
+{
+  "camry_hours_by_slug": {},
+  "camry_present": false,
+  "config_count": 17,
+  "configs": [
+    {
+      "assignment_tier": "T3a",
+      "config_key": "2020_bmw_5_series_m550i_xdrive_n63b44o2",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.3,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.9,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 3.3,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1.5,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1.5,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1.2,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1.2,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T2c",
+      "tier_matches_assignment": false
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2022_volkswagen_atlas_v6_se_w_technology_3_6l_3_6cyl",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.3,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.7,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.2,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2022_volkswagen_atlas_2_0t_se_3_6l_3_6cyl",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.3,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.7,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.2,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2022_volkswagen_jetta_s_ea211",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.3,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.23,
+          "current_confidence": 0.87,
+          "current_source": "chassis_clone",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.7,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.6,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 7,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.3,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2020_volkswagen_jetta_1_4t_r_line_ea211",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.3,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.7,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.3,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 7.6,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.3,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2016_honda_cr_v_se_k24w9",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.3,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.2,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 3.7,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T3a",
+      "config_key": "2021_bmw_5_series_m550i_xdrive_n63b44t4",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.7,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.7,
+          "current_source": "chassis_clone",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.9,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.7,
+          "current_source": "chassis_clone",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 4.2,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1.5,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1.5,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1.2,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1.2,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T2c",
+      "tier_matches_assignment": false
+    },
+    {
+      "assignment_tier": "T2c",
+      "config_key": "2020_bmw_7_series_750i_xdrive_n63b44o2",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 4.2,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1.5,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1.5,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.2,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1.2,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1.2,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T2c",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2003_honda_accord_ex_j30a4",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.7,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.4,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.7,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.3,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 4.6,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.75,
+          "current_source": "training_data",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2018_honda_civic_lx_k20c2",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.3,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.3,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 3.1,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2026_ford_expedition_tremor_gtdi_high",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.3,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.4,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2.6,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.1,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2023_nissan_rogue_sv_engine",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.3,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.6,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.2,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2022_toyota_rav4_le_a25a_fxs",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.3,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2.3,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.2,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.9,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T2a",
+      "config_key": "2020_volvo_xc90_t6_momentum_7_passenger_b4204ts",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.3,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.9,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.4,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.2,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1.5,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 4.2,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1.5,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.3,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1.2,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1.2,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T2c",
+      "tier_matches_assignment": false
+    },
+    {
+      "assignment_tier": "T4",
+      "config_key": "2018_porsche_911_turbo_s_ma1_76",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.7,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.7,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.7,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.2,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.7,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.7,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.7,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.7,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2.3,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.7,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.7,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 3,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 3,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 3,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.2,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 2,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 2,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T4",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T1",
+      "config_key": "2020_honda_civic_sport_k20c2",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.3,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.3,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 1,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T1",
+      "tier_matches_assignment": true
+    },
+    {
+      "assignment_tier": "T3a",
+      "config_key": "2018_mercedes_benz_c_class_amg_c_63_s_m177",
+      "services": [
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.6,
+          "current_confidence": 0.9,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.3,
+          "slug": "oil_change"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.3,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.3,
+          "slug": "filter_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.8,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.3,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.3,
+          "slug": "battery_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.3,
+          "slug": "coolant_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.3,
+          "slug": "transmission_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.3,
+          "slug": "differential_service"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.3,
+          "slug": "wheel_alignment"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 0.75,
+          "current_confidence": 0.45,
+          "current_source": "training_data",
+          "db_labor_category": "routine",
+          "fallback_hours": null,
+          "labor_category": "routine",
+          "labor_mult": 1.3,
+          "slug": "power_steering_flush"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 4.6,
+          "current_confidence": 0.8,
+          "current_source": "aggregated",
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 2,
+          "slug": "spark_plugs"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": null,
+          "current_confidence": null,
+          "current_source": null,
+          "db_labor_category": "engine_access",
+          "fallback_hours": null,
+          "labor_category": "engine_access",
+          "labor_mult": 2,
+          "slug": "timing_belt"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 1.5,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1.3,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "camry_hours": null,
+          "current_book_hours": 2,
+          "current_confidence": 0.4,
+          "current_source": "aggregated",
+          "db_labor_category": "brakes",
+          "fallback_hours": null,
+          "labor_category": "brakes",
+          "labor_mult": 1.3,
+          "slug": "rotor_replacement"
+        }
+      ],
+      "tier": "T3a",
+      "tier_matches_assignment": true
+    }
+  ],
+  "labor_matrix_db": {
+    "brakes": {
+      "T1": 1,
+      "T2a": 1,
+      "T2b": 1.1,
+      "T2c": 1.2,
+      "T3a": 1.3,
+      "T3b": 1.5,
+      "T4": 2
+    },
+    "diagnostics": {
+      "T1": 1,
+      "T2a": 1.2,
+      "T2b": 1.4,
+      "T2c": 1.5,
+      "T3a": 1.7,
+      "T3b": 2,
+      "T4": 2.5
+    },
+    "engine_access": {
+      "T1": 1,
+      "T2a": 1.2,
+      "T2b": 1.5,
+      "T2c": 1.5,
+      "T3a": 2,
+      "T3b": 2.2,
+      "T4": 3
+    },
+    "routine": {
+      "T1": 1,
+      "T2a": 1,
+      "T2b": 1.1,
+      "T2c": 1.2,
+      "T3a": 1.3,
+      "T3b": 1.5,
+      "T4": 1.7
+    }
+  }
+}

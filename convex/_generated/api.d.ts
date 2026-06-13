@@ -87,6 +87,7 @@ import type * as lib_haloVariantInference from "../lib/haloVariantInference.js";
 import type * as lib_haloVariantRules from "../lib/haloVariantRules.js";
 import type * as lib_intervals from "../lib/intervals.js";
 import type * as lib_job_actuals from "../lib/job_actuals.js";
+import type * as lib_laborBands from "../lib/laborBands.js";
 import type * as lib_labor_aggregation from "../lib/labor_aggregation.js";
 import type * as lib_late_start from "../lib/late_start.js";
 import type * as lib_mechanic_verifications from "../lib/mechanic_verifications.js";
@@ -413,6 +414,7 @@ declare const fullApi: ApiFromModules<{
   "lib/haloVariantRules": typeof lib_haloVariantRules;
   "lib/intervals": typeof lib_intervals;
   "lib/job_actuals": typeof lib_job_actuals;
+  "lib/laborBands": typeof lib_laborBands;
   "lib/labor_aggregation": typeof lib_labor_aggregation;
   "lib/late_start": typeof lib_late_start;
   "lib/mechanic_verifications": typeof lib_mechanic_verifications;

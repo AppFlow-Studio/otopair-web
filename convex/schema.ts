@@ -988,6 +988,13 @@ export default defineSchema({
     source: v.optional(v.string()),
     confidence: v.optional(v.number()),
     data_quality: v.optional(v.string()),
+    // [Phase 1] Multi-source guardrail flags (spec 2026-06-13). book_hours is
+    // > 15 min from the Pricing-v2 tier fallback (suspicious single source):
+    labor_outside_fallback_band: v.optional(v.boolean()),
+    // ≥2 strong sources disagreed beyond the agreement band before MAD:
+    labor_sources_disagree: v.optional(v.boolean()),
+    // |book_hours − fallback| in whole minutes (for the director panel):
+    fallback_gap_minutes: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])

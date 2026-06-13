@@ -190,6 +190,13 @@ type ServiceIntervalRow = {
   display?: string
 }
 
+type LaborTimeRow = {
+  serviceName: string
+  hours: number | null
+  source: string | null
+  confidence: number | null
+}
+
 type FitmentSummaryRow = { service: string; count: number }
 
 // Shapes returned by directorCars.vehicleConfigFitments / partFitmentDetail.
@@ -698,6 +705,41 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                         <span className="mono" style={{ textAlign:'right' }}>{r.months ?? '—'}</span>
                         <span style={{ textAlign:'center' }}>{r.verified ? <Badge tone="green">✓</Badge> : <span style={{ color:'var(--slate-400)' }}>—</span>}</span>
                         <span className="mono" style={{ textAlign:'right' }}>{r.confidence != null ? r.confidence.toFixed(2) : '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Labor times — per-service book hours + source + confidence.
+                  Confidence chip is colored by the 0.75 quote gate so it's
+                  obvious which services have real (OLP-backed) labor vs the
+                  tier-estimate fallback. */}
+              {detail.laborTimes && detail.laborTimes.length > 0 && (
+                <div style={{ marginBottom:18 }}>
+                  <SectionTitle label={`Labor times (${detail.laborTimes.length})`} />
+                  <div style={{ border:'1px solid var(--slate-200)', borderRadius:8, overflow:'hidden' }}>
+                    <div style={{ display:'grid', gridTemplateColumns:'1.6fr 80px 1fr 80px', padding:'8px 12px', background:'var(--slate-25)', borderBottom:'1px solid var(--slate-200)', fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
+                      <span>Service</span>
+                      <span style={{ textAlign:'right' }}>Hours</span>
+                      <span>Source</span>
+                      <span style={{ textAlign:'right' }}>Conf.</span>
+                    </div>
+                    {(detail.laborTimes as LaborTimeRow[]).map((r, i) => (
+                      <div key={i} style={{
+                        display:'grid', gridTemplateColumns:'1.6fr 80px 1fr 80px',
+                        padding:'8px 12px', alignItems:'center',
+                        borderBottom: i < detail.laborTimes.length - 1 ? '1px solid var(--slate-100)' : 'none',
+                        fontSize:12, color:'var(--slate-700)',
+                      }}>
+                        <span style={{ fontWeight:500, color:'var(--slate-900)' }}>{r.serviceName}</span>
+                        <span className="mono" style={{ textAlign:'right' }}>{r.hours != null ? `${r.hours.toFixed(1)} h` : '—'}</span>
+                        <span style={{ fontSize:11, color:'var(--slate-500)' }}>{r.source ?? '—'}</span>
+                        <span style={{ textAlign:'right' }}>
+                          {r.confidence != null
+                            ? <Badge tone={r.confidence >= 0.75 ? 'green' : 'yellow'}>{r.confidence.toFixed(2)}</Badge>
+                            : <span style={{ color:'var(--slate-400)' }}>—</span>}
+                        </span>
                       </div>
                     ))}
                   </div>

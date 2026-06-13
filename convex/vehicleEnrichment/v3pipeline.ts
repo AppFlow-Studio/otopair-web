@@ -1863,7 +1863,7 @@ async function runPollBatch1Body(
           if (!svc) continue;
           // VDB labor is verified-bad (too generic per car) — kept at near-zero
           // weight as a last-resort tiebreaker only. The weighted median now
-          // honors weights (labor_aggregation.ts), so RepairPal/LLM dominate.
+          // honors weights (labor_aggregation.ts), so OLP/LLM dominate.
           // book_only skips the empirical job_actuals scan.
           await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
             vehicle_config_id: args.vehicleConfigId,

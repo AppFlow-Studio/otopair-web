@@ -35,7 +35,8 @@ import { BLOCKED_DOMAINS } from "./sourceRegistry";
 import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts } from "./applicabilityRules";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
-import { reextractPartPrice, isAffirmativeRejection } from "./priceReextract";
+import { reextractPartPrice, isAffirmativeRejection, priceAllSources } from "./priceReextract";
+import { extractPriceFirecrawl } from "./firecrawl";
 import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
 import {
@@ -2412,128 +2413,187 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         );
         if (fitments.length === 0) continue;
 
-        // Authoritative: deterministic JSON-LD prices. Write the real per-SKU
-        // price for any fitment whose OEM number was parsed from the registry
-        // HTML, and mark it so the LLM breakdown below can't overwrite it.
-        for (const f of fitments) {
-          const num = (f as any).oem_part_number as string | null;
-          if (!num) continue;
-          const dp = deterministicPrices.get(normalizeOemNumber(num));
-          if (!dp) continue;
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
-            part_id:       f.part_id,
-            price:         dp.price,
-            price_type:    "sale",
-            source_url:    dp.source_url,
-            source_domain: dp.source_domain,
-          });
-          deterministicallyPriced.add(f.part_id);
-        }
+        if (process.env.PARTS_FIRECRAWL_PRICING === "off") {
+          // ===== LEGACY PATH (flag-off fallback) =====
 
-        // Preferred: itemized parts_breakdown — write each part's own price.
-        if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
-          // Build a quick oem_number → part_id lookup. Same OEM may have
-          // multiple fitments under one service (base + package variant) —
-          // every match gets the same per-unit price. Keys are NORMALIZED
-          // (mirrors the deterministic path above): the LLM frequently
-          // reformats numbers ("5Q0 698 451 A" vs stored "5Q0698451A"), and a
-          // raw-string match silently dropped those prices (Jun-9 review).
-          const numberToPartIds = new Map<string, Id<"oem_parts">[]>();
+          // Authoritative: deterministic JSON-LD prices. Write the real per-SKU
+          // price for any fitment whose OEM number was parsed from the registry
+          // HTML, and mark it so the LLM breakdown below can't overwrite it.
           for (const f of fitments) {
-            const num = (f as any).oem_part_number;
+            const num = (f as any).oem_part_number as string | null;
             if (!num) continue;
-            const key = normalizeOemNumber(num);
-            const arr = numberToPartIds.get(key) ?? [];
-            arr.push(f.part_id);
-            numberToPartIds.set(key, arr);
+            const dp = deterministicPrices.get(normalizeOemNumber(num));
+            if (!dp) continue;
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+              part_id:       f.part_id,
+              price:         dp.price,
+              price_type:    "sale",
+              source_url:    dp.source_url,
+              source_domain: dp.source_domain,
+            });
+            deterministicallyPriced.add(f.part_id);
           }
 
-          for (const entry of svc.parts_breakdown) {
-            if (entry.price_low == null) continue;
-            if (!entry.oem_part_number) continue;
-            const partIds = numberToPartIds.get(normalizeOemNumber(entry.oem_part_number));
-            if (!partIds || partIds.length === 0) continue;
-            const sourceDomain = entry.source_domain ?? extractDomain(entry.source_url ?? undefined) ?? "enrichment";
+          // Preferred: itemized parts_breakdown — write each part's own price.
+          if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
+            // Build a quick oem_number → part_id lookup. Same OEM may have
+            // multiple fitments under one service (base + package variant) —
+            // every match gets the same per-unit price. Keys are NORMALIZED
+            // (mirrors the deterministic path above): the LLM frequently
+            // reformats numbers ("5Q0 698 451 A" vs stored "5Q0698451A"), and a
+            // raw-string match silently dropped those prices (Jun-9 review).
+            const numberToPartIds = new Map<string, Id<"oem_parts">[]>();
+            for (const f of fitments) {
+              const num = (f as any).oem_part_number;
+              if (!num) continue;
+              const key = normalizeOemNumber(num);
+              const arr = numberToPartIds.get(key) ?? [];
+              arr.push(f.part_id);
+              numberToPartIds.set(key, arr);
+            }
 
-            // FIX AT SOURCE: verify the web-search LLM's price against its own
-            // cited page via the shared two-tier re-extraction (Tier 1 structured
-            // → Tier 2 LLM that excludes MSRP/"was"/"You Save"). When it confirms
-            // a real price we store the verified "sale" value instead of the raw
-            // estimate, so a fresh enrichment never persists a discount/MSRP
-            // figure. Flag-gated because it adds a fetch per itemized part; falls
-            // back to the unverified llm_estimate when off, unreachable, or
-            // neither tier can trust the page.
-            let verified: number | null = null;
-            // Affirmative rejection = the cited page itself testified AGAINST
-            // this number (price>=MSRP / wrong OEM / outside the median band).
-            // Persisting it as trusted 'llm_estimate' would feed a known-bad
-            // value into the customer median (Jun-9 review, item 8) — write it
-            // as UNVERIFIED instead (kept for audit, excluded from the median).
-            // Passive failures (empty page, no text, LLM error) keep the old
-            // fail-open llm_estimate behavior: we learned nothing new.
-            let affirmativeReject = false;
-            if (process.env.PARTS_REEXTRACT_BATCH2 === "on" && entry.source_url) {
-              try {
-                const outcome = await reextractPartPrice({
-                  oem: entry.oem_part_number,
-                  partName: (entry as any).part_name ?? null,
-                  source_url: entry.source_url,
-                  crossSourceMedian: null,
-                });
-                if (outcome.status === "sale") {
-                  verified = outcome.price;
-                } else if (
-                  outcome.status === "unverified" &&
-                  isAffirmativeRejection(outcome.reason)
-                ) {
-                  affirmativeReject = true;
-                  console.warn(
-                    `[v8] Batch-2 price affirmatively rejected (${outcome.reason}) for ` +
-                      `${entry.oem_part_number} @ ${sourceDomain} — storing as unverified`,
-                  );
+            for (const entry of svc.parts_breakdown) {
+              if (entry.price_low == null) continue;
+              if (!entry.oem_part_number) continue;
+              const partIds = numberToPartIds.get(normalizeOemNumber(entry.oem_part_number));
+              if (!partIds || partIds.length === 0) continue;
+              const sourceDomain = entry.source_domain ?? extractDomain(entry.source_url ?? undefined) ?? "enrichment";
+
+              // FIX AT SOURCE: verify the web-search LLM's price against its own
+              // cited page via the shared two-tier re-extraction (Tier 1 structured
+              // → Tier 2 LLM that excludes MSRP/"was"/"You Save"). When it confirms
+              // a real price we store the verified "sale" value instead of the raw
+              // estimate, so a fresh enrichment never persists a discount/MSRP
+              // figure. Flag-gated because it adds a fetch per itemized part; falls
+              // back to the unverified llm_estimate when off, unreachable, or
+              // neither tier can trust the page.
+              let verified: number | null = null;
+              // Affirmative rejection = the cited page itself testified AGAINST
+              // this number (price>=MSRP / wrong OEM / outside the median band).
+              // Persisting it as trusted 'llm_estimate' would feed a known-bad
+              // value into the customer median (Jun-9 review, item 8) — write it
+              // as UNVERIFIED instead (kept for audit, excluded from the median).
+              // Passive failures (empty page, no text, LLM error) keep the old
+              // fail-open llm_estimate behavior: we learned nothing new.
+              let affirmativeReject = false;
+              if (process.env.PARTS_REEXTRACT_BATCH2 === "on" && entry.source_url) {
+                try {
+                  const outcome = await reextractPartPrice({
+                    oem: entry.oem_part_number,
+                    partName: (entry as any).part_name ?? null,
+                    source_url: entry.source_url,
+                    crossSourceMedian: null,
+                  });
+                  if (outcome.status === "sale") {
+                    verified = outcome.price;
+                  } else if (
+                    outcome.status === "unverified" &&
+                    isAffirmativeRejection(outcome.reason)
+                  ) {
+                    affirmativeReject = true;
+                    console.warn(
+                      `[v8] Batch-2 price affirmatively rejected (${outcome.reason}) for ` +
+                        `${entry.oem_part_number} @ ${sourceDomain} — storing as unverified`,
+                    );
+                  }
+                } catch (e) {
+                  console.warn("[v8] Batch-2 Tier-2 reextract failed (non-fatal):", e);
                 }
-              } catch (e) {
-                console.warn("[v8] Batch-2 Tier-2 reextract failed (non-fatal):", e);
+              }
+
+              for (const partId of partIds) {
+                // Deterministic JSON-LD price already owns this part — the LLM
+                // estimate must not overwrite it or pollute the median.
+                if (deterministicallyPriced.has(partId)) continue;
+                await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+                  part_id:       partId,
+                  price:         verified ?? entry.price_low,
+                  price_type:
+                    verified != null
+                      ? "sale"
+                      : affirmativeReject
+                        ? UNVERIFIED_PRICE_TYPE
+                        : "llm_estimate",
+                  source_url:    entry.source_url ?? undefined,
+                  source_domain: sourceDomain,
+                });
+                if (verified != null) deterministicallyPriced.add(partId);
               }
             }
+            continue; // breakdown handled this service — don't fall through
+          }
 
-            for (const partId of partIds) {
-              // Deterministic JSON-LD price already owns this part — the LLM
-              // estimate must not overwrite it or pollute the median.
-              if (deterministicallyPriced.has(partId)) continue;
-              await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
-                part_id:       partId,
-                price:         verified ?? entry.price_low,
-                price_type:
-                  verified != null
-                    ? "sale"
-                    : affirmativeReject
-                      ? UNVERIFIED_PRICE_TYPE
-                      : "llm_estimate",
-                source_url:    entry.source_url ?? undefined,
-                source_domain: sourceDomain,
-              });
-              if (verified != null) deterministicallyPriced.add(partId);
+          // Fallback: legacy service-level price. Store as per-unit on each
+          // fitment in the service (no division — the prompt contracts the
+          // service-level price as per-unit too).
+          const priceVal = asNumber(svc.parts_cost_low?.value);
+          if (priceVal == null) continue;
+          for (const fitment of fitments) {
+            // Skip parts the deterministic JSON-LD parser already priced.
+            if (deterministicallyPriced.has(fitment.part_id)) continue;
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+              part_id:       fitment.part_id,
+              price:         priceVal,
+              price_type:    "llm_estimate",
+              source_domain: extractDomain(svc.parts_cost_low?.source_url) ?? "enrichment",
+              source_url:    svc.parts_cost_low?.source_url ?? undefined,
+            });
+          }
+        } else {
+          // ===== Firecrawl structured pricing (default) =====
+          // Price each fitment across the UNION of its discovered source URLs
+          // (deterministic JSON-LD source + parts_breakdown entries). Every price
+          // is re-verified via Firecrawl json + gauge/guided-retry; only validated
+          // "sale" rows are written (msrp/discount included). Parts with no
+          // discovered product URL get no price here (better than an llm guess).
+          const urlsByPart = new Map<string, { urls: string[]; oem: string | null; name: string | null }>();
+          const addUrl = (partId: any, url: string | undefined | null, oem: string | null, name: string | null) => {
+            if (!url) return;
+            const k = String(partId);
+            const e = urlsByPart.get(k) ?? { urls: [], oem, name };
+            if (!e.urls.includes(url)) e.urls.push(url);
+            if (!e.oem && oem) e.oem = oem;
+            if (!e.name && name) e.name = name;
+            urlsByPart.set(k, e);
+          };
+          for (const f of fitments) {
+            const num = (f as any).oem_part_number as string | null;
+            const dp = num ? deterministicPrices.get(normalizeOemNumber(num)) : null;
+            if (dp?.source_url) addUrl(f.part_id, dp.source_url, num ?? null, (f as any).part_name ?? null);
+          }
+          if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
+            const numToPartIds = new Map<string, any[]>();
+            for (const f of fitments) {
+              const num = (f as any).oem_part_number;
+              if (!num) continue;
+              const key = normalizeOemNumber(num);
+              const arr = numToPartIds.get(key) ?? [];
+              arr.push(f.part_id);
+              numToPartIds.set(key, arr);
+            }
+            for (const entry of svc.parts_breakdown) {
+              if (!entry.oem_part_number || !entry.source_url) continue;
+              for (const pid of numToPartIds.get(normalizeOemNumber(entry.oem_part_number)) ?? []) {
+                addUrl(pid, entry.source_url, entry.oem_part_number, (entry as any).part_name ?? null);
+              }
             }
           }
-          continue; // breakdown handled this service — don't fall through
-        }
-
-        // Fallback: legacy service-level price. Store as per-unit on each
-        // fitment in the service (no division — the prompt contracts the
-        // service-level price as per-unit too).
-        const priceVal = asNumber(svc.parts_cost_low?.value);
-        if (priceVal == null) continue;
-        for (const fitment of fitments) {
-          // Skip parts the deterministic JSON-LD parser already priced.
-          if (deterministicallyPriced.has(fitment.part_id)) continue;
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
-            part_id:       fitment.part_id,
-            price:         priceVal,
-            price_type:    "llm_estimate",
-            source_domain: extractDomain(svc.parts_cost_low?.source_url) ?? "enrichment",
-            source_url:    svc.parts_cost_low?.source_url ?? undefined,
-          });
+          for (const [partIdStr, e] of urlsByPart) {
+            if (e.urls.length === 0) continue;
+            const rows = await priceAllSources(e.urls, { oem: e.oem, partName: e.name }, extractPriceFirecrawl);
+            for (const row of rows) {
+              if (row.outcome.status !== "sale") continue;
+              await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+                part_id: partIdStr as any,
+                price: row.outcome.price,
+                price_type: "sale",
+                source_domain: row.source_domain,
+                source_url: row.source_url,
+                msrp: row.outcome.msrp ?? undefined,
+                discount: row.outcome.discount ?? undefined,
+              });
+            }
+          }
         }
       }
     }

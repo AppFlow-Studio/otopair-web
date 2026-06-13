@@ -53,11 +53,3 @@ export function siblingMatches(
   return chassisOk && engineOk;
 }
 
-/** Provenance match_key string for a resolved sibling. */
-export function matchKeyString(d: LaborDeterminant, target: PlatformKey): string {
-  const k = matchKeyForDeterminant(d, target);
-  return k.engine_family
-    ? `engine_family:${k.engine_family}`
-    : `chassis_code:${k.chassis_code}`;
-}
-

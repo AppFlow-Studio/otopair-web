@@ -108,8 +108,8 @@ describe("devOnly/laborValidation report", () => {
 
   test("timing_belt missing on a CHAIN engine doesn't count against data-good", async () => {
     const t = makeT();
-    // Chain car: no timing_belt labor anywhere (RepairPal correctly has no
-    // page) — the service is not applicable, so the rollup must skip it.
+    // Chain car: no timing_belt labor anywhere (OLP correctly has no belt job
+    // for a chain engine) — the service is not applicable, so the rollup skips it.
     await seedConfigWithLabor(t, {
       allGood: true,
       timingSystem: "chain",

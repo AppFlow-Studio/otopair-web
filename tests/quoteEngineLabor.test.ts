@@ -249,7 +249,7 @@ describe("recomputeLaborForConfigService data_quality stamping", () => {
     tier: "catalog",
     hours: 3.2,
     weight: 0.8,
-    source: "repairpal_motor",
+    source: "olp_labor",
   };
 
   it("patch path clears a stale clone stamp to data_quality 'aggregated'", async () => {
@@ -316,5 +316,35 @@ describe("recomputeLaborForConfigService data_quality stamping", () => {
     );
     expect(db.patches).toHaveLength(0);
     expect(db.inserts).toHaveLength(0);
+  });
+});
+
+describe("labor_aggregation anchor = olp_labor", () => {
+  it("a lone olp_labor observation unlocks confidence 0.8", async () => {
+    const db = fakeDb({
+      labor_observations: [
+        { _id: "oa1", vehicle_config_id: CFG, service_id: SVC, tier: "catalog", hours: 1.2, weight: 0.8, source: "olp_labor" },
+      ],
+      labor_times: [],
+    });
+    await recomputeLaborForConfigService(
+      { db } as any,
+      { vehicleConfigId: CFG, serviceId: SVC, now: 1000, bookOnly: true },
+    );
+    expect(db.inserts[0].doc).toMatchObject({ book_hours: 1.2, source: "aggregated", confidence: 0.8 });
+  });
+
+  it("a lone repairpal_motor observation is no longer an anchor (confidence 0.4)", async () => {
+    const db = fakeDb({
+      labor_observations: [
+        { _id: "oa2", vehicle_config_id: CFG, service_id: SVC, tier: "catalog", hours: 1.2, weight: 0.8, source: "repairpal_motor" },
+      ],
+      labor_times: [],
+    });
+    await recomputeLaborForConfigService(
+      { db } as any,
+      { vehicleConfigId: CFG, serviceId: SVC, now: 1000, bookOnly: true },
+    );
+    expect(db.inserts[0].doc).toMatchObject({ confidence: 0.4 });
   });
 });

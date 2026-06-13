@@ -108,11 +108,11 @@ export async function recomputeLaborForConfigService(
 
   let bookHours: number | undefined;
   let engineFamily: string | undefined;
-  let hasRepairpal = false;
+  let hasAnchor = false;
   if (catalog.length > 0) {
-    // Weighted robust median: repairpal_motor (0.8) dominates LLM (0.3-0.5) and
+    // Weighted robust median: olp_labor (0.8) dominates LLM (0.3-0.5) and
     // VDB (0.05). A wrong high-weight value is guarded at WRITE time by the
-    // sibling validation gate, not here.
+    // scrape's sanity gate, not here.
     bookHours = clampRound(
       weightedMedian(
         catalog.map((o: any) => o.hours as number),
@@ -120,7 +120,7 @@ export async function recomputeLaborForConfigService(
       ),
     );
     engineFamily = catalog.find((o: any) => o.engine_family)?.engine_family;
-    hasRepairpal = catalog.some((o: any) => o.source === "repairpal_motor");
+    hasAnchor = catalog.some((o: any) => o.source === "olp_labor");
   }
 
   // ── Empirical tier: post-job actuals, gated at the min sample size ──
@@ -138,23 +138,21 @@ export async function recomputeLaborForConfigService(
     }
   }
 
-  // Data-good signal (spec §3.7). RepairPal (MOTOR) is the high-trust anchor;
-  // corroboration by a second non-VDB source within 20% bumps it to 0.9.
+  // Data-good signal. OLP (olp_labor) is the high-trust anchor; corroboration
+  // by a second non-VDB source within 20% bumps it to 0.9.
   //
-  // DECISION (Jun 9 2026 review): without a repairpal_motor observation the
-  // ceiling is 0.6, which is BELOW the quote gate's MIN_VDB_CONFIDENCE (0.75)
-  // — i.e. LLM-only consensus intentionally does NOT quote; the quote falls to
-  // the transparent tier_estimate layer instead. That also means recompute can
-  // downgrade an old VDB row (0.9) below the gate — accepted, that's the VDB
-  // de-throning. Rollout consequence: flip LABOR_SOURCE_REPAIRPAL=on BEFORE
-  // any catalog-wide re-enrich/relabor, or Layer-1 labor goes dark.
+  // Without an olp_labor observation the ceiling is 0.6, which is BELOW the
+  // quote gate's MIN_VDB_CONFIDENCE (0.75) — LLM-only consensus intentionally
+  // does NOT quote; the quote falls to the transparent tier_estimate layer
+  // instead. Rollout: land this change + backfill olp_labor BEFORE relying on
+  // Layer-1 labor, or it goes dark.
   const nonVdb = catalog.filter((o: any) => o.source !== "vdb_repair_estimates");
   const agree = (a: number, b: number) => Math.abs(a - b) / Math.max(a, b) <= 0.2;
   let confidence: number | undefined;
   if (bookHours !== undefined) {
-    if (hasRepairpal) {
+    if (hasAnchor) {
       const corroborated = nonVdb.some(
-        (o: any) => o.source !== "repairpal_motor" && agree(o.hours, bookHours!),
+        (o: any) => o.source !== "olp_labor" && agree(o.hours, bookHours!),
       );
       confidence = corroborated ? 0.9 : 0.8;
     } else if (nonVdb.length >= 2) {
@@ -195,7 +193,7 @@ export async function recomputeLaborForConfigService(
       patch.source = "aggregated";
       // Explicitly clear any stale clone/training stamp: the quote gate
       // disqualifies on data_quality, and a leftover 'chassis_clone' would
-      // silently veto a freshly aggregated RepairPal/MOTOR value.
+      // silently veto a freshly aggregated OLP value.
       patch.data_quality = "aggregated";
       if (engineFamily) patch.engine_family = engineFamily;
     }

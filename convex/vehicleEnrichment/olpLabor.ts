@@ -13,6 +13,9 @@
 
 export const OLP_BASE = "https://openlaborproject.com";
 
+// MAKE/MODEL slugs ONLY. OLP engine slugs contain literal dots ("1.5l-i4-turbo")
+// which this would mangle to "1-5l..." — engine slugs must always be taken from
+// the API's vehicles[].engineSlug, never constructed.
 export const olpSlugify = (s: string) =>
   s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 

@@ -41,6 +41,7 @@ import {
   parseLlmPriceResponse,
   validateLlmPrice,
 } from "./priceParser";
+import { median } from "../lib/robustStats";
 
 export type ReextractOutcome =
   | { status: "sale"; price: number; tier: "structured" | "llm" | "firecrawl"; msrp?: number | null; discount?: number | null }
@@ -249,4 +250,51 @@ export async function resolveVerifiedPrice(
     return { status: "sale", price: x.sale_price as number, tier: "firecrawl", msrp: x.msrp, discount: x.discount };
   }
   return { status: "unverified", reason: `${g.reason}${retried ? "_after_retry" : ""}` };
+}
+
+export type SourcePriceRow = {
+  source_url: string;
+  source_domain: string;
+  outcome: ReextractOutcome;
+};
+
+function domainOf(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+}
+
+/** Price a part across its candidate source URLs: extract all (for a cross-source
+ *  median), then resolveVerifiedPrice each against that median. Deduped by URL,
+ *  capped at 3. Pure orchestration — caller does the DB writes. */
+export async function priceAllSources(
+  urls: string[],
+  args: { oem: string | null; partName?: string | null },
+  extract: PriceExtractor,
+): Promise<SourcePriceRow[]> {
+  const seen = new Set<string>();
+  const list: string[] = [];
+  for (const u of urls) {
+    if (!u || seen.has(u)) continue;
+    seen.add(u);
+    list.push(u);
+    if (list.length >= 3) break;
+  }
+
+  // Pass 1: raw extracts → cross-source median of the sale prices.
+  const sales: number[] = [];
+  for (const u of list) {
+    const x = await extract(u, args.oem, args.partName, null);
+    if (x?.sale_price != null && x.sale_price > 0) sales.push(x.sale_price);
+  }
+  const crossSourceMedian = sales.length > 0 ? median(sales) : null;
+
+  // Pass 2: gauge + guided retry each, against the median.
+  const out: SourcePriceRow[] = [];
+  for (const u of list) {
+    const outcome = await resolveVerifiedPrice(
+      { url: u, oem: args.oem, partName: args.partName, crossSourceMedian },
+      extract,
+    );
+    out.push({ source_url: u, source_domain: domainOf(u), outcome });
+  }
+  return out;
 }

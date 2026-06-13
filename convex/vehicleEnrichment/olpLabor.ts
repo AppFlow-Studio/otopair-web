@@ -130,3 +130,91 @@ export function pickOlpVehicle(
   }
   return best;
 }
+
+export type OlpLaborJob = {
+  name: string;
+  slug: string;
+  category: string;
+  laborHours: number;
+};
+
+/** Plausible wrench-time bounds; outside ⇒ page/format drift, don't trust. */
+export const OLP_HOURS_MIN = 0.05;
+export const OLP_HOURS_MAX = 60;
+
+type JobMapEntry = { slugs: string[]; nameRe?: RegExp };
+
+/**
+ * Our service slugs (the 13 keys of LABOR_SERVICE_CONFIG in
+ * services/laborDeterminant.ts) → ordered OLP job-slug candidates, verified
+ * against real OLP data (2018 Civic, 2026-06-12). First PRESENT candidate
+ * supplies the comparison hours; all matches are reported. nameRe is a
+ * fallback for cars whose job list uses a variant slug we haven't seen.
+ */
+export const OLP_JOB_MAP: Record<string, JobMapEntry> = {
+  oil_change: {
+    slugs: ["oil-change-synthetic", "oil-change", "oil-change-diesel"],
+    nameRe: /^oil change/i,
+  },
+  spark_plugs: {
+    slugs: ["spark-plugs", "spark-plugs-v6", "spark-plugs-v8"],
+    nameRe: /^spark plugs/i,
+  },
+  timing_belt: { slugs: ["timing-belt", "timing-belt-kit"], nameRe: /^timing belt\b/i },
+  brake_pad_replacement: { slugs: ["brake-pads-front", "brake-pads-rear"] },
+  rotor_replacement: {
+    slugs: [
+      "brake-rotors-front-pair", "brake-rotors-rear-pair",
+      "brake-pads-rotors-front", "brake-pads-rotors-rear",
+    ],
+  },
+  battery_replacement: { slugs: ["battery", "battery-replacement"] },
+  wheel_alignment: { slugs: ["wheel-alignment"] },
+  filter_replacement: { slugs: ["air-filter", "engine-air-filter"] },
+  coolant_flush: { slugs: ["coolant-flush"] },
+  power_steering_flush: {
+    slugs: ["power-steering-fluid-flush", "power-steering-service"],
+  },
+  transmission_service: {
+    slugs: [
+      "transmission-service", "trans-filter-fluid",
+      "automatic-transmission-fluid-filter-change",
+    ],
+  },
+  differential_service: {
+    slugs: ["differential-service", "differential-fluid-change"],
+  },
+  brake_fluid_flush: { slugs: ["brake-fluid-flush"] },
+};
+
+export type ServiceMatch = {
+  service: string;
+  olp_hours: number | null; // first sane match, in candidate order
+  olp_jobs: Array<{ name: string; slug: string; hours: number; sane: boolean }>;
+};
+
+export function matchJobs(
+  jobs: OlpLaborJob[],
+  map: Record<string, JobMapEntry> = OLP_JOB_MAP,
+): ServiceMatch[] {
+  const bySlug = new Map(jobs.map((j) => [j.slug, j]));
+  return Object.entries(map).map(([service, entry]) => {
+    const found: OlpLaborJob[] = [];
+    for (const s of entry.slugs) {
+      const j = bySlug.get(s);
+      if (j && !found.includes(j)) found.push(j);
+    }
+    if (found.length === 0 && entry.nameRe) {
+      const j = jobs.find((x) => entry.nameRe!.test(x.name));
+      if (j) found.push(j);
+    }
+    const olp_jobs = found.map((j) => ({
+      name: j.name,
+      slug: j.slug,
+      hours: j.laborHours,
+      sane: j.laborHours >= OLP_HOURS_MIN && j.laborHours <= OLP_HOURS_MAX,
+    }));
+    const first = olp_jobs.find((j) => j.sane);
+    return { service, olp_hours: first ? first.hours : null, olp_jobs };
+  });
+}

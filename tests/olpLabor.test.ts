@@ -88,3 +88,61 @@ describe("pickOlpVehicle", () => {
     ).toBeNull();
   });
 });
+
+import {
+  matchJobs,
+  OLP_JOB_MAP,
+  type OlpLaborJob,
+} from "../convex/vehicleEnrichment/olpLabor";
+import laborJobs from "./fixtures/olp/labor-jobs-civic.json";
+
+describe("matchJobs", () => {
+  const jobs = laborJobs as OlpLaborJob[];
+  const bySvc = Object.fromEntries(
+    matchJobs(jobs).map((m) => [m.service, m]),
+  );
+
+  it("covers every LABOR_SERVICE_CONFIG service slug", () => {
+    // keep OLP_JOB_MAP keys aligned with convex/services/laborDeterminant.ts
+    expect(Object.keys(OLP_JOB_MAP).sort()).toEqual(
+      [
+        "battery_replacement", "brake_fluid_flush", "brake_pad_replacement",
+        "coolant_flush", "differential_service", "filter_replacement",
+        "oil_change", "power_steering_flush", "rotor_replacement",
+        "spark_plugs", "timing_belt", "transmission_service", "wheel_alignment",
+      ].sort(),
+    );
+  });
+
+  it("matches oil_change to the synthetic row (first candidate present)", () => {
+    expect(bySvc.oil_change.olp_hours).toBe(0.3);
+    expect(bySvc.oil_change.olp_jobs[0].slug).toBe("oil-change-synthetic");
+  });
+
+  it("matches brake pads front+rear and uses the first for olp_hours", () => {
+    expect(bySvc.brake_pad_replacement.olp_hours).toBe(1);
+    expect(bySvc.brake_pad_replacement.olp_jobs.map((j) => j.slug)).toEqual([
+      "brake-pads-front",
+      "brake-pads-rear",
+    ]);
+  });
+
+  it("matches rotors to the pair rows", () => {
+    expect(bySvc.rotor_replacement.olp_hours).toBe(1.5);
+  });
+
+  it("returns no match for timing_belt on a chain engine", () => {
+    // fixture has timing-chain, not timing-belt — correctly unmatched
+    expect(bySvc.timing_belt.olp_hours).toBeNull();
+    expect(bySvc.timing_belt.olp_jobs).toEqual([]);
+  });
+
+  it("flags insane hours and skips them for olp_hours", () => {
+    const fake: OlpLaborJob[] = [
+      { name: "Wheel Alignment", slug: "wheel-alignment", category: "maintenance", laborHours: 999 },
+    ];
+    const m = matchJobs(fake).find((x) => x.service === "wheel_alignment")!;
+    expect(m.olp_jobs[0].sane).toBe(false);
+    expect(m.olp_hours).toBeNull();
+  });
+});

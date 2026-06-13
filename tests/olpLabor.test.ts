@@ -127,8 +127,13 @@ describe("matchJobs", () => {
     ]);
   });
 
-  it("matches rotors to the pair rows", () => {
+  it("matches rotors to the pair rows before the pads+rotors combos", () => {
     expect(bySvc.rotor_replacement.olp_hours).toBe(1.5);
+    expect(bySvc.rotor_replacement.olp_jobs.map((j) => j.slug)).toEqual([
+      "brake-rotors-front-pair",
+      "brake-rotors-rear-pair",
+      "brake-pads-rotors-front",
+    ]);
   });
 
   it("returns no match for timing_belt on a chain engine", () => {

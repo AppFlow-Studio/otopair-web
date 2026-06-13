@@ -163,6 +163,8 @@ export const OLP_JOB_MAP: Record<string, JobMapEntry> = {
   timing_belt: { slugs: ["timing-belt", "timing-belt-kit"], nameRe: /^timing belt\b/i },
   brake_pad_replacement: { slugs: ["brake-pads-front", "brake-pads-rear"] },
   rotor_replacement: {
+    // Pair-only rows FIRST — our rotor_replacement is rotors-only, so the
+    // pads+rotors combo rows are last-resort comparators (bundled scope).
     slugs: [
       "brake-rotors-front-pair", "brake-rotors-rear-pair",
       "brake-pads-rotors-front", "brake-pads-rotors-rear",
@@ -182,6 +184,8 @@ export const OLP_JOB_MAP: Record<string, JobMapEntry> = {
     ],
   },
   differential_service: {
+    // The broader "service" row first — matches our service's full scope;
+    // the fluid-only row (≈half the hours) is the narrower fallback.
     slugs: ["differential-service", "differential-fluid-change"],
   },
   brake_fluid_flush: { slugs: ["brake-fluid-flush"] },

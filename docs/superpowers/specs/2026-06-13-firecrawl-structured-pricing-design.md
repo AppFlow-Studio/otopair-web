@@ -35,41 +35,60 @@ ceiling.
    URLs, extract each, compute a cross-source median, validate each against it.
    Capped at **3 sources/part** to bound Firecrawl credits.
 3. **Persist `msrp` + `discount`** — add optional columns to `part_prices`.
-4. **Absolute sanity ceiling: $5,000** — reject a single-source `sale_price` above
-   it unless a second source corroborates (kills the $21,499 case).
-5. Keep the existing `validateLlmPrice` guardrails — they are the proven gate.
+4. **Gauge-and-guide validation** — detect a wrong extraction from *self-evidencing*
+   signals (the returned `price_label`/`product_title` and cross-source agreement),
+   and when one trips, **re-extract once with a corrective prompt** that names the
+   problem, rather than rejecting outright.
+5. **Hard-wall backstop AFTER the guided retry** — if it still fails the gauges,
+   apply the existing `validateLlmPrice` + the absolute **$5,000** ceiling and mark
+   `unverified`. The ceiling is a last-resort absurdity catch, not the primary gate.
 
 ## Architecture
 
-### 1. `extractPriceFirecrawl(url, oem, partName)` — `convex/vehicleEnrichment/firecrawl.ts`
-Calls `POST /v2/scrape` with the `json` format + this schema:
+### 1. `extractPriceFirecrawl(url, oem, partName, correction?)` — `convex/vehicleEnrichment/firecrawl.ts`
+Calls `POST /v2/scrape` with the `json` format + an **evidence-rich** schema (the
+extra fields are what the gauges read):
 ```jsonc
 formats: [{ type: "json",
-  prompt: "Extract pricing for the auto part with OEM <oem>: current sale/discounted
-           price, MSRP/list price, discount amount, in-stock, and the part number shown.",
+  prompt: "<base prompt> <correction?>",   // see below; correction is appended on retry
   schema: { type:"object", required:["sale_price"], properties:{
     sale_price:{type:["number","null"]}, msrp:{type:["number","null"]},
     discount_amount:{type:["number","null"]}, in_stock:{type:["boolean","null"]},
-    oem_part_number:{type:["string","null"]} }}}]
+    oem_part_number:{type:["string","null"]},   // OEM the page shows for this price
+    price_label:{type:["string","null"]},        // EXACT text read, e.g. "Sale $37.19" / "You Save $13"
+    product_title:{type:["string","null"]},
+    sells_this_part:{type:["boolean","null"]},   // does this page actually sell the target OEM?
+    confidence:{type:["number","null"]} }}}]     // 0..1 self-rating
 ```
-Returns `{ sale_price, msrp, discount, in_stock, oem_seen } | null`. Network-only;
-no DB. Reuses the existing `FIRECRAWL_API_KEY` + base URL.
+Base prompt is **strongly negative-instructed**: return only the dollar amount the
+customer pays now for OEM `<oem>`; IGNORE SKUs/part numbers, phone numbers,
+quantities, shipping, core charges, and unrelated products; copy the exact
+`price_label` text; if the page doesn't sell this exact part, return `sale_price:null`.
+On a guided retry the caller passes `correction` (a sentence naming the detected
+problem) which is appended to the prompt. Returns
+`{ sale_price, msrp, discount, in_stock, oem_seen, price_label, product_title, sells_this_part, confidence } | null`.
+Network-only; no DB. Reuses the existing `FIRECRAWL_API_KEY` + base URL.
 
 ### 2. `resolveVerifiedPrice({url, oem, partName, crossSourceMedian})` — `priceReextract.ts`
-Replaces `reextractPartPrice`'s tier logic. Steps:
+Replaces `reextractPartPrice`'s tier logic. **Gauge → guide → backstop:**
 1. `extractPriceFirecrawl(url, oem, partName)`. Empty/null → `{status:"fetch_failed"}`
    (caller must NOT demote the existing row — same rule as today).
-2. Validate the returned `sale_price`:
-   - **existing `validateLlmPrice`**: `price>0`, `price < msrp`, `oem_seen` matches
-     target OEM, and within `[0.3×, 3×]` of `crossSourceMedian` when present.
-   - **+ discount consistency**: if `msrp` and `discount` both present, require
-     `|（msrp − sale_price) − discount| ≤ max($2, 5% of msrp)`; else ignore.
-   - **+ absolute ceiling**: if `sale_price > $5,000` AND no `crossSourceMedian`
-     corroboration (no 2nd source within band) → reject.
-3. Pass → `{status:"sale", price:sale_price, msrp, discount}`; fail →
-   `{status:"unverified", reason}`.
+2. **Gauge** the result (self-evidencing — no price thresholds):
+   - `price_label` looks like a *sale price*, not a savings/MSRP/SKU figure
+     (reject if it matches `/save|you save|% off|\bwas\b|msrp|list|sku|part\s*#/i`),
+   - `sells_this_part` is not `false`, and `oem_seen` (when present) matches the target,
+   - `sale ≤ msrp` and `msrp − sale ≈ discount` (±`max($2, 5% of msrp)`),
+   - `sale_price` agrees with `crossSourceMedian` when present (within `[0.3×, 3×]`).
+3. If any gauge trips → **guided retry**: call `extractPriceFirecrawl` ONCE more with
+   a `correction` naming the failure (e.g. *"your $21,499 looks like a SKU; ignore
+   part numbers and return the dollar price for OEM <oem>"*). Re-gauge the retry result.
+4. **Backstop:** if the (retried) result still fails the gauges, apply
+   `validateLlmPrice` + the **$5,000** absolute ceiling (single-source, no median
+   corroboration) → `{status:"unverified", reason}`.
+5. Pass (first shot or after retry) → `{status:"sale", price:sale_price, msrp, discount}`.
 
-`ReextractOutcome` gains optional `msrp?` / `discount?` on the `"sale"` variant.
+`ReextractOutcome` gains optional `msrp?` / `discount?` on the `"sale"` variant, and
+the `"unverified"` reason records whether a guided retry was attempted.
 
 ### 3. `priceAllSources(part, candidateUrls[], opts)` — shared driver in `priceReextract.ts`
 - Dedupe + cap `candidateUrls` at 3.
@@ -113,9 +132,13 @@ Read-only display; no new query.
 ## Data flow (both paths)
 ```
 part → candidate source URLs (≤3, deduped)
-  → extractPriceFirecrawl each → {sale_price, msrp, discount, oem_seen}
+  → extractPriceFirecrawl each → {sale_price, msrp, discount, oem_seen, price_label, sells_this_part, ...}
   → crossSourceMedian of the raw sale_prices
-  → resolveVerifiedPrice each: validateLlmPrice + discount-consistency + $5k ceiling
+  → resolveVerifiedPrice each:
+       gauge (price_label looks like a sale price · sells_this_part · oem match
+              · sale≤msrp · discount reconciles · agrees with median)
+         └─ trips? → guided retry (corrective prompt) → re-gauge
+       still bad → backstop (validateLlmPrice + $5k ceiling) → unverified
   → upsertPartPrice(price=sale_price, price_type="sale", msrp, discount, source_url, source_domain)
      fail → "unverified" (kept, dropped from customer median) · empty → untouched
 ```
@@ -127,25 +150,34 @@ is transient (row untouched). `llm_estimate` / `online_discount` / `you_save` ar
 
 ## Error handling
 - Firecrawl error / empty → `fetch_failed` → existing row untouched (no data loss).
-- Single-source part (no median) → absolute ceiling + `price<msrp` + OEM-match carry
-  the validation; flagged in the outcome reason.
+- Guided retry is bounded to **one** extra call per source, fired only when a gauge
+  trips; a retry that also errors → `fetch_failed` (row untouched).
+- Single-source part (no median) → the gauges (`price_label`/`sells_this_part`/
+  `price<msrp`/OEM-match) carry the validation; the $5k ceiling is the final catch.
 - Per-part / per-source failures never abort the run (try/catch per source).
 
 ## Testing
 - Unit (`tests/`): the Firecrawl-json response parser (maps `data.json` →
-  `{sale_price,msrp,discount,oem_seen}`, tolerates nulls); `resolveVerifiedPrice`
-  validation with fixtures captured from the probe — **incl. the $21,499 row, which
-  MUST be rejected**, the `online_discount $74.38` row (→ sale $37.19), and an
-  already-correct `sale` row (→ unchanged). `validateLlmPrice` is already tested.
+  `{sale_price,msrp,discount,oem_seen,price_label,...}`, tolerates nulls); the
+  **gauge** predicates (a `"You Save $13"` `price_label` trips; an `oem_seen`
+  mismatch trips; `sells_this_part:false` trips; a value outside the median band
+  trips) using fixtures captured from the probe. The gauge+retry logic is unit
+  tested with a **stubbed extractor** (no network): a first-call result that trips a
+  gauge must trigger exactly one retry, and a good retry result must resolve to
+  `sale`. Cases that MUST resolve to `unverified`: the **$21,499** row even after
+  retry; cases that MUST resolve to `sale`: the `online_discount $74.38` → `$37.19`
+  row and an already-correct `sale` row (unchanged). `validateLlmPrice` already tested.
 - Dev verification: reprice one config; confirm corrections land, no outlier is
-  written, and `msrp`/`discount` populate.
+  written, `msrp`/`discount` populate, and the retry fires on a seeded-bad source.
 
 ## Cost note
 Firecrawl `json` extraction costs more credits than a plain scrape, and "all
-candidate sources" multiplies that per part. Capped at 3 sources/part. Enrichment
-credit spend rises materially (every priced part × ≤3 json calls); reprice is a
-low-frequency director action so it's negligible there. Accepted trade-off for
-correctness; the `PARTS_FIRECRAWL_PRICING` flag allows disabling.
+candidate sources" multiplies that per part, plus the **guided retry adds at most
+one extra call per source — only when a gauge trips** (most extractions pass first
+shot). Capped at 3 sources/part. Enrichment credit spend rises materially (every
+priced part × ≤3 json calls, + occasional retries); reprice is a low-frequency
+director action so it's negligible there. Accepted trade-off for correctness; the
+`PARTS_FIRECRAWL_PRICING` flag allows disabling.
 
 ## Out of scope
 - The part↔source-URL mismatch (a rotor priced from a `brake_pads` page) — a

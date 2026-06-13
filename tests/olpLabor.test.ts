@@ -157,3 +157,25 @@ describe("matchJobs", () => {
     expect(m.olp_hours).toBeNull();
   });
 });
+
+describe("matchJobs cylinder-aware spark plugs", () => {
+  const jobs: OlpLaborJob[] = [
+    { name: "Spark Plugs", slug: "spark-plugs", category: "engine", laborHours: 4.5 },
+    { name: "Spark Plugs - V6", slug: "spark-plugs-v6", category: "engine", laborHours: 2.7 },
+    { name: "Spark Plugs - V8", slug: "spark-plugs-v8", category: "engine", laborHours: 2.7 },
+  ];
+  const sp = (hints?: { cylinders?: number | null }) =>
+    matchJobs(jobs, OLP_JOB_MAP, hints).find((m) => m.service === "spark_plugs")!;
+
+  it("picks the V8 row for an 8-cylinder engine (not the generic 4.5h)", () => {
+    expect(sp({ cylinders: 8 }).olp_hours).toBe(2.7);
+    expect(sp({ cylinders: 8 }).olp_jobs[0].slug).toBe("spark-plugs-v8");
+  });
+  it("picks the V6 row for a 6-cylinder engine", () => {
+    expect(sp({ cylinders: 6 }).olp_hours).toBe(2.7);
+  });
+  it("uses the base row for I4 / unknown cylinders (back-compat)", () => {
+    expect(sp({ cylinders: 4 }).olp_hours).toBe(4.5);
+    expect(sp().olp_hours).toBe(4.5); // no hints → unchanged
+  });
+});

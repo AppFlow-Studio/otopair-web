@@ -142,7 +142,14 @@ export type OlpLaborJob = {
 export const OLP_HOURS_MIN = 0.05;
 export const OLP_HOURS_MAX = 60;
 
-type JobMapEntry = { slugs: string[]; nameRe?: RegExp };
+type JobMapEntry = {
+  slugs: string[];
+  nameRe?: RegExp;
+  /** cylinder count → preferred OLP slug (e.g. 8 → "spark-plugs-v8"). When the
+   *  resolver knows the engine's cylinders and the page carries this row, it
+   *  wins over the generic first slug. */
+  cylinderSlugs?: Record<number, string>;
+};
 
 /**
  * Our service slugs (the 13 keys of LABOR_SERVICE_CONFIG in
@@ -158,6 +165,7 @@ export const OLP_JOB_MAP: Record<string, JobMapEntry> = {
   },
   spark_plugs: {
     slugs: ["spark-plugs", "spark-plugs-v6", "spark-plugs-v8"],
+    cylinderSlugs: { 6: "spark-plugs-v6", 8: "spark-plugs-v8" },
     nameRe: /^spark plugs/i,
   },
   timing_belt: { slugs: ["timing-belt", "timing-belt-kit"], nameRe: /^timing belt\b/i },
@@ -200,10 +208,18 @@ export type ServiceMatch = {
 export function matchJobs(
   jobs: OlpLaborJob[],
   map: Record<string, JobMapEntry> = OLP_JOB_MAP,
+  hints?: { cylinders?: number | null },
 ): ServiceMatch[] {
   const bySlug = new Map(jobs.map((j) => [j.slug, j]));
+  const cyl = hints?.cylinders ?? null;
   return Object.entries(map).map(([service, entry]) => {
     const found: OlpLaborJob[] = [];
+    // Cylinder-specific variant first when known and present on the page.
+    const cylSlug = cyl != null ? entry.cylinderSlugs?.[cyl] : undefined;
+    if (cylSlug) {
+      const j = bySlug.get(cylSlug);
+      if (j) found.push(j);
+    }
     for (const s of entry.slugs) {
       const j = bySlug.get(s);
       if (j && !found.includes(j)) found.push(j);

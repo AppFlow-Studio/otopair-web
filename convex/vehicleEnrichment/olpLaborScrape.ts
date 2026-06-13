@@ -10,7 +10,7 @@ import { internalAction } from "../_generated/server";
 import { v } from "convex/values";
 import {
   OLP_BASE, olpSlugify, extractBuildId, parseJsonLoose,
-  olpModelCandidates, pickOlpVehicle, matchJobs,
+  olpModelCandidates, pickOlpVehicle, matchJobs, OLP_JOB_MAP,
   type OlpVehicleRow, type OlpLaborJob,
 } from "./olpLabor";
 
@@ -115,7 +115,7 @@ export const resolveOlpLaborForConfig = internalAction({
     }
 
     const services: Record<string, number> = {};
-    for (const m of matchJobs(laborJobs)) {
+    for (const m of matchJobs(laborJobs, OLP_JOB_MAP, { cylinders: args.cylinders ?? null })) {
       if (m.olp_hours != null) services[m.service] = m.olp_hours;
     }
     return {

@@ -380,7 +380,11 @@ interface ReductoWrappedValue {
 interface ReductoExtractResponse {
   job_id?: string;
   studio_link?: string;
-  result?: Array<Record<string, unknown>>;
+  // Without `settings.array_extract`, /extract returns the extraction as a
+  // SINGLE object; with it, an array. We send a single-receipt schema, so the
+  // object form is the norm — but accept both (Reducto's docs warn the result
+  // "may be a single object or an array depending on the schema").
+  result?: Record<string, unknown> | Array<Record<string, unknown>>;
   usage?: { num_pages?: number; num_fields?: number; credits?: number };
 }
 
@@ -438,17 +442,20 @@ async function callReductoExtract(
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      // NOTE: Reducto's published HTTP docs show `instructions.schema` +
-      // `settings.{array_extract, citations}` nesting, but the live API
-      // (ExtractConfigNew Pydantic model) rejects that with
-      // 422 "Field required: schema". Flat body matches the MCP
-      // `extract_data` tool signature, which is the contract that actually
-      // works against `https://platform.reducto.ai/extract`.
+      // Reducto's live /extract reads the JSON schema from `instructions.schema`.
+      // A top-level `schema` field is SILENTLY IGNORED — the API returns 200 but
+      // falls back to generic auto-extraction (company_name / total_amount_due /
+      // invoice_line_items…), so none of our keys (shop, *_subtotal_cents,
+      // line_items) populate and the receipt renders empty. Do NOT add
+      // `settings.array_extract`: it routes the body onto the legacy config path
+      // that 422s ("Legacy config requires async_config.enabled=true"); we want a
+      // single receipt object (line_items is a nested array), not row extraction.
+      // `settings.citations.enabled` wraps each leaf as { value, citations[] } so
+      // unwrapExtraction() can harvest per-field extract_confidence.
       body: JSON.stringify({
         input: documentUrl,
-        schema: RECEIPT_EXTRACTION_SCHEMA,
-        array_extract: true,
-        citations: true,
+        instructions: { schema: RECEIPT_EXTRACTION_SCHEMA },
+        settings: { citations: { enabled: true } },
       }),
       signal: controller.signal,
     });
@@ -460,7 +467,7 @@ async function callReductoExtract(
     }
 
     const body = (await res.json()) as ReductoExtractResponse;
-    const first = body.result?.[0];
+    const first = Array.isArray(body.result) ? body.result[0] : body.result;
     if (!first) throw new Error("Reducto returned no extraction result");
 
     const confidenceMap: Record<string, number> = {};

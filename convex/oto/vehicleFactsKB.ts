@@ -54,20 +54,23 @@
 //                                  This is what chat.ts's `retrieve_vehicle_facts`
 //                                  callable invokes.
 //   * getFactById                -- internal helper.
-//   * insertFact                 -- legacy creation mutation. Kept for back-compat;
-//                                  new code should prefer `recordVehicleFact`
-//                                  in convex/oto/vehicleFactsEditing.ts.
-//   * recordFact                 -- action wrapper around insertFact (no
-//                                  embedding side-effects).
+//
+// Jun-10 IDOR sweep: every export is internal-only (sole runtime caller is
+// the chat.ts/evalHarness server path; public, these were an anonymous
+// KB-scan surface). The legacy insertFact/recordFact pair was DELETED — it
+// bypassed the recordVehicleFact invariants (no audit row, no web_search
+// confidence cap, no canonical_question_key) and let any signed-in user
+// write the shared KB. The sole sanctioned write path is
+// `recordVehicleFact` in convex/oto/vehicleFactsEditing.ts.
 //
 // Heavy KB (Locked Principle #5 -- the moat) -- facts learned for one car
 // propagate to similar cars by chassis/engine without re-asking Haiku.
 // =============================================================================
 
 import { v } from "convex/values";
-import { query, mutation, action, internalQuery } from "../_generated/server";
-import type { Doc, Id } from "../_generated/dataModel";
-import { api } from "../_generated/api";
+import { internalQuery, internalAction } from "../_generated/server";
+import type { Doc } from "../_generated/dataModel";
+import { internal } from "../_generated/api";
 import { canonicalQuestionKey } from "./canonicalize";
 
 // ---------------------------------------------------------------------------
@@ -198,23 +201,74 @@ function toTier2FactRow(
 // O(log n) on `by_canonical_question`. The caller (cascadeTier2) computes
 // the hash; this query only knows the key.
 
-export const lookupFactsByCanonicalHash = query({
+/** Vehicle identity a fact can be scoped against. (config id compared as an
+ *  opaque string — the query-arg validator enforces the real Id type.) */
+type VehicleScope = {
+  vehicle_config_id?: string | null;
+  chassis_code?: string | null;
+  engine_code?: string | null;
+};
+
+/**
+ * B-P2: does a hash-matched fact actually belong to THIS vehicle? The
+ * canonical_question_key is just sha256(normalize(question)) — no vehicle
+ * identity — so without this gate a fact recorded for one car is served to
+ * any car asking the same question. A fact matches if it shares the current
+ * vehicle's config, chassis, OR engine. Conservative by construction: a fact
+ * that matches on none of those three is treated as a different car's and
+ * dropped (we'd rather miss a hash hit and fall through to STRUCT/TEXT/web
+ * than serve the wrong car's number). Pure.
+ *
+ * Known limitation: facts are written single-axis (record_vehicle_fact scopes
+ * a write to one axis), so a read that supplies only a DIFFERENT axis than the
+ * fact was stored on misses it (a same-car cache miss, never a cross-car
+ * leak). The common case — same question, same car, same axis — hits. Closing
+ * the cross-axis miss requires passing the active vehicle's FULL identity
+ * (config + chassis + engine) at read time, NOT loosening this matcher (which
+ * would reintroduce leaks). Tracked as a follow-up.
+ */
+export function factMatchesVehicleScope(
+  fact: { vehicle_config_id?: unknown; chassis_code?: unknown; engine_code?: unknown },
+  scope: VehicleScope,
+): boolean {
+  if (scope.vehicle_config_id && fact.vehicle_config_id === scope.vehicle_config_id) {
+    return true;
+  }
+  if (scope.chassis_code && fact.chassis_code === scope.chassis_code) return true;
+  if (scope.engine_code && fact.engine_code === scope.engine_code) return true;
+  return false;
+}
+
+export const lookupFactsByCanonicalHash = internalQuery({
   args: {
     canonical_question_key: v.string(),
     limit: v.optional(v.number()),
+    // B-P2 vehicle scoping: when ANY of these is provided, a hash hit is
+    // returned only if it belongs to this vehicle (factMatchesVehicleScope).
+    // Omit all three to preserve the legacy unscoped read.
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    chassis_code: v.optional(v.string()),
+    engine_code: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<Tier2FactRow[]> => {
     const cap = Math.min(20, args.limit ?? 5);
+    const scoped = !!(
+      args.vehicle_config_id || args.chassis_code || args.engine_code
+    );
+    // Over-fetch to absorb retracted-row attrition AND (when scoping) other
+    // cars' rows sharing this canonical key, so the current car's fact isn't
+    // capped out before the vehicle filter runs. A point-key read stays cheap.
     const rows = await ctx.db
       .query("vehicle_facts")
       .withIndex("by_canonical_question", (q: any) =>
         q.eq("canonical_question_key", args.canonical_question_key),
       )
-      .take(cap * 4); // Over-fetch to absorb retracted-row attrition.
+      .take(scoped ? 200 : cap * 4);
 
     const out: Tier2FactRow[] = [];
     for (const r of rows) {
       if ((r.verification_status ?? "unverified") === "retracted") continue;
+      if (scoped && !factMatchesVehicleScope(r, args)) continue;
       out.push(toTier2FactRow(r, "hash"));
       if (out.length >= cap) break;
     }
@@ -238,7 +292,7 @@ type StructuralRow = KBFactRow & {
   render_disclaim_tag: boolean;
 };
 
-export const lookupFactsStructural = query({
+export const lookupFactsStructural = internalQuery({
   args: {
     topic: v.string(),
     vehicle_config_id: v.optional(v.id("vehicle_configs")),
@@ -319,7 +373,7 @@ export const lookupFactsStructural = query({
 // QUERY: T2_TEXT -- Convex searchIndex BM25 fallback.
 // ---------------------------------------------------------------------------
 
-export const lookupFactsByText = query({
+export const lookupFactsByText = internalQuery({
   args: {
     query_text: v.string(),
     topic_axis: v.optional(v.string()),
@@ -357,7 +411,7 @@ export const lookupFactsByText = query({
 // ACTION: cascadeTier2 -- the Wave 5.4 read entry point.
 // ---------------------------------------------------------------------------
 
-export const cascadeTier2 = action({
+export const cascadeTier2 = internalAction({
   args: {
     question_text: v.string(),
     topic: v.string(),
@@ -372,15 +426,25 @@ export const cascadeTier2 = action({
 
     const key = await canonicalQuestionKey(args.question_text);
     const hashHits: Tier2FactRow[] = await ctx.runQuery(
-      api.oto.vehicleFactsKB.lookupFactsByCanonicalHash,
-      { canonical_question_key: key, limit },
+      internal.oto.vehicleFactsKB.lookupFactsByCanonicalHash,
+      {
+        canonical_question_key: key,
+        limit,
+        // B-P2: scope the hash hit to THIS vehicle so one car's fact isn't
+        // served to another car's owner asking the same question.
+        ...(args.vehicle_config_id !== undefined
+          ? { vehicle_config_id: args.vehicle_config_id }
+          : {}),
+        ...(args.chassis_code !== undefined ? { chassis_code: args.chassis_code } : {}),
+        ...(args.engine_code !== undefined ? { engine_code: args.engine_code } : {}),
+      },
     );
     if (hashHits.length > 0) {
       return { tier: "T2_HASH", facts: hashHits };
     }
 
     const structRows: StructuralRow[] = await ctx.runQuery(
-      api.oto.vehicleFactsKB.lookupFactsStructural,
+      internal.oto.vehicleFactsKB.lookupFactsStructural,
       {
         topic: args.topic,
         ...(args.vehicle_config_id !== undefined
@@ -409,7 +473,7 @@ export const cascadeTier2 = action({
     }
 
     const textHits: Tier2FactRow[] = await ctx.runQuery(
-      api.oto.vehicleFactsKB.lookupFactsByText,
+      internal.oto.vehicleFactsKB.lookupFactsByText,
       {
         query_text: args.question_text,
         topic_axis: args.topic_axis,
@@ -434,94 +498,5 @@ export const getFactById = internalQuery({
   handler: async (ctx, args) => await ctx.db.get(args.id),
 });
 
-// ---------------------------------------------------------------------------
-// MUTATION: legacy insertFact. New code should prefer recordVehicleFact in
-// convex/oto/vehicleFactsEditing.ts.
-// ---------------------------------------------------------------------------
-
-export const insertFact = mutation({
-  args: {
-    topic: v.string(),
-    topic_axis: v.union(
-      v.literal("vehicle"),
-      v.literal("trim"),
-      v.literal("chassis"),
-      v.literal("engine"),
-      v.literal("model_year"),
-    ),
-    vehicle_config_id: v.optional(v.id("vehicle_configs")),
-    chassis_code: v.optional(v.string()),
-    engine_code: v.optional(v.string()),
-    make: v.optional(v.string()),
-    model: v.optional(v.string()),
-    trim_name: v.optional(v.string()),
-    year_min: v.optional(v.number()),
-    year_max: v.optional(v.number()),
-    fact_text: v.string(),
-    question_text: v.string(),
-    answer_format: v.optional(v.string()),
-    source: v.union(
-      v.literal("manufacturer"),
-      v.literal("oto_inferred"),
-      v.literal("web_search"),
-      v.literal("user_confirmed"),
-      v.literal("propagated"),
-    ),
-    cited_url: v.optional(v.string()),
-    confidence: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("unauthenticated");
-    const id = await ctx.db.insert("vehicle_facts", {
-      ...args,
-      created_at: Date.now(),
-    } as any);
-    return id;
-  },
-});
-
-// ---------------------------------------------------------------------------
-// ACTION: recordFact -- legacy thin wrapper around insertFact.
-// ---------------------------------------------------------------------------
-
-export const recordFact = action({
-  args: {
-    topic: v.string(),
-    topic_axis: v.union(
-      v.literal("vehicle"),
-      v.literal("trim"),
-      v.literal("chassis"),
-      v.literal("engine"),
-      v.literal("model_year"),
-    ),
-    vehicle_config_id: v.optional(v.id("vehicle_configs")),
-    chassis_code: v.optional(v.string()),
-    engine_code: v.optional(v.string()),
-    make: v.optional(v.string()),
-    model: v.optional(v.string()),
-    trim_name: v.optional(v.string()),
-    year_min: v.optional(v.number()),
-    year_max: v.optional(v.number()),
-    fact_text: v.string(),
-    question_text: v.string(),
-    answer_format: v.optional(v.string()),
-    source: v.union(
-      v.literal("manufacturer"),
-      v.literal("oto_inferred"),
-      v.literal("web_search"),
-      v.literal("user_confirmed"),
-      v.literal("propagated"),
-    ),
-    cited_url: v.optional(v.string()),
-    confidence: v.number(),
-  },
-  handler: async (ctx, args): Promise<{ id: string }> => {
-    const insertArgs = { ...args };
-    const id: Id<"vehicle_facts"> = await ctx.runMutation(
-      api.oto.vehicleFactsKB.insertFact,
-      insertArgs,
-    );
-    return { id: id as unknown as string };
-  },
-});
+// (Legacy insertFact / recordFact deleted in the Jun-10 IDOR sweep — see
+// file header. Write path: vehicleFactsEditing.recordVehicleFact.)

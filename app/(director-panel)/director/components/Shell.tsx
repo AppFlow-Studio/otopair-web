@@ -1,7 +1,7 @@
 'use client'
 
 import { ReactNode, CSSProperties } from 'react'
-import { IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe, IconAudit, IconSearch, IconSettings, IconCar, IconBolt, Avatar } from './Primitives'
+import { IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe, IconAudit, IconSearch, IconSettings, IconCar, IconBolt, IconTag, Avatar } from './Primitives'
 
 const NAV_ITEMS = [
   { id:'overview',     label:'Overview',     Icon:IconHome },
@@ -10,9 +10,13 @@ const NAV_ITEMS = [
   { id:'bookings',     label:'Bookings',     Icon:IconCalendar },
   { id:'cars',         label:'Cars',         Icon:IconCar },
   { id:'configs',      label:'Vehicle configs', Icon:IconSettings },
+  { id:'pricing',      label:'Pricing & tiers', Icon:IconBolt },
+  { id:'serviceParts', label:'Service Parts', Icon:IconTag },
   { id:'bugs',         label:'Bugs',         Icon:IconBug,     badge:'bugs' },
   { id:'feedback',     label:'Feedback',     Icon:IconMessage, badge:'feedback' },
   { id:'otoFeedback',  label:'Oto feedback', Icon:IconBolt,    badge:'otoFeedback' },
+  { id:'otoSim',       label:'Oto Sim',      Icon:IconBolt },
+  { id:'otoConversations', label:'Oto History', Icon:IconMessage },
   { id:'stripe',       label:'Stripe',       Icon:IconStripe,  badge:'stripe' },
   { id:'audit',         label:'Audit log',       Icon:IconAudit },
   { id:'mechanicEdits', label:'Mechanic Edits',  Icon:IconCar,  badge:'mechanicEdits' },

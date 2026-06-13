@@ -396,7 +396,12 @@ http.route({
 const MCP_TOKEN = process.env.MCP_AUTH_TOKEN;
 
 function checkMcpAuth(request: Request): boolean {
-  if (!MCP_TOKEN) return true;
+  // Fail CLOSED when the token is unconfigured (Jun-10 sweep review fix).
+  // These routes reach internal.mcp_api.* generic table read/write — with
+  // the old fail-open default, an unset env var silently exposed every
+  // table (transcripts, users, semantic memory) to anonymous HTTP callers.
+  // MCP_AUTH_TOKEN is set on the dev deployment; keep it set everywhere.
+  if (!MCP_TOKEN) return false;
   const authHeader = request.headers.get("Authorization") || "";
   const bearerToken = authHeader.replace(/^Bearer\s+/i, "");
   const url = new URL(request.url);

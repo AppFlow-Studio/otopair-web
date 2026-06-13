@@ -39,6 +39,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { isServiceApplicable } from "./services/applicability";
 
 /**
  * QUERY: list
@@ -308,6 +309,41 @@ export const listBookableForVehicle = query({
       }
     }
 
+    // ── Structural applicability rows (Service Parts Reference N/A rules) ───
+    // Fetch the rows isServiceApplicable() needs ONCE, before the per-service
+    // loop. These encode the reference's "Not Applicable" gates: timing belt on
+    // a chain-driven engine, PS flush on electric power steering, any ICE
+    // service on an EV, differential service without a serviceable diff, tire
+    // rotation on staggered+directional fitments, OBD-II services below the
+    // min model year. isServiceApplicable fails OPEN on every missing input, so
+    // nulls here simply mean "don't gate on that dimension". The gate only runs
+    // when both engine and config (its two required, non-null inputs) exist.
+    const structuralEngine = engineId ? await ctx.db.get(engineId) : null;
+    const [structuralChassis, structuralDrivetrain, structuralTrim] = config
+      ? await Promise.all([
+          config.chassis_code
+            ? ctx.db
+                .query("chassis_specs")
+                .withIndex("by_chassis_code", (q) =>
+                  q.eq("chassis_code", config.chassis_code!),
+                )
+                .first()
+            : null,
+          ctx.db
+            .query("drivetrain_configs")
+            .withIndex("by_vehicle_config", (q) =>
+              q.eq("vehicle_config_id", config._id),
+            )
+            .first(),
+          ctx.db
+            .query("trim_specs")
+            .withIndex("by_vehicle_config", (q) =>
+              q.eq("vehicle_config_id", config._id),
+            )
+            .first(),
+        ])
+      : [null, null, null];
+
     const services = await ctx.db.query("services").collect();
     const out: Array<{
       service_id: Id<"services">;
@@ -324,6 +360,34 @@ export const listBookableForVehicle = query({
       const ownerOverride = ownerApplicableOverride.get(sid);
       if (ownerOverride === false) continue;
       if (ownerOverride === undefined && engineNonApplicable.has(sid)) continue;
+
+      // Structural N/A gate (Service Parts Reference). Excludes services the
+      // reference marks Not Applicable for this vehicle's hardware: timing belt
+      // on a chain-driven engine, power-steering flush on electric PS, ICE-only
+      // services on an EV, differential service without a serviceable diff,
+      // tire rotation on staggered+directional fitments, OBD-II services below
+      // the min model year. Same treatment as is_applicable === false: the
+      // service is excluded from results entirely.
+      //
+      // Precedence: an explicit owner override of is_applicable === true wins
+      // over this gate (the owner knows their car best), so we only consult the
+      // structural rules when there is NO owner override. The gate also needs
+      // both required inputs — isServiceApplicable fails open without them.
+      if (
+        ownerOverride === undefined &&
+        structuralEngine &&
+        config &&
+        !isServiceApplicable(
+          service,
+          structuralEngine,
+          structuralChassis,
+          structuralDrivetrain,
+          structuralTrim,
+          config,
+        )
+      ) {
+        continue;
+      }
 
       // Labor-only services bypass enrichment + fitment + package gates.
       // They need no parts data and can be booked the moment the vehicle exists.
@@ -406,5 +470,50 @@ export const listBookableForVehicle = query({
     }
 
     return out;
+  },
+});
+
+/**
+ * QUERY: getMostBookedThisWeek
+ *
+ * Aggregates the past 7 days of bookings and returns the top-N most-
+ * frequently-booked services. Used by the "Most Booked" hero card on
+ * the new booking-flow entry screen (Screen 1).
+ *
+ * Counts each service_id across every booking — a single 3-service
+ * booking contributes 1 to each of its 3 services. No deduping per
+ * user (popularity = raw booking frequency, not unique-customer reach).
+ */
+export const getMostBookedThisWeek = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 1;
+    const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+    const recent = await ctx.db
+      .query("bookings")
+      .filter((q) => q.gt(q.field("_creationTime"), sevenDaysAgoMs))
+      .collect();
+
+    const counts = new Map<string, number>();
+    for (const b of recent) {
+      const ids = (b as { service_ids?: Id<"services">[] }).service_ids ?? [];
+      for (const id of ids) {
+        const key = String(id);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+
+    const ranked = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit);
+
+    const results = await Promise.all(
+      ranked.map(async ([id, count]) => {
+        const service = await ctx.db.get(id as Id<"services">);
+        return service ? { service, count } : null;
+      }),
+    );
+    return results.filter((r): r is NonNullable<typeof r> => r !== null);
   },
 });

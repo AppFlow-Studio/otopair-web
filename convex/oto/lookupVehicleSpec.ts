@@ -20,7 +20,7 @@
 // catalog lookup against vehicles/vehicle_configs/makes/models/trims.
 // =============================================================================
 
-import { query } from "../_generated/server";
+import { internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import { isEvalTestMake } from "./evalTestFilter";
@@ -63,7 +63,9 @@ function lower(s: string | null | undefined): string {
   return (s ?? "").toLowerCase();
 }
 
-export const lookupVehicleSpec = query({
+// internalQuery: sole caller is the chat.ts tool dispatch. Public, this was
+// an anonymous wide-table-scan surface over the whole catalog (Jun-10 sweep).
+export const lookupVehicleSpec = internalQuery({
   args: { query: v.string() },
   handler: async (ctx, { query: rawQuery }): Promise<SpecFacts> => {
     const q = rawQuery.trim();

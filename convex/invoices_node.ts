@@ -78,6 +78,7 @@ export const generateAndEmail = internalAction({
       paymentId: assembled.paymentId,
       invoiceStorageId: storageId,
       invoiceGeneratedAtMs: generatedAtMs,
+      invoiceQuoteFlags: assembled.quoteFlags ?? [],
     });
 
     let emailedAtMs: number | null = null;
@@ -195,6 +196,7 @@ export const sendInvoiceToEmail = action({
         paymentId: assembled.paymentId,
         invoiceStorageId: storageId,
         invoiceGeneratedAtMs: Date.now(),
+        invoiceQuoteFlags: assembled.quoteFlags ?? [],
       });
     }
 

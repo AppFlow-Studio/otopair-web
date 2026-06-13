@@ -277,6 +277,7 @@ export const auditMeta = (a: string) => {
     mechanic_added:   { tone:'indigo', label:'Mechanic added',   Icon: IconUsers },
     tier_change:      { tone:'purple', label:'Tier change',      Icon: IconSettings },
     shop_created:     { tone:'slate',  label:'Shop created',     Icon: IconShop },
+    login_failed:     { tone:'red',    label:'Login failed',     Icon: IconBolt },
   }
   return m[a] || { tone:'slate' as Tone, label:a, Icon: IconClock }
 }

@@ -510,20 +510,19 @@ export const upsertFromClerk = mutation({
       return existing._id;
     }
 
-    // Walk-in claim — when a shop previously created a stub user for this
-    // person during a walk-in booking (clerkUserId prefix "shop-created-"),
-    // match it by email or normalized phone and migrate it onto the real
-    // Clerk identity. All bookings + vehicle_owners stay linked because
-    // they reference the Convex user _id, not the clerkUserId string.
+    // Stub claim — when a stub user was created for this person before they
+    // had a Clerk identity, match it by email or normalized phone and migrate
+    // it onto the real Clerk identity. Two stub sources, same shape:
+    //   • "shop-created-" — shop walk-in booking (convex/bookings.ts)
+    //   • "presignup-"    — marketing-site Oto pre-signup (convex/preSignups.ts)
+    // All bookings + vehicle_owners stay linked because they reference the
+    // Convex user _id, not the clerkUserId string.
     const normalizedIncomingPhone = normalizePhoneE164(args.phone);
     let claimable = await ctx.db
       .query("users")
       .withIndex("by_email", (q) => q.eq("email", args.email))
       .first();
-    if (
-      claimable &&
-      !String(claimable.clerkUserId ?? "").startsWith("shop-created-")
-    ) {
+    if (claimable && !isClaimableStub(claimable.clerkUserId)) {
       claimable = null;
     }
     if (!claimable && normalizedIncomingPhone) {
@@ -531,7 +530,7 @@ export const upsertFromClerk = mutation({
       claimable =
         all.find(
           (u) =>
-            String(u.clerkUserId ?? "").startsWith("shop-created-") &&
+            isClaimableStub(u.clerkUserId) &&
             u.phone === normalizedIncomingPhone,
         ) ?? null;
     }
@@ -575,6 +574,14 @@ function normalizePhoneE164(raw: string | undefined): string | undefined {
   if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
   if (raw.startsWith("+")) return raw;
   return undefined;
+}
+
+// A stub user is one created before the person had a Clerk identity — either a
+// shop walk-in ("shop-created-") or a marketing pre-signup ("presignup-").
+// These are the only rows a Clerk signup is allowed to claim by email/phone.
+function isClaimableStub(clerkUserId: string | undefined): boolean {
+  const id = String(clerkUserId ?? "");
+  return id.startsWith("shop-created-") || id.startsWith("presignup-");
 }
 
 export const deleteFromClerk = mutation({

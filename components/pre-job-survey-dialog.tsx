@@ -12,6 +12,7 @@ import {
 import { Check, Loader2 } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import {
@@ -460,6 +461,19 @@ export type PreJobOemPartsForService = {
   parts: PreJobOemPart[];
 };
 
+/** Locked/agreed quote summary for the pre-job header. Mirrors the post-job
+ *  `LockedQuote` shape. When `originalTotalCents` differs from `totalCents`, the
+ *  customer approved a price adjustment — shown as original → new. */
+export type PreJobLockedQuote = {
+  totalCents: number;
+  originalTotalCents?: number | null;
+  hasBreakdown?: boolean;
+  partsCents: number;
+  laborCents: number;
+  taxCents: number;
+  feeCents: number;
+};
+
 export default function PreJobSurveyDialog({
   open,
   bookingId,
@@ -469,6 +483,7 @@ export default function PreJobSurveyDialog({
   passportData,
   prefillData,
   oemPartsByService,
+  lockedQuote,
   isSubmitting,
   onClose,
   onSubmit,
@@ -481,6 +496,7 @@ export default function PreJobSurveyDialog({
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
   oemPartsByService?: PreJobOemPartsForService[] | null;
+  lockedQuote?: PreJobLockedQuote | null;
   isSubmitting: boolean;
   onClose: () => void;
   onSubmit: (payload: PreJobSurveyPayload, action: SubmitIntent) => Promise<void>;
@@ -496,6 +512,7 @@ export default function PreJobSurveyDialog({
       passportData={passportData ?? null}
       prefillData={prefillData ?? null}
       oemPartsByService={oemPartsByService ?? null}
+      lockedQuote={lockedQuote ?? null}
       isSubmitting={isSubmitting}
       onClose={onClose}
       onSubmit={onSubmit}
@@ -512,6 +529,7 @@ function PreJobSurveyDialogBody({
   passportData,
   prefillData,
   oemPartsByService,
+  lockedQuote,
   isSubmitting,
   onClose,
   onSubmit,
@@ -524,11 +542,25 @@ function PreJobSurveyDialogBody({
   passportData: VehiclePassportData | null;
   prefillData: PreJobSurveyPayload | null;
   oemPartsByService: PreJobOemPartsForService[] | null;
+  lockedQuote: PreJobLockedQuote | null;
   isSubmitting: boolean;
   onClose: () => void;
   onSubmit: (payload: PreJobSurveyPayload, action: SubmitIntent) => Promise<void>;
 }) {
   const serviceFlags = getBookingServiceFlags(bookingServices);
+
+  // Which brake axle(s) this booking actually covers. A "Rear pads only" job
+  // hides the front-pad field (and vice versa) so the mechanic only measures
+  // what's in scope. Falls back to both axles while loading, for non-brake
+  // bookings, and for legacy bookings with no recorded axle option.
+  const brakeScope = useQuery(
+    api.serviceParts.getBrakeScopeForBooking,
+    open && bookingId ? ({ bookingId } as { bookingId: Id<"bookings"> }) : "skip",
+  );
+  const padScope =
+    serviceFlags.hasBrakeWork && brakeScope?.hasBrakeWork
+      ? { front: brakeScope.front, rear: brakeScope.rear }
+      : { front: true, rear: true };
 
   const initialMileage =
     typeof prefillData?.mileage === "number" && Number.isFinite(prefillData.mileage)
@@ -874,14 +906,16 @@ function PreJobSurveyDialogBody({
     }
     if (serviceFlags.hasBrakeWork) {
       if (
-        typeof payload.brakes?.front_pad_mm !== "number" ||
-        !Number.isFinite(payload.brakes.front_pad_mm)
+        padScope.front &&
+        (typeof payload.brakes?.front_pad_mm !== "number" ||
+          !Number.isFinite(payload.brakes.front_pad_mm))
       ) {
         throw new Error("Front pad thickness is required for brake-related work.");
       }
       if (
-        typeof payload.brakes?.rear_pad_mm !== "number" ||
-        !Number.isFinite(payload.brakes.rear_pad_mm)
+        padScope.rear &&
+        (typeof payload.brakes?.rear_pad_mm !== "number" ||
+          !Number.isFinite(payload.brakes.rear_pad_mm))
       ) {
         throw new Error("Rear pad thickness is required for brake-related work.");
       }
@@ -1258,6 +1292,51 @@ function PreJobSurveyDialogBody({
             />
           ) : null}
 
+          {lockedQuote ? (
+            (() => {
+              const adjusted =
+                lockedQuote.originalTotalCents != null &&
+                lockedQuote.originalTotalCents !== lockedQuote.totalCents;
+              return (
+                <section className="rounded-lg border border-primary/15 bg-card p-3.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                      {adjusted ? "Agreed price" : "Quoted price"}
+                      {adjusted ? (
+                        <span className="inline-flex items-center rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-success">
+                          Adjusted
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="flex items-baseline gap-2">
+                      {adjusted && lockedQuote.originalTotalCents != null ? (
+                        <span className="text-[12px] font-medium tabular-nums text-muted-foreground line-through">
+                          ${(lockedQuote.originalTotalCents / 100).toFixed(2)}
+                        </span>
+                      ) : null}
+                      <span className="text-[16px] font-bold tabular-nums text-foreground">
+                        ${(lockedQuote.totalCents / 100).toFixed(2)}
+                      </span>
+                    </span>
+                  </div>
+                  {lockedQuote.hasBreakdown ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Parts ${(lockedQuote.partsCents / 100).toFixed(2)} ·{" "}
+                      Labor ${(lockedQuote.laborCents / 100).toFixed(2)} ·{" "}
+                      Tax+Fee $
+                      {((lockedQuote.taxCents + lockedQuote.feeCents) / 100).toFixed(2)}
+                    </p>
+                  ) : null}
+                  {adjusted ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Customer approved this adjusted total.
+                    </p>
+                  ) : null}
+                </section>
+              );
+            })()
+          ) : null}
+
           {oemPartsByService && oemPartsByService.length > 0 ? (
             <section className="rounded-lg border border-primary/15 bg-card p-3.5">
               <div className="mb-2 flex items-baseline justify-between gap-2">
@@ -1557,41 +1636,50 @@ function PreJobSurveyDialogBody({
               accent={serviceFlags.hasBrakeWork ? "required" : "muted"}
             >
               <div className="grid gap-2 sm:grid-cols-2">
-                <SelectableFieldCard
-                  label={
-                    serviceFlags.hasBrakeWork ? (
-                      <RequiredLabel text="Front pad thickness" />
-                    ) : (
-                      "Front pad thickness"
-                    )
-                  }
-                  value={frontPadMm}
-                  onChange={setFrontPadMm}
-                  options={PAD_THICKNESS_OPTIONS}
-                  placeholder="Select mm…"
-                  otherPlaceholder="mm"
-                  otherInputMode="decimal"
-                  otherSanitize={keepNumericInput}
-                  helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
-                />
-                <SelectableFieldCard
-                  label={
-                    serviceFlags.hasBrakeWork ? (
-                      <RequiredLabel text="Rear pad thickness" />
-                    ) : (
-                      "Rear pad thickness"
-                    )
-                  }
-                  value={rearPadMm}
-                  onChange={setRearPadMm}
-                  options={PAD_THICKNESS_OPTIONS}
-                  placeholder="Select mm…"
-                  otherPlaceholder="mm"
-                  otherInputMode="decimal"
-                  otherSanitize={keepNumericInput}
-                  helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
-                />
+                {padScope.front ? (
+                  <SelectableFieldCard
+                    label={
+                      serviceFlags.hasBrakeWork ? (
+                        <RequiredLabel text="Front pad thickness" />
+                      ) : (
+                        "Front pad thickness"
+                      )
+                    }
+                    value={frontPadMm}
+                    onChange={setFrontPadMm}
+                    options={PAD_THICKNESS_OPTIONS}
+                    placeholder="Select mm…"
+                    otherPlaceholder="mm"
+                    otherInputMode="decimal"
+                    otherSanitize={keepNumericInput}
+                    helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
+                  />
+                ) : null}
+                {padScope.rear ? (
+                  <SelectableFieldCard
+                    label={
+                      serviceFlags.hasBrakeWork ? (
+                        <RequiredLabel text="Rear pad thickness" />
+                      ) : (
+                        "Rear pad thickness"
+                      )
+                    }
+                    value={rearPadMm}
+                    onChange={setRearPadMm}
+                    options={PAD_THICKNESS_OPTIONS}
+                    placeholder="Select mm…"
+                    otherPlaceholder="mm"
+                    otherInputMode="decimal"
+                    otherSanitize={keepNumericInput}
+                    helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
+                  />
+                ) : null}
               </div>
+              {serviceFlags.hasBrakeWork && !(padScope.front && padScope.rear) ? (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Scoped to this booking — {padScope.front ? "front" : "rear"} axle only.
+                </p>
+              ) : null}
               <FieldRow
                 label={
                   serviceFlags.hasBrakeWork ? (

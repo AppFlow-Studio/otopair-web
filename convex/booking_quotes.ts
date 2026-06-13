@@ -19,8 +19,9 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { resolveWinningPartForService } from "./serviceParts";
+import { quoteUnitPrice } from "./part_prices";
 import type { TraceEntry } from "./partSelector";
-import { detectTier } from "./lib/quoteEngine";
+import { detectTier, resolveQuoteSeries } from "./lib/quoteEngine";
 import type { VehicleTier } from "./lib/vehicleTiers";
 
 /** Fallback band width when service_vehicle_specs has no engine-specific
@@ -81,6 +82,27 @@ export type FixedPriceLine = {
   price_cents: number;
 };
 
+/** Per-service projection of the quote-engine result for the booking.
+ *  One row per service id in the booking, in the same order as
+ *  `args.services`. Lets `createBatch` compare per-line costs against the
+ *  engine's per-service band and stamp `fallback_catch` on the service
+ *  rows that diverge (the case where AI-enriched parts prices were wrong
+ *  and the multiplier engine corrected them). Persisted on the booking
+ *  row as `service_quote_flags` so the director panel can render a
+ *  per-line "Fallback catch" pill. */
+export type PerServiceQuoteFlags = {
+  service_id: Id<"services">;
+  /** Engine flags for this service, possibly augmented with 'fallback_catch'
+   *  in createBatch when the per-line cost falls outside the engine band.
+   *  When the engine refused this service, contains ['fallback_only']. */
+  flags: string[];
+  engine_parts_low: number | null;
+  engine_parts_high: number | null;
+  engine_labor_hours: number | null;
+  engine_labor_source: string | null;
+  parts_source: string | null;
+};
+
 export type ComputeDisclosedRangeResult = {
   low_cents: number;
   high_cents: number;
@@ -93,6 +115,25 @@ export type ComputeDisclosedRangeResult = {
   /** Per-service flat-price hits. Empty when no service resolved to a
    *  shop_service_fixed_prices row. Threaded into `computeQuotedSetPrice`. */
   fixed_price_lines: FixedPriceLine[];
+  /** Pricing v2 flags raised during disclosed-range computation. Possible
+   *  values: per-quote engine flags (tier_estimate, awd_surcharge_applied,
+   *  ccb_absolute_pricing, fixed_price_override, spread_exceeded), plus
+   *  'fallback_only' when the engine refused at least one service and the
+   *  band fell back to service_vehicle_specs / fallback midpoint logic.
+   *  The mobile UI surfaces these as an "Estimate" pill. Empty when the
+   *  engine signed off on every service cleanly. */
+  quote_flags: string[];
+  /** Pricing v2 engine band for the labor+parts portion (dollars). Null when
+   *  the engine refused at least one service. Persisted alongside the
+   *  disclosed range so finance can audit how far the customer's contracted
+   *  band sits from the engine's confidence-weighted fallback. */
+  quote_fallback_low_dollars: number | null;
+  quote_fallback_high_dollars: number | null;
+  /** Per-service engine projection in the same order as `args.services`.
+   *  Empty when the caller didn't supply shop_id + vehicle_config_id.
+   *  Consumed by createBatch to detect per-line `fallback_catch` and by
+   *  director.bookingDetail to surface per-service flags. */
+  service_quote_flags: PerServiceQuoteFlags[];
 };
 
 const dollarsToCents = (d: number) => Math.round(d * 100);
@@ -207,7 +248,73 @@ export async function computeDisclosedRange(
     breakdown.tax_high_cents +
     breakdown.service_fee_high_cents;
 
-  return { low_cents, high_cents, breakdown, is_fixed_price, fixed_price_lines };
+  // Pricing v2 sanity sidecar. Call the quote engine over the same service
+  // list and roll its per-quote flags up onto the disclosed range. When any
+  // service refuses (e.g. CCB without absolute pricing, no pricing_tier
+  // match), the customer's band is still the source of truth — we just mark
+  // it `fallback_only` so the UI can render an "Estimate" pill. Skipped
+  // when the caller hasn't threaded shop_id + vehicle_config_id.
+  const quote_flags_set = new Set<string>();
+  let quote_fallback_low_dollars: number | null = null;
+  let quote_fallback_high_dollars: number | null = null;
+  const service_quote_flags: PerServiceQuoteFlags[] = [];
+  if (args.shop_id && args.vehicle_config_id) {
+    const series = await resolveQuoteSeries(ctx, {
+      vehicle_config_id: args.vehicle_config_id,
+      service_ids: args.services.map((s) => s.service_id),
+      shop_id: args.shop_id,
+    });
+    const anyRefused = series.quotes.some((q) => !q.ok);
+    if (anyRefused) {
+      quote_flags_set.add("fallback_only");
+      quote_flags_set.add("tier_estimate");
+    } else {
+      quote_fallback_low_dollars = series.total_low;
+      quote_fallback_high_dollars = series.total_high;
+    }
+    // Build the per-service projection regardless of whether any service
+    // refused — directors still want to see which lines the engine refused
+    // and which it cleared. Order matches args.services (same as the input
+    // service_ids passed to resolveQuoteSeries).
+    for (let i = 0; i < args.services.length; i++) {
+      const svc = args.services[i];
+      const q = series.quotes[i];
+      if (q && q.ok) {
+        for (const f of q.flags) quote_flags_set.add(f);
+        service_quote_flags.push({
+          service_id: svc.service_id,
+          flags: [...q.flags],
+          engine_parts_low: q.parts.low,
+          engine_parts_high: q.parts.high,
+          engine_labor_hours: q.labor.hours,
+          engine_labor_source: q.labor.hours_source,
+          parts_source: q.parts.source,
+        });
+      } else {
+        service_quote_flags.push({
+          service_id: svc.service_id,
+          flags: ["fallback_only"],
+          engine_parts_low: null,
+          engine_parts_high: null,
+          engine_labor_hours: null,
+          engine_labor_source: null,
+          parts_source: null,
+        });
+      }
+    }
+  }
+
+  return {
+    low_cents,
+    high_cents,
+    breakdown,
+    is_fixed_price,
+    fixed_price_lines,
+    quote_flags: Array.from(quote_flags_set),
+    quote_fallback_low_dollars,
+    quote_fallback_high_dollars,
+    service_quote_flags,
+  };
 }
 
 async function resolvePartsBandForService(
@@ -286,6 +393,18 @@ export type PricedPartSnapshotRow = {
   quantity: number;
   unit_price_cents: number;
   line_total_cents: number;
+  /** Service Parts Reference role fields (2026-06). One snapshot row per
+   *  ROLE winner (oil + filter + washer…). Only core / default-kit roles are
+   *  snapshotted — as_needed stays out of the locked contract. */
+  service_role?: string;
+  role_key?: string;
+  quantity_basis?: string;
+  /** TRUE when the winning part had NO trustworthy price rows (every row was
+   *  poison/unverified → empty summary). The row bills 0 in the locked quote
+   *  — this marker makes that an explicit "price to be confirmed post-job"
+   *  instead of a silent claim that the part costs $0 (Jun-9 review, item 10).
+   *  Also flips the result's low_confidence → bookings.low_confidence_parts. */
+  price_unknown?: boolean;
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -362,6 +481,39 @@ export function computeQuotedSetPrice(args: {
   };
 }
 
+/**
+ * Enforce the documented invariant `quoted_set_price_cents ≤
+ * disclosed_range_high_cents` now that the snapshot is itemized per ROLE with
+ * capacity-multiplied fluid quantities. The disclosed band's
+ * `service_vehicle_specs.parts_cost_low/high` rows were priced on a bundled
+ * dealer basis (e.g. Camry oil change $50–56 covers "4.8qt + cartridge +
+ * gasket"), while the quote now sums per-SKU lines (5×1qt bottles + filter +
+ * washer) — the two bases can legitimately diverge upward. When they do, the
+ * customer's contracted ceiling must cover what the mechanic will confirm:
+ * raise `parts_high_cents` (and therefore `high_cents`) by exactly the
+ * shortfall. The customer already saw the same itemized lines on Review &
+ * Pay (getPricedPartsForServices runs the identical resolver), so the raised
+ * ceiling reflects what was displayed, never a hidden increase.
+ *
+ * Returns a new object; never mutates the input. No-op when the invariant
+ * already holds.
+ */
+export function reconcileDisclosedCeilingWithQuote(
+  disclosed: ComputeDisclosedRangeResult,
+  quotedTotalCents: number,
+): ComputeDisclosedRangeResult {
+  if (quotedTotalCents <= disclosed.high_cents) return disclosed;
+  const delta = quotedTotalCents - disclosed.high_cents;
+  return {
+    ...disclosed,
+    high_cents: disclosed.high_cents + delta,
+    breakdown: {
+      ...disclosed.breakdown,
+      parts_high_cents: disclosed.breakdown.parts_high_cents + delta,
+    },
+  };
+}
+
 export type PartSelectionTraceRow = {
   service_id: Id<"services">;
   winner_part_id?: Id<"oem_parts">;
@@ -375,6 +527,9 @@ export type PartSelectionTraceRow = {
     eliminated_part_ids?: Id<"oem_parts">[];
   }>;
   eliminated_by_gate_part_ids?: Id<"oem_parts">[];
+  /** Which role group within the service this entry scored — selection runs
+   *  per role since the Service Parts Reference work. Absent on legacy rows. */
+  role_key?: string;
 };
 
 export type PricedPartsSnapshotResult = {
@@ -392,6 +547,86 @@ function traceEntryToRow(entry: TraceEntry) {
     survivor_part_ids: entry.survivor_part_ids,
     eliminated_part_ids: entry.eliminated_part_ids,
   };
+}
+
+/**
+ * Pure mapper: one service's part resolution → locked snapshot rows + trace.
+ *
+ * One snapshot row per LOCKED role winner (core + default-kit roles), one
+ * trace row per scored role group; as_needed roles are deliberately excluded
+ * from rows — they're the discovery range, not the locked contract, and
+ * computeQuotedSetPrice sums every row it's given.
+ *
+ * price_unknown contract (Jun-9 review, item 10): a locked winner whose price
+ * summary is EMPTY (sample_size 0 — every price row was poison/unverified)
+ * used to be snapshotted as a bare `unit_price_cents: 0`, silently billing $0
+ * in the locked quote. Such rows are now marked `price_unknown: true` and the
+ * result's low_confidence flips (persisted as bookings.low_confidence_parts),
+ * so the mechanic's post-job confirmation — which hydrates from this snapshot
+ * (job_actuals.ts) — can demand a real price for the line.
+ */
+export function snapshotRowsForResolution(
+  serviceId: Id<"services">,
+  resolution: Awaited<ReturnType<typeof resolveWinningPartForService>>,
+): {
+  rows: PricedPartSnapshotRow[];
+  trace: PartSelectionTraceRow[];
+  low_confidence: boolean;
+} {
+  const rows: PricedPartSnapshotRow[] = [];
+  const trace: PartSelectionTraceRow[] = [];
+  let low_confidence = resolution.lowConfidence === true;
+
+  if (resolution.roleWinners.length === 0) {
+    trace.push({
+      service_id: serviceId,
+      winner_part_id: undefined,
+      source: "no_candidates",
+    });
+    return { rows, trace, low_confidence };
+  }
+
+  for (const rw of resolution.roleWinners) {
+    const { part, priceSummary } = rw.candidate;
+    trace.push({
+      service_id: serviceId,
+      winner_part_id: part._id,
+      // Snapshot trace keeps the legacy source vocabulary; universal
+      // fallbacks are deliberate single-candidate picks.
+      source: rw.source === "universal_fallback" ? "scored" : rw.source,
+      trace: rw.trace?.map(traceEntryToRow),
+      eliminated_by_gate_part_ids: rw.eliminatedByGatePartIds,
+      role_key: rw.roleKey,
+    });
+
+    if (!rw.includeInLockedQuote) continue;
+
+    // PARTS_PRICE_SOURCE flag (shared selector): median across sources once
+    // flipped (gated at >=3 sources so per-pack vs per-unit listings can't
+    // swing it), else the outlier-rejected mean. Default is average.
+    const unit_price_dollars = quoteUnitPrice(priceSummary);
+    const quantity = Math.max(1, rw.quantity);
+    const line_total_dollars =
+      Math.round(quantity * unit_price_dollars * 100) / 100;
+    const price_unknown = priceSummary.sample_size === 0 ? true : undefined;
+    if (price_unknown) low_confidence = true;
+    rows.push({
+      service_id: serviceId,
+      part_id: part._id,
+      oem_number: part.oem_part_number,
+      part_name: part.name,
+      brand: part.brand ?? undefined,
+      part_tier: part.part_tier ?? undefined,
+      quantity,
+      unit_price_cents: Math.round(unit_price_dollars * 100),
+      line_total_cents: Math.round(line_total_dollars * 100),
+      service_role: rw.serviceRole,
+      role_key: rw.roleKey,
+      quantity_basis: rw.quantityBasis,
+      price_unknown,
+    });
+  }
+  return { rows, trace, low_confidence };
 }
 
 export async function computePricedPartsSnapshot(
@@ -428,31 +663,16 @@ export async function computePricedPartsSnapshot(
     positionByServiceId.set(String(v.serviceId), v.position.toLowerCase());
   }
 
-  const appendWinnerRow = (
+  // Row/trace construction lives in the pure, unit-tested
+  // snapshotRowsForResolution (see its doc for the price_unknown contract).
+  const appendResolution = (
     serviceId: Id<"services">,
     resolution: Awaited<ReturnType<typeof resolveWinningPartForService>>,
   ) => {
-    if (resolution.lowConfidence) low_confidence = true;
-    if (!resolution.winner) return;
-    const { fitment: f, part, priceSummary } = resolution.winner;
-    // Use the outlier-rejected mean (`average`) — same field the customer-
-    // facing breakdown reads. Median is naïve to per-pack listings mixing
-    // with per-unit listings for the same OEM (spark plugs, brake pads).
-    const unit_price_dollars = priceSummary.average;
-    const quantity = Math.max(1, f.quantity_needed ?? 1);
-    const line_total_dollars =
-      Math.round(quantity * unit_price_dollars * 100) / 100;
-    rows.push({
-      service_id: serviceId,
-      part_id: part._id,
-      oem_number: part.oem_part_number,
-      part_name: part.name,
-      brand: part.brand ?? undefined,
-      part_tier: part.part_tier ?? undefined,
-      quantity,
-      unit_price_cents: Math.round(unit_price_dollars * 100),
-      line_total_cents: Math.round(line_total_dollars * 100),
-    });
+    const r = snapshotRowsForResolution(serviceId, resolution);
+    rows.push(...r.rows);
+    trace.push(...r.trace);
+    if (r.low_confidence) low_confidence = true;
   };
 
   for (const serviceId of args.serviceIds) {
@@ -477,23 +697,12 @@ export async function computePricedPartsSnapshot(
         vehicleConfigId: args.vehicleConfigId,
         confirmedPackages: args.confirmedPackages,
         positionFilter: "rear",
+        // Shared, positionless roles (caliper grease) and universal
+        // fallbacks bill once — the front pass already carries them.
+        suppressSharedRoles: true,
       });
-      trace.push({
-        service_id: serviceId,
-        winner_part_id: frontRes.winner?.part._id,
-        source: frontRes.source,
-        trace: frontRes.trace?.map(traceEntryToRow),
-        eliminated_by_gate_part_ids: frontRes.eliminatedByGatePartIds,
-      });
-      trace.push({
-        service_id: serviceId,
-        winner_part_id: rearRes.winner?.part._id,
-        source: rearRes.source,
-        trace: rearRes.trace?.map(traceEntryToRow),
-        eliminated_by_gate_part_ids: rearRes.eliminatedByGatePartIds,
-      });
-      appendWinnerRow(serviceId, frontRes);
-      appendWinnerRow(serviceId, rearRes);
+      appendResolution(serviceId, frontRes);
+      appendResolution(serviceId, rearRes);
       continue;
     }
 
@@ -505,15 +714,7 @@ export async function computePricedPartsSnapshot(
       confirmedPackages: args.confirmedPackages,
       positionFilter: position,
     });
-
-    trace.push({
-      service_id: serviceId,
-      winner_part_id: resolution.winner?.part._id,
-      source: resolution.source,
-      trace: resolution.trace?.map(traceEntryToRow),
-      eliminated_by_gate_part_ids: resolution.eliminatedByGatePartIds,
-    });
-    appendWinnerRow(serviceId, resolution);
+    appendResolution(serviceId, resolution);
   }
 
   return { rows, trace, low_confidence };

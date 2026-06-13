@@ -12,7 +12,7 @@ import type { Id } from "../_generated/dataModel";
 export interface FieldResult {
   value: string | number | boolean | null;
   source_url: string | null;
-  source_type: "web_search" | "scraped" | "training_data" | "sibling_engine" | "gap_fill" | "nhtsa" | null;
+  source_type: "web_search" | "scraped" | "training_data" | "sibling_engine" | "gap_fill" | "nhtsa" | "director_verified" | null;
   confidence: number | null; // 0.0–1.0
   flagged: boolean;
   flag_reason: string | null;
@@ -342,6 +342,14 @@ export const V4_FIELD_KEYS = [
   "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem",
   // ── v9.9 New OEM Parts (1) ── bottle-SKU engine oil for oil_change fitment.
   "engine_oil_oem",
+  // ── Service Parts Reference expansion (16) ── every reference role's OEM SKU
+  //    (fluids return the OEM bottle part number, never the spec string; null
+  //    when the vehicle doesn't use that part — conditional existence IS data).
+  "oil_filter_housing_oring_oem", "ignition_coil_oem", "intake_manifold_gasket_oem",
+  "timing_kit_oem", "water_pump_oem", "atf_fluid_oem", "trans_filter_oem",
+  "trans_pan_gasket_oem", "brake_fluid_oem", "ps_fluid_oem", "gear_oil_oem",
+  "friction_modifier_oem", "brake_hardware_kit_front_oem", "brake_hardware_kit_rear_oem",
+  "brake_wear_sensor_front_oem", "brake_wear_sensor_rear_oem",
   // ── v7 New Fluid Types (3) ──
   "trans_fluid_type", "diff_fluid_type", "transfer_case_fluid_type",
   // ── v7 New Fluid Intervals (4) ──

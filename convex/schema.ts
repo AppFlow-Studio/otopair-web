@@ -115,11 +115,23 @@ export default defineSchema({
     oil_capacity_qts: v.optional(v.number()),
     coolant_type: v.optional(v.string()),
     coolant_capacity_qts: v.optional(v.number()),
+    // Pricing v2 per_unit_spec fluid capacities — feed serviceUnits.resolveServiceUnitCount
+    // for transmission_service / differential_service quantity scaling.
+    // Also acts as the fallback-spec branch: docs already carrying these on the
+    // shared local dev deployment don't fail schema validation on temur-dev.
+    transmission_fluid_capacity_qts: v.optional(v.number()),
+    differential_fluid_capacity_qts: v.optional(v.number()),
     spark_plug_quantity: v.optional(v.number()),
     spark_plug_gap_mm: v.optional(v.number()),
     timing_idler_count: v.optional(v.number()),
     water_pump_timing_driven: v.optional(v.boolean()),
     data_quality: v.optional(v.string()),
+    // Field names a HUMAN corrected (director edit / CLI data fix). The
+    // pipeline's updateEngineSpecs skips these keys, and _pollBatch1V3
+    // overrides the freshly-extracted batch fields with the verified values
+    // so applicability runs against the truth (a misclassified belt car
+    // could otherwise never get its belt parts — found live Jun 10 2026).
+    verified_fields: v.optional(v.array(v.string())),
     last_enriched_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
@@ -237,6 +249,12 @@ export default defineSchema({
     verification_count: v.optional(v.number()),
     chassis_code: v.optional(v.string()),
     cloned_from_config_id: v.optional(v.id("vehicle_configs")),
+    // YMMT-level cache of the VDB exterior image. Populated by
+    // saveVehicleImageUrl on first successful resolve for any VIN that
+    // links to this config; read by resolveVehicleImage so a different
+    // VIN with the same year/make/model/trim skips the VDB call.
+    // First-fetched-wins (we don't overwrite once set).
+    image_url: v.optional(v.string()),
     // Pricing v2 (spec May 29 2026): denormalized 7-tier assignment. Quote
     // engine reads this directly — no join through pricing_vehicle_assignments.
     // Writers: seedTierAssignments (Part 5 explicit) → 'part5_seed';
@@ -392,6 +410,12 @@ export default defineSchema({
     // When set, this fitment only applies if the owner has confirmed this package
     // in vehicle_owner_specs.confirmed_packages.
     package_code: v.optional(v.string()),
+    // Role this part plays in the service per the Service Parts Reference:
+    // "core" (every invoice, locked) | "as_needed" (discovery — makes the
+    // quote a range) | "kit" (variant bundle). NOT oem_parts.part_tier
+    // (part quality) and NOT VehicleTier (pricing tier). Older rows lack it —
+    // resolver falls back to lib/servicePartsReference roleForSubcategory.
+    service_role: v.optional(v.string()),
     confidence: v.optional(v.number()),
     source_count: v.optional(v.number()),
     first_confirmed_at: v.optional(v.number()),
@@ -618,6 +642,11 @@ export default defineSchema({
     estimated_cost_usd: v.optional(v.number()),
     started_at: v.optional(v.number()),
     completed_at: v.optional(v.number()),
+    // Liveness heartbeat — stamped by each poll attempt (~60s cadence). The
+    // STEP 0 force-unstick path treats a live-status run with a stale
+    // heartbeat as a crashed chain (action killed at the 10-min cap, deploy
+    // restart) and lets a director force take it over.
+    last_heartbeat_at: v.optional(v.number()),
     duration_ms: v.optional(v.number()),
     fields_filled: v.optional(v.number()),
     fields_total: v.optional(v.number()),
@@ -678,10 +707,25 @@ export default defineSchema({
     scrape_success: v.optional(v.boolean()),
     http_status: v.optional(v.number()),
     created_at: v.optional(v.number()),
+    // Deterministic prices parsed from the raw HTML at scrape time (JSON-LD),
+    // serialized as ParsedPartPrice[]. Carries correct per-SKU prices from the
+    // scrape action to the price-write step. `format_version` lets the price
+    // path treat older markdown-only rows as a miss so they re-fetch HTML.
+    part_prices_json: v.optional(v.string()),
+    format_version: v.optional(v.number()),
   })
     .index("by_cache_key", ["cache_key"])
     .index("by_expires_at", ["expires_at"])
     .index("by_make_year", ["make_id", "year"]),
+
+  // Reversibility log for the price backfill: every legacy part_prices row the
+  // backfill deletes is snapshotted here first, so a prune can be undone.
+  price_backfill_log: defineTable({
+    part_id: v.id("oem_parts"),
+    deleted_row: v.any(), // the original part_prices document
+    batch: v.string(),
+    deleted_at: v.number(),
+  }).index("by_batch", ["batch"]),
 
   scrape_jobs: defineTable({
     source: v.string(),
@@ -766,6 +810,12 @@ export default defineSchema({
     labor_multiplier_category_id: v.optional(v.id("pricing_labor_categories")),
     display_order: v.optional(v.number()),
     default_labor_hours: v.optional(v.number()),
+    // Labor sourcing: which platform dimension determines this service's labor,
+    // and the RepairPal estimator slug (null = no RepairPal page, e.g. fluids).
+    labor_determinant: v.optional(
+      v.union(v.literal("engine"), v.literal("chassis"), v.literal("both")),
+    ),
+    repairpal_slug: v.optional(v.union(v.string(), v.null())),
     has_options: v.optional(v.boolean()),
     is_labor_only: v.optional(v.boolean()),
     requires_parts: v.optional(v.boolean()),
@@ -779,6 +829,33 @@ export default defineSchema({
     requires_emissions_test: v.optional(v.boolean()),
     min_model_year: v.optional(v.number()),
     created_at: v.optional(v.number()),
+
+    // Pricing v2 — parts-quantity scaling kind. Tells the engine + mobile UI
+    // how the Camry-anchored band scales to other vehicles:
+    //   - 'labor_only'     : no parts; band is N/A
+    //   - 'per_axle'       : brake_pads, rotor — booking position drives count
+    //   - 'per_cylinder'   : spark_plugs — engines.spark_plug_quantity / cylinders
+    //   - 'per_unit_spec'  : oil/coolant/trans — engine capacity field
+    //   - 'per_wheel'      : tire_balance, tire_replacement — fixed 4
+    //   - 'fixed_kit'      : filter/battery/timing_belt/fuel_system — 1 service = 1 kit
+    // Kept optional so legacy rows from the temur-dev fallback-spec branch
+    // don't fail schema validation.
+    parts_kind: v.optional(
+      v.union(
+        v.literal("labor_only"),
+        v.literal("per_axle"),
+        v.literal("per_cylinder"),
+        v.literal("per_unit_spec"),
+        v.literal("per_wheel"),
+        v.literal("fixed_kit"),
+      ),
+    ),
+    // Display label for the per-unit band: "axle" | "cyl" | "qt" | "wheel" | "kit"
+    parts_unit_label: v.optional(v.string()),
+    // For parts_kind='per_unit_spec', the engines table field to read for the
+    // per-vehicle quantity: "oil_capacity_qts" | "coolant_capacity_qts" |
+    // "transmission_fluid_capacity_qts" | "differential_fluid_capacity_qts".
+    parts_unit_spec_source: v.optional(v.string()),
   })
     .index("by_slug", ["slug"])
     .index("by_category", ["service_category_id"])
@@ -802,6 +879,45 @@ export default defineSchema({
     state_fee: v.optional(v.number()),
     display_order: v.optional(v.number()),
   }).index("by_service_id", ["service_id"]),
+
+  // Director-editable parts rule per canonical service. One row per service.
+  // Replaces the hard-coded BILLABLE_SUBCATEGORIES_BY_SERVICE in serviceParts.ts
+  // and the static SPECS array in seeds/seedServiceParts.ts. Seeded from the
+  // May 2026 Service Parts Reference PDF via seeds/seedServicePartsRules.
+  service_parts_rules: defineTable({
+    service_id: v.id("services"),
+    // Mirror of services.parts_kind — kept in sync on every upsertRule write
+    // so the runtime resolver in lib/serviceUnits.ts keeps reading from the
+    // services doc unchanged.
+    parts_kind: v.union(
+      v.literal("labor_only"),
+      v.literal("per_axle"),
+      v.literal("per_cylinder"),
+      v.literal("per_unit_spec"),
+      v.literal("per_wheel"),
+      v.literal("fixed_kit"),
+    ),
+    parts_unit_label: v.optional(v.string()),
+    parts_unit_spec_source: v.optional(v.string()),
+    // Allowlist of oem_parts.subcategory values eligible for the invoice.
+    // The union of both arrays is the new billable filter.
+    core_subcategories: v.array(v.string()),
+    as_needed_subcategories: v.array(v.string()),
+    // OEM parts pinned to a subcategory role — these short-circuit the
+    // 7-layer selector. Empty array = resolver behavior unchanged.
+    pinned_parts: v.array(
+      v.object({
+        subcategory: v.string(),
+        part_id: v.id("oem_parts"),
+        is_core: v.boolean(),
+      }),
+    ),
+    // Quantity override that wins over serviceUnits.resolveServiceUnitCount.
+    // Null/undefined means "use the resolver."
+    qty_override: v.optional(v.number()),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  }).index("by_service", ["service_id"]),
 
   // [A] 17 fields (D had 7, W doesn't have this table)
   // Bridge table: long-term migrate to service_intervals + labor_times
@@ -828,6 +944,13 @@ export default defineSchema({
     // parts_cost_low/high (above) hold the dealer parts-counter ±6% band.
     oem_part_number: v.optional(v.string()),
     parts_cost_basis: v.optional(v.string()),
+    // Pricing v2 parts-quantity scaling: how many units the Camry-anchored
+    // band represents on THIS spec row. Brake pads = 1 axle. Spark plugs
+    // on Camry A25A-FKS = 4 cylinders. Oil change on the Camry = ~5 qts.
+    // Other vehicles scale by (vehicle_unit_count / parts_baseline_unit_count).
+    // Optional so legacy rows that already carry the field don't fail
+    // schema validation on temur-dev.
+    parts_baseline_unit_count: v.optional(v.number()),
   })
     .index("by_engine_id", ["engine_id"])
     .index("by_service_id", ["service_id"])
@@ -868,6 +991,29 @@ export default defineSchema({
     .index("by_vehicle_config", ["vehicle_config_id"])
     .index("by_vehicle_config_and_service", ["vehicle_config_id", "service_id"])
     .index("by_engine_family", ["engine_family"]),
+
+  // [W] Append-only per-source labor observations — mirror of part_prices for
+  // service times. Each source (VDB, LLM book-time, …) contributes one CATALOG
+  // row per (config, service); a weighted robust median over them produces
+  // labor_times.book_hours, so no single source (e.g. VDB) is the source of
+  // truth. Empirical post-job actuals are aggregated live from job_actuals, not
+  // stored here.
+  labor_observations: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    engine_family: v.optional(v.string()),
+    hours: v.number(),
+    source: v.string(), // "vdb_repair_estimates" | "llm_training" | "llm_web" | ...
+    tier: v.string(), // "catalog" (book-time sources) | "empirical" (reserved)
+    weight: v.number(), // catalog trust weight (vdb 0.4, llm 0.3, …)
+    observed_at: v.number(),
+    // Provenance when sourced from a platform-equivalent sibling (RepairPal).
+    sibling_slug: v.optional(v.string()), // e.g. "550i-xdrive"
+    match_key: v.optional(v.string()), // "engine_family:N63" | "chassis_code:G30" | "exact"
+  })
+    .index("by_config_service", ["vehicle_config_id", "service_id"])
+    .index("by_config_service_source", ["vehicle_config_id", "service_id", "source"])
+    .index("by_engine_family_service", ["engine_family", "service_id"]),
 
   // ===== VEHICLES & OWNERSHIP =====
 
@@ -1006,6 +1152,18 @@ export default defineSchema({
           added_at: v.optional(v.number()),
         }),
       ),
+    ),
+
+    // Battery chemistry actually installed in the car. Mirrors tire_setup:
+    // "source" can be "user" (confirmed in the booking flow), "scan", or
+    // "inferred_from_oem". Takes precedence over chassis_specs.battery_type
+    // when present — that field is the OEM default, this one is the truth.
+    battery: v.optional(
+      v.object({
+        type: v.optional(v.string()), // "AGM" | "flooded" | "EFB" | "lithium-ion"
+        confirmed_at: v.optional(v.number()),
+        source: v.optional(v.string()), // "user" | "scan" | "inferred_from_oem"
+      }),
     ),
 
     last_updated_at: v.optional(v.number()),
@@ -1196,6 +1354,62 @@ export default defineSchema({
     .index("by_vehicle_owner", ["vehicleOwnerId"])
     .index("by_vehicle_and_type", ["vehicleOwnerId", "type"]),
 
+  // Uploaded shop receipts / invoices / inspection sheets. One row per file
+  // the user (or an inbound shop email, eventually) drops into the Cars-tab
+  // Service History flow. Reducto extraction lives in the sibling table so
+  // we can re-parse a doc on a new schema_version without rewriting the
+  // upload metadata.
+  vehicle_documents: defineTable({
+    user_id: v.id("users"),
+    vehicle_owner_id: v.id("vehicle_owners"),
+    vin: v.string(),
+    storage_id: v.id("_storage"),
+    mime_type: v.string(),
+    original_filename: v.string(),
+    size_bytes: v.number(),
+    uploaded_at: v.number(),
+    source: v.union(
+      v.literal("user_upload"),
+      v.literal("shop_email"),
+      v.literal("imported"),
+    ),
+    parse_status: v.union(
+      v.literal("queued"),
+      v.literal("parsing"),
+      v.literal("parsed"),
+      v.literal("needs_review"),
+      v.literal("failed"),
+    ),
+    parse_error: v.optional(v.string()),
+    reducto_job_id: v.optional(v.string()),
+    parsed_at: v.optional(v.number()),
+  })
+    .index("by_user", ["user_id"])
+    .index("by_vehicle_owner", ["vehicle_owner_id"])
+    .index("by_vin", ["vin"])
+    .index("by_parse_status", ["parse_status"]),
+
+  // Structured Reducto parse result for a vehicle_document. `payload` matches
+  // the Reducto extraction spec (document/shop/vehicle/line_items/safety
+  // measurements). `review_state` gates whether the derivation pipeline has
+  // already written into maintenance_records / vehicle_owners.mileage.
+  vehicle_document_extractions: defineTable({
+    document_id: v.id("vehicle_documents"),
+    schema_version: v.number(),
+    payload: v.any(),
+    overall_confidence: v.number(),
+    review_state: v.union(
+      v.literal("auto_accepted"),
+      v.literal("user_confirmed"),
+      v.literal("pending_review"),
+      v.literal("rejected"),
+    ),
+    created_at: v.number(),
+    reviewed_at: v.optional(v.number()),
+    reviewed_by: v.optional(v.id("users")),
+  })
+    .index("by_document", ["document_id"]),
+
   // ===== USERS & AUTH =====
 
   // [D] 25 fields (A had 15, W had 22)
@@ -1375,6 +1589,8 @@ export default defineSchema({
     no_show_threshold_minutes: v.optional(v.number()),
     overrun_default_extension_percent: v.optional(v.number()),
     overrun_extension_floor_minutes: v.optional(v.number()),
+    overrun_escalation_minutes: v.optional(v.number()),
+    overrun_auto_apply_minutes: v.optional(v.number()),
     buffer_minutes: v.optional(v.number()),
     max_bookings_per_mechanic_rolling_hour: v.optional(v.number()),
     entity_label_mode: v.optional(v.string()),
@@ -1710,6 +1926,16 @@ export default defineSchema({
     schedule_change_mode: v.optional(v.string()),
     schedule_change_source_booking_id: v.optional(v.id("bookings")),
     customer_can_restore_original: v.optional(v.boolean()),
+    // Per-booking delay-cascade cap tracking. Each time this booking is
+    // auto-pushed downstream by an upstream overrun, cascade_push_count is
+    // incremented and the shifted minutes accrue into
+    // cascade_pushed_minutes_total. Once a further push would exceed the cap
+    // (CASCADE_MAX_PUSHES_PER_BOOKING or CASCADE_MAX_PUSHED_MINUTES), the
+    // booking is routed to a manual scheduling alert instead of being moved
+    // silently again — stops the "pushed at 9:00, again 9:20, again 9:50"
+    // spiral. See buildDownstreamMovementPlan in convex/bookings.ts.
+    cascade_push_count: v.optional(v.number()),
+    cascade_pushed_minutes_total: v.optional(v.number()),
     custom_services: v.optional(
       v.array(
         v.object({
@@ -1783,6 +2009,20 @@ export default defineSchema({
           quantity: v.number(),
           unit_price_cents: v.number(),
           line_total_cents: v.number(),
+          // Service Parts Reference role fields (additive, 2026-06). One
+          // snapshot row per ROLE winner (oil + filter + washer…), not one
+          // per service. core/kit rows only — as_needed stays out of the
+          // locked contract.
+          service_role: v.optional(v.string()),
+          role_key: v.optional(v.string()),
+          // How quantity was derived: "fitment" | "fixed:N" | "per_cylinder"
+          // | "capacity:<field>=<value><unit>/<pkg>" | "unknown_capacity".
+          quantity_basis: v.optional(v.string()),
+          // TRUE when the winner had no trustworthy price rows (empty
+          // summary): the line bills 0 in the locked quote and must be
+          // priced at the mechanic's post-job confirmation. Pairs with
+          // bookings.low_confidence_parts. (Jun-9 review, item 10.)
+          price_unknown: v.optional(v.boolean()),
         })
       )
     ),
@@ -1816,6 +2056,9 @@ export default defineSchema({
             ),
           ),
           eliminated_by_gate_part_ids: v.optional(v.array(v.id("oem_parts"))),
+          // Which part role within the service this trace entry scored
+          // (selection now runs per role group). Absent on legacy rows.
+          role_key: v.optional(v.string()),
         }),
       ),
     ),
@@ -1859,6 +2102,40 @@ export default defineSchema({
     final_capture_amount_cents: v.optional(v.number()),
     final_parts_used_at_capture: v.optional(v.array(postjobPartValidator)),
     sla_expires_at_ms: v.optional(v.number()),
+
+    // Pricing v2 sanity-check flags raised when the shop-supplied total
+    // diverges from the quoteEngine fallback band. Soft-only; UI surfaces
+    // an "Estimate" pill but writes still succeed. Snapshotted once at
+    // createBatch and never mutated afterwards.
+    quote_flags: v.optional(v.array(v.string())),
+    quote_fallback_low: v.optional(v.float64()),
+    quote_fallback_high: v.optional(v.float64()),
+    // Dollar delta when the customer's labor cost lands above the engine's
+    // expected labor cost by more than ±8% — paired with the
+    // `labor_cost_above_engine` flag on `quote_flags`. Server still books
+    // (customer consented to the higher number), but the director panel
+    // surfaces it so we can audit shops that consistently bill above engine.
+    labor_cost_delta_above_engine_dollars: v.optional(v.float64()),
+    // Per-service sibling to `quote_flags`. One row per service id with the
+    // engine's per-quote flags + a `fallback_catch` marker when the booking
+    // line for that service falls outside the engine's per-service band
+    // (the case where AI-enriched parts prices were materially wrong and
+    // the multiplier engine corrected them). Drives the director-side
+    // "Fallback catch" pill so admins can audit which line was caught.
+    service_quote_flags: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          flags: v.array(v.string()),
+          engine_parts_low: v.optional(v.float64()),
+          engine_parts_high: v.optional(v.float64()),
+          engine_labor_hours: v.optional(v.float64()),
+          engine_labor_source: v.optional(v.string()),
+          parts_source: v.optional(v.string()),
+          booking_line_parts_cost: v.optional(v.float64()),
+        }),
+      ),
+    ),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])
@@ -1998,6 +2275,18 @@ export default defineSchema({
     captured_amount_cents: v.optional(v.number()),
     reauth_payment_intent_id: v.optional(v.string()),
 
+    // How the customer originated this payment. Drives the reauth UX:
+    // 'card' = saved Stripe PaymentMethod on the customer (silent server-
+    // side reauth possible). 'apple_pay'/'google_pay' = one-time wallet
+    // token (reauth requires re-prompting the user via PlatformPay).
+    payment_origin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
+
     // Invoice PDF (generated server-side after capture). Identical layout to
     // the email attachment, stored once in Convex file storage and reused for
     // both the email send and the mobile "View Receipt PDF" link.
@@ -2005,6 +2294,11 @@ export default defineSchema({
     invoice_storage_id: v.optional(v.id("_storage")),
     invoice_generated_at_ms: v.optional(v.number()),
     invoice_emailed_at_ms: v.optional(v.number()),
+    // Pricing v2 sanity-check flags raised inside assembleInvoiceData when
+    // the captured total diverges from the quoteEngine fallback band, or
+    // when shop.labor_rate is missing and the tier-aware rate is also null.
+    // Soft-only; surfaced to operators in the receipt PDF + admin UI.
+    invoice_quote_flags: v.optional(v.array(v.string())),
     // URL-safe random token embedded in the receipt deep-link sent over
     // email. Lets walk-in customers who don't have a Clerk account open
     // /receipts/[bookingId]?t=<token> without signing in. Treated as
@@ -2221,6 +2515,15 @@ export default defineSchema({
     difficulty_rating: v.optional(v.number()),
     parts_used: v.optional(v.any()),
     technician_notes: v.optional(v.string()),
+    // Customer-facing summary of what the mechanic did. Distinct from
+    // `technician_notes` (which stays internal). Required by the shop
+    // portal at job completion per Receipt Spec v4, but optional at
+    // the DB layer so legacy job_actuals rows don't break.
+    mechanic_findings: v.optional(v.string()),
+    // Vehicle mileage at drop-off. Paired with the existing
+    // `completion_mileage` (= odometer_out) to form the
+    // "Mileage 47,832 → 47,835" line on the receipt sheet.
+    odometer_in: v.optional(v.float64()),
     finalized_at_ms: v.optional(v.number()),
     finalized_by_user_id: v.optional(v.id("users")),
     prejob_report: v.optional(prejobReportValidator),
@@ -2272,6 +2575,22 @@ export default defineSchema({
     .index("by_job_actual_id", ["job_actual_id"])
     .index("by_edited_at", ["edited_at"]),
 
+  // Append-only audit log of mechanic labor-time changes on a job_actual —
+  // the labor counterpart to job_actual_part_edits. One row per change to
+  // actual_labor_minutes that the mechanic explicitly submits (auto-derived
+  // labor from elapsed time is not logged). old/new are minutes.
+  job_actual_labor_edits: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.id("job_actuals"),
+    old_minutes: v.optional(v.number()),
+    new_minutes: v.optional(v.number()),
+    edited_by_user_id: v.id("users"),
+    edited_at: v.number(),
+  })
+    .index("by_booking_id", ["booking_id"])
+    .index("by_job_actual_id", ["job_actual_id"])
+    .index("by_edited_at", ["edited_at"]),
+
   // ===== AI & ANALYTICS =====
 
   // [I]
@@ -2303,8 +2622,9 @@ export default defineSchema({
     // converging on a diagnostic form or direct service. chat.ts increments
     // when Haiku stays in narrowing mode (last_user_intent starts with
     // "symptom_narrowing") without rendering the form; resets when the form
-    // fires. At 6 the envelope emits a `<polite_exit_required>` block and
-    // the prompt rule forces Haiku to render the diagnostic form with not_sure.
+    // fires. At the envelope's POLITE_EXIT_THRESHOLD (4 — lowered from 6 on
+    // beta feedback) it emits a `<polite_exit_required>` block and the prompt
+    // rule forces Haiku to render the diagnostic form with not_sure.
     // -----------------------------------------------------------------------
     diagnostic_turn_count: v.optional(v.number()),
     // -----------------------------------------------------------------------
@@ -2593,6 +2913,18 @@ export default defineSchema({
     .index("by_token", ["token"])
     .index("by_user_id", ["user_id"]),
 
+  // Singleton row of director-controlled global feature flags. Keyed
+  // `"global"` so the row is fetched by a stable lookup; future booleans get
+  // appended as new optional fields. Default behavior when the row is absent
+  // is decided per-flag at the call site (e.g. round_labor_times_to_15min
+  // defaults to true).
+  director_settings: defineTable({
+    key: v.string(),
+    round_labor_times_to_15min: v.boolean(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("director_users")),
+  }).index("by_key", ["key"]),
+
   // ==========================================================================
   // Scheduling-overhaul tables — late-start monitoring, no-show monitoring,
   // overrun check-ins, and the notification outbox queue. Backed by
@@ -2743,6 +3075,15 @@ export default defineSchema({
     is_complete: v.optional(v.boolean()),
     extension_minutes: v.optional(v.number()),
     cascade_depth: v.optional(v.number()),
+    // Blocking vs non-blocking extension (Dynamic Scheduling spec). Captured at
+    // extension time: true = the bay stays occupied during the extra time, so
+    // downstream same-bay bookings cascade; false = the bay is free (mechanic
+    // waiting on a part/approval), so the job's own end moves but NOTHING
+    // downstream is pushed. Unset is treated as blocking (conservative default,
+    // also used for system auto-applied extensions). reason_code optionally
+    // drives the customer message + pre-selects the toggle default.
+    blocks_bay: v.optional(v.boolean()),
+    reason_code: v.optional(v.string()),
     resolved_at_ms: v.optional(v.number()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
@@ -3338,6 +3679,10 @@ export default defineSchema({
     tools_called: v.array(v.string()),
     // Branch of the final iteration: "data_continue" | "terminal" | "text_only"
     final_branch: v.string(),
+    // B-P2: did the turn write conversation state (update_conversation_state)?
+    // Surfaces Haiku's state-contract under-calling. Optional — rows written
+    // before this field existed lack it.
+    state_called: v.optional(v.boolean()),
     // For ad-hoc cost analysis later.
     booking_id: v.optional(v.id("bookings")),
     error: v.optional(v.string()),
@@ -3992,6 +4337,26 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_user_id", ["user_id"]),
 
+  // ─────────────────────────────────────────────────────────────────────
+  // urgency_tier_events — Action Engine calibration log (v1.1 spec §6
+  // Change 4). Records every observed Now/Soon/Soonish/Resting tier-entry
+  // per maintenance item per vehicle. Drives post-launch retuning of
+  // URGENCY_TIER_CUTOFFS — without this stream the 75/55/25 thresholds
+  // are blind. `from_tier` is undefined on the first observation per
+  // session; otherwise it's the prior tier the client saw.
+  // ─────────────────────────────────────────────────────────────────────
+  urgency_tier_events: defineTable({
+    vin: v.string(),
+    item_id: v.string(),
+    from_tier: v.optional(v.string()),
+    to_tier: v.string(),
+    urgency_score: v.number(),
+    occurred_at: v.number(),
+  })
+    .index("by_vin", ["vin"])
+    .index("by_vin_item", ["vin", "item_id"])
+    .index("by_to_tier", ["to_tier"]),
+
   // ==========================================================================
   // MVP Pricing Multiplier (see plan: tier × category × Toyota baseline)
   // --------------------------------------------------------------------------
@@ -4050,6 +4415,38 @@ export default defineSchema({
     .index("by_tier", ["tier_id"])
     .index("by_category", ["pricing_category_id"])
     .index("by_tier_and_category", ["tier_id", "pricing_category_id"]),
+
+  // Append-only history of every fallback-spec edit (baselines, parts
+  // multipliers, labor multipliers, service default_labor_hours). One row
+  // per edit, captured BEFORE the patch lands so restore is exact. Drives
+  // the per-row History modal in the Pricing & Tiers director tab.
+  pricing_fallback_snapshots: defineTable({
+    entity_type: v.union(
+      v.literal("baseline"),
+      v.literal("parts_multiplier"),
+      v.literal("labor_multiplier"),
+      v.literal("service_labor_hours"),
+    ),
+    // Stringified Convex Id of the target row. We keep it as a string so a
+    // single table covers four target tables without a v.union of ids.
+    entity_id: v.string(),
+    // Display key — service slug or "category × tier" — so the history feed
+    // can group/label snapshots without hydrating every related row.
+    entity_label: v.string(),
+    // Full prior state of the target row at the moment of the snapshot.
+    // Stored as JSON-stringified payload so restore is exact and replay-safe.
+    payload: v.string(),
+    // Human-readable diff summary, e.g. "low: $80.00 → $95.00, source: manual → bookings".
+    changes_summary: v.string(),
+    // True when this snapshot was written as part of a Restore (so the UI
+    // can label it "Restore point" instead of "Edit").
+    is_restore: v.optional(v.boolean()),
+    actor_name: v.string(),
+    actor_id: v.optional(v.id("director_users")),
+    created_at: v.number(),
+  })
+    .index("by_entity", ["entity_type", "entity_id"])
+    .index("by_created_at", ["created_at"]),
 
   // Toyota Camry (T1) anchor price per service, in cents. is_real_data drives
   // lock/estimate routing — when both is_real_data AND the matching

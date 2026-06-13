@@ -7,12 +7,16 @@
 //
 // Insert is fire-and-forget from chat.ts — failures here must NEVER break a
 // chat turn. Wrap the call site in try/catch and log+swallow.
+//
+// internalMutation: the only caller is chat.ts. As a public mutation this
+// accepted arbitrary user_id/conversation_id from anonymous callers (Jun-10
+// IDOR sweep).
 // =============================================================================
 
-import { mutation } from "../_generated/server";
+import { internalMutation } from "../_generated/server";
 import { v } from "convex/values";
 
-export const recordTurn = mutation({
+export const recordTurn = internalMutation({
   args: {
     conversation_id: v.id("ai_conversations"),
     user_id: v.id("users"),
@@ -27,6 +31,7 @@ export const recordTurn = mutation({
     total_latency_ms: v.number(),
     tools_called: v.array(v.string()),
     final_branch: v.string(),
+    state_called: v.optional(v.boolean()),
     booking_id: v.optional(v.id("bookings")),
     error: v.optional(v.string()),
   },

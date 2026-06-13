@@ -39,21 +39,36 @@ type BaselineSpec = {
   oem_part_number?: string;
   parts_cost_basis: string;
   applies_to: "shared" | "awd_only";
+  /** Per Pricing v2 — how many units the parts_low/parts_high band represents
+   *  on this Camry baseline. Other vehicles scale by (vehicle_count / baseline).
+   *    per_axle      → 1
+   *    per_cylinder  → 4 (Camry A25A-FKS is inline-4)
+   *    per_unit_spec → engine capacity count on Camry
+   *    per_wheel     → 4 (always)
+   *    fixed_kit     → 1 */
+  parts_baseline_unit_count: number;
 };
 
 const BASELINE: ReadonlyArray<BaselineSpec> = [
   {
     service_slug: "oil_change",
-    parts_low: 50, parts_high: 56,
+    // Single OEM oil filter — shops supply the engine oil from stock, so
+    // it's not billed as a customer line item. Reclassified to fixed_kit
+    // on 2026-06-09; the previous (50, 56) band reflected oil + filter +
+    // gasket combined, which was multiplied by oil_capacity_qts at quote
+    // time and produced the "$110/qt" bug on the Stelvio.
+    parts_low: 12, parts_high: 18,
     oem_part_number: "04152-YZZA1",
-    parts_cost_basis: "4.8qt 0W-16 + cartridge + gasket (NYC dealer parts-counter, ±6%)",
+    parts_cost_basis: "1× Toyota cartridge oil filter (NYC parts-counter, ±20%)",
     applies_to: "shared",
+    parts_baseline_unit_count: 1,
   },
   {
     service_slug: "filter_replacement",
     parts_low: 52, parts_high: 58,
     parts_cost_basis: "Both genuine Toyota (engine + cabin)",
     applies_to: "shared",
+    parts_baseline_unit_count: 1, // fixed_kit
   },
   {
     service_slug: "spark_plugs",
@@ -61,6 +76,7 @@ const BASELINE: ReadonlyArray<BaselineSpec> = [
     oem_part_number: "90919-01289",
     parts_cost_basis: "OEM iridium set of 4 — verify counter price",
     applies_to: "shared",
+    parts_baseline_unit_count: 4, // per_cylinder — Camry is I4
   },
   {
     // Front pads canonical; rear ($52-58, 04466-AZ207) noted in basis.
@@ -70,12 +86,14 @@ const BASELINE: ReadonlyArray<BaselineSpec> = [
     parts_cost_basis:
       "Genuine Toyota front pad set. Rear pair: $52-58 / 04466-AZ207. XSE EPB adds +0.3hr coding.",
     applies_to: "shared",
+    parts_baseline_unit_count: 1, // per_axle (front)
   },
   {
     service_slug: "brake_fluid_flush",
     parts_low: 14, parts_high: 16,
     parts_cost_basis: "DOT 3, 1L",
     applies_to: "shared",
+    parts_baseline_unit_count: 1, // fixed_kit
   },
   {
     service_slug: "battery_replacement",
@@ -83,24 +101,29 @@ const BASELINE: ReadonlyArray<BaselineSpec> = [
     oem_part_number: "00544-35060",
     parts_cost_basis: "Toyota TrueStart (84-mo) Group 35",
     applies_to: "shared",
+    parts_baseline_unit_count: 1, // fixed_kit
   },
   {
     service_slug: "coolant_flush",
     parts_low: 55, parts_high: 61,
     parts_cost_basis: "~2 gal Toyota SLLC (pink), system capacity ~1.7 gal",
     applies_to: "shared",
+    // Camry coolant capacity ≈ 1.7 gal ≈ 6.8 qts — round to 7 for the baseline.
+    parts_baseline_unit_count: 7,
   },
   {
     service_slug: "transmission_service",
     parts_low: 49, parts_high: 55,
     parts_cost_basis: "~4 qt Toyota WS, drain-and-fill (aftermarket not advised)",
     applies_to: "shared",
+    parts_baseline_unit_count: 4, // ~4 qt drain-and-fill
   },
   {
     service_slug: "differential_service",
     parts_low: 42, parts_high: 48,
     parts_cost_basis: "Toyota diff oil, 2qt (rear diff + transfer case). AWD only.",
     applies_to: "awd_only",
+    parts_baseline_unit_count: 1, // fixed_kit (1 service includes both diffs)
   },
 ];
 
@@ -273,6 +296,7 @@ export const run = internalMutation({
         parts_cost_high: row.parts_high,
         oem_part_number: row.oem_part_number,
         parts_cost_basis: row.parts_cost_basis,
+        parts_baseline_unit_count: row.parts_baseline_unit_count,
         confidence_score: 0.95,
         data_source: "spec_v2_camry_baseline",
         last_enriched_at: now,

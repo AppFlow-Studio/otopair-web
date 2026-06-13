@@ -82,11 +82,33 @@ function buildTireSizeValue(data: VehiclePassportData) {
 export default function VehiclePassportSection({
   data,
   bookingServices = [],
+  hasPriorVisits = false,
+  inline = false,
 }: {
   data: VehiclePassportData | null | undefined;
   bookingServices?: string[];
+  /** True when this VIN has prior bookings at the shop. Suppresses the
+   *  "First visit" pill and replaces the FirstVisitNotice with a softer
+   *  "specs incomplete" prompt — `data.is_complete` only tracks whether the
+   *  passport's required spec fields are filled, not whether the car has
+   *  ever been worked at this shop. */
+  hasPriorVisits?: boolean;
+  /** When true, render the spec content directly with no outer box, no
+   *  expand/collapse, and no redundant Vehicle ID header — the parent is
+   *  expected to provide its own surrounding context. Used inside the
+   *  4-step mechanic Vehicle Passport card to avoid box-in-box and the
+   *  extra click to reveal spec data. */
+  inline?: boolean;
 }) {
   if (!data) {
+    if (inline) {
+      return (
+        <div className="animate-pulse space-y-2">
+          <div className="h-4 w-40 rounded bg-muted" />
+          <div className="h-24 rounded bg-muted/60" />
+        </div>
+      );
+    }
     return (
       <div className="rounded-xl border border-primary/10 bg-card p-4">
         <div className="animate-pulse space-y-3">
@@ -99,9 +121,11 @@ export default function VehiclePassportSection({
 
   return (
     <VehiclePassportSectionBody
-      key={`${data.vin}-${data.is_complete}-${bookingServices.join("|")}`}
+      key={`${data.vin}-${data.is_complete}-${hasPriorVisits}-${inline}-${bookingServices.join("|")}`}
       data={data}
       bookingServices={bookingServices}
+      hasPriorVisits={hasPriorVisits}
+      inline={inline}
     />
   );
 }
@@ -109,11 +133,17 @@ export default function VehiclePassportSection({
 function VehiclePassportSectionBody({
   data,
   bookingServices,
+  hasPriorVisits,
+  inline,
 }: {
   data: VehiclePassportData;
   bookingServices: string[];
+  hasPriorVisits: boolean;
+  inline: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(!data.is_complete);
+  const [isOpenLegacy, setIsOpenLegacy] = useState(!data.is_complete);
+  const isOpen = inline ? true : isOpenLegacy;
+  const setIsOpen = inline ? () => {} : setIsOpenLegacy;
   const [renderedAt] = useState(() => Date.now());
   const contentId = useId();
   const serviceFlags = getBookingServiceFlags(bookingServices);
@@ -299,6 +329,39 @@ function VehiclePassportSectionBody({
     },
   ];
 
+  const bodyContent = (
+    <div id={contentId} className={cn("space-y-3", inline ? "" : "bg-muted/40 p-3 sm:p-4")}>
+      <EnrichmentStatusBanner
+        status={data.enrichment_status}
+        fillRate={data.enrichment_fill_rate}
+      />
+      {!data.is_complete ? (
+        hasPriorVisits ? (
+          <MissingSpecsNotice missingFields={data.missing_fields} />
+        ) : (
+          <FirstVisitNotice />
+        )
+      ) : (
+        <>
+          {sections.map((section) => (
+            <PanelSection
+              key={section.key}
+              title={section.title}
+              badge={section.badge}
+              inline={inline}
+            >
+              {section.content}
+            </PanelSection>
+          ))}
+        </>
+      )}
+    </div>
+  );
+
+  if (inline) {
+    return bodyContent;
+  }
+
   return (
     <section className="overflow-hidden rounded-xl border border-primary/10 bg-card shadow-[0_4px_14px_-6px_rgba(15,23,42,0.08)]">
       <button
@@ -324,9 +387,13 @@ function VehiclePassportSectionBody({
             {data.vehicle_label}
           </p>
         </div>
-        {!data.is_complete ? (
+        {!data.is_complete && !hasPriorVisits ? (
           <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-primary">
             First visit
+          </span>
+        ) : !data.is_complete && hasPriorVisits ? (
+          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] text-amber-700">
+            Specs incomplete
           </span>
         ) : null}
         {isOpen ? (
@@ -336,30 +403,64 @@ function VehiclePassportSectionBody({
         )}
       </button>
 
-      {isOpen ? (
-        <div id={contentId} className="space-y-3 bg-muted/40 p-3 sm:p-4">
-          <EnrichmentStatusBanner
-            status={data.enrichment_status}
-            fillRate={data.enrichment_fill_rate}
-          />
-          {!data.is_complete ? (
-            <FirstVisitNotice />
-          ) : (
-            <>
-              {sections.map((section) => (
-                <PanelSection
-                  key={section.key}
-                  title={section.title}
-                  badge={section.badge}
-                >
-                  {section.content}
-                </PanelSection>
-              ))}
-            </>
-          )}
-        </div>
-      ) : null}
+      {isOpen ? bodyContent : null}
     </section>
+  );
+}
+
+const MISSING_FIELD_LABELS: Record<string, string> = {
+  mileage: "Mileage",
+  "tires.brand": "Tire brand",
+  "tires.overall_condition": "Tire condition",
+  "tires.model": "Tire model",
+  "tires.size_front": "Front tire size",
+  "tires.size_rear": "Rear tire size",
+  "tires.run_flat": "Run-flat status",
+  "fluids.oil_viscosity": "Oil viscosity",
+  "fluids.oil_type": "Oil type",
+  "fluids.coolant_type": "Coolant type",
+  "fluids.brake_fluid_type": "Brake fluid",
+  "fluids.transmission_fluid_type": "Transmission fluid",
+};
+
+function labelForMissingField(field: string): string {
+  return (
+    MISSING_FIELD_LABELS[field] ??
+    field
+      .split(".")
+      .pop()!
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+}
+
+export function MissingSpecsNotice({
+  missingFields,
+}: {
+  missingFields: string[];
+}) {
+  if (missingFields.length === 0) return null;
+  return (
+    <div className="rounded-lg bg-muted/40 px-4 py-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Missing specs
+        </p>
+        <p className="text-[10px] text-muted-foreground">
+          {missingFields.length} field{missingFields.length === 1 ? "" : "s"}
+        </p>
+      </div>
+      <ul className="mt-2 flex flex-wrap gap-1.5">
+        {missingFields.map((field) => (
+          <li
+            key={field}
+            className="inline-flex items-center rounded-full border border-border bg-card px-2 py-0.5 text-[11px] font-medium text-foreground"
+          >
+            {labelForMissingField(field)}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -413,15 +514,29 @@ function PanelSection({
   title,
   badge,
   children,
+  inline = false,
 }: {
   title: string;
   badge?: string;
   children: ReactNode;
+  inline?: boolean;
 }) {
   return (
-    <section className="rounded-lg border border-primary/10 bg-card px-3 py-2.5 sm:px-3.5">
+    <section
+      className={
+        inline
+          ? "border-t border-border pt-3 first:border-t-0 first:pt-0"
+          : "rounded-lg border border-primary/10 bg-card px-3 py-2.5 sm:px-3.5"
+      }
+    >
       <div className="flex items-center justify-between gap-3">
-        <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-primary">
+        <p
+          className={
+            inline
+              ? "text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground"
+              : "text-[9px] font-semibold uppercase tracking-[0.18em] text-primary"
+          }
+        >
           {title}
         </p>
         {badge ? (
@@ -430,7 +545,15 @@ function PanelSection({
           </span>
         ) : null}
       </div>
-      <div className="mt-1 divide-y divide-primary/10">{children}</div>
+      <div
+        className={
+          inline
+            ? "mt-1.5 divide-y divide-border"
+            : "mt-1 divide-y divide-primary/10"
+        }
+      >
+        {children}
+      </div>
     </section>
   );
 }

@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import ElapsedTimer from "./elapsed-timer";
+import OverrunExtendCard from "./overrun-extend-card";
 
 type DraftPhoto = {
   id: string;
@@ -349,6 +350,17 @@ export function NowWorkingPane({
               {job.serviceNames.join(" · ")}
             </p>
           </section>
+
+          {job.status === "in_progress" && (
+            <div className="pt-4">
+              <OverrunExtendCard
+                bookingId={bookingId}
+                onFinishEarly={() => onMarkComplete(bookingId)}
+                onToast={onToast}
+                variant="dark"
+              />
+            </div>
+          )}
 
           <div
             className={

@@ -9,6 +9,9 @@ const isPublicRoute = createRouteMatcher([
   "/accept-invite(.*)",
   "/api/waitlist",
   "/api/webhooks(.*)",
+  // Flagship marketing hero — VIN decode + ElevenLabs token are public.
+  "/api/vin(.*)",
+  "/api/elevenlabs(.*)",
   "/shop-only",
   "/account-deactivated",
   "/director(.*)",

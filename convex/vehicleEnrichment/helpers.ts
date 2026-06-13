@@ -91,6 +91,8 @@ export type FirecrawlResult = {
   url: string;
   markdown: string;
   title: string;
+  /** Raw HTML, present only when the caller requested it (price extraction). */
+  html?: string;
 };
 
 export type ApiVerificationResult = {

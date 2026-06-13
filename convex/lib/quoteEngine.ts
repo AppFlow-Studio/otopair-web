@@ -16,6 +16,7 @@ import { Doc, Id } from "../_generated/dataModel";
 import { QueryCtx } from "../_generated/server";
 import { resolveLaborRate, VehicleTier } from "./vehicleTiers";
 import { ASSIGNMENT_RULES, matchRule } from "../seeds/seedPricing";
+import { resolveServiceUnitCount, unitScale } from "./serviceUnits";
 
 // Anchor — the 2020 Camry LE FWD vehicle_config (seeded by seedCamryBaseline).
 export const CAMRY_FWD_CONFIG_KEY = "2020_toyota_camry_le_fwd_a25a-fks";
@@ -31,12 +32,39 @@ const DISQUALIFIED_DATA_QUALITY: ReadonlySet<string> = new Set([
   "training_data",
   "default_fallback",
 ]);
+// Legacy rows (pre-aggregation pipeline) wrote their junk label into `source`
+// with data_quality UNSET — e.g. source='training_data' confidence=0.75 — so a
+// data_quality-only gate let LLM guesses through as "vdb". Mirror the set on
+// source. Plain 'vdb' stays eligible (its bad rows carry clone stamps).
+const DISQUALIFIED_SOURCE: ReadonlySet<string> = new Set([
+  "training_data",
+  "web_search",
+  "chassis_clone",
+  "engine_clone",
+  "default_fallback",
+]);
 const MIN_VDB_CONFIDENCE = 0.75;
 const MIN_EMPIRICAL_SAMPLES = 5;
 
-function isHighQualityVdb(row: Doc<"labor_times">): boolean {
+/**
+ * Drivetrains with a separately serviceable differential: AWD/4WD (front +
+ * rear + transfer case) and RWD (rear diff). FWD transaxles integrate the
+ * final drive into the gearbox; unknown returns false (fail-safe).
+ */
+export function hasServiceableDifferential(
+  drivetrain: string | null | undefined,
+): boolean {
+  const d = (drivetrain ?? "").toUpperCase();
+  return d === "AWD" || d === "4WD" || d === "RWD" || d === "4X4";
+}
+
+// Exported: laborTimes.ts (the booking-time UI resolver) applies the SAME
+// gate so the UI and the quote engine never tell different labor stories
+// (Jun-9 review: "the two labor resolvers disagree").
+export function isHighQualityVdb(row: Doc<"labor_times">): boolean {
   if (row.book_hours == null || row.book_hours <= 0) return false;
   if (row.source === "tier_estimate") return false;
+  if (DISQUALIFIED_SOURCE.has(row.source ?? "")) return false;
   if (DISQUALIFIED_DATA_QUALITY.has(row.data_quality ?? "")) return false;
   if ((row.confidence ?? 0) < MIN_VDB_CONFIDENCE) return false;
   return true;
@@ -44,29 +72,49 @@ function isHighQualityVdb(row: Doc<"labor_times">): boolean {
 
 // ─── resolveLaborHours — 6-layer fallback per spec Part 3 ─────────────────
 
+export type LaborHoursSource =
+  | "vdb"
+  | "aggregated"
+  | "vdb_camry_baseline"
+  | "empirical"
+  | "sibling"
+  | "engine_family"
+  | "tier_estimate";
+
 export type LaborHoursResult =
   | {
       ok: true;
       hours: number;
-      source:
-        | "vdb"
-        | "vdb_camry_baseline"
-        | "empirical"
-        | "sibling"
-        | "engine_family"
-        | "tier_estimate";
+      source: LaborHoursSource;
       confidence: number;
+      /** Raw hours from layers 1-3 before the tier-floor adjustment. Equal
+       *  to `hours` when neither floor nor above-flag applied. */
+      raw_hours?: number;
+      /** True when a real layer (vdb/empirical/sibling) returned hours below
+       *  the Camry × tier multiplier floor and we substituted the floor. */
+      tier_floor_applied?: boolean;
+      /** True when a real layer returned hours strictly above the Camry ×
+       *  tier multiplier floor — informational only, no substitution. */
+      above_tier_floor?: boolean;
     }
   | { ok: false; reason: string };
 
-export async function resolveLaborHours(
+type RawLaborResult = {
+  hours: number;
+  source: Exclude<LaborHoursSource, "tier_estimate" | "engine_family">;
+  confidence: number;
+};
+
+/** Resolve direct VDB, empirical, and sibling-chassis labor in priority order.
+ *  Returns null when all real layers refuse — caller falls back to the tier
+ *  floor (Layer 5) or refuses. */
+async function resolveRawLaborLayers(
   ctx: QueryCtx,
   args: {
     vehicle_config_id: Id<"vehicle_configs">;
     service_id: Id<"services">;
-    vehicle_tier: VehicleTier;
   },
-): Promise<LaborHoursResult> {
+): Promise<RawLaborResult | null> {
   // Layer 1: direct labor_times row, real flat-rate data (not tier_estimate)
   const direct = await ctx.db
     .query("labor_times")
@@ -78,10 +126,8 @@ export async function resolveLaborHours(
     .collect();
 
   for (const row of direct) {
-    // Camry baseline rows are seeded data, always accepted.
     if (row.source === "vdb_camry_baseline" && row.book_hours != null && row.book_hours > 0) {
       return {
-        ok: true,
         hours: row.book_hours,
         source: "vdb_camry_baseline",
         confidence: row.confidence ?? 0.9,
@@ -89,13 +135,13 @@ export async function resolveLaborHours(
     }
     if (isHighQualityVdb(row)) {
       return {
-        ok: true,
         hours: row.book_hours!,
-        source: "vdb",
+        // Report real provenance: RepairPal/MOTOR-driven medians are stamped
+        // source='aggregated' by labor_aggregation — don't relabel them "vdb".
+        source: row.source === "aggregated" ? "aggregated" : "vdb",
         confidence: row.confidence ?? 0.9,
       };
     }
-    // Low-quality vdb rows: log and fall through to subsequent layers.
     if (
       row.source !== "tier_estimate" &&
       row.book_hours != null &&
@@ -117,7 +163,6 @@ export async function resolveLaborHours(
       (row.empirical_sample_size ?? 0) >= MIN_EMPIRICAL_SAMPLES
     ) {
       return {
-        ok: true,
         hours: row.empirical_hours,
         source: "empirical",
         confidence: row.confidence ?? 0.85,
@@ -125,7 +170,7 @@ export async function resolveLaborHours(
     }
   }
 
-  // Layer 3: sibling config (same chassis_code, different config)
+  // Layer 3: sibling config (same chassis_code, same make, quality-gated)
   const cfg = await ctx.db.get(args.vehicle_config_id);
   if (cfg?.chassis_code) {
     const siblings = await ctx.db
@@ -136,34 +181,57 @@ export async function resolveLaborHours(
       .collect();
     for (const sib of siblings) {
       if (sib._id === args.vehicle_config_id) continue;
+      // Same-chassis-code rows span multiple makes when enrichment
+      // hallucinates a generic placeholder (e.g. "THE" on a Stelvio, Ford
+      // Ranger, Audi Q5, and Malibu). Require same make to count.
+      if (sib.make_id !== cfg.make_id) continue;
       const sibLabor = await ctx.db
         .query("labor_times")
         .withIndex("by_vehicle_config_and_service", (q) =>
           q.eq("vehicle_config_id", sib._id).eq("service_id", args.service_id),
         )
         .first();
+      if (!sibLabor) continue;
+      // Fast-path: drop tier_estimate seeds and null/zero hours before the
+      // shared quality gate so the early-continue intent stays visible.
       if (
-        sibLabor?.book_hours != null &&
-        sibLabor.book_hours > 0 &&
-        sibLabor.source !== "tier_estimate"
+        sibLabor.book_hours == null ||
+        sibLabor.book_hours <= 0 ||
+        sibLabor.source === "tier_estimate"
       ) {
-        return {
-          ok: true,
-          hours: sibLabor.book_hours,
-          source: "sibling",
-          confidence: 0.7,
-        };
+        continue;
       }
+      // Same quality definition as Layer 1 (isHighQualityVdb covers
+      // DISQUALIFIED_SOURCE / DISQUALIFIED_DATA_QUALITY / MIN_VDB_CONFIDENCE).
+      // Without this gate, the rows Layer 1 rejects (chassis clones,
+      // training-data guesses) walked back in through the sibling door at
+      // a fabricated 0.7 confidence.
+      if (!isHighQualityVdb(sibLabor)) continue;
+      return {
+        hours: sibLabor.book_hours,
+        source: "sibling",
+        confidence: 0.7,
+      };
     }
   }
 
   // Layer 4: engine-family estimator — DEFERRED per spec Open Items.
 
-  // Layer 5: tier_estimate fallback (Camry hours × labor multiplier)
+  return null;
+}
+
+/** Compute the tier-multiplier floor (Camry book_hours × labor multiplier).
+ *  Returns null when the service has no multiplier category, no multiplier
+ *  row for the tier, no Camry seed, or no Camry hours for this service. */
+async function computeTierFloor(
+  ctx: QueryCtx,
+  args: {
+    service_id: Id<"services">;
+    vehicle_tier: VehicleTier;
+  },
+): Promise<{ hours: number } | null> {
   const service = await ctx.db.get(args.service_id);
-  if (!service?.labor_multiplier_category_id) {
-    return { ok: false, reason: "service has no labor_multiplier_category" };
-  }
+  if (!service?.labor_multiplier_category_id) return null;
   const laborMultRow = await ctx.db
     .query("pricing_labor_multipliers")
     .withIndex("by_category_tier", (q) =>
@@ -172,36 +240,103 @@ export async function resolveLaborHours(
         .eq("tier", args.vehicle_tier),
     )
     .first();
-  if (!laborMultRow) {
-    return {
-      ok: false,
-      reason: `no labor multiplier for tier ${args.vehicle_tier}`,
-    };
-  }
+  if (!laborMultRow) return null;
   const camry = await getCamryFwdConfig(ctx);
-  if (!camry) {
-    return {
-      ok: false,
-      reason: "Camry baseline config not seeded — run seedCamryBaseline:run",
-    };
-  }
+  if (!camry) return null;
   const camryHours = await ctx.db
     .query("labor_times")
     .withIndex("by_vehicle_config_and_service", (q) =>
       q.eq("vehicle_config_id", camry._id).eq("service_id", args.service_id),
     )
     .first();
-  if (!camryHours?.book_hours) {
+  if (!camryHours?.book_hours) return null;
+  return { hours: camryHours.book_hours * laborMultRow.multiplier };
+}
+
+export async function resolveLaborHours(
+  ctx: QueryCtx,
+  args: {
+    vehicle_config_id: Id<"vehicle_configs">;
+    service_id: Id<"services">;
+    vehicle_tier: VehicleTier;
+  },
+): Promise<LaborHoursResult> {
+  // Pass 1: try the real per-vehicle layers (direct VDB, empirical, sibling).
+  const raw = await resolveRawLaborLayers(ctx, {
+    vehicle_config_id: args.vehicle_config_id,
+    service_id: args.service_id,
+  });
+
+  // Pass 2: always compute the tier floor — Round 6 policy treats Camry ×
+  // tier multiplier as the minimum realistic time, regardless of which
+  // upstream layer produced the raw value. Below-floor raw gets bumped up
+  // and flagged; above-floor raw keeps its value and gets an informational
+  // flag for director audit.
+  const floor = await computeTierFloor(ctx, {
+    service_id: args.service_id,
+    vehicle_tier: args.vehicle_tier,
+  });
+
+  if (raw == null && floor == null) {
+    // Refuse — no real data and no Camry-anchored floor either. Surface the
+    // most actionable missing-data reason so callers can guide seeding.
+    const service = await ctx.db.get(args.service_id);
+    if (!service?.labor_multiplier_category_id) {
+      return { ok: false, reason: "service has no labor_multiplier_category" };
+    }
+    const camry = await getCamryFwdConfig(ctx);
+    if (!camry) {
+      return {
+        ok: false,
+        reason: "Camry baseline config not seeded — run seedCamryBaseline:run",
+      };
+    }
     return {
       ok: false,
-      reason: `no Camry baseline hours for service ${args.service_id}`,
+      reason: `no labor multiplier for tier ${args.vehicle_tier} (and no Camry hours)`,
+    };
+  }
+
+  if (raw == null && floor != null) {
+    // Engine refused every real layer — return the tier estimate as before.
+    return {
+      ok: true,
+      hours: floor.hours,
+      source: "tier_estimate",
+      confidence: 0.3,
+    };
+  }
+
+  if (raw != null && floor == null) {
+    // Legacy services without a multiplier row: trust the raw value as-is.
+    return {
+      ok: true,
+      hours: raw.hours,
+      source: raw.source,
+      confidence: raw.confidence,
+    };
+  }
+
+  // Both raw and floor present — reconcile per Round 6 policy.
+  const r = raw!;
+  const f = floor!;
+  if (r.hours < f.hours) {
+    return {
+      ok: true,
+      hours: f.hours,
+      source: r.source,
+      confidence: r.confidence,
+      raw_hours: r.hours,
+      tier_floor_applied: true,
     };
   }
   return {
     ok: true,
-    hours: camryHours.book_hours * laborMultRow.multiplier,
-    source: "tier_estimate",
-    confidence: 0.3,
+    hours: r.hours,
+    source: r.source,
+    confidence: r.confidence,
+    raw_hours: r.hours,
+    above_tier_floor: r.hours > f.hours,
   };
 }
 
@@ -330,11 +465,14 @@ export async function resolvePartsCost(
     flags.push("awd_surcharge_applied");
   }
 
-  // Differential service is AWD-only.
-  if (slug === "differential_service" && !isAwd) {
+  // Differential service: every drivetrain with a separately serviceable
+  // diff qualifies (Jun-9 review — the old `!isAwd` check refused RWD/4WD,
+  // which have differentials). FWD transaxles don't; unknown stays refused
+  // (fail-safe — never bill a service the car might not have).
+  if (slug === "differential_service" && !hasServiceableDifferential(cfg.drivetrain)) {
     return {
       ok: false,
-      reason: "differential service not applicable to FWD vehicle",
+      reason: `differential service not applicable to drivetrain=${cfg.drivetrain ?? "unknown"}`,
     };
   }
 
@@ -363,8 +501,41 @@ export type Quote =
         hours_source: string;
         hours_confidence: number;
         rate_source: string;
+        /** Raw hours from VDB/empirical/sibling before tier-floor bump.
+         *  Equal to `hours` when neither floor nor above-flag fired. */
+        raw_hours?: number;
+        /** True when raw labor was below Camry × tier multiplier and we
+         *  substituted the floor. Emits `labor_below_tier_floor` flag. */
+        tier_floor_applied?: boolean;
+        /** True when raw labor exceeded the Camry × tier floor.
+         *  Informational only. Emits `labor_above_tier_expected` flag. */
+        above_tier_floor?: boolean;
       };
-      parts: { low: number; high: number; source: string };
+      parts: {
+        /** Service total parts band (per-unit × unit_count). Drives the
+         *  customer-facing line total + Stripe hold. */
+        low: number;
+        high: number;
+        source: string;
+        /** Per-unit band — display the SAME number on each per-OEM-part
+         *  row when unit_count > 1 (e.g. front + rear axles, 8 plugs,
+         *  N quarts of oil). */
+        per_unit_low: number;
+        per_unit_high: number;
+        /** How many of `unit_label` this vehicle consumes for this service.
+         *  For per_axle: 1 or 2 (booking position). For per_cylinder: 4/6/8.
+         *  For per_unit_spec: engines.{capacity}. For per_wheel: 4. For
+         *  fixed_kit: 1. */
+        unit_count: number;
+        /** How many units the Camry-anchored band represents. Caller scales
+         *  by (unit_count / baseline_count). */
+        baseline_count: number;
+        /** Display label: "axle" | "cyl" | "qt" | "wheel" | "kit". */
+        unit_label: string | null;
+        /** True when we couldn't resolve a per-vehicle count and fell back
+         *  to the baseline (e.g. unenriched engine, missing capacity). */
+        unit_count_estimated: boolean;
+      };
       flags: string[];
       display_label?: string;
     }
@@ -381,6 +552,9 @@ export async function buildQuote(
     vehicle_config_id: Id<"vehicle_configs">;
     service_id: Id<"services">;
     shop_id: Id<"shops">;
+    /** Booking position for per_axle services ("front" | "rear" | "both").
+     *  Ignored for other parts_kind values. Defaults to 1 axle when null. */
+    booking_position?: "front" | "rear" | "both" | null;
   },
 ): Promise<Quote> {
   const cfg = await ctx.db.get(args.vehicle_config_id);
@@ -430,7 +604,17 @@ export async function buildQuote(
         hours_confidence: 1,
         rate_source: "fixed_override",
       },
-      parts: { low: price, high: price, source: "fixed_override" },
+      parts: {
+        low: price,
+        high: price,
+        source: "fixed_override",
+        per_unit_low: price,
+        per_unit_high: price,
+        unit_count: 1,
+        baseline_count: 1,
+        unit_label: "kit",
+        unit_count_estimated: false,
+      },
       flags: ["fixed_price_override"],
       display_label: "Fixed price",
     };
@@ -455,9 +639,74 @@ export async function buildQuote(
   });
   if (!partsRes.ok) return refuse(partsRes.reason);
 
+  // Resolve the per-vehicle unit count via the service's parts_kind:
+  // per_axle uses booking_position, per_cylinder reads engines.cylinders,
+  // per_unit_spec reads the engine capacity field, per_wheel = 4, etc.
+  // The service total parts band = per-unit band × (unit_count / baseline).
+  const service = await ctx.db.get(args.service_id);
+  const camry = await getCamryFwdConfig(ctx);
+  const camrySpec =
+    camry?.engine_id && service
+      ? await ctx.db
+          .query("service_vehicle_specs")
+          .withIndex("by_engine_and_service", (q) =>
+            q
+              .eq("engine_id", camry.engine_id!)
+              .eq("service_id", args.service_id),
+          )
+          .first()
+      : null;
+  let engineRow: Doc<"engines"> | null = null;
+  if (cfg.engine_id) {
+    engineRow = (await ctx.db.get(cfg.engine_id)) ?? null;
+  }
+
+  // Director-editable rule lookup: when qty_override is set, it wins over
+  // the per-vehicle resolver (intended for services that don't fit any of
+  // the six standard kinds). Loaded once here so we don't pay an extra DB
+  // round-trip on the hot path when no override exists.
+  const partsRule = service
+    ? await ctx.db
+        .query("service_parts_rules")
+        .withIndex("by_service", (q) =>
+          q.eq("service_id", args.service_id),
+        )
+        .first()
+    : null;
+  const qtyOverride = partsRule?.qty_override ?? null;
+
+  const baselineFromSpec = camrySpec?.parts_baseline_unit_count ?? null;
+  const unitRes = service
+    ? qtyOverride != null
+      ? {
+          count: qtyOverride,
+          label: service.parts_unit_label ?? null,
+          baseline: baselineFromSpec ?? 1,
+          is_estimate: false,
+        }
+      : resolveServiceUnitCount({
+          service,
+          engine: engineRow,
+          bookingPosition: args.booking_position ?? null,
+          baselineFromSpec,
+        })
+    : {
+        count: 1,
+        label: null,
+        baseline: 1,
+        is_estimate: true,
+      };
+
+  // CCB absolute pricing is a flat per-axle price already, so don't scale
+  // it again — treat as unit_count=1 baseline=1.
+  const isCcbAbsolute = partsRes.source === "ccb_absolute";
+  const scale = isCcbAbsolute ? 1 : unitScale(unitRes);
+  const scaledPartsLow = partsRes.low * scale;
+  const scaledPartsHigh = partsRes.high * scale;
+
   const laborCost = hoursRes.hours * rateRes.rate;
-  const low = laborCost + partsRes.low;
-  const high = laborCost + partsRes.high;
+  const low = laborCost + scaledPartsLow;
+  const high = laborCost + scaledPartsHigh;
   const spreadPct = low > 0 ? ((high - low) / low) * 100 : 0;
 
   const flags: string[] = [...partsRes.flags];
@@ -465,6 +714,11 @@ export async function buildQuote(
   if (hoursRes.source === "tier_estimate") {
     flags.push("tier_estimate");
     display_label = "Initial estimate — final price confirmed at booking";
+  }
+  if (hoursRes.tier_floor_applied) flags.push("labor_below_tier_floor");
+  if (hoursRes.above_tier_floor) flags.push("labor_above_tier_expected");
+  if (unitRes.is_estimate && !isCcbAbsolute) {
+    flags.push("unit_count_estimated");
   }
   if (spreadPct > 10) flags.push("spread_exceeded");
 
@@ -481,11 +735,20 @@ export async function buildQuote(
       hours_source: hoursRes.source,
       hours_confidence: hoursRes.confidence,
       rate_source: rateRes.source,
+      raw_hours: hoursRes.raw_hours,
+      tier_floor_applied: hoursRes.tier_floor_applied,
+      above_tier_floor: hoursRes.above_tier_floor,
     },
     parts: {
-      low: round2(partsRes.low),
-      high: round2(partsRes.high),
+      low: round2(scaledPartsLow),
+      high: round2(scaledPartsHigh),
       source: partsRes.source,
+      per_unit_low: round2(partsRes.low),
+      per_unit_high: round2(partsRes.high),
+      unit_count: isCcbAbsolute ? 1 : unitRes.count,
+      baseline_count: isCcbAbsolute ? 1 : unitRes.baseline,
+      unit_label: isCcbAbsolute ? "axle" : unitRes.label,
+      unit_count_estimated: isCcbAbsolute ? false : unitRes.is_estimate,
     },
     flags,
     display_label,
@@ -581,6 +844,10 @@ export async function resolveQuoteSeries(
     vehicle_config_id: Id<"vehicle_configs">;
     service_ids: Id<"services">[];
     shop_id: Id<"shops">;
+    /** Optional per-service booking positions for per_axle services.
+     *  Map: service_id (stringified) → "front" | "rear" | "both". When a
+     *  service id is absent, defaults to 1 axle. */
+    service_positions?: Record<string, "front" | "rear" | "both">;
   },
 ): Promise<QuoteSeries> {
   const quotes: Quote[] = [];
@@ -594,6 +861,8 @@ export async function resolveQuoteSeries(
       vehicle_config_id: args.vehicle_config_id,
       service_id,
       shop_id: args.shop_id,
+      booking_position:
+        args.service_positions?.[String(service_id)] ?? null,
     });
     quotes.push(q);
     if (q.ok) {

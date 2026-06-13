@@ -48,16 +48,6 @@ export interface OtoToolSchema {
 
 const DATA_TOOLS: OtoToolSchema[] = [
   {
-    name: "get_my_vehicles",
-    description:
-      "List every vehicle the user owns. Each entry includes year, make, model, trim, mileage, and an `is_primary` flag — the primary vehicle is the user's active car. Call this when the user references a vehicle that isn't the one in the <vehicle> context block, when the user has no vehicle context yet, or when the user asks 'what cars do I have?'. Do not call this if the question is already answerable from the <vehicle> block.",
-    input_schema: {
-      type: "object",
-      properties: {},
-    },
-  },
-
-  {
     name: "get_bookings",
     description:
       "Get the user's bookings filtered by status. Use `status_filter: 'active'` for upcoming/in-progress (statuses: pending, confirmed, in_progress). Use `'completed'` before recommending a new service so you don't duplicate recent work. Use `'all'` only when explicitly asked. Returns most recent first; default limit 5. " +
@@ -108,20 +98,10 @@ const DATA_TOOLS: OtoToolSchema[] = [
       properties: {
         vehicle_id: {
           type: "string",
-          description: "VIN. Get from the <vehicle> block or get_my_vehicles.",
+          description: "The active vehicle's identifier from the <vehicle> block (its VIN or Convex id — either works).",
         },
       },
       required: ["vehicle_id"],
-    },
-  },
-
-  {
-    name: "list_service_categories",
-    description:
-      "List the seven Otopair service categories: Diagnostics, Compliance, Routine Maintenance, Tires, Brakes, Battery, Fluids. Use when the user asks 'what kinds of services do you do?' before drilling into specifics. For a per-vehicle filtered list of services, use list_services_for_vehicle instead.",
-    input_schema: {
-      type: "object",
-      properties: {},
     },
   },
 
@@ -164,98 +144,6 @@ const DATA_TOOLS: OtoToolSchema[] = [
         },
       },
       required: ["service_slug"],
-    },
-  },
-
-  {
-    name: "get_shop",
-    description:
-      "Get a shop's name, neighborhood, address, rating, and review count. Call when a shop ID surfaces from a booking, recommendation, or get_my_mechanics and the user wants details.",
-    input_schema: {
-      type: "object",
-      properties: {
-        shop_id: { type: "string", description: "Convex shop ID." },
-      },
-      required: ["shop_id"],
-    },
-  },
-
-  {
-    name: "get_shop_services",
-    description:
-      "List which services a shop offers (by slug). Use before recommending booking at a shop, or to answer 'does this shop do X?'.",
-    input_schema: {
-      type: "object",
-      properties: {
-        shop_id: { type: "string", description: "Convex shop ID." },
-      },
-      required: ["shop_id"],
-    },
-  },
-
-  {
-    name: "get_shop_hours",
-    description:
-      "Get a shop's 7-day operating hours. Use when the user asks 'is this shop open Saturday?' or before recommending a slot.",
-    input_schema: {
-      type: "object",
-      properties: {
-        shop_id: { type: "string", description: "Convex shop ID." },
-      },
-      required: ["shop_id"],
-    },
-  },
-
-  {
-    name: "get_mechanic",
-    description:
-      "Get a mechanic's profile: name, photo, rating, review count, shop. Use when a mechanic ID surfaces and the user wants details.",
-    input_schema: {
-      type: "object",
-      properties: {
-        mechanic_id: { type: "string", description: "Convex mechanic ID." },
-      },
-      required: ["mechanic_id"],
-    },
-  },
-
-  {
-    name: "get_my_mechanics",
-    description:
-      "The user's preferred mechanics — favorites and recently booked. Use when the user says 'my usual guy' or 'who have I booked with before?'.",
-    input_schema: {
-      type: "object",
-      properties: {},
-    },
-  },
-
-  {
-    name: "get_reviews",
-    description:
-      "Reviews of a shop or mechanic. Use when the user asks 'is this shop good?' or for social proof before recommending. Returns rating, comment, date, and reviewer initials only — no PII. Default limit 5.",
-    input_schema: {
-      type: "object",
-      properties: {
-        target_type: { type: "string", enum: ["shop", "mechanic"] },
-        target_id: { type: "string", description: "Convex shop ID or mechanic ID." },
-        limit: { type: "integer", minimum: 1, maximum: 20, description: "Default 5." },
-      },
-      required: ["target_type", "target_id"],
-    },
-  },
-
-  {
-    name: "find_available_slots",
-    description:
-      "Find the next bookable appointment slots at a specific shop. Use AFTER the user has indicated booking intent and the shop is known — never for discovery. Returns raw slot data for Oto's reasoning context; do NOT compose slots back to the user in prose. Time-slot selection happens inside the BookServiceComponent rendered by render_book_service. Does NOT book anything.",
-    input_schema: {
-      type: "object",
-      properties: {
-        shop_id: { type: "string", description: "Convex shop ID." },
-        mechanic_id: { type: "string", description: "Optional — restrict to one mechanic." },
-        limit: { type: "integer", minimum: 1, maximum: 10, description: "Default 5." },
-      },
-      required: ["shop_id"],
     },
   },
 
@@ -326,7 +214,7 @@ const DATA_TOOLS: OtoToolSchema[] = [
       properties: {
         vehicle_id: {
           type: "string",
-          description: "VIN. Get from the <vehicle> block or get_my_vehicles.",
+          description: "The active vehicle's identifier from the <vehicle> block (its VIN or Convex id — either works).",
         },
       },
       required: ["vehicle_id"],
@@ -710,7 +598,7 @@ const RENDER_TOOLS: OtoToolSchema[] = [
         recommended_mechanic_id: {
           type: "string",
           description:
-            "Optional pre-selected mechanic ID — typically the user's preferred mechanic from get_my_mechanics when the user said something like \"book me with my usual guy\". Omit if no clear signal.",
+            "Optional pre-selected mechanic ID. Set ONLY when a concrete mechanic id has already surfaced in this conversation (e.g. from a prior booking the user referenced). Do NOT invent one — omit it and the mobile component lets the user pick.",
         },
       },
       required: ["service_slugs"],
@@ -925,21 +813,12 @@ export type OtoToolCategory = "data" | "state" | "model_routing" | "render" | "n
 
 export const OTO_TOOL_CATEGORY: Record<string, OtoToolCategory> = {
   // data
-  get_my_vehicles: "data",
   get_bookings: "data",
   // Booking Status — Sprint 3 Day 5 §14.3 (pending-only subset of get_bookings)
   get_pending_bookings: "data",
   get_due_services: "data",
-  list_service_categories: "data",
   list_services_for_vehicle: "data",
   get_service_details: "data",
-  get_shop: "data",
-  get_shop_services: "data",
-  get_shop_hours: "data",
-  get_mechanic: "data",
-  get_my_mechanics: "data",
-  get_reviews: "data",
-  find_available_slots: "data",
   get_rewards_summary: "data",
   // Loyalty Tier 2 expansion (Sprint 3 Day 3 §11 + §14.2) — informational
   // surfacing only; no claim-flow tool (per §14.2 Constraint 2, Day 1 Pass F).

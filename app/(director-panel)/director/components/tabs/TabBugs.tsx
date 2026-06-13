@@ -93,7 +93,7 @@ const BugModal = ({ bug, onClose }: { bug: Bug | undefined; onClose: () => void 
   const [localStatus,   setLocalStatus]   = useState(bug?.status ?? 'new')
   const [localAssignee, setLocalAssignee] = useState<Id<'director_users'> | ''>(bug?.assignee ?? '')
 
-  const rawAudit = useQuery(api.audit_log.listByEntity, bug ? { entity_type: 'bug', entity_id: bug._id } : 'skip')
+  const rawAudit = useQuery(api.audit_log.listByEntity, bug ? { entity_type: 'bug', entity_id: bug._id, token: session?.token ?? '' } : 'skip')
   const auditEntries = rawAudit?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
     action: e.action, actor: e.actor, detail: e.detail ?? '',

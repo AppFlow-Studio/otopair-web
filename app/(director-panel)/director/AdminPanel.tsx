@@ -12,6 +12,7 @@ import { TabUsers }     from './components/tabs/TabUsers'
 import { TabBookings }  from './components/tabs/TabBookings'
 import { TabCars }      from './components/tabs/TabCars'
 import { TabVehicleConfigs } from './components/tabs/TabVehicleConfigs'
+import { TabPricing } from './components/tabs/TabPricing'
 import { TabBugs }      from './components/tabs/TabBugs'
 import { TabFeedback }  from './components/tabs/TabFeedback'
 import { TabOtoFeedback } from './components/tabs/TabOtoFeedback'
@@ -19,6 +20,9 @@ import { TabStripe }    from './components/tabs/TabStripe'
 import { TabAudit }     from './components/tabs/TabAudit'
 import { TabSettings }       from './components/tabs/TabSettings'
 import { TabMechanicEdits } from './components/tabs/TabMechanicEdits'
+import { TabServiceParts } from './components/tabs/TabServiceParts'
+import { TabOtoSim }    from './components/tabs/TabOtoSim'
+import { TabOtoConversations } from './components/tabs/TabOtoConversations'
 
 const SESSION_KEY = 'otopair_director_token'
 
@@ -29,9 +33,13 @@ const TABS: Record<string, React.ComponentType> = {
   bookings: TabBookings,
   cars:        TabCars,
   configs:     TabVehicleConfigs,
+  pricing:     TabPricing,
+  serviceParts: TabServiceParts,
   bugs:        TabBugs,
   feedback:    TabFeedback,
   otoFeedback: TabOtoFeedback,
+  otoSim:      TabOtoSim,
+  otoConversations: TabOtoConversations,
   stripe:      TabStripe,
   audit:          TabAudit,
   mechanicEdits:  TabMechanicEdits,

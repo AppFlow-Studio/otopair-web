@@ -22,10 +22,11 @@
 import { computeBookingTax } from "./tax";
 import { computePlatformFeeDollars } from "./platformFee";
 
-/** Fallback band ratio (±25%) around the parts estimate when no
+/** Fallback band ratio (±8%) around the parts estimate when no
  *  engine-specific service_vehicle_specs row is available. Mirror of the
- *  server constant in booking_quotes.ts. */
-const FALLBACK_BAND_RATIO = 0.25;
+ *  server constant in booking_quotes.ts — kept honest at 5–8% because
+ *  that's where real source variance lands after MAD outlier rejection. */
+const FALLBACK_BAND_RATIO = 0.08;
 
 export type DerivedRange = {
   lowDollars: number;
@@ -33,10 +34,31 @@ export type DerivedRange = {
   formatted: string;
 };
 
-/** Format two dollar amounts as `$108.42 – $138.67`. Em dash (U+2013). */
+/** Format two dollar amounts as `$108.42 – $138.67`. Em dash (U+2013).
+ *  When the endpoints round to the same cents value (parts-less services
+ *  like Fuel System Cleaning collapse the band to a single point), render
+ *  just `$108.42` so the customer doesn't see a redundant "$X – $X". */
 export function formatRange(lowDollars: number, highDollars: number): string {
-  return `$${lowDollars.toFixed(2)} – $${highDollars.toFixed(2)}`;
+  const low = lowDollars.toFixed(2);
+  const high = highDollars.toFixed(2);
+  if (low === high) return `$${low}`;
+  return `$${low} – $${high}`;
 }
+
+/**
+ * Per-service fixed-price line. When present in `fixedPriceLines`, that
+ * service's parts contribute the flat amount on BOTH endpoints (no band)
+ * and its labor is subtracted from the aggregate `laborCost` — mirroring
+ * `computeDisclosedRange` (otopair-web/convex/booking_quotes.ts:110-142).
+ *
+ * `serviceId` is identity-only; it isn't read here, but callers carry it
+ * so the UI can mark the same line with a "Fixed price" badge.
+ */
+export type FixedPriceLine = {
+  serviceId: string;
+  laborCost: number;
+  partsFixed: number;
+};
 
 /**
  * Derive a price range from live breakdown inputs. Used pre-booking when
@@ -54,17 +76,32 @@ export function deriveDisclosedRange(args: {
   zip?: string | null;
   partsLowDollars?: number;
   partsHighDollars?: number;
+  /** When supplied, each line's parts collapse to `partsFixed` on both
+   *  endpoints and its `laborCost` is subtracted from the aggregate so the
+   *  flat price isn't double-billed with labor. */
+  fixedPriceLines?: FixedPriceLine[];
 }): DerivedRange {
-  const labor = Math.max(0, args.laborCost);
+  const fixedParts = (args.fixedPriceLines ?? []).reduce(
+    (sum, line) => sum + Math.max(0, line.partsFixed),
+    0,
+  );
+  const laborReduction = (args.fixedPriceLines ?? []).reduce(
+    (sum, line) => sum + Math.max(0, line.laborCost),
+    0,
+  );
+
+  const labor = Math.max(0, args.laborCost - laborReduction);
   const partsMid = Math.max(0, args.partsCost);
-  const partsLow = Math.max(
+  const variablePartsLow = Math.max(
     0,
     args.partsLowDollars ?? partsMid * (1 - FALLBACK_BAND_RATIO),
   );
-  const partsHigh = Math.max(
-    partsLow,
+  const variablePartsHigh = Math.max(
+    variablePartsLow,
     args.partsHighDollars ?? partsMid * (1 + FALLBACK_BAND_RATIO),
   );
+  const partsLow = variablePartsLow + fixedParts;
+  const partsHigh = variablePartsHigh + fixedParts;
 
   const taxLow = computeBookingTax({
     laborDollars: labor,
@@ -99,7 +136,16 @@ export function deriveDisclosedRange(args: {
  * the singular `total_cost`.
  */
 export type SnapshottedRange =
-  | { hasRange: true; lowDollars: number; highDollars: number; formatted: string }
+  | {
+      hasRange: true;
+      lowDollars: number;
+      highDollars: number;
+      formatted: string;
+      /** True when the snapshot collapsed to a single point — every line
+       *  in the booking resolved to a flat fixed price (or had no parts
+       *  variance), so there's no ±band to disclose. */
+      isFixedPrice: boolean;
+    }
   | { hasRange: false };
 
 export function disclosedRangeFromBooking(booking: {
@@ -120,5 +166,6 @@ export function disclosedRangeFromBooking(booking: {
     lowDollars: low,
     highDollars: high,
     formatted: formatRange(low, high),
+    isFixedPrice: booking.disclosed_range_low_cents === booking.disclosed_range_high_cents,
   };
 }

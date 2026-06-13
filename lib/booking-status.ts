@@ -144,3 +144,45 @@ export function getBookingStatusPillClass(status: string): string {
     "bg-muted text-muted-foreground"
   );
 }
+
+// The mechanic-facing 4-step workspace. Terminal statuses (completed, cancelled,
+// no_show, declined) fall outside the active stepper and render a "closed" state
+// instead of one of the four step panels.
+export type JobStep = 1 | 2 | 3 | 4 | "terminal";
+
+export const JOB_STEP_LABELS: Record<Exclude<JobStep, "terminal">, string> = {
+  1: "Incoming",
+  2: "Confirmed",
+  3: "Vehicle here",
+  4: "Active job",
+};
+
+export const JOB_STEP_DESCRIPTIONS: Record<Exclude<JobStep, "terminal">, string> = {
+  1: "Review the quote and decide whether to accept, adjust, or decline.",
+  2: "Booking is on the calendar — mark the vehicle as arrived when it shows up.",
+  3: "Vehicle is at the shop. Run pre-job inspection, then start the job.",
+  4: "Job is underway. Add any unforeseen scope before marking it completed.",
+};
+
+export function getJobStep(status: string): JobStep {
+  switch (status as BookingStatus) {
+    case "pending":
+    case "pending_shop_acceptance":
+    case "pending_customer_acceptance":
+    case "tentative_quote":
+      return 1;
+    case "confirmed":
+      return 2;
+    case "vehicle_at_shop":
+      return 3;
+    case "in_progress":
+      return 4;
+    case "completed":
+    case "cancelled":
+    case "no_show":
+    case "declined":
+      return "terminal";
+    default:
+      return 1;
+  }
+}

@@ -249,6 +249,25 @@ async function performSubmission(
     laborRateCents: args.laborRateCents,
   });
 
+  // Fixed-price bookings: parts/labor updates are audit-only. Customer
+  // agreed to a flat price (shop_service_fixed_prices); mechanic edits get
+  // logged on booking_approvals but never alter the booking total, never
+  // trip a Stripe authorization adjust, and never push the customer an
+  // approval prompt. Path returns early after the audit insert.
+  const isFixedPrice = booking.is_fixed_price === true;
+  if (isFixedPrice) {
+    return performFixedPriceInformationalSubmission(ctx, {
+      bookingId: args.bookingId,
+      cycle: args.cycle,
+      parts: args.parts,
+      laborHours: args.laborHours,
+      laborRateCents: args.laborRateCents,
+      notes: args.notes,
+      submittedByUserId: args.submittedByUserId,
+      priced,
+    });
+  }
+
   const ceiling = ceilingForCycle(booking, args.cycle);
   // Pre-feature bookings (no disclosed range): there's no approval contract
   // — fall back to legacy behavior at capture time. Reject submission here.
@@ -381,6 +400,64 @@ async function performSubmission(
     state: newState,
     totalCents: priced.total_cents,
     ceilingCents: ceiling,
+  };
+}
+
+/** Fixed-price submission path — log the mechanic's edited parts/labor on
+ *  booking_approvals for audit, but do NOT touch the booking total,
+ *  payment_approval_state, Stripe authorization, or the customer. The
+ *  customer's contracted price came from shop_service_fixed_prices and
+ *  stays locked. */
+async function performFixedPriceInformationalSubmission(
+  ctx: any,
+  args: {
+    bookingId: Id<"bookings">;
+    cycle: "pre_job" | "mid_job" | "post_job";
+    parts: SubmittedPart[];
+    laborHours: number | undefined;
+    laborRateCents: number | undefined;
+    notes: string | undefined;
+    submittedByUserId: Id<"users"> | undefined;
+    priced: SetPriceComputed;
+  },
+): Promise<{
+  approvalId: Id<"booking_approvals">;
+  state: string;
+  totalCents: number;
+  ceilingCents: number;
+}> {
+  const now = Date.now();
+  // Snapshot the customer-locked price as the "ceiling" on the audit row so
+  // the activity log can compare mechanic-computed vs locked side-by-side.
+  const bookingRow: any = await ctx.db.get(args.bookingId);
+  const lockedCents =
+    bookingRow?.mechanic_set_price_cents ??
+    Math.round((bookingRow?.total_cost ?? 0) * 100);
+  const approvalId = await ctx.db.insert("booking_approvals", {
+    booking_id: args.bookingId,
+    cycle: args.cycle,
+    mechanic_set_price_cents: args.priced.total_cents,
+    parts_subtotal_cents: args.priced.parts_subtotal_cents,
+    labor_cents: args.priced.labor_cents,
+    tax_cents: args.priced.tax_cents,
+    service_fee_cents: args.priced.service_fee_cents,
+    parts_snapshot: args.parts as any,
+    labor_hours: args.laborHours,
+    labor_rate_cents: args.laborRateCents,
+    notes: args.notes,
+    prior_ceiling_cents: lockedCents,
+    ceiling_after_decision_cents: lockedCents,
+    submitted_at_ms: now,
+    submitted_by_user_id: args.submittedByUserId,
+    decision: "fixed_price_informational",
+    decided_at_ms: now,
+    decision_actor: "system",
+  });
+  return {
+    approvalId,
+    state: "fixed_price_locked",
+    totalCents: lockedCents,
+    ceilingCents: lockedCents,
   };
 }
 
@@ -650,6 +727,68 @@ export const getOpenApprovalForBooking = query({
   },
 });
 
+/**
+ * Shop-facing: the EFFECTIVE agreed quote for a booking — the latest approved
+ * mechanic adjustment (pre/mid-job) if any, with its frozen breakdown. Drives
+ * the read-only post-job confirmation so it shows the price the customer
+ * actually agreed to (parts → labor → tax/fee → total), all from one source so
+ * the numbers reconcile. Returns null when no adjustment was approved (the
+ * caller then falls back to the booking's original quote).
+ */
+export const getEffectiveQuoteForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    // Soft shop-staff check — mirror getActiveJobConflict's read-only style.
+    const membership = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .collect();
+    const inShop = membership.some(
+      (m: any) => String(m.shop_id) === String((booking as any).shop_id),
+    );
+    if (!inShop) return null;
+
+    const rows = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+
+    const APPROVED = new Set([
+      "approved",
+      "auto_approved_within_range",
+    ]);
+    // Latest approved row wins (rows are newest-first).
+    const eff = rows.find(
+      (r: any) =>
+        APPROVED.has(r.decision ?? "") &&
+        r.parts_subtotal_cents != null &&
+        r.labor_cents != null,
+    );
+    if (!eff) return null;
+
+    const partsCents = eff.parts_subtotal_cents ?? 0;
+    const laborCents = eff.labor_cents ?? 0;
+    const taxCents = eff.tax_cents ?? 0;
+    const feeCents = eff.service_fee_cents ?? 0;
+    return {
+      cycle: eff.cycle as string,
+      totalCents: eff.mechanic_set_price_cents,
+      partsCents,
+      laborCents,
+      taxCents,
+      feeCents,
+      partsSnapshot: eff.parts_snapshot ?? [],
+    };
+  },
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // SLA expiry (cron-triggered)
 // ─────────────────────────────────────────────────────────────────────────
@@ -799,6 +938,7 @@ export const getBookingApprovalState = query({
     const open = rows.find((r: any) => r.decision == null) ?? null;
 
     return {
+      booking_status: (booking as any).status as string,
       payment_approval_state:
         ((booking as any).payment_approval_state as string | undefined) ??
         "none",

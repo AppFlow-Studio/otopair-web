@@ -103,7 +103,7 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
   }, [String(bookingId)])
 
   const rawAudit = useQuery(api.audit_log.listByEntity,
-    bookingId ? { entity_type: 'booking', entity_id: bookingId } : 'skip')
+    bookingId ? { entity_type: 'booking', entity_id: bookingId, token: session?.token ?? '' } : 'skip')
   type AuditRow = { created_at: number; action: string; actor: string; detail?: string }
   const auditEntries = (rawAudit as AuditRow[] | undefined)?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
@@ -168,17 +168,97 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
             <div style={{ padding:22, borderRight:'1px solid var(--slate-100)' }}>
               {/* Services */}
               <div style={{ marginBottom:18 }}>
-                <SectionTitle label={`Services (${detail.services.length})`} />
+                <SectionTitle
+                  label={(() => {
+                    const catches = detail.services.filter((s) =>
+                      (s.quoteFlags ?? []).includes('fallback_catch'),
+                    ).length
+                    const corrected = detail.services.filter((s) =>
+                      (s.quoteFlags ?? []).includes('engine_corrected_parts'),
+                    ).length
+                    const aboveEngine = (detail.quoteFlags ?? []).includes(
+                      'labor_cost_above_engine',
+                    )
+                    const parts: string[] = []
+                    if (catches > 0) parts.push(`${catches} fallback catch${catches > 1 ? 'es' : ''}`)
+                    if (corrected > 0) parts.push(`${corrected} engine-corrected`)
+                    if (aboveEngine) {
+                      const delta = detail.laborCostDeltaAboveEngineDollars
+                      parts.push(
+                        delta != null
+                          ? `labor $+${delta.toFixed(2)} over engine`
+                          : 'labor above engine',
+                      )
+                    }
+                    return parts.length > 0
+                      ? `Services (${detail.services.length}) · ${parts.join(' · ')}`
+                      : `Services (${detail.services.length})`
+                  })()}
+                />
                 <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-                  {detail.services.map((s) => (
-                    <div key={String(s.id)} style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:8, padding:'8px 12px' }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-                        <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{s.name}</span>
-                        {s.category && <Badge tone="slate">{s.category}</Badge>}
+                  {detail.services.map((s) => {
+                    const flags = s.quoteFlags ?? []
+                    const isCatch = flags.includes('fallback_catch')
+                    const isCorrected = flags.includes('engine_corrected_parts')
+                    const isRefused = flags.includes('fallback_only')
+                    const otherFlags = flags.filter(
+                      (f) =>
+                        f !== 'fallback_catch' &&
+                        f !== 'engine_corrected_parts' &&
+                        f !== 'fallback_only',
+                    )
+                    const partsLow = s.engineBand?.partsLow
+                    const partsHigh = s.engineBand?.partsHigh
+                    const linePrice = s.bookingLinePartsCost
+                    const fmt = (n: number) => `$${n.toFixed(2)}`
+                    const deltaPct =
+                      partsLow != null && partsHigh != null && linePrice != null && partsLow > 0
+                        ? Math.round(
+                            ((linePrice - (partsLow + partsHigh) / 2) /
+                              ((partsLow + partsHigh) / 2)) *
+                              100,
+                          )
+                        : null
+                    return (
+                      <div key={String(s.id)} style={{ background:'#fff', border:`1px solid ${isCatch ? '#FED7AA' : isCorrected ? '#A7F3D0' : 'var(--slate-200)'}`, borderRadius:8, padding:'8px 12px' }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                          <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
+                            <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{s.name}</span>
+                            {isCatch && <Badge tone="orange">⚠ Fallback catch</Badge>}
+                            {isCorrected && <Badge tone="green">✓ Engine corrected</Badge>}
+                            {isRefused && <Badge tone="red">Engine refused</Badge>}
+                            {otherFlags.map((f) => (
+                              <Badge key={f} tone="slate">{f}</Badge>
+                            ))}
+                          </div>
+                          {s.category && <Badge tone="slate">{s.category}</Badge>}
+                        </div>
+                        {s.description && <div style={{ fontSize:11, color:'var(--slate-500)', marginTop:3 }}>{s.description}</div>}
+                        {partsLow != null && partsHigh != null && (
+                          <div style={{ fontSize:11, color:'var(--slate-500)', marginTop:4, fontFamily:'var(--mono)' }}>
+                            Engine parts band {fmt(partsLow)}–{fmt(partsHigh)}
+                            {linePrice != null && (
+                              <>
+                                {' · '}
+                                {isCorrected
+                                  ? <>customer agreed to engine band ({fmt(linePrice)})</>
+                                  : <>booking line {fmt(linePrice)}{deltaPct != null && <> · {deltaPct > 0 ? '+' : ''}{deltaPct}% delta</>}</>
+                                }
+                              </>
+                            )}
+                            {s.engineBand?.partsSource && (
+                              <> · <span style={{ color:'var(--slate-400)' }}>{s.engineBand.partsSource}</span></>
+                            )}
+                          </div>
+                        )}
+                        {isRefused && (
+                          <div style={{ fontSize:11, color:'var(--red-700)', marginTop:4 }}>
+                            Engine refused this service — routed to booking_approvals.
+                          </div>
+                        )}
                       </div>
-                      {s.description && <div style={{ fontSize:11, color:'var(--slate-500)', marginTop:3 }}>{s.description}</div>}
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
 

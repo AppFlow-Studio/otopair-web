@@ -35,7 +35,7 @@
 // IDEMPOTENCY
 // -----------
 // Per-step:
-//   - kb_topics seed routes through api.oto.memoryEditing.registerKbTopic
+//   - kb_topics seed routes through internal.oto.memoryEditing.registerKbTopic
 //     which is idempotent on topic_key (returns existing id on duplicate).
 //   - The four no-op steps record a processed=0 batch.
 // Re-running the driver after success is a no-op: every registerKbTopic

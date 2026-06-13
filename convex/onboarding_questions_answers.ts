@@ -57,6 +57,27 @@ export const saveQuestionAnswer = mutation({
   },
 });
 
+/**
+ * Read a user's onboarding car-knowledge level by user_id. Used by the Oto
+ * chat action to scale answer complexity (beginner vs experienced). Returns
+ * the raw stored value (number|string) or null if the user never answered.
+ */
+export const getCarKnowledgeLevelForUser = query({
+  args: { user_id: v.id("users") },
+  handler: async (ctx, args): Promise<number | string | null> => {
+    // B-P5: .first(), NOT .unique(). The save mutations check-then-insert
+    // with no uniqueness guarantee, so a race can leave a user with two
+    // onboarding rows — and .unique() throws on more than one, which (since
+    // the chat envelope reads this every turn) took down the whole Oto turn
+    // for that user. A read must degrade, not crash; take the first row.
+    const row = await ctx.db
+      .query("onboarding_questions_answers")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+      .first();
+    return row?.car_knowledge_level ?? null;
+  },
+});
+
 export const saveCarKnowledgeLevel = mutation({
   args: {
     level: v.number(),

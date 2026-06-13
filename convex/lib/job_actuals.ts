@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
+import { internal } from "../_generated/api";
 import {
   deleteSpecVarianceByJobActualId,
   upsertSpecVarianceRecord,
@@ -10,6 +11,7 @@ import {
   prejobReportValidator,
   vehicleUpdateValuesValidator,
 } from "./vehicle_passports";
+import { recomputeLaborForConfigService } from "./labor_aggregation";
 
 export const jobActualPartValidator = postjobPartValidator;
 
@@ -276,84 +278,12 @@ async function recomputeEmpiricalLaborTimes(
     now: number;
   }
 ) {
-  const finalizedActuals = (await ctx.db.query("job_actuals").collect()).filter(
-    (jobActual: any) =>
-      jobActual.finalized_at_ms != null && jobActual.actual_labor_minutes != null
-  );
-
-  const bookingCache = new Map<string, any>();
-  const vehicleCache = new Map<string, any>();
-  const matchingHours: number[] = [];
-
-  for (const jobActual of finalizedActuals) {
-    const bookingKey = String(jobActual.booking_id);
-    let booking = bookingCache.get(bookingKey);
-    if (booking === undefined) {
-      booking = await ctx.db.get(jobActual.booking_id);
-      bookingCache.set(bookingKey, booking ?? null);
-    }
-    if (!booking) continue;
-    if (String(primaryServiceId(booking) ?? "") !== String(serviceId)) continue;
-
-    const vehicleKey = String(booking.vin);
-    let vehicle = vehicleCache.get(vehicleKey);
-    if (vehicle === undefined) {
-      vehicle = await ctx.db
-        .query("vehicles")
-        .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
-        .unique();
-      vehicleCache.set(vehicleKey, vehicle ?? null);
-    }
-    if (!vehicle) continue;
-    if (String(vehicle.vehicle_config_id ?? "") !== String(vehicleConfigId)) continue;
-
-    matchingHours.push(jobActual.actual_labor_minutes / 60);
-  }
-
-  const laborRows = await ctx.db
-    .query("labor_times")
-    .withIndex("by_vehicle_config", (q: any) => q.eq("vehicle_config_id", vehicleConfigId))
-    .collect();
-  const laborRow =
-    laborRows.find((row: any) => String(row.service_id) === String(serviceId)) ?? null;
-
-  if (matchingHours.length === 0) {
-    if (laborRow) {
-      await ctx.db.patch(laborRow._id, {
-        empirical_hours: 0,
-        empirical_sample_size: 0,
-        empirical_p25: 0,
-        empirical_p75: 0,
-      });
-    }
-    return;
-  }
-
-  const empiricalHours =
-    matchingHours.reduce((sum, value) => sum + value, 0) / matchingHours.length;
-  const empiricalP25 = calculatePercentile(matchingHours, 0.25);
-  const empiricalP75 = calculatePercentile(matchingHours, 0.75);
-
-  if (laborRow) {
-    await ctx.db.patch(laborRow._id, {
-      empirical_hours: empiricalHours,
-      empirical_sample_size: matchingHours.length,
-      empirical_p25: empiricalP25,
-      empirical_p75: empiricalP75,
-    });
-    return;
-  }
-
-  await ctx.db.insert("labor_times", {
-    vehicle_config_id: vehicleConfigId,
-    service_id: serviceId,
-    empirical_hours: empiricalHours,
-    empirical_sample_size: matchingHours.length,
-    empirical_p25: empiricalP25,
-    empirical_p75: empiricalP75,
-    source: "job_actuals",
-    created_at: now,
-  });
+  // Delegates to the shared labor aggregator: book_hours from the robust median
+  // of catalog observations, empirical_hours from SINGLE-service post-job actuals
+  // gated at LABOR_EMPIRICAL_MIN_SAMPLES. (The previous implementation full-scanned
+  // job_actuals, used a plain mean, and credited a multi-service booking's whole
+  // duration to service_ids[0] — all fixed in recomputeLaborForConfigService.)
+  await recomputeLaborForConfigService(ctx, { vehicleConfigId, serviceId, now });
 }
 
 async function upsertSpecVarianceForJobActual(
@@ -487,6 +417,34 @@ export async function saveJobActualDraft(
     });
   }
 
+  // Labor-edit audit — mirror the parts-edit diff. Only log when the mechanic
+  // explicitly submits actual_labor_minutes (not the auto-derived elapsed-time
+  // value, which has no actuals key) and the value actually changed.
+  if (
+    actorUserId &&
+    actuals &&
+    Object.prototype.hasOwnProperty.call(actuals, "actual_labor_minutes")
+  ) {
+    const oldMin =
+      typeof (existing as any).actual_labor_minutes === "number"
+        ? (existing as any).actual_labor_minutes
+        : undefined;
+    const newMin =
+      typeof actuals.actual_labor_minutes === "number"
+        ? actuals.actual_labor_minutes
+        : undefined;
+    if (oldMin !== newMin) {
+      await ctx.db.insert("job_actual_labor_edits", {
+        booking_id: booking._id,
+        job_actual_id: existing._id,
+        old_minutes: oldMin,
+        new_minutes: newMin,
+        edited_by_user_id: actorUserId,
+        edited_at: now,
+      });
+    }
+  }
+
   applyActualsInputToPatch(patch, actuals);
 
   if (
@@ -529,6 +487,9 @@ export async function finalizeJobActuals(
     preferAutoLaborMinutes: true,
     actorUserId: userId,
   });
+  // Capture before patching: only the first finalization should emit the
+  // semantic fact, so a reopen → re-finalize doesn't duplicate it.
+  const isFirstFinalize = !draft.finalized_at_ms;
 
   await ctx.db.patch(draft._id, {
     completed_at_ms: draft.completed_at_ms ?? now,
@@ -544,7 +505,61 @@ export async function finalizeJobActuals(
     jobActual: finalized,
     now,
   });
+
+  if (isFirstFinalize) {
+    await deriveJobFindingsSemantics(ctx, { booking, jobActual: finalized, now });
+  }
+
   return finalized;
+}
+
+// (B) Mechanic-typed findings → Oto memory. Mirrors the document-parse path
+// (internalDeriveSemantics in vehicleDocuments_node.ts): the mechanic's
+// technician_notes become a `history_anchor` user_semantic_fact so Oto surfaces
+// them in <recent_context> with no prompt change. Scoped to the booking's
+// customer + vehicle. Scheduled (runAfter 0) because recordUserSemanticFact
+// sanitizes the payload and may throw — isolating it keeps a rejection there
+// from rolling back the finalize/derived-data writes that already committed.
+const SEMANTIC_PAYLOAD_MAX = 480;
+
+async function deriveJobFindingsSemantics(
+  ctx: any,
+  { booking, jobActual, now }: { booking: any; jobActual: any; now: number },
+) {
+  const raw =
+    typeof jobActual?.technician_notes === "string"
+      ? jobActual.technician_notes.trim()
+      : "";
+  if (!raw) return;
+  if (!booking?.user_id) return;
+
+  // Scope the fact to the right car (best-effort; the fact is still useful
+  // without it). `.first()` not `.unique()` so a duplicate-VIN row can't throw.
+  const vehicle = booking.vin
+    ? await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
+        .first()
+    : null;
+
+  const datePrefix = `[${new Date(now).toISOString().slice(0, 10)}] `;
+  const payloadText = `${datePrefix}Mechanic findings: ${raw}`.slice(
+    0,
+    SEMANTIC_PAYLOAD_MAX,
+  );
+
+  await ctx.scheduler.runAfter(
+    0,
+    internal.oto.memoryEditing.recordUserSemanticFact,
+    {
+      user_id: booking.user_id,
+      ...(vehicle?._id ? { vehicle_id: vehicle._id } : {}),
+      fact_type: "history_anchor" as const,
+      payload: payloadText,
+      source: "inferred_behavior" as const,
+      written_by: "system" as const,
+    },
+  );
 }
 
 export async function reopenJobActuals(

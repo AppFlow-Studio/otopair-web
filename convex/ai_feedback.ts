@@ -8,7 +8,13 @@
  */
 
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
+// Jun-10 IDOR sweep: every director-facing function below validates a
+// director session token SERVER-SIDE and derives the audit actor from the
+// session. The old surface let anyone with the deployment URL read every
+// user's transcript + email + phone (getConversationForFeedback) and forge
+// audit attribution via caller-supplied actorName/actorId.
+import { requireDirector } from "./directorGate";
 
 /**
  * submit — write a feedback row tied to the current Clerk-authenticated user.
@@ -65,11 +71,10 @@ export const submit = mutation({
 /**
  * listRecent — owner-side review query. Returns the most recent N feedback
  * rows ordered newest-first. Not user-scoped — this is for the OtoPair team
- * to inspect feedback across users. Callers (e.g. an admin tool / dashboard)
- * should gate access at their own surface; we intentionally do not enforce
- * an admin check here because the owner reviews from a privileged context.
+ * to inspect feedback across users. internalQuery (Jun-10 sweep): it has no
+ * panel caller; reach it via `npx convex run` when needed.
  */
-export const listRecent = query({
+export const listRecent = internalQuery({
   args: {
     limit: v.optional(v.number()),
     rating: v.optional(v.union(v.literal("thumbs_up"), v.literal("thumbs_down"))),
@@ -112,8 +117,9 @@ const OTOFB_OPEN_STATUSES = new Set(["new", "reviewed", "actionable"]);
 const normalizeStatus = (s: string | undefined) => s ?? "new";
 
 export const listByStatus = query({
-  args: { includeArchived: v.optional(v.boolean()) },
-  handler: async (ctx, { includeArchived = false }) => {
+  args: { token: v.string(), includeArchived: v.optional(v.boolean()) },
+  handler: async (ctx, { token, includeArchived = false }) => {
+    await requireDirector(ctx, token);
     const all = await ctx.db
       .query("ai_feedback")
       .withIndex("by_submitted_at")
@@ -169,7 +175,8 @@ export const listByStatus = query({
   },
 });
 
-export const openCount = query({
+// internalQuery (Jun-10 sweep): no panel caller today.
+export const openCount = internalQuery({
   args: {},
   handler: async (ctx) => {
     const all = await ctx.db.query("ai_feedback").collect();
@@ -181,10 +188,10 @@ export const updateStatus = mutation({
   args: {
     id: v.id("ai_feedback"),
     status: v.string(),
-    actorName: v.string(),
-    actorId: v.optional(v.id("director_users")),
+    token: v.string(),
   },
-  handler: async (ctx, { id, status, actorName, actorId }) => {
+  handler: async (ctx, { id, status, token }) => {
+    const actor = await requireDirector(ctx, token);
     const fb = await ctx.db.get(id);
     if (!fb) return;
     const prev = normalizeStatus(fb.review_status);
@@ -194,8 +201,8 @@ export const updateStatus = mutation({
       entity_type: "oto_feedback",
       entity_id: String(id),
       action: "status_change",
-      actor: actorName,
-      actor_id: actorId,
+      actor: actor.name,
+      actor_id: actor.userId,
       detail: `${prev} → ${status}`,
       created_at: Date.now(),
     });
@@ -206,10 +213,10 @@ export const archive = mutation({
   args: {
     id: v.id("ai_feedback"),
     archived: v.boolean(),
-    actorName: v.string(),
-    actorId: v.optional(v.id("director_users")),
+    token: v.string(),
   },
-  handler: async (ctx, { id, archived, actorName, actorId }) => {
+  handler: async (ctx, { id, archived, token }) => {
+    const actor = await requireDirector(ctx, token);
     const fb = await ctx.db.get(id);
     if (!fb) return;
     await ctx.db.patch(id, { archived, updated_at: Date.now() });
@@ -217,8 +224,8 @@ export const archive = mutation({
       entity_type: "oto_feedback",
       entity_id: String(id),
       action: "status_change",
-      actor: actorName,
-      actor_id: actorId,
+      actor: actor.name,
+      actor_id: actor.userId,
       detail: archived ? "Oto feedback archived" : "Oto feedback restored from archive",
       created_at: Date.now(),
     });
@@ -227,9 +234,11 @@ export const archive = mutation({
 
 // Returns the full conversation thread + the rated message highlighted.
 // Used by the director modal to show what Oto actually said in context.
+// Raw transcript + user email/phone — director-token-gated.
 export const getConversationForFeedback = query({
-  args: { feedbackId: v.id("ai_feedback") },
-  handler: async (ctx, { feedbackId }) => {
+  args: { feedbackId: v.id("ai_feedback"), token: v.string() },
+  handler: async (ctx, { feedbackId, token }) => {
+    await requireDirector(ctx, token);
     const fb = await ctx.db.get(feedbackId);
     if (!fb) return null;
     const convo = await ctx.db.get(fb.conversation_id);

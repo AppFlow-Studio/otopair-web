@@ -12,13 +12,33 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { summarizePartPrices } from "./part_prices";
+import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
 import {
   selectPart,
   normalizeDataQuality,
   type CandidateInput,
   type TraceEntry,
 } from "./partSelector";
+import {
+  getServicePartsSpec,
+  normalizeServiceSlug,
+  roleForSubcategory,
+  type PartRoleSpec,
+  type ServiceRole,
+} from "./lib/servicePartsReference";
+import {
+  effectiveServiceRole,
+  resolveRoleQuantity,
+  roleApplies,
+  type VehicleSpecBundle,
+} from "./lib/partRoleQuantity";
+import {
+  axleForBrakeService,
+  axlePositionByServiceId,
+  fitmentMatchesPosition,
+  isBrakeSlug,
+  type BrakeScope,
+} from "./lib/brakeScope";
 
 /** Confidence floor for the selector's confidence gate. Below this a fitment
  *  can still win, but only after the gate has eliminated everyone and the
@@ -26,6 +46,65 @@ import {
 export const PART_CONFIDENCE_GATE_THRESHOLD = 0.7;
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+/**
+ * Per-service parts rule. Replaces the legacy `BILLABLE_SUBCATEGORIES_BY_SERVICE`
+ * constant — director-editable via the Service Parts admin tab, seeded from the
+ * May 2026 PDF in seeds/seedServicePartsRules.ts.
+ *
+ *   - `allowed` is the union of core + as-needed subcategories. Null means
+ *     "no rule row for this service" → preserve legacy "no filter" behavior.
+ *   - `pinnedPartIdsBySubcategory` maps subcategory → pinned oem_parts._id.
+ *     When the resolver finds a candidate whose subcategory has a pinned
+ *     entry, it short-circuits the 7-layer selector and picks the pin.
+ *   - `qtyOverride` (when set) wins over serviceUnits.resolveServiceUnitCount.
+ */
+type ServicePartsRuleSnapshot = {
+  allowed: Set<string> | null;
+  pinnedPartIdsBySubcategory: Map<string, Id<"oem_parts">>;
+  qtyOverride: number | null;
+};
+
+async function loadServicePartsRule(
+  ctx: { db: any },
+  serviceId: Id<"services">,
+): Promise<ServicePartsRuleSnapshot> {
+  const rule = await ctx.db
+    .query("service_parts_rules")
+    .withIndex("by_service", (q: any) => q.eq("service_id", serviceId))
+    .first();
+  if (!rule) {
+    return {
+      allowed: null,
+      pinnedPartIdsBySubcategory: new Map(),
+      qtyOverride: null,
+    };
+  }
+  const allowed = new Set<string>([
+    ...rule.core_subcategories,
+    ...rule.as_needed_subcategories,
+  ]);
+  const pinnedPartIdsBySubcategory = new Map<string, Id<"oem_parts">>();
+  for (const p of rule.pinned_parts as Array<{
+    subcategory: string;
+    part_id: Id<"oem_parts">;
+  }>) {
+    pinnedPartIdsBySubcategory.set(p.subcategory, p.part_id);
+  }
+  return {
+    allowed,
+    pinnedPartIdsBySubcategory,
+    qtyOverride: rule.qty_override ?? null,
+  };
+}
+
+function isBillableSubcategoryViaRule(
+  rule: ServicePartsRuleSnapshot,
+  subcategory: string | undefined | null,
+): boolean {
+  if (rule.allowed == null) return true; // no rule row → legacy behavior
+  return subcategory != null && rule.allowed.has(subcategory);
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -38,7 +117,10 @@ export interface PackageQuestion {
 }
 
 export interface ResolvedFitment {
-  fitment_id: Id<"part_fitments">;
+  /** Optional: snapshot-sourced rows (pre/post-job, quote-anchored) have no
+   *  originating fitment row — only the resolver path sets this. No consumer
+   *  reads it; it's a provenance breadcrumb. */
+  fitment_id?: Id<"part_fitments">;
   part_id: Id<"oem_parts">;
   oem_part_number: string;
   name: string;
@@ -132,11 +214,23 @@ export const getPartsForService = query({
       (f) => f.package_code == null || confirmed.has(f.package_code),
     );
 
-    // 3. Hydrate the part info for each fitment.
+    // Load the director-editable rule once for this service so the per-fitment
+    // loop below can apply the subcategory allowlist without re-querying.
+    const serviceForRule = await ctx.db
+      .query("services")
+      .withIndex("by_slug", (q) => q.eq("slug", args.serviceSlug))
+      .first();
+    const rule = serviceForRule
+      ? await loadServicePartsRule(ctx, serviceForRule._id)
+      : { allowed: null, pinnedPartIdsBySubcategory: new Map(), qtyOverride: null };
+
+    // 3. Hydrate the part info for each fitment. Drop subcategories that
+    //    aren't billable for this service per service_parts_rules.
     const resolved: ResolvedFitment[] = [];
     for (const f of applicable) {
       const part = await ctx.db.get(f.part_id);
       if (!part) continue;
+      if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
       resolved.push({
         fitment_id: f._id,
         part_id: f.part_id,
@@ -170,6 +264,71 @@ export const getOemPartsForBooking = query({
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return [];
 
+    // ── Quote-anchored source of truth ────────────────────────────────────
+    // Pre-job (and post-job) must list exactly what the system QUOTED — the
+    // frozen `priced_parts_snapshot` (one row per locked role winner) — not
+    // every catalog candidate the resolver considered. Without this the dialog
+    // listed all six oil filters on file for the chassis instead of the one
+    // oil filter on the quote. The snapshot is the same data the customer saw
+    // on Review & Pay and the mechanic sees in the job scope, so all three
+    // surfaces agree. Grouped by service, in the booking's service order.
+    const snapshot = ((booking as any).priced_parts_snapshot ?? []) as Array<{
+      service_id: Id<"services">;
+      part_id?: Id<"oem_parts">;
+      oem_number: string;
+      part_name: string;
+      quantity: number;
+      role_key?: string;
+    }>;
+    if (snapshot.length > 0) {
+      const bySvc = new Map<string, OemPartsForService>();
+      for (const row of snapshot) {
+        const key = String(row.service_id);
+        let entry = bySvc.get(key);
+        if (!entry) {
+          const service = await ctx.db.get(row.service_id);
+          if (!service?.slug) continue;
+          entry = {
+            serviceId: row.service_id,
+            serviceName: service.name,
+            serviceSlug: service.slug,
+            parts: [],
+          };
+          bySvc.set(key, entry);
+        }
+        // Position is implicit in the snapshot (it already froze the booked
+        // axle); surface it from the role_key for the brakes display only.
+        const rk = row.role_key ?? "";
+        const position = /^front_/.test(rk)
+          ? "front"
+          : /^rear_/.test(rk)
+            ? "rear"
+            : undefined;
+        entry.parts.push({
+          part_id: row.part_id as Id<"oem_parts">,
+          oem_part_number: row.oem_number,
+          name: row.part_name,
+          position,
+          quantity_needed: row.quantity,
+        });
+      }
+      const out: OemPartsForService[] = [];
+      for (const sid of booking.service_ids ?? []) {
+        const entry = bySvc.get(String(sid));
+        if (entry) out.push(entry);
+      }
+      // Defensive: emit any snapshot service not on service_ids (shouldn't
+      // happen, but never silently drop a quoted line).
+      for (const entry of bySvc.values()) {
+        if (!out.includes(entry)) out.push(entry);
+      }
+      return out;
+    }
+
+    // ── Legacy fallback (no priced snapshot) ──────────────────────────────
+    // Older bookings created before quote snapshotting carry no quoted parts;
+    // there's nothing to anchor to, so fall back to the informational catalog
+    // resolve (every billable fitment for the booked axle).
     const vehicle = await ctx.db
       .query("vehicles")
       .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
@@ -179,9 +338,23 @@ export const getOemPartsForBooking = query({
     const configId = vehicle.vehicle_config_id;
     const out: OemPartsForService[] = [];
 
+    // Customer's axle choice per service (brake pads front/rear/both). Drives
+    // the position filter below so the card shows only what was booked — a
+    // "Rear pads only" job must not list front pads.
+    const axleByServiceId = axlePositionByServiceId(booking);
+
     for (const serviceId of booking.service_ids ?? []) {
       const service = await ctx.db.get(serviceId);
       if (!service?.slug) continue;
+
+      const position = isBrakeSlug(service.slug)
+        ? axleForBrakeService(
+            booking,
+            String(serviceId),
+            service.slug,
+            axleByServiceId,
+          )
+        : undefined;
 
       const fitments = await ctx.db
         .query("part_fitments")
@@ -194,10 +367,18 @@ export const getOemPartsForBooking = query({
       // gate on owner package answers here, just show the universal base parts.
       const base = fitments.filter((f) => f.package_code == null);
 
+      const rule = await loadServicePartsRule(ctx, serviceId);
+
       const resolved: ResolvedFitment[] = [];
       for (const f of base) {
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
+        if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
+        // Scope to the booked axle. Position-neutral parts (hardware kits,
+        // grease) survive a single-axle filter; "both"/unspecified keeps all.
+        if (!fitmentMatchesPosition(f.position, part.subcategory, position)) {
+          continue;
+        }
         resolved.push({
           fitment_id: f._id,
           part_id: f.part_id,
@@ -221,6 +402,50 @@ export const getOemPartsForBooking = query({
     }
 
     return out;
+  },
+});
+
+/**
+ * The brake axle(s) a booking actually covers — drives the pre-job brakes
+ * section so a "Rear pads only" job hides the front-pad field (and vice
+ * versa). Union across every brake/rotor service on the booking. When a brake
+ * service carries no explicit axle option (legacy booking), we fall back to
+ * "both" so nothing is hidden by mistake. Returns hasBrakeWork:false for
+ * non-brake bookings — the dialog then keeps both pad fields visible as
+ * optional passport capture.
+ */
+export const getBrakeScopeForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args): Promise<BrakeScope> => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return { hasBrakeWork: false, front: false, rear: false };
+
+    const axleByServiceId = axlePositionByServiceId(booking);
+    let hasBrakeWork = false;
+    let sawAxleSignal = false;
+    let front = false;
+    let rear = false;
+
+    for (const serviceId of booking.service_ids ?? []) {
+      const service = await ctx.db.get(serviceId);
+      if (!service?.slug || !isBrakeSlug(service.slug)) continue;
+      hasBrakeWork = true;
+      const axle = axleForBrakeService(
+        booking,
+        String(serviceId),
+        service.slug,
+        axleByServiceId,
+      );
+      if (!axle) continue;
+      sawAxleSignal = true;
+      if (axle === "front" || axle === "both") front = true;
+      if (axle === "rear" || axle === "both") rear = true;
+    }
+
+    if (!hasBrakeWork) return { hasBrakeWork: false, front: false, rear: false };
+    // Default to both axles when the booking recorded no axle option.
+    if (!sawAxleSignal) return { hasBrakeWork: true, front: true, rear: true };
+    return { hasBrakeWork: true, front, rear };
   },
 });
 
@@ -250,6 +475,21 @@ export type PricedFitment = {
   line_total_high: number;
   has_price_data: boolean;
   price_sample_size: number;
+  /** Service Parts Reference role fields (2026-06). Which part role this line
+   *  fills (role_key === oem_parts.subcategory), how it participates in the
+   *  quote (core locks, as_needed ranges, kit bundles), and how the billed
+   *  quantity was derived (capacity math for fluids). */
+  service_role?: ServiceRole;
+  role_key?: string;
+  quantity_basis?: string;
+  /** True when this line goes into the locked quote (core, or kit with
+   *  includeByDefault) — mirrors the snapshot's `includeInLockedQuote`. The
+   *  customer's Review & Pay renders EVERY locked line (not just the primary
+   *  winner) so its parts match the mechanic's frozen `priced_parts_snapshot`.
+   *  Undefined on loser candidates (no role winner). */
+  locked?: boolean;
+  /** True when this is a synthesized universal consumable line. */
+  virtual?: boolean;
 };
 
 export type PricedPartsForService = {
@@ -268,7 +508,17 @@ export type PricedPartsForService = {
   /** True when the confidence gate eliminated every candidate on this service
    *  and we fell back to the full pool. */
   lowConfidence: boolean;
-  partsTotal: number;        // winner.line_total + secondaryWinner.line_total (or 0)
+  /** Σ line_total over the LOCKED lines in `parts` (core + default kits).
+   *  Pre-reference this was just the winner's line. */
+  partsTotal: number;
+  /** Σ line_total over as_needed lines — the discovery adder that turns the
+   *  quote into a range (high side = partsTotal + asNeededTotal). */
+  asNeededTotal: number;
+  /** ALL resolved part lines for the service, one per role (engine oil +
+   *  filter + washer…), in reference order. `winner` above is parts[primary]
+   *  for back-compat. For "both" axle bookings this contains front + rear
+   *  lines with shared roles (grease) billed once. */
+  parts: PricedFitment[];
   /** Second axle's winner when the customer chose `position: "both"` (e.g.
    *  Brake Pad Replacement on all four). The primary `winner` holds front,
    *  `secondaryWinner` holds rear. Null for single-axle (or non-positional)
@@ -278,34 +528,190 @@ export type PricedPartsForService = {
   secondaryLosers?: PricedFitment[];
 };
 
-// ─── Shared resolver: from (vin, config, service) → winner + losers + trace ─
+// ─── Shared resolver: from (vin, config, service) → role winners + trace ────
 
 type WinnerCandidate = {
+  /** Real fitment row, or a synthetic stub for universal-consumable
+   *  fallbacks (virtual: true on the RoleWinner). */
   fitment: Doc<"part_fitments">;
   part: Doc<"oem_parts">;
   priceSummary: Awaited<ReturnType<typeof summarizePartPrices>>;
 };
 
+/** One resolved part ROLE within a service (oil, filter, washer, grease…).
+ *  The 7-layer scorer runs *within* each role group — it picks among
+ *  candidate SKUs for the same role, never across roles. */
+export type RoleWinner = {
+  /** === oem_parts.subcategory (or category fallback for legacy rows). */
+  roleKey: string;
+  /** core | as_needed | kit — after vehicle-conditional promotion. */
+  serviceRole: ServiceRole;
+  candidate: WinnerCandidate;
+  losers: WinnerCandidate[];
+  source: "vin_sticky" | "scored" | "universal_fallback";
+  trace?: TraceEntry[];
+  eliminatedByGatePartIds?: Id<"oem_parts">[];
+  lowConfidence: boolean;
+  /** Billed quantity + audit string (capacity math for fluids,
+   *  per-cylinder for plugs). See lib/partRoleQuantity.ts. */
+  quantity: number;
+  quantityBasis: string;
+  /** core, or kit with includeByDefault — goes into the locked snapshot.
+   *  as_needed stays out of the contract (discovery range only). */
+  includeInLockedQuote: boolean;
+  /** True when this line is a synthesized universal consumable (no enriched
+   *  fitment existed for a core role with a universalFallback). */
+  virtual?: boolean;
+};
+
 export type ResolvedServiceWinner = {
+  /** Back-compat: the PRIMARY role's winner (pads for a brake job, oil for
+   *  an oil change). Full multi-part output lives in `roleWinners`. */
   winner: WinnerCandidate | null;
+  /** Back-compat: the primary role's losing candidates. */
   losers: WinnerCandidate[];
   source: "vin_sticky" | "scored" | "no_candidates";
   trace?: TraceEntry[];
   eliminatedByGatePartIds?: Id<"oem_parts">[];
   lowConfidence: boolean;
+  /** One winner per part role, in reference order (primary/core first). */
+  roleWinners: RoleWinner[];
 };
+
+// Fresh object per call — callers receive mutable arrays.
+function emptyResolution(): ResolvedServiceWinner {
+  return {
+    winner: null,
+    losers: [],
+    source: "no_candidates",
+    lowConfidence: false,
+    roleWinners: [],
+  };
+}
+
+/** Fetch the spec rows quantity/condition resolution needs — once per
+ *  resolver call, only when the service's reference roles require any. */
+async function fetchSpecBundle(
+  ctx: { db: any },
+  vehicleConfigId: Id<"vehicle_configs">,
+): Promise<VehicleSpecBundle> {
+  const config = await ctx.db.get(vehicleConfigId);
+  if (!config) return {};
+  const [engine, transmission, chassis, drivetrain] = await Promise.all([
+    config.engine_id ? ctx.db.get(config.engine_id) : Promise.resolve(null),
+    config.transmission_id ? ctx.db.get(config.transmission_id) : Promise.resolve(null),
+    config.chassis_code
+      ? ctx.db
+          .query("chassis_specs")
+          .withIndex("by_chassis_code", (q: any) => q.eq("chassis_code", config.chassis_code))
+          .first()
+      : Promise.resolve(null),
+    ctx.db
+      .query("drivetrain_configs")
+      .withIndex("by_vehicle_config", (q: any) => q.eq("vehicle_config_id", vehicleConfigId))
+      .first(),
+  ]);
+  return { config, engine, transmission, chassis, drivetrain };
+}
+
+/** Query part_fitments for a service_type under both slug forms (dash from
+ *  seed_services, underscore from the v3 pipeline), de-duped by _id. */
+async function fitmentsForServiceType(
+  ctx: { db: any },
+  vehicleConfigId: Id<"vehicle_configs">,
+  serviceSlug: string,
+): Promise<Doc<"part_fitments">[]> {
+  const slugDash = serviceSlug.replace(/_/g, "-");
+  const slugUnderscore = serviceSlug.replace(/-/g, "_");
+  const slugAliases =
+    slugDash === slugUnderscore ? [slugUnderscore] : [slugUnderscore, slugDash];
+
+  const seen = new Set<string>();
+  const fitments: Doc<"part_fitments">[] = [];
+  for (const slug of slugAliases) {
+    const rows = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_config_service", (q: any) =>
+        q.eq("vehicle_config_id", vehicleConfigId).eq("service_type", slug),
+      )
+      .collect();
+    for (const f of rows) {
+      const key = String(f._id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fitments.push(f);
+    }
+  }
+  return fitments;
+}
+
+/** Plausibility cap for consumable roles: a candidate whose quote unit price
+ *  exceeds this multiple of the role's reference anchor (universalFallback
+ *  defaultPriceUsd) is treated as a captured MSRP/multi-pack/garbage figure
+ *  (e.g. the Jun-10 $49 crush washer vs its $4 anchor — 12×). 6× is generous
+ *  for genuine OEM-premium consumables while catching order-of-magnitude
+ *  grabs that MAD outlier rejection can't see at n<4 sources. */
+const PLAUSIBLE_ANCHOR_MULT = 6;
+
+/**
+ * Synthesize a role's universal-consumable candidate: the seeded oem_parts
+ * row (category "consumable", subcategory === roleKey) with a PRICED summary,
+ * or null when the seed is missing/unpriced. Used in two places:
+ *   1. CORE roles with NO enriched fitment (the original fallback), and
+ *   2. the all-unpriced SWAP (Jun-10 live finding, 750i gear oil): a junk
+ *      fitment with zero trustworthy price rows used to BLOCK the fallback —
+ *      synthesis only fired when no fitment group existed — so the role
+ *      billed $0 while a priced seed sat unused.
+ */
+async function synthesizeUniversalCandidate(
+  ctx: { db: any },
+  role: PartRoleSpec,
+  slug: string,
+  vehicleConfigId: Id<"vehicle_configs">,
+  serviceRole: ServiceRole,
+): Promise<WinnerCandidate | null> {
+  if (!role.universalFallback) return null;
+  const universalPart = await ctx.db
+    .query("oem_parts")
+    .withIndex("by_subcategory", (q: any) => q.eq("subcategory", role.roleKey))
+    .filter((q: any) => q.eq(q.field("category"), "consumable"))
+    .first();
+  if (!universalPart) return null; // seed not run yet — skip silently
+  const priceSummary = await summarizePartPrices(ctx, universalPart._id);
+  if (priceSummary.sample_size === 0) return null; // unpriced seed — skip
+  const stubFitment = {
+    _id: `virtual:${slug}:${role.roleKey}`,
+    part_id: universalPart._id,
+    vehicle_config_id: vehicleConfigId,
+    service_type: slug,
+    quantity_needed: undefined,
+    position: undefined,
+    package_code: undefined,
+    service_role: serviceRole,
+    confidence: 1, // deliberate fallback, not a low-confidence guess
+    mechanic_verified: false,
+  } as unknown as Doc<"part_fitments">;
+  return { fitment: stubFitment, part: universalPart, priceSummary };
+}
 
 /**
  * Core selection helper. Used at booking-create time (via
  * computePricedPartsSnapshot) and on the Review & Pay query.
  *
- * Composition (per product decision):
- *   1. If `vehicle_part_preferences` has an `is_default=true` row for
- *      (vin, service_id) AND that part_id is in this vehicle's fitment pool →
- *      VIN-sticky wins, skip scoring. "We know this car has XYZ inside it."
- *   2. Otherwise run the 7-layer scorer over the fitment pool.
- *   3. With no fitments at all → `source: "no_candidates"` (caller falls back
- *      to default_parts_estimate).
+ * Selection runs PER PART ROLE (oil + filter + washer…), per the Service
+ * Parts Reference (lib/servicePartsReference.ts):
+ *   1. Labor-only services return no parts, unconditionally.
+ *   2. Fitments are pulled for this service AND any borrowed services the
+ *      reference declares (rotor jobs borrow pads from brake_pad_replacement).
+ *   3. Candidates are grouped by role (part.subcategory); within each group:
+ *      VIN-sticky preference first, otherwise the 7-layer scorer.
+ *   4. Reference CORE roles with no enriched fitment but a universalFallback
+ *      get a synthesized consumable line (grease, washers, DOT4) so core
+ *      coverage never silently drops.
+ *   5. Quantities resolve per role: fluids = ceil(capacity / packageSize)
+ *      from the vehicle's spec rows, plugs = per cylinder, else fitment/fixed.
+ *   6. `winner`/`losers` stay back-compat (= the PRIMARY role's outcome);
+ *      the full multi-part output is `roleWinners`.
  */
 export async function resolveWinningPartForService(
   ctx: { db: any },
@@ -319,41 +725,36 @@ export async function resolveWinningPartForService(
      *  whose `position` matches (case-insensitive) survive into the scorer.
      *  Use "front"/"rear" for single-axle resolution; "both" or undefined
      *  means no filter (legacy behavior — caller takes responsibility for
-     *  what that picks). */
+     *  what that picks). Positionless roles (caliper grease) bypass it. */
     positionFilter?: string;
+    /** Set on the SECOND pass of a "both" (front+rear) resolution so shared,
+     *  positionless roles (grease) and universal fallbacks aren't billed
+     *  twice. */
+    suppressSharedRoles?: boolean;
   },
 ): Promise<ResolvedServiceWinner> {
-  // The catalog has two co-existing slug forms for the same service —
-  // `seed_services.ts` writes dash form ("brake-pads") while the v3
-  // enrichment pipeline (v3pipeline.ts:829) writes underscore form
-  // ("brake_pad_replacement") into part_fitments.service_type. Query
-  // both forms so we don't return empty just because the customer's
-  // booked service.slug happens to be the dash form. Safe because
-  // service_type is scoped to a single vehicle_config_id, so cross-talk
-  // is impossible.
-  const slugDash = args.serviceSlug;
-  const slugUnderscore = args.serviceSlug.replace(/-/g, "_");
-  const slugAliases = slugDash === slugUnderscore ? [slugDash] : [slugDash, slugUnderscore];
+  const slug = normalizeServiceSlug(args.serviceSlug);
+  const spec = getServicePartsSpec(slug);
 
-  const fitmentBuckets: Doc<"part_fitments">[][] = [];
-  for (const slug of slugAliases) {
-    const rows = await ctx.db
-      .query("part_fitments")
-      .withIndex("by_config_service", (q: any) =>
-        q.eq("vehicle_config_id", args.vehicleConfigId).eq("service_type", slug),
-      )
-      .collect();
-    fitmentBuckets.push(rows);
+  // Labor-only services NEVER bill parts (Service Parts Reference). Also
+  // covers services whose parts run through a dedicated flow (tires).
+  if (spec && (spec.laborOnly || spec.handledByDedicatedFlow)) {
+    return emptyResolution();
   }
-  // De-dup by fitment _id in case both slug forms point at the same row.
-  const seen = new Set<string>();
-  const fitments: Doc<"part_fitments">[] = [];
-  for (const bucket of fitmentBuckets) {
-    for (const f of bucket) {
-      const key = String(f._id);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      fitments.push(f);
+
+  // ── Collect fitments: own service + reference-borrowed services ──────────
+  const fitments = await fitmentsForServiceType(ctx, args.vehicleConfigId, slug);
+  const ownFitmentIds = new Set(fitments.map((f) => String(f._id)));
+
+  const borrowedServices = new Set<string>();
+  for (const r of spec?.roles ?? []) {
+    if (r.fitmentService) borrowedServices.add(normalizeServiceSlug(r.fitmentService));
+  }
+  for (const borrowed of borrowedServices) {
+    if (borrowed === slug) continue;
+    const rows = await fitmentsForServiceType(ctx, args.vehicleConfigId, borrowed);
+    for (const f of rows) {
+      if (!ownFitmentIds.has(String(f._id))) fitments.push(f);
     }
   }
 
@@ -362,40 +763,148 @@ export async function resolveWinningPartForService(
       f.package_code == null || args.confirmedPackages.has(f.package_code),
   );
 
-  // Hydrate parts first — we need `oem_parts.subcategory` for position
-  // matching as a fallback when `part_fitments.position` is null. The v3
-  // pipeline writes subcategory reliably (e.g. "front_brake_pad" /
-  // "rear_brake_pad") but `position` is only set on the OEM seed map and
-  // can be missing on older fitment rows.
+  // Director-editable rule: subcategory allowlist + pinned parts. Loaded
+  // once per resolver call; null `allowed` preserves the legacy "no filter"
+  // behavior for any service without a rule row.
+  const rule = await loadServicePartsRule(ctx, args.serviceId);
+
+  // Hydrate parts first — we need `oem_parts.subcategory` both for role
+  // grouping (Service Parts Reference) and for position matching as a
+  // fallback when `part_fitments.position` is null. The v3 pipeline writes
+  // subcategory reliably (e.g. "front_brake_pad" / "rear_brake_pad") but
+  // `position` is only set on the OEM seed map and can be missing on older
+  // fitment rows.
+  //
+  // Billing-subcategory gate: drop fitments whose subcategory isn't on the
+  // service's billable allowlist per service_parts_rules. Pipeline still
+  // stores these for the vehicle profile; we just don't price them.
   const hydratedAll: WinnerCandidate[] = [];
   for (const f of packageGated) {
     const part = await ctx.db.get(f.part_id);
     if (!part) continue;
+    if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
     const priceSummary = await summarizePartPrices(ctx, f.part_id);
     hydratedAll.push({ fitment: f, part, priceSummary });
   }
 
-  // Position-aware narrowing — only after the package gate. "both" /
-  // undefined → no filter. A candidate matches when EITHER its
-  // fitment.position OR its part.subcategory carries the requested axle.
-  const positionFilter = args.positionFilter?.toLowerCase();
-  const hydrated =
-    positionFilter && positionFilter !== "both"
-      ? hydratedAll.filter((c) => {
-          const pos = (c.fitment.position ?? "").toLowerCase();
-          const sub = (c.part.subcategory ?? "").toLowerCase();
-          if (pos === positionFilter) return true;
-          // subcategory like "front_brake_pad" / "rear_brake_pad" / "front_rotor"
-          if (sub.startsWith(`${positionFilter}_`)) return true;
-          return false;
-        })
-      : hydratedAll;
+  // Spec bundle for fluid capacities / cylinder counts / condition flags —
+  // fetched once, only when the reference needs it for this service.
+  const needsBundle = (spec?.roles ?? []).some(
+    (r) => r.quantity.kind !== "fixed" || r.condition != null,
+  );
+  const bundle: VehicleSpecBundle = needsBundle
+    ? await fetchSpecBundle(ctx, args.vehicleConfigId)
+    : {};
 
-  if (hydrated.length === 0) {
-    return { winner: null, losers: [], source: "no_candidates", lowConfidence: false };
+  // ── Role grouping ─────────────────────────────────────────────────────────
+  // Each candidate maps to a reference role via its part's subcategory (with
+  // a category fallback for legacy rows). Own-service candidates that match
+  // no declared role still form ad-hoc groups (pre-reference behavior, and
+  // services without a spec); BORROWED candidates that match no declared
+  // role are dropped — we only borrowed them for specific roles.
+  type Group = {
+    roleKey: string;
+    role: PartRoleSpec | null;
+    candidates: WinnerCandidate[];
+  };
+  const groups = new Map<string, Group>();
+  for (const c of hydratedAll) {
+    const role = roleForSubcategory(slug, c.part.subcategory, c.part.category);
+    const isBorrowed = !ownFitmentIds.has(String(c.fitment._id));
+    if (!role && isBorrowed) continue;
+    const roleKey =
+      role?.roleKey ??
+      (c.part.subcategory ?? c.part.category ?? "unknown").toLowerCase();
+    const g = groups.get(roleKey) ?? { roleKey, role, candidates: [] };
+    g.candidates.push(c);
+    groups.set(roleKey, g);
   }
 
-  // VIN-sticky check — prefer a previously installed part on this exact VIN.
+  // ── Position narrowing (per group) ────────────────────────────────────────
+  // "both"/undefined → no filter. Positionless roles (grease) bypass the
+  // filter, but are dropped entirely on the suppressed (rear) pass of a
+  // "both" resolution so they bill once.
+  //
+  // Axle default: for services whose reference declares BOTH front_* and
+  // rear_* primary roles (brake pads, rotors), an omitted position would now
+  // bill BOTH axles — a silent price double the legacy single-winner
+  // behavior never produced. Callers that want both axles must say "both"
+  // (which runs two passes); an omitted position defaults to front.
+  let positionFilter = args.positionFilter?.toLowerCase();
+  if (!positionFilter && spec) {
+    const primaryAxles = new Set(
+      spec.roles
+        .filter((r) => r.primary)
+        .map((r) => /^(front|rear)_/.exec(r.roleKey)?.[1])
+        .filter(Boolean),
+    );
+    if (primaryAxles.size > 1) positionFilter = "front";
+  }
+  const filteredGroups: Group[] = [];
+  for (const g of groups.values()) {
+    if (g.role?.positionless) {
+      if (!args.suppressSharedRoles) filteredGroups.push(g);
+      continue;
+    }
+    if (!positionFilter || positionFilter === "both") {
+      filteredGroups.push(g);
+      continue;
+    }
+    const kept = g.candidates.filter((c) => {
+      const pos = (c.fitment.position ?? "").toLowerCase();
+      const sub = (c.part.subcategory ?? "").toLowerCase();
+      if (pos === positionFilter) return true;
+      // subcategory like "front_brake_pad" / "rear_brake_pad" / "front_rotor"
+      if (sub.startsWith(`${positionFilter}_`)) return true;
+      // Position-neutral parts (oil filter, battery) carry neither marker —
+      // they survive a position pass untouched.
+      return pos === "" && !/^(front|rear)_/.test(sub);
+    });
+    if (kept.length > 0) filteredGroups.push({ ...g, candidates: kept });
+  }
+
+  // ── Universal-consumable fallbacks for missing CORE roles ─────────────────
+  // Only on the unsuppressed pass, only for roles the vehicle qualifies for,
+  // and only when the reference defines a fallback. Synthesized candidates
+  // carry a stub fitment and skip the scorer (source: universal_fallback).
+  const virtualRoleKeys = new Set<string>();
+  if (spec && !args.suppressSharedRoles) {
+    for (const role of spec.roles) {
+      if (!role.universalFallback) continue;
+      if (filteredGroups.some((g) => g.roleKey === role.roleKey)) continue;
+      if (!roleApplies(role, bundle)) continue;
+      if (effectiveServiceRole(role, bundle) !== "core") continue;
+      if (
+        positionFilter &&
+        positionFilter !== "both" &&
+        !role.positionless &&
+        /^(front|rear)_/.test(role.roleKey) &&
+        !role.roleKey.startsWith(`${positionFilter}_`)
+      ) {
+        continue;
+      }
+      const candidate = await synthesizeUniversalCandidate(
+        ctx,
+        role,
+        slug,
+        args.vehicleConfigId,
+        effectiveServiceRole(role, bundle),
+      );
+      if (!candidate) continue; // seed not run / unpriced — skip silently
+      filteredGroups.push({
+        roleKey: role.roleKey,
+        role,
+        candidates: [candidate],
+      });
+      virtualRoleKeys.add(role.roleKey);
+    }
+  }
+
+  if (filteredGroups.length === 0) {
+    return emptyResolution();
+  }
+
+  // ── VIN-sticky preference (prior install on this exact VIN) ──────────────
   const vinPrefs = await ctx.db
     .query("vehicle_part_preferences")
     .withIndex("by_vin_service", (q: any) =>
@@ -405,57 +914,216 @@ export async function resolveWinningPartForService(
   const stickyDefault = vinPrefs.find(
     (p: Doc<"vehicle_part_preferences">) => p.is_default === true,
   );
-  if (stickyDefault) {
-    const sticky = hydrated.find((c) => c.part._id === stickyDefault.part_id);
-    if (sticky) {
-      const losers = hydrated.filter((c) => c.part._id !== sticky.part._id);
-      return { winner: sticky, losers, source: "vin_sticky", lowConfidence: false };
-    }
-    // Sticky preference points at a part no longer in the fitment pool (e.g.
-    // catalog churn). Fall through to scoring rather than picking a part we
-    // can't price.
-  }
 
-  // 7-layer scorer.
+  // ── Score each role group ─────────────────────────────────────────────────
   const now = Date.now();
-  const inputs: CandidateInput[] = hydrated.map((c) => ({
-    part_id: c.part._id,
-    confidence: c.fitment.confidence ?? 0,
-    mechanic_verified: c.fitment.mechanic_verified === true,
-    data_quality: normalizeDataQuality(
-      c.fitment.data_quality ?? c.part.data_quality ?? null,
-    ),
-    prices: c.priceSummary.sources_used.map((s) => ({
-      price: s.price,
-      refreshed_days_ago:
-        s.refreshed_at != null
-          ? Math.max(0, Math.floor((now - s.refreshed_at) / MS_PER_DAY))
-          : 9999,
-    })),
-  }));
+  const roleWinners: RoleWinner[] = [];
+  for (const g of filteredGroups) {
+    // Skip role groups the vehicle positively doesn't qualify for
+    // (serviceable_filter === false). Fail-open on missing data.
+    if (g.role && !roleApplies(g.role, bundle)) continue;
 
-  const result = selectPart(inputs, {
-    gateEnabled: true,
-    gateThreshold: PART_CONFIDENCE_GATE_THRESHOLD,
-  });
-  if (!result.winner) {
-    return { winner: null, losers: [], source: "no_candidates", lowConfidence: false };
+    const effRole: ServiceRole = g.role ? effectiveServiceRole(g.role, bundle) : "core";
+    const { quantity, quantityBasis } = (() => {
+      // Use the winner's fitment quantity after selection; compute from the
+      // group's first candidate now and recompute below if a different
+      // candidate wins (quantities within a role group are homogeneous in
+      // practice — same part type).
+      return (({ quantity, basis }) => ({ quantity, quantityBasis: basis }))(
+        resolveRoleQuantity(g.role, bundle, g.candidates[0]?.fitment.quantity_needed),
+      );
+    })();
+    const includeInLockedQuote =
+      effRole === "core" || (effRole === "kit" && g.role?.includeByDefault === true);
+
+    // Unusable-group swap (Jun-10): when EVERY enriched candidate in a
+    // declared CORE role group is unusable for billing — either UNPRICED
+    // (empty summary → bills $0/price_unknown; the 750i's junk gear-oil
+    // fitment blocked a perfectly good $22 seed) or IMPLAUSIBLE (price
+    // > PLAUSIBLE_ANCHOR_MULT × the reference's defaultPriceUsd anchor; the
+    // Jetta's crush washer billed $49 against a $4 anchor — a captured
+    // MSRP/multi-pack/garbage figure that survives MAD at n<4) — swap to the
+    // priced universal seed. Anchors exist only on consumable roles (the
+    // roles that declare universalFallback), so real parts (pads, rotors,
+    // batteries) are never price-capped by this. Suppressed (rear) passes
+    // skip positionless roles, mirroring the virtual block, so shared
+    // consumables still bill once.
+    const anchorUsd = g.role?.universalFallback?.defaultPriceUsd;
+    const unusableForBilling = (c: WinnerCandidate) =>
+      c.priceSummary.sample_size === 0 ||
+      (anchorUsd != null &&
+        anchorUsd > 0 &&
+        quoteUnitPrice(c.priceSummary) > anchorUsd * PLAUSIBLE_ANCHOR_MULT);
+    if (
+      g.role?.universalFallback &&
+      effRole === "core" &&
+      !virtualRoleKeys.has(g.roleKey) &&
+      !(args.suppressSharedRoles && g.role.positionless) &&
+      g.candidates.length > 0 &&
+      g.candidates.every(unusableForBilling)
+    ) {
+      const swapped = await synthesizeUniversalCandidate(
+        ctx,
+        g.role,
+        slug,
+        args.vehicleConfigId,
+        effRole,
+      );
+      if (swapped) {
+        roleWinners.push({
+          roleKey: g.roleKey,
+          serviceRole: effRole,
+          candidate: swapped,
+          losers: g.candidates,
+          source: "universal_fallback",
+          lowConfidence: false,
+          quantity,
+          quantityBasis,
+          includeInLockedQuote,
+          virtual: true,
+        });
+        continue;
+      }
+    }
+
+    // Virtual fallback group — single deliberate candidate, no scorer.
+    if (virtualRoleKeys.has(g.roleKey)) {
+      roleWinners.push({
+        roleKey: g.roleKey,
+        serviceRole: effRole,
+        candidate: g.candidates[0],
+        losers: [],
+        source: "universal_fallback",
+        lowConfidence: false,
+        quantity,
+        quantityBasis,
+        includeInLockedQuote,
+        virtual: true,
+      });
+      continue;
+    }
+
+    // Director-pinned part wins its group outright — beats VIN-sticky and the
+    // scorer. Highest-priority signal: a director said "this exact part is
+    // the canonical OEM for this service-role".
+    if (rule.pinnedPartIdsBySubcategory.size > 0) {
+      const pinned = g.candidates.find((c) => {
+        const sub = c.part.subcategory ?? "";
+        const pinnedPartId = rule.pinnedPartIdsBySubcategory.get(sub);
+        return pinnedPartId != null && pinnedPartId === c.part._id;
+      });
+      if (pinned) {
+        const q = resolveRoleQuantity(g.role, bundle, pinned.fitment.quantity_needed);
+        roleWinners.push({
+          roleKey: g.roleKey,
+          serviceRole: effRole,
+          candidate: pinned,
+          losers: g.candidates.filter((c) => c.part._id !== pinned.part._id),
+          source: "scored",
+          lowConfidence: false,
+          quantity: q.quantity,
+          quantityBasis: q.basis,
+          includeInLockedQuote,
+        });
+        continue;
+      }
+    }
+
+    // VIN-sticky wins its group outright, skipping the scorer.
+    if (stickyDefault) {
+      const sticky = g.candidates.find((c) => c.part._id === stickyDefault.part_id);
+      if (sticky) {
+        const q = resolveRoleQuantity(g.role, bundle, sticky.fitment.quantity_needed);
+        roleWinners.push({
+          roleKey: g.roleKey,
+          serviceRole: effRole,
+          candidate: sticky,
+          losers: g.candidates.filter((c) => c.part._id !== sticky.part._id),
+          source: "vin_sticky",
+          lowConfidence: false,
+          quantity: q.quantity,
+          quantityBasis: q.basis,
+          includeInLockedQuote,
+        });
+        continue;
+      }
+    }
+
+    const inputs: CandidateInput[] = g.candidates.map((c) => ({
+      part_id: c.part._id,
+      confidence: c.fitment.confidence ?? 0,
+      mechanic_verified: c.fitment.mechanic_verified === true,
+      data_quality: normalizeDataQuality(
+        c.fitment.data_quality ?? c.part.data_quality ?? null,
+      ),
+      prices: c.priceSummary.sources_used.map((s) => ({
+        price: s.price,
+        refreshed_days_ago:
+          s.refreshed_at != null
+            ? Math.max(0, Math.floor((now - s.refreshed_at) / MS_PER_DAY))
+            : 9999,
+      })),
+    }));
+
+    const result = selectPart(inputs, {
+      gateEnabled: true,
+      gateThreshold: PART_CONFIDENCE_GATE_THRESHOLD,
+    });
+    if (!result.winner) continue;
+    const winner = g.candidates.find((c) => c.part._id === result.winner!.part_id)!;
+    const q = resolveRoleQuantity(g.role, bundle, winner.fitment.quantity_needed);
+    roleWinners.push({
+      roleKey: g.roleKey,
+      serviceRole: effRole,
+      candidate: winner,
+      losers: g.candidates.filter((c) => c.part._id !== winner.part._id),
+      source: "scored",
+      trace: result.trace,
+      eliminatedByGatePartIds: result.eliminatedByGate.map((e) => e.part_id),
+      lowConfidence: result.low_confidence,
+      quantity: q.quantity,
+      quantityBasis: q.basis,
+      includeInLockedQuote,
+    });
   }
-  const winner = hydrated.find((c) => c.part._id === result.winner!.part_id)!;
-  const losers = hydrated.filter((c) => c.part._id !== winner.part._id);
+
+  if (roleWinners.length === 0) {
+    return emptyResolution();
+  }
+
+  // ── Order + back-compat primary ───────────────────────────────────────────
+  // Reference order first (primary/core roles lead), ad-hoc groups after.
+  const roleOrder = new Map<string, number>();
+  (spec?.roles ?? []).forEach((r, i) => roleOrder.set(r.roleKey, i));
+  roleWinners.sort(
+    (a, b) => (roleOrder.get(a.roleKey) ?? 999) - (roleOrder.get(b.roleKey) ?? 999),
+  );
+
+  const primaryKeys = new Set(
+    (spec?.roles ?? []).filter((r) => r.primary).map((r) => r.roleKey),
+  );
+  const primary =
+    roleWinners.find((rw) => primaryKeys.has(rw.roleKey)) ??
+    roleWinners.find((rw) => rw.serviceRole === "core") ??
+    roleWinners[0];
+
   return {
-    winner,
-    losers,
-    source: "scored",
-    trace: result.trace,
-    eliminatedByGatePartIds: result.eliminatedByGate.map((e) => e.part_id),
-    lowConfidence: result.low_confidence,
+    winner: primary.candidate,
+    losers: primary.losers,
+    source: primary.source === "universal_fallback" ? "scored" : primary.source,
+    trace: primary.trace,
+    eliminatedByGatePartIds: primary.eliminatedByGatePartIds,
+    lowConfidence: roleWinners.some((rw) => rw.lowConfidence),
+    roleWinners,
   };
 }
 
-function toPricedFitment(c: WinnerCandidate): PricedFitment {
-  const quantity = c.fitment.quantity_needed ?? 1;
-  const unit_price = c.priceSummary.average;
+function toPricedFitment(c: WinnerCandidate, rw?: RoleWinner): PricedFitment {
+  // Role winners carry reference-resolved quantity (fluid capacity math,
+  // per-cylinder plugs); bare candidates (losers) fall back to the fitment.
+  const quantity = rw?.quantity ?? c.fitment.quantity_needed ?? 1;
+  // PARTS_PRICE_SOURCE flag: median@>=3 sources once flipped, else average.
+  const unit_price = quoteUnitPrice(c.priceSummary);
   const line_total = Math.round(quantity * unit_price * 100) / 100;
   const unit_price_low = c.priceSummary.min_kept;
   const unit_price_high = c.priceSummary.max_kept;
@@ -476,6 +1144,32 @@ function toPricedFitment(c: WinnerCandidate): PricedFitment {
     line_total_high,
     has_price_data: c.priceSummary.sample_size > 0,
     price_sample_size: c.priceSummary.sample_size,
+    service_role: rw?.serviceRole,
+    role_key: rw?.roleKey,
+    quantity_basis: rw?.quantityBasis,
+    locked: rw?.includeInLockedQuote,
+    virtual: rw?.virtual,
+  };
+}
+
+/** Map a resolution's role winners to priced lines + locked/range totals. */
+function pricedLinesFromResolution(res: ResolvedServiceWinner): {
+  parts: PricedFitment[];
+  lockedTotal: number;
+  asNeededTotal: number;
+} {
+  const parts = res.roleWinners.map((rw) => toPricedFitment(rw.candidate, rw));
+  let lockedTotal = 0;
+  let asNeededTotal = 0;
+  for (let i = 0; i < res.roleWinners.length; i++) {
+    const rw = res.roleWinners[i];
+    if (rw.includeInLockedQuote) lockedTotal += parts[i].line_total;
+    else if (rw.serviceRole === "as_needed") asNeededTotal += parts[i].line_total;
+  }
+  return {
+    parts,
+    lockedTotal: Math.round(lockedTotal * 100) / 100,
+    asNeededTotal: Math.round(asNeededTotal * 100) / 100,
   };
 }
 
@@ -541,8 +1235,9 @@ export const getPricedPartsForServices = query({
 
       const position = positionByServiceId.get(String(serviceId));
 
-      // "both" → two passes (front + rear) so the breakdown carries two
-      // priced lines. Single-pass for "front"/"rear"/undefined.
+      // "both" → two passes (front + rear) so the breakdown carries both
+      // axles' lines. The rear pass suppresses shared, positionless roles
+      // (caliper grease) so they bill once. Single-pass otherwise.
       if (position === "both") {
         const frontRes = await resolveWinningPartForService(ctx, {
           vin: owner.vin,
@@ -559,24 +1254,34 @@ export const getPricedPartsForServices = query({
           vehicleConfigId: configId,
           confirmedPackages: confirmed,
           positionFilter: "rear",
+          suppressSharedRoles: true,
         });
 
-        const frontWinner = frontRes.winner ? toPricedFitment(frontRes.winner) : null;
-        const rearWinner = rearRes.winner ? toPricedFitment(rearRes.winner) : null;
+        const front = pricedLinesFromResolution(frontRes);
+        const rear = pricedLinesFromResolution(rearRes);
+        const frontWinner = frontRes.winner
+          ? toPricedFitment(frontRes.winner, frontRes.roleWinners[0])
+          : null;
+        const rearWinner = rearRes.winner
+          ? toPricedFitment(rearRes.winner, rearRes.roleWinners[0])
+          : null;
 
         out.push({
           serviceId,
           serviceName: service.name,
           serviceSlug: service.slug,
           winner: frontWinner,
-          losers: frontRes.losers.map(toPricedFitment),
+          losers: frontRes.losers.map((c) => toPricedFitment(c)),
           selectionSource:
             frontRes.source !== "no_candidates" ? frontRes.source : rearRes.source,
           lowConfidence: frontRes.lowConfidence || rearRes.lowConfidence,
           partsTotal:
-            (frontWinner?.line_total ?? 0) + (rearWinner?.line_total ?? 0),
+            Math.round((front.lockedTotal + rear.lockedTotal) * 100) / 100,
+          asNeededTotal:
+            Math.round((front.asNeededTotal + rear.asNeededTotal) * 100) / 100,
+          parts: [...front.parts, ...rear.parts],
           secondaryWinner: rearWinner,
-          secondaryLosers: rearRes.losers.map(toPricedFitment),
+          secondaryLosers: rearRes.losers.map((c) => toPricedFitment(c)),
         });
         continue;
       }
@@ -590,8 +1295,14 @@ export const getPricedPartsForServices = query({
         positionFilter: position,
       });
 
-      const winner = resolution.winner ? toPricedFitment(resolution.winner) : null;
-      const losers = resolution.losers.map(toPricedFitment);
+      const primaryRw = resolution.roleWinners.find(
+        (rw) => rw.candidate === resolution.winner,
+      );
+      const winner = resolution.winner
+        ? toPricedFitment(resolution.winner, primaryRw)
+        : null;
+      const losers = resolution.losers.map((c) => toPricedFitment(c));
+      const lines = pricedLinesFromResolution(resolution);
 
       out.push({
         serviceId,
@@ -601,7 +1312,9 @@ export const getPricedPartsForServices = query({
         losers,
         selectionSource: resolution.source,
         lowConfidence: resolution.lowConfidence,
-        partsTotal: winner?.line_total ?? 0,
+        partsTotal: lines.lockedTotal,
+        asNeededTotal: lines.asNeededTotal,
+        parts: lines.parts,
       });
     }
 
@@ -788,6 +1501,74 @@ export const recordTireSetup = mutation({
         last_updated_at: now,
       });
     }
+  },
+});
+
+/**
+ * Record the battery chemistry actually installed in the car. Customer
+ * picks Standard (flooded) / AGM / EFB in SingleServiceOptionsSheet; the
+ * label is mapped client-side to the enrichment vocabulary
+ * ("AGM" | "flooded" | "EFB" | "lithium-ion") and passed here.
+ *
+ * Mirrors recordTireSetup — stamps confirmed_at + source ("user" by
+ * default), upserts the vehicle_owner_specs row.
+ */
+export const recordBatteryType = mutation({
+  args: {
+    vehicleOwnerId: v.id("vehicle_owners"),
+    battery_type: v.string(),
+    source: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const owner = await ctx.db.get(args.vehicleOwnerId);
+    if (!owner) throw new Error("vehicle_owner not found");
+
+    const now = Date.now();
+    const battery = {
+      type: args.battery_type,
+      confirmed_at: now,
+      source: args.source ?? "user",
+    };
+
+    const existing = await ctx.db
+      .query("vehicle_owner_specs")
+      .withIndex("by_vehicle_owner", (q) =>
+        q.eq("vehicle_owner_id", args.vehicleOwnerId),
+      )
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        battery,
+        last_updated_at: now,
+      });
+    } else {
+      await ctx.db.insert("vehicle_owner_specs", {
+        vehicle_owner_id: args.vehicleOwnerId,
+        battery,
+        created_at: now,
+        last_updated_at: now,
+      });
+    }
+  },
+});
+
+/**
+ * Read the owner-confirmed battery field. Returns null if the
+ * vehicle_owner_specs row doesn't exist or hasn't recorded a battery yet.
+ * Used by the battery option-selection sheet to pre-fill the customer's
+ * prior choice ahead of falling back to chassis_specs.battery_type.
+ */
+export const getOwnerSpecBattery = query({
+  args: { vehicleOwnerId: v.id("vehicle_owners") },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("vehicle_owner_specs")
+      .withIndex("by_vehicle_owner", (q) =>
+        q.eq("vehicle_owner_id", args.vehicleOwnerId),
+      )
+      .first();
+    return row?.battery ?? null;
   },
 });
 

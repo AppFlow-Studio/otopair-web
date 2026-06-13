@@ -120,6 +120,78 @@ const DRAG_THRESHOLD = 5;
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Computes side-by-side layout for overlapping events within a single column.
+ * Events that don't overlap with anything get full width. Overlapping events
+ * are split into equal-width sub-columns using a greedy interval assignment.
+ * Returns a map from event id → { leftRatio, widthRatio } (both 0–1).
+ */
+function computeColumnLayout(
+  events: CalendarEvent[],
+): Map<string, { leftRatio: number; widthRatio: number }> {
+  const result = new Map<string, { leftRatio: number; widthRatio: number }>();
+  if (events.length === 0) return result;
+
+  // Union-Find to identify overlap clusters (connected components)
+  const parent = new Map<string, string>(events.map((e) => [e.id, e.id]));
+  function find(id: string): string {
+    if (parent.get(id) !== id) parent.set(id, find(parent.get(id)!));
+    return parent.get(id)!;
+  }
+  function unite(a: string, b: string) {
+    parent.set(find(a), find(b));
+  }
+  for (let i = 0; i < events.length; i++) {
+    for (let j = i + 1; j < events.length; j++) {
+      const a = events[i], b = events[j];
+      if (a.start.getTime() < b.end.getTime() && b.start.getTime() < a.end.getTime()) {
+        unite(a.id, b.id);
+      }
+    }
+  }
+
+  // Group events by cluster
+  const clusters = new Map<string, CalendarEvent[]>();
+  for (const ev of events) {
+    const root = find(ev.id);
+    if (!clusters.has(root)) clusters.set(root, []);
+    clusters.get(root)!.push(ev);
+  }
+
+  for (const group of clusters.values()) {
+    if (group.length === 1) {
+      result.set(group[0].id, { leftRatio: 0, widthRatio: 1 });
+      continue;
+    }
+    // Greedy sub-column assignment within the cluster
+    const sorted = [...group].sort((a, b) => a.start.getTime() - b.start.getTime());
+    const cols: { end: number; id: string }[][] = [];
+    const eventCol = new Map<string, number>();
+    for (const ev of sorted) {
+      let placed = false;
+      for (let c = 0; c < cols.length; c++) {
+        if (cols[c][cols[c].length - 1].end <= ev.start.getTime()) {
+          cols[c].push({ end: ev.end.getTime(), id: ev.id });
+          eventCol.set(ev.id, c);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        cols.push([{ end: ev.end.getTime(), id: ev.id }]);
+        eventCol.set(ev.id, cols.length - 1);
+      }
+    }
+    const numCols = cols.length;
+    for (const ev of group) {
+      const c = eventCol.get(ev.id) ?? 0;
+      result.set(ev.id, { leftRatio: c / numCols, widthRatio: 1 / numCols });
+    }
+  }
+
+  return result;
+}
+
 function formatGutterTime(hour: number, minute: number): { time: string; period: string; isHalf: boolean } | null {
   if (minute === 0) {
     const ampm = hour >= 12 ? "pm" : "am";
@@ -682,6 +754,7 @@ export default function DaySwimLanes({
         {/* Mechanic columns */}
         {columns.map((col, colIdx) => {
           const colBookings = bookingsByColumn.get(col.id) ?? [];
+          const colLayout = computeColumnLayout(colBookings);
           const colBlocked = blockedByColumn.get(col.id) ?? [];
           const isOwnLane = isMechanicViewer && String(col.id) === viewerKey;
           const isReadOnlyLane = isMechanicViewer && !isOwnLane;
@@ -1005,6 +1078,9 @@ export default function DaySwimLanes({
                     (ev.end.getTime() - ev.start.getTime()) / 60000;
                   const slotTop = (evStartMin / totalMinutes) * totalHeight;
                   const slotHeight = Math.max(ROW_HEIGHT * 0.5, (evDuration / totalMinutes) * totalHeight);
+                  const { leftRatio, widthRatio } = colLayout.get(ev.id) ?? { leftRatio: 0, widthRatio: 1 };
+                  const evLeft = `${leftRatio * 100}%`;
+                  const evWidth = `${widthRatio * 100}%`;
                   const colors =
                     statusColors[ev.status ?? "confirmed"] ??
                     statusColors.confirmed;
@@ -1029,9 +1105,11 @@ export default function DaySwimLanes({
                     return (
                       <div
                         key={ev.id}
-                        className="absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10"
+                        className="absolute text-xs px-2 py-1 overflow-hidden z-10"
                         style={{
                           top: slotTop,
+                          left: evLeft,
+                          width: evWidth,
                           height: Math.max(ROW_HEIGHT * 0.5, slotHeight - 2),
                           backgroundColor: "transparent",
                           color: colors.text,
@@ -1064,13 +1142,15 @@ export default function DaySwimLanes({
                     <div
                       key={ev.id}
                       data-event-block
-                      className={`absolute left-0 right-0 text-xs px-2 py-1 overflow-hidden z-10 select-none transition-shadow duration-150 ${
+                      className={`absolute text-xs px-2 py-1 overflow-hidden z-10 select-none transition-shadow duration-150 ${
                         isDraggable
                           ? "cursor-grab active:cursor-grabbing"
                           : "cursor-pointer"
                       } ${isSelected ? "ring-2 ring-primary ring-offset-1 shadow-md z-20" : ""}`}
                       style={{
                         top: slotTop,
+                        left: evLeft,
+                        width: evWidth,
                         height: Math.max(ROW_HEIGHT * 0.5, slotHeight - 2),
                         backgroundColor: colors.bg,
                         color: colors.text,

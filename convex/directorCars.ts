@@ -784,6 +784,29 @@ export const vehicleConfigDetail = query({
       .order("desc")
       .take(20);
 
+    // Latest "Reprice parts" audit row — the reprice action doesn't write to
+    // enrichment_runs; its only signal is an audit_log row. Detail prefix is
+    // matched in the UI to derive a scheduled / complete / failed state.
+    const repriceAuditRows = await ctx.db
+      .query("audit_log")
+      .withIndex("by_entity", (q) =>
+        q.eq("entity_type", "vehicle_config").eq("entity_id", String(id)),
+      )
+      .order("desc")
+      .take(40);
+    const latestRepriceAudit = (() => {
+      const row = repriceAuditRows.find((r) =>
+        (r.detail ?? "").startsWith("Reprice parts"),
+      );
+      if (!row) return null;
+      return {
+        id: row._id,
+        detail: row.detail,
+        createdAt: row.created_at,
+        actor: row.actor,
+      };
+    })();
+
     // Vehicles using this config — sample so director can jump to a VIN.
     const vehicles = await ctx.db
       .query("vehicles")
@@ -940,6 +963,7 @@ export const vehicleConfigDetail = query({
         totalTokensOut:    r.total_tokens_out,
         estimatedCostUsd:  r.estimated_cost_usd,
       })),
+      latestRepriceAudit,
 
       vehicles:       vehicleSample,
       vehicleCount:   vehicles.length,

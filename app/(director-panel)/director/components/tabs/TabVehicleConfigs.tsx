@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useEffect, useContext } from 'react'
-import { useQuery, useMutation } from 'convex/react'
+import { useState, useEffect, useRef, useContext } from 'react'
+import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import {
   Badge, Button, Card, Input, Select, Modal, AuditButton,
-  tableStyles, IconSearch, IconX, IconCar,
+  tableStyles, IconSearch, IconX, IconCar, IconRefresh,
 } from '../Primitives'
 import { DirectorNotesPanel } from '../DirectorNotesPanel'
 import { SectionAnchor } from '../Shell'
@@ -58,6 +58,76 @@ const enrichmentChip = (status: string, fillRate?: number) => {
   const tone = ENRICHMENT_TONE[status] ?? 'slate'
   const pct = fillRate != null ? ` · ${fmtFillRate(fillRate)}` : ''
   return <Badge tone={tone} dot>{status}{pct}</Badge>
+}
+
+// "3m ago" / "1h ago" / "Just now". Lower-resolution than ageLabel — used for
+// the action-row pills where we want a glanceable freshness signal.
+function relativeTime(ts?: number): string {
+  if (!ts) return ''
+  const diff = Math.max(0, Date.now() - ts)
+  const secs = Math.floor(diff / 1000)
+  if (secs < 30) return 'just now'
+  if (secs < 60) return `${secs}s ago`
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
+// Action-row status pill — derives the visual state from the most recent
+// enrichment_runs row for this config. Clicking jumps to the matching row in
+// the Enrichment runs section. Trigger is not yet distinct between
+// 'full' and 'parts' clicks (single 'new_vehicle' string), so the same pill
+// is shown next to both Re-enrich and Backfill parts buttons.
+type RunStatusPillProps = {
+  run: EnrichmentRunRow | undefined
+  onClick?: () => void
+}
+
+const RunStatusPill = ({ run, onClick }: RunStatusPillProps) => {
+  if (!run) return null
+  const isRunning =
+    run.completedAt == null && run.status !== 'complete' && run.status !== 'failed'
+  const tone: 'green' | 'red' | 'blue' = isRunning
+    ? 'blue'
+    : run.status === 'failed'
+    ? 'red'
+    : 'green'
+  const label = isRunning
+    ? `Running ${relativeTime(run.startedAt ?? run.createdAt)}`
+    : run.status === 'failed'
+    ? `Failed ${relativeTime(run.completedAt ?? run.createdAt)}`
+    : `Done ${relativeTime(run.completedAt ?? run.createdAt)}`
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', gap:6, marginTop:4, cursor: onClick ? 'pointer' : 'default' }}
+      onClick={onClick}
+      title={onClick ? 'Jump to run in Enrichment runs' : undefined}>
+      <Badge tone={tone} dot>{label}</Badge>
+    </span>
+  )
+}
+
+// Reprice doesn't write enrichment_runs — only audit_log. The latest matching
+// audit row's detail string carries the state: "scheduled" vs "complete" vs
+// the error message. The pill renders read-only (no scroll target).
+const RepriceStatusPill = ({ row }: { row: LatestRepriceAudit }) => {
+  if (!row) return null
+  const detail = row.detail ?? ''
+  const failed = /error|failed|exception/i.test(detail)
+  const scheduled = /scheduled/i.test(detail)
+  const tone: 'green' | 'red' | 'blue' = failed ? 'red' : scheduled ? 'blue' : 'green'
+  const label = failed
+    ? `Failed ${relativeTime(row.createdAt)}`
+    : scheduled
+    ? `Running ${relativeTime(row.createdAt)}`
+    : `Done ${relativeTime(row.createdAt)}`
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', gap:6, marginTop:4 }}
+      title={detail}>
+      <Badge tone={tone} dot>{label}</Badge>
+    </span>
+  )
 }
 
 const SectionTitle = ({ label, right }: { label: string; right?: React.ReactNode }) => (
@@ -187,6 +257,13 @@ type VehicleSampleRow = {
   createdAt?: number
 }
 
+type LatestRepriceAudit = {
+  id: Id<'audit_log'>
+  detail?: string
+  createdAt: number
+  actor?: string
+} | null
+
 // ---------------------------------------------------------------------------
 // PartFitmentDrawerBody — drill-down into a single OEM part attached to this
 // vehicle_config. Mirrors the ModalAuditDrawerBody chrome (header + scrollable
@@ -311,8 +388,10 @@ const PartFitmentDrawerBody = ({ partId, configId, onClose }: {
 
 const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | null; onClose: () => void }) => {
   const session   = useContext(DirectorSessionCtx)
-  const actorName = session?.name ?? 'Director'
-  const actorId   = session?.userId as Id<'director_users'> | undefined
+  // Every config-edit mutation + backfill action validates this server-side
+  // and derives the audit actor from the session — actorName/actorId are no
+  // longer accepted args anywhere in this modal.
+  const sessionToken = session?.token ?? ''
   const [auditOpen, setAuditOpen] = useState(false)
   const [editOpen,  setEditOpen]  = useState(false)
   const [engineOpen,  setEngineOpen]  = useState(false)
@@ -332,6 +411,33 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   const updateChassisSpecs = useMutation(api.directorConfigActions.updateChassisSpecsFields)
   const updateTrimSpecs    = useMutation(api.directorConfigActions.updateTrimSpecsFields)
   const markVerified       = useMutation(api.directorConfigActions.markConfigVerified)
+  const reEnrichConfig     = useAction(api.directorConfigBackfills.reEnrichConfig)
+  const backfillConfigParts = useAction(api.directorConfigBackfills.backfillConfigParts)
+  const repriceConfigParts = useAction(api.directorConfigBackfills.repriceConfigParts)
+  // Independent busy flags so one running backfill doesn't grey out the others.
+  const [busyFull,   setBusyFull]   = useState(false)
+  const [busyParts,  setBusyParts]  = useState(false)
+  const [busyPrices, setBusyPrices] = useState(false)
+
+  // Refs + highlight state for scrolling from the action-row pill to the
+  // matching Enrichment runs row.
+  const runsSectionRef = useRef<HTMLDivElement | null>(null)
+  const runRowRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const [highlightedRunId, setHighlightedRunId] = useState<string | null>(null)
+
+  const jumpToLatestRun = () => {
+    const latest = (detail?.enrichmentRuns as EnrichmentRunRow[] | undefined)?.[0]
+    if (!latest) return
+    runsSectionRef.current?.scrollIntoView({ behavior:'smooth', block:'start' })
+    const row = runRowRefs.current[String(latest.id)]
+    row?.scrollIntoView({ behavior:'smooth', block:'center' })
+    setHighlightedRunId(String(latest.id))
+  }
+  useEffect(() => {
+    if (!highlightedRunId) return
+    const t = setTimeout(() => setHighlightedRunId(null), 1800)
+    return () => clearTimeout(t)
+  }, [highlightedRunId])
 
   useEffect(() => {
     if (!toast) return
@@ -354,7 +460,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   }
 
   const rawAudit = useQuery(api.audit_log.listByEntity,
-    configId ? { entity_type: 'vehicle_config', entity_id: configId } : 'skip')
+    configId ? { entity_type: 'vehicle_config', entity_id: configId, token: sessionToken } : 'skip')
   type AuditRow = { created_at: number; action: string; actor: string; detail?: string }
   const auditEntries = (rawAudit as AuditRow[] | undefined)?.map(e => ({
     timestamp: new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
@@ -363,8 +469,54 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
 
   const handleVerify = async () => {
     if (!configId) return
-    const res = await markVerified({ id: configId, actorName, actorId })
+    const res = await markVerified({ id: configId, token: sessionToken })
     setToast(`Config marked verified. Total: ${(res as any)?.verifications ?? '?'}.`)
+  }
+
+  // --- Backfill triggers -----------------------------------------------------
+  // All three kick off async jobs and return immediately so the click can't time
+  // out; the toast confirms scheduling. Full + parts run a Claude batch (progress
+  // in the enrichment-runs panel). Reprice runs a live scrape in a scheduled
+  // internal action and records the priced count in the audit log when it lands.
+  const handleReEnrich = async () => {
+    if (!configId || busyFull) return
+    if (!window.confirm('Re-enrich the ENTIRE car? Re-runs the full pipeline (engine, transmission, parts, intervals, labor) and overwrites resolved specs. Costs an LLM batch and finishes in a few minutes.')) return
+    setBusyFull(true)
+    try {
+      const res = await reEnrichConfig({ id: configId, token: sessionToken }) as { status?: string; message?: string }
+      setToast(res?.status === 'scheduled'
+        ? 'Full re-enrich scheduled — check Enrichment runs in a few minutes.'
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+    } catch (e) {
+      setToast(`Re-enrich failed: ${(e as Error).message}`)
+    } finally { setBusyFull(false) }
+  }
+
+  const handleBackfillParts = async () => {
+    if (!configId || busyParts) return
+    if (!window.confirm('Re-discover only this car’s PARTS (which parts apply per service)? Preserves hand-edited engine/transmission/chassis specs. Costs an LLM batch and finishes in a few minutes. Prices are not changed — use "Reprice parts" for that.')) return
+    setBusyParts(true)
+    try {
+      const res = await backfillConfigParts({ id: configId, token: sessionToken }) as { status?: string; message?: string }
+      setToast(res?.status === 'scheduled'
+        ? 'Parts backfill scheduled — check Enrichment runs in a few minutes.'
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+    } catch (e) {
+      setToast(`Parts backfill failed: ${(e as Error).message}`)
+    } finally { setBusyParts(false) }
+  }
+
+  const handleRepriceParts = async () => {
+    if (!configId || busyPrices) return
+    setBusyPrices(true)
+    try {
+      const res = await repriceConfigParts({ id: configId, token: sessionToken }) as { status?: string; message?: string }
+      setToast(res?.status === 'scheduled'
+        ? 'Reprice started — the priced count lands in the audit log in a moment.'
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+    } catch (e) {
+      setToast(`Reprice failed: ${(e as Error).message}`)
+    } finally { setBusyPrices(false) }
   }
 
   const ymmt = detail
@@ -667,11 +819,18 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
               </div>
 
               {detail.enrichmentRuns && detail.enrichmentRuns.length > 0 && (
-                <div style={{ marginBottom:18 }}>
+                <div style={{ marginBottom:18 }} ref={runsSectionRef}>
                   <SectionTitle label={`Enrichment runs (${detail.enrichmentRuns.length})`} />
                   <div style={{ maxHeight:220, overflowY:'auto', display:'flex', flexDirection:'column', gap:6 }}>
                     {(detail.enrichmentRuns as EnrichmentRunRow[]).map(run => (
-                      <div key={String(run.id)} style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:6, padding:'6px 10px' }}>
+                      <div key={String(run.id)}
+                        ref={(el) => { runRowRefs.current[String(run.id)] = el }}
+                        style={{
+                          background: highlightedRunId === String(run.id) ? 'var(--blue-50, #EFF6FF)' : '#fff',
+                          border: `1px solid ${highlightedRunId === String(run.id) ? 'var(--blue-300, #93C5FD)' : 'var(--slate-200)'}`,
+                          borderRadius:6, padding:'6px 10px',
+                          transition: 'background 220ms ease, border-color 220ms ease',
+                        }}>
                         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
                           <Badge tone={run.status === 'complete' ? 'green' : run.status === 'failed' ? 'red' : 'slate'} dot>{run.status ?? 'unknown'}</Badge>
                           <span className="mono" style={{ fontSize:11, color:'var(--slate-500)' }}>{fmtDate(run.createdAt)}</span>
@@ -744,6 +903,24 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                   <ActionRow label="Mark verified"
                     hint={`Bumps verification count (current: ${detail.enrichment.verificationCount ?? 0})`}
                     action={<Button size="sm" variant="primary" onClick={handleVerify}>Verify</Button>} />
+                  <ActionRow label="Re-enrich entire car"
+                    hint={<>
+                      Full pipeline re-run (specs + parts + intervals + labor). Async — a few minutes.
+                      <RunStatusPill run={(detail.enrichmentRuns as EnrichmentRunRow[] | undefined)?.[0]} onClick={jumpToLatestRun} />
+                    </>}
+                    action={<Button size="sm" disabled={busyFull} onClick={handleReEnrich}>{busyFull ? 'Scheduling…' : 'Re-enrich'}</Button>} />
+                  <ActionRow label="Backfill parts only"
+                    hint={<>
+                      Re-discover which parts apply per service. Keeps hand-edited specs. Async — a few minutes.
+                      <RunStatusPill run={(detail.enrichmentRuns as EnrichmentRunRow[] | undefined)?.[0]} onClick={jumpToLatestRun} />
+                    </>}
+                    action={<Button size="sm" disabled={busyParts} onClick={handleBackfillParts}>{busyParts ? 'Scheduling…' : 'Backfill parts'}</Button>} />
+                  <ActionRow label="Reprice parts only"
+                    hint={<>
+                      Re-scrape correct prices for the parts already on this car. Async — the priced count lands in the audit log.
+                      <RepriceStatusPill row={(detail.latestRepriceAudit as LatestRepriceAudit) ?? null} />
+                    </>}
+                    action={<Button size="sm" disabled={busyPrices} icon={<IconRefresh size={11} />} onClick={handleRepriceParts}>{busyPrices ? 'Repricing…' : 'Reprice parts'}</Button>} />
                 </AdminActionPanel>
               </div>
 
@@ -769,14 +946,14 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
           {/* Edit forms */}
           <ConfigEditModal open={editOpen} onClose={() => setEditOpen(false)}
             configId={configId} detail={detail}
-            actorName={actorName} actorId={actorId}
+            token={sessionToken}
             onSaved={(n) => { setEditOpen(false); setToast(n > 0 ? `Saved ${n} field${n === 1 ? '' : 's'}.` : 'No changes.') }}
             updateBasics={updateBasics} />
 
           {detail.engine && (
             <EngineEditModal open={engineOpen} onClose={() => setEngineOpen(false)}
               engineId={detail.engine.id} current={detail.engine}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setEngineOpen(false); setToast(n > 0 ? `Saved ${n} engine field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateEngine} />
           )}
@@ -784,7 +961,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
           {detail.transmission && (
             <TransmissionEditModal open={transOpen} onClose={() => setTransOpen(false)}
               transmissionId={detail.transmission.id} current={detail.transmission}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setTransOpen(false); setToast(n > 0 ? `Saved ${n} transmission field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateTransmission} />
           )}
@@ -793,7 +970,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
             <ChassisSpecsEditModal open={chassisOpen} onClose={() => setChassisOpen(false)}
               chassisCode={detail.chassisCode}
               current={detail.chassisSpecs ?? null}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setChassisOpen(false); setToast(n > 0 ? `Saved ${n} chassis-spec field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateChassisSpecs} />
           )}
@@ -802,7 +979,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
             <TrimSpecsEditModal open={trimOpen} onClose={() => setTrimOpen(false)}
               vehicleConfigId={configId}
               current={detail.trimSpecs ?? null}
-              actorName={actorName} actorId={actorId}
+              token={sessionToken}
               onSaved={(n) => { setTrimOpen(false); setToast(n > 0 ? `Saved ${n} trim-spec field${n === 1 ? '' : 's'}.` : 'No changes.') }}
               updateFields={updateTrimSpecs} />
           )}
@@ -819,14 +996,13 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
 // ---------------------------------------------------------------------------
 
 const ConfigEditModal = ({
-  open, onClose, configId, detail, actorName, actorId, onSaved, updateBasics,
+  open, onClose, configId, detail, token, onSaved, updateBasics,
 }: {
   open: boolean
   onClose: () => void
   configId: Id<'vehicle_configs'> | null
   detail: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (changes: number) => void
   updateBasics: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateConfigBasics>>
 }) => {
@@ -860,8 +1036,7 @@ const ConfigEditModal = ({
         brake_fluid_type:  brake,
         ps_fluid_type:     ps,
         enrichment_status: status,
-        actorName,
-        actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -923,14 +1098,13 @@ const EditRow = ({ label, children }: { label: string; children: React.ReactNode
 // ---------------------------------------------------------------------------
 
 const EngineEditModal = ({
-  open, onClose, engineId, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, engineId, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   engineId: Id<'engines'>
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateEngineFields>>
 }) => {
@@ -997,7 +1171,7 @@ const EngineEditModal = ({
         spark_plug_gap_mm:        n(spGap),
         water_pump_timing_driven: wpTiming === '' ? undefined : wpTiming === 'true',
         data_quality:             dq,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -1046,14 +1220,13 @@ const EngineEditModal = ({
 // ---------------------------------------------------------------------------
 
 const TransmissionEditModal = ({
-  open, onClose, transmissionId, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, transmissionId, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   transmissionId: Id<'transmissions'>
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateTransmissionFields>>
 }) => {
@@ -1099,7 +1272,7 @@ const TransmissionEditModal = ({
         has_serviceable_filter: filter   === '' ? undefined : filter   === 'true',
         service_method: method,
         data_quality: dq,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -1148,14 +1321,13 @@ const TransmissionEditModal = ({
 // ---------------------------------------------------------------------------
 
 const ChassisSpecsEditModal = ({
-  open, onClose, chassisCode, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, chassisCode, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   chassisCode: string
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateChassisSpecsFields>>
 }) => {
@@ -1216,7 +1388,7 @@ const ChassisSpecsEditModal = ({
         has_rear_wiper:       hasRearWiper === '' ? undefined : hasRearWiper === 'true',
         has_brake_pad_sensor: hasPadSensor === '' ? undefined : hasPadSensor === 'true',
         data_quality: dq,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {
@@ -1286,14 +1458,13 @@ const ChassisSpecsEditModal = ({
 // ---------------------------------------------------------------------------
 
 const TrimSpecsEditModal = ({
-  open, onClose, vehicleConfigId, current, actorName, actorId, onSaved, updateFields,
+  open, onClose, vehicleConfigId, current, token, onSaved, updateFields,
 }: {
   open: boolean
   onClose: () => void
   vehicleConfigId: Id<'vehicle_configs'>
   current: any
-  actorName: string
-  actorId?: Id<'director_users'>
+  token: string
   onSaved: (n: number) => void
   updateFields: ReturnType<typeof useMutation<typeof api.directorConfigActions.updateTrimSpecsFields>>
 }) => {
@@ -1333,7 +1504,7 @@ const TrimSpecsEditModal = ({
         tire_directional: directional === '' ? undefined : directional === 'true',
         is_run_flat:      runFlat     === '' ? undefined : runFlat     === 'true',
         alignment_type:   alignment,
-        actorName, actorId,
+        token,
       })
       onSaved((res as any)?.changes ?? 0)
     } finally {

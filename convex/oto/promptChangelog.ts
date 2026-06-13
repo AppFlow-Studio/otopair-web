@@ -26,7 +26,7 @@
 // surface those tools call.
 // =============================================================================
 
-import { internalMutation, mutation, query } from "../_generated/server";
+import { internalMutation, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 
 // -----------------------------------------------------------------------------
@@ -148,7 +148,10 @@ export const markRolloutOutcome = internalMutation({
 // mutation.
 // -----------------------------------------------------------------------------
 
-export const setActivePromptVersion = mutation({
+// internalMutation: the rollback script runs via `npx convex run` (deploy
+// creds reach internal functions). Public, anyone could forge rollback audit
+// rows with a caller-chosen `actor` (Jun-10 IDOR sweep).
+export const setActivePromptVersion = internalMutation({
   args: {
     version: v.string(),
     rolled_back_from: v.string(),
@@ -195,11 +198,13 @@ export const setActivePromptVersion = mutation({
 
 // -----------------------------------------------------------------------------
 // listRecentChanges — read-side helper used by the rollback script to find
-// the second-newest version. Public query: any user can read the changelog
-// (it's an audit-style log, not secret).
+// the second-newest version. internalQuery (Jun-10 sweep): no legitimate
+// public caller exists, and it leaks prompt-engineering metadata (versions,
+// authors, diff summaries, rollback reasons) to anonymous callers. The
+// rollback script reaches it via `npx convex run`.
 // -----------------------------------------------------------------------------
 
-export const listRecentChanges = query({
+export const listRecentChanges = internalQuery({
   args: {
     limit: v.optional(v.number()),
   },

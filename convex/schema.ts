@@ -436,6 +436,8 @@ export default defineSchema({
     price_type: v.optional(v.string()),
     source_url: v.optional(v.string()),
     source_domain: v.optional(v.string()),
+    msrp: v.optional(v.number()),
+    discount: v.optional(v.number()),
     refreshed_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })

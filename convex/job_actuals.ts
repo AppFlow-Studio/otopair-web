@@ -409,6 +409,13 @@ export const getPrefillData = query({
     // afterward and skip anything already covered by the snapshot.
     const snapshot: any[] = ((booking as any).priced_parts_snapshot ?? []);
     const snapshotOems = new Set<string>();
+    // Services the quote already covers. The hardcoded catalog floor (layer 3)
+    // below must NOT fire for these — its gate (`length === before`) is true
+    // whenever the cascade added nothing, which INCLUDES the case where every
+    // cascade row was deduped against the snapshot. Without this guard a
+    // fully-quoted oil change re-adds catalog "Oil Filter / Synthetic Oil /
+    // Drain Plug Gasket" rows that were never on the quote.
+    const snapshotServiceIds = new Set<string>();
     const normalizeOem = (n: string) =>
       n.trim().toUpperCase().replace(/\s+/g, "");
     if (snapshot && snapshot.length > 0) {
@@ -423,6 +430,7 @@ export const getPrefillData = query({
           learned_from: "config",
         });
         if (row.oem_number) snapshotOems.add(normalizeOem(row.oem_number));
+        if (row.service_id) snapshotServiceIds.add(String(row.service_id));
       }
     }
 
@@ -463,9 +471,15 @@ export const getPrefillData = query({
       }
 
       // Layer 3 catalog floor — only when the cascade produced nothing for
-      // this service. Uses service_vehicle_specs OEM columns indexed by
-      // engine to suggest canonical parts even with zero historical data.
-      if (suggestedParts.length === before && specs) {
+      // this service AND the quote snapshot doesn't already cover it. Uses
+      // service_vehicle_specs OEM columns indexed by engine to suggest
+      // canonical parts even with zero historical data. Skipping
+      // snapshot-covered services keeps post-job anchored to what was quoted.
+      if (
+        suggestedParts.length === before &&
+        specs &&
+        !snapshotServiceIds.has(String(sid))
+      ) {
         // TODO(ts-fix): service_vehicle_specs schema is missing OEM-part fields used below:
         //   oil_filter_oem, oil_capacity_qts (lives on engines), oil_viscocity (note: actual field on engines is oil_viscosity),
         //   oil_drain_plug_gasket_oem, front_brake_pad_oem, rear_brake_pad_oem, engine_air_filter_oem,

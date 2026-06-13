@@ -938,6 +938,7 @@ export const getBookingApprovalState = query({
     const open = rows.find((r: any) => r.decision == null) ?? null;
 
     return {
+      booking_status: (booking as any).status as string,
       payment_approval_state:
         ((booking as any).payment_approval_state as string | undefined) ??
         "none",

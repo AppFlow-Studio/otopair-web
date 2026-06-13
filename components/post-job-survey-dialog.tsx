@@ -4345,7 +4345,7 @@ function ApprovalStatusPanel({
                 {busyAction === "start" ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : null}
-                Start work →
+                {workflow.startWorkBeginsJob ? "Start work →" : "Confirm booking →"}
               </button>
             )}
           </div>
@@ -4401,7 +4401,9 @@ function ApprovalStatusPanel({
                 ? `Final billing confirmed${setPrice ? ` · ${setPrice}` : ""}. Capture is processing.`
                 : cycle === "mid_job"
                   ? `Added scope confirmed${setPrice ? ` · ${setPrice}` : ""}.`
-                  : `You're cleared to start work${setPrice ? ` · ${setPrice}` : ""}.`}
+                  : workflow.startWorkBeginsJob
+                    ? `You're cleared to start work${setPrice ? ` · ${setPrice}` : ""}.`
+                    : `Price locked in${setPrice ? ` · ${setPrice}` : ""}. Confirm the booking — you can start work once the vehicle is here.`}
             </p>
             {cycle === "pre_job" ? (
               <button
@@ -4416,7 +4418,7 @@ function ApprovalStatusPanel({
                 {busyAction === "start" ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : null}
-                Start work →
+                {workflow.startWorkBeginsJob ? "Start work →" : "Confirm booking →"}
               </button>
             ) : (
               <button

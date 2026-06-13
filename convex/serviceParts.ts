@@ -117,7 +117,10 @@ export interface PackageQuestion {
 }
 
 export interface ResolvedFitment {
-  fitment_id: Id<"part_fitments">;
+  /** Optional: snapshot-sourced rows (pre/post-job, quote-anchored) have no
+   *  originating fitment row — only the resolver path sets this. No consumer
+   *  reads it; it's a provenance breadcrumb. */
+  fitment_id?: Id<"part_fitments">;
   part_id: Id<"oem_parts">;
   oem_part_number: string;
   name: string;
@@ -261,6 +264,71 @@ export const getOemPartsForBooking = query({
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return [];
 
+    // ── Quote-anchored source of truth ────────────────────────────────────
+    // Pre-job (and post-job) must list exactly what the system QUOTED — the
+    // frozen `priced_parts_snapshot` (one row per locked role winner) — not
+    // every catalog candidate the resolver considered. Without this the dialog
+    // listed all six oil filters on file for the chassis instead of the one
+    // oil filter on the quote. The snapshot is the same data the customer saw
+    // on Review & Pay and the mechanic sees in the job scope, so all three
+    // surfaces agree. Grouped by service, in the booking's service order.
+    const snapshot = ((booking as any).priced_parts_snapshot ?? []) as Array<{
+      service_id: Id<"services">;
+      part_id?: Id<"oem_parts">;
+      oem_number: string;
+      part_name: string;
+      quantity: number;
+      role_key?: string;
+    }>;
+    if (snapshot.length > 0) {
+      const bySvc = new Map<string, OemPartsForService>();
+      for (const row of snapshot) {
+        const key = String(row.service_id);
+        let entry = bySvc.get(key);
+        if (!entry) {
+          const service = await ctx.db.get(row.service_id);
+          if (!service?.slug) continue;
+          entry = {
+            serviceId: row.service_id,
+            serviceName: service.name,
+            serviceSlug: service.slug,
+            parts: [],
+          };
+          bySvc.set(key, entry);
+        }
+        // Position is implicit in the snapshot (it already froze the booked
+        // axle); surface it from the role_key for the brakes display only.
+        const rk = row.role_key ?? "";
+        const position = /^front_/.test(rk)
+          ? "front"
+          : /^rear_/.test(rk)
+            ? "rear"
+            : undefined;
+        entry.parts.push({
+          part_id: row.part_id as Id<"oem_parts">,
+          oem_part_number: row.oem_number,
+          name: row.part_name,
+          position,
+          quantity_needed: row.quantity,
+        });
+      }
+      const out: OemPartsForService[] = [];
+      for (const sid of booking.service_ids ?? []) {
+        const entry = bySvc.get(String(sid));
+        if (entry) out.push(entry);
+      }
+      // Defensive: emit any snapshot service not on service_ids (shouldn't
+      // happen, but never silently drop a quoted line).
+      for (const entry of bySvc.values()) {
+        if (!out.includes(entry)) out.push(entry);
+      }
+      return out;
+    }
+
+    // ── Legacy fallback (no priced snapshot) ──────────────────────────────
+    // Older bookings created before quote snapshotting carry no quoted parts;
+    // there's nothing to anchor to, so fall back to the informational catalog
+    // resolve (every billable fitment for the booked axle).
     const vehicle = await ctx.db
       .query("vehicles")
       .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
@@ -414,6 +482,12 @@ export type PricedFitment = {
   service_role?: ServiceRole;
   role_key?: string;
   quantity_basis?: string;
+  /** True when this line goes into the locked quote (core, or kit with
+   *  includeByDefault) — mirrors the snapshot's `includeInLockedQuote`. The
+   *  customer's Review & Pay renders EVERY locked line (not just the primary
+   *  winner) so its parts match the mechanic's frozen `priced_parts_snapshot`.
+   *  Undefined on loser candidates (no role winner). */
+  locked?: boolean;
   /** True when this is a synthesized universal consumable line. */
   virtual?: boolean;
 };
@@ -1073,6 +1147,7 @@ function toPricedFitment(c: WinnerCandidate, rw?: RoleWinner): PricedFitment {
     service_role: rw?.serviceRole,
     role_key: rw?.roleKey,
     quantity_basis: rw?.quantityBasis,
+    locked: rw?.includeInLockedQuote,
     virtual: rw?.virtual,
   };
 }

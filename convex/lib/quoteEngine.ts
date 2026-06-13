@@ -18,8 +18,10 @@ import { resolveLaborRate, VehicleTier } from "./vehicleTiers";
 import { ASSIGNMENT_RULES, matchRule } from "../seeds/seedPricing";
 import { resolveServiceUnitCount, unitScale } from "./serviceUnits";
 
-// Anchor — the 2020 Camry LE FWD vehicle_config (seeded by seedCamryBaseline).
-export const CAMRY_FWD_CONFIG_KEY = "2020_toyota_camry_le_fwd_a25a-fks";
+// Anchor config key + Camry lookup live in laborFallback (shared with the
+// labor aggregator so both compute the same tier floor).
+export { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig } from "./laborFallback";
+import { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig, computeLaborTierFloorHours } from "./laborFallback";
 
 // ─── vdb quality gate ───────────────────────────────────────────────────────
 // Lived experience: vdb-seeded labor_times "wrong often" — chassis/engine
@@ -225,32 +227,13 @@ async function resolveRawLaborLayers(
  *  row for the tier, no Camry seed, or no Camry hours for this service. */
 async function computeTierFloor(
   ctx: QueryCtx,
-  args: {
-    service_id: Id<"services">;
-    vehicle_tier: VehicleTier;
-  },
+  args: { service_id: Id<"services">; vehicle_tier: VehicleTier },
 ): Promise<{ hours: number } | null> {
-  const service = await ctx.db.get(args.service_id);
-  if (!service?.labor_multiplier_category_id) return null;
-  const laborMultRow = await ctx.db
-    .query("pricing_labor_multipliers")
-    .withIndex("by_category_tier", (q) =>
-      q
-        .eq("labor_category_id", service.labor_multiplier_category_id!)
-        .eq("tier", args.vehicle_tier),
-    )
-    .first();
-  if (!laborMultRow) return null;
-  const camry = await getCamryFwdConfig(ctx);
-  if (!camry) return null;
-  const camryHours = await ctx.db
-    .query("labor_times")
-    .withIndex("by_vehicle_config_and_service", (q) =>
-      q.eq("vehicle_config_id", camry._id).eq("service_id", args.service_id),
-    )
-    .first();
-  if (!camryHours?.book_hours) return null;
-  return { hours: camryHours.book_hours * laborMultRow.multiplier };
+  const hours = await computeLaborTierFloorHours(ctx, {
+    serviceId: args.service_id,
+    vehicleTier: args.vehicle_tier as unknown as string,
+  });
+  return hours == null ? null : { hours };
 }
 
 export async function resolveLaborHours(
@@ -768,17 +751,6 @@ function refuse(reason: string): Quote {
     reason,
     route_to: "booking_approvals",
   };
-}
-
-async function getCamryFwdConfig(
-  ctx: QueryCtx,
-): Promise<Doc<"vehicle_configs"> | null> {
-  return await ctx.db
-    .query("vehicle_configs")
-    .withIndex("by_config_key", (q) =>
-      q.eq("config_key", CAMRY_FWD_CONFIG_KEY),
-    )
-    .first();
 }
 
 // ─── detectTier — read-only ASSIGNMENT_RULES walk ───────────────────────────

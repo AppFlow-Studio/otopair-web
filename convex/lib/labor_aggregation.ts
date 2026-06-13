@@ -23,9 +23,10 @@
  * jobs complete — "our internal data is better" without re-enriching.
  */
 
-import { summarizeObservations, weightedMedian } from "./robustStats";
+import { summarizeObservations, weightedMedian, nonOutlierIndices } from "./robustStats";
 import { STRONG_LABOR_SOURCES, withinGuardrail, withinAgreementBand } from "./laborBands";
 import { computeLaborTierFloorHours } from "./laborFallback";
+import { detectTier } from "./quoteEngine";
 
 /** Post-job actuals must reach this count before empirical overrides book time. */
 export const LABOR_EMPIRICAL_MIN_SAMPLES = 3;
@@ -141,18 +142,28 @@ export async function recomputeLaborForConfigService(
   // Confidence comes from source AGREEMENT, not source identity, and every
   // value is weighed against the Pricing-v2 tier fallback within a 15-min
   // guardrail. The fallback FLAGS a suspicious single source; it never inflates.
-  const nonVdb = catalog.filter((o: any) => o.source !== "vdb_repair_estimates");
-  const strong = catalog.filter((o: any) => STRONG_LABOR_SOURCES.has(o.source));
-
   let confidence: number | undefined;
   let outsideFallbackBand = false;
   let sourcesDisagree = false;
   let fallbackGapMinutes: number | undefined;
 
   if (bookHours !== undefined) {
-    // Tier fallback for the guardrail — needs the config's pricing_tier.
+    // `kept` mirrors the observations weightedMedian actually used (its internal
+    // MAD drops wide outliers at n>=4), so confidence reflects what DROVE
+    // book_hours — a strong source dropped as an outlier must not lend its trust
+    // to a value the weaker sources produced. Disagreement, by contrast, uses the
+    // PRE-MAD strong set so a contested pair is still flagged after MAD removes one.
+    const keepIdx = new Set(nonOutlierIndices(catalog.map((o: any) => o.hours as number)));
+    const kept = catalog.filter((_: any, i: number) => keepIdx.has(i));
+    const strongRaw = catalog.filter((o: any) => STRONG_LABOR_SOURCES.has(o.source));
+    const strong = kept.filter((o: any) => STRONG_LABOR_SOURCES.has(o.source));
+    const nonVdb = kept.filter((o: any) => o.source !== "vdb_repair_estimates");
+
+    // Tier fallback for the guardrail. detectTier resolves the tier via the rule
+    // engine when pricing_tier hasn't been persisted yet (fresh enrichments set it
+    // lazily at first quote), so the guardrail isn't silently skipped for new cars.
     const cfg = await ctx.db.get(vehicleConfigId);
-    const tier = cfg?.pricing_tier as string | undefined;
+    const tier = cfg ? await detectTier(ctx, cfg) : null;
     let fallbackHours: number | null = null;
     if (tier) {
       fallbackHours = await computeLaborTierFloorHours(ctx, {
@@ -160,22 +171,24 @@ export async function recomputeLaborForConfigService(
         vehicleTier: tier,
       });
     }
+    let fallbackOutOfBand = false;
     if (fallbackHours != null) {
-      fallbackGapMinutes = Math.round(Math.abs(bookHours - fallbackHours) * 60);
+      // Round the fallback to book_hours' 0.1h precision so the 15-min band
+      // isn't tripped by a rounding asymmetry at the boundary.
+      const fb = Math.round(fallbackHours * 10) / 10;
+      fallbackGapMinutes = Math.round(Math.abs(bookHours - fb) * 60);
+      fallbackOutOfBand = !withinGuardrail(bookHours, fb);
     }
-    const fallbackOutOfBand =
-      fallbackHours != null && !withinGuardrail(bookHours, fallbackHours);
 
-    // Strong-source disagreement (pre-MAD spread beyond the agreement band).
-    if (strong.length >= 2) {
-      const hrs = strong.map((o: any) => o.hours as number);
+    if (strongRaw.length >= 2) {
+      const hrs = strongRaw.map((o: any) => o.hours as number);
       sourcesDisagree = !withinAgreementBand(Math.min(...hrs), Math.max(...hrs));
     }
 
     if (strong.length >= 2 && !sourcesDisagree) {
       confidence = 0.9; // ≥2 strong sources agree
     } else if (strong.length >= 1) {
-      // 1 strong source, OR ≥2 strong that disagree → capped at single-source.
+      // 1 strong source (that survived MAD), OR ≥2 strong that disagree.
       if (fallbackOutOfBand) {
         confidence = 0.6;
         outsideFallbackBand = true;

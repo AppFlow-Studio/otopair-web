@@ -59,7 +59,28 @@ describe("agreement + fallback-guardrail confidence", () => {
     const db = base([obs("olp_labor", 0.6), obs("repairpal_labor", 1.2)]);
     await recomputeLaborForConfigService({ db } as any,
       { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
-    expect(db.inserts[0].doc.confidence).toBeLessThan(0.9);
-    expect(db.inserts[0].doc).toMatchObject({ labor_sources_disagree: true });
+    // median (0.6) coincides with the fallback, so it lands at the single-source
+    // 0.8 tier — disagreement is flagged for review but not yet read by the quote
+    // gate (a Phase-3 concern, since >1 strong source can't occur in prod until
+    // RepairPal/web sources are added).
+    expect(db.inserts[0].doc.confidence).toBe(0.8);
+    expect(db.inserts[0].doc).toMatchObject({
+      labor_sources_disagree: true, labor_outside_fallback_band: false,
+    });
+  });
+
+  it("a strong source MAD-dropped as an outlier does not lend its 0.8 to a weaker-source median", async () => {
+    // 4 obs so weightedMedian's internal MAD engages; olp 7.5 is the outlier and
+    // is dropped, so book_hours is LLM/VDB-driven and confidence must be the
+    // LLM-consensus 0.6, NOT the strong-source 0.8.
+    const db = base([
+      obs("olp_labor", 7.5, 0.8),
+      obs("llm_web", 1.0, 0.5),
+      obs("llm_training", 1.1, 0.3),
+      obs("vdb_repair_estimates", 1.05, 0.05),
+    ]);
+    await recomputeLaborForConfigService({ db } as any,
+      { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
+    expect(db.inserts[0].doc.confidence).toBe(0.6);
   });
 });

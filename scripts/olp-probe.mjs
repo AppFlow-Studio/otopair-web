@@ -75,7 +75,7 @@ const allSvc = resolved.flatMap((r) =>
   r.services.map((s) => ({ ...s, config_key: r.config_key })),
 );
 const matched = allSvc.filter((s) => s.status === "matched");
-const deltas = matched.map((s) => Math.abs(s.delta_pct)).filter((d) => d != null);
+const deltas = matched.filter((s) => s.delta_pct != null).map((s) => Math.abs(s.delta_pct));
 const within25 = deltas.filter((d) => d <= 25).length;
 
 const svcSlugs = [...new Set(allSvc.map((s) => s.slug))].sort();

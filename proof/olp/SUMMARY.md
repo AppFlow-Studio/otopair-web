@@ -9,6 +9,18 @@ Source: openlaborproject.com Next.js data routes (buildId `9LcCyZqhNWcZKlN9hHFXY
 - Median |Δ| OLP vs our book_hours: **23%** — within ±25%: **56%**
 - OLP-has / we-don't: **5** · we-have / OLP-doesn't: **4**
 
+### Reading these numbers
+
+The disagreement is **directional and structural, not random noise**: OLP reads
+lower than our book_hours in 112 of the 201 matched comparisons (higher in 54).
+Three known scope mismatches drive most of it — `oil_change` (OLP's row is a
+synthetic-oil-only change, ours is the bundled service; −40…−50% on nearly every
+car), `differential_service` (OLP's "service" row vs our fluid-change-anchored
+hours; +65% median), and `timing_belt` (n=2 — chain engines correctly have no
+OLP row, so the sample is two cars). The per-service medians below are the
+right lens; the pooled 23% headline mixes these scope mismatches with genuinely
+aligned services like `brake_pad_replacement` and `filter_replacement` (Δ=0%).
+
 ## Resolution per config
 
 | Config | OLP vehicle | Labor entries | Services matched |

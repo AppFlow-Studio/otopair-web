@@ -32,7 +32,7 @@
  * cannot drift.
  */
 
-import { fetchUrlWithHtml } from "./firecrawl";
+import { fetchUrlWithHtml, type ExtractedPrice } from "./firecrawl";
 import { callClaudeExtractOnly } from "./utils/claudeClient";
 import {
   parsePartPrices,
@@ -177,4 +177,38 @@ export async function reextractPartPrice(args: {
     return { status: "sale", price: fields.price, tier: "llm" };
   }
   return { status: "unverified", reason: `llm_${verdict.reason}` };
+}
+
+const BAD_LABEL_RE = /save|you\s*save|%\s*off|\bwas\b|\bmsrp\b|\blist\b|\bsku\b|part\s*#|part\s*number/i;
+
+export type GaugeResult = { pass: boolean; reason: string; correction: string | null };
+
+/** Self-evidencing validation of a Firecrawl extraction — no price thresholds
+ *  except the median band. Returns a corrective sentence when a gauge trips so
+ *  the caller can re-extract with guidance. Pure. */
+export function gaugePrice(
+  x: ExtractedPrice,
+  ctx: { oem: string | null; crossSourceMedian: number | null },
+): GaugeResult {
+  const sp = x.sale_price;
+  if (sp == null || !(sp > 0)) return { pass: false, reason: "no_price", correction: `Return the numeric dollar sale price for OEM ${ctx.oem ?? "this part"}, or null if not sold here.` };
+  if (x.sells_this_part === false) return { pass: false, reason: "not_this_part", correction: `Confirm the page sells OEM ${ctx.oem ?? "the target part"}; if it does not, return sale_price null.` };
+  if (x.price_label && BAD_LABEL_RE.test(x.price_label)) {
+    return { pass: false, reason: "label_not_sale", correction: `Your price_label was "${x.price_label}", which is a discount/MSRP/SKU — not the sale price. Return the current dollar amount the customer pays for OEM ${ctx.oem ?? "this part"}.` };
+  }
+  if (ctx.oem && x.oem_seen && normalizeOemNumber(x.oem_seen) !== normalizeOemNumber(ctx.oem)) {
+    return { pass: false, reason: "oem_mismatch", correction: `Your price was for OEM ${x.oem_seen}, but the target is ${ctx.oem}. Return the price for ${ctx.oem} specifically, or null.` };
+  }
+  if (x.msrp != null && x.msrp > 0 && sp >= x.msrp) {
+    return { pass: false, reason: "ge_msrp", correction: `Your price ${sp} was >= the MSRP ${x.msrp} — that's the list price. Return the actual current price BELOW MSRP.` };
+  }
+  if (x.msrp != null && x.discount != null && Math.abs(x.msrp - sp - x.discount) > Math.max(2, x.msrp * 0.05)) {
+    return { pass: false, reason: "discount_inconsistent", correction: `Your numbers don't reconcile (msrp ${x.msrp} − sale ${sp} ≠ discount ${x.discount}). Re-read the page and return the actual sale price + its MSRP for OEM ${ctx.oem ?? "this part"}.` };
+  }
+  if (ctx.crossSourceMedian != null && ctx.crossSourceMedian > 0) {
+    if (sp > ctx.crossSourceMedian * 3 || sp < ctx.crossSourceMedian * 0.3) {
+      return { pass: false, reason: "median_outlier", correction: `Your price ${sp} is far from other sources (~${ctx.crossSourceMedian}). Re-check you read the price for OEM ${ctx.oem ?? "this part"}, not a bundle/quantity/SKU.` };
+    }
+  }
+  return { pass: true, reason: "ok", correction: null };
 }

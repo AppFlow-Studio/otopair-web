@@ -35,7 +35,11 @@ async function fetchOlpJson(url: string): Promise<any | null> {
       const parsed = parseJsonLoose(body);
       if (parsed && typeof parsed === "object") return parsed;
     }
-  } catch {}
+  } catch (err) {
+    // Visible diagnostic (e.g. FIRECRAWL_API_KEY unset in a local run) —
+    // we still degrade to the direct fetch below.
+    console.warn(`[olpProbe] firecrawl fetch failed for ${url}: ${err instanceof Error ? err.message : err}`);
+  }
   try {
     const r = await fetch(url, {
       headers: { "User-Agent": CHROME_UA, Accept: "application/json" },
@@ -189,6 +193,12 @@ export const probeConfig = internalAction({
       `${OLP_BASE}/_next/data/${args.buildId}/portal/${makeSlug}/${modelSlug}/${snap.year}/${row.engineSlug}.json?${baseParams}`,
     );
     const redirect = portal?.pageProps?.__N_REDIRECT as string | undefined;
+    if (redirect && !redirect.startsWith("/")) {
+      // Next.js normally redirects to a relative path; anything else means
+      // the data-route contract drifted — surface it instead of building a
+      // garbage URL that would mislead triage as "missing laborJobs".
+      return fail("unexpected non-relative __N_REDIRECT", { redirect });
+    }
     if (redirect) {
       const path = redirect.replace(/\/$/, "");
       const dt = path.split("/").pop();

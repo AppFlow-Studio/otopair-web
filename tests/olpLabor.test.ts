@@ -136,6 +136,23 @@ describe("matchJobs", () => {
     ]);
   });
 
+  it("maps differential_service to the routine fluid-change job, not the full service", () => {
+    // routine diff service = fluid change (0.7h), not the broader 'service' (1.2h)
+    expect(bySvc.differential_service.olp_hours).toBe(0.7);
+    expect(bySvc.differential_service.olp_jobs[0].slug).toBe("differential-fluid-change");
+  });
+
+  it("maps oil_change to the plain/synthetic drain-fill job (0.3h)", () => {
+    expect(bySvc.oil_change.olp_hours).toBe(0.3);
+  });
+
+  it("maps brake_pad_replacement to pads-only front+rear", () => {
+    expect(bySvc.brake_pad_replacement.olp_jobs.map((j) => j.slug)).toEqual([
+      "brake-pads-front",
+      "brake-pads-rear",
+    ]);
+  });
+
   it("returns no match for timing_belt on a chain engine", () => {
     // fixture has timing-chain, not timing-belt — correctly unmatched
     expect(bySvc.timing_belt.olp_hours).toBeNull();

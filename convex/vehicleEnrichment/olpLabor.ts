@@ -184,9 +184,9 @@ export const OLP_JOB_MAP: Record<string, JobMapEntry> = {
     ],
   },
   differential_service: {
-    // The broader "service" row first — matches our service's full scope;
-    // the fluid-only row (≈half the hours) is the narrower fallback.
-    slugs: ["differential-service", "differential-fluid-change"],
+    // Routine diff service = the FLUID change (~0.7h). The broader
+    // "differential-service" row (~1.2h, includes inspection) is the fallback.
+    slugs: ["differential-fluid-change", "differential-service"],
   },
   brake_fluid_flush: { slugs: ["brake-fluid-flush"] },
 };

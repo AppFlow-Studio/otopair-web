@@ -1,0 +1,335 @@
+{
+  "config_key": "2003_honda_accord_ex_j30a4",
+  "make": "Honda",
+  "model": "Accord",
+  "olp_labor_count": 563,
+  "olp_url": "https://openlaborproject.com/portal/honda/accord/2003/3.0l-v6-j30/",
+  "olp_vehicle": {
+    "displayYear": "2003",
+    "engine": "3.0L V6 J30",
+    "engineSlug": "3.0l-v6-j30",
+    "forcedInduction": null,
+    "fuelType": "gas",
+    "jobCount": 563,
+    "timingType": "belt",
+    "vehicleId": "aa5dfdfa-9041-48e3-a8e9-f5d7f7d5b610",
+    "yearRange": "2003"
+  },
+  "resolved": true,
+  "services": [
+    {
+      "delta_pct": -50,
+      "olp_hours": 0.3,
+      "olp_jobs": [
+        {
+          "hours": 0.3,
+          "name": "Oil Change - Synthetic",
+          "sane": true,
+          "slug": "oil-change-synthetic"
+        },
+        {
+          "hours": 0.4,
+          "name": "Oil Change",
+          "sane": true,
+          "slug": "oil-change"
+        },
+        {
+          "hours": 0.6,
+          "name": "Oil Change - Diesel",
+          "sane": true,
+          "slug": "oil-change-diesel"
+        }
+      ],
+      "our_confidence": 0.8,
+      "our_hours": 0.6,
+      "our_source": "aggregated",
+      "repairpal_hours": 0.58,
+      "slug": "oil_change",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -40,
+      "olp_hours": 0.3,
+      "olp_jobs": [
+        {
+          "hours": 0.3,
+          "name": "Air Filter",
+          "sane": true,
+          "slug": "air-filter"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 0.5,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "filter_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 60,
+      "olp_hours": 0.8,
+      "olp_jobs": [
+        {
+          "hours": 0.8,
+          "name": "Spark Plugs",
+          "sane": true,
+          "slug": "spark-plugs"
+        },
+        {
+          "hours": 1.5,
+          "name": "Spark Plugs - V6",
+          "sane": true,
+          "slug": "spark-plugs-v6"
+        },
+        {
+          "hours": 1.5,
+          "name": "Spark Plugs - V8",
+          "sane": true,
+          "slug": "spark-plugs-v8"
+        }
+      ],
+      "our_confidence": 0.8,
+      "our_hours": 0.5,
+      "our_source": "aggregated",
+      "repairpal_hours": 0.47,
+      "slug": "spark_plugs",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 9,
+      "olp_hours": 5,
+      "olp_jobs": [
+        {
+          "hours": 5,
+          "name": "Timing Belt",
+          "sane": true,
+          "slug": "timing-belt"
+        },
+        {
+          "hours": 4.5,
+          "name": "Timing Belt Kit",
+          "sane": true,
+          "slug": "timing-belt-kit"
+        }
+      ],
+      "our_confidence": 0.8,
+      "our_hours": 4.6,
+      "our_source": "aggregated",
+      "repairpal_hours": 4.57,
+      "slug": "timing_belt",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 14,
+      "olp_hours": 0.8,
+      "olp_jobs": [
+        {
+          "hours": 0.8,
+          "name": "Coolant Flush",
+          "sane": true,
+          "slug": "coolant-flush"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 0.7,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "coolant_flush",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 200,
+      "olp_hours": 1.5,
+      "olp_jobs": [
+        {
+          "hours": 1.5,
+          "name": "Transmission Service",
+          "sane": true,
+          "slug": "transmission-service"
+        },
+        {
+          "hours": 1.5,
+          "name": "Transmission Filter and Fluid",
+          "sane": true,
+          "slug": "trans-filter-fluid"
+        },
+        {
+          "hours": 1.5,
+          "name": "Automatic Transmission Fluid and Filter Change",
+          "sane": true,
+          "slug": "automatic-transmission-fluid-filter-change"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 0.5,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "transmission_service",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -23,
+      "olp_hours": 1,
+      "olp_jobs": [
+        {
+          "hours": 1,
+          "name": "Wheel Alignment",
+          "sane": true,
+          "slug": "wheel-alignment"
+        }
+      ],
+      "our_confidence": 0.8,
+      "our_hours": 1.3,
+      "our_source": "aggregated",
+      "repairpal_hours": 1.27,
+      "slug": "wheel_alignment",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 20,
+      "olp_hours": 1.2,
+      "olp_jobs": [
+        {
+          "hours": 1.2,
+          "name": "Brake Pads - Front",
+          "sane": true,
+          "slug": "brake-pads-front"
+        },
+        {
+          "hours": 1.2,
+          "name": "Brake Pads - Rear",
+          "sane": true,
+          "slug": "brake-pads-rear"
+        }
+      ],
+      "our_confidence": 0.8,
+      "our_hours": 1,
+      "our_source": "aggregated",
+      "repairpal_hours": 1.04,
+      "slug": "brake_pad_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 33,
+      "olp_hours": 2,
+      "olp_jobs": [
+        {
+          "hours": 2,
+          "name": "Brake Rotors - Front Pair",
+          "sane": true,
+          "slug": "brake-rotors-front-pair"
+        },
+        {
+          "hours": 2,
+          "name": "Brake Rotors - Rear Pair",
+          "sane": true,
+          "slug": "brake-rotors-rear-pair"
+        },
+        {
+          "hours": 1.8,
+          "name": "Brake Pads and Rotors - Front",
+          "sane": true,
+          "slug": "brake-pads-rotors-front"
+        },
+        {
+          "hours": 1.8,
+          "name": "Brake Pads and Rotors - Rear",
+          "sane": true,
+          "slug": "brake-pads-rotors-rear"
+        }
+      ],
+      "our_confidence": 0.75,
+      "our_hours": 1.5,
+      "our_source": "training_data",
+      "repairpal_hours": null,
+      "slug": "rotor_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 14,
+      "olp_hours": 0.8,
+      "olp_jobs": [
+        {
+          "hours": 0.8,
+          "name": "Brake Fluid Flush",
+          "sane": true,
+          "slug": "brake-fluid-flush"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 0.7,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "brake_fluid_flush",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 0,
+      "olp_hours": 0.4,
+      "olp_jobs": [
+        {
+          "hours": 0.4,
+          "name": "Battery",
+          "sane": true,
+          "slug": "battery"
+        }
+      ],
+      "our_confidence": 0.8,
+      "our_hours": 0.4,
+      "our_source": "aggregated",
+      "repairpal_hours": 0.35,
+      "slug": "battery_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 0,
+      "olp_hours": 0.5,
+      "olp_jobs": [
+        {
+          "hours": 0.5,
+          "name": "Power Steering Fluid Flush",
+          "sane": true,
+          "slug": "power-steering-fluid-flush"
+        },
+        {
+          "hours": 0.5,
+          "name": "Power Steering Service",
+          "sane": true,
+          "slug": "power-steering-service"
+        }
+      ],
+      "our_confidence": 0.75,
+      "our_hours": 0.5,
+      "our_source": "training_data",
+      "repairpal_hours": null,
+      "slug": "power_steering_flush",
+      "status": "matched"
+    },
+    {
+      "delta_pct": null,
+      "olp_hours": 1,
+      "olp_jobs": [
+        {
+          "hours": 1,
+          "name": "Differential Service",
+          "sane": true,
+          "slug": "differential-service"
+        },
+        {
+          "hours": 0.6,
+          "name": "Differential Fluid Change",
+          "sane": true,
+          "slug": "differential-fluid-change"
+        }
+      ],
+      "our_confidence": null,
+      "our_hours": null,
+      "our_source": null,
+      "repairpal_hours": null,
+      "slug": "differential_service",
+      "status": "no_our_data"
+    }
+  ],
+  "trim": "EX",
+  "year": 2003
+}

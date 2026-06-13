@@ -43,7 +43,7 @@ import {
 } from "./priceParser";
 
 export type ReextractOutcome =
-  | { status: "sale"; price: number; tier: "structured" | "llm" }
+  | { status: "sale"; price: number; tier: "structured" | "llm" | "firecrawl"; msrp?: number | null; discount?: number | null }
   | { status: "unverified"; reason: string }
   // The page came back empty (fetch/anti-bot failure) — we learned NOTHING
   // about it, so callers must NOT demote the existing row on this outcome.
@@ -211,4 +211,42 @@ export function gaugePrice(
     }
   }
   return { pass: true, reason: "ok", correction: null };
+}
+
+export type PriceExtractor = (
+  url: string, oem: string | null, partName?: string | null, correction?: string | null,
+) => Promise<ExtractedPrice | null>;
+
+/** Extract → gauge → ONE guided retry → hard-wall backstop. The extractor is
+ *  injectable so tests can stub it; production passes extractPriceFirecrawl. */
+export async function resolveVerifiedPrice(
+  args: { url: string; oem: string | null; partName?: string | null; crossSourceMedian: number | null },
+  extract: PriceExtractor,
+): Promise<ReextractOutcome> {
+  const { url, oem, partName, crossSourceMedian } = args;
+
+  let x = await extract(url, oem, partName, null);
+  if (!x) return { status: "fetch_failed", reason: "no_extract" };
+
+  let g = gaugePrice(x, { oem, crossSourceMedian });
+  let retried = false;
+  if (!g.pass && g.correction) {
+    retried = true;
+    const x2 = await extract(url, oem, partName, g.correction);
+    if (!x2) return { status: "fetch_failed", reason: "no_extract_retry" };
+    x = x2;
+    g = gaugePrice(x, { oem, crossSourceMedian });
+  }
+
+  if (g.pass) {
+    return { status: "sale", price: x.sale_price as number, tier: "firecrawl", msrp: x.msrp, discount: x.discount };
+  }
+
+  // Hard-wall backstop: validateLlmPrice + the $5k single-source ceiling.
+  const vp = validateLlmPrice({ price: x.sale_price, msrp: x.msrp, oemSeen: x.oem_seen, oem: oem ?? "", crossSourceMedian });
+  const overCeiling = (x.sale_price ?? 0) > 5000 && crossSourceMedian == null;
+  if (vp.ok && !overCeiling && oem) {
+    return { status: "sale", price: x.sale_price as number, tier: "firecrawl", msrp: x.msrp, discount: x.discount };
+  }
+  return { status: "unverified", reason: `${g.reason}${retried ? "_after_retry" : ""}` };
 }

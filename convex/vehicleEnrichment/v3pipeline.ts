@@ -2593,6 +2593,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
                 discount: row.outcome.discount ?? undefined,
               });
             }
+            // Observability: a part where NO source yielded a trusted price gets
+            // no row (better than an llm guess) — but log it so a degraded run
+            // (anti-bot blocks / Firecrawl outage) is diagnosable, not silent.
+            if (!rows.some((r) => r.outcome.status === "sale")) {
+              console.warn(
+                `[v8/price] no trusted price for part ${partIdStr} (oem=${e.oem ?? "?"}) from ${e.urls.length} source(s): ` +
+                  rows.map((r) => `${r.source_domain}:${r.outcome.status}${r.outcome.status === "unverified" ? `(${r.outcome.reason})` : ""}`).join(", "),
+              );
+            }
           }
         }
       }

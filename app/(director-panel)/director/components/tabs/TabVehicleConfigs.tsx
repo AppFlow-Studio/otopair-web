@@ -219,6 +219,8 @@ type PartPriceRow = {
   sourceUrl: string | null
   sourceDomain: string | null
   refreshedAt: number | null
+  msrp: number | null
+  discount: number | null
 }
 type PartEvidenceRow = {
   field: string | null
@@ -325,6 +327,11 @@ const PartFitmentDrawerBody = ({ partId, configId, onClose }: {
                     <div key={i} style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:6, padding:'8px 10px' }}>
                       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:4 }}>
                         <span className="mono" style={{ fontSize:13, fontWeight:600, color:'var(--slate-900)' }}>${p.price.toFixed(2)}</span>
+                        {p.msrp != null && p.discount != null ? (
+                          <span style={{ color:'var(--slate-500)', fontSize:11, marginLeft:6 }}>
+                            (was ${p.msrp.toFixed(2)} · save ${p.discount.toFixed(2)})
+                          </span>
+                        ) : null}
                         {p.priceType && <Badge tone="slate">{p.priceType}</Badge>}
                       </div>
                       {(p.sourceDomain || p.sourceUrl) && (

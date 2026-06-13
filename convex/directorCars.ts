@@ -692,6 +692,8 @@ export const partFitmentDetail = query({
           sourceUrl:     (p as any).source_url ?? null,
           sourceDomain:  (p as any).source_domain ?? null,
           refreshedAt:   (p as any).refreshed_at ?? null,
+          msrp:          (p as any).msrp ?? null,
+          discount:      (p as any).discount ?? null,
         }))
         .sort((a, b) => a.price - b.price),
       evidence: evidence

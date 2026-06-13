@@ -93,7 +93,8 @@ export type EngineHints = {
  * Year is a hard filter (rows are per single displayYear). Engines are
  * scored: displacement match +4, cylinder count +2, forced-induction
  * agreement +1 — displacement dominates because it is the most reliable
- * field on both sides.
+ * field on both sides. Equal scores tie-break by array position (first
+ * row wins) — only reachable when displacement is missing from our DB.
  */
 export function pickOlpVehicle(
   vehicles: OlpVehicleRow[],

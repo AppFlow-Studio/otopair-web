@@ -24,6 +24,8 @@
  */
 
 import { summarizeObservations, weightedMedian } from "./robustStats";
+import { STRONG_LABOR_SOURCES, withinGuardrail, withinAgreementBand } from "./laborBands";
+import { computeLaborTierFloorHours } from "./laborFallback";
 
 /** Post-job actuals must reach this count before empirical overrides book time. */
 export const LABOR_EMPIRICAL_MIN_SAMPLES = 3;
@@ -107,7 +109,6 @@ export async function recomputeLaborForConfigService(
 
   let bookHours: number | undefined;
   let engineFamily: string | undefined;
-  let hasAnchor = false;
   if (catalog.length > 0) {
     // Weighted robust median: olp_labor (0.8) dominates LLM (0.3-0.5) and
     // VDB (0.05). A wrong high-weight value is guarded at WRITE time by the
@@ -119,7 +120,6 @@ export async function recomputeLaborForConfigService(
       ),
     );
     engineFamily = catalog.find((o: any) => o.engine_family)?.engine_family;
-    hasAnchor = catalog.some((o: any) => o.source === "olp_labor");
   }
 
   // ── Empirical tier: post-job actuals, gated at the min sample size ──
@@ -137,25 +137,53 @@ export async function recomputeLaborForConfigService(
     }
   }
 
-  // Data-good signal. OLP (olp_labor) is the high-trust anchor; corroboration
-  // by a second non-VDB source within 20% bumps it to 0.9.
-  //
-  // Without an olp_labor observation the ceiling is 0.6, which is BELOW the
-  // quote gate's MIN_VDB_CONFIDENCE (0.75) — LLM-only consensus intentionally
-  // does NOT quote; the quote falls to the transparent tier_estimate layer
-  // instead. Rollout: land this change + backfill olp_labor BEFORE relying on
-  // Layer-1 labor, or it goes dark.
+  // ── Agreement + fallback-guardrail confidence (spec 2026-06-13) ──
+  // Confidence comes from source AGREEMENT, not source identity, and every
+  // value is weighed against the Pricing-v2 tier fallback within a 15-min
+  // guardrail. The fallback FLAGS a suspicious single source; it never inflates.
   const nonVdb = catalog.filter((o: any) => o.source !== "vdb_repair_estimates");
-  const agree = (a: number, b: number) => Math.abs(a - b) / Math.max(a, b) <= 0.2;
+  const strong = catalog.filter((o: any) => STRONG_LABOR_SOURCES.has(o.source));
+
   let confidence: number | undefined;
+  let outsideFallbackBand = false;
+  let sourcesDisagree = false;
+  let fallbackGapMinutes: number | undefined;
+
   if (bookHours !== undefined) {
-    if (hasAnchor) {
-      const corroborated = nonVdb.some(
-        (o: any) => o.source !== "olp_labor" && agree(o.hours, bookHours!),
-      );
-      confidence = corroborated ? 0.9 : 0.8;
+    // Tier fallback for the guardrail — needs the config's pricing_tier.
+    const cfg = await ctx.db.get(vehicleConfigId);
+    const tier = cfg?.pricing_tier as string | undefined;
+    let fallbackHours: number | null = null;
+    if (tier) {
+      fallbackHours = await computeLaborTierFloorHours(ctx, {
+        serviceId,
+        vehicleTier: tier,
+      });
+    }
+    if (fallbackHours != null) {
+      fallbackGapMinutes = Math.round(Math.abs(bookHours - fallbackHours) * 60);
+    }
+    const fallbackOutOfBand =
+      fallbackHours != null && !withinGuardrail(bookHours, fallbackHours);
+
+    // Strong-source disagreement (pre-MAD spread beyond the agreement band).
+    if (strong.length >= 2) {
+      const hrs = strong.map((o: any) => o.hours as number);
+      sourcesDisagree = !withinAgreementBand(Math.min(...hrs), Math.max(...hrs));
+    }
+
+    if (strong.length >= 2 && !sourcesDisagree) {
+      confidence = 0.9; // ≥2 strong sources agree
+    } else if (strong.length >= 1) {
+      // 1 strong source, OR ≥2 strong that disagree → capped at single-source.
+      if (fallbackOutOfBand) {
+        confidence = 0.6;
+        outsideFallbackBand = true;
+      } else {
+        confidence = 0.8; // within guardrail, or no fallback to corroborate
+      }
     } else if (nonVdb.length >= 2) {
-      confidence = 0.6;
+      confidence = 0.6; // LLM-only consensus — below the 0.75 quote gate
     } else {
       confidence = 0.4;
     }
@@ -195,6 +223,9 @@ export async function recomputeLaborForConfigService(
       // silently veto a freshly aggregated OLP value.
       patch.data_quality = "aggregated";
       if (engineFamily) patch.engine_family = engineFamily;
+      patch.labor_outside_fallback_band = outsideFallbackBand;
+      patch.labor_sources_disagree = sourcesDisagree;
+      patch.fallback_gap_minutes = fallbackGapMinutes;
     }
     if (Object.keys(patch).length > 0) await ctx.db.patch(existing._id, patch);
     return;
@@ -210,6 +241,9 @@ export async function recomputeLaborForConfigService(
     source: bookHours !== undefined ? "aggregated" : undefined,
     data_quality: bookHours !== undefined ? "aggregated" : undefined,
     confidence,
+    labor_outside_fallback_band: outsideFallbackBand,
+    labor_sources_disagree: sourcesDisagree,
+    fallback_gap_minutes: fallbackGapMinutes,
     empirical_hours: empirical ? empirical.hours : 0,
     empirical_sample_size: empirical ? empirical.n : empiricalCount,
     empirical_p25: empirical ? empirical.p25 : 0,

@@ -69,7 +69,7 @@ export const report = internalQuery({
             q.eq("vehicle_config_id", cfg._id).eq("service_id", svc._id),
           )
           .collect();
-        const olpObs = obs.filter((o: any) => o.source === "olp").length;
+        const olpObs = obs.filter((o: any) => o.source === "olp_labor").length;
 
         const gateOk = lt ? isHighQualityVdb(lt as any) : false;
         const mapped = slug in OLP_JOB_MAP;

@@ -11,7 +11,6 @@ import { internal } from "../_generated/api";
 import {
   OLP_BASE,
   olpSlugify,
-  extractBuildId,
   parseJsonLoose,
   olpModelCandidates,
   pickOlpVehicle,
@@ -21,6 +20,7 @@ import {
 } from "../vehicleEnrichment/olpLabor";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { fetchUrlWithHtml } from "../vehicleEnrichment/firecrawl";
+export { resolveBuildId } from "../vehicleEnrichment/olpLaborScrape";
 
 const CHROME_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -60,15 +60,6 @@ async function fetchOlpHtml(url: string): Promise<string | null> {
   } catch {}
   return null;
 }
-
-/** Discover the current Next.js buildId (changes when OLP redeploys). */
-export const resolveBuildId = internalAction({
-  args: {},
-  handler: async (): Promise<{ buildId: string | null }> => {
-    const html = await fetchOlpHtml(OLP_BASE);
-    return { buildId: html ? extractBuildId(html) : null };
-  },
-});
 
 /** Enriched configs for the driver loop. */
 export const _listEnrichedConfigs = internalQuery({

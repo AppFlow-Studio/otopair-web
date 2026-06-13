@@ -176,13 +176,21 @@ export const run = internalMutation({
     // 2) Find Camry model under Toyota (models table has no compound index;
     //    collect-and-filter is fine — models is a small reference table.)
     const allModels = await ctx.db.query("models").collect();
-    const camryModelDoc = allModels.find(
+    let camryModelDoc = allModels.find(
       (m: any) => m.name === CAMRY_MODEL_NAME && m.make_id === toyota._id,
     );
     if (!camryModelDoc) {
-      throw new Error(
-        `seedCamryBaseline: models table has no 'Camry' under Toyota. Seed models first.`,
-      );
+      // Defensive find-or-create (mirrors the engine + config handling below).
+      // The Camry model is the anchor's parent row; creating it here keeps the
+      // seed self-sufficient instead of hard-failing when the catalog lacks it
+      // (the failure that silently left the fallback anchor unseeded).
+      const camryModelId = await ctx.db.insert("models", {
+        make_id: toyota._id,
+        name: CAMRY_MODEL_NAME,
+        slug: "camry",
+        created_at: now,
+      });
+      camryModelDoc = (await ctx.db.get(camryModelId))!;
     }
 
     // 3) Find or create the A25A-FKS engine (shared between FWD + AWD trims)

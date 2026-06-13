@@ -43,4 +43,17 @@ describe("priceAllSources", () => {
     const outlier = out.find((o) => o.source_domain === "c.com")!;
     expect(outlier.outcome.status).toBe("unverified");
   });
+
+  it("a LONE source over $5k is rejected (no self-seeded median; $5k ceiling fires)", async () => {
+    const extract = async () => ({ ...mk(21499), msrp: null, discount: null, price_label: "Price $21499" });
+    const out = await priceAllSources(["https://a.com/p"], { oem: "OEM1" }, extract);
+    expect(out).toHaveLength(1);
+    expect(out[0].outcome.status).toBe("unverified");
+  });
+
+  it("a LONE source under $5k still passes", async () => {
+    const extract = async () => ({ ...mk(40), msrp: null, discount: null });
+    const out = await priceAllSources(["https://a.com/p"], { oem: "OEM1" }, extract);
+    expect(out[0].outcome.status).toBe("sale");
+  });
 });

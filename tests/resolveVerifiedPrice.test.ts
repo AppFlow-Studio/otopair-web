@@ -43,6 +43,25 @@ describe("resolveVerifiedPrice", () => {
     expect(s.calls.length).toBe(2);
   });
 
+  it("a single-source price over $5k (no median) is rejected by the ceiling even when gauges pass", async () => {
+    // clean label, matching OEM, null msrp, NO cross-source median → gauges all
+    // pass, but the $5k single-source ceiling must still reject it.
+    const lone: ExtractedPrice = {
+      ...good, sale_price: 21499, msrp: null, discount: null, price_label: "Price $21499.00",
+    };
+    const s = scripted([lone]);
+    const r = await resolveVerifiedPrice({ url: "u", oem: "13717852380", partName: "Battery", crossSourceMedian: null }, s.fn);
+    expect(r.status).toBe("unverified");
+    expect((r as any).reason).toContain("over_ceiling");
+    expect(s.calls.length).toBe(1); // gauges passed → no retry; ceiling rejects post-hoc
+  });
+
+  it("a single-source price UNDER $5k passes (ceiling doesn't over-reject)", async () => {
+    const s = scripted([{ ...good, msrp: null, discount: null }]); // sale 37.19, no median
+    const r = await resolveVerifiedPrice({ url: "u", oem: "13717852380", partName: "Air Filter", crossSourceMedian: null }, s.fn);
+    expect(r.status).toBe("sale");
+  });
+
   it("null extraction (page failed) → fetch_failed, no retry", async () => {
     const s = scripted([null]);
     const r = await resolveVerifiedPrice({ url: "u", oem: "x", partName: null, crossSourceMedian: null }, s.fn);

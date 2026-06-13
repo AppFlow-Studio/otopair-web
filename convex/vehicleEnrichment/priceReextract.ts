@@ -239,17 +239,23 @@ export async function resolveVerifiedPrice(
     g = gaugePrice(x, { oem, crossSourceMedian });
   }
 
-  if (g.pass) {
+  // The $5k absolute ceiling is a hard wall applied even when the gauges PASS —
+  // a single-source price (no cross-source median to corroborate) above $5k is
+  // rejected regardless, because with one source there is nothing to evidence it
+  // against (the median gauge would be self-satisfying).
+  const overCeiling = (x.sale_price ?? 0) > 5000 && crossSourceMedian == null;
+
+  if (g.pass && !overCeiling) {
     return { status: "sale", price: x.sale_price as number, tier: "firecrawl", msrp: x.msrp, discount: x.discount };
   }
 
   // Hard-wall backstop: validateLlmPrice + the $5k single-source ceiling.
   const vp = validateLlmPrice({ price: x.sale_price, msrp: x.msrp, oemSeen: x.oem_seen, oem: oem ?? "", crossSourceMedian });
-  const overCeiling = (x.sale_price ?? 0) > 5000 && crossSourceMedian == null;
   if (vp.ok && !overCeiling && oem) {
     return { status: "sale", price: x.sale_price as number, tier: "firecrawl", msrp: x.msrp, discount: x.discount };
   }
-  return { status: "unverified", reason: `${g.reason}${retried ? "_after_retry" : ""}` };
+  const reason = overCeiling ? "over_ceiling" : g.reason;
+  return { status: "unverified", reason: `${reason}${retried ? "_after_retry" : ""}` };
 }
 
 export type SourcePriceRow = {
@@ -285,7 +291,10 @@ export async function priceAllSources(
     const x = await extract(u, args.oem, args.partName, null);
     if (x?.sale_price != null && x.sale_price > 0) sales.push(x.sale_price);
   }
-  const crossSourceMedian = sales.length > 0 ? median(sales) : null;
+  // Median only counts as corroboration with >= 2 distinct sources. A lone
+  // source must NOT seed its own median (that would self-satisfy the median
+  // gauge and disable the single-source $5k ceiling in resolveVerifiedPrice).
+  const crossSourceMedian = sales.length >= 2 ? median(sales) : null;
 
   // Pass 2: gauge + guided retry each, against the median.
   const out: SourcePriceRow[] = [];

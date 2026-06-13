@@ -17,8 +17,7 @@
  *   npx convex run devOnly/fallbackVsOlp:dump --prod=false  > out.json
  */
 import { internalQuery } from "../_generated/server";
-
-const CAMRY_FWD_CONFIG_KEY = "2020_toyota_camry_le_fwd_a25a-fks";
+import { CAMRY_FWD_CONFIG_KEY } from "../lib/laborFallback";
 
 // The OLP-comparable labor services -> labor_category (per task GROUND TRUTH /
 // seedServiceCategories). diagnostics-category services have no OLP equivalent.

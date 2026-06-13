@@ -15,6 +15,7 @@ import {
   olpModelCandidates,
   pickOlpVehicle,
   matchJobs,
+  OLP_JOB_MAP,
   type OlpVehicleRow,
   type OlpLaborJob,
 } from "../vehicleEnrichment/olpLabor";
@@ -206,7 +207,12 @@ export const probeConfig = internalAction({
     }
 
     // (4) match our services and join with our data
-    const matches = matchJobs(laborJobs);
+    // Pass the engine cylinder count so the probe picks the same cylinder-specific
+    // spark-plug row (v6/v8) the production resolver does — otherwise the audit
+    // output would show the generic row and hide the fix it drove.
+    const matches = matchJobs(laborJobs, OLP_JOB_MAP, {
+      cylinders: snap.engine_hints?.cylinders ?? null,
+    });
     const byService = new Map(matches.map((m) => [m.service, m]));
     const services = snap.services.map((s: any) => {
       const m = byService.get(s.slug);

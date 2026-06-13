@@ -47,3 +47,85 @@ export function parseJsonLoose(s: string): unknown | null {
   }
   return null;
 }
+
+/**
+ * Ordered model-slug candidates, most specific first. OLP keys models by
+ * trim-qualified nameplate (civic, civic-si, civic-type-r) — same shape as
+ * RepairPal, so same candidate strategy as repairpalModelCandidates:
+ *   ("5 Series", "M550i xDrive") → 5-series-m550i-xdrive, m550i-xdrive,
+ *                                  m550i, 5-series
+ */
+export function olpModelCandidates(model: string, trim: string): string[] {
+  const out: string[] = [];
+  const add = (s: string) => {
+    const v = olpSlugify(s);
+    if (v && !out.includes(v)) out.push(v);
+  };
+  if (trim) {
+    add(`${model} ${trim}`);
+    add(trim);
+    add(trim.replace(/xdrive/i, "").trim());
+  }
+  add(model);
+  return out;
+}
+
+export type OlpVehicleRow = {
+  vehicleId?: string;
+  yearRange?: string;
+  displayYear: string;
+  engine: string;
+  engineSlug: string;
+  fuelType?: string | null;
+  timingType?: string | null;
+  forcedInduction?: string | null;
+  jobCount?: number;
+};
+
+export type EngineHints = {
+  displacementL: number | null; // 1.5
+  cylinders: number | null; // 4
+  turbo: boolean | null; // any forced induction
+};
+
+/**
+ * Pick the best year+engine row from a model-browse vehicles[] list.
+ * Year is a hard filter (rows are per single displayYear). Engines are
+ * scored: displacement match +4, cylinder count +2, forced-induction
+ * agreement +1 — displacement dominates because it is the most reliable
+ * field on both sides.
+ */
+export function pickOlpVehicle(
+  vehicles: OlpVehicleRow[],
+  year: number,
+  hints: EngineHints,
+): OlpVehicleRow | null {
+  const rows = vehicles.filter((r) => r.displayYear === String(year));
+  if (rows.length === 0) return null;
+  if (rows.length === 1) return rows[0];
+
+  let best: OlpVehicleRow | null = null;
+  let bestScore = -1;
+  for (const r of rows) {
+    const slug = r.engineSlug.toLowerCase();
+    let score = 0;
+    if (hints.displacementL != null) {
+      // OLP slugs always carry one decimal: "2.0l-i4", "1.5l-i4-turbo"
+      if (slug.startsWith(`${hints.displacementL.toFixed(1)}l`)) score += 4;
+    }
+    if (hints.cylinders != null) {
+      const m = slug.match(/[ivwhf](\d{1,2})\b/); // i4, v6, h6, w12
+      if (m && Number(m[1]) === hints.cylinders) score += 2;
+    }
+    if (hints.turbo != null) {
+      const rowTurbo =
+        /turbo|supercharg/.test(slug) || (r.forcedInduction ?? "") === "turbo";
+      if (rowTurbo === hints.turbo) score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = r;
+    }
+  }
+  return best;
+}

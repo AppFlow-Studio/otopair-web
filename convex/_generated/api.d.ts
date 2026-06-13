@@ -41,6 +41,7 @@ import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
 import type * as devOnly_olpProbe from "../devOnly/olpProbe.js";
 import type * as devOnly_partsCoverage from "../devOnly/partsCoverage.js";
 import type * as devOnly_purgeRepairpalObs from "../devOnly/purgeRepairpalObs.js";
+import type * as devOnly_repriceJsonProbe from "../devOnly/repriceJsonProbe.js";
 import type * as devOnly_validateQuoteEngine from "../devOnly/validateQuoteEngine.js";
 import type * as devOnly_verifyLabor from "../devOnly/verifyLabor.js";
 import type * as devOnly_verifyParts from "../devOnly/verifyParts.js";
@@ -366,6 +367,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/olpProbe": typeof devOnly_olpProbe;
   "devOnly/partsCoverage": typeof devOnly_partsCoverage;
   "devOnly/purgeRepairpalObs": typeof devOnly_purgeRepairpalObs;
+  "devOnly/repriceJsonProbe": typeof devOnly_repriceJsonProbe;
   "devOnly/validateQuoteEngine": typeof devOnly_validateQuoteEngine;
   "devOnly/verifyLabor": typeof devOnly_verifyLabor;
   "devOnly/verifyParts": typeof devOnly_verifyParts;

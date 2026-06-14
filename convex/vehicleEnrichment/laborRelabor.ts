@@ -42,8 +42,61 @@ export const _laborConfigInputs = internalQuery({
     // null repairpal_slug is fine — the RepairPal resolver skips nulls, and OLP +
     // web still run for them.
     const serviceDocs = await ctx.db.query("services").collect();
+
+    // ── Per-config applicability gate (parity with v3pipeline) ─────────────────
+    // The live enrichment path (v3pipeline.ts) only resolves labor for services
+    // applicable to THIS vehicle: `if (!svc.is_applicable) continue;`. This
+    // backfill must do the same, otherwise running it with RepairPal/web flags on
+    // burns firecrawl credits on inapplicable services and writes spurious
+    // web_labor/repairpal_labor observations for services the vehicle doesn't have
+    // (e.g. timing_belt on a chain engine, differential service on FWD).
+    //
+    // Engine-level default lives in service_vehicle_specs.is_applicable (the same
+    // signal services.ts uses: owner overrides are per-vehicle-instance and don't
+    // exist at config level, so the engine default is the right signal here). We
+    // exclude a service ONLY on an explicit is_applicable === false — a missing
+    // spec row or null/true value stays INCLUDED (mirrors the pipeline's
+    // `is_applicable ?? true` default and services.ts's `=== false` exclusion).
+    //
+    // When the config has no engine_id we can't query specs, so we keep all
+    // services (the pre-fix behavior).
+    let excluded = 0;
+    const nonApplicableServiceIds = new Set<string>();
+    if (cfg.engine_id) {
+      const engineSpecs = await ctx.db
+        .query("service_vehicle_specs")
+        .withIndex("by_engine_id", (q) => q.eq("engine_id", cfg.engine_id))
+        .collect();
+      // Prefer a config-specific row when one exists for a service_id; otherwise
+      // fall back to the engine-level row. A service is excluded iff its resolved
+      // row has is_applicable === false.
+      const resolved = new Map<string, boolean | undefined>(); // service_id -> is_applicable
+      const hasConfigRow = new Set<string>();
+      for (const spec of engineSpecs as any[]) {
+        const sid = String(spec.service_id);
+        const isConfigRow =
+          spec.vehicle_config_id != null && String(spec.vehicle_config_id) === String(vehicleConfigId);
+        if (isConfigRow) {
+          resolved.set(sid, spec.is_applicable);
+          hasConfigRow.add(sid);
+        } else if (!hasConfigRow.has(sid)) {
+          resolved.set(sid, spec.is_applicable);
+        }
+      }
+      for (const [sid, isApplicable] of resolved) {
+        if (isApplicable === false) nonApplicableServiceIds.add(sid);
+      }
+    }
+
     const services = (serviceDocs as any[])
       .filter((s) => s.slug)
+      .filter((s) => {
+        if (nonApplicableServiceIds.has(String(s._id))) {
+          excluded++;
+          return false;
+        }
+        return true;
+      })
       .map((s) => ({
         slug: s.slug as string,
         serviceId: s._id,
@@ -53,6 +106,7 @@ export const _laborConfigInputs = internalQuery({
       }));
 
     return {
+      excluded,
       config_key: cfg.config_key as string,
       make: (make as any)?.name ?? "",
       model: (model as any)?.name ?? "",
@@ -111,7 +165,7 @@ export const laborRelaborConfig = internalAction({
       },
     );
 
-    return { config_key: inp.config_key, ...res };
+    return { config_key: inp.config_key, excluded: inp.excluded ?? 0, ...res };
   },
 });
 
@@ -167,6 +221,7 @@ export const laborRelaborAll = internalAction({
         console.log(
           `[laborRelaborAll] ${processed}/${targets.length} ${cfg.config_key}: ` +
           `resolved=${res?.resolved} written=${res?.written ?? 0} ` +
+          `excluded=${res?.excluded ?? 0} ` +
           `failed=${res?.failed?.length ?? 0} ` +
           `sources=${JSON.stringify(res?.sources ?? {})}`,
         );

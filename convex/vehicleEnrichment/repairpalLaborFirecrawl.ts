@@ -18,12 +18,13 @@
  *    unit test by design (see the Phase-3 labor plan).
  *
  * Resolver-action shape mirrors `resolveOlpLaborForConfig` (olpLaborScrape.ts);
- * the firecrawl `json` POST mirrors `extractPriceFirecrawl` (firecrawl.ts), with
- * the schema/prompt swapped for a two-field dollar range.
+ * the firecrawl `json` POST uses the shared `firecrawlJsonExtract` helper
+ * (firecrawl.ts), with the schema/prompt set to a two-field dollar range.
  */
 import { internalAction } from "../_generated/server";
 import { v } from "convex/values";
 import { OLP_HOURS_MIN, OLP_HOURS_MAX } from "./olpLabor";
+import { firecrawlJsonExtract } from "./firecrawl";
 
 /** RepairPal publishes a labor DOLLAR range; we recover hours via this reference
  *  rate. A documented guesstimate — repairpal_labor is a low-weight corroborator. */
@@ -40,10 +41,6 @@ export function dollarsToHours(priceLow: number, priceHigh: number): number {
 // ---------------------------------------------------------------------------
 
 const REPAIRPAL_BASE = "https://repairpal.com/estimator";
-
-// Firecrawl is module-private in firecrawl.ts (getApiKey/FIRECRAWL_BASE), so we
-// replicate the small POST inline here rather than exporting those internals.
-const FIRECRAWL_BASE = "https://api.firecrawl.dev/v2";
 
 /** Slugify a make/model into RepairPal's URL path form. The repairpal_slug is
  *  already in slug form (e.g. "oil-change") — only make/model need this. */
@@ -103,37 +100,10 @@ type RepairpalDollarRange = { price_low: number | null; price_high: number | nul
  * Returns null on any non-ok / error / missing-key — never throws.
  */
 async function extractRepairpalLaborFirecrawl(url: string): Promise<RepairpalDollarRange | null> {
-  const key = process.env.FIRECRAWL_API_KEY;
-  if (!key) {
-    // Safe-skip: without a firecrawl key this resolver simply yields nothing.
-    console.warn("RepairPal labor: FIRECRAWL_API_KEY not set; skipping");
-    return null;
-  }
-  try {
-    const resp = await fetch(`${FIRECRAWL_BASE}/scrape`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        url,
-        formats: [{ type: "json", prompt: REPAIRPAL_LABOR_PROMPT, schema: REPAIRPAL_LABOR_SCHEMA }],
-        timeout: 45000,
-      }),
-      signal: AbortSignal.timeout(50000),
-    });
-    if (!resp.ok) {
-      console.error(`RepairPal labor firecrawl failed for ${url}: ${resp.status}`);
-      return null;
-    }
-    const data = await resp.json();
-    const d = data.data ?? data;
-    const j = d.json ?? d.extract ?? null;
-    if (!j || typeof j !== "object") return null;
-    const num = (x: any) => (typeof x === "number" && Number.isFinite(x) ? x : null);
-    return { price_low: num(j.price_low), price_high: num(j.price_high) };
-  } catch (e) {
-    console.error(`RepairPal labor firecrawl error for ${url}:`, e);
-    return null;
-  }
+  const j = await firecrawlJsonExtract(url, REPAIRPAL_LABOR_PROMPT, REPAIRPAL_LABOR_SCHEMA);
+  if (!j) return null;
+  const num = (x: any) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+  return { price_low: num(j.price_low), price_high: num(j.price_high) };
 }
 
 export type RepairpalLaborResult = {

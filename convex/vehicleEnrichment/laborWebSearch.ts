@@ -22,16 +22,16 @@
  *    network / no FIRECRAWL_API_KEY), so it carries no unit test by design.
  *
  * Resolver-action shape + observability mirror the Task-3 sibling
- * `resolveRepairpalLaborForConfig` (repairpalLaborFirecrawl.ts): inline firecrawl
- * `json` POST (firecrawl.ts's getApiKey/FIRECRAWL_BASE are module-private, so the
- * small POST is replicated here), per-item try/catch, console.warn on a missing
- * key, console.error on a real fetch error. The web search itself reuses the
- * EXPORTED `searchAndFetch` from firecrawl.ts.
+ * `resolveRepairpalLaborForConfig` (repairpalLaborFirecrawl.ts): both share the
+ * EXPORTED `firecrawlJsonExtract` helper from firecrawl.ts for the `json` POST
+ * (which warns + safe-skips on a missing key), with per-item try/catch and
+ * console.error on a real fetch error. The web search itself reuses the EXPORTED
+ * `searchAndFetch` from firecrawl.ts.
  */
 import { internalAction } from "../_generated/server";
 import { v } from "convex/values";
 import { OLP_HOURS_MIN, OLP_HOURS_MAX } from "./olpLabor";
-import { searchAndFetch } from "./firecrawl";
+import { searchAndFetch, firecrawlJsonExtract } from "./firecrawl";
 
 export type WebLaborExtract = {
   labor_hours: number | null;
@@ -54,11 +54,6 @@ export function acceptWebLabor(x: WebLaborExtract): boolean {
 // ---------------------------------------------------------------------------
 // Network resolver
 // ---------------------------------------------------------------------------
-
-// Firecrawl is module-private in firecrawl.ts (getApiKey/FIRECRAWL_BASE), so we
-// replicate the small `json` scrape POST inline here rather than exporting those
-// internals (same shape as extractPriceFirecrawl / the Task-3 RepairPal resolver).
-const FIRECRAWL_BASE = "https://api.firecrawl.dev/v2";
 
 /** Firecrawl `json` extraction schema for one labor-hours read. */
 const WEB_LABOR_SCHEMA = {
@@ -100,12 +95,6 @@ async function extractWebLaborFirecrawl(
   vehicleLabel: string,
   serviceName: string,
 ): Promise<WebLaborExtract | null> {
-  const key = process.env.FIRECRAWL_API_KEY;
-  if (!key) {
-    // Safe-skip: without a firecrawl key this resolver simply yields nothing.
-    console.warn("web_labor: FIRECRAWL_API_KEY not set; skipping");
-    return null;
-  }
   const prompt =
     `Extract the flat-rate / book LABOR TIME IN HOURS for the service "${serviceName}" on the vehicle "${vehicleLabel}". ` +
     `Return labor_hours as a plain number of HOURS only (e.g. 1.2) — NOT dollars, NOT the total job time including parts, NOT a labor rate. ` +
@@ -113,39 +102,18 @@ async function extractWebLaborFirecrawl(
     `Set vehicle_match to whether this page is actually about THIS vehicle (true / false / null if unknown). ` +
     `Copy the exact text you read the hours from into source_label. ` +
     `If the page does not state the labor hours, set labor_hours to null. Never guess.`;
-  try {
-    const resp = await fetch(`${FIRECRAWL_BASE}/scrape`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        url,
-        formats: [{ type: "json", prompt, schema: WEB_LABOR_SCHEMA }],
-        timeout: 45000,
-      }),
-      signal: AbortSignal.timeout(50000),
-    });
-    if (!resp.ok) {
-      console.error(`web_labor firecrawl failed for ${url}: ${resp.status}`);
-      return null;
-    }
-    const data = await resp.json();
-    const d = data.data ?? data;
-    const j = d.json ?? d.extract ?? null;
-    if (!j || typeof j !== "object") return null;
-    const num = (x: any) => (typeof x === "number" && Number.isFinite(x) ? x : null);
-    const bool = (x: any) => (typeof x === "boolean" ? x : null);
-    const str = (x: any) => (typeof x === "string" ? x : null);
-    return {
-      labor_hours: num(j.labor_hours),
-      service_match: bool(j.service_match),
-      vehicle_match: bool(j.vehicle_match),
-      source_label: str(j.source_label),
-      confidence: num(j.confidence),
-    };
-  } catch (e) {
-    console.error(`web_labor firecrawl error for ${url}:`, e);
-    return null;
-  }
+  const j = await firecrawlJsonExtract(url, prompt, WEB_LABOR_SCHEMA);
+  if (!j) return null;
+  const num = (x: any) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+  const bool = (x: any) => (typeof x === "boolean" ? x : null);
+  const str = (x: any) => (typeof x === "string" ? x : null);
+  return {
+    labor_hours: num(j.labor_hours),
+    service_match: bool(j.service_match),
+    vehicle_match: bool(j.vehicle_match),
+    source_label: str(j.source_label),
+    confidence: num(j.confidence),
+  };
 }
 
 /** Hostname of a URL, guarded — falls back to the raw url, then "". */

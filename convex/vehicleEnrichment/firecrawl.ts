@@ -285,3 +285,43 @@ export async function extractPriceFirecrawl(
     return null;
   }
 }
+
+/** Generic Firecrawl `json`-format structured extraction. POSTs {url, formats:[{type:"json",prompt,schema}]}
+ *  and returns the parsed json object (the `data.data.json ?? .json ?? .extract`), or null on any failure.
+ *  Missing FIRECRAWL_API_KEY → warn + null (callers that are corroborators must safe-skip, not throw).
+ *  Network-only; callers do their own field coercion + domain logic. */
+export async function firecrawlJsonExtract(
+  url: string,
+  prompt: string,
+  schema: Record<string, unknown>,
+  timeoutMs: number = 50_000,
+): Promise<Record<string, any> | null> {
+  const key = process.env.FIRECRAWL_API_KEY;
+  if (!key) {
+    console.warn("firecrawlJsonExtract: FIRECRAWL_API_KEY not set; skipping");
+    return null;
+  }
+  try {
+    const resp = await fetch(`${FIRECRAWL_BASE}/scrape`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        url,
+        formats: [{ type: "json", prompt, schema }],
+        timeout: Math.max(5_000, timeoutMs - 5_000),
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!resp.ok) {
+      console.error(`firecrawlJsonExtract failed for ${url}: ${resp.status}`);
+      return null;
+    }
+    const data = await resp.json();
+    const d = data.data ?? data;
+    const j = d.json ?? d.extract ?? null;
+    return j && typeof j === "object" ? j : null;
+  } catch (e) {
+    console.error(`firecrawlJsonExtract error for ${url}:`, e);
+    return null;
+  }
+}

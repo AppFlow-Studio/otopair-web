@@ -6,7 +6,9 @@
  * `labor_observations` + recomputes the labor_times row internally.
  *
  *   - `_laborConfigInputs`  — internalQuery: loads the config + make/model/engine
- *                             docs and the full `services` list (with repairpal_slug).
+ *                             docs and the per-config-APPLICABLE `services` list
+ *                             (with repairpal_slug), gated via the canonical
+ *                             getApplicableServices helper; fails open.
  *   - `laborRelaborConfig`  — internalAction: per-config driver; resolves the OLP
  *                             buildId (if flagged) and calls `laborAllSources`.
  *   - `laborRelaborAll`     — internalAction: fleet driver; pages over enriched
@@ -20,6 +22,13 @@ import { internalAction, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { deriveEngineFamily } from "./laborSibling";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
+// Canonical structural per-config applicability — the SAME helper the booking
+// surface (services.ts) and Oto (oto/applicableServices.ts) gate on, computed
+// from engine/chassis/drivetrain/trim + service requirement flags keyed by
+// vehicleConfigId. Mirrors v3's own applyApplicabilityRules; fails open on
+// missing inputs. Replaces the legacy service_vehicle_specs.is_applicable column
+// (written only by the retired per-engine pipeline, empty for v3 configs).
+import { getApplicableServices } from "../services/applicability";
 // The multi-source labor flags are read from env in ONE place (laborResearch.ts)
 // so this backfill and the v3pipeline path can never drift — now actually DRY.
 import { laborFlagsFromEnv } from "./laborResearch";
@@ -44,54 +53,58 @@ export const _laborConfigInputs = internalQuery({
     const serviceDocs = await ctx.db.query("services").collect();
 
     // ── Per-config applicability gate (parity with v3pipeline) ─────────────────
-    // The live enrichment path (v3pipeline.ts) only resolves labor for services
-    // applicable to THIS vehicle: `if (!svc.is_applicable) continue;`. This
-    // backfill must do the same, otherwise running it with RepairPal/web flags on
-    // burns firecrawl credits on inapplicable services and writes spurious
-    // web_labor/repairpal_labor observations for services the vehicle doesn't have
-    // (e.g. timing_belt on a chain engine, differential service on FWD).
+    // The live enrichment path only resolves labor for services applicable to
+    // THIS vehicle. This backfill must do the same, otherwise running it with
+    // RepairPal/web flags on burns firecrawl credits on inapplicable services and
+    // writes spurious web_labor/repairpal_labor observations for services the
+    // vehicle doesn't have (e.g. timing_belt on a chain engine, differential
+    // service on FWD).
     //
-    // Engine-level default lives in service_vehicle_specs.is_applicable (the same
-    // signal services.ts uses: owner overrides are per-vehicle-instance and don't
-    // exist at config level, so the engine default is the right signal here). We
-    // exclude a service ONLY on an explicit is_applicable === false — a missing
-    // spec row or null/true value stays INCLUDED (mirrors the pipeline's
-    // `is_applicable ?? true` default and services.ts's `=== false` exclusion).
+    // The gate uses the CANONICAL structural applicability helper
+    // `getApplicableServices` (services/applicability.ts) — the same per-config
+    // rules v3's applyApplicabilityRules and the batch-2 prompt apply, and the
+    // same gate the booking surface (services.ts) and Oto (oto/applicableServices)
+    // already use. It computes applicability from engine/chassis/drivetrain/trim +
+    // service requirement flags keyed by vehicleConfigId. This deliberately does
+    // NOT use the legacy service_vehicle_specs.is_applicable column: that column is
+    // written ONLY by the retired per-engine pipeline and is empty for the
+    // v3-enriched configs this backfill targets, so a filter on it was a near
+    // no-op that never stopped the off-vehicle burn it was meant to prevent.
     //
-    // When the config has no engine_id we can't query specs, so we keep all
-    // services (the pre-fix behavior).
+    // FAIL OPEN: getApplicableServices returns [] when it can't evaluate (missing
+    // config or engine row), and we also wrap it in try/catch. In EITHER case we
+    // keep ALL slug-bearing services (the pre-fix behavior). A backfill that
+    // silently resolves nothing is worse than one that over-resolves — over-burn
+    // is recoverable, but dropping every service would skip the entire fleet's
+    // labor with no labor written.
     let excluded = 0;
-    const nonApplicableServiceIds = new Set<string>();
-    if (cfg.engine_id) {
-      const engineSpecs = await ctx.db
-        .query("service_vehicle_specs")
-        .withIndex("by_engine_id", (q) => q.eq("engine_id", cfg.engine_id))
-        .collect();
-      // Prefer a config-specific row when one exists for a service_id; otherwise
-      // fall back to the engine-level row. A service is excluded iff its resolved
-      // row has is_applicable === false.
-      const resolved = new Map<string, boolean | undefined>(); // service_id -> is_applicable
-      const hasConfigRow = new Set<string>();
-      for (const spec of engineSpecs as any[]) {
-        const sid = String(spec.service_id);
-        const isConfigRow =
-          spec.vehicle_config_id != null && String(spec.vehicle_config_id) === String(vehicleConfigId);
-        if (isConfigRow) {
-          resolved.set(sid, spec.is_applicable);
-          hasConfigRow.add(sid);
-        } else if (!hasConfigRow.has(sid)) {
-          resolved.set(sid, spec.is_applicable);
-        }
+    let applicableIds: Set<string> | null = null; // null = fail open (keep all)
+    try {
+      const applicable = await getApplicableServices(ctx, vehicleConfigId);
+      if (applicable.length > 0) {
+        applicableIds = new Set(applicable.map((s) => String(s._id)));
+      } else {
+        // Empty result = "couldn't evaluate" (no config/engine), NOT "nothing
+        // applies" — fail open rather than dropping everything.
+        console.warn(
+          `[_laborConfigInputs] getApplicableServices returned [] for ${vehicleConfigId} ` +
+            `— failing open, keeping all services`,
+        );
       }
-      for (const [sid, isApplicable] of resolved) {
-        if (isApplicable === false) nonApplicableServiceIds.add(sid);
-      }
+    } catch (e) {
+      // Fail open on any helper error — never strand a config's labor backfill.
+      console.warn(
+        `[_laborConfigInputs] getApplicableServices threw for ${vehicleConfigId} ` +
+          `— failing open, keeping all services`,
+        e,
+      );
     }
 
     const services = (serviceDocs as any[])
       .filter((s) => s.slug)
       .filter((s) => {
-        if (nonApplicableServiceIds.has(String(s._id))) {
+        // applicableIds === null means fail-open: keep every slug-bearing service.
+        if (applicableIds !== null && !applicableIds.has(String(s._id))) {
           excluded++;
           return false;
         }

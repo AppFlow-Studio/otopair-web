@@ -114,7 +114,9 @@ describe("matchJobs", () => {
     );
   });
 
-  it("matches oil_change to the synthetic row (first candidate present)", () => {
+  it("matches oil_change to the plain slug when present, falls back to synthetic when plain is absent", () => {
+    // fixture has oil-change-synthetic but not oil-change (chain-engine Civic
+    // doesn't list the plain slug) — falls back to synthetic 0.3
     expect(bySvc.oil_change.olp_hours).toBe(0.3);
     expect(bySvc.oil_change.olp_jobs[0].slug).toBe("oil-change-synthetic");
   });
@@ -155,6 +157,18 @@ describe("matchJobs", () => {
     const m = matchJobs(fake).find((x) => x.service === "wheel_alignment")!;
     expect(m.olp_jobs[0].sane).toBe(false);
     expect(m.olp_hours).toBeNull();
+  });
+});
+
+describe("matchJobs oil_change slug preference", () => {
+  it("prefers plain oil-change over synthetic when both are present", () => {
+    const jobs: OlpLaborJob[] = [
+      { name: "Oil Change - Synthetic", slug: "oil-change-synthetic", category: "maintenance", laborHours: 0.3 },
+      { name: "Oil Change", slug: "oil-change", category: "maintenance", laborHours: 0.5 },
+    ];
+    const m = matchJobs(jobs, OLP_JOB_MAP).find((x) => x.service === "oil_change")!;
+    expect(m.olp_hours).toBe(0.5);
+    expect(m.olp_jobs[0].slug).toBe("oil-change");
   });
 });
 

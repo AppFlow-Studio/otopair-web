@@ -160,7 +160,10 @@ type JobMapEntry = {
  */
 export const OLP_JOB_MAP: Record<string, JobMapEntry> = {
   oil_change: {
-    slugs: ["oil-change-synthetic", "oil-change", "oil-change-diesel"],
+    // Plain slug first: "oil-change" is the full oil+filter service (0.3–0.6h)
+    // and is the scope match for our oil_change. "oil-change-synthetic" is a
+    // drain-fill-only step (~0.3h) that undershoots; keep it as fallback.
+    slugs: ["oil-change", "oil-change-synthetic", "oil-change-diesel"],
     nameRe: /^oil change/i,
   },
   spark_plugs: {
@@ -186,6 +189,9 @@ export const OLP_JOB_MAP: Record<string, JobMapEntry> = {
     slugs: ["power-steering-fluid-flush", "power-steering-service"],
   },
   transmission_service: {
+    // All three slugs carry equivalent hours on the vehicles we've sampled —
+    // no reorder needed (any +35% gap is real data disagreement, not a slug
+    // scope mismatch; multi-source reconciliation is Phase 3).
     slugs: [
       "transmission-service", "trans-filter-fluid",
       "automatic-transmission-fluid-filter-change",

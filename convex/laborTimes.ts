@@ -30,7 +30,7 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { detectTier, resolveLaborHours } from "./lib/quoteEngine";
+import { detectTier, isHighQualityVdb, resolveLaborHours } from "./lib/quoteEngine";
 
 export type LaborHoursForService = {
   serviceId: Id<"services">;
@@ -168,12 +168,8 @@ export const getLaborHoursForServices = query({
         ) {
           resolvedHours = directRow.empirical_hours;
           resolvedSource = "vehicle_specific_empirical";
-        } else if (
-          directRow &&
-          typeof directRow.book_hours === "number" &&
-          directRow.book_hours > 0
-        ) {
-          resolvedHours = directRow.book_hours;
+        } else if (directRow && isHighQualityVdb(directRow)) {
+          resolvedHours = directRow.book_hours!;
           resolvedSource = "vehicle_specific_book";
         } else {
           resolvedHours = defaultHours;

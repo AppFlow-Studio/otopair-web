@@ -18,10 +18,23 @@ import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 
+// Per-source labor weights for the multi-source aggregation (single source of
+// truth). olp_labor is 0.7 here — deliberately a touch below olpRelabor.ts's
+// single-source 0.8 — because web + RepairPal corroboration is present in this
+// path. NOTE: upsertLaborObservation keys by (config, service, source), so if
+// both this path and the olp-only olpRelabor backfill write the same olp_labor
+// row, the last writer wins its weight. Keep 0.7 here intentionally.
 const SOURCE_WEIGHTS = { olp_labor: 0.7, web_labor: 0.6, repairpal_labor: 0.4 } as const;
 
 export type SourceHours = Record<string, number>; // serviceSlug -> hours
 export type LaborObsRow = { service: string; source: string; hours: number; weight: number };
+
+export type LaborAllSourcesResult = {
+  resolved: boolean;
+  written: number;
+  failed: string[];
+  sources: { olp: number; web: number; repairpal: number };
+};
 
 /** Flatten per-source {slug:hours} maps into weighted observation rows. */
 export function mergeLaborSources(by: { olp?: SourceHours; web?: SourceHours; repairpal?: SourceHours }): LaborObsRow[] {
@@ -70,7 +83,7 @@ export const laborAllSources = internalAction({
     })),
     flags: v.object({ olp: v.boolean(), repairpal: v.boolean(), web: v.boolean() }),
   },
-  handler: async (ctx, args): Promise<any> => {
+  handler: async (ctx, args): Promise<LaborAllSourcesResult> => {
     let olp: SourceHours = {};
     let web: SourceHours = {};
     let repairpal: SourceHours = {};
@@ -114,7 +127,7 @@ export const laborAllSources = internalAction({
           },
         );
         if (res?.resolved) repairpal = res.services ?? {};
-        else console.warn(`laborAllSources: RepairPal not resolved`);
+        else console.warn(`laborAllSources: RepairPal not resolved`); // RepairPal resolver returns no error field (unlike OLP), so none to log.
       } catch (e) {
         console.warn(`laborAllSources: RepairPal resolver threw:`, e);
       }
@@ -179,8 +192,9 @@ export const laborAllSources = internalAction({
           book_only: true,
         });
         written++;
-      } catch {
+      } catch (e) {
         failed.push(`${row.service}:${row.source}`);
+        console.warn(`laborAllSources: write failed [${row.service}:${row.source}]`, e);
       }
     }
 

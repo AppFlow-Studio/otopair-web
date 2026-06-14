@@ -391,6 +391,59 @@ describe("resolveLaborHours guardrail-aware tier floor", () => {
   });
 });
 
+// ─── Empirical-first (Task 5) ────────────────────────────────────────────────
+// A row with BOTH a high-quality aggregated book_hours (conf ≥ 0.75) AND
+// empirical_hours with sample_size ≥ 5 must return source "empirical" —
+// empirical overrides book, matching the UI resolver (laborTimes.ts) and spec §5.
+
+describe("resolveRawLaborLayers empirical-first priority", () => {
+  it("empirical overrides high-quality book when sample_size >= 5", async () => {
+    const db = fakeDb({
+      vehicle_configs: [{ _id: CFG }],
+      services: [SERVICE_NO_TIER],
+      labor_times: [
+        {
+          _id: "lt_both",
+          vehicle_config_id: CFG,
+          service_id: SVC,
+          // High-quality aggregated book — would normally pass isHighQualityVdb
+          book_hours: 3.0,
+          source: "aggregated",
+          data_quality: "aggregated",
+          confidence: 0.8,
+          // Empirical with sufficient samples — must win
+          empirical_hours: 2.7,
+          empirical_sample_size: 5,
+        },
+      ],
+    });
+    const res = await resolveLaborHours({ db } as any, laborArgs());
+    expect(res).toMatchObject({ ok: true, source: "empirical", hours: 2.7 });
+  });
+
+  it("empirical does NOT override book when sample_size < 5 (falls to book)", async () => {
+    const db = fakeDb({
+      vehicle_configs: [{ _id: CFG }],
+      services: [SERVICE_NO_TIER],
+      labor_times: [
+        {
+          _id: "lt_both",
+          vehicle_config_id: CFG,
+          service_id: SVC,
+          book_hours: 3.0,
+          source: "aggregated",
+          data_quality: "aggregated",
+          confidence: 0.8,
+          empirical_hours: 2.7,
+          empirical_sample_size: 4, // below threshold
+        },
+      ],
+    });
+    const res = await resolveLaborHours({ db } as any, laborArgs());
+    expect(res).toMatchObject({ ok: true, source: "aggregated" });
+  });
+});
+
 describe("labor_aggregation anchor = olp_labor", () => {
   it("a lone olp_labor observation unlocks confidence 0.8", async () => {
     const db = fakeDb({

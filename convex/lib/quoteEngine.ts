@@ -128,6 +128,24 @@ async function resolveRawLaborLayers(
     )
     .collect();
 
+  // Layer 2: empirical (≥MIN_EMPIRICAL_SAMPLES completed jobs) — checked FIRST
+  // so real-world job data overrides book-rate data, matching the UI resolver
+  // (laborTimes.ts) and spec §5. Book (Layer 1b) is the fallback for this row.
+  for (const row of direct) {
+    if (
+      row.empirical_hours != null &&
+      row.empirical_hours > 0 &&
+      (row.empirical_sample_size ?? 0) >= MIN_EMPIRICAL_SAMPLES
+    ) {
+      return {
+        hours: row.empirical_hours,
+        source: "empirical",
+        confidence: row.confidence ?? 0.85,
+      };
+    }
+  }
+
+  // Layer 1b: direct VDB / aggregated book_hours (quality-gated)
   for (const row of direct) {
     if (row.source === "vdb_camry_baseline" && row.book_hours != null && row.book_hours > 0) {
       return {
@@ -155,21 +173,6 @@ async function resolveRawLaborLayers(
           `vehicle_config=${args.vehicle_config_id} service=${args.service_id} ` +
           `data_quality=${row.data_quality ?? "?"} confidence=${row.confidence ?? "?"}`,
       );
-    }
-  }
-
-  // Layer 2: empirical (≥MIN_EMPIRICAL_SAMPLES completed jobs)
-  for (const row of direct) {
-    if (
-      row.empirical_hours != null &&
-      row.empirical_hours > 0 &&
-      (row.empirical_sample_size ?? 0) >= MIN_EMPIRICAL_SAMPLES
-    ) {
-      return {
-        hours: row.empirical_hours,
-        source: "empirical",
-        confidence: row.confidence ?? 0.85,
-      };
     }
   }
 

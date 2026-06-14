@@ -32,6 +32,7 @@ import { internalAction } from "../_generated/server";
 import { v } from "convex/values";
 import { OLP_HOURS_MIN, OLP_HOURS_MAX } from "./olpLabor";
 import { searchAndFetch, firecrawlJsonExtract } from "./firecrawl";
+import { median } from "../lib/robustStats";
 
 export type WebLaborExtract = {
   labor_hours: number | null;
@@ -125,13 +126,6 @@ function hostnameOf(u: string): string {
   }
 }
 
-/** Simple median: sort ascending; even count averages the two middle values. */
-function median(nums: number[]): number {
-  const xs = [...nums].sort((a, b) => a - b);
-  const mid = Math.floor(xs.length / 2);
-  return xs.length % 2 === 0 ? (xs[mid - 1] + xs[mid]) / 2 : xs[mid];
-}
-
 export type WebLaborResult = {
   /** True only when at least one service yielded a value (non-empty services map). */
   resolved: boolean;
@@ -163,6 +157,11 @@ export const resolveWebLaborForConfig = internalAction({
     services: v.array(v.object({ slug: v.string(), name: v.string() })),
   },
   handler: async (_ctx, args): Promise<WebLaborResult> => {
+    if (!process.env.FIRECRAWL_API_KEY) {
+      console.warn("resolveWebLaborForConfig: FIRECRAWL_API_KEY not set; skipping web_labor");
+      return { resolved: false, services: {} };
+    }
+
     const services: Record<string, { hours: number; source_domain: string }> = {};
     const engine = args.engine ?? "";
     const vehicleLabel = `${args.year} ${args.make} ${args.model} ${engine}`

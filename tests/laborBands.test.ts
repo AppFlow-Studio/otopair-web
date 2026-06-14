@@ -32,9 +32,10 @@ describe("laborBands", () => {
 
   it("classifies the strong web/portal sources, not VDB/LLM/legacy", () => {
     expect(STRONG_LABOR_SOURCES.has("olp_labor")).toBe(true);
-    expect(STRONG_LABOR_SOURCES.has("repairpal_labor")).toBe(true);
+    expect(STRONG_LABOR_SOURCES.has("web_labor")).toBe(true);
+    expect(STRONG_LABOR_SOURCES.has("oem_labor")).toBe(true);
+    expect(STRONG_LABOR_SOURCES.has("repairpal_labor")).toBe(false); // corroborator, not strong
     expect(STRONG_LABOR_SOURCES.has("vdb_repair_estimates")).toBe(false);
-    expect(STRONG_LABOR_SOURCES.has("llm_training")).toBe(false);
-    expect(STRONG_LABOR_SOURCES.has("repairpal_motor")).toBe(false); // deprecated
+    expect(STRONG_LABOR_SOURCES.has("repairpal_motor")).toBe(false);
   });
 });

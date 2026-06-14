@@ -88,6 +88,7 @@ import type * as lib_haloVariantRules from "../lib/haloVariantRules.js";
 import type * as lib_intervals from "../lib/intervals.js";
 import type * as lib_job_actuals from "../lib/job_actuals.js";
 import type * as lib_laborBands from "../lib/laborBands.js";
+import type * as lib_laborConstants from "../lib/laborConstants.js";
 import type * as lib_laborFallback from "../lib/laborFallback.js";
 import type * as lib_labor_aggregation from "../lib/labor_aggregation.js";
 import type * as lib_late_start from "../lib/late_start.js";
@@ -416,6 +417,7 @@ declare const fullApi: ApiFromModules<{
   "lib/intervals": typeof lib_intervals;
   "lib/job_actuals": typeof lib_job_actuals;
   "lib/laborBands": typeof lib_laborBands;
+  "lib/laborConstants": typeof lib_laborConstants;
   "lib/laborFallback": typeof lib_laborFallback;
   "lib/labor_aggregation": typeof lib_labor_aggregation;
   "lib/late_start": typeof lib_late_start;

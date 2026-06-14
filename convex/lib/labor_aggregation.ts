@@ -190,8 +190,12 @@ export async function recomputeLaborForConfigService(
 
     if (strong.length >= 2 && !sourcesDisagree) {
       confidence = 0.9; // ≥2 strong sources agree
+    } else if (sourcesDisagree) {
+      // Contested but real — quotable (clears the 0.75 gate) and flagged for
+      // director review, rather than punting to a worse tier estimate.
+      confidence = 0.75;
     } else if (strong.length >= 1) {
-      // 1 strong source (that survived MAD), OR ≥2 strong that disagree.
+      // 1 strong source (that survived MAD).
       if (fallbackOutOfBand) {
         confidence = 0.6;
         outsideFallbackBand = true;

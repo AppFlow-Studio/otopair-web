@@ -26,7 +26,7 @@ const obs = (source: string, hours: number, weight = 0.7) => ({
 
 describe("agreement + fallback-guardrail confidence", () => {
   it("two strong sources that agree → 0.9, no flags", async () => {
-    const db = base([obs("olp_labor", 0.6), obs("repairpal_labor", 0.65)]);
+    const db = base([obs("olp_labor", 0.6), obs("web_labor", 0.65)]);
     await recomputeLaborForConfigService({ db } as any,
       { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
     expect(db.inserts[0].doc).toMatchObject({
@@ -54,16 +54,12 @@ describe("agreement + fallback-guardrail confidence", () => {
     });
   });
 
-  it("two strong sources that disagree → flagged + capped below 0.9", async () => {
-    // 0.6 vs 1.2: agreement band = max(15min, 10%·1.2h=7.2min)=15min; 36min apart → disagree
-    const db = base([obs("olp_labor", 0.6), obs("repairpal_labor", 1.2)]);
+  it("two strong sources that disagree → quotable 0.75 + review flag", async () => {
+    // ≥2 strong sources disagree beyond the band → contested-but-quotable 0.75 + review flag.
+    const db = base([obs("olp_labor", 0.6), obs("web_labor", 1.2)]);
     await recomputeLaborForConfigService({ db } as any,
       { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
-    // median (0.6) coincides with the fallback, so it lands at the single-source
-    // 0.8 tier — disagreement is flagged for review but not yet read by the quote
-    // gate (a Phase-3 concern, since >1 strong source can't occur in prod until
-    // RepairPal/web sources are added).
-    expect(db.inserts[0].doc.confidence).toBe(0.8);
+    expect(db.inserts[0].doc.confidence).toBe(0.75);
     expect(db.inserts[0].doc).toMatchObject({
       labor_sources_disagree: true, labor_outside_fallback_band: false,
     });

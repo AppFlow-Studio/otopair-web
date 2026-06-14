@@ -31,6 +31,14 @@ import { detectTier } from "./quoteEngine";
 /** Post-job actuals must reach this count before empirical overrides book time. */
 export const LABOR_EMPIRICAL_MIN_SAMPLES = 3;
 
+/**
+ * Minimum empirical sample size required to surface empirical hours in a
+ * customer-facing quote or any read path (v3queries, service_vehicle_specs).
+ * Higher than the write gate (3) so quotes wait for a more stable median
+ * before trusting post-job actuals over book data.
+ */
+export const LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES = 5;
+
 // Generic sanity bounds — reject absurd labor values regardless of service.
 const LABOR_MIN_HOURS = 0.1;
 const LABOR_MAX_HOURS = 8.0;

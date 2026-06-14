@@ -23,6 +23,7 @@ import { resolveServiceUnitCount, unitScale } from "./serviceUnits";
 export { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig } from "./laborFallback";
 import { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig, computeLaborTierFloorHours } from "./laborFallback";
 import { withinGuardrail } from "./laborBands";
+import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./labor_aggregation";
 
 // ─── vdb quality gate ───────────────────────────────────────────────────────
 // Lived experience: vdb-seeded labor_times "wrong often" — chassis/engine
@@ -47,7 +48,6 @@ const DISQUALIFIED_SOURCE: ReadonlySet<string> = new Set([
   "default_fallback",
 ]);
 const MIN_VDB_CONFIDENCE = 0.75;
-const MIN_EMPIRICAL_SAMPLES = 5;
 
 /**
  * Drivetrains with a separately serviceable differential: AWD/4WD (front +
@@ -135,7 +135,7 @@ async function resolveRawLaborLayers(
     if (
       row.empirical_hours != null &&
       row.empirical_hours > 0 &&
-      (row.empirical_sample_size ?? 0) >= MIN_EMPIRICAL_SAMPLES
+      (row.empirical_sample_size ?? 0) >= LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES
     ) {
       return {
         hours: row.empirical_hours,

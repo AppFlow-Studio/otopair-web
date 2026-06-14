@@ -10,6 +10,7 @@
 import { v } from "convex/values";
 import { internalQuery, internalMutation } from "../_generated/server";
 import { isPoisonPriceType } from "../lib/priceTypes";
+import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "../lib/labor_aggregation";
 
 export const getVehicleConfigByKey = internalQuery({
   args: { configKey: v.string() },
@@ -344,10 +345,9 @@ export const getQuotableLaborTime = internalQuery({
 
     if (!labor) return null;
 
-    const MIN_SAMPLES = 3;
     const useEmpirical =
       labor.empirical_hours != null &&
-      (labor.empirical_sample_size ?? 0) >= MIN_SAMPLES;
+      (labor.empirical_sample_size ?? 0) >= LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES;
 
     return {
       hours: useEmpirical ? labor.empirical_hours! : labor.book_hours,

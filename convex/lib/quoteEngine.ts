@@ -23,7 +23,7 @@ import { resolveServiceUnitCount, unitScale } from "./serviceUnits";
 export { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig } from "./laborFallback";
 import { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig, computeLaborTierFloorHours } from "./laborFallback";
 import { withinGuardrail } from "./laborBands";
-import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./labor_aggregation";
+import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./laborConstants";
 
 // ─── vdb quality gate ───────────────────────────────────────────────────────
 // Lived experience: vdb-seeded labor_times "wrong often" — chassis/engine
@@ -128,7 +128,8 @@ async function resolveRawLaborLayers(
     )
     .collect();
 
-  // Layer 2: empirical (≥MIN_EMPIRICAL_SAMPLES completed jobs) — checked FIRST
+  // Empirical-first (≥LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES completed jobs) — real-world
+  // actuals override book data (spec §5 + the UI resolver laborTimes.ts).
   // so real-world job data overrides book-rate data, matching the UI resolver
   // (laborTimes.ts) and spec §5. Book (Layer 1b) is the fallback for this row.
   for (const row of direct) {
@@ -307,6 +308,19 @@ export async function resolveLaborHours(
   // Both raw and floor present — reconcile per Round 6 policy (guardrail-aware).
   const r = raw!;
   const f = floor!;
+  // Empirical (real post-job actuals, ≥ the quote sample gate) is the highest-
+  // trust source — it bypasses the floor entirely; a Camry estimate must never
+  // override measured times. (Decision Jun-13: the floor applies to book/aggregated
+  // data, not empirical.)
+  if (r.source === "empirical") {
+    return {
+      ok: true,
+      hours: r.hours,
+      source: r.source,
+      confidence: r.confidence,
+      raw_hours: r.hours,
+    };
+  }
   if (r.hours < f.hours) {
     if (withinGuardrail(r.hours, f.hours)) {
       // Raw is within 15 min of the floor — real value is credible; don't inflate.

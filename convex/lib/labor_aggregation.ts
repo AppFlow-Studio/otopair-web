@@ -28,16 +28,11 @@ import { STRONG_LABOR_SOURCES, withinGuardrail, withinAgreementBand } from "./la
 import { computeLaborTierFloorHours } from "./laborFallback";
 import { detectTier } from "./quoteEngine";
 
-/** Post-job actuals must reach this count before empirical overrides book time. */
-export const LABOR_EMPIRICAL_MIN_SAMPLES = 3;
-
-/**
- * Minimum empirical sample size required to surface empirical hours in a
- * customer-facing quote or any read path (v3queries, service_vehicle_specs).
- * Higher than the write gate (3) so quotes wait for a more stable median
- * before trusting post-job actuals over book data.
- */
-export const LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES = 5;
+// Empirical sample-size gates live in a leaf module (laborConstants, no imports)
+// so importing them here can't form a cycle with quoteEngine (which imports
+// detectTier from this file). Re-exported for the existing importers of these names.
+import { LABOR_EMPIRICAL_MIN_SAMPLES, LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./laborConstants";
+export { LABOR_EMPIRICAL_MIN_SAMPLES, LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES };
 
 // Generic sanity bounds — reject absurd labor values regardless of service.
 const LABOR_MIN_HOURS = 0.1;

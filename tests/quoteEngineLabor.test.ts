@@ -321,7 +321,7 @@ describe("recomputeLaborForConfigService data_quality stamping", () => {
 
 // ─── Guardrail-aware tier floor (Task 1: floor decision) ────────────────────
 // Floor = Camry book_hours × multiplier = 1.5 × 1.0 = 1.5 h.
-// raw 1.4h → 9 min below floor → within 15 min guardrail → keep raw, no floor.
+// raw 1.4h → 6 min below floor → within 15 min guardrail → keep raw, no floor.
 // raw 0.9h → 36 min below floor → exceeds guardrail → substitute floor.
 
 const CAMRY_ID = "camry1";
@@ -362,7 +362,7 @@ function floorTables(rawHours: number) {
 }
 
 describe("resolveLaborHours guardrail-aware tier floor", () => {
-  it("keeps raw hours when raw is within 15 min of floor (9 min below → no substitution)", async () => {
+  it("keeps raw hours when raw is within 15 min of floor (6 min below → no substitution)", async () => {
     const db = fakeDb(floorTables(1.4));
     const res = await resolveLaborHours({ db } as any, {
       vehicle_config_id: CFG as any,
@@ -388,6 +388,29 @@ describe("resolveLaborHours guardrail-aware tier floor", () => {
       hours: 1.5,
       tier_floor_applied: true,
     });
+  });
+
+  it("does NOT floor empirical data — real post-job actuals bypass the floor", async () => {
+    // empirical 1.2h is 18 min below the 1.5h floor (beyond the 15-min guardrail),
+    // but empirical (5+ jobs) is the source of truth and must never be inflated.
+    const t = floorTables(1.4);
+    t.labor_times[1] = {
+      _id: "lt_real",
+      vehicle_config_id: CFG,
+      service_id: SVC,
+      book_hours: 1.4,
+      source: "aggregated",
+      confidence: 0.8,
+      empirical_hours: 1.2,
+      empirical_sample_size: 5,
+    } as any;
+    const db = fakeDb(t);
+    const res = await resolveLaborHours({ db } as any, {
+      vehicle_config_id: CFG as any,
+      service_id: SVC as any,
+      vehicle_tier: TIER as any,
+    });
+    expect(res).toMatchObject({ ok: true, source: "empirical", hours: 1.2 });
   });
 });
 

@@ -22,6 +22,7 @@ import { resolveServiceUnitCount, unitScale } from "./serviceUnits";
 // labor aggregator so both compute the same tier floor).
 export { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig } from "./laborFallback";
 import { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig, computeLaborTierFloorHours } from "./laborFallback";
+import { withinGuardrail } from "./laborBands";
 
 // ─── vdb quality gate ───────────────────────────────────────────────────────
 // Lived experience: vdb-seeded labor_times "wrong often" — chassis/engine
@@ -300,10 +301,22 @@ export async function resolveLaborHours(
     };
   }
 
-  // Both raw and floor present — reconcile per Round 6 policy.
+  // Both raw and floor present — reconcile per Round 6 policy (guardrail-aware).
   const r = raw!;
   const f = floor!;
   if (r.hours < f.hours) {
+    if (withinGuardrail(r.hours, f.hours)) {
+      // Raw is within 15 min of the floor — real value is credible; don't inflate.
+      return {
+        ok: true,
+        hours: r.hours,
+        source: r.source,
+        confidence: r.confidence,
+        raw_hours: r.hours,
+        tier_floor_applied: false,
+      };
+    }
+    // Raw is more than 15 min below the floor — substitute floor value.
     return {
       ok: true,
       hours: f.hours,

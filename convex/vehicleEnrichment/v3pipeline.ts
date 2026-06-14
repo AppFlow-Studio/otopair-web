@@ -53,6 +53,7 @@ import { lookupChassisCode } from "./utils/chassisLookup";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
+import { laborFlagsFromEnv } from "./laborResearch";
 import type { Id } from "../_generated/dataModel";
 
 // ─── Constants ─────────────────────────────────────────────────────
@@ -2302,12 +2303,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       //    weighted-median labor_times row — all internally. It REPLACES the old
       //    OLP-only resolution + write loop. The LLM book-time loop below (llm_web
       //    / llm_training) is a SEPARATE source the orchestrator does NOT handle,
-      //    so it stays. Flags: OLP on-by-default; RepairPal/web opt-in.
-      const laborFlags = {
-        olp: process.env.LABOR_SOURCE_OLP !== "off",
-        repairpal: process.env.LABOR_SOURCE_REPAIRPAL === "on",
-        web: process.env.LABOR_SOURCE_WEB === "on",
-      };
+      //    so it stays. Flags: OLP on-by-default; RepairPal/web opt-in (read from
+      //    env in ONE place via laborFlagsFromEnv so this path and the laborRelabor
+      //    backfill can never drift).
+      const laborFlags = laborFlagsFromEnv();
 
       // Engine descriptors fetched ONCE for the orchestrator inputs (named
       // distinctly from the LLM loop's per-service `engineDoc` to avoid clashing).
@@ -2377,6 +2376,9 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         name: string;
         repairpal_slug: string | null;
       }> = [];
+      // resolveServiceId is serviceCache-memoized, so re-iterating `services` here
+      // (after the LLM book-time loop above already resolved these slugs) reads from
+      // the cache and does NOT double-query the DB.
       for (const svc of services) {
         if (!svc.is_applicable) continue;
         const slug = SERVICE_NAME_TO_SLUG[svc.service_name];

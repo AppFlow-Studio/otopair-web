@@ -20,15 +20,9 @@ import { internalAction, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { deriveEngineFamily } from "./laborSibling";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
-
-/** Compute the multi-source labor flags from env (DRY with the v3pipeline path). */
-function laborFlagsFromEnv() {
-  return {
-    olp: process.env.LABOR_SOURCE_OLP !== "off",
-    repairpal: process.env.LABOR_SOURCE_REPAIRPAL === "on",
-    web: process.env.LABOR_SOURCE_WEB === "on",
-  };
-}
+// The multi-source labor flags are read from env in ONE place (laborResearch.ts)
+// so this backfill and the v3pipeline path can never drift — now actually DRY.
+import { laborFlagsFromEnv } from "./laborResearch";
 
 export const _laborConfigInputs = internalQuery({
   args: { vehicleConfigId: v.id("vehicle_configs") },
@@ -121,8 +115,12 @@ export const laborRelaborConfig = internalAction({
   },
 });
 
-/** Enriched configs for the fleet driver loop (terminal labor-bearing states). */
-export const _listEnrichedConfigs = internalQuery({
+/** Enriched configs for the fleet relabor. NOTE: this `.collect()`s all
+ *  vehicle_configs then filters in-memory (mirrors olpRelabor) — fine at the
+ *  current fleet size, but for a large fleet this risks Convex's ~8MB query
+ *  limit. Follow-up if the fleet grows: add a by_enrichment_status index and
+ *  page. Callers can bound a single run with `limit`. */
+export const _listEnrichedConfigsForRelabor = internalQuery({
   args: {},
   handler: async (ctx) => {
     // "complete" / "verified" / "partial" are the states that have actually been
@@ -150,7 +148,7 @@ export const laborRelaborAll = internalAction({
     { limit },
   ): Promise<{ total: number; processed: number; ok: number; errored: number }> => {
     const all: Array<{ id: any; config_key: string }> = await ctx.runQuery(
-      internal.vehicleEnrichment.laborRelabor._listEnrichedConfigs,
+      internal.vehicleEnrichment.laborRelabor._listEnrichedConfigsForRelabor,
       {},
     );
     const targets = typeof limit === "number" ? all.slice(0, Math.max(0, limit)) : all;
@@ -169,6 +167,7 @@ export const laborRelaborAll = internalAction({
         console.log(
           `[laborRelaborAll] ${processed}/${targets.length} ${cfg.config_key}: ` +
           `resolved=${res?.resolved} written=${res?.written ?? 0} ` +
+          `failed=${res?.failed?.length ?? 0} ` +
           `sources=${JSON.stringify(res?.sources ?? {})}`,
         );
       } catch (e) {

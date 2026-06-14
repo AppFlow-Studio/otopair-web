@@ -36,6 +36,17 @@ export type LaborAllSourcesResult = {
   sources: { olp: number; web: number; repairpal: number };
 };
 
+/** The multi-source labor flags, read from env in ONE place so the enrichment
+ *  pipeline and the laborRelabor backfill can never drift on what's default-on/off.
+ *  OLP is on unless explicitly "off"; web + RepairPal are opt-in (=== "on"). */
+export function laborFlagsFromEnv(): { olp: boolean; repairpal: boolean; web: boolean } {
+  return {
+    olp: process.env.LABOR_SOURCE_OLP !== "off",
+    repairpal: process.env.LABOR_SOURCE_REPAIRPAL === "on",
+    web: process.env.LABOR_SOURCE_WEB === "on",
+  };
+}
+
 /** Flatten per-source {slug:hours} maps into weighted observation rows. */
 export function mergeLaborSources(by: { olp?: SourceHours; web?: SourceHours; repairpal?: SourceHours }): LaborObsRow[] {
   const rows: LaborObsRow[] = [];

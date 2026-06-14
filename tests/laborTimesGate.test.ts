@@ -16,6 +16,7 @@ import { makeT } from "./helpers";
 async function seedWorld(
   t: ReturnType<typeof makeT>,
   laborRow: Record<string, unknown> | null,
+  opts: { round_labor_times_to_15min?: boolean } = {},
 ) {
   return await t.run(async (ctx) => {
     const now = Date.now();
@@ -57,6 +58,13 @@ async function seedWorld(
         ...laborRow,
       } as any);
     }
+    if (opts.round_labor_times_to_15min !== undefined) {
+      await ctx.db.insert("director_settings", {
+        key: "global",
+        round_labor_times_to_15min: opts.round_labor_times_to_15min,
+        updated_at: now,
+      } as any);
+    }
     return { ownerId, serviceId, configId };
   });
 }
@@ -81,12 +89,16 @@ describe("getLaborHoursForServices quality gate", () => {
 
   test("a high-quality aggregated row quotes as vehicle-specific book hours", async () => {
     const t = makeT();
-    const { ownerId, serviceId } = await seedWorld(t, {
-      book_hours: 2.1,
-      source: "aggregated",
-      data_quality: "aggregated",
-      confidence: 0.9,
-    });
+    const { ownerId, serviceId } = await seedWorld(
+      t,
+      {
+        book_hours: 2.1,
+        source: "aggregated",
+        data_quality: "aggregated",
+        confidence: 0.9,
+      },
+      { round_labor_times_to_15min: false },
+    );
 
     const out = await t.query(api.laborTimes.getLaborHoursForServices, {
       vehicleOwnerId: ownerId,

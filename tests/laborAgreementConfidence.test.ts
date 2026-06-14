@@ -94,6 +94,42 @@ describe("agreement + fallback-guardrail confidence", () => {
     });
   });
 
+  it("a strong source OUTVOTED on the weighted-median frontier does not lend its 0.8 to a weaker-source median", async () => {
+    // web_labor (strong) sits at 2.0 but is outvoted: median lands on the LLM 1.2,
+    // so the strong source did NOT drive book_hours → must NOT earn 0.8 (drops to
+    // the 0.6 LLM-consensus tier, below the 0.75 quote gate).
+    const db = base([
+      obs("web_labor", 2.0, 0.6),
+      obs("repairpal_labor", 1.0, 0.4),
+      obs("llm_training", 1.2, 0.3),
+    ]);
+    await recomputeLaborForConfigService({ db } as any,
+      { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
+    expect(db.inserts[0].doc.book_hours).toBe(1.2);
+    expect(db.inserts[0].doc.confidence).toBe(0.6);
+  });
+
+  it("an OUTVOTED strong source is denied 0.8 even when the fallback corroborates the weaker median", async () => {
+    // Isolates the outvote bug from the fallback-guardrail flag. web_labor (strong,
+    // 1.2) is outvoted: the two non-strong 0.6 corroborators carry the weighted
+    // median to book_hours=0.6, which the Camry fallback (0.5 × 1.2 = 0.6h) happens
+    // to corroborate (gap 0 → within guardrail). Pre-fix the single-strong branch
+    // fired and the in-band fallback minted 0.8 on a value the strong source did NOT
+    // produce (1.2 is 0.6h from 0.6, outside the 0.25h agreement band). The fix gates
+    // that branch on a strong source DRIVING book_hours, so this drops to the
+    // 0.6 LLM-consensus tier instead of the strong-source 0.8.
+    const db = base([
+      obs("web_labor", 1.2, 0.3),
+      obs("repairpal_labor", 0.6, 0.4),
+      obs("llm_training", 0.6, 0.5),
+    ]);
+    await recomputeLaborForConfigService({ db } as any,
+      { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
+    expect(db.inserts[0].doc.book_hours).toBe(0.6);
+    expect(db.inserts[0].doc.labor_outside_fallback_band).toBe(false);
+    expect(db.inserts[0].doc.confidence).toBe(0.6);
+  });
+
   it("a strong source MAD-dropped as an outlier does not lend its 0.8 to a weaker-source median", async () => {
     // 4 obs so weightedMedian's internal MAD engages; olp 7.5 is the outlier and
     // is dropped, so book_hours is LLM/VDB-driven and confidence must be the

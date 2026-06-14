@@ -114,9 +114,10 @@ export async function recomputeLaborForConfigService(
   let bookHours: number | undefined;
   let engineFamily: string | undefined;
   if (catalog.length > 0) {
-    // Weighted robust median: olp_labor (0.8) dominates LLM (0.3-0.5) and
-    // VDB (0.05). A wrong high-weight value is guarded at WRITE time by the
-    // scrape's sanity gate, not here.
+    // Weighted robust median over the catalog sources, each carrying its own
+    // weight: olp_labor (0.7) anchors, with web_labor (0.6) and repairpal_labor
+    // (0.4) as additional sources, ahead of LLM (0.3-0.5) and VDB (0.05). A wrong
+    // high-weight value is guarded at WRITE time by the scrape's sanity gate, not here.
     bookHours = clampRound(
       weightedMedian(
         catalog.map((o: any) => o.hours as number),
@@ -194,8 +195,11 @@ export async function recomputeLaborForConfigService(
       // Contested but real — quotable (clears the 0.75 gate) and flagged for
       // director review, rather than punting to a worse tier estimate.
       confidence = 0.75;
-    } else if (strong.length >= 1) {
-      // 1 strong source (that survived MAD).
+    } else if (strong.length >= 1 && strong.some((o: any) => withinAgreementBand(o.hours as number, bookHours))) {
+      // 1 strong source that actually DROVE book_hours (its value is within the
+      // agreement band of the weighted-median result). A strong source that
+      // SURVIVED MAD but was OUTVOTED on the frontier must not lend its 0.8 to a
+      // value the weaker sources produced — same invariant as the MAD-drop guard.
       if (fallbackOutOfBand) {
         confidence = 0.6;
         outsideFallbackBand = true;

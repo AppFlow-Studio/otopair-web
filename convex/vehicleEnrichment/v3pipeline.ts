@@ -2370,23 +2370,30 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       // OLP resolved gets its observation even when the LLM skipped labor_hours
       // for that service (pipeline/backfill parity with olpRelabor.ts).
       // Source olp_labor, weight 0.8, tier catalog — mirrors olpRelabor exactly.
-      for (const [olpSlug, olpH] of Object.entries(olpHours)) {
-        const serviceId = await resolveServiceId(ctx, olpSlug, serviceCache);
+      // Per-service isolation (mirrors olpRelabor.ts): one failing write must not
+      // strand the rest of the config or abort downstream part-price writes.
+      // The upsert keys by (config, service, source), so a re-run safely retries.
+      for (const [serviceSlug, olpH] of Object.entries(olpHours)) {
+        const serviceId = await resolveServiceId(ctx, serviceSlug, serviceCache);
         if (!serviceId) continue;
-        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
-          vehicle_config_id: args.vehicleConfigId,
-          service_id: serviceId,
-          hours: olpH,
-          source: "olp_labor",
-          weight: 0.8,
-          tier: "catalog",
-          engine_family: olpEngineFamily,
-        });
-        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
-          vehicle_config_id: args.vehicleConfigId,
-          service_id: serviceId,
-          book_only: true,
-        });
+        try {
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
+            vehicle_config_id: args.vehicleConfigId,
+            service_id: serviceId,
+            hours: olpH,
+            source: "olp_labor",
+            weight: 0.8,
+            tier: "catalog",
+            engine_family: olpEngineFamily,
+          });
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
+            vehicle_config_id: args.vehicleConfigId,
+            service_id: serviceId,
+            book_only: true,
+          });
+        } catch {
+          // Swallow so remaining services and downstream part-price writes proceed.
+        }
       }
 
       // Write part prices from Batch 2 pricing.

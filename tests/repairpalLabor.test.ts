@@ -10,6 +10,7 @@ describe("RepairPal $→hr", () => {
   });
   it("clamps to the sane labor band", () => {
     expect(dollarsToHours(1, 1)).toBe(0.05);     // OLP_HOURS_MIN floor
+    expect(dollarsToHours(0, 0)).toBe(0.05); // zero midpoint also floors to OLP_HOURS_MIN
     expect(dollarsToHours(99999, 99999)).toBe(60); // OLP_HOURS_MAX ceiling
   });
 });

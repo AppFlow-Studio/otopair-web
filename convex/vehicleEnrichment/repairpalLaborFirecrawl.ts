@@ -106,7 +106,7 @@ async function extractRepairpalLaborFirecrawl(url: string): Promise<RepairpalDol
   const key = process.env.FIRECRAWL_API_KEY;
   if (!key) {
     // Safe-skip: without a firecrawl key this resolver simply yields nothing.
-    console.error("RepairPal labor: FIRECRAWL_API_KEY not set; skipping");
+    console.warn("RepairPal labor: FIRECRAWL_API_KEY not set; skipping");
     return null;
   }
   try {
@@ -160,7 +160,6 @@ export const resolveRepairpalLaborForConfig = internalAction({
     make: v.string(),
     model: v.string(),
     year: v.number(),
-    trim: v.optional(v.string()),
     services: v.array(
       v.object({
         slug: v.string(),

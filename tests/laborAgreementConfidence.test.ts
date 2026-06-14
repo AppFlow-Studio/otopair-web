@@ -56,12 +56,41 @@ describe("agreement + fallback-guardrail confidence", () => {
 
   it("two strong sources that disagree → quotable 0.75 + review flag", async () => {
     // ≥2 strong sources disagree beyond the band → contested-but-quotable 0.75 + review flag.
+    // Band math: 0.6 vs 1.2 → gap = 0.6h = 36 min;
+    // agreement band = max(15 min, 10%·1.2h = 7.2 min) = 15 min → gap > band → disagree.
     const db = base([obs("olp_labor", 0.6), obs("web_labor", 1.2)]);
     await recomputeLaborForConfigService({ db } as any,
       { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
     expect(db.inserts[0].doc.confidence).toBe(0.75);
     expect(db.inserts[0].doc).toMatchObject({
       labor_sources_disagree: true, labor_outside_fallback_band: false,
+    });
+  });
+
+  it("MAD drops one of two disagreeing strong sources — disagreement still flagged at 0.75", async () => {
+    // 4 obs so weightedMedian's internal MAD (nonOutlierIndices) engages (n≥4).
+    // olp_labor(0.6) and web_labor(5.0) are BOTH strong and disagree badly:
+    //   agreement band = max(0.25h, 0.1·5.0h=0.5h) = 0.5h; gap = 4.4h >> 0.5h → disagree.
+    // MAD on values [0.6, 5.0, 0.65, 0.7]:
+    //   median = (0.65+0.7)/2 = 0.675; absDev = [0.075, 4.325, 0.025, 0.025];
+    //   MAD = (0.025+0.075)/2 = 0.05; modified-z for 5.0 = 0.6745·(5.0-0.675)/0.05 ≈ 58.3 >> 3.5
+    //   → web_labor(5.0) dropped post-MAD; post-MAD strong = [olp_labor(0.6)] (length 1).
+    // But strongRaw (pre-MAD) still has both → sourcesDisagree = true → 0.75 branch fires.
+    // weightedMedian of kept obs ([0.6,w=0.8], [0.65,w=0.5], [0.7,w=0.3]): cumulative weight
+    //   reaches total/2 = 0.8 at the first entry → book_hours = 0.6.
+    // Fallback = 0.5h × 1.2 (T2c multiplier) = 0.6h; gap = 0 min → within guardrail.
+    const db = base([
+      obs("olp_labor", 0.6, 0.8),
+      obs("web_labor", 5.0, 0.6),
+      obs("llm_web", 0.65, 0.5),
+      obs("llm_training", 0.7, 0.3),
+    ]);
+    await recomputeLaborForConfigService({ db } as any,
+      { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
+    expect(db.inserts[0].doc).toMatchObject({
+      confidence: 0.75,
+      labor_sources_disagree: true,
+      labor_outside_fallback_band: false,
     });
   });
 

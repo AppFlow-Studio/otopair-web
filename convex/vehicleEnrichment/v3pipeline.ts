@@ -52,6 +52,7 @@ import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
+import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import type { Id } from "../_generated/dataModel";
 
 // ─── Constants ─────────────────────────────────────────────────────
@@ -2295,37 +2296,34 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         console.log(`[v8] ${deterministicPrices.size} deterministic JSON-LD prices for ${args.make} ${args.model}`);
       }
 
-      // ── OLP labor (ONCE per car). Resolve the config to its OLP page and get
-      //    scope-correct hours per service. On-by-default; disable with
-      //    LABOR_SOURCE_OLP="off". A config OLP can't resolve simply gets no
-      //    olp_labor observation and degrades to the LLM layer (no sibling routing).
-      const olpEnabled = process.env.LABOR_SOURCE_OLP !== "off";
-      const olpEngineDoc: any = olpEnabled
-        ? await ctx.runQuery(internal.vehicleEnrichment.v3queries.getEngine, { engineId: args.engineId })
-        : null;
-      const olpEngineFamily =
-        olpEngineDoc?.engine_family ??
-        deriveEngineFamily(olpEngineDoc?.engine_code) ??
+      // ── Multi-source labor (ONCE per car). The `laborAllSources` orchestrator
+      //    fans out to OLP + RepairPal + open-web (each flag-gated), merges the
+      //    per-source hours into weighted `labor_observations`, and recomputes the
+      //    weighted-median labor_times row — all internally. It REPLACES the old
+      //    OLP-only resolution + write loop. The LLM book-time loop below (llm_web
+      //    / llm_training) is a SEPARATE source the orchestrator does NOT handle,
+      //    so it stays. Flags: OLP on-by-default; RepairPal/web opt-in.
+      const laborFlags = {
+        olp: process.env.LABOR_SOURCE_OLP !== "off",
+        repairpal: process.env.LABOR_SOURCE_REPAIRPAL === "on",
+        web: process.env.LABOR_SOURCE_WEB === "on",
+      };
+
+      // Engine descriptors fetched ONCE for the orchestrator inputs (named
+      // distinctly from the LLM loop's per-service `engineDoc` to avoid clashing).
+      const laborEngineDoc: any = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getEngine,
+        { engineId: args.engineId },
+      );
+      const laborEngineFamily =
+        laborEngineDoc?.engine_family ??
+        deriveEngineFamily(laborEngineDoc?.engine_code) ??
         deriveEngineFamily(args.engineCode);
-      let olpHours: Record<string, number> = {};
-      if (olpEnabled) {
-        const bid = await ctx.runAction(internal.vehicleEnrichment.olpLaborScrape.resolveBuildId, {});
-        if (bid.buildId) {
-          const rawDisp = olpEngineDoc?.displacement_l ?? olpEngineDoc?.displacement_liters ?? null;
-          const olp: any = await ctx.runAction(
-            internal.vehicleEnrichment.olpLaborScrape.resolveOlpLaborForConfig,
-            {
-              buildId: bid.buildId, make: args.make, model: args.model, trim: args.trim ?? "",
-              year: args.year,
-              displacementL: rawDisp == null ? null : Number(rawDisp) || null,
-              cylinders: olpEngineDoc?.cylinders ?? null,
-              turbo: olpEngineDoc?.aspiration != null ? /turbo|supercharg/i.test(olpEngineDoc.aspiration) : null,
-            },
-          );
-          if (olp.resolved) olpHours = olp.services;
-          console.log(`[v8/labor] OLP for ${args.make} ${args.model} ${args.trim ?? ""}: ${olp.resolved ? `${Object.keys(olpHours).length} services` : "(unresolved)"}`);
-        }
-      }
+      const laborRawDisp = laborEngineDoc?.displacement_l ?? laborEngineDoc?.displacement_liters ?? null;
+      const laborDisplacementL = laborRawDisp == null ? null : Number(laborRawDisp) || null;
+      const laborCylinders = laborEngineDoc?.cylinders ?? null;
+      const laborTurbo =
+        laborEngineDoc?.aspiration != null ? /turbo|supercharg/i.test(laborEngineDoc.aspiration) : null;
 
       // Write labor times from Batch 2 pricing
       for (const svc of services) {
@@ -2366,37 +2364,67 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         });
       }
 
-      // OLP labor — written independently of the LLM loop so that every service
-      // OLP resolved gets its observation even when the LLM skipped labor_hours
-      // for that service (pipeline/backfill parity with olpRelabor.ts).
-      // Source olp_labor, weight 0.8, tier catalog — mirrors olpRelabor exactly.
-      // Per-service isolation (mirrors olpRelabor.ts): one failing write must not
-      // strand the rest of the config or abort downstream part-price writes.
-      // The upsert keys by (config, service, source), so a re-run safely retries.
-      for (const [serviceSlug, olpH] of Object.entries(olpHours)) {
-        const serviceId = await resolveServiceId(ctx, serviceSlug, serviceCache);
+      // Multi-source labor — written independently of the LLM loop so that every
+      // APPLICABLE MAPPED service gets resolved (OLP + RepairPal + web) regardless
+      // of whether the LLM provided labor_hours (Phase-2 parity with the backfill
+      // in laborRelabor.ts). The orchestrator does the observation writes + recompute
+      // internally; olp_labor lands at weight 0.7 here (the multi-source SOURCE_WEIGHTS
+      // recalibration), NOT the single-source 0.8 of olpRelabor.ts. Replaces the old
+      // OLP-only resolution + write loop.
+      const laborServices: Array<{
+        slug: string;
+        serviceId: Id<"services">;
+        name: string;
+        repairpal_slug: string | null;
+      }> = [];
+      for (const svc of services) {
+        if (!svc.is_applicable) continue;
+        const slug = SERVICE_NAME_TO_SLUG[svc.service_name];
+        if (!slug) continue;
+        const serviceId = await resolveServiceId(ctx, slug, serviceCache);
         if (!serviceId) continue;
-        try {
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
-            vehicle_config_id: args.vehicleConfigId,
-            service_id: serviceId,
-            hours: olpH,
-            source: "olp_labor",
-            weight: 0.8,
-            tier: "catalog",
-            engine_family: olpEngineFamily,
-          });
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
-            vehicle_config_id: args.vehicleConfigId,
-            service_id: serviceId,
-            book_only: true,
-          });
-        } catch (e) {
-          // Log (this is a fire-and-forget action with no failed[] return path) so a
-          // dropped OLP observation is diagnosable; remaining services + downstream
-          // part-price writes still proceed.
-          console.warn("[v3pipeline] OLP labor write failed for", serviceSlug, e);
-        }
+        laborServices.push({
+          slug,
+          serviceId,
+          name: svc.service_name,
+          repairpal_slug: LABOR_SERVICE_CONFIG[slug]?.repairpal_slug ?? null,
+        });
+      }
+
+      // Resolve the OLP Next.js buildId only when OLP is enabled (it's the one
+      // shared input across all OLP service pages); undefined if OLP off/unresolved.
+      let laborBuildId: string | undefined = undefined;
+      if (laborFlags.olp) {
+        const bid = await ctx.runAction(internal.vehicleEnrichment.olpLaborScrape.resolveBuildId, {});
+        laborBuildId = bid.buildId ?? undefined;
+      }
+
+      console.log(
+        `[v8/labor] laborAllSources for ${args.make} ${args.model} ${args.trim ?? ""}: ` +
+        `flags={olp:${laborFlags.olp},repairpal:${laborFlags.repairpal},web:${laborFlags.web}}, ` +
+        `${laborServices.length} services, buildId=${laborBuildId ? "resolved" : "none"}`,
+      );
+
+      // Wrapped in try/catch so a total orchestrator failure NEVER aborts the
+      // downstream part-price writes (graceful degradation, like the old OLP block).
+      try {
+        await ctx.runAction(internal.vehicleEnrichment.laborResearch.laborAllSources, {
+          vehicleConfigId: args.vehicleConfigId,
+          make: args.make,
+          model: args.model,
+          trim: args.trim ?? "",
+          year: args.year,
+          engine: laborEngineDoc?.engine_code ?? null,
+          engine_family: laborEngineFamily,
+          displacementL: laborDisplacementL,
+          cylinders: laborCylinders,
+          turbo: laborTurbo,
+          buildId: laborBuildId,
+          services: laborServices,
+          flags: laborFlags,
+        });
+      } catch (e) {
+        console.warn("[v3pipeline] laborAllSources failed (non-fatal):", e);
       }
 
       // Write part prices from Batch 2 pricing.

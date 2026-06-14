@@ -280,7 +280,10 @@ import type * as vehicleEnrichment_extractionPrompts from "../vehicleEnrichment/
 import type * as vehicleEnrichment_firecrawl from "../vehicleEnrichment/firecrawl.js";
 import type * as vehicleEnrichment_gapFill from "../vehicleEnrichment/gapFill.js";
 import type * as vehicleEnrichment_helpers from "../vehicleEnrichment/helpers.js";
+import type * as vehicleEnrichment_laborRelabor from "../vehicleEnrichment/laborRelabor.js";
+import type * as vehicleEnrichment_laborResearch from "../vehicleEnrichment/laborResearch.js";
 import type * as vehicleEnrichment_laborSibling from "../vehicleEnrichment/laborSibling.js";
+import type * as vehicleEnrichment_laborWebSearch from "../vehicleEnrichment/laborWebSearch.js";
 import type * as vehicleEnrichment_marketplaceScraper from "../vehicleEnrichment/marketplaceScraper.js";
 import type * as vehicleEnrichment_mutations from "../vehicleEnrichment/mutations.js";
 import type * as vehicleEnrichment_nhtsa from "../vehicleEnrichment/nhtsa.js";
@@ -297,6 +300,7 @@ import type * as vehicleEnrichment_prompts_batch1Prompt from "../vehicleEnrichme
 import type * as vehicleEnrichment_prompts_batch1bPrompt from "../vehicleEnrichment/prompts/batch1bPrompt.js";
 import type * as vehicleEnrichment_prompts_batch2Prompt from "../vehicleEnrichment/prompts/batch2Prompt.js";
 import type * as vehicleEnrichment_queries from "../vehicleEnrichment/queries.js";
+import type * as vehicleEnrichment_repairpalLaborFirecrawl from "../vehicleEnrichment/repairpalLaborFirecrawl.js";
 import type * as vehicleEnrichment_runHeadless from "../vehicleEnrichment/runHeadless.js";
 import type * as vehicleEnrichment_runPublic from "../vehicleEnrichment/runPublic.js";
 import type * as vehicleEnrichment_runTest from "../vehicleEnrichment/runTest.js";
@@ -609,7 +613,10 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/firecrawl": typeof vehicleEnrichment_firecrawl;
   "vehicleEnrichment/gapFill": typeof vehicleEnrichment_gapFill;
   "vehicleEnrichment/helpers": typeof vehicleEnrichment_helpers;
+  "vehicleEnrichment/laborRelabor": typeof vehicleEnrichment_laborRelabor;
+  "vehicleEnrichment/laborResearch": typeof vehicleEnrichment_laborResearch;
   "vehicleEnrichment/laborSibling": typeof vehicleEnrichment_laborSibling;
+  "vehicleEnrichment/laborWebSearch": typeof vehicleEnrichment_laborWebSearch;
   "vehicleEnrichment/marketplaceScraper": typeof vehicleEnrichment_marketplaceScraper;
   "vehicleEnrichment/mutations": typeof vehicleEnrichment_mutations;
   "vehicleEnrichment/nhtsa": typeof vehicleEnrichment_nhtsa;
@@ -626,6 +633,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/prompts/batch1bPrompt": typeof vehicleEnrichment_prompts_batch1bPrompt;
   "vehicleEnrichment/prompts/batch2Prompt": typeof vehicleEnrichment_prompts_batch2Prompt;
   "vehicleEnrichment/queries": typeof vehicleEnrichment_queries;
+  "vehicleEnrichment/repairpalLaborFirecrawl": typeof vehicleEnrichment_repairpalLaborFirecrawl;
   "vehicleEnrichment/runHeadless": typeof vehicleEnrichment_runHeadless;
   "vehicleEnrichment/runPublic": typeof vehicleEnrichment_runPublic;
   "vehicleEnrichment/runTest": typeof vehicleEnrichment_runTest;

@@ -147,8 +147,11 @@ export const getLaborHoursForServices = query({
           } else if (
             engineResult.source === "vdb" ||
             engineResult.source === "vdb_camry_baseline" ||
-            engineResult.source === "sibling"
+            engineResult.source === "sibling" ||
+            engineResult.source === "aggregated"
           ) {
+            // `aggregated` is the standard multi-source weighted-median book
+            // value — real vehicle-grounded data, NOT a tier estimate.
             resolvedSource = "vehicle_specific_book";
           } else {
             // "tier_estimate" — Camry baseline × multiplier
@@ -161,6 +164,11 @@ export const getLaborHoursForServices = query({
       // back to the legacy direct-row path, then catalog default. Preserves
       // behavior for shops/vehicles that pre-date Pricing v2.
       if (resolvedHours == null) {
+        // NOTE: this legacy fallback (reached only when no tier resolves — a rare
+        // pre-Pricing-v2 / unclassified-make path) trusts the upstream WRITE gate:
+        // empirical_hours is only non-zero once >= LABOR_EMPIRICAL_MIN_SAMPLES (3),
+        // so it deliberately does NOT re-apply the stricter quote gate (5) the
+        // engine path uses. See the "upstream-gated empirical" test.
         if (
           directRow &&
           typeof directRow.empirical_hours === "number" &&

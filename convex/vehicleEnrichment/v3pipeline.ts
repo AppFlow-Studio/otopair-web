@@ -2391,8 +2391,11 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             service_id: serviceId,
             book_only: true,
           });
-        } catch {
-          // Swallow so remaining services and downstream part-price writes proceed.
+        } catch (e) {
+          // Log (this is a fire-and-forget action with no failed[] return path) so a
+          // dropped OLP observation is diagnosable; remaining services + downstream
+          // part-price writes still proceed.
+          console.warn("[v3pipeline] OLP labor write failed for", serviceSlug, e);
         }
       }
 

@@ -2364,26 +2364,29 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           service_id: serviceId,
           book_only: true,
         });
+      }
 
-        // OLP (real per-vehicle flat-rate hours) → one CATALOG observation at
-        // anchor weight. Drives book_hours + quote-grade confidence (0.8/0.9).
-        const olpH = olpHours[slug];
-        if (olpH != null) {
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
-            vehicle_config_id: args.vehicleConfigId,
-            service_id: serviceId,
-            hours: olpH,
-            source: "olp_labor",
-            weight: 0.8,
-            tier: "catalog",
-            engine_family: olpEngineFamily,
-          });
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
-            vehicle_config_id: args.vehicleConfigId,
-            service_id: serviceId,
-            book_only: true,
-          });
-        }
+      // OLP labor — written independently of the LLM loop so that every service
+      // OLP resolved gets its observation even when the LLM skipped labor_hours
+      // for that service (pipeline/backfill parity with olpRelabor.ts).
+      // Source olp_labor, weight 0.8, tier catalog — mirrors olpRelabor exactly.
+      for (const [olpSlug, olpH] of Object.entries(olpHours)) {
+        const serviceId = await resolveServiceId(ctx, olpSlug, serviceCache);
+        if (!serviceId) continue;
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
+          vehicle_config_id: args.vehicleConfigId,
+          service_id: serviceId,
+          hours: olpH,
+          source: "olp_labor",
+          weight: 0.8,
+          tier: "catalog",
+          engine_family: olpEngineFamily,
+        });
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
+          vehicle_config_id: args.vehicleConfigId,
+          service_id: serviceId,
+          book_only: true,
+        });
       }
 
       // Write part prices from Batch 2 pricing.

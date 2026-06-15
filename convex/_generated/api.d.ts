@@ -38,6 +38,7 @@ import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
 import type * as devOnly_dedupeConfig from "../devOnly/dedupeConfig.js";
 import type * as devOnly_fallbackVsOlp from "../devOnly/fallbackVsOlp.js";
 import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
+import type * as devOnly_laborWebSpread from "../devOnly/laborWebSpread.js";
 import type * as devOnly_olpProbe from "../devOnly/olpProbe.js";
 import type * as devOnly_partsCoverage from "../devOnly/partsCoverage.js";
 import type * as devOnly_purgeRepairpalObs from "../devOnly/purgeRepairpalObs.js";
@@ -371,6 +372,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/dedupeConfig": typeof devOnly_dedupeConfig;
   "devOnly/fallbackVsOlp": typeof devOnly_fallbackVsOlp;
   "devOnly/laborValidation": typeof devOnly_laborValidation;
+  "devOnly/laborWebSpread": typeof devOnly_laborWebSpread;
   "devOnly/olpProbe": typeof devOnly_olpProbe;
   "devOnly/partsCoverage": typeof devOnly_partsCoverage;
   "devOnly/purgeRepairpalObs": typeof devOnly_purgeRepairpalObs;

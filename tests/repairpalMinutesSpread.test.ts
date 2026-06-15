@@ -189,3 +189,47 @@ describe("minutesSpread", () => {
     expect(minutesSpread([])).toBeNull();
   });
 });
+
+import { extractPayloadEcho, median, summarizeRows } from "../convex/devOnly/repairpalMinutesSpread";
+
+describe("extractPayloadEcho", () => {
+  it("echoes vehicle/operation/calculation_context/ranged_estimate faithfully", () => {
+    const echo = extractPayloadEcho(CIVIC_BRAKE);
+    expect(echo.vehicle).toBe("2015 Honda Civic");
+    expect(echo.operation).toBe("Brake Pad Replacement");
+    expect(echo.calculation_context).toEqual({ vehicle_brand_price_impact_percent: 0, geographic_area_price_impact_percent: 17 });
+    expect(echo.ranged_estimate!.labor).toEqual({ low: 128.94, high: 378 });
+    expect(echo.ranged_estimate!.parts.names).toEqual(["Disc Brake Anti-Rattle Clip", "Disc Brake Pad Set"]);
+    expect(echo.ranged_estimate!.total.dealer.high).toBe(689.01);
+  });
+});
+
+describe("median", () => {
+  it("odd and even length", () => {
+    expect(median([3, 1, 2])).toBe(2);
+    expect(median([1, 2, 3, 4])).toBe(2.5);
+  });
+  it("null for empty", () => {
+    expect(median([])).toBeNull();
+  });
+});
+
+describe("summarizeRows", () => {
+  it("flags high-spread pairs and medians implied rates", () => {
+    const porsche = extractVariants(PORSCHE_SPARK);
+    const rows = [
+      {
+        vehicle_input: { year: 2018, make: "Porsche", model: "911" },
+        service: { slug: "spark_plugs" },
+        payload: { vehicle: "2018 Porsche 911" },
+        variants: porsche.variants,
+        minutes_spread: minutesSpread(porsche.variants),
+      },
+    ] as any;
+    const s = summarizeRows(rows);
+    expect(s.high_spread_pairs).toHaveLength(1); // 366/156 = 2.35 ≥ 1.25
+    expect(s.high_spread_pairs[0]).toEqual({ vehicle: "2018 Porsche 911", service: "spark_plugs", minutes_min: 156, minutes_max: 366, distinct_minutes: 2 });
+    expect(s.median_implied_rate_low).toBeCloseTo(193.41, 1);
+    expect(s.book_hours_deltas).toEqual([]);
+  });
+});

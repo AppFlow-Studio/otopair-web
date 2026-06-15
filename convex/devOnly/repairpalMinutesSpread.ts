@@ -216,3 +216,72 @@ export function minutesSpread(
   const mins = variants.map((v) => v.labor.minutes);
   return { min: Math.min(...mins), max: Math.max(...mins), distinct: new Set(mins).size };
 }
+
+/** Faithful echo of the payload's top-level non-variant fields. */
+export function extractPayloadEcho(j: any): {
+  vehicle: string; operation: string;
+  calculation_context: { vehicle_brand_price_impact_percent: number; geographic_area_price_impact_percent: number } | null;
+  ranged_estimate: { total: MoneyBand; labor: { low: number; high: number }; parts: { low: number; high: number; names: string[] } } | null;
+} {
+  const re = j?.estimates?.ranged_estimate;
+  const cc = j?.calculation_context;
+  return {
+    vehicle: String(j?.vehicle ?? ""),
+    operation: String(j?.operation ?? ""),
+    calculation_context: cc
+      ? {
+          vehicle_brand_price_impact_percent: Number(cc.vehicle_brand_price_impact_percent ?? 0),
+          geographic_area_price_impact_percent: Number(cc.geographic_area_price_impact_percent ?? 0),
+        }
+      : null,
+    ranged_estimate: re
+      ? {
+          total: coerceMoneyBand(re.total),
+          labor: { low: Number(re.labor?.low ?? 0), high: Number(re.labor?.high ?? 0) },
+          parts: { low: Number(re.parts?.low ?? 0), high: Number(re.parts?.high ?? 0), names: Array.isArray(re.parts?.names) ? re.parts.names : [] },
+        }
+      : null,
+  };
+}
+
+/** Plain median. null for empty. */
+export function median(nums: number[]): number | null {
+  if (nums.length === 0) return null;
+  const s = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+/** Roll up per-row variants into the report summary. */
+export function summarizeRows(rows: any[]): {
+  median_implied_rate_low: number | null;
+  median_implied_rate_high: number | null;
+  rate_consistency: { low_cv: number | null; high_cv: number | null };
+  high_spread_pairs: Array<{ vehicle: string; service: string; minutes_min: number; minutes_max: number; distinct_minutes: number }>;
+  book_hours_deltas: Array<{ vehicle: string; service: string; repairpal_hours: number; book_hours: number; delta_hours: number; delta_pct: number }>;
+} {
+  const allLow: number[] = [];
+  const allHigh: number[] = [];
+  const high_spread_pairs: any[] = [];
+  for (const r of rows) {
+    for (const v of r.variants ?? []) {
+      allLow.push(v.implied_rate_low);
+      allHigh.push(v.implied_rate_high);
+    }
+    const ms = r.minutes_spread;
+    if (ms && ms.distinct > 1 && ms.min > 0 && ms.max / ms.min >= HIGH_SPREAD_RATIO) {
+      high_spread_pairs.push({
+        vehicle: r.payload?.vehicle || `${r.vehicle_input.year} ${r.vehicle_input.make} ${r.vehicle_input.model}`,
+        service: r.service.slug,
+        minutes_min: ms.min, minutes_max: ms.max, distinct_minutes: ms.distinct,
+      });
+    }
+  }
+  return {
+    median_implied_rate_low: median(allLow),
+    median_implied_rate_high: median(allHigh),
+    rate_consistency: { low_cv: allLow.length ? cv(allLow) : null, high_cv: allHigh.length ? cv(allHigh) : null },
+    high_spread_pairs,
+    book_hours_deltas: [], // best-effort lookup deferred (curated set; see spec §9)
+  };
+}

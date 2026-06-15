@@ -379,3 +379,117 @@ async function resolveBaseVehicleId(
   if (!bv) return { ok: false, stage: "base_vehicle", make_id: makeId };
   return { ok: true, make_id: makeId, ...bv };
 }
+
+// ───────────────────────── the probe ─────────────────────────
+
+export const probe = internalAction({
+  args: {
+    zipCode: v.optional(v.string()),
+    asOf: v.optional(v.string()),
+    vehicles: v.optional(v.array(v.object({ year: v.number(), make: v.string(), model: v.string() }))),
+    services: v.optional(v.array(v.string())),
+    includeComposite: v.optional(v.boolean()),
+  },
+  handler: async (_ctx, args): Promise<any> => {
+    const zipCode = args.zipCode ?? "10001";
+    const vehicles = args.vehicles ?? DEFAULT_PROBE_VEHICLES;
+    const serviceSlugs = args.services ?? DEFAULT_PROBE_SERVICES;
+    const includeComposite = args.includeComposite ?? false;
+
+    const cache = new Map<string, any[]>();
+    const rows: any[] = [];
+    const coverage_gaps: any[] = [];
+    const by_request: Array<{ url: string; via: string; status: number }> = [];
+    let direct_ok = 0, firecrawl_used = 0, failed = 0;
+
+    const track = async (url: string): Promise<FetchResult> => {
+      const res = await fetchRepairpalJson(url);
+      by_request.push({ url, via: res.via, status: res.status });
+      if (res.via === "direct") direct_ok++;
+      else if (res.via === "firecrawl") firecrawl_used++;
+      else failed++;
+      return res;
+    };
+
+    for (const veh of vehicles) {
+      const vlabel = `${veh.year} ${veh.make} ${veh.model}`;
+      const rv = await resolveBaseVehicleId(veh.year, veh.make, veh.model, cache, track);
+      if (!rv.ok) {
+        for (const slug of serviceSlugs) {
+          coverage_gaps.push({ vehicle: vlabel, service: slug, stage: rv.stage, detail: `${rv.stage} not found on RepairPal` });
+        }
+        continue;
+      }
+      const resolved = {
+        make_id: rv.make_id, base_vehicle_id: rv.base_vehicle_id,
+        base_vehicle_slug: rv.slug, model_name: rv.model_name, model_id: rv.model_id,
+      };
+
+      for (const slug of serviceSlugs) {
+        const cfg = LABOR_SERVICE_CONFIG[slug];
+        const notes: string[] = [];
+        let serviceId = REPAIRPAL_SERVICE_IDS[slug] ?? null;
+
+        if (serviceId == null) {
+          if (slug === "rotor_replacement" && includeComposite) {
+            serviceId = COMPOSITE_PAD_ROTOR_SERVICE_ID;
+            notes.push("composite pad+rotor — not comparable to standalone rotor");
+          } else {
+            coverage_gaps.push({
+              vehicle: vlabel, service: slug, stage: "service_id",
+              detail: slug === "rotor_replacement" ? "no standalone RepairPal rotor service" : "no serviceId mapped",
+            });
+            continue;
+          }
+        }
+
+        const url =
+          `${REPAIRPAL_API_BASE}/estimate?baseVehicleId=${rv.base_vehicle_id}` +
+          `&scheduled=0&serviceId=${serviceId}&zipCode=${encodeURIComponent(zipCode)}`;
+        const { json, via, status } = await track(url);
+
+        if (!json) {
+          coverage_gaps.push({ vehicle: vlabel, service: slug, stage: "estimate_empty", detail: `fetch ${via} status ${status}` });
+          rows.push({
+            vehicle_input: veh,
+            service: { slug, repairpal_slug: cfg?.repairpal_slug ?? null, service_id: serviceId },
+            resolved, fetch: { via, status, url },
+            payload: { vehicle: "", operation: "", calculation_context: null, ranged_estimate: null },
+            dimension: null, variant_count: 0, variants: [],
+            minutes_spread: null, implied_rate_consistency: null,
+            book_hours: null, book_hours_delta: null,
+            notes: [...notes, "fetch failed / empty"],
+          });
+          continue;
+        }
+
+        const payload = extractPayloadEcho(json);
+        const { dimension, variants } = extractVariants(json);
+        const ms = minutesSpread(variants);
+        const rc = rateConsistency(variants);
+        if (variants.length === 0) notes.push("empty estimate");
+        if (dimension === "engine_base") notes.push("engine_base dimension");
+        if (variants.some((vv) => vv.position)) notes.push("position_count split");
+
+        rows.push({
+          vehicle_input: veh,
+          service: { slug, repairpal_slug: cfg?.repairpal_slug ?? null, service_id: serviceId },
+          resolved, fetch: { via, status, url },
+          payload,
+          dimension, variant_count: variants.length, variants,
+          minutes_spread: ms, implied_rate_consistency: rc,
+          book_hours: null, book_hours_delta: null,
+          notes,
+        });
+      }
+    }
+
+    return {
+      meta: { zipCode, scheduled: 0, asOf: args.asOf ?? null, vehicles_probed: vehicles.length, services_probed: serviceSlugs.length },
+      access: { direct_ok, firecrawl_used, failed, by_request },
+      resolution: { resolved_pairs: rows.filter((r) => r.variant_count > 0).length, coverage_gaps },
+      summary: summarizeRows(rows),
+      rows,
+    };
+  },
+});

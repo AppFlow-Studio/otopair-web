@@ -1,9 +1,20 @@
 # RepairPal Global ID Catalog — Playwright Crawler Design
 
-**Status:** Design (approved for implementation)
+**Status:** SHIPPED 2026-06-15 — but **pivoted from Playwright to direct fetch** (see note).
 **Date:** 2026-06-15
 **Branch:** `waleed-fix`
 **Related:** [`2026-06-15-repairpal-minutes-spread-spike-design.md`](./2026-06-15-repairpal-minutes-spread-spike-design.md) (the spike that motivated this), [`../reviews/2026-06-15-repairpal-minutes-spike-findings.md`](../reviews/2026-06-15-repairpal-minutes-spike-findings.md) (findings: BMW trim-as-model miss → need deterministic catalog), [`repairpal-minutes-field-spec.md`](./repairpal-minutes-field-spec.md)
+
+> ### ⚠ Implementation pivot (2026-06-15) — Playwright → direct fetch
+> The headed-Playwright mechanism in §3 **was built and run, and failed**: Cloudflare
+> challenges the automated browser's `page.goto` navigation ("Just a moment…" interstitial,
+> 120s timeout) — and firecrawl's proxy is challenged the same way. But **plain Node `fetch`
+> (and curl) reach the same endpoints at HTTP 200/JSON, un-challenged**, from our IP. So the
+> shipped crawler (`tests/repairpal/catalog-crawl.manual.spec.ts`) uses **direct `fetch` with
+> no browser** (the Playwright runner is kept only for TS + helper imports). Everything else —
+> crawl flow, CSV outputs, resume, anchors — is exactly as designed below. **Result:** 45 makes,
+> 9,229 base-vehicles, 311 services, 0 failures, all anchors green; run took 4.1 min.
+> Read §3 with this swap in mind (ignore the CF-clear / `page.evaluate` specifics).
 
 ---
 

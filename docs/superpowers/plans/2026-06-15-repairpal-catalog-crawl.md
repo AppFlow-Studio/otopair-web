@@ -10,6 +10,14 @@
 
 **Reference:** Spec `docs/superpowers/specs/2026-06-15-repairpal-catalog-crawl-design.md`. Findings that motivated it: `docs/superpowers/reviews/2026-06-15-repairpal-minutes-spike-findings.md`.
 
+> **SHIPPED with a pivot (2026-06-15):** Tasks 1–3 (helpers) shipped as written. The Task 4/5
+> headed-Playwright crawler **was built and run but Cloudflare-blocked the browser** at the
+> initial navigation; it was pivoted to **direct Node `fetch` (no browser)** — which reaches the
+> endpoints un-challenged. The shipped `catalog-crawl.manual.spec.ts` is the direct-fetch version
+> (run: `npx playwright test … --project=chromium`, no `--headed`). Crawl succeeded: 45 makes /
+> 9,229 base-vehicles / 311 services / 0 failures / all anchors green in 4.1 min. Read the
+> Playwright/headed specifics in Task 4/5 as superseded by the direct-fetch transport.
+
 ---
 
 ## File Structure

@@ -285,3 +285,97 @@ export function summarizeRows(rows: any[]): {
     book_hours_deltas: [], // best-effort lookup deferred (curated set; see spec §9)
   };
 }
+
+// ───────────────────────── network helpers (untested glue) ─────────────────────────
+
+type FetchResult = { json: any | null; via: "direct" | "firecrawl" | "failed"; status: number };
+
+/** Firecrawl raw-body scrape of a JSON endpoint (NOT the LLM json-extract mode).
+ *  Strips any HTML wrapper Firecrawl adds and JSON.parses the first {...}/[...] body. */
+async function firecrawlRawJson(url: string): Promise<{ json: any | null; status: number }> {
+  const key = process.env.FIRECRAWL_API_KEY;
+  if (!key) {
+    console.warn("firecrawlRawJson: FIRECRAWL_API_KEY not set; cannot use proxy fallback");
+    return { json: null, status: 0 };
+  }
+  try {
+    const resp = await fetch(`${FIRECRAWL_BASE}/scrape`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ url, formats: ["rawHtml"], timeout: 30000 }),
+      signal: AbortSignal.timeout(35000),
+    });
+    if (!resp.ok) return { json: null, status: resp.status };
+    const data = await resp.json();
+    const d = data.data ?? data;
+    const raw: string = d?.rawHtml ?? d?.html ?? d?.markdown ?? "";
+    const text = raw.replace(/<[^>]+>/g, "").trim();
+    const start = text.search(/[\[{]/);
+    if (start < 0) return { json: null, status: resp.status };
+    try {
+      return { json: JSON.parse(text.slice(start)), status: resp.status };
+    } catch {
+      return { json: null, status: resp.status };
+    }
+  } catch (e) {
+    console.error("firecrawlRawJson error:", e);
+    return { json: null, status: 0 };
+  }
+}
+
+/** Direct GET first (accept: application/json); on non-200 / non-JSON / parse-fail,
+ *  fall back to the firecrawl raw scrape. Records which path produced the JSON. */
+async function fetchRepairpalJson(url: string): Promise<FetchResult> {
+  try {
+    const r = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20000) });
+    const ct = r.headers.get("content-type") ?? "";
+    if (r.ok && ct.includes("json")) {
+      try {
+        return { json: await r.json(), via: "direct", status: r.status };
+      } catch {
+        /* fall through */
+      }
+    }
+    const fc = await firecrawlRawJson(url);
+    if (fc.json) return { json: fc.json, via: "firecrawl", status: fc.status || r.status };
+    return { json: null, via: "failed", status: r.status };
+  } catch {
+    const fc = await firecrawlRawJson(url);
+    if (fc.json) return { json: fc.json, via: "firecrawl", status: fc.status };
+    return { json: null, via: "failed", status: 0 };
+  }
+}
+
+type ResolveResult =
+  | { ok: true; make_id: number; base_vehicle_id: number; slug: string; model_name: string; model_id: number }
+  | { ok: false; stage: "make" | "base_vehicle"; make_id: number | null };
+
+/** year → makes → base-vehicles, matched by name. Caches makes-per-year and
+ *  base-vehicles-per-(year,makeId) in the passed Map. `fetchJson` is injected so the
+ *  caller can tally direct/firecrawl/failed access counts. */
+async function resolveBaseVehicleId(
+  year: number, make: string, model: string,
+  cache: Map<string, any[]>,
+  fetchJson: (url: string) => Promise<FetchResult>,
+): Promise<ResolveResult> {
+  const makesKey = `makes:${year}`;
+  let makes = cache.get(makesKey);
+  if (makes === undefined) {
+    const { json } = await fetchJson(`${REPAIRPAL_API_BASE}/makes?year=${year}`);
+    makes = Array.isArray(json) ? json : [];
+    cache.set(makesKey, makes);
+  }
+  const makeId = matchMake(makes, make);
+  if (makeId == null) return { ok: false, stage: "make", make_id: null };
+
+  const bvKey = `bv:${year}:${makeId}`;
+  let bvs = cache.get(bvKey);
+  if (bvs === undefined) {
+    const { json } = await fetchJson(`${REPAIRPAL_API_BASE}/base-vehicles?year=${year}&makeId=${makeId}`);
+    bvs = Array.isArray(json) ? json : [];
+    cache.set(bvKey, bvs);
+  }
+  const bv = matchBaseVehicle(bvs, model);
+  if (!bv) return { ok: false, stage: "base_vehicle", make_id: makeId };
+  return { ok: true, make_id: makeId, ...bv };
+}

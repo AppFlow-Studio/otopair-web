@@ -181,3 +181,119 @@ What the scrape *did* confirm/improve for our set:
 - serviceId mapping resolved from the crawled catalog by name; the 7 "no RP equiv" services were confirmed absent by catalog search.
 - Throwaway gather artifacts (`convex/devOnly/fleetLaborDump.ts`, local `_*.mjs/_*.json/_*.md`) — delete after review.
 
+---
+
+# Appendix A — RepairPal estimate endpoint: full reference
+
+Everything needed to read labor time/cost out of RepairPal's Fair-Price Estimator, verified by direct inspection (2026-06-15). The data lives in the **JSON API behind the rendered estimator flow** — no certified-shop widget, no login.
+
+## A.1 Three endpoints (the ID-resolution chain)
+
+All are **plain `GET`**, return `application/json`, **require no auth/cookies**, and are reachable with a direct fetch (send `accept: application/json`). Base: `https://repairpal.com/next-api/estimator-flow`.
+
+| Step | Endpoint | Returns |
+|---|---|---|
+| 1. make → makeId | `/makes?year={Y}` | `[{ id, name }]` — e.g. `{"id":2,"name":"Porsche"}`. (makeIds are global/stable across years.) |
+| 2. model → baseVehicleId | `/base-vehicles?year={Y}&makeId={M}` | `[{ id, makeName, year, slug, modelName, makeId, modelId }]` — `id` **is** the `baseVehicleId`; e.g. `{"id":76572,"makeName":"Porsche","year":2018,"slug":"2018-porsche-718-boxster","modelName":"718 Boxster","makeId":2,"modelId":12488}`. There is **no `/years`** endpoint — enumerate years by probing `/makes?year=Y` (empty array = invalid year). |
+| 3. labor estimate | `/estimate?baseVehicleId=&serviceId=&zipCode=&scheduled=0` | the estimate payload (below). |
+
+`modelName` granularity **varies by make**: model-line for some (`Civic`, `911`, `Camry`), **trim-as-model** for others (BMW 2019 = `330i`, `M340i`, `530i xDrive`…). `serviceId` is a separate global catalog (the 311-service `repairpal_services.csv`; mapping in §1 of this doc).
+
+## A.2 The `estimate` request
+
+```
+GET https://repairpal.com/next-api/estimator-flow/estimate
+      ?baseVehicleId={int}      # required — from step 2
+      &serviceId={int}          # required — the repair/service (e.g. 30 = Brake Pad)
+      &zipCode={5-digit}        # required — drives the geographic rate multiplier
+      &scheduled=0              # the "get an estimate now" flow (not a booking)
+Headers: accept: application/json
+```
+A single GET returns **all variants/configs** for that vehicle+service at once — no need to pre-select a submodel/engine in the UI.
+
+## A.3 Response — top level
+
+```jsonc
+{
+  "vehicle": "2015 Honda Civic",          // string label
+  "operation": "Brake Pad Replacement",   // the service name
+  "estimates": { … },                     // the labor/cost data (see A.4)
+  "calculation_context": {
+    "vehicle_brand_price_impact_percent": 0,    // brand premium: 0 Honda · 35 Porsche
+    "geographic_area_price_impact_percent": 17  // local-area impact for the ZIP
+  }
+}
+```
+HTTP 200 with an `estimates` object that has no minutes-bearing node = **this vehicle+service is not estimated** (a genuine gap, not an error).
+
+## A.4 `estimates` — FIVE response shapes ⚠
+
+This is the critical gotcha. The minutes-bearing `estimate` object appears in **five different places** depending on how RepairPal models the service for the vehicle. **Do not hard-code paths — walk the tree (§A.7).**
+
+1. **Direct single** — `estimates.estimate` — flat services with no variant dimension (tire rotation, alignment, brake fluid, often oil):
+   ```jsonc
+   "estimates": { "estimate": { "total": {…}, "labor": {…, "minutes": 24}, "parts": [], "footnotes": […] } }
+   ```
+2. **By engine** — `estimates.engine_base["3.8 Liter, 6 Cylinder"].estimate` — engine-determined jobs (spark plugs, timing).
+3. **By submodel/trim** — `estimates.submodel["LX"].estimate` — trim-determined jobs.
+4. **By position (top-level)** — `estimates.position_count["Front, Both Sides"].estimate` — brake pad / rotor (Front / Rear / "Front and Rear, All").
+5. **By position, nested under a variant** — `estimates.submodel["EX"].position_count["Front and Rear, All"].estimate` (and `engine_base[…].position_count[…]` likewise).
+
+Plus an aggregate that is **NOT** minutes-bearing:
+- **`estimates.ranged_estimate`** — the cross-variant roll-up: `{ total, labor:{low,high}, parts:{low,high,names[]} }`. **Its `labor` has no `minutes`** (dollars only) — never use it for labor time.
+
+A submodel/engine node holds **either** `.estimate` (shape 2/3) **or** `.position_count` (shape 5); a node may also carry its own `ranged_estimate`.
+
+## A.5 The `labor` object — what we actually want
+
+Every minutes-bearing `estimate` has:
+```jsonc
+"labor": {
+  "low": 386.82,    // UNROUNDED labor dollars, independent-shop floor
+  "high": 567,      // UNROUNDED labor dollars, dealer ceiling
+  "notes": [],
+  "minutes": 120    // ← THE TARGET: discrete labor time (MOTOR/Chilton standard), in MINUTES
+}
+```
+`hours = minutes / 60`. `minutes` is the genuine flat-rate labor time and is **ZIP-invariant** (only the dollars scale with the geographic/brand multipliers). The `ranged_estimate.labor` is the only `labor` **without** `minutes`.
+
+## A.6 Other fields per estimate
+
+- **`total`** (MoneyBand): `{ low, high, independent:{low,high}, dealer:{low,high} }` — full job cost (labor + parts), split by shop type.
+- **`parts`** (per-variant array): `[{ part, position, total_price:{low,high}, quantity }]`. (`ranged_estimate.parts` is instead an aggregate `{ low, high, names:[] }`.)
+- **`footnotes`** (string[]): what the labor does/doesn't include — e.g. *"Includes: tire and wheel assembly removal… Does not include: moving spare tire, a road test, TPM diagnosing."*
+- **`calculation_context`** (top-level): the market multipliers RepairPal applied — `vehicle_brand_price_impact_percent` (0 Honda, 35 Porsche) and `geographic_area_price_impact_percent` (17 for ZIP 10001).
+
+## A.7 Parsing it correctly (recursive — the lesson)
+
+Because of the five shapes (§A.4), a path-based reader silently under-reports. **Walk the whole `estimates` tree and collect every `labor.minutes`:**
+```js
+function variantsWithMinutes(estimateJson) {
+  const out = [];
+  (function walk(o) {
+    if (o == null || typeof o !== "object") return;
+    if (o.labor && typeof o.labor.minutes === "number") out.push(o);  // an estimate node
+    for (const v of Object.values(o)) walk(v);
+  })(estimateJson.estimates ?? {});
+  return out;  // each has .labor.{low,high,minutes}, .total, .parts, .footnotes
+}
+```
+`ranged_estimate.labor` lacks `minutes`, so it's naturally skipped — no double counting. To pick the right value for a specific config, match the variant key by **engine** (`"{displacement_l} Liter, {cylinders} Cylinder"`), **trim** (the submodel key), and/or **position** (Front/Rear), then read `.labor.minutes`.
+
+## A.8 Implied hourly rate (no rate field exists)
+
+There is no `rate` field — derive it: `implied_$/hr = labor.low / (minutes/60)` (independent floor) and `labor.high / (minutes/60)` (dealer ceiling). It is **constant across variants** of a vehicle (e.g. 911 spark: $193/hr low, $283/hr high at both 156-min and 366-min engines), which is strong evidence `minutes` is the real driver. RepairPal's effective rate is ~**$143–193/hr**, so reverse-engineering hours from the public rounded dollars at a fixed `$130/hr` (the old `repairpal_labor` method) **overestimates ~1.36×+** — use `minutes` directly.
+
+## A.9 Access & Cloudflare
+
+- The endpoints sit behind **Cloudflare**. A **plain server-side `fetch`/curl from our IP is NOT challenged** (200/JSON every time, hundreds of requests in the catalog crawl with 0 failures).
+- **Firecrawl is unusable** for these: its proxy returns `ERR_TUNNEL_CONNECTION_FAILED` or lands on the `"Just a moment…"` interstitial — never the JSON (even with `proxy:"enhanced"`, `timeout:120000`, `parsers:[]`, `accept` header).
+- **A headed Playwright browser is also challenged** at `page.goto` (the interstitial times out). So: **use direct `fetch`, no browser, no firecrawl.** Be polite at bulk (throttle ~100–200 ms, sequential, resumable).
+
+## A.10 Coverage & gotchas (summary)
+
+- **Coverage is broad** — ~90%+ of vehicles for most otopair maintenance services (tire rotation/alignment/brake-fluid/brake-pad ~95–96%, oil/filter/coolant/spark ~91–94%, transmission/battery ~71–75%); genuinely lower only for timing belt (15%, chain engines N/A) and standalone rotor (27%, usually billed as the composite `4453439`). See the DEFINITIVE CORRECTION block at the top. The endpoint *also* estimates 100+ component repairs (alternator, water pump, clutch, catalytic converter…) beyond the otopair service set.
+- **Scope ≠ id:** otopair `filter_replacement` = air **+** cabin (RP `14` is air-only; cabin is `35`); otopair transmission has two RP variants — drain&fill `158` vs full-pan `507` (prefer `507`, higher coverage); RP `33` is "Brake Bleed" (= brake fluid flush); standalone rotor `31` vs composite pad+rotor `4453439`.
+- **Per-vehicle gaps are real and specific** — e.g. the 911 returns everything except coolant, timing belt (chain), and standalone rotor (it's the composite).
+- **`minutes` only** is trustworthy for labor time; the `ranged_estimate` dollar roll-up and the public rendered ranges are lossy/rate-biased.
+

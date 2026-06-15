@@ -34,6 +34,8 @@ RepairPal's `next-api/estimator-flow/*` endpoints return JSON to a **direct GET 
 
 **Playwright is the robust path:** launch a real Chromium (headed), navigate to a `repairpal.com` page to establish a genuine same-origin session, then run every API call via **in-page `fetch()`** (`page.evaluate`) with `accept: application/json`. The real-browser session (cookies, fingerprint, same-origin) is what defeats the bot-challenge that blocked firecrawl. Run **headed** (`headless: false`) so the session looks human and the operator can watch progress.
 
+**Cloudflare note (verified 2026-06-15):** the endpoints sit behind Cloudflare. Firecrawl's enhanced proxy either returns `ERR_TUNNEL_CONNECTION_FAILED` or lands on the `"Just a moment..."` CF interstitial — never the JSON. A plain GET from our IPs passed 41/41 in the spike (CF didn't challenge it), and a headed real browser clears the CF JS challenge once (automatically, or the operator clicks it) so subsequent in-page fetches ride the cleared `cf_clearance` cookie. After `page.goto`, the crawler should wait for the real page (not the `"Just a moment..."` title) before starting fetches, and re-clear if a fetch ever returns the interstitial HTML instead of JSON.
+
 ---
 
 ## 4. Crawl flow
@@ -41,7 +43,7 @@ RepairPal's `next-api/estimator-flow/*` endpoints return JSON to a **direct GET 
 All API calls run **in-page** via `page.evaluate(async (url) => (await fetch(url, {headers:{accept:"application/json"}})).json(), url)` after an initial `page.goto("https://repairpal.com/estimator/car-selector?zipCode=10001")`.
 
 ### 4.1 Years
-Enumerate candidate years from `START_YEAR = 1990` to `new Date().getFullYear() + 1`. For each candidate, call `makes?year=Y`; a year is **valid** if it returns a non-empty array. (Deterministic; avoids depending on a fragile React dropdown selector. The car-selector year `<select>` is an optional cross-check, not the source of truth.)
+Enumerate candidate years from `START_YEAR = 2000` to `new Date().getFullYear() + 1`. For each candidate, call `makes?year=Y`; a year is **valid** if it returns a non-empty array. (Deterministic; avoids depending on a fragile React dropdown selector. The car-selector year `<select>` is an optional cross-check, not the source of truth.)
 
 ### 4.2 Makes
 For each valid year `Y`: `fetch(.../makes?year=Y)` → `[{id, name}]`. Accumulate into a global make set keyed by `id` (makeIds are global; the same `id`/`name` recurs across years).
@@ -130,7 +132,7 @@ If an anchor fails, the crawl exits non-zero with a clear message (catalog not t
 
 ## 10. Caveats
 
-- **Scale:** ~34 makes × ~37 candidate years ≈ up to ~1,260 base-vehicle fetches (many (year,make) pairs empty for makes that didn't exist yet). Throttled, expect roughly **10–20 minutes** headed. `base_vehicles.csv` may reach tens of thousands of rows (a few MB) — fine for CSV.
+- **Scale:** ~34 makes × ~27 candidate years (2000–2026) ≈ up to ~920 base-vehicle fetches (some (year,make) pairs empty). Throttled, expect roughly **8–15 minutes** headed. `base_vehicles.csv` may reach tens of thousands of rows (a few MB) — fine for CSV.
 - **Bot-block risk:** mitigated by the real-browser session + throttle + resumability, but not eliminated. If RepairPal challenges mid-crawl, the headed window makes it visible and the resume logic lets you continue after a pause.
 - **Services embed format** could change; the regex extraction is validated by the §8 service anchors.
 - **Year range** `START_YEAR=1990` is a safe floor; valid years are discovered, so an over-wide range only costs a few empty `makes` probes.

@@ -43,3 +43,12 @@ export function extractServices(html: string): Array<{ service_id: number; servi
   }
   return out;
 }
+
+/** Dedupe by a key field, keeping the first occurrence and preserving order. */
+export function dedupById<T extends Record<string, any>>(items: T[], idKey: keyof T): T[] {
+  const seen = new Map<any, T>();
+  for (const it of items) {
+    if (!seen.has(it[idKey])) seen.set(it[idKey], it);
+  }
+  return [...seen.values()];
+}

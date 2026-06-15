@@ -47,3 +47,22 @@ describe("extractServices", () => {
     expect(extractServices("no services here")).toEqual([]);
   });
 });
+
+import { dedupById } from "./catalogCrawl.helpers";
+
+describe("dedupById", () => {
+  it("keeps the first occurrence per id, preserves order", () => {
+    const items = [
+      { service_id: 30, service_name: "Brake Pad Replacement" },
+      { service_id: 128, service_name: "Spark Plug Replacement" },
+      { service_id: 30, service_name: "Brake Pad Replacement (dup)" },
+    ];
+    expect(dedupById(items, "service_id")).toEqual([
+      { service_id: 30, service_name: "Brake Pad Replacement" },
+      { service_id: 128, service_name: "Spark Plug Replacement" },
+    ]);
+  });
+  it("handles empty input", () => {
+    expect(dedupById([], "service_id")).toEqual([]);
+  });
+});

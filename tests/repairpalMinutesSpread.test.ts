@@ -47,3 +47,44 @@ describe("matchBaseVehicle", () => {
     expect(matchBaseVehicle(BASE_VEHICLES_HONDA_2015, "Pilot")).toBeNull();
   });
 });
+
+import { impliedRate, cv, rateConsistency } from "../convex/devOnly/repairpalMinutesSpread";
+
+describe("impliedRate", () => {
+  it("computes labor$ / (minutes/60)", () => {
+    expect(impliedRate(128.94, 54)).toBeCloseTo(143.27, 1); // Civic LX low
+    expect(impliedRate(189, 54)).toBeCloseTo(210, 1);       // Civic LX high
+  });
+  it("returns 0 when minutes is 0 (no divide-by-zero)", () => {
+    expect(impliedRate(100, 0)).toBe(0);
+  });
+});
+
+describe("cv (population coefficient of variation)", () => {
+  it("is ~0 for a constant series", () => {
+    expect(cv([193, 193, 193])).toBeCloseTo(0, 6);
+  });
+  it("is positive for a spread series", () => {
+    expect(cv([1, 2, 3])).toBeGreaterThan(0.3); // sd/mean = 0.816/2
+  });
+  it("is 0 for empty or zero-mean input", () => {
+    expect(cv([])).toBe(0);
+    expect(cv([0, 0])).toBe(0);
+  });
+});
+
+describe("rateConsistency", () => {
+  it("yields ~0 CV across 911 engines (constant implied $/hr)", () => {
+    const variants = [
+      { implied_rate_low: 193.41, implied_rate_high: 283.5 },
+      { implied_rate_low: 193.41, implied_rate_high: 283.5 },
+      { implied_rate_low: 193.41, implied_rate_high: 283.5 },
+    ] as any;
+    const rc = rateConsistency(variants)!;
+    expect(rc.low_cv).toBeCloseTo(0, 4);
+    expect(rc.high_cv).toBeCloseTo(0, 4);
+  });
+  it("returns null for no variants", () => {
+    expect(rateConsistency([])).toBeNull();
+  });
+});

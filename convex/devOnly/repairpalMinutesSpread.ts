@@ -117,3 +117,29 @@ export function matchBaseVehicle(
   }
   return null;
 }
+
+/** labor dollars ÷ (minutes/60). 0 when minutes ≤ 0. */
+export function impliedRate(laborDollars: number, minutes: number): number {
+  if (!(minutes > 0)) return 0;
+  return laborDollars / (minutes / 60);
+}
+
+/** Population coefficient of variation (stddev / mean). 0 for empty or zero-mean. */
+export function cv(nums: number[]): number {
+  if (nums.length === 0) return 0;
+  const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+  if (mean === 0) return 0;
+  const variance = nums.reduce((a, b) => a + (b - mean) ** 2, 0) / nums.length;
+  return Math.sqrt(variance) / mean;
+}
+
+/** CV of implied low/high $/hr across a variant set. null if no variants. */
+export function rateConsistency(
+  variants: Array<{ implied_rate_low: number; implied_rate_high: number }>,
+): { low_cv: number; high_cv: number } | null {
+  if (variants.length < 1) return null;
+  return {
+    low_cv: cv(variants.map((v) => v.implied_rate_low)),
+    high_cv: cv(variants.map((v) => v.implied_rate_high)),
+  };
+}

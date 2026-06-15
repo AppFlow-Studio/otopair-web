@@ -23,7 +23,11 @@ const SERVICE_PROBE_IDS = [21446, 27442, 76380, 77615, 77342];
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-test("crawl RepairPal global ID catalog", async ({ page }) => {
+test("crawl RepairPal global ID catalog", async ({ page }, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "chromium",
+    "Manual crawler is chromium-only — run with --project=chromium to avoid 3x concurrent runs corrupting the CSV output.",
+  );
   test.setTimeout(45 * 60 * 1000); // 45 minutes
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -51,13 +55,42 @@ test("crawl RepairPal global ID catalog", async ({ page }) => {
     return null;
   }
 
+  // Clear the Cloudflare "Just a moment..." interstitial by (re)loading a real page
+  // and waiting for the title to settle. Called at start, and again mid-crawl if
+  // fetches start failing (a re-challenge).
+  async function clearCloudflare(): Promise<void> {
+    await page.goto(`https://repairpal.com/estimator/car-selector?zipCode=${ZIP}`, {
+      waitUntil: "domcontentloaded",
+    });
+    await expect
+      .poll(async () => await page.title(), { timeout: 120000, intervals: [2000] })
+      .not.toContain("Just a moment");
+  }
+
+  // A resilient fetch: on a null result (often a Cloudflare re-challenge) it warns
+  // inline; after 3 consecutive failures it re-clears Cloudflare and retries once.
+  // A valid-but-empty array ([]) counts as success (resets the counter).
+  let consecutiveFailures = 0;
+  async function fetchJsonResilient(url: string, label: string): Promise<any> {
+    let j = await fetchJson(url);
+    if (j !== null) {
+      consecutiveFailures = 0;
+      return j;
+    }
+    consecutiveFailures++;
+    console.warn(`[catalog] fetch failed (${label}); consecutive=${consecutiveFailures}`);
+    if (consecutiveFailures >= 3) {
+      console.warn(`[catalog] re-clearing Cloudflare after ${consecutiveFailures} consecutive failures…`);
+      await clearCloudflare();
+      consecutiveFailures = 0;
+      j = await fetchJson(url);
+      if (j === null) console.warn(`[catalog] still failing after re-clear (${label})`);
+    }
+    return j;
+  }
+
   // 1. Establish session; clear the Cloudflare "Just a moment..." interstitial.
-  await page.goto(`https://repairpal.com/estimator/car-selector?zipCode=${ZIP}`, {
-    waitUntil: "domcontentloaded",
-  });
-  await expect
-    .poll(async () => await page.title(), { timeout: 120000, intervals: [2000] })
-    .not.toContain("Just a moment");
+  await clearCloudflare();
 
   // 2. Discover valid years + global makes.
   const thisYear = new Date().getFullYear();
@@ -65,7 +98,7 @@ test("crawl RepairPal global ID catalog", async ({ page }) => {
   const validYears: number[] = [];
   const yearMakes: Array<{ year: number; makeId: number }> = [];
   for (let y = START_YEAR; y <= thisYear + 1; y++) {
-    const makes = await fetchJson(`${API}/makes?year=${y}`);
+    const makes = await fetchJsonResilient(`${API}/makes?year=${y}`, `makes ${y}`);
     await sleep(DELAY_MS);
     if (!Array.isArray(makes) || makes.length === 0) continue;
     validYears.push(y);
@@ -97,7 +130,7 @@ test("crawl RepairPal global ID catalog", async ({ page }) => {
   let pairsDone = 0;
   for (const { year, makeId } of yearMakes) {
     if (done.has(`${year}:${makeId}`)) continue;
-    const bvs = await fetchJson(`${API}/base-vehicles?year=${year}&makeId=${makeId}`);
+    const bvs = await fetchJsonResilient(`${API}/base-vehicles?year=${year}&makeId=${makeId}`, `base-vehicles ${year}/${makeId}`);
     await sleep(DELAY_MS);
     if (!Array.isArray(bvs)) {
       failures.push({ stage: "base_vehicles", year, makeId });
@@ -146,6 +179,8 @@ test("crawl RepairPal global ID catalog", async ({ page }) => {
     service_brake_30: uniqServices.some((s) => s.service_id === 30),
     service_spark_128: uniqServices.some((s) => s.service_id === 128),
     service_oil_107: uniqServices.some((s) => s.service_id === 107),
+    service_timing_144: uniqServices.some((s) => s.service_id === 144),
+    bmw_2019_330i_77615: /(^|\n)77615,2019,/.test(bvText),
   };
   fs.writeFileSync(
     path.join(OUT_DIR, "repairpal_catalog_manifest.json"),
@@ -178,4 +213,7 @@ test("crawl RepairPal global ID catalog", async ({ page }) => {
   expect(anchors.camry_2005_27442).toBe(true);
   expect(anchors.service_brake_30).toBe(true);
   expect(anchors.service_spark_128).toBe(true);
+  expect(anchors.service_oil_107).toBe(true);
+  expect(anchors.service_timing_144).toBe(true);
+  expect(anchors.bmw_2019_330i_77615).toBe(true);
 });

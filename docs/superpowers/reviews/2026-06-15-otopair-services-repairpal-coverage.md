@@ -8,30 +8,29 @@ Every otopair service was matched against the crawled 311-service RepairPal cata
 
 ---
 
-> ## ⚠ CORRECTION (parser bug — coverage was UNDERCOUNTED)
-> The coverage numbers below were produced by a scan that only parsed the
-> `estimates.submodel` and `estimates.engine_base` dimensions. RepairPal also returns
-> variants under a **top-level `estimates.position_count`** (Front/Rear) — which my scan
-> ignored, so any service estimated that way was wrongly counted as "empty." This hit
-> **brake pad / rotor hardest** (they're position-split). Corrected with the full parser:
-> - **Fleet coverage: 24%** (44/180), not 16%. **brake_pad = 14/15**, not 1/15.
-> - Blind scrape per vehicle: **Civic 79 / 911 65 / Camry 68** of 311 (not 64/50/49).
-> - Brake pad **IS** covered on the 911 (Front 60 min, Rear 60, both 120) — earlier "not covered" was the bug.
-> - Genuinely empty across the fleet (no minutes under *any* dimension): **timing belt, tire rotation, wheel alignment, brake fluid** (0/15). Coolant is empty on the 911 specifically (matches it being absent from the 911's service list).
-> - The §4 endpoint-vs-OLP comparison likewise undercounted position-split services (it had only 1 brake_pad row; there should be ~14). Treat §2/§4/§6 numbers as the *floor*; the corrected fleet coverage is 24%.
+> ## ⚠ DEFINITIVE CORRECTION — §2/§4/§6 below are WRONG (undercounted by parser bugs)
+> The original scan parsed only `estimates.submodel`/`estimates.engine_base`. RepairPal
+> returns minutes in **at least four shapes**: those two, a **top-level
+> `estimates.position_count`** (Front/Rear — brake pad/rotor), **and a direct
+> `estimates.estimate`** (a single flat value — tire rotation/alignment/brake fluid/etc.).
+> The scan missed the last two, so it dramatically under-reported coverage. A
+> **shape-agnostic recursive parser** (find `labor.minutes` anywhere in the response),
+> validated on known cases, gives the real numbers.
 >
-> **Definitive coverage — 308 vehicles sampled across all makes/years (fixed parser):**
+> **Real coverage — 308 vehicles across all makes/years (recursive parser):**
 >
-> | Service | Covered | Service | Covered |
+> | Service | Coverage | Service | Coverage |
 > |---|--:|---|--:|
-> | **brake_pad_replacement** | **254/308 (82%)** | rotor_replacement | 43/308 (14%) |
-> | spark_plugs | 60/308 (19%) | oil_change | 41/308 (13%) |
-> | coolant_flush | 46/308 (15%) | filter_replacement | 35/308 (11%) |
-> | wheel_alignment | 26/308 (8%) | transmission (507) | 24/308 (8%) |
-> | battery_replacement | 13/308 (4%) | brake_fluid_flush | 5/308 (2%) |
-> | timing_belt | 3/308 (1%) | **tire_rotation** | **0/308 (0%)** |
+> | tire_rotation | **96% (296/308)** | brake_pad | 95% (292/308) |
+> | wheel_alignment | **96% (296/308)** | brake_fluid_flush | 95% (293/308) |
+> | filter_replacement | 94% (289/308) | oil_change | 93% (287/308) |
+> | coolant_flush | 92% (282/308) | spark_plugs | 91% (279/308) |
+> | transmission (507) | 75% (230/308) | battery_replacement | 71% (218/308) |
+> | rotor (standalone 31) | 27% (83/308) | timing_belt | 15% (45/308) |
 >
-> 278/308 vehicles (90%) have ≥1 covered service. **Brake pad is near-universal (82%)** — the rest are vehicle-dependent (mainstream cars cover better than the long tail). Only **tire_rotation is truly never covered (0%)**; wheel alignment (8%), brake fluid (2%), and timing belt (1%) are *rare but real* — my earlier "genuinely empty 0/15" was a small-fleet artifact.
+> **96% of cars (296/308) have ≥1 covered service. The endpoint has BROAD coverage, ~90%+ for most otopair services — not the 16%/24% I reported earlier.** The genuinely-lower ones are honest: **timing_belt 15%** (most engines are chain → N/A), **standalone rotor 27%** (usually billed as the composite pad+rotor `4453439`), and transmission/battery ~71–75%.
+>
+> **911 reconciliation** (recursive parser): covered = oil, filter, spark, transmission, tire rotation, alignment, brake pad, brake fluid, battery; empty = **coolant** (matches "the entire list except coolant"), timing belt (chain), standalone rotor (composite). The earlier "16% / endpoint is repair-only / can't do alignment-tire-rotation-brake-fluid" claims were **all wrong** — caused by the two parser bugs, not the data. §2/§4/§6 below are retained only as a record of the buggy run; trust this block.
 
 ## 1. The complete mapping (all 23)
 

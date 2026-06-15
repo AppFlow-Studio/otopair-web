@@ -18,3 +18,32 @@ describe("toCsvRow / toCsv", () => {
     expect(toCsv(["id", "name"], [[1, "Brakes"], [2, "x,y"]])).toBe('id,name\n1,Brakes\n2,"x,y"\n');
   });
 });
+
+import { extractServices } from "./catalogCrawl.helpers";
+
+// Mirrors the real escaped flight-data shape: a category (followed by "icon"),
+// then a services array (each followed by "emuOperationTaxonomyCategoryId"),
+// including a unicode-escaped (& = &) service name. In a TS string literal,
+// `\\"` is a literal backslash+quote and `\\u0026` is a literal & sequence.
+const FIXTURE =
+  'x\\"id\\":1,\\"name\\":\\"Brakes\\",\\"icon\\":\\"$L31\\"}' +
+  ',\\"services\\":[' +
+  '{\\"id\\":1,\\"name\\":\\"AC Compressor Replacement\\",\\"emuOperationTaxonomyCategoryId\\":7,\\"popularityRank\\":null,\\"scheduled\\":false}' +
+  ',{\\"id\\":30,\\"name\\":\\"Brake Pad Replacement\\",\\"emuOperationTaxonomyCategoryId\\":1}' +
+  ',{\\"id\\":99,\\"name\\":\\"Heating \\u0026 AC Service\\",\\"emuOperationTaxonomyCategoryId\\":3}]';
+
+describe("extractServices", () => {
+  it("extracts services (not categories) and decodes unicode names", () => {
+    expect(extractServices(FIXTURE)).toEqual([
+      { service_id: 1, service_name: "AC Compressor Replacement" },
+      { service_id: 30, service_name: "Brake Pad Replacement" },
+      { service_id: 99, service_name: "Heating & AC Service" },
+    ]);
+  });
+  it("excludes the category object (followed by icon, not emuOperationTaxonomyCategoryId)", () => {
+    expect(extractServices(FIXTURE).some((s) => s.service_name === "Brakes")).toBe(false);
+  });
+  it("returns [] when nothing matches", () => {
+    expect(extractServices("no services here")).toEqual([]);
+  });
+});

@@ -180,7 +180,9 @@ test("crawl RepairPal global ID catalog", async ({ page }, testInfo) => {
     service_spark_128: uniqServices.some((s) => s.service_id === 128),
     service_oil_107: uniqServices.some((s) => s.service_id === 107),
     service_timing_144: uniqServices.some((s) => s.service_id === 144),
-    bmw_2019_330i_77615: /(^|\n)77615,2019,/.test(bvText),
+    // Validates the trim-as-model fix this project exists for: 2019 BMW is modeled
+    // by trim (330i/M340i/…), not "3 Series". Content-based (not a brittle hardcoded id).
+    bmw_2019_trim_as_model: /,2019,30,BMW,\d+,(330i|M340i|530i)/i.test(bvText),
   };
   fs.writeFileSync(
     path.join(OUT_DIR, "repairpal_catalog_manifest.json"),
@@ -215,5 +217,5 @@ test("crawl RepairPal global ID catalog", async ({ page }, testInfo) => {
   expect(anchors.service_spark_128).toBe(true);
   expect(anchors.service_oil_107).toBe(true);
   expect(anchors.service_timing_144).toBe(true);
-  expect(anchors.bmw_2019_330i_77615).toBe(true);
+  expect(anchors.bmw_2019_trim_as_model).toBe(true);
 });

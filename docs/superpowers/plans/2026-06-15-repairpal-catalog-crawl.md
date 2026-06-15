@@ -183,7 +183,10 @@ function decodeJsonString(raw: string): string {
  *  Anchors on the `emuOperationTaxonomyCategoryId` field that follows each service's
  *  name — categories (followed by `icon`) are NOT matched, avoiding the id collision. */
 export function extractServices(html: string): Array<{ service_id: number; service_name: string }> {
-  const re = /\\"id\\":(\d+),\\"name\\":\\"((?:[^"\\]|\\.)*?)\\",\\"emuOperationTaxonomyCategoryId\\"/g;
+  // Name body `(?:[^\\]|\\(?!"))*?` treats \" as a hard terminator (so a category,
+  // lacking the emuOperationTaxonomyCategoryId tail, can't bleed into the next service)
+  // while still allowing \uXXXX escapes. Assumes service names contain no embedded quote.
+  const re = /\\"id\\":(\d+),\\"name\\":\\"((?:[^\\]|\\(?!"))*?)\\",\\"emuOperationTaxonomyCategoryId\\"/g;
   const out: Array<{ service_id: number; service_name: string }> = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) {

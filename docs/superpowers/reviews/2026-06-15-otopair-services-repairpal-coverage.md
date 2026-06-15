@@ -8,6 +8,18 @@ Every otopair service was matched against the crawled 311-service RepairPal cata
 
 ---
 
+> ## ⚠ CORRECTION (parser bug — coverage was UNDERCOUNTED)
+> The coverage numbers below were produced by a scan that only parsed the
+> `estimates.submodel` and `estimates.engine_base` dimensions. RepairPal also returns
+> variants under a **top-level `estimates.position_count`** (Front/Rear) — which my scan
+> ignored, so any service estimated that way was wrongly counted as "empty." This hit
+> **brake pad / rotor hardest** (they're position-split). Corrected with the full parser:
+> - **Fleet coverage: 24%** (44/180), not 16%. **brake_pad = 14/15**, not 1/15.
+> - Blind scrape per vehicle: **Civic 79 / 911 65 / Camry 68** of 311 (not 64/50/49).
+> - Brake pad **IS** covered on the 911 (Front 60 min, Rear 60, both 120) — earlier "not covered" was the bug.
+> - Genuinely empty across the fleet (no minutes under *any* dimension): **timing belt, tire rotation, wheel alignment, brake fluid** (0/15). Coolant is empty on the 911 specifically (matches it being absent from the 911's service list).
+> - The §4 endpoint-vs-OLP comparison likewise undercounted position-split services (it had only 1 brake_pad row; there should be ~14). Treat §2/§4/§6 numbers as the *floor*; the corrected fleet coverage is 24%.
+
 ## 1. The complete mapping (all 23)
 
 

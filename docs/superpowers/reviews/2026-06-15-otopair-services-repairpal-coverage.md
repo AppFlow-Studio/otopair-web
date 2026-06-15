@@ -19,6 +19,19 @@ Every otopair service was matched against the crawled 311-service RepairPal cata
 > - Brake pad **IS** covered on the 911 (Front 60 min, Rear 60, both 120) — earlier "not covered" was the bug.
 > - Genuinely empty across the fleet (no minutes under *any* dimension): **timing belt, tire rotation, wheel alignment, brake fluid** (0/15). Coolant is empty on the 911 specifically (matches it being absent from the 911's service list).
 > - The §4 endpoint-vs-OLP comparison likewise undercounted position-split services (it had only 1 brake_pad row; there should be ~14). Treat §2/§4/§6 numbers as the *floor*; the corrected fleet coverage is 24%.
+>
+> **Definitive coverage — 308 vehicles sampled across all makes/years (fixed parser):**
+>
+> | Service | Covered | Service | Covered |
+> |---|--:|---|--:|
+> | **brake_pad_replacement** | **254/308 (82%)** | rotor_replacement | 43/308 (14%) |
+> | spark_plugs | 60/308 (19%) | oil_change | 41/308 (13%) |
+> | coolant_flush | 46/308 (15%) | filter_replacement | 35/308 (11%) |
+> | wheel_alignment | 26/308 (8%) | transmission (507) | 24/308 (8%) |
+> | battery_replacement | 13/308 (4%) | brake_fluid_flush | 5/308 (2%) |
+> | timing_belt | 3/308 (1%) | **tire_rotation** | **0/308 (0%)** |
+>
+> 278/308 vehicles (90%) have ≥1 covered service. **Brake pad is near-universal (82%)** — the rest are vehicle-dependent (mainstream cars cover better than the long tail). Only **tire_rotation is truly never covered (0%)**; wheel alignment (8%), brake fluid (2%), and timing belt (1%) are *rare but real* — my earlier "genuinely empty 0/15" was a small-fleet artifact.
 
 ## 1. The complete mapping (all 23)
 

@@ -143,3 +143,76 @@ export function rateConsistency(
     high_cv: cv(variants.map((v) => v.implied_rate_high)),
   };
 }
+
+function coerceMoneyBand(t: any): MoneyBand {
+  const n = (x: any) => (typeof x === "number" ? x : 0);
+  return {
+    low: n(t?.low), high: n(t?.high),
+    independent: { low: n(t?.independent?.low), high: n(t?.independent?.high) },
+    dealer: { low: n(t?.dealer?.low), high: n(t?.dealer?.high) },
+  };
+}
+
+/** Build one variant from a payload `estimate` object. null if labor.minutes is non-numeric. */
+function variantFromEstimate(key: string, position: string | null, est: any): RepairpalVariant | null {
+  const labor = est?.labor;
+  if (!labor || typeof labor.minutes !== "number") return null;
+  const minutes = labor.minutes;
+  const low = typeof labor.low === "number" ? labor.low : 0;
+  const high = typeof labor.high === "number" ? labor.high : 0;
+  return {
+    key, position,
+    labor: { low, high, minutes, notes: Array.isArray(labor.notes) ? labor.notes : [] },
+    hours: minutes / 60,
+    implied_rate_low: impliedRate(low, minutes),
+    implied_rate_high: impliedRate(high, minutes),
+    total: coerceMoneyBand(est.total),
+    parts: Array.isArray(est.parts)
+      ? est.parts.map((p: any) => ({
+          part: String(p?.part ?? ""),
+          position: String(p?.position ?? ""),
+          total_price: { low: Number(p?.total_price?.low ?? 0), high: Number(p?.total_price?.high ?? 0) },
+          quantity: Number(p?.quantity ?? 0),
+        }))
+      : [],
+    footnotes: Array.isArray(est.footnotes) ? est.footnotes : [],
+  };
+}
+
+/** Locate the variant map (submodel | engine_base) and extract every variant,
+ *  descending into position_count splits. Variants lacking numeric minutes are dropped. */
+export function extractVariants(estimateJson: any): {
+  dimension: "submodel" | "engine_base" | null;
+  variants: RepairpalVariant[];
+} {
+  const e = estimateJson?.estimates ?? {};
+  const dimension: "submodel" | "engine_base" | null = e.submodel
+    ? "submodel"
+    : e.engine_base
+      ? "engine_base"
+      : null;
+  if (!dimension) return { dimension: null, variants: [] };
+  const map = e[dimension] ?? {};
+  const variants: RepairpalVariant[] = [];
+  for (const [key, node] of Object.entries<any>(map)) {
+    if (node?.estimate) {
+      const variant = variantFromEstimate(key, null, node.estimate);
+      if (variant) variants.push(variant);
+    } else if (node?.position_count) {
+      for (const [pos, p] of Object.entries<any>(node.position_count)) {
+        const variant = variantFromEstimate(key, pos, p?.estimate);
+        if (variant) variants.push(variant);
+      }
+    }
+  }
+  return { dimension, variants };
+}
+
+/** min/max/distinct of variant minutes. null if no variants. */
+export function minutesSpread(
+  variants: Array<{ labor: { minutes: number } }>,
+): { min: number; max: number; distinct: number } | null {
+  if (variants.length === 0) return null;
+  const mins = variants.map((v) => v.labor.minutes);
+  return { min: Math.min(...mins), max: Math.max(...mins), distinct: new Set(mins).size };
+}

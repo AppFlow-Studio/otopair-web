@@ -89,3 +89,31 @@ export type RepairpalVariant = {
 export function normalizeName(s: string): string {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }
+
+/** Find a make by normalized-name equality → its numeric id, or null. */
+export function matchMake(makes: any[], make: string): number | null {
+  const want = normalizeName(make);
+  for (const m of makes) {
+    if (normalizeName(String(m?.name ?? "")) === want) return Number(m.id);
+  }
+  return null;
+}
+
+/** Find a base-vehicle by normalized modelName equality → its id record, or null. */
+export function matchBaseVehicle(
+  list: any[],
+  model: string,
+): { base_vehicle_id: number; slug: string; model_name: string; model_id: number } | null {
+  const want = normalizeName(model);
+  for (const bv of list) {
+    if (normalizeName(String(bv?.modelName ?? "")) === want) {
+      return {
+        base_vehicle_id: Number(bv.id),
+        slug: String(bv.slug ?? ""),
+        model_name: String(bv.modelName ?? ""),
+        model_id: Number(bv.modelId ?? 0),
+      };
+    }
+  }
+  return null;
+}

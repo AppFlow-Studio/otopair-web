@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-15 · **Branch:** `waleed-fix` · **Deployment:** `waleed` (dev)
 **Source of truth for the service list:** `Otopair_Service_Parts_Reference (1).pdf` (the 23 canonical services).
-**Extends:** [`2026-06-15-repairpal-endpoint-vs-olp-vs-public.md`](./2026-06-15-repairpal-endpoint-vs-olp-vs-public.md) (the 3-source analysis, which covered only 7 services). This doc maps **all 23** to RepairPal and measures endpoint coverage across the fleet.
+**Extends:** `[2026-06-15-repairpal-endpoint-vs-olp-vs-public.md](./2026-06-15-repairpal-endpoint-vs-olp-vs-public.md)` (the 3-source analysis, which covered only 7 services). This doc maps **all 23** to RepairPal and measures endpoint coverage across the fleet.
 
 Every otopair service was matched against the crawled 311-service RepairPal catalog (`repairpal_services.csv`). The catalog is richer than the spike's per-vehicle view — notably it carries a **standalone `31 Brake Rotor Replacement`**, `33 Brake Bleed` (= brake fluid flush), `52 Coolant Change`, `158`/`507` for the two transmission variants, `569 Tire Rotation`, and `261 Battery Test`.
 
@@ -10,31 +10,33 @@ Every otopair service was matched against the crawled 311-service RepairPal cata
 
 ## 1. The complete mapping (all 23)
 
-| # | Otopair service | RepairPal serviceId(s) | RepairPal name | Status |
-|--:|---|--:|---|---|
-| 1 | Diagnostic Scan | — | (nearest: 947 Electrical System Diagnosis) | **no clean RP equiv** (labor-only) |
-| 2 | Pre-Purchase Inspection | 5518 | Pre-Purchase Car Inspection | mapped (excluded from MVP) |
-| 3 | Check Engine Light Diagnosis | 5520 | Check Engine Light Diagnosis & Testing | mapped (labor-only) |
-| 4 | State Inspection (NY) | — | — | **no RP equiv** (regulatory) |
-| 5 | Emissions Test (NY) | — | — | **no RP equiv** (regulatory) |
-| 6 | Oil Change | **107** | Oil Change | ✅ |
-| 7 | Filter Replacement (air + cabin) | **14** + **35** | Air Filter Replacement **+** Cabin Air Filter Replacement | ⚠ scope: otopair bundles 2 RP services |
-| 8 | Spark Plugs | **128** | Spark Plug Replacement | ✅ |
-| 9 | Timing Belt | 144 | Timing Belt Replacement | mapped (endpoint empty for our fleet — all chain) |
-| 10 | Coolant Flush | **52** | Coolant Change | ✅ |
-| 11 | Transmission Service | **158** / 507 | Transmission Fluid Change (drain&fill) / Transmission Filter and Fluid Change (full-pan) | ⚠ scope: 2 variants |
-| 12 | Tire Rotation | 569 | Tire Rotation | mapped (endpoint returns none) |
-| 13 | Tire Balance | 971 | Tire & Wheel Assembly Rotate & Balance | ⚠ combo (no standalone balance) |
-| 14 | Wheel Alignment | 169 | Wheel Alignment | mapped (endpoint returns none) |
-| 15 | Tire Replacement | — | — | **no RP equiv** (separate tire flow) |
-| 16 | Brake Pad Replacement | **30** | Brake Pad Replacement | ✅ |
-| 17 | Rotor Replacement | **31** (+ 4453439) | Brake Rotor Replacement (standalone) [+ composite pad+rotor] | ✅ **corrected** — standalone exists |
-| 18 | Brake Fluid Flush | 33 | Brake Bleed | mapped (endpoint returns none) |
-| 19 | Battery Test | 261 | Battery Test | mapped (labor-only) |
-| 20 | Battery Replacement | **590** | Battery Replacement | ✅ |
-| 21 | Power Steering Flush | — | — | **no RP equiv** |
-| 22 | Differential Service | — | — | **no RP equiv** |
-| 23 | Fuel System / Induction Service | — | (only components, e.g. 142 Throttle Body) | **no RP equiv** |
+
+| #   | Otopair service                  | RepairPal serviceId(s) | RepairPal name                                                                           | Status                                            |
+| --- | -------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| 1   | Diagnostic Scan                  | —                      | (nearest: 947 Electrical System Diagnosis)                                               | **no clean RP equiv** (labor-only)                |
+| 2   | Pre-Purchase Inspection          | 5518                   | Pre-Purchase Car Inspection                                                              | mapped (excluded from MVP)                        |
+| 3   | Check Engine Light Diagnosis     | 5520                   | Check Engine Light Diagnosis & Testing                                                   | mapped (labor-only)                               |
+| 4   | State Inspection (NY)            | —                      | —                                                                                        | **no RP equiv** (regulatory)                      |
+| 5   | Emissions Test (NY)              | —                      | —                                                                                        | **no RP equiv** (regulatory)                      |
+| 6   | Oil Change                       | **107**                | Oil Change                                                                               | ✅                                                 |
+| 7   | Filter Replacement (air + cabin) | **14** + **35**        | Air Filter Replacement **+** Cabin Air Filter Replacement                                | ⚠ scope: otopair bundles 2 RP services            |
+| 8   | Spark Plugs                      | **128**                | Spark Plug Replacement                                                                   | ✅                                                 |
+| 9   | Timing Belt                      | 144                    | Timing Belt Replacement                                                                  | mapped (endpoint empty for our fleet — all chain) |
+| 10  | Coolant Flush                    | **52**                 | Coolant Change                                                                           | ✅                                                 |
+| 11  | Transmission Service             | **158** / 507          | Transmission Fluid Change (drain&fill) / Transmission Filter and Fluid Change (full-pan) | ⚠ scope: 2 variants                               |
+| 12  | Tire Rotation                    | 569                    | Tire Rotation                                                                            | mapped (endpoint returns none)                    |
+| 13  | Tire Balance                     | 971                    | Tire & Wheel Assembly Rotate & Balance                                                   | ⚠ combo (no standalone balance)                   |
+| 14  | Wheel Alignment                  | 169                    | Wheel Alignment                                                                          | mapped (endpoint returns none)                    |
+| 15  | Tire Replacement                 | —                      | —                                                                                        | **no RP equiv** (separate tire flow)              |
+| 16  | Brake Pad Replacement            | **30**                 | Brake Pad Replacement                                                                    | ✅                                                 |
+| 17  | Rotor Replacement                | **31** (+ 4453439)     | Brake Rotor Replacement (standalone) [+ composite pad+rotor]                             | ✅ **corrected** — standalone exists               |
+| 18  | Brake Fluid Flush                | 33                     | Brake Bleed                                                                              | mapped (endpoint returns none)                    |
+| 19  | Battery Test                     | 261                    | Battery Test                                                                             | mapped (labor-only)                               |
+| 20  | Battery Replacement              | **590**                | Battery Replacement                                                                      | ✅                                                 |
+| 21  | Power Steering Flush             | —                      | —                                                                                        | **no RP equiv**                                   |
+| 22  | Differential Service             | —                      | —                                                                                        | **no RP equiv**                                   |
+| 23  | Fuel System / Induction Service  | —                      | (only components, e.g. 142 Throttle Body)                                                | **no RP equiv**                                   |
+
 
 **16 of 23** otopair services map to a RepairPal serviceId; **7 have no RepairPal equivalent** (Diagnostic Scan, State Inspection, Emissions Test, Tire Replacement, Power Steering Flush, Differential Service, Fuel/Induction).
 
@@ -44,20 +46,22 @@ Every otopair service was matched against the crawled 311-service RepairPal cata
 
 Mapping to a serviceId ≠ getting data. For the 15 cleanly-resolved fleet configs, per-service endpoint coverage:
 
-| Otopair service | RP serviceId | Endpoint coverage (/15 configs) |
-|---|--:|--:|
-| oil_change | 107 | 6/15 |
-| filter_replacement | 14 | 3/15 |
-| spark_plugs | 128 | 8/15 |
-| timing_belt | 144 | 0/15 — RP estimate returns none |
-| coolant_flush | 52 | 5/15 |
-| transmission_service | 158 | 1/15 |
-| tire_rotation | 569 | 0/15 — RP estimate returns none |
-| wheel_alignment | 169 | 0/15 — RP estimate returns none |
-| brake_pad_replacement | 30 | 1/15 |
-| rotor_replacement | 31 | 2/15 |
-| brake_fluid_flush | 33 | 0/15 — RP estimate returns none |
-| battery_replacement | 590 | 3/15 |
+
+| Otopair service       | RP serviceId | Endpoint coverage (/15 configs) |
+| --------------------- | ------------ | ------------------------------- |
+| oil_change            | 107          | 6/15                            |
+| filter_replacement    | 14           | 3/15                            |
+| spark_plugs           | 128          | 8/15                            |
+| timing_belt           | 144          | 0/15 — RP estimate returns none |
+| coolant_flush         | 52           | 5/15                            |
+| transmission_service  | 158          | 1/15                            |
+| tire_rotation         | 569          | 0/15 — RP estimate returns none |
+| wheel_alignment       | 169          | 0/15 — RP estimate returns none |
+| brake_pad_replacement | 30           | 1/15                            |
+| rotor_replacement     | 31           | 2/15                            |
+| brake_fluid_flush     | 33           | 0/15 — RP estimate returns none |
+| battery_replacement   | 590          | 3/15                            |
+
 
 **Overall: 29 of 180 (config × mapped-service) pairs returned data — ~16%.** Adding the new mappings widened the *kinds* of services covered (coolant, filter, standalone rotor, transmission now produce data) but the endpoint stays sparse, and **5 mapped services return nothing at all** through the estimate endpoint: **timing belt, tire rotation, wheel alignment, brake fluid flush** (and tire balance / battery test / diagnostics). RepairPal lists those as services but does not expose an estimable `minutes` for them.
 
@@ -78,38 +82,40 @@ Extending past the easy 7 surfaced real scope mismatches — these matter before
 
 All fleet rows where the endpoint returned data **and** OLP exists (26 rows; sorted by endpoint÷OLP):
 
-| Vehicle | Service | **Endpoint** | OLP | book | Public \$→hr | ep/OLP | variant |
-|---|---|--:|--:|--:|--:|--:|---|
-| 2018 Porsche 911 Turbo S | spark_plugs | **6.1** | 1 | 1 | 11.19 | 6.10× | 3.8 Liter, 6 Cylinder |
-| 2022 VW Atlas V6 SE w/Technology | coolant_flush | **1.4** | 0.8 | 0.8 | 2.19 | 1.75× | 3.6 Liter, 6 Cylinder |
-| 2022 VW Atlas 2.0T SE | coolant_flush | **1.4** | 0.8 | 0.8 | 2.19 | 1.75× | 3.6 Liter, 6 Cylinder |
-| 2022 VW Jetta S | oil_change | **0.5** | 0.3 | 0.3 | 0.78 | 1.67× | 1.5 Liter, 4 Cylinder |
-| 2020 VW Jetta 1.4T R-Line | oil_change | **0.5** | 0.3 | 0.3 | 0.78 | 1.67× | 1.4 Liter, 4 Cylinder |
-| 2018 Honda Civic LX | oil_change | **0.5** | 0.3 | 0.3 | 0.68 | 1.67× | 1.5 Liter, 4 Cylinder |
-| 2018 Honda Civic LX | battery_replacement | **0.5** | 0.3 | 0.3 | 0.68 | 1.67× | LX |
-| 2020 Honda Civic Sport | oil_change | **0.5** | 0.3 | 0.3 | 0.68 | 1.67× | 1.5 Liter, 4 Cylinder |
-| 2020 Honda Civic Sport | battery_replacement | **0.5** | 0.3 | 0.3 | 0.68 | 1.67× | Sport |
-| 2003 Honda Accord EX | brake_pad_replacement | **1.8** | 1.2 | 1.2 | 2.45 | 1.50× | EX |
-| 2018 Honda Civic LX | filter_replacement | **0.3** | 0.2 | 0.2 | 0.41 | 1.50× | LX |
-| 2020 Honda Civic Sport | filter_replacement | **0.3** | 0.2 | 0.2 | 0.41 | 1.50× | Sport |
-| 2003 Honda Accord EX | spark_plugs | **1** | 0.8 | 0.8 | 1.36 | 1.25× | 3.0 Liter, 6 Cylinder |
-| 2020 VW Jetta 1.4T R-Line | spark_plugs | **1.1** | 0.9 | 0.9 | 1.72 | 1.22× | 1.4 Liter, 4 Cylinder |
-| 2018 Honda Civic LX | spark_plugs | **0.9** | 0.8 | 0.8 | 1.22 | 1.13× | 1.5 Liter, 4 Cylinder |
-| 2020 Honda Civic Sport | spark_plugs | **0.9** | 0.8 | 0.8 | 1.22 | 1.13× | 1.5 Liter, 4 Cylinder |
-| 2022 VW Jetta S | battery_replacement | **0.5** | 0.5 | 0.5 | 0.78 | 1.00× | 1.5 Liter, 4 Cylinder |
-| 2018 Porsche 911 Turbo S | oil_change | **0.4** | 0.4 | 0.4 | 0.73 | 1.00× | 3.8 Liter, 6 Cylinder |
-| 2022 VW Jetta S | rotor_replacement | **1.6** | 1.8 | 1.8 | 2.5 | 0.89× | 1.5 Liter, 4 Cylinder |
-| 2020 VW Jetta 1.4T R-Line | rotor_replacement | **1.6** | 1.8 | 1.8 | 2.5 | 0.89× | 1.4 Liter, 4 Cylinder |
-| 2018 Honda Civic LX | coolant_flush | **0.7** | 0.8 | 0.8 | 0.95 | 0.87× | 1.5 Liter, 4 Cylinder |
-| 2020 Honda Civic Sport | coolant_flush | **0.7** | 0.8 | 0.8 | 0.95 | 0.87× | 1.5 Liter, 4 Cylinder |
-| 2022 VW Atlas V6 SE w/Technology | spark_plugs | **1.7** | 2.5 | 2.5 | 2.66 | 0.68× | 3.6 Liter, 6 Cylinder |
-| 2022 VW Atlas 2.0T SE | spark_plugs | **1.7** | 2.5 | 2.5 | 2.66 | 0.68× | 3.6 Liter, 6 Cylinder |
-| 2018 Porsche 911 Turbo S | filter_replacement † | **0.2** | 0.4 | 0.4 | 0.37 | 0.50× | 4.0 Liter, 6 Cylinder |
-| 2003 Honda Accord EX | transmission_service ‡ | **0.6** | 1.5 | 1.5 | 0.82 | 0.40× | 2.4 Liter, 4 Cylinder |
+
+| Vehicle                          | Service                | **Endpoint** | OLP | book | Public →hr | ep/OLP | variant               |
+| -------------------------------- | ---------------------- | ------------ | --- | ---- | ---------- | ------ | --------------------- |
+| 2018 Porsche 911 Turbo S         | spark_plugs            | **6.1**      | 1   | 1    | 11.19      | 6.10×  | 3.8 Liter, 6 Cylinder |
+| 2022 VW Atlas V6 SE w/Technology | coolant_flush          | **1.4**      | 0.8 | 0.8  | 2.19       | 1.75×  | 3.6 Liter, 6 Cylinder |
+| 2022 VW Atlas 2.0T SE            | coolant_flush          | **1.4**      | 0.8 | 0.8  | 2.19       | 1.75×  | 3.6 Liter, 6 Cylinder |
+| 2022 VW Jetta S                  | oil_change             | **0.5**      | 0.3 | 0.3  | 0.78       | 1.67×  | 1.5 Liter, 4 Cylinder |
+| 2020 VW Jetta 1.4T R-Line        | oil_change             | **0.5**      | 0.3 | 0.3  | 0.78       | 1.67×  | 1.4 Liter, 4 Cylinder |
+| 2018 Honda Civic LX              | oil_change             | **0.5**      | 0.3 | 0.3  | 0.68       | 1.67×  | 1.5 Liter, 4 Cylinder |
+| 2018 Honda Civic LX              | battery_replacement    | **0.5**      | 0.3 | 0.3  | 0.68       | 1.67×  | LX                    |
+| 2020 Honda Civic Sport           | oil_change             | **0.5**      | 0.3 | 0.3  | 0.68       | 1.67×  | 1.5 Liter, 4 Cylinder |
+| 2020 Honda Civic Sport           | battery_replacement    | **0.5**      | 0.3 | 0.3  | 0.68       | 1.67×  | Sport                 |
+| 2003 Honda Accord EX             | brake_pad_replacement  | **1.8**      | 1.2 | 1.2  | 2.45       | 1.50×  | EX                    |
+| 2018 Honda Civic LX              | filter_replacement     | **0.3**      | 0.2 | 0.2  | 0.41       | 1.50×  | LX                    |
+| 2020 Honda Civic Sport           | filter_replacement     | **0.3**      | 0.2 | 0.2  | 0.41       | 1.50×  | Sport                 |
+| 2003 Honda Accord EX             | spark_plugs            | **1**        | 0.8 | 0.8  | 1.36       | 1.25×  | 3.0 Liter, 6 Cylinder |
+| 2020 VW Jetta 1.4T R-Line        | spark_plugs            | **1.1**      | 0.9 | 0.9  | 1.72       | 1.22×  | 1.4 Liter, 4 Cylinder |
+| 2018 Honda Civic LX              | spark_plugs            | **0.9**      | 0.8 | 0.8  | 1.22       | 1.13×  | 1.5 Liter, 4 Cylinder |
+| 2020 Honda Civic Sport           | spark_plugs            | **0.9**      | 0.8 | 0.8  | 1.22       | 1.13×  | 1.5 Liter, 4 Cylinder |
+| 2022 VW Jetta S                  | battery_replacement    | **0.5**      | 0.5 | 0.5  | 0.78       | 1.00×  | 1.5 Liter, 4 Cylinder |
+| 2018 Porsche 911 Turbo S         | oil_change             | **0.4**      | 0.4 | 0.4  | 0.73       | 1.00×  | 3.8 Liter, 6 Cylinder |
+| 2022 VW Jetta S                  | rotor_replacement      | **1.6**      | 1.8 | 1.8  | 2.5        | 0.89×  | 1.5 Liter, 4 Cylinder |
+| 2020 VW Jetta 1.4T R-Line        | rotor_replacement      | **1.6**      | 1.8 | 1.8  | 2.5        | 0.89×  | 1.4 Liter, 4 Cylinder |
+| 2018 Honda Civic LX              | coolant_flush          | **0.7**      | 0.8 | 0.8  | 0.95       | 0.87×  | 1.5 Liter, 4 Cylinder |
+| 2020 Honda Civic Sport           | coolant_flush          | **0.7**      | 0.8 | 0.8  | 0.95       | 0.87×  | 1.5 Liter, 4 Cylinder |
+| 2022 VW Atlas V6 SE w/Technology | spark_plugs            | **1.7**      | 2.5 | 2.5  | 2.66       | 0.68×  | 3.6 Liter, 6 Cylinder |
+| 2022 VW Atlas 2.0T SE            | spark_plugs            | **1.7**      | 2.5 | 2.5  | 2.66       | 0.68×  | 3.6 Liter, 6 Cylinder |
+| 2018 Porsche 911 Turbo S         | filter_replacement †   | **0.2**      | 0.4 | 0.4  | 0.37       | 0.50×  | 4.0 Liter, 6 Cylinder |
+| 2003 Honda Accord EX             | transmission_service ‡ | **0.6**      | 1.5 | 1.5  | 0.82       | 0.40×  | 2.4 Liter, 4 Cylinder |
+
 
 `†` 911 filter matched the 4.0 L variant (3.8 L absent from the *filter* estimate) — a variant-match miss; and RP `14` is air-only vs the otopair air+cabin bundle. `‡` RP `158` is drain&fill vs our full-pan 1.5 h — a scope mismatch, not a labor disagreement.
 
-**The story from the original 7 holds and strengthens:** the 911 spark plugs (6.1 h vs OLP 1 h) remains the headline; oil/filter/coolant run **endpoint > OLP** (the endpoint times the real job, OLP is flatter); the public \$→hr method stays biased high; and the few **< 1× rows are scope mismatches** (filter air-only, transmission drain&fill) rather than the endpoint under-timing.
+**The story from the original 7 holds and strengthens:** the 911 spark plugs (6.1 h vs OLP 1 h) remains the headline; oil/filter/coolant run **endpoint > OLP** (the endpoint times the real job, OLP is flatter); the public →hr method stays biased high; and the few **< 1× rows are scope mismatches** (filter air-only, transmission drain&fill) rather than the endpoint under-timing.
 
 ---
 
@@ -122,7 +128,32 @@ All fleet rows where the endpoint returned data **and** OLP exists (26 rows; sor
 
 ---
 
+## 6. Blind scrape — is the 16% a mapping miss, or is the endpoint just maintenance-poor?
+
+To rule out "we're using the wrong serviceIds," I blind-scraped **all 311 global serviceIds** against three vehicles' estimate endpoints:
+
+| Vehicle | serviceIds returning labor (of 311) |
+|---|--:|
+| 2018 Honda Civic | **64** |
+| 2018 Porsche 911 | **50** |
+| 2020 Toyota Camry | **49** |
+| **distinct across all 3** | **107** |
+
+So the endpoint is **not** sparse overall — it returns labor for ~50–64 services per vehicle. But those are almost entirely **component *repairs***: Alternator/Water Pump/Fuel Pump/Catalytic Converter/Clutch/Starter/Radiator/Head Gasket/Throttle Body/Rack & Pinion/ABS unit/Wheel Replacement/etc. RepairPal's estimator is a **repair** estimator, not a **maintenance** one.
+
+**For otopair's 23 services, no hidden/alternate serviceId exists.** Searching the full 107-service hit-set for any maintenance match returns only repairs and our already-known IDs — there is **no** wheel alignment, **no** timing *belt* (only timing *chain* repairs `151`/`4442`), **no** brake fluid flush, **no** tire rotation, **no** tire balance, **no** battery test under *any* of the 311 IDs. They are genuinely not estimated.
+
+What the scrape *did* confirm/improve for our set:
+- **Working under the endpoint:** oil `107`, spark `128`, coolant `52`, brake_pad `30`, rotor-composite `4453439`, battery `590`, air-filter `14` — and **transmission `507`** (full-pan) returns data where `158` (drain&fill) did not. Prefer `507` for transmission.
+- Everything else in our map (timing `144`, alignment `169`, brake-fluid `33`, tire-rotation `569`, tire-balance `971`, battery-test `261`, cabin-filter `35`, check-engine `5520`) returns nothing for any vehicle.
+
+**Conclusion:** the ~16% otopair coverage is **structural, not a mapping error** — RepairPal estimates *repairs*, and most otopair services are *maintenance*. (If otopair ever sells component repairs, the endpoint suddenly covers 100+ of them.) This is now confirmed three ways: `failed=0` on re-test, 0/151 empties flipped on re-hit, and no alternate serviceId in the full 311-ID blind scrape.
+
+---
+
 ### Provenance / caveats
+
 - `waleed` dev (15 cleanly-resolved configs of 18 with labor; 3 trim-as-model configs left unresolved by the tightened matcher rather than mis-matched).
 - serviceId mapping resolved from the crawled catalog by name; the 7 "no RP equiv" services were confirmed absent by catalog search.
 - Throwaway gather artifacts (`convex/devOnly/fleetLaborDump.ts`, local `_*.mjs/_*.json/_*.md`) — delete after review.
+

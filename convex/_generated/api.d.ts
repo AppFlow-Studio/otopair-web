@@ -42,6 +42,7 @@ import type * as devOnly_laborWebSpread from "../devOnly/laborWebSpread.js";
 import type * as devOnly_olpProbe from "../devOnly/olpProbe.js";
 import type * as devOnly_partsCoverage from "../devOnly/partsCoverage.js";
 import type * as devOnly_purgeRepairpalObs from "../devOnly/purgeRepairpalObs.js";
+import type * as devOnly_repairpalMinutesSpread from "../devOnly/repairpalMinutesSpread.js";
 import type * as devOnly_repriceJsonProbe from "../devOnly/repriceJsonProbe.js";
 import type * as devOnly_validateQuoteEngine from "../devOnly/validateQuoteEngine.js";
 import type * as devOnly_verifyLabor from "../devOnly/verifyLabor.js";
@@ -376,6 +377,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/olpProbe": typeof devOnly_olpProbe;
   "devOnly/partsCoverage": typeof devOnly_partsCoverage;
   "devOnly/purgeRepairpalObs": typeof devOnly_purgeRepairpalObs;
+  "devOnly/repairpalMinutesSpread": typeof devOnly_repairpalMinutesSpread;
   "devOnly/repriceJsonProbe": typeof devOnly_repriceJsonProbe;
   "devOnly/validateQuoteEngine": typeof devOnly_validateQuoteEngine;
   "devOnly/verifyLabor": typeof devOnly_verifyLabor;

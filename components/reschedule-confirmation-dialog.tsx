@@ -33,6 +33,7 @@ export default function RescheduleConfirmationDialog({
   onCancel,
   onConfirm,
   reserveOriginalSlotMessage,
+  skipsCustomerApproval = false,
   zIndexClassName = "z-[60]",
 }: {
   proposal: RescheduleConfirmationProposal | null;
@@ -41,21 +42,28 @@ export default function RescheduleConfirmationDialog({
   onCancel: () => void;
   onConfirm: () => void;
   reserveOriginalSlotMessage: string;
+  /** When true, the booking is moved directly (no customer-approval step) —
+   * used for manual-scheduling-review pushes, which behave like the
+   * automatic delay cascade. The customer just gets a courtesy notice. */
+  skipsCustomerApproval?: boolean;
   zIndexClassName?: string;
 }) {
   let summary: string | null = null;
 
   if (proposal) {
+    const approvalNote = skipsCustomerApproval
+      ? "The customer will be notified of the new time, but won't need to approve it."
+      : "The customer will be asked to approve the new time.";
     if (proposal.timeChanged && proposal.mechanicChanged) {
       summary = `Move from ${proposal.originalMechanicName ?? "Unassigned"} at ${formatTimeLabel(proposal.originalTime)} to ${proposal.newMechanicName ?? "Unassigned"} at ${formatTimeLabel(proposal.newTime)}?`;
     } else if (proposal.dateChanged && proposal.timeChanged) {
-      summary = `Move from ${format(new Date(proposal.originalDate + "T00:00:00"), "EEE MMM d")} at ${formatTimeLabel(proposal.originalTime)} to ${format(new Date(proposal.newDate + "T00:00:00"), "EEE MMM d")} at ${formatTimeLabel(proposal.newTime)}? The customer will be asked to approve the new time.`;
+      summary = `Move from ${format(new Date(proposal.originalDate + "T00:00:00"), "EEE MMM d")} at ${formatTimeLabel(proposal.originalTime)} to ${format(new Date(proposal.newDate + "T00:00:00"), "EEE MMM d")} at ${formatTimeLabel(proposal.newTime)}? ${approvalNote}`;
     } else if (proposal.dateChanged) {
-      summary = `Move from ${format(new Date(proposal.originalDate + "T00:00:00"), "EEE MMM d")} to ${format(new Date(proposal.newDate + "T00:00:00"), "EEE MMM d")} at ${formatTimeLabel(proposal.newTime)}? The customer will be asked to approve the new date.`;
+      summary = `Move from ${format(new Date(proposal.originalDate + "T00:00:00"), "EEE MMM d")} to ${format(new Date(proposal.newDate + "T00:00:00"), "EEE MMM d")} at ${formatTimeLabel(proposal.newTime)}? ${skipsCustomerApproval ? "The customer will be notified of the new date, but won't need to approve it." : "The customer will be asked to approve the new date."}`;
     } else if (proposal.timeChanged) {
-      summary = `Move from ${formatTimeLabel(proposal.originalTime)} to ${formatTimeLabel(proposal.newTime)}? The customer will be asked to approve the new time.`;
+      summary = `Move from ${formatTimeLabel(proposal.originalTime)} to ${formatTimeLabel(proposal.newTime)}? ${approvalNote}`;
     } else {
-      summary = `Reassign from ${proposal.originalMechanicName ?? "Unassigned"} to ${proposal.newMechanicName ?? "Unassigned"}? The customer will be asked to approve the change.`;
+      summary = `Reassign from ${proposal.originalMechanicName ?? "Unassigned"} to ${proposal.newMechanicName ?? "Unassigned"}? ${skipsCustomerApproval ? "The customer will be notified of the change, but won't need to approve it." : "The customer will be asked to approve the change."}`;
     }
   }
 
@@ -82,7 +90,9 @@ export default function RescheduleConfirmationDialog({
     >
       <div className="text-sm text-muted-foreground space-y-1">
         {summary && <p>{summary}</p>}
-        <p className="mt-2 text-xs text-muted-foreground">{reserveOriginalSlotMessage}</p>
+        {!skipsCustomerApproval && (
+          <p className="mt-2 text-xs text-muted-foreground">{reserveOriginalSlotMessage}</p>
+        )}
       </div>
       {error && <p className="mt-3 text-xs text-destructive">{error}</p>}
     </ConfirmationDialog>

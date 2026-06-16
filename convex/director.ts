@@ -438,6 +438,37 @@ export const recentBookingsList = query({
       const services = await Promise.all(
         b.service_ids.map(async (sid) => { const s = await ctx.db.get(sid); return s?.name ?? "—"; })
       );
+      // Pricing v2 fallback summary — mirrors the per-service classification
+      // BookingDetailModal already does, so list + modal stay in sync without
+      // a second round-trip when the director scans the table. Fixed-price
+      // modes (fixed_price_override, ccb_absolute_pricing) are set prices,
+      // not estimates — explicitly excluded from the fallback counters.
+      const flagRows = b.service_quote_flags ?? [];
+      let catches = 0;
+      let corrected = 0;
+      let refused = 0;
+      let laborFloored = 0;
+      let laborAbove = 0;
+      for (const row of flagRows) {
+        const f = row.flags ?? [];
+        if (f.includes("fixed_price_override") || f.includes("ccb_absolute_pricing")) continue;
+        if (f.includes("fallback_catch")) catches++;
+        if (f.includes("engine_corrected_parts")) corrected++;
+        if (f.includes("fallback_only")) refused++;
+        if (f.includes("labor_below_tier_floor")) laborFloored++;
+        if (f.includes("labor_above_tier_expected")) laborAbove++;
+      }
+      // Booking-level "labor cost above engine" — server soft-flagged because
+      // the customer's labor cost landed >8% above the engine's expected
+      // cost (paying more is consensual, but worth surfacing).
+      const aboveEngine = (b.quote_flags ?? []).includes(
+        "labor_cost_above_engine",
+      )
+        ? 1
+        : 0;
+      const aboveEngineDeltaDollars = aboveEngine
+        ? b.labor_cost_delta_above_engine_dollars ?? null
+        : null;
       return {
         id:        b._id,
         user:      user ? `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || user.email || "Unknown" : "Unknown",
@@ -447,6 +478,16 @@ export const recentBookingsList = query({
         time:      b.scheduled_time ?? "—",
         status:    b.status,
         total:     b.total_cost ?? 0,
+        fallback: {
+          catches,
+          corrected,
+          refused,
+          aboveEngine,
+          aboveEngineDeltaDollars,
+          laborFloored,
+          laborAbove,
+          total: flagRows.length,
+        },
       };
     }));
   },
@@ -464,7 +505,16 @@ export const bookingDetail = query({
     ]);
 
     // Service rows — keep id + description so we can show the form filled
-    // per-service (selected option, tire spec, etc.).
+    // per-service (selected option, tire spec, etc.). Joins Pricing v2
+    // per-service flags so the director modal can render a "Fallback catch"
+    // pill next to lines the engine flagged.
+    const serviceFlagsByServiceId = new Map<
+      string,
+      NonNullable<typeof booking.service_quote_flags>[number]
+    >();
+    for (const row of booking.service_quote_flags ?? []) {
+      serviceFlagsByServiceId.set(String(row.service_id), row);
+    }
     const services = await Promise.all(
       booking.service_ids.map(async (sid) => {
         const s = await ctx.db.get(sid);
@@ -473,12 +523,24 @@ export const bookingDetail = query({
           const cat = await ctx.db.get(s.service_category_id);
           category = cat?.name;
         }
+        const flagRow = serviceFlagsByServiceId.get(String(sid));
         return {
           id:          sid,
           name:        s?.name ?? "—",
           slug:        s?.slug,
           description: s?.description,
           category,
+          quoteFlags:  flagRow?.flags ?? [],
+          engineBand: flagRow
+            ? {
+                partsLow:    flagRow.engine_parts_low ?? null,
+                partsHigh:   flagRow.engine_parts_high ?? null,
+                laborHours:  flagRow.engine_labor_hours ?? null,
+                laborSource: flagRow.engine_labor_source ?? null,
+                partsSource: flagRow.parts_source ?? null,
+              }
+            : null,
+          bookingLinePartsCost: flagRow?.booking_line_parts_cost ?? null,
         };
       })
     );
@@ -593,6 +655,11 @@ export const bookingDetail = query({
       recommendedScheduledTime: booking.recommended_scheduled_time,
       parentJobId:         booking.parent_job_id,
       refundReason:        booking.refund_reason,
+      quoteFlags:          booking.quote_flags ?? [],
+      quoteFallbackLow:    booking.quote_fallback_low ?? null,
+      quoteFallbackHigh:   booking.quote_fallback_high ?? null,
+      laborCostDeltaAboveEngineDollars:
+        booking.labor_cost_delta_above_engine_dollars ?? null,
 
       statusHistory: statusHistory.map((h) => ({
         status:    h.new_status,

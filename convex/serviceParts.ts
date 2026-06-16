@@ -32,6 +32,13 @@ import {
   roleApplies,
   type VehicleSpecBundle,
 } from "./lib/partRoleQuantity";
+import {
+  axleForBrakeService,
+  axlePositionByServiceId,
+  fitmentMatchesPosition,
+  isBrakeSlug,
+  type BrakeScope,
+} from "./lib/brakeScope";
 
 /** Confidence floor for the selector's confidence gate. Below this a fitment
  *  can still win, but only after the gate has eliminated everyone and the
@@ -39,6 +46,65 @@ import {
 export const PART_CONFIDENCE_GATE_THRESHOLD = 0.7;
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+/**
+ * Per-service parts rule. Replaces the legacy `BILLABLE_SUBCATEGORIES_BY_SERVICE`
+ * constant — director-editable via the Service Parts admin tab, seeded from the
+ * May 2026 PDF in seeds/seedServicePartsRules.ts.
+ *
+ *   - `allowed` is the union of core + as-needed subcategories. Null means
+ *     "no rule row for this service" → preserve legacy "no filter" behavior.
+ *   - `pinnedPartIdsBySubcategory` maps subcategory → pinned oem_parts._id.
+ *     When the resolver finds a candidate whose subcategory has a pinned
+ *     entry, it short-circuits the 7-layer selector and picks the pin.
+ *   - `qtyOverride` (when set) wins over serviceUnits.resolveServiceUnitCount.
+ */
+type ServicePartsRuleSnapshot = {
+  allowed: Set<string> | null;
+  pinnedPartIdsBySubcategory: Map<string, Id<"oem_parts">>;
+  qtyOverride: number | null;
+};
+
+async function loadServicePartsRule(
+  ctx: { db: any },
+  serviceId: Id<"services">,
+): Promise<ServicePartsRuleSnapshot> {
+  const rule = await ctx.db
+    .query("service_parts_rules")
+    .withIndex("by_service", (q: any) => q.eq("service_id", serviceId))
+    .first();
+  if (!rule) {
+    return {
+      allowed: null,
+      pinnedPartIdsBySubcategory: new Map(),
+      qtyOverride: null,
+    };
+  }
+  const allowed = new Set<string>([
+    ...rule.core_subcategories,
+    ...rule.as_needed_subcategories,
+  ]);
+  const pinnedPartIdsBySubcategory = new Map<string, Id<"oem_parts">>();
+  for (const p of rule.pinned_parts as Array<{
+    subcategory: string;
+    part_id: Id<"oem_parts">;
+  }>) {
+    pinnedPartIdsBySubcategory.set(p.subcategory, p.part_id);
+  }
+  return {
+    allowed,
+    pinnedPartIdsBySubcategory,
+    qtyOverride: rule.qty_override ?? null,
+  };
+}
+
+function isBillableSubcategoryViaRule(
+  rule: ServicePartsRuleSnapshot,
+  subcategory: string | undefined | null,
+): boolean {
+  if (rule.allowed == null) return true; // no rule row → legacy behavior
+  return subcategory != null && rule.allowed.has(subcategory);
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -51,7 +117,10 @@ export interface PackageQuestion {
 }
 
 export interface ResolvedFitment {
-  fitment_id: Id<"part_fitments">;
+  /** Optional: snapshot-sourced rows (pre/post-job, quote-anchored) have no
+   *  originating fitment row — only the resolver path sets this. No consumer
+   *  reads it; it's a provenance breadcrumb. */
+  fitment_id?: Id<"part_fitments">;
   part_id: Id<"oem_parts">;
   oem_part_number: string;
   name: string;
@@ -145,11 +214,23 @@ export const getPartsForService = query({
       (f) => f.package_code == null || confirmed.has(f.package_code),
     );
 
-    // 3. Hydrate the part info for each fitment.
+    // Load the director-editable rule once for this service so the per-fitment
+    // loop below can apply the subcategory allowlist without re-querying.
+    const serviceForRule = await ctx.db
+      .query("services")
+      .withIndex("by_slug", (q) => q.eq("slug", args.serviceSlug))
+      .first();
+    const rule = serviceForRule
+      ? await loadServicePartsRule(ctx, serviceForRule._id)
+      : { allowed: null, pinnedPartIdsBySubcategory: new Map(), qtyOverride: null };
+
+    // 3. Hydrate the part info for each fitment. Drop subcategories that
+    //    aren't billable for this service per service_parts_rules.
     const resolved: ResolvedFitment[] = [];
     for (const f of applicable) {
       const part = await ctx.db.get(f.part_id);
       if (!part) continue;
+      if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
       resolved.push({
         fitment_id: f._id,
         part_id: f.part_id,
@@ -183,6 +264,71 @@ export const getOemPartsForBooking = query({
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return [];
 
+    // ── Quote-anchored source of truth ────────────────────────────────────
+    // Pre-job (and post-job) must list exactly what the system QUOTED — the
+    // frozen `priced_parts_snapshot` (one row per locked role winner) — not
+    // every catalog candidate the resolver considered. Without this the dialog
+    // listed all six oil filters on file for the chassis instead of the one
+    // oil filter on the quote. The snapshot is the same data the customer saw
+    // on Review & Pay and the mechanic sees in the job scope, so all three
+    // surfaces agree. Grouped by service, in the booking's service order.
+    const snapshot = ((booking as any).priced_parts_snapshot ?? []) as Array<{
+      service_id: Id<"services">;
+      part_id?: Id<"oem_parts">;
+      oem_number: string;
+      part_name: string;
+      quantity: number;
+      role_key?: string;
+    }>;
+    if (snapshot.length > 0) {
+      const bySvc = new Map<string, OemPartsForService>();
+      for (const row of snapshot) {
+        const key = String(row.service_id);
+        let entry = bySvc.get(key);
+        if (!entry) {
+          const service = await ctx.db.get(row.service_id);
+          if (!service?.slug) continue;
+          entry = {
+            serviceId: row.service_id,
+            serviceName: service.name,
+            serviceSlug: service.slug,
+            parts: [],
+          };
+          bySvc.set(key, entry);
+        }
+        // Position is implicit in the snapshot (it already froze the booked
+        // axle); surface it from the role_key for the brakes display only.
+        const rk = row.role_key ?? "";
+        const position = /^front_/.test(rk)
+          ? "front"
+          : /^rear_/.test(rk)
+            ? "rear"
+            : undefined;
+        entry.parts.push({
+          part_id: row.part_id as Id<"oem_parts">,
+          oem_part_number: row.oem_number,
+          name: row.part_name,
+          position,
+          quantity_needed: row.quantity,
+        });
+      }
+      const out: OemPartsForService[] = [];
+      for (const sid of booking.service_ids ?? []) {
+        const entry = bySvc.get(String(sid));
+        if (entry) out.push(entry);
+      }
+      // Defensive: emit any snapshot service not on service_ids (shouldn't
+      // happen, but never silently drop a quoted line).
+      for (const entry of bySvc.values()) {
+        if (!out.includes(entry)) out.push(entry);
+      }
+      return out;
+    }
+
+    // ── Legacy fallback (no priced snapshot) ──────────────────────────────
+    // Older bookings created before quote snapshotting carry no quoted parts;
+    // there's nothing to anchor to, so fall back to the informational catalog
+    // resolve (every billable fitment for the booked axle).
     const vehicle = await ctx.db
       .query("vehicles")
       .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
@@ -192,9 +338,23 @@ export const getOemPartsForBooking = query({
     const configId = vehicle.vehicle_config_id;
     const out: OemPartsForService[] = [];
 
+    // Customer's axle choice per service (brake pads front/rear/both). Drives
+    // the position filter below so the card shows only what was booked — a
+    // "Rear pads only" job must not list front pads.
+    const axleByServiceId = axlePositionByServiceId(booking);
+
     for (const serviceId of booking.service_ids ?? []) {
       const service = await ctx.db.get(serviceId);
       if (!service?.slug) continue;
+
+      const position = isBrakeSlug(service.slug)
+        ? axleForBrakeService(
+            booking,
+            String(serviceId),
+            service.slug,
+            axleByServiceId,
+          )
+        : undefined;
 
       const fitments = await ctx.db
         .query("part_fitments")
@@ -207,10 +367,18 @@ export const getOemPartsForBooking = query({
       // gate on owner package answers here, just show the universal base parts.
       const base = fitments.filter((f) => f.package_code == null);
 
+      const rule = await loadServicePartsRule(ctx, serviceId);
+
       const resolved: ResolvedFitment[] = [];
       for (const f of base) {
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
+        if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
+        // Scope to the booked axle. Position-neutral parts (hardware kits,
+        // grease) survive a single-axle filter; "both"/unspecified keeps all.
+        if (!fitmentMatchesPosition(f.position, part.subcategory, position)) {
+          continue;
+        }
         resolved.push({
           fitment_id: f._id,
           part_id: f.part_id,
@@ -234,6 +402,50 @@ export const getOemPartsForBooking = query({
     }
 
     return out;
+  },
+});
+
+/**
+ * The brake axle(s) a booking actually covers — drives the pre-job brakes
+ * section so a "Rear pads only" job hides the front-pad field (and vice
+ * versa). Union across every brake/rotor service on the booking. When a brake
+ * service carries no explicit axle option (legacy booking), we fall back to
+ * "both" so nothing is hidden by mistake. Returns hasBrakeWork:false for
+ * non-brake bookings — the dialog then keeps both pad fields visible as
+ * optional passport capture.
+ */
+export const getBrakeScopeForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args): Promise<BrakeScope> => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return { hasBrakeWork: false, front: false, rear: false };
+
+    const axleByServiceId = axlePositionByServiceId(booking);
+    let hasBrakeWork = false;
+    let sawAxleSignal = false;
+    let front = false;
+    let rear = false;
+
+    for (const serviceId of booking.service_ids ?? []) {
+      const service = await ctx.db.get(serviceId);
+      if (!service?.slug || !isBrakeSlug(service.slug)) continue;
+      hasBrakeWork = true;
+      const axle = axleForBrakeService(
+        booking,
+        String(serviceId),
+        service.slug,
+        axleByServiceId,
+      );
+      if (!axle) continue;
+      sawAxleSignal = true;
+      if (axle === "front" || axle === "both") front = true;
+      if (axle === "rear" || axle === "both") rear = true;
+    }
+
+    if (!hasBrakeWork) return { hasBrakeWork: false, front: false, rear: false };
+    // Default to both axles when the booking recorded no axle option.
+    if (!sawAxleSignal) return { hasBrakeWork: true, front: true, rear: true };
+    return { hasBrakeWork: true, front, rear };
   },
 });
 
@@ -270,6 +482,12 @@ export type PricedFitment = {
   service_role?: ServiceRole;
   role_key?: string;
   quantity_basis?: string;
+  /** True when this line goes into the locked quote (core, or kit with
+   *  includeByDefault) — mirrors the snapshot's `includeInLockedQuote`. The
+   *  customer's Review & Pay renders EVERY locked line (not just the primary
+   *  winner) so its parts match the mechanic's frozen `priced_parts_snapshot`.
+   *  Undefined on loser candidates (no role winner). */
+  locked?: boolean;
   /** True when this is a synthesized universal consumable line. */
   virtual?: boolean;
 };
@@ -545,12 +763,26 @@ export async function resolveWinningPartForService(
       f.package_code == null || args.confirmedPackages.has(f.package_code),
   );
 
+  // Director-editable rule: subcategory allowlist + pinned parts. Loaded
+  // once per resolver call; null `allowed` preserves the legacy "no filter"
+  // behavior for any service without a rule row.
+  const rule = await loadServicePartsRule(ctx, args.serviceId);
+
   // Hydrate parts first — we need `oem_parts.subcategory` both for role
-  // grouping and for position matching when `part_fitments.position` is null.
+  // grouping (Service Parts Reference) and for position matching as a
+  // fallback when `part_fitments.position` is null. The v3 pipeline writes
+  // subcategory reliably (e.g. "front_brake_pad" / "rear_brake_pad") but
+  // `position` is only set on the OEM seed map and can be missing on older
+  // fitment rows.
+  //
+  // Billing-subcategory gate: drop fitments whose subcategory isn't on the
+  // service's billable allowlist per service_parts_rules. Pipeline still
+  // stores these for the vehicle profile; we just don't price them.
   const hydratedAll: WinnerCandidate[] = [];
   for (const f of packageGated) {
     const part = await ctx.db.get(f.part_id);
     if (!part) continue;
+    if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
     const priceSummary = await summarizePartPrices(ctx, f.part_id);
     hydratedAll.push({ fitment: f, part, priceSummary });
   }
@@ -771,6 +1003,32 @@ export async function resolveWinningPartForService(
       continue;
     }
 
+    // Director-pinned part wins its group outright — beats VIN-sticky and the
+    // scorer. Highest-priority signal: a director said "this exact part is
+    // the canonical OEM for this service-role".
+    if (rule.pinnedPartIdsBySubcategory.size > 0) {
+      const pinned = g.candidates.find((c) => {
+        const sub = c.part.subcategory ?? "";
+        const pinnedPartId = rule.pinnedPartIdsBySubcategory.get(sub);
+        return pinnedPartId != null && pinnedPartId === c.part._id;
+      });
+      if (pinned) {
+        const q = resolveRoleQuantity(g.role, bundle, pinned.fitment.quantity_needed);
+        roleWinners.push({
+          roleKey: g.roleKey,
+          serviceRole: effRole,
+          candidate: pinned,
+          losers: g.candidates.filter((c) => c.part._id !== pinned.part._id),
+          source: "scored",
+          lowConfidence: false,
+          quantity: q.quantity,
+          quantityBasis: q.basis,
+          includeInLockedQuote,
+        });
+        continue;
+      }
+    }
+
     // VIN-sticky wins its group outright, skipping the scorer.
     if (stickyDefault) {
       const sticky = g.candidates.find((c) => c.part._id === stickyDefault.part_id);
@@ -889,6 +1147,7 @@ function toPricedFitment(c: WinnerCandidate, rw?: RoleWinner): PricedFitment {
     service_role: rw?.serviceRole,
     role_key: rw?.roleKey,
     quantity_basis: rw?.quantityBasis,
+    locked: rw?.includeInLockedQuote,
     virtual: rw?.virtual,
   };
 }

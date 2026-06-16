@@ -3,15 +3,15 @@ import { api, internal } from "../convex/_generated/api";
 import { identityFor, makeT, seedOverrunFixture } from "./helpers";
 
 /**
- * NOTE on subject booking: when a cascade is blocked, the current
- * implementation of `applyDownstreamMovement` attaches the
- * `manual_scheduling_required` alert to the **upstream** booking id
- * (because `plan.proposals` never carries a `blocked_reason` marker, so
- * `subjectBookingId` falls back to `upstreamBooking._id`). The handoff doc
- * describes the alert as attached to the downstream booking; tests here pin
- * the *actual* behavior. The two `test`-marked spec-divergence cases at the
- * bottom document the spec expectation as `test.fails` so they will start
- * passing automatically the day the code matches the spec.
+ * NOTE on subject booking: when a cascade is blocked,
+ * `applyDownstreamMovement` attaches the `manual_scheduling_required` alert
+ * to the **downstream** booking that's actually blocked (via
+ * `plan.blockedBookingId`), so the front-desk banner highlights the booking
+ * that needs manual review — not the upstream job that triggered the
+ * cascade. The alert payload also carries `upstreamBookingId`, and
+ * `resolveManualSchedulingAlertsForBooking` checks that field too, so a
+ * terminal transition on the upstream booking (completed/cancelled/etc.)
+ * still auto-resolves the alert.
  */
 
 async function warpAndProcess(
@@ -100,7 +100,7 @@ async function attachOwnerShopMembership(
 }
 
 describe("MANUAL-* scheduling alerts", () => {
-  test("MANUAL-01: cascade hits close-of-business → alert created on upstream", async () => {
+  test("MANUAL-01: cascade hits close-of-business → alert created on downstream", async () => {
     const t = makeT();
     const fx = await setupBlockedCascade(t);
     await triggerBlockedCascade(t, fx);
@@ -113,16 +113,19 @@ describe("MANUAL-* scheduling alerts", () => {
       shop_id: fx.shopId,
       status: "pending",
     });
-    // Current implementation attaches to upstream; spec wants downstream.
+    // Alert highlights the blocked downstream booking, not the upstream job.
     expect(String((shopAlerts[0] as any).booking_id)).toBe(
-      String(fx.upstreamBookingId),
+      String(fx.downstreamBookingId),
     );
     expect((shopAlerts[0] as any).dedupe_key).toBe(
-      `manual-scheduling:${String(fx.upstreamBookingId)}:job_overrun`,
+      `manual-scheduling:${String(fx.downstreamBookingId)}:job_overrun`,
     );
     expect((shopAlerts[0] as any).payload.source).toBe("job_overrun");
     expect((shopAlerts[0] as any).payload.reason).toMatch(
       /cascade.*blocked|couldn't be auto-rescheduled/i,
+    );
+    expect(String((shopAlerts[0] as any).payload.upstreamBookingId)).toBe(
+      String(fx.upstreamBookingId),
     );
 
     // Downstream B should be untouched.
@@ -162,7 +165,7 @@ describe("MANUAL-* scheduling alerts", () => {
 
     expect(listed.length).toBeGreaterThanOrEqual(1);
     const matching = listed.find(
-      (r: any) => String(r.bookingId) === String(fx.upstreamBookingId),
+      (r: any) => String(r.bookingId) === String(fx.downstreamBookingId),
     );
     expect(matching).toBeDefined();
     expect((matching as any).source).toBe("job_overrun");
@@ -181,7 +184,9 @@ describe("MANUAL-* scheduling alerts", () => {
         bookingId: fx.upstreamBookingId,
       });
 
-    const alerts = await getManualAlertsByBooking(t, fx.upstreamBookingId);
+    // The alert is attached to the blocked downstream booking, but completing
+    // the upstream booking still resolves it via payload.upstreamBookingId.
+    const alerts = await getManualAlertsByBooking(t, fx.downstreamBookingId);
     expect(alerts).toHaveLength(1);
     expect((alerts[0] as any).status).toBe("resolved");
   });
@@ -198,7 +203,7 @@ describe("MANUAL-* scheduling alerts", () => {
         reason: "manual_test_cancel",
       });
 
-    const alerts = await getManualAlertsByBooking(t, fx.upstreamBookingId);
+    const alerts = await getManualAlertsByBooking(t, fx.downstreamBookingId);
     expect((alerts[0] as any).status).toBe("resolved");
   });
 
@@ -218,6 +223,68 @@ describe("MANUAL-* scheduling alerts", () => {
     const after = await t.run((ctx) => ctx.db.get(alert._id));
     expect((after as any)?.status).toBe("resolved");
     expect((after as any)?.processed_at).toBeTypeOf("number");
+  });
+
+  test("MANUAL-06: rescheduleFromManualSchedulingAlert pushes the booking directly, preserves status, notifies customer", async () => {
+    const t = makeT();
+    const fx = await setupBlockedCascade(t);
+    await triggerBlockedCascade(t, fx);
+
+    const before: any = await t.run((ctx) =>
+      ctx.db.get(fx.downstreamBookingId),
+    );
+    expect(before.status).toBe("confirmed");
+    expect(before.scheduled_time).toBe("16:15");
+
+    // Move the blocked booking to the next day, 09:00 — well inside hours.
+    const nextDay = new Date(`${fx.scheduledDate}T00:00:00Z`);
+    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    const newDate = nextDay.toISOString().slice(0, 10);
+
+    await t
+      .withIdentity(identityFor(fx.ownerClerkId))
+      .mutation(api.bookings.rescheduleFromManualSchedulingAlert, {
+        bookingId: fx.downstreamBookingId,
+        newScheduledDate: newDate,
+        newScheduledTime: "09:00",
+      });
+
+    const after: any = await t.run((ctx) =>
+      ctx.db.get(fx.downstreamBookingId),
+    );
+    // Status unchanged — no customer-approval step, unlike proposeReschedule.
+    expect(after.status).toBe("confirmed");
+    expect(after.scheduled_date).toBe(newDate);
+    expect(after.scheduled_time).toBe("09:00");
+    expect(String(after.mechanic_id)).toBe(String(fx.alice));
+
+    // Original slot + cascade provenance recorded, same as an automatic push.
+    expect(after.previous_scheduled_date).toBe(fx.scheduledDate);
+    expect(after.previous_scheduled_time).toBe("16:15");
+    expect(String(after.previous_mechanic_id)).toBe(String(fx.alice));
+    expect(after.schedule_change_mode).toBe("shop_delay_cascade");
+    expect(after.customer_can_restore_original).toBe(false);
+
+    // Customer gets a courtesy notice (not a reschedule-approval request).
+    const outbox = await t.run((ctx) =>
+      ctx.db
+        .query("notification_outbox")
+        .withIndex("by_booking_id", (q: any) =>
+          q.eq("booking_id", fx.downstreamBookingId),
+        )
+        .collect(),
+    );
+    const courtesy = outbox.find(
+      (r: any) => r.category === "schedule_courtesy_update",
+    );
+    expect(courtesy).toBeDefined();
+    expect((courtesy as any).payload.source).toBe("front_desk_manual");
+    expect((courtesy as any).payload.newDate).toBe(newDate);
+    expect((courtesy as any).payload.newTime).toBe("09:00");
+
+    // The manual-scheduling alert is resolved.
+    const alerts = await getManualAlertsByBooking(t, fx.downstreamBookingId);
+    expect(alerts[0].status).toBe("resolved");
   });
 
   test("MANUAL dismiss auth: cross-tenant owner cannot dismiss", async () => {
@@ -342,30 +409,28 @@ describe("MANUAL-* scheduling alerts", () => {
   });
 
   // ───────── Spec divergence: documented but NOT yet implemented ─────────
-  // These tests are expected to FAIL until the production code is changed to
-  // attach manual_scheduling alerts to the downstream booking subject. The
-  // handoff doc claims downstream action paths auto-resolve the alert;
-  // current code keeps the alert on the upstream booking_id.
+  // This test is expected to FAIL until the production code is changed so
+  // that downstream action paths (other than reschedule) auto-resolve the
+  // alert. The handoff doc claims "Vehicle Here" on the downstream booking
+  // resolves the alert, but `markVehicleAtShop`'s `vehicle_at_shop`
+  // transition isn't in the auto-resolve status list.
 
-  test.fails(
-    "SPEC: proposeReschedule on downstream B resolves the alert",
-    async () => {
-      const t = makeT();
-      const fx = await setupBlockedCascade(t);
-      await triggerBlockedCascade(t, fx);
+  test("SPEC: proposeReschedule on downstream B resolves the alert", async () => {
+    const t = makeT();
+    const fx = await setupBlockedCascade(t);
+    await triggerBlockedCascade(t, fx);
 
-      await t
-        .withIdentity(identityFor(fx.ownerClerkId))
-        .mutation(api.bookings.proposeReschedule, {
-          bookingId: fx.downstreamBookingId,
-          newScheduledDate: fx.scheduledDate,
-          newScheduledTime: "10:00",
-        });
+    await t
+      .withIdentity(identityFor(fx.ownerClerkId))
+      .mutation(api.bookings.proposeReschedule, {
+        bookingId: fx.downstreamBookingId,
+        newScheduledDate: fx.scheduledDate,
+        newScheduledTime: "10:00",
+      });
 
-      const alerts = await getManualAlertsForShop(t, fx.shopId);
-      expect(alerts).toHaveLength(0);
-    },
-  );
+    const alerts = await getManualAlertsForShop(t, fx.shopId);
+    expect(alerts).toHaveLength(0);
+  });
 
   test.fails(
     "SPEC: Vehicle Here on downstream B resolves the alert",

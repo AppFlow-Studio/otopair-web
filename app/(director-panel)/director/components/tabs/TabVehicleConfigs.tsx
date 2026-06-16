@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useContext } from 'react'
+import { useState, useEffect, useRef, useContext } from 'react'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
@@ -58,6 +58,76 @@ const enrichmentChip = (status: string, fillRate?: number) => {
   const tone = ENRICHMENT_TONE[status] ?? 'slate'
   const pct = fillRate != null ? ` · ${fmtFillRate(fillRate)}` : ''
   return <Badge tone={tone} dot>{status}{pct}</Badge>
+}
+
+// "3m ago" / "1h ago" / "Just now". Lower-resolution than ageLabel — used for
+// the action-row pills where we want a glanceable freshness signal.
+function relativeTime(ts?: number): string {
+  if (!ts) return ''
+  const diff = Math.max(0, Date.now() - ts)
+  const secs = Math.floor(diff / 1000)
+  if (secs < 30) return 'just now'
+  if (secs < 60) return `${secs}s ago`
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
+// Action-row status pill — derives the visual state from the most recent
+// enrichment_runs row for this config. Clicking jumps to the matching row in
+// the Enrichment runs section. Trigger is not yet distinct between
+// 'full' and 'parts' clicks (single 'new_vehicle' string), so the same pill
+// is shown next to both Re-enrich and Backfill parts buttons.
+type RunStatusPillProps = {
+  run: EnrichmentRunRow | undefined
+  onClick?: () => void
+}
+
+const RunStatusPill = ({ run, onClick }: RunStatusPillProps) => {
+  if (!run) return null
+  const isRunning =
+    run.completedAt == null && run.status !== 'complete' && run.status !== 'failed'
+  const tone: 'green' | 'red' | 'blue' = isRunning
+    ? 'blue'
+    : run.status === 'failed'
+    ? 'red'
+    : 'green'
+  const label = isRunning
+    ? `Running ${relativeTime(run.startedAt ?? run.createdAt)}`
+    : run.status === 'failed'
+    ? `Failed ${relativeTime(run.completedAt ?? run.createdAt)}`
+    : `Done ${relativeTime(run.completedAt ?? run.createdAt)}`
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', gap:6, marginTop:4, cursor: onClick ? 'pointer' : 'default' }}
+      onClick={onClick}
+      title={onClick ? 'Jump to run in Enrichment runs' : undefined}>
+      <Badge tone={tone} dot>{label}</Badge>
+    </span>
+  )
+}
+
+// Reprice doesn't write enrichment_runs — only audit_log. The latest matching
+// audit row's detail string carries the state: "scheduled" vs "complete" vs
+// the error message. The pill renders read-only (no scroll target).
+const RepriceStatusPill = ({ row }: { row: LatestRepriceAudit }) => {
+  if (!row) return null
+  const detail = row.detail ?? ''
+  const failed = /error|failed|exception/i.test(detail)
+  const scheduled = /scheduled/i.test(detail)
+  const tone: 'green' | 'red' | 'blue' = failed ? 'red' : scheduled ? 'blue' : 'green'
+  const label = failed
+    ? `Failed ${relativeTime(row.createdAt)}`
+    : scheduled
+    ? `Running ${relativeTime(row.createdAt)}`
+    : `Done ${relativeTime(row.createdAt)}`
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', gap:6, marginTop:4 }}
+      title={detail}>
+      <Badge tone={tone} dot>{label}</Badge>
+    </span>
+  )
 }
 
 const SectionTitle = ({ label, right }: { label: string; right?: React.ReactNode }) => (
@@ -186,6 +256,13 @@ type VehicleSampleRow = {
   year?:     number
   createdAt?: number
 }
+
+type LatestRepriceAudit = {
+  id: Id<'audit_log'>
+  detail?: string
+  createdAt: number
+  actor?: string
+} | null
 
 // ---------------------------------------------------------------------------
 // PartFitmentDrawerBody — drill-down into a single OEM part attached to this
@@ -341,6 +418,26 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   const [busyFull,   setBusyFull]   = useState(false)
   const [busyParts,  setBusyParts]  = useState(false)
   const [busyPrices, setBusyPrices] = useState(false)
+
+  // Refs + highlight state for scrolling from the action-row pill to the
+  // matching Enrichment runs row.
+  const runsSectionRef = useRef<HTMLDivElement | null>(null)
+  const runRowRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const [highlightedRunId, setHighlightedRunId] = useState<string | null>(null)
+
+  const jumpToLatestRun = () => {
+    const latest = (detail?.enrichmentRuns as EnrichmentRunRow[] | undefined)?.[0]
+    if (!latest) return
+    runsSectionRef.current?.scrollIntoView({ behavior:'smooth', block:'start' })
+    const row = runRowRefs.current[String(latest.id)]
+    row?.scrollIntoView({ behavior:'smooth', block:'center' })
+    setHighlightedRunId(String(latest.id))
+  }
+  useEffect(() => {
+    if (!highlightedRunId) return
+    const t = setTimeout(() => setHighlightedRunId(null), 1800)
+    return () => clearTimeout(t)
+  }, [highlightedRunId])
 
   useEffect(() => {
     if (!toast) return
@@ -722,11 +819,18 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
               </div>
 
               {detail.enrichmentRuns && detail.enrichmentRuns.length > 0 && (
-                <div style={{ marginBottom:18 }}>
+                <div style={{ marginBottom:18 }} ref={runsSectionRef}>
                   <SectionTitle label={`Enrichment runs (${detail.enrichmentRuns.length})`} />
                   <div style={{ maxHeight:220, overflowY:'auto', display:'flex', flexDirection:'column', gap:6 }}>
                     {(detail.enrichmentRuns as EnrichmentRunRow[]).map(run => (
-                      <div key={String(run.id)} style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:6, padding:'6px 10px' }}>
+                      <div key={String(run.id)}
+                        ref={(el) => { runRowRefs.current[String(run.id)] = el }}
+                        style={{
+                          background: highlightedRunId === String(run.id) ? 'var(--blue-50, #EFF6FF)' : '#fff',
+                          border: `1px solid ${highlightedRunId === String(run.id) ? 'var(--blue-300, #93C5FD)' : 'var(--slate-200)'}`,
+                          borderRadius:6, padding:'6px 10px',
+                          transition: 'background 220ms ease, border-color 220ms ease',
+                        }}>
                         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
                           <Badge tone={run.status === 'complete' ? 'green' : run.status === 'failed' ? 'red' : 'slate'} dot>{run.status ?? 'unknown'}</Badge>
                           <span className="mono" style={{ fontSize:11, color:'var(--slate-500)' }}>{fmtDate(run.createdAt)}</span>
@@ -800,13 +904,22 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                     hint={`Bumps verification count (current: ${detail.enrichment.verificationCount ?? 0})`}
                     action={<Button size="sm" variant="primary" onClick={handleVerify}>Verify</Button>} />
                   <ActionRow label="Re-enrich entire car"
-                    hint="Full pipeline re-run (specs + parts + intervals + labor). Async — a few minutes."
+                    hint={<>
+                      Full pipeline re-run (specs + parts + intervals + labor). Async — a few minutes.
+                      <RunStatusPill run={(detail.enrichmentRuns as EnrichmentRunRow[] | undefined)?.[0]} onClick={jumpToLatestRun} />
+                    </>}
                     action={<Button size="sm" disabled={busyFull} onClick={handleReEnrich}>{busyFull ? 'Scheduling…' : 'Re-enrich'}</Button>} />
                   <ActionRow label="Backfill parts only"
-                    hint="Re-discover which parts apply per service. Keeps hand-edited specs. Async — a few minutes."
+                    hint={<>
+                      Re-discover which parts apply per service. Keeps hand-edited specs. Async — a few minutes.
+                      <RunStatusPill run={(detail.enrichmentRuns as EnrichmentRunRow[] | undefined)?.[0]} onClick={jumpToLatestRun} />
+                    </>}
                     action={<Button size="sm" disabled={busyParts} onClick={handleBackfillParts}>{busyParts ? 'Scheduling…' : 'Backfill parts'}</Button>} />
                   <ActionRow label="Reprice parts only"
-                    hint="Re-scrape correct prices for the parts already on this car. Async — the priced count lands in the audit log."
+                    hint={<>
+                      Re-scrape correct prices for the parts already on this car. Async — the priced count lands in the audit log.
+                      <RepriceStatusPill row={(detail.latestRepriceAudit as LatestRepriceAudit) ?? null} />
+                    </>}
                     action={<Button size="sm" disabled={busyPrices} icon={<IconRefresh size={11} />} onClick={handleRepriceParts}>{busyPrices ? 'Repricing…' : 'Reprice parts'}</Button>} />
                 </AdminActionPanel>
               </div>

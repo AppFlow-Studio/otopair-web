@@ -472,3 +472,48 @@ export const listBookableForVehicle = query({
     return out;
   },
 });
+
+/**
+ * QUERY: getMostBookedThisWeek
+ *
+ * Aggregates the past 7 days of bookings and returns the top-N most-
+ * frequently-booked services. Used by the "Most Booked" hero card on
+ * the new booking-flow entry screen (Screen 1).
+ *
+ * Counts each service_id across every booking — a single 3-service
+ * booking contributes 1 to each of its 3 services. No deduping per
+ * user (popularity = raw booking frequency, not unique-customer reach).
+ */
+export const getMostBookedThisWeek = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 1;
+    const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+    const recent = await ctx.db
+      .query("bookings")
+      .filter((q) => q.gt(q.field("_creationTime"), sevenDaysAgoMs))
+      .collect();
+
+    const counts = new Map<string, number>();
+    for (const b of recent) {
+      const ids = (b as { service_ids?: Id<"services">[] }).service_ids ?? [];
+      for (const id of ids) {
+        const key = String(id);
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+
+    const ranked = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit);
+
+    const results = await Promise.all(
+      ranked.map(async ([id, count]) => {
+        const service = await ctx.db.get(id as Id<"services">);
+        return service ? { service, count } : null;
+      }),
+    );
+    return results.filter((r): r is NonNullable<typeof r> => r !== null);
+  },
+});

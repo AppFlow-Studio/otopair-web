@@ -115,10 +115,10 @@ export default defineSchema({
     oil_capacity_qts: v.optional(v.number()),
     coolant_type: v.optional(v.string()),
     coolant_capacity_qts: v.optional(v.number()),
-    // Fallback-spec branch: per_unit_spec fluid capacities used by
-    // serviceUnits.resolveServiceUnitCount. Kept here so docs already
-    // carrying these on the shared local dev deployment don't fail
-    // schema validation on temur-dev.
+    // Pricing v2 per_unit_spec fluid capacities — feed serviceUnits.resolveServiceUnitCount
+    // for transmission_service / differential_service quantity scaling.
+    // Also acts as the fallback-spec branch: docs already carrying these on the
+    // shared local dev deployment don't fail schema validation on temur-dev.
     transmission_fluid_capacity_qts: v.optional(v.number()),
     differential_fluid_capacity_qts: v.optional(v.number()),
     spark_plug_quantity: v.optional(v.number()),
@@ -829,9 +829,17 @@ export default defineSchema({
     requires_emissions_test: v.optional(v.boolean()),
     min_model_year: v.optional(v.number()),
     created_at: v.optional(v.number()),
-    // Fallback-spec branch: parts-quantity scaling kind + display label
-    // + per-unit spec source field on engines. Kept here as optional so
-    // legacy rows from that branch don't fail schema validation.
+
+    // Pricing v2 — parts-quantity scaling kind. Tells the engine + mobile UI
+    // how the Camry-anchored band scales to other vehicles:
+    //   - 'labor_only'     : no parts; band is N/A
+    //   - 'per_axle'       : brake_pads, rotor — booking position drives count
+    //   - 'per_cylinder'   : spark_plugs — engines.spark_plug_quantity / cylinders
+    //   - 'per_unit_spec'  : oil/coolant/trans — engine capacity field
+    //   - 'per_wheel'      : tire_balance, tire_replacement — fixed 4
+    //   - 'fixed_kit'      : filter/battery/timing_belt/fuel_system — 1 service = 1 kit
+    // Kept optional so legacy rows from the temur-dev fallback-spec branch
+    // don't fail schema validation.
     parts_kind: v.optional(
       v.union(
         v.literal("labor_only"),
@@ -842,7 +850,11 @@ export default defineSchema({
         v.literal("fixed_kit"),
       ),
     ),
+    // Display label for the per-unit band: "axle" | "cyl" | "qt" | "wheel" | "kit"
     parts_unit_label: v.optional(v.string()),
+    // For parts_kind='per_unit_spec', the engines table field to read for the
+    // per-vehicle quantity: "oil_capacity_qts" | "coolant_capacity_qts" |
+    // "transmission_fluid_capacity_qts" | "differential_fluid_capacity_qts".
     parts_unit_spec_source: v.optional(v.string()),
   })
     .index("by_slug", ["slug"])
@@ -867,6 +879,45 @@ export default defineSchema({
     state_fee: v.optional(v.number()),
     display_order: v.optional(v.number()),
   }).index("by_service_id", ["service_id"]),
+
+  // Director-editable parts rule per canonical service. One row per service.
+  // Replaces the hard-coded BILLABLE_SUBCATEGORIES_BY_SERVICE in serviceParts.ts
+  // and the static SPECS array in seeds/seedServiceParts.ts. Seeded from the
+  // May 2026 Service Parts Reference PDF via seeds/seedServicePartsRules.
+  service_parts_rules: defineTable({
+    service_id: v.id("services"),
+    // Mirror of services.parts_kind — kept in sync on every upsertRule write
+    // so the runtime resolver in lib/serviceUnits.ts keeps reading from the
+    // services doc unchanged.
+    parts_kind: v.union(
+      v.literal("labor_only"),
+      v.literal("per_axle"),
+      v.literal("per_cylinder"),
+      v.literal("per_unit_spec"),
+      v.literal("per_wheel"),
+      v.literal("fixed_kit"),
+    ),
+    parts_unit_label: v.optional(v.string()),
+    parts_unit_spec_source: v.optional(v.string()),
+    // Allowlist of oem_parts.subcategory values eligible for the invoice.
+    // The union of both arrays is the new billable filter.
+    core_subcategories: v.array(v.string()),
+    as_needed_subcategories: v.array(v.string()),
+    // OEM parts pinned to a subcategory role — these short-circuit the
+    // 7-layer selector. Empty array = resolver behavior unchanged.
+    pinned_parts: v.array(
+      v.object({
+        subcategory: v.string(),
+        part_id: v.id("oem_parts"),
+        is_core: v.boolean(),
+      }),
+    ),
+    // Quantity override that wins over serviceUnits.resolveServiceUnitCount.
+    // Null/undefined means "use the resolver."
+    qty_override: v.optional(v.number()),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("users")),
+  }).index("by_service", ["service_id"]),
 
   // [A] 17 fields (D had 7, W doesn't have this table)
   // Bridge table: long-term migrate to service_intervals + labor_times
@@ -893,10 +944,12 @@ export default defineSchema({
     // parts_cost_low/high (above) hold the dealer parts-counter ±6% band.
     oem_part_number: v.optional(v.string()),
     parts_cost_basis: v.optional(v.string()),
-    // Fallback-spec branch: unit count behind the Camry anchor's parts band.
+    // Pricing v2 parts-quantity scaling: how many units the Camry-anchored
+    // band represents on THIS spec row. Brake pads = 1 axle. Spark plugs
+    // on Camry A25A-FKS = 4 cylinders. Oil change on the Camry = ~5 qts.
     // Other vehicles scale by (vehicle_unit_count / parts_baseline_unit_count).
-    // Kept as optional here so legacy rows that already carry the field
-    // don't fail schema validation on temur-dev.
+    // Optional so legacy rows that already carry the field don't fail
+    // schema validation on temur-dev.
     parts_baseline_unit_count: v.optional(v.number()),
   })
     .index("by_engine_id", ["engine_id"])
@@ -1536,6 +1589,8 @@ export default defineSchema({
     no_show_threshold_minutes: v.optional(v.number()),
     overrun_default_extension_percent: v.optional(v.number()),
     overrun_extension_floor_minutes: v.optional(v.number()),
+    overrun_escalation_minutes: v.optional(v.number()),
+    overrun_auto_apply_minutes: v.optional(v.number()),
     buffer_minutes: v.optional(v.number()),
     max_bookings_per_mechanic_rolling_hour: v.optional(v.number()),
     entity_label_mode: v.optional(v.string()),
@@ -1871,6 +1926,16 @@ export default defineSchema({
     schedule_change_mode: v.optional(v.string()),
     schedule_change_source_booking_id: v.optional(v.id("bookings")),
     customer_can_restore_original: v.optional(v.boolean()),
+    // Per-booking delay-cascade cap tracking. Each time this booking is
+    // auto-pushed downstream by an upstream overrun, cascade_push_count is
+    // incremented and the shifted minutes accrue into
+    // cascade_pushed_minutes_total. Once a further push would exceed the cap
+    // (CASCADE_MAX_PUSHES_PER_BOOKING or CASCADE_MAX_PUSHED_MINUTES), the
+    // booking is routed to a manual scheduling alert instead of being moved
+    // silently again — stops the "pushed at 9:00, again 9:20, again 9:50"
+    // spiral. See buildDownstreamMovementPlan in convex/bookings.ts.
+    cascade_push_count: v.optional(v.number()),
+    cascade_pushed_minutes_total: v.optional(v.number()),
     custom_services: v.optional(
       v.array(
         v.object({
@@ -2045,11 +2110,18 @@ export default defineSchema({
     quote_flags: v.optional(v.array(v.string())),
     quote_fallback_low: v.optional(v.float64()),
     quote_fallback_high: v.optional(v.float64()),
+    // Dollar delta when the customer's labor cost lands above the engine's
+    // expected labor cost by more than ±8% — paired with the
+    // `labor_cost_above_engine` flag on `quote_flags`. Server still books
+    // (customer consented to the higher number), but the director panel
+    // surfaces it so we can audit shops that consistently bill above engine.
+    labor_cost_delta_above_engine_dollars: v.optional(v.float64()),
     // Per-service sibling to `quote_flags`. One row per service id with the
     // engine's per-quote flags + a `fallback_catch` marker when the booking
-    // line for that service falls outside the engine's per-service band.
-    // Written by the fallback-spec branch; kept here so legacy bookings
-    // that already carry the field don't fail schema validation.
+    // line for that service falls outside the engine's per-service band
+    // (the case where AI-enriched parts prices were materially wrong and
+    // the multiplier engine corrected them). Drives the director-side
+    // "Fallback catch" pill so admins can audit which line was caught.
     service_quote_flags: v.optional(
       v.array(
         v.object({
@@ -2503,6 +2575,22 @@ export default defineSchema({
     .index("by_job_actual_id", ["job_actual_id"])
     .index("by_edited_at", ["edited_at"]),
 
+  // Append-only audit log of mechanic labor-time changes on a job_actual —
+  // the labor counterpart to job_actual_part_edits. One row per change to
+  // actual_labor_minutes that the mechanic explicitly submits (auto-derived
+  // labor from elapsed time is not logged). old/new are minutes.
+  job_actual_labor_edits: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.id("job_actuals"),
+    old_minutes: v.optional(v.number()),
+    new_minutes: v.optional(v.number()),
+    edited_by_user_id: v.id("users"),
+    edited_at: v.number(),
+  })
+    .index("by_booking_id", ["booking_id"])
+    .index("by_job_actual_id", ["job_actual_id"])
+    .index("by_edited_at", ["edited_at"]),
+
   // ===== AI & ANALYTICS =====
 
   // [I]
@@ -2825,6 +2913,18 @@ export default defineSchema({
     .index("by_token", ["token"])
     .index("by_user_id", ["user_id"]),
 
+  // Singleton row of director-controlled global feature flags. Keyed
+  // `"global"` so the row is fetched by a stable lookup; future booleans get
+  // appended as new optional fields. Default behavior when the row is absent
+  // is decided per-flag at the call site (e.g. round_labor_times_to_15min
+  // defaults to true).
+  director_settings: defineTable({
+    key: v.string(),
+    round_labor_times_to_15min: v.boolean(),
+    updated_at: v.number(),
+    updated_by_user_id: v.optional(v.id("director_users")),
+  }).index("by_key", ["key"]),
+
   // ==========================================================================
   // Scheduling-overhaul tables — late-start monitoring, no-show monitoring,
   // overrun check-ins, and the notification outbox queue. Backed by
@@ -2975,6 +3075,15 @@ export default defineSchema({
     is_complete: v.optional(v.boolean()),
     extension_minutes: v.optional(v.number()),
     cascade_depth: v.optional(v.number()),
+    // Blocking vs non-blocking extension (Dynamic Scheduling spec). Captured at
+    // extension time: true = the bay stays occupied during the extra time, so
+    // downstream same-bay bookings cascade; false = the bay is free (mechanic
+    // waiting on a part/approval), so the job's own end moves but NOTHING
+    // downstream is pushed. Unset is treated as blocking (conservative default,
+    // also used for system auto-applied extensions). reason_code optionally
+    // drives the customer message + pre-selects the toggle default.
+    blocks_bay: v.optional(v.boolean()),
+    reason_code: v.optional(v.string()),
     resolved_at_ms: v.optional(v.number()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
@@ -4306,6 +4415,38 @@ export default defineSchema({
     .index("by_tier", ["tier_id"])
     .index("by_category", ["pricing_category_id"])
     .index("by_tier_and_category", ["tier_id", "pricing_category_id"]),
+
+  // Append-only history of every fallback-spec edit (baselines, parts
+  // multipliers, labor multipliers, service default_labor_hours). One row
+  // per edit, captured BEFORE the patch lands so restore is exact. Drives
+  // the per-row History modal in the Pricing & Tiers director tab.
+  pricing_fallback_snapshots: defineTable({
+    entity_type: v.union(
+      v.literal("baseline"),
+      v.literal("parts_multiplier"),
+      v.literal("labor_multiplier"),
+      v.literal("service_labor_hours"),
+    ),
+    // Stringified Convex Id of the target row. We keep it as a string so a
+    // single table covers four target tables without a v.union of ids.
+    entity_id: v.string(),
+    // Display key — service slug or "category × tier" — so the history feed
+    // can group/label snapshots without hydrating every related row.
+    entity_label: v.string(),
+    // Full prior state of the target row at the moment of the snapshot.
+    // Stored as JSON-stringified payload so restore is exact and replay-safe.
+    payload: v.string(),
+    // Human-readable diff summary, e.g. "low: $80.00 → $95.00, source: manual → bookings".
+    changes_summary: v.string(),
+    // True when this snapshot was written as part of a Restore (so the UI
+    // can label it "Restore point" instead of "Edit").
+    is_restore: v.optional(v.boolean()),
+    actor_name: v.string(),
+    actor_id: v.optional(v.id("director_users")),
+    created_at: v.number(),
+  })
+    .index("by_entity", ["entity_type", "entity_id"])
+    .index("by_created_at", ["created_at"]),
 
   // Toyota Camry (T1) anchor price per service, in cents. is_real_data drives
   // lock/estimate routing — when both is_real_data AND the matching

@@ -63,9 +63,12 @@ function formatDate(dateString: string) {
 
 function formatMinutes(minutes?: number | null) {
   if (!minutes) return "Est. TBD";
-  if (minutes < 60) return `Est. ${minutes} min`;
-  const hours = minutes / 60;
-  return `Est. ${hours % 1 === 0 ? hours : hours.toFixed(1)} hr`;
+  const total = Math.round(minutes);
+  if (total < 60) return `Est. ${total} min`;
+  const h = Math.floor(total / 60);
+  const m = total - h * 60;
+  if (m === 0) return `Est. ${h} hr`;
+  return `Est. ${h} hr ${m} min`;
 }
 
 function getInitials(name: string) {
@@ -102,7 +105,9 @@ function DashboardCard({
 export default function MechanicDashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const dashboard = useQuery(api.bookings.getMyMechanicDashboard);
+  const dashboard = useQuery(api.bookings.getMyMechanicDashboard, {
+    localDate: new Date().toLocaleDateString("en-CA"),
+  });
   const customerOnMyWay = useQuery(api.bookings.getCustomerOnMyWayMonitors);
   const customerLateNotificationSent = useQuery(api.bookings.getCustomerLateNotificationSentMonitors);
 
@@ -117,8 +122,7 @@ export default function MechanicDashboard() {
     api.bookings.commitInspectionAndAwaitEstimate,
   );
   const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
-  const answerOverrunCheckIn = useMutation(api.bookings.answerOverrunCheckIn);
-  const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
+
   const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
   const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -358,31 +362,7 @@ export default function MechanicDashboard() {
     }
   }
 
-  async function handleOverrunAnswer(
-    bookingId: string,
-    action: "complete" | number,
-  ) {
-    setBusyAction(`overrun:${bookingId}`);
-    try {
-      if (action === "complete") {
-        await answerOverrunCheckIn({
-          bookingId: bookingId as Id<"bookings">,
-          isComplete: true,
-        });
-        setToast("Overrun check-in closed");
-      } else {
-        await answerOverrunExtension({
-          bookingId: bookingId as Id<"bookings">,
-          extensionMinutes: action,
-        });
-        setToast(`Added ${action} minutes`);
-      }
-    } catch (error: unknown) {
-      setToast(error instanceof Error ? error.message : "Could not answer overrun check-in");
-    } finally {
-      setBusyAction(null);
-    }
-  }
+
 
   if (dashboard === undefined) {
     return (
@@ -521,9 +501,6 @@ export default function MechanicDashboard() {
             {dashboard.todaysJobs.map((job, index) => {
               const actionKeyStart = `start:${job._id}`;
               const actionKeyComplete = `complete:${job._id}`;
-              const overrunCheckin = dashboard.openOverrunCheckins?.find(
-                (row) => String(row.bookingId) === String(job._id),
-              );
               const initials = getInitials(job.customerDisplayName);
               return (
                 <div
@@ -655,33 +632,6 @@ export default function MechanicDashboard() {
                           return "Start Booking";
                         })()}
                       </button>
-                    ) : null}
-
-                    {overrunCheckin && job.status === "in_progress" ? (
-                      <div className="flex w-full flex-wrap items-center gap-2 rounded-xl border border-cyan-200 bg-cyan-50 p-3">
-                        <span className="text-xs font-semibold text-cyan-800">
-                          Overrun check
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => void handleOverrunAnswer(String(job._id), "complete")}
-                          disabled={busyAction === `overrun:${String(job._id)}`}
-                          className="rounded-lg bg-cyan-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
-                        >
-                          On track
-                        </button>
-                        {[15, 30, 45, 60].map((minutes) => (
-                          <button
-                            key={minutes}
-                            type="button"
-                            onClick={() => void handleOverrunAnswer(String(job._id), minutes)}
-                            disabled={busyAction === `overrun:${String(job._id)}`}
-                            className="rounded-lg border border-cyan-200 bg-white px-3 py-1.5 text-xs font-medium text-cyan-900 disabled:opacity-60"
-                          >
-                            +{minutes}m
-                          </button>
-                        ))}
-                      </div>
                     ) : null}
 
                     {job.status === "in_progress" ? (
@@ -945,6 +895,7 @@ export default function MechanicDashboard() {
             }),
           )
         }
+        lockBilling
       />
 
       {/* Pre-Job Approval — auto-chained from the inspection dialog. Same

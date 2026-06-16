@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import type { Id } from "../_generated/dataModel";
+import { internal } from "../_generated/api";
 import {
   deleteSpecVarianceByJobActualId,
   upsertSpecVarianceRecord,
@@ -416,6 +417,34 @@ export async function saveJobActualDraft(
     });
   }
 
+  // Labor-edit audit — mirror the parts-edit diff. Only log when the mechanic
+  // explicitly submits actual_labor_minutes (not the auto-derived elapsed-time
+  // value, which has no actuals key) and the value actually changed.
+  if (
+    actorUserId &&
+    actuals &&
+    Object.prototype.hasOwnProperty.call(actuals, "actual_labor_minutes")
+  ) {
+    const oldMin =
+      typeof (existing as any).actual_labor_minutes === "number"
+        ? (existing as any).actual_labor_minutes
+        : undefined;
+    const newMin =
+      typeof actuals.actual_labor_minutes === "number"
+        ? actuals.actual_labor_minutes
+        : undefined;
+    if (oldMin !== newMin) {
+      await ctx.db.insert("job_actual_labor_edits", {
+        booking_id: booking._id,
+        job_actual_id: existing._id,
+        old_minutes: oldMin,
+        new_minutes: newMin,
+        edited_by_user_id: actorUserId,
+        edited_at: now,
+      });
+    }
+  }
+
   applyActualsInputToPatch(patch, actuals);
 
   if (
@@ -458,6 +487,9 @@ export async function finalizeJobActuals(
     preferAutoLaborMinutes: true,
     actorUserId: userId,
   });
+  // Capture before patching: only the first finalization should emit the
+  // semantic fact, so a reopen → re-finalize doesn't duplicate it.
+  const isFirstFinalize = !draft.finalized_at_ms;
 
   await ctx.db.patch(draft._id, {
     completed_at_ms: draft.completed_at_ms ?? now,
@@ -473,7 +505,61 @@ export async function finalizeJobActuals(
     jobActual: finalized,
     now,
   });
+
+  if (isFirstFinalize) {
+    await deriveJobFindingsSemantics(ctx, { booking, jobActual: finalized, now });
+  }
+
   return finalized;
+}
+
+// (B) Mechanic-typed findings → Oto memory. Mirrors the document-parse path
+// (internalDeriveSemantics in vehicleDocuments_node.ts): the mechanic's
+// technician_notes become a `history_anchor` user_semantic_fact so Oto surfaces
+// them in <recent_context> with no prompt change. Scoped to the booking's
+// customer + vehicle. Scheduled (runAfter 0) because recordUserSemanticFact
+// sanitizes the payload and may throw — isolating it keeps a rejection there
+// from rolling back the finalize/derived-data writes that already committed.
+const SEMANTIC_PAYLOAD_MAX = 480;
+
+async function deriveJobFindingsSemantics(
+  ctx: any,
+  { booking, jobActual, now }: { booking: any; jobActual: any; now: number },
+) {
+  const raw =
+    typeof jobActual?.technician_notes === "string"
+      ? jobActual.technician_notes.trim()
+      : "";
+  if (!raw) return;
+  if (!booking?.user_id) return;
+
+  // Scope the fact to the right car (best-effort; the fact is still useful
+  // without it). `.first()` not `.unique()` so a duplicate-VIN row can't throw.
+  const vehicle = booking.vin
+    ? await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
+        .first()
+    : null;
+
+  const datePrefix = `[${new Date(now).toISOString().slice(0, 10)}] `;
+  const payloadText = `${datePrefix}Mechanic findings: ${raw}`.slice(
+    0,
+    SEMANTIC_PAYLOAD_MAX,
+  );
+
+  await ctx.scheduler.runAfter(
+    0,
+    internal.oto.memoryEditing.recordUserSemanticFact,
+    {
+      user_id: booking.user_id,
+      ...(vehicle?._id ? { vehicle_id: vehicle._id } : {}),
+      fact_type: "history_anchor" as const,
+      payload: payloadText,
+      source: "inferred_behavior" as const,
+      written_by: "system" as const,
+    },
+  );
 }
 
 export async function reopenJobActuals(

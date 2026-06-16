@@ -5,7 +5,7 @@ import QRCode from 'qrcode'
 import { useQuery, useAction, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
-import { Badge, Button, Card, Avatar, Input, Select } from '../Primitives'
+import { Badge, Button, Card, Avatar, Input, Select, Toggle } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 
@@ -327,6 +327,8 @@ const UserRow = ({ user, isSelf, actorName, actorId, canRemove, canRegen, canEdi
 export const TabSettings = () => {
   const session   = useContext(DirectorSessionCtx)
   const users     = useQuery(api.director_auth.listUsers)
+  const globalSettings = useQuery(api.directorSettings.getGlobal)
+  const setRoundLaborTo15 = useMutation(api.directorSettings.setRoundLaborTo15)
   const [addOpen, setAddOpen] = useState(false)
 
   const role         = session?.role ?? 'viewer'
@@ -337,6 +339,29 @@ export const TabSettings = () => {
   return (
     <SectionAnchor id="settings" title="Settings"
       subtitle={isSuperadmin ? 'Director access and account management. All actions are audit logged.' : 'You have read-only access to this page.'}>
+      <Card padded={false} style={{ marginBottom: 24 }}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--slate-200)' }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Labor time rounding</div>
+          <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 2 }}>
+            Round each labor-time estimate UP to the nearest 15 minutes (e.g. 36 min → 45 min). Applies everywhere the booking flow shows or stores duration.
+          </div>
+        </div>
+        <div style={{ padding: '14px 18px' }}>
+          <Toggle
+            checked={globalSettings?.round_labor_times_to_15min ?? true}
+            onChange={e => {
+              if (!isSuperadmin) return
+              setRoundLaborTo15({ value: e.target.checked, actorName, actorId })
+            }}
+            label="Round to 15-minute slots"
+          />
+          {!isSuperadmin && (
+            <div style={{ fontSize: 11, color: 'var(--slate-400)', marginTop: 6 }}>
+              Read-only — contact a superadmin to change this setting.
+            </div>
+          )}
+        </div>
+      </Card>
       <Card padded={false} style={{ marginBottom: 24 }}>
         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--slate-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>

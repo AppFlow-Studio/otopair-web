@@ -22,7 +22,7 @@ export const STATUS_TABS: { key: JobStatusFilter; label: string }[] = [
 ];
 
 export function todayString() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date().toLocaleDateString("en-CA");
 }
 
 export function formatTime(time: string): string {
@@ -52,13 +52,19 @@ export function formatJobDate(
   return `${dateLabel}, ${timeLabel}`;
 }
 
+// Shops have 20 minutes to accept/decline an incoming booking before it shows
+// as overdue. Returns null once the deadline has passed so callers can render
+// an "overdue" state of their own.
+export const PENDING_SHOP_RESPONSE_MS = 20 * 60 * 1000;
+
 export function pendingCountdown(creationTime: number): string | null {
   if (!creationTime || Number.isNaN(creationTime)) return null;
-  const deadline = creationTime + 24 * 60 * 60 * 1000;
+  const deadline = creationTime + PENDING_SHOP_RESPONSE_MS;
   const remaining = deadline - Date.now();
   if (remaining <= 0) return null;
-  const hours = Math.floor(remaining / (1000 * 60 * 60));
-  const minutes = Math.floor((remaining % (1000 * 60 * 60)) / (1000 * 60));
-  if (hours > 0) return `${hours}h ${minutes}m left`;
-  return `${minutes}m left`;
+  // Round up so the last partial minute still shows as "1m left" rather than
+  // flashing "0m" before flipping to overdue. Seconds-precision would mislead
+  // users since these labels only refresh when the parent re-renders.
+  const minutesLeft = Math.max(1, Math.ceil(remaining / 60_000));
+  return `${minutesLeft}m left`;
 }

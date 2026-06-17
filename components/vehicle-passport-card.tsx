@@ -125,6 +125,37 @@ function formatLaborMinutes(minutes?: number | null): string {
   return `${hours}h ${mins}m`;
 }
 
+/**
+ * Format a visit date for display. Prefers the completion timestamp; otherwise
+ * falls back to the scheduled `YYYY-MM-DD` string. Either way the result uses a
+ * spelled-out month (e.g. "May 26, 2026") rather than a raw numeric ISO date.
+ * The scheduled string is parsed as local midnight so the day never shifts.
+ */
+function formatVisitDate(
+  completedAtMs?: number | null,
+  scheduledDate?: string | null,
+): string {
+  if (typeof completedAtMs === "number" && Number.isFinite(completedAtMs)) {
+    return new Date(completedAtMs).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
+  if (scheduledDate) {
+    const parsed = new Date(`${scheduledDate}T00:00:00`);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+    }
+    return scheduledDate;
+  }
+  return "—";
+}
+
 interface SectionShellProps {
   icon: typeof Car;
   title: string;
@@ -346,13 +377,7 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
 
 function HistoryEntryRow({ entry }: { entry: VinHistoryEntry }) {
   const [open, setOpen] = useState(false);
-  const when = entry.completedAtMs
-    ? new Date(entry.completedAtMs).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      })
-    : entry.scheduledDate ?? "—";
+  const when = formatVisitDate(entry.completedAtMs, entry.scheduledDate);
 
   return (
     <li>
@@ -529,13 +554,7 @@ function PreviousMechanicFeedbackSection({
   return (
     <ul className="divide-y divide-border">
       {withFeedback.map((entry: VinHistoryEntry) => {
-        const when = entry.completedAtMs
-          ? new Date(entry.completedAtMs).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })
-          : entry.scheduledDate ?? "—";
+        const when = formatVisitDate(entry.completedAtMs, entry.scheduledDate);
         return (
           <li key={String(entry.bookingId)} className="py-2.5 first:pt-0 last:pb-0">
             <div className="mb-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">

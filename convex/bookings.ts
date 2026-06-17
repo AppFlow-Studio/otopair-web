@@ -8043,6 +8043,220 @@ export const listForMyMechanic = query({
   },
 });
 
+/**
+ * QUERY: listBookingArchive
+ * Role-aware booking list for the "Previous Bookings" tab. Owners/managers/
+ * front-desk see every booking at their shop; a mechanic sees only the
+ * bookings assigned to them. Scope is enforced here (server-side) so the
+ * page never has to trust the client to pick the right list. Returns the
+ * `isMechanicScope` flag so the UI can hide owner-only affordances.
+ */
+export const listBookingArchive = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return { isMechanicScope: false, jobs: [] };
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return { isMechanicScope: false, jobs: [] };
+
+    const mechanicContext = await getMechanicMembershipForUser(
+      ctx,
+      user._id,
+      primary.shopId,
+    );
+
+    let bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", primary.shopId))
+      .collect();
+
+    if (mechanicContext) {
+      bookings = bookings.filter(
+        (booking) =>
+          String(booking.mechanic_id ?? "") ===
+          String(mechanicContext.mechanic._id),
+      );
+    }
+
+    bookings.sort(compareBookingsBySchedule);
+    const jobs = await Promise.all(
+      bookings.map((booking) => mapBookingListItem(ctx, booking)),
+    );
+    return { isMechanicScope: !!mechanicContext, jobs };
+  },
+});
+
+/**
+ * QUERY: listQuoteJobsForShop
+ * Every tire/rotor quote job the shop has visibility into for the
+ * "Previous Bookings → Quote Jobs" tab: open broadcast requests, quotes the
+ * shop submitted, and the ones it won or lost. Quote-stage bookings have no
+ * `shop_id` until accepted, so the regular shop-booking queries miss them —
+ * this assembles them from the broadcast queue plus the shop's quote
+ * responses. Visible to every role (quote bidding isn't mechanic-scoped).
+ */
+export const listQuoteJobsForShop = query({
+  args: { shopId: v.id("shops") },
+  handler: async (ctx, args) => {
+    const shopKey = String(args.shopId);
+
+    // 1. Quotes this shop submitted (any outcome). Keep the most recent
+    //    response per booking for the headline bid, and track whether any
+    //    of the shop's responses are still live (non-superseded).
+    type ResponseInfo = {
+      kind: "tire" | "rotor";
+      total: number;
+      createdAt: number;
+      anyLive: boolean;
+    };
+    const responseByBooking = new Map<string, ResponseInfo>();
+
+    const tireResponses = await ctx.db
+      .query("tire_quote_responses")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .collect();
+    const rotorResponses = await ctx.db
+      .query("rotor_quote_responses")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
+      .collect();
+
+    const ingestResponse = (
+      kind: "tire" | "rotor",
+      bookingId: any,
+      total: number,
+      createdAt: number,
+      superseded: boolean,
+    ) => {
+      const key = String(bookingId);
+      const existing = responseByBooking.get(key);
+      if (!existing) {
+        responseByBooking.set(key, {
+          kind,
+          total,
+          createdAt,
+          anyLive: !superseded,
+        });
+        return;
+      }
+      existing.anyLive = existing.anyLive || !superseded;
+      if (createdAt >= existing.createdAt) {
+        existing.total = total;
+        existing.createdAt = createdAt;
+      }
+    };
+
+    for (const r of tireResponses) {
+      ingestResponse(
+        "tire",
+        r.booking_id,
+        r.total,
+        r.created_at ?? r._creationTime,
+        r.superseded_at != null,
+      );
+    }
+    for (const r of rotorResponses) {
+      ingestResponse(
+        "rotor",
+        r.booking_id,
+        r.total,
+        r.created_at ?? r._creationTime,
+        r.superseded_at != null,
+      );
+    }
+
+    // 2. Open broadcast quote requests (any shop can still bid). These carry
+    //    tire_specs/rotor_specs and live at status pending_quote/quotes_ready.
+    const openCandidates = (
+      await Promise.all(
+        ["pending_quote", "quotes_ready"].map((status) =>
+          ctx.db
+            .query("bookings")
+            .withIndex("by_status", (q) => q.eq("status", status))
+            .collect(),
+        ),
+      )
+    )
+      .flat()
+      .filter((b) => b.tire_specs != null || b.rotor_specs != null);
+
+    // 3. Union of booking ids from both sources, then load + map each once.
+    const bookingIds = new Set<string>([
+      ...responseByBooking.keys(),
+      ...openCandidates.map((b) => String(b._id)),
+    ]);
+
+    const rows = await Promise.all(
+      Array.from(bookingIds).map(async (key) => {
+        const booking: any = await ctx.db.get(key as Id<"bookings">);
+        if (!booking) return null;
+        if (booking.tire_specs == null && booking.rotor_specs == null) {
+          return null;
+        }
+
+        const responseInfo = responseByBooking.get(key);
+        const kind: "tire" | "rotor" =
+          booking.tire_specs != null ? "tire" : "rotor";
+
+        // Derive the outcome from the shop's perspective.
+        let outcome: "open" | "pending" | "won" | "lost" | "closed";
+        if (
+          booking.status === "cancelled" ||
+          booking.status === "declined" ||
+          booking.status === "no_show"
+        ) {
+          outcome = "closed";
+        } else if (booking.shop_id != null) {
+          outcome = String(booking.shop_id) === shopKey ? "won" : "lost";
+        } else if (
+          booking.status === "pending_quote" ||
+          booking.status === "quotes_ready"
+        ) {
+          outcome = responseInfo?.anyLive ? "pending" : "open";
+        } else {
+          outcome = "open";
+        }
+
+        const customer = await ctx.db.get(booking.user_id);
+        const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
+
+        // Human-readable spec summary for the table.
+        let specSummary = "";
+        if (kind === "tire" && booking.tire_specs) {
+          const t = booking.tire_specs;
+          specSummary = `${t.size} · ${t.type} ×${t.quantity}`;
+        } else if (kind === "rotor" && booking.rotor_specs) {
+          const r = booking.rotor_specs;
+          const qty = r.axle === "both" ? 4 : 2;
+          specSummary = `${r.axle} rotors ×${qty} · ${r.brake_system_type}${
+            r.include_pads ? " + pads" : ""
+          }`;
+        }
+
+        const submittedAt =
+          responseInfo?.createdAt ??
+          booking.created_at ??
+          booking._creationTime;
+
+        return {
+          _id: booking._id,
+          customerName: formatCustomerName(customer),
+          vehicle: vehicleLabels.full,
+          kind,
+          specSummary,
+          yourBidTotal: responseInfo?.total ?? null,
+          outcome,
+          submittedAt,
+        };
+      }),
+    );
+
+    return rows
+      .filter((row): row is NonNullable<typeof row> => row != null)
+      .sort((a, b) => b.submittedAt - a.submittedAt);
+  },
+});
+
 export const getMyMechanicDashboard = query({
   args: { localDate: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -9501,6 +9715,25 @@ export const createByShop = mutation({
     catalogEstimatedMinutes: v.optional(v.float64()),
     mechanicQuotedPrice: v.optional(v.float64()),
     catalogQuotedPrice: v.optional(v.float64()),
+    // Optional parts data-gathering: the mechanic's edits to the catalog's
+    // parts/price/quantity guess shown in the drawer. Pure analytics — the
+    // catalog reference is recomputed server-side, so the client sends ONLY
+    // the edited values plus a per-row pairing `key`
+    // (role_key || oem_number || part_name, scoped to the service).
+    mechanicPartEntries: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          key: v.string(),
+          part_name: v.string(),
+          oem_number: v.string(),
+          brand: v.optional(v.string()),
+          quantity: v.optional(v.number()),
+          unit_price_cents: v.optional(v.number()),
+          catalog_origin: v.boolean(),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -9650,10 +9883,26 @@ export const createByShop = mutation({
       }))
       .filter((c: any) => c.name.length > 0);
     const bookingSource = args.source ?? "mechanic_walk_in";
+
+    // ── Walk-in cost resolution ──────────────────────────────────────
+    // The schedule "Create booking" drawer captures a single all-in figure
+    // on the Mechanic-estimate section (mechanicQuotedPrice) plus a time
+    // estimate — it does NOT split the quote into labor vs parts. Earlier
+    // this path persisted the client's hardcoded labor_cost/parts_cost of 0,
+    // so the job drawer rendered "$0.00" even though the mechanic entered a
+    // quoted price. Treat the quoted price as the authoritative all-in
+    // service charge (recorded on the labor line, since no parts are
+    // itemized here), and fall back to any client-supplied labor/parts for
+    // non-drawer callers that pre-compute their own split.
+    const quotedPrice = args.mechanicQuotedPrice;
+    const hasQuote = quotedPrice != null && quotedPrice > 0;
+    const resolvedLaborCost = hasQuote ? quotedPrice : args.laborCost;
+    const resolvedPartsCost = hasQuote ? 0 : args.partsCost;
+
     const bookingId = await ctx.db.insert("bookings", {
-      labor_cost: args.laborCost,
-      parts_cost: args.partsCost,
-      total_cost: args.laborCost + args.partsCost,
+      labor_cost: resolvedLaborCost,
+      parts_cost: resolvedPartsCost,
+      total_cost: resolvedLaborCost + resolvedPartsCost,
       estimated_labor_minutes: args.estimatedLaborMinutes,
       mechanic_id: resolvedMechanicId,
       scheduled_date: args.scheduledDate,
@@ -9753,6 +10002,92 @@ export const createByShop = mutation({
             catalog_estimated_minutes: catMins > 0 ? catMins : undefined,
             mechanic_quoted_price: allocate(args.mechanicQuotedPrice, catMins),
             catalog_quoted_price: allocate(args.catalogQuotedPrice, catMins),
+          });
+        }
+      }
+
+      // ── Parts data-gathering (catalog vs mechanic) ────────────────────
+      // Recompute the catalog parts snapshot server-side (authoritative — the
+      // client sends only the mechanic's edits, never the catalog reference)
+      // and record one parts_quote_snapshots row per part: the catalog's guess
+      // paired with whatever the mechanic corrected. Pure analytics — this does
+      // NOT touch labor_cost / parts_cost / total_cost, nor the booking's
+      // priced_parts_snapshot (a display + post-job contract field).
+      if (existingVehicle.vehicle_config_id) {
+        let confirmedPackages = new Set<string>();
+        if (ownerLink) {
+          const specs = await ctx.db
+            .query("vehicle_owner_specs")
+            .withIndex("by_vehicle_owner", (q: any) =>
+              q.eq("vehicle_owner_id", ownerLink._id),
+            )
+            .first();
+          confirmedPackages = new Set(specs?.confirmed_packages ?? []);
+        }
+
+        const catalogSnap = await computePricedPartsSnapshot(ctx, {
+          serviceIds: args.serviceIds,
+          vehicleConfigId: existingVehicle.vehicle_config_id,
+          vin: canonicalVin,
+          confirmedPackages,
+          serviceVariants: deriveServiceVariantsFromOptions(
+            args.selectedServiceOptions,
+          ),
+        });
+
+        const pairKey = (serviceId: string, key: string) =>
+          `${serviceId}::${key}`;
+        const mechByKey = new Map<
+          string,
+          NonNullable<typeof args.mechanicPartEntries>[number]
+        >();
+        for (const m of args.mechanicPartEntries ?? []) {
+          mechByKey.set(pairKey(String(m.service_id), m.key), m);
+        }
+        const seen = new Set<string>();
+
+        // One row per catalog part; attach the matching mechanic edit if any.
+        for (const r of catalogSnap.rows) {
+          const composite = pairKey(
+            String(r.service_id),
+            r.role_key || r.oem_number || r.part_name,
+          );
+          const m = mechByKey.get(composite);
+          if (m) seen.add(composite);
+          await ctx.db.insert("parts_quote_snapshots", {
+            ...snapshotBase,
+            service_id: r.service_id,
+            role_key: r.role_key,
+            quantity_basis: r.quantity_basis,
+            price_unknown: r.price_unknown,
+            catalog_part_id: r.part_id,
+            catalog_oem_number: r.oem_number,
+            catalog_part_name: r.part_name,
+            catalog_brand: r.brand,
+            catalog_part_tier: r.part_tier,
+            catalog_quantity: r.quantity,
+            catalog_unit_price_cents: r.unit_price_cents,
+            catalog_line_total_cents: r.line_total_cents,
+            mechanic_oem_number: m?.oem_number || undefined,
+            mechanic_part_name: m?.part_name || undefined,
+            mechanic_brand: m?.brand,
+            mechanic_quantity: m?.quantity,
+            mechanic_unit_price_cents: m?.unit_price_cents,
+          });
+        }
+
+        // Parts the catalog missed entirely — mechanic-added rows, no catalog match.
+        for (const m of args.mechanicPartEntries ?? []) {
+          const composite = pairKey(String(m.service_id), m.key);
+          if (seen.has(composite)) continue;
+          await ctx.db.insert("parts_quote_snapshots", {
+            ...snapshotBase,
+            service_id: m.service_id,
+            mechanic_oem_number: m.oem_number || undefined,
+            mechanic_part_name: m.part_name || undefined,
+            mechanic_brand: m.brand,
+            mechanic_quantity: m.quantity,
+            mechanic_unit_price_cents: m.unit_price_cents,
           });
         }
       }

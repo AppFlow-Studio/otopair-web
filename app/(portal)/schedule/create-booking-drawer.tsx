@@ -6,7 +6,7 @@ import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/ph
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useEntityLabel } from "@/lib/use-entity-label";
-import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, MessageSquare, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
+import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, MessageSquare, Package, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
 import {
   Select,
   SelectItem,
@@ -373,6 +373,7 @@ export default function CreateBookingDrawer({
     "vehicle",
     "services",
     "mechanic_estimate",
+    "catalog_parts",
     "diagnostic",
     "notes",
     "scheduling",
@@ -466,6 +467,28 @@ export default function CreateBookingDrawer({
   const [showTirePicker, setShowTirePicker] = useState(false);
   const [pendingSubmitOutsideHours, setPendingSubmitOutsideHours] = useState<boolean | null>(null);
 
+  /* ---- Optional catalog-parts data-gathering (walk-in confirmed flow) ----
+     Prefilled from quotes.previewCatalogPartsByVin with the parts/price/qty the
+     customer app would have shown for the chosen services + options. The
+     mechanic can correct anything; edits are sent to createByShop for analytics
+     ONLY and never change the quoted price. */
+  type MechanicPartEdit = {
+    key: string; // role_key || oem_number || part_name (within a service)
+    service_id: string;
+    part_name: string;
+    oem_number: string;
+    brand: string;
+    quantity: string;
+    unit_price: string; // dollars (string input)
+    catalog_origin: boolean;
+    price_unknown: boolean;
+  };
+  const [catalogPartEdits, setCatalogPartEdits] = useState<
+    Record<string, MechanicPartEdit[]>
+  >({});
+  const dirtyPartKeysRef = useRef<Set<string>>(new Set());
+  const addedPartSeqRef = useRef(0);
+
   const shopData = useQuery(api.schedule.getShopServicesWithCategories);
   const createBooking = useMutation(api.bookings.createByShop);
   const backfillBooking = useMutation((api as any).bookings.backfillCompletedBooking);
@@ -528,6 +551,132 @@ export default function CreateBookingDrawer({
   const TIRE_PART_PREFIX = "Tires — ";
 
   const categories = useMemo(() => shopData?.categories ?? [], [shopData?.categories]);
+
+  // Reactive catalog-parts prefill for the optional data-gathering section.
+  const catalogPartsPreview = useQuery(
+    api.quotes.previewCatalogPartsByVin,
+    validVin && selectedIds.size > 0
+      ? {
+          vin: validVin,
+          serviceIds: Array.from(selectedIds) as Id<"services">[],
+          selectedServiceOptions:
+            selectedServiceOptions.length > 0
+              ? selectedServiceOptions.map((o) => ({
+                  service_id: o.service_id,
+                  option_label: o.option_label,
+                  option_type: o.option_type,
+                }))
+              : undefined,
+        }
+      : "skip",
+  );
+
+  // Seed editable rows from the catalog preview without clobbering the
+  // mechanic's edits (tracked in dirtyPartKeysRef) or any manually-added rows.
+  // Rebuilds for the currently-selected services so deselected ones drop out.
+  useEffect(() => {
+    if (catalogPartsPreview === undefined) return;
+    const previewBySvc = new Map<string, any>();
+    if (catalogPartsPreview.hasConfig) {
+      for (const svc of catalogPartsPreview.services) {
+        previewBySvc.set(String(svc.service_id), svc);
+      }
+    }
+    setCatalogPartEdits((prev) => {
+      const next: Record<string, MechanicPartEdit[]> = {};
+      for (const sid of Array.from(selectedIds).map(String)) {
+        const existing = prev[sid] ?? [];
+        const svc = previewBySvc.get(sid);
+        const catalogRows: MechanicPartEdit[] = (svc?.rows ?? []).map(
+          (r: any) => {
+            const key = r.role_key || r.oem_number || r.part_name;
+            const composite = `${sid}::${key}`;
+            if (dirtyPartKeysRef.current.has(composite)) {
+              const edited = existing.find((e) => e.key === key);
+              if (edited) return edited;
+            }
+            return {
+              key,
+              service_id: sid,
+              part_name: r.part_name,
+              oem_number: r.oem_number,
+              brand: r.brand ?? "",
+              quantity: String(r.quantity),
+              unit_price: r.price_unknown
+                ? ""
+                : String(r.unit_price_cents / 100),
+              catalog_origin: true,
+              price_unknown: r.price_unknown === true,
+            };
+          },
+        );
+        const added = existing.filter((e) => !e.catalog_origin);
+        next[sid] = [...catalogRows, ...added];
+      }
+      return next;
+    });
+  }, [catalogPartsPreview, selectedIds]);
+
+  const setCatalogPartField = (
+    sid: string,
+    idx: number,
+    field: "part_name" | "oem_number" | "brand" | "quantity" | "unit_price",
+    value: string,
+  ) =>
+    setCatalogPartEdits((prev) => {
+      const rows = prev[sid] ?? [];
+      const row = rows[idx];
+      if (row) dirtyPartKeysRef.current.add(`${sid}::${row.key}`);
+      return {
+        ...prev,
+        [sid]: rows.map((r, i) => (i === idx ? { ...r, [field]: value } : r)),
+      };
+    });
+
+  const addCatalogPartRow = (sid: string) =>
+    setCatalogPartEdits((prev) => {
+      const rows = prev[sid] ?? [];
+      const key = `manual-${addedPartSeqRef.current++}`;
+      dirtyPartKeysRef.current.add(`${sid}::${key}`);
+      return {
+        ...prev,
+        [sid]: [
+          ...rows,
+          {
+            key,
+            service_id: sid,
+            part_name: "",
+            oem_number: "",
+            brand: "",
+            quantity: "1",
+            unit_price: "",
+            catalog_origin: false,
+            price_unknown: false,
+          },
+        ],
+      };
+    });
+
+  const removeCatalogPartRow = (sid: string, idx: number) =>
+    setCatalogPartEdits((prev) => {
+      const rows = prev[sid] ?? [];
+      const row = rows[idx];
+      if (row) dirtyPartKeysRef.current.delete(`${sid}::${row.key}`);
+      return { ...prev, [sid]: rows.filter((_, i) => i !== idx) };
+    });
+
+  // Selected standard services (with names) for the catalog-parts section.
+  const catalogPartServices = useMemo(() => {
+    const all = categories.flatMap((c: any) => c.services as any[]);
+    return Array.from(selectedIds)
+      .map((sid) => {
+        const svc = all.find((s: any) => s._id === sid);
+        return svc
+          ? { service_id: String(sid), name: svc.name as string }
+          : null;
+      })
+      .filter(Boolean) as Array<{ service_id: string; name: string }>;
+  }, [categories, selectedIds]);
 
   const isDiagnostic = useMemo(() => {
     const matchesDiagnostic = (text: string | undefined | null) =>
@@ -824,6 +973,35 @@ export default function CreateBookingDrawer({
         (mechanicEstimateMinutes ?? catalogEstimateMinutes) || undefined;
       const finalVin = vin.trim() || `SHOP${Date.now()}`;
 
+      // Optional parts data-gathering: the mechanic's edits to the catalog's
+      // parts/price/quantity guess. Sent for analytics only — the server
+      // recomputes the catalog reference and never charges off these values.
+      const toPartNum = (s: string) => {
+        const n = Number(s);
+        return s.trim() !== "" && Number.isFinite(n) ? n : undefined;
+      };
+      const mechanicPartEntries = Object.values(catalogPartEdits)
+        .flat()
+        .filter(
+          (r) =>
+            selectedIds.has(r.service_id) &&
+            (r.part_name.trim() !== "" || r.oem_number.trim() !== ""),
+        )
+        .map((r) => {
+          const priceDollars = toPartNum(r.unit_price);
+          return {
+            service_id: r.service_id as Id<"services">,
+            key: r.key,
+            part_name: r.part_name.trim(),
+            oem_number: r.oem_number.trim().toUpperCase(),
+            brand: r.brand.trim() || undefined,
+            quantity: toPartNum(r.quantity),
+            unit_price_cents:
+              priceDollars != null ? Math.round(priceDollars * 100) : undefined,
+            catalog_origin: r.catalog_origin,
+          };
+        });
+
       await createBooking({
         shopId: shopData.shopId as Id<"shops">,
         customerEmail: email.trim() || undefined,
@@ -843,6 +1021,9 @@ export default function CreateBookingDrawer({
         diagnosticSystem: isDiagnostic && diagnosticSystem ? diagnosticSystem : undefined,
         mechanicId: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
         assignmentPreference,
+        // Walk-ins quote a single all-in price (no labor/parts split). The
+        // server records mechanicQuotedPrice as the authoritative cost; these
+        // are the legacy split inputs and stay 0 for this flow.
         laborCost: 0,
         partsCost: 0,
         estimatedLaborMinutes: estMinutes,
@@ -863,6 +1044,8 @@ export default function CreateBookingDrawer({
         catalogEstimatedMinutes: catalogMinutes,
         mechanicQuotedPrice: mechanicQuotedPrice ?? undefined,
         catalogQuotedPrice: 0,
+        mechanicPartEntries:
+          mechanicPartEntries.length > 0 ? mechanicPartEntries : undefined,
       });
 
       onToast("Booking created");
@@ -1722,6 +1905,147 @@ export default function CreateBookingDrawer({
             </div>
           )}
         </CollapsibleSection>
+
+        {/* ── Catalog parts (optional data-gathering; walk-in confirmed flow) ──
+            Prefilled with what the customer app would have shown; edits are
+            recorded for analytics only and never change the quoted price. */}
+        {!isBackfill && selectedIds.size > 0 && (
+          <CollapsibleSection
+            sectionKey="catalog_parts"
+            icon={Package}
+            label="Catalog parts (optional)"
+            open={openSections.has("catalog_parts")}
+            onToggle={toggleSection}
+          >
+            <p className="mb-3 text-xs text-muted-foreground">
+              Prefilled from our catalog — fix anything that&apos;s wrong. Helps
+              us improve pricing and does <strong>not</strong> change the quoted
+              price.
+            </p>
+            {catalogPartsPreview && !catalogPartsPreview.hasConfig && (
+              <p className="mb-3 text-xs text-amber-700">
+                No catalog match for this VIN yet — add parts below if you like.
+              </p>
+            )}
+            <div className="space-y-4">
+              {catalogPartServices.map(({ service_id: sid, name }) => {
+                const rows = catalogPartEdits[sid] ?? [];
+                return (
+                  <div
+                    key={sid}
+                    className="rounded-lg border border-border bg-background/40 p-3"
+                  >
+                    <DrawerFieldLabel>{name} — parts</DrawerFieldLabel>
+                    <div className="space-y-2">
+                      {rows.length === 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          No catalog parts for this service.
+                        </p>
+                      )}
+                      {rows.map((p, idx) => (
+                        <div
+                          key={p.key}
+                          className="grid grid-cols-12 gap-2 items-start"
+                        >
+                          <input
+                            type="text"
+                            placeholder="Part name"
+                            value={p.part_name}
+                            onChange={(e) =>
+                              setCatalogPartField(
+                                sid,
+                                idx,
+                                "part_name",
+                                e.target.value,
+                              )
+                            }
+                            className={`${drawerInputClassName} col-span-3`}
+                          />
+                          <input
+                            type="text"
+                            placeholder="OEM #"
+                            value={p.oem_number}
+                            onChange={(e) =>
+                              setCatalogPartField(
+                                sid,
+                                idx,
+                                "oem_number",
+                                e.target.value,
+                              )
+                            }
+                            className={`${drawerInputClassName} col-span-3 font-mono uppercase`}
+                          />
+                          <input
+                            type="text"
+                            placeholder="Brand"
+                            value={p.brand}
+                            onChange={(e) =>
+                              setCatalogPartField(
+                                sid,
+                                idx,
+                                "brand",
+                                e.target.value,
+                              )
+                            }
+                            className={`${drawerInputClassName} col-span-2`}
+                          />
+                          <input
+                            type="number"
+                            min={0}
+                            step={1}
+                            placeholder="Qty"
+                            value={p.quantity}
+                            onChange={(e) =>
+                              setCatalogPartField(
+                                sid,
+                                idx,
+                                "quantity",
+                                e.target.value,
+                              )
+                            }
+                            className={`${drawerInputClassName} col-span-1`}
+                          />
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            placeholder={p.price_unknown ? "price?" : "Price"}
+                            value={p.unit_price}
+                            onChange={(e) =>
+                              setCatalogPartField(
+                                sid,
+                                idx,
+                                "unit_price",
+                                e.target.value,
+                              )
+                            }
+                            className={`${drawerInputClassName} col-span-2`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeCatalogPartRow(sid, idx)}
+                            className="col-span-1 text-xs text-muted-foreground hover:text-destructive py-2"
+                            aria-label="Remove part"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => addCatalogPartRow(sid)}
+                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add part
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CollapsibleSection>
+        )}
 
         {/* ── Diagnostic system (only when a diagnostic service is selected) ── */}
         {isDiagnostic && (

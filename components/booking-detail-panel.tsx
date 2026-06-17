@@ -13,7 +13,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { ArrowRight, Bell, Car, Check, Clock, Copy, DollarSign, Ellipsis, FileText, History, Loader2, MessageSquare, RotateCcw, Wrench, X } from "lucide-react";
+import { ArrowRight, Bell, Car, Clock, Ellipsis, Loader2, MessageSquare, User, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import OverrunExtendCard from "@/components/mechanic/overrun-extend-card";
 import InvoiceNumberField from "@/components/invoice-number-field";
@@ -53,14 +53,18 @@ import {
 } from "@/components/ui/select";
 import {
   drawerDestructiveButtonClassName,
-  drawerInfoCardClassName,
   drawerPrimaryButtonClassName,
   drawerSecondaryButtonClassName,
   drawerSelectTriggerClassName,
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
 import { StatusPill } from "@/components/status-pill";
+import BookingTimelineModal from "@/components/booking/booking-timeline-modal";
 import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
+import {
+  type ActivityEvent,
+  formatActivityTimestamp,
+} from "@/lib/booking-activity-format";
 import type {
   JobActualPartPayload,
   PostJobSurveyPayload,
@@ -96,158 +100,6 @@ function getCancelReasons(status?: string | null) {
         CANCEL_REASONS[3],
       ]
     : CANCEL_REASONS;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Activity log types                                                  */
-/* ------------------------------------------------------------------ */
-
-type ActivityActor = {
-  userId: Id<"users"> | null;
-  label: string;
-};
-
-type ActivityEvent =
-  | {
-      type: "booking_created";
-      at: number;
-      actor: ActivityActor;
-      data: {
-        quotedSetPriceCents: number | null;
-        quotedBreakdown: {
-          parts_cents: number;
-          labor_cents: number;
-          tax_cents: number;
-          service_fee_cents: number;
-        } | null;
-        disclosedRangeLowCents: number | null;
-        disclosedRangeHighCents: number | null;
-        pricedPartsSnapshot: Array<{
-          part_name: string;
-          oem_number: string;
-          quantity: number;
-          unit_price_cents: number;
-          line_total_cents: number;
-        }> | null;
-        services: string[];
-      };
-    }
-  | {
-      type: "status_change";
-      at: number;
-      actor: ActivityActor;
-      data: { from: string | null; to: string; reason: string | null };
-    }
-  | {
-      type: "estimate_submitted";
-      at: number;
-      actor: ActivityActor;
-      data: {
-        cycle: string;
-        approvalId: Id<"booking_approvals">;
-        totalCents: number;
-        partsSubtotalCents: number | null;
-        laborCents: number | null;
-        taxCents: number | null;
-        serviceFeeCents: number | null;
-        priorCeilingCents: number;
-        partsSnapshot: Array<{
-          part_name?: string;
-          oem_number?: string;
-          quantity?: number;
-          cost?: number;
-        }>;
-        notes: string | null;
-        slaExpiresAtMs: number | null;
-        autoApprovedInRange: boolean;
-      };
-    }
-  | {
-      type: "estimate_decision";
-      at: number;
-      actor: ActivityActor;
-      data: {
-        cycle: string;
-        approvalId: Id<"booking_approvals">;
-        decision: string;
-        totalCents: number;
-        ceilingAfterDecisionCents: number | null;
-      };
-    }
-  | {
-      type: "part_edit";
-      at: number;
-      actor: ActivityActor;
-      data: {
-        editType:
-          | "added"
-          | "removed"
-          | "price"
-          | "quantity"
-          | "supplied_by"
-          | "swap"
-          | "not_used";
-        partKey: string;
-        partName: string | null;
-        oemNumber: string | null;
-        oldValue: string | null;
-        newValue: string | null;
-      };
-    };
-
-function formatActivityTimestamp(ms: number): string {
-  return new Date(ms).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-function formatCycleLabel(cycle: string): string {
-  if (cycle === "pre_job") return "Pre-Job";
-  if (cycle === "mid_job") return "Mid-Job";
-  if (cycle === "post_job") return "Post-Job";
-  return cycle;
-}
-
-function formatDecisionLabel(decision: string): string {
-  switch (decision) {
-    case "approved":
-      return "Approved";
-    case "declined":
-      return "Declined";
-    case "withdrawn":
-      return "Withdrawn";
-    case "auto_approved_within_range":
-      return "Auto-approved (in range)";
-    case "sla_expired":
-      return "SLA expired";
-    default:
-      return decision;
-  }
-}
-
-function formatEditType(editType: string): string {
-  switch (editType) {
-    case "added":
-      return "Added part";
-    case "removed":
-      return "Removed part";
-    case "price":
-      return "Changed price";
-    case "quantity":
-      return "Changed quantity";
-    case "supplied_by":
-      return "Changed supplier";
-    case "swap":
-      return "Swapped part";
-    case "not_used":
-      return "Marked not-used";
-    default:
-      return editType;
-  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -308,66 +160,107 @@ function pendingCountdown(creationTime: number): string | null {
   return `${minutesLeft}m left`;
 }
 
-function isForcedDelayReason(reason?: string | null): boolean {
-  return reason?.startsWith("forced_delay_") ?? false;
-}
-
-function humanizeStatus(
-  status: string,
-  reason?: string | null,
-  oldStatus?: string | null,
-): string {
-  if (status === "confirmed" && reason === "shop_cancelled_reschedule") return "Reschedule Withdrawn";
-  if (status === "confirmed" && reason === "customer_declined_reschedule") return "Reschedule Declined";
-  if (status === "confirmed" && reason === "reschedule_auto_reverted_24h") return "Reschedule Expired";
-  if (status === "pending_customer_acceptance" && isForcedDelayReason(reason)) {
-    return "Late-Start Delay Pending Customer Acceptance";
-  }
-  const map: Record<string, string> = {
-    pending: "Pending",
-    pending_shop_acceptance: "Pending Shop Acceptance",
-    pending_customer_acceptance: "Pending Customer Acceptance",
-    confirmed: "Confirmed",
-    vehicle_at_shop: "Vehicle Here",
-    in_progress: "In Progress",
-    completed: "Completed",
-    no_show: "No-show",
-    cancelled:
-      oldStatus === "pending" || oldStatus === "pending_shop_acceptance"
-        ? "Declined"
-        : "Cancelled",
-  };
-  return map[status] ?? status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-const SYSTEM_REASONS = new Set([
-  "cancelled_by_shop",
-  "shop_cancelled_reschedule",
-  "customer_declined_reschedule",
-  "reschedule_auto_reverted_24h",
-  "customer_approved_reschedule",
-  "forced_delay_proposed_by_shop",
-  "forced_delay_proposed_by_system",
-  "forced_delay_updated_by_shop",
-  "forced_delay_updated_by_system",
-]);
-
-function isSystemReason(reason: string): boolean {
-  return SYSTEM_REASONS.has(reason) || reason.startsWith("seed_");
-}
-
-function getStatusDescription(
-  status: string,
-  reason?: string | null,
-  scheduleChangeMode?: string | null,
+// Display-only MM:SS countdown for the incoming-booking header. There is no
+// real backend auto-decline for pending bookings; this is a soft response
+// deadline (PENDING_SHOP_RESPONSE_MS) shown to nudge the shop. `nowMs` is
+// passed in so the caller's 1s ticker drives the re-render.
+function pendingCountdownClock(
+  creationTime: number,
+  nowMs: number,
 ): string | null {
-  if (status === "pending" || status === "pending_shop_acceptance") return "Awaiting shop review";
-  if (status === "pending_customer_acceptance" && (scheduleChangeMode === "forced_delay" || isForcedDelayReason(reason))) {
-    return "Automatic late-start delay pending customer response";
+  if (!creationTime || isNaN(creationTime)) return null;
+  const remaining = creationTime + PENDING_SHOP_RESPONSE_MS - nowMs;
+  if (remaining <= 0) return null;
+  const totalSeconds = Math.ceil(remaining / 1000);
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// One-line contextual subtext under the header, by booking status.
+function getStatusSubtext(status: string): string | null {
+  switch (status) {
+    case "pending":
+    case "pending_shop_acceptance":
+      return "Booked on the Otopair app — needs your response";
+    case "pending_customer_acceptance":
+      return "Waiting on the customer to confirm the proposed change";
+    case "confirmed":
+      return "On the calendar — mark the vehicle here when it arrives";
+    case "vehicle_at_shop":
+      return "Vehicle is at the shop — run the check, then start the job";
+    case "in_progress":
+      return "Job is underway — add any unforeseen scope before completing";
+    case "completed":
+      return "Job complete — review the report and send the receipt";
+    case "no_show":
+      return "Customer never arrived for this booking";
+    case "cancelled":
+      return "This booking was cancelled";
+    case "declined":
+      return "You declined this booking";
+    default:
+      return null;
   }
-  if (status === "pending_customer_acceptance") return "Shop proposed reschedule";
-  if (status === "cancelled" && reason === "cancelled_by_shop") return "Shop cancelled booking";
-  if (status === "cancelled" && reason && !isSystemReason(reason)) return reason;
+}
+
+// Verb describing the most recent lifecycle event, for the timeline footer.
+function getTimelineFooterVerb(status: string): string {
+  switch (status) {
+    case "pending":
+    case "pending_shop_acceptance":
+      return "Requested";
+    case "pending_customer_acceptance":
+      return "Change proposed";
+    case "confirmed":
+      return "Confirmed";
+    case "vehicle_at_shop":
+      return "Vehicle arrived";
+    case "in_progress":
+      return "Job started";
+    case "completed":
+      return "Completed";
+    case "no_show":
+      return "Marked no-show";
+    case "cancelled":
+      return "Cancelled";
+    case "declined":
+      return "Declined";
+    default:
+      return "Updated";
+  }
+}
+
+// Payment-approval state badge shown next to the status pill in the header.
+function PaymentApprovalBadge({ state }: { state?: string | null }) {
+  if (state === "reauth_required") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
+        Hold reauth needed
+      </span>
+    );
+  }
+  if (state === "post_job_pending") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+        Actuals &gt; estimate &mdash; customer review
+      </span>
+    );
+  }
+  if (state === "pre_job_pending" || state === "mid_job_pending") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+        Pending customer approval
+      </span>
+    );
+  }
+  if (state === "captured") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+        Charged
+      </span>
+    );
+  }
   return null;
 }
 
@@ -763,6 +656,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [isActioning, setIsActioning] = useState(false);
     const [actionError, setActionError] = useState("");
     const [showDeclineModal, setShowDeclineModal] = useState(false);
+    const [showTimelineModal, setShowTimelineModal] = useState(false);
+    const [nowMs, setNowMs] = useState(() => Date.now());
     const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
     const [declineOtherText, setDeclineOtherText] = useState("");
     const [showPrejobDialog, setShowPrejobDialog] = useState(false);
@@ -826,6 +721,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         el.removeEventListener("scroll", onScroll);
       };
     }, [job?._id]);
+
+    // Drive the incoming-booking countdown clock. Only ticks while the booking
+    // is awaiting the shop's response, so it idles for every other status.
+    const isIncomingStatus =
+      job?.status === "pending" || job?.status === "pending_shop_acceptance";
+    useEffect(() => {
+      if (!isIncomingStatus) return;
+      setNowMs(Date.now());
+      const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+      return () => window.clearInterval(id);
+    }, [isIncomingStatus, job?._id]);
 
     const markNotificationsRead = useMutation(
       api.notifications.markShopNotificationsReadForBooking,
@@ -1430,29 +1336,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
     }
 
-    async function handleCopyValue(
-      value: string | null | undefined,
-      field: "email" | "vin",
-      errorMessage: string
-    ) {
-      const text = value?.trim();
-      if (!text) return;
-
-      try {
-        await navigator.clipboard.writeText(text);
-        setCopiedField(field);
-        if (copyEmailTimeoutRef.current !== null) {
-          window.clearTimeout(copyEmailTimeoutRef.current);
-        }
-        copyEmailTimeoutRef.current = window.setTimeout(() => {
-          setCopiedField(null);
-          copyEmailTimeoutRef.current = null;
-        }, 1500);
-      } catch {
-        setActionError(errorMessage);
-      }
-    }
-
     async function handleStartWithPrejob(
       payload: PreJobSurveyPayload,
       action: "close" | "start"
@@ -1797,6 +1680,317 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       ? `${job.serviceNames.join(", ")} — ${job.customerName}`
       : "Booking Detail";
 
+    // Step actions (Accept / Decline / Vehicle here / Reschedule / …) are
+    // hoisted to render at the top of the body, directly under the stepper.
+    const actionBar = job
+      ? (() => {
+                  const s = job.status;
+                  // A pre-job quote is sitting with the customer. The booking
+                  // status is still pending_shop_acceptance, but the shop's
+                  // turn is over until the customer approves or declines —
+                  // block the response actions in the meantime.
+                  const quoteAwaitingCustomer =
+                    (job as any).paymentApprovalState === "pre_job_pending";
+                  const isPendingIncoming =
+                    s === "pending" || s === "pending_shop_acceptance";
+                  const canAccept = isPendingIncoming && !quoteAwaitingCustomer;
+                  const canAdjustQuote = isPendingIncoming;
+                  const canComplete = s === "in_progress";
+                  const canMarkVehicleHere = s === "confirmed";
+                  const canStartJob = s === "vehicle_at_shop";
+                  const canMarkNoShow = s === "confirmed";
+                  const canDecline = isPendingIncoming && !quoteAwaitingCustomer;
+                  const canCancel =
+                    s === "confirmed" ||
+                    s === "vehicle_at_shop" ||
+                    s === "in_progress";
+                  const canReschedule =
+                    !!onRequestReschedule &&
+                    !quoteAwaitingCustomer &&
+                    (s === "pending" ||
+                      s === "pending_shop_acceptance" ||
+                      s === "confirmed" ||
+                      s === "vehicle_at_shop" ||
+                      s === "in_progress");
+                  const canAdjustMidJob =
+                    s === "in_progress" &&
+                    (job as any).hasDisclosedRange &&
+                    ((job as any).paymentApprovalState === "in_range" ||
+                      (job as any).paymentApprovalState === "pre_job_approved" ||
+                      (job as any).paymentApprovalState === "mid_job_approved" ||
+                      (job as any).paymentApprovalState === "captured");
+
+                  if (
+                    !canAccept &&
+                    !canAdjustQuote &&
+                    !canMarkVehicleHere &&
+                    !canComplete &&
+                    !canDecline &&
+                    !canCancel &&
+                    !canMarkNoShow &&
+                    !canReschedule &&
+                    !canAdjustMidJob
+                  )
+                    return null;
+
+                  return (
+                    <div className="space-y-2">
+                      {job.isFixedPrice && (canAdjustQuote || canAdjustMidJob) ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                          <span className="font-semibold">Fixed price service.</span>{" "}
+                          Updating parts or time won&apos;t change the price — edits are logged but
+                          will not affect this job. To change what the customer pays, update the
+                          fixed price in the shop&apos;s service catalog.
+                        </div>
+                      ) : null}
+                      {quoteAwaitingCustomer ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                          <span className="font-semibold">
+                            Waiting on the customer.
+                          </span>{" "}
+                          Your quote was sent for approval. You can&apos;t
+                          accept, decline, or reschedule this booking until the
+                          customer approves or declines it.
+                        </div>
+                      ) : null}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {canAccept && (
+                          <button
+                            onClick={() =>
+                              handleStatusAction("accept")
+                            }
+                            disabled={isActioning}
+                            className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                          >
+                            {isActioning && (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            )}
+                            {isActioning ? (
+                              "Accepting..."
+                            ) : (
+                              <span>
+                                <span
+                                  style={{
+                                    textDecorationLine: "underline",
+                                  }}
+                                >
+                                  A
+                                </span>
+                                ccept booking
+                              </span>
+                            )}
+                          </button>
+                        )}
+                        {canStartJob && (
+                          <button
+                            onClick={handleStartJob}
+                            disabled={!job.mechanicId || isActioning}
+                            title={
+                              !job.mechanicId
+                                ? "Assign a mechanic first"
+                                : undefined
+                            }
+                            className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                          >
+                            Open vehicle check
+                          </button>
+                        )}
+                        {canMarkVehicleHere && (
+                          <button
+                            onClick={handleVehicleAtShop}
+                            disabled={isActioning}
+                            className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                          >
+                            {isActioning ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : null}
+                            Vehicle here
+                          </button>
+                        )}
+                        {job.status === "in_progress" &&
+                          (job as any).hasDisclosedRange &&
+                          ((job as any).paymentApprovalState === "in_range" ||
+                            (job as any).paymentApprovalState === "pre_job_approved" ||
+                            (job as any).paymentApprovalState === "mid_job_approved" ||
+                            (job as any).paymentApprovalState === "captured") && (
+                            <button
+                              type="button"
+                              onClick={() => setShowMidJobDialog(true)}
+                              disabled={isActioning}
+                              className={drawerSecondaryButtonClassName}
+                              title="Found extra work mid-job? Send the new price to the customer for confirmation."
+                            >
+                              Add unforeseen scope
+                            </button>
+                          )}
+                        {(job as any).hasDisclosedRange &&
+                          ((job as any).paymentApprovalState === "pre_job_pending" ||
+                            (job as any).paymentApprovalState === "mid_job_pending" ||
+                            (job as any).paymentApprovalState === "post_job_pending" ||
+                            (job as any).paymentApprovalState === "pre_job_declined" ||
+                            (job as any).paymentApprovalState === "sla_expired") && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                (job as any).paymentApprovalState === "mid_job_pending"
+                                  ? setShowMidJobDialog(true)
+                                  : setShowPrejobEstimateDialog(true)
+                              }
+                              disabled={isActioning}
+                              className={drawerSecondaryButtonClassName}
+                              title="View pending customer confirmation"
+                            >
+                              {(job as any).paymentApprovalState === "post_job_pending"
+                                ? "Customer reviewing final billing"
+                                : (job as any).paymentApprovalState === "mid_job_pending"
+                                  ? "Mid-job pending confirmation"
+                                  : "Open pending estimate"}
+                            </button>
+                          )}
+                        {canComplete && job.status === "in_progress" && (
+                          // TODO: Fix --success usage
+                          <button
+                            onClick={() => openPostjobDialog()}
+                            disabled={isActioning}
+                            className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                            style={
+                              job.diagnosticSystem
+                                ? { backgroundColor: "#b45309", color: "#fff" }
+                                : job.status === "in_progress"
+                                  ? undefined
+                                  : {
+                                      backgroundColor: completedColors.text,
+                                      color: "#fff",
+                                    }
+                            }
+                          >
+                            {job.diagnosticSystem ? (
+                              <span>Run diagnostic checklist</span>
+                            ) : (
+                              <span>
+                                Ma
+                                <span
+                                  style={{
+                                    textDecorationLine: "underline",
+                                  }}
+                                >
+                                  r
+                                </span>
+                                k completed
+                              </span>
+                            )}
+                          </button>
+                        )}
+                        {canReschedule && (
+                          <button
+                            onClick={() => onRequestReschedule?.()}
+                            disabled={isActioning}
+                            className={drawerSecondaryButtonClassName}
+                            title="Switch to the day-lane to drag this booking to a new time"
+                          >
+                            Reschedule
+                          </button>
+                        )}
+                        {canDecline && (
+                          <button
+                            onClick={() =>
+                              setShowDeclineModal(true)
+                            }
+                            disabled={isActioning}
+                            className={drawerDestructiveButtonClassName}
+                          >
+                            <span>
+                              <span
+                                style={{
+                                  textDecorationLine: "underline",
+                                }}
+                              >
+                                D
+                              </span>
+                              ecline
+                            </span>
+                          </button>
+                        )}
+                        {(() => {
+                          // Secondary / destructive / rare actions collapse into
+                          // a single ⋯ menu so the row stays to one or two
+                          // prominent buttons.
+                          const overflow: Array<{
+                            key: string;
+                            label: string;
+                            onSelect: () => void;
+                            destructive?: boolean;
+                          }> = [];
+                          if (
+                            canAdjustQuote &&
+                            (job as any).paymentApprovalState !== "pre_job_pending"
+                          ) {
+                            overflow.push({
+                              key: "adjust-quote",
+                              label: "Adjust quote",
+                              onSelect: () => setShowPrejobEstimateDialog(true),
+                            });
+                          }
+                          if (canComplete && job.status === "confirmed") {
+                            overflow.push({
+                              key: "mark-completed",
+                              label: "Mark completed",
+                              onSelect: () => openPostjobDialog(),
+                            });
+                          }
+                          if (canMarkNoShow) {
+                            overflow.push({
+                              key: "no-show",
+                              label: "Mark no-show",
+                              onSelect: () => handlePostThresholdNoShow(),
+                              destructive: true,
+                            });
+                          }
+                          if (canCancel) {
+                            overflow.push({
+                              key: "cancel",
+                              label: "Cancel booking",
+                              onSelect: () => setShowCancelConfirm(true),
+                              destructive: true,
+                            });
+                          }
+                          if (overflow.length === 0) return null;
+                          return (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  disabled={isActioning}
+                                  aria-label="More booking actions"
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                                >
+                                  <Ellipsis className="h-4 w-4" aria-hidden="true" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                {overflow.map((item) => (
+                                  <DropdownMenuItem
+                                    key={item.key}
+                                    onSelect={item.onSelect}
+                                    className={
+                                      item.destructive
+                                        ? "text-destructive focus:text-destructive"
+                                        : undefined
+                                    }
+                                  >
+                                    {item.label}
+                                  </DropdownMenuItem>
+                                ))}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  );
+        })()
+      : null;
+
     return (
       <>
         <div
@@ -1804,23 +1998,90 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           tabIndex={-1}
           className="flex flex-col flex-1 min-h-0 focus:outline-none"
         >
-          {/* Header */}
-          <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
-            <h2 className="text-base font-semibold text-foreground truncate pr-2">
-              {title}
-            </h2>
+          {/* Sticky top region — header, stepper, and primary actions stay visible */}
+          <div className="shrink-0 border-b border-border">
+            <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
+            <div className="min-w-0 flex-1">
+              {job ? (
+                <>
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <h2 className="truncate text-base font-semibold text-foreground">
+                      {job.vehicle || "Booking Detail"}
+                    </h2>
+                    <StatusPill status={job.status} />
+                    <PaymentApprovalBadge
+                      state={(job as any).paymentApprovalState}
+                    />
+                  </div>
+                  <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                    {job.serviceNames.join(", ")}
+                    {job.customerName ? ` · ${job.customerName}` : ""}
+                  </p>
+                  {(() => {
+                    const subtext = getStatusSubtext(job.status);
+                    const clock =
+                      isIncomingStatus &&
+                      (job as any).paymentApprovalState !== "pre_job_pending"
+                        ? pendingCountdownClock(job._creationTime, nowMs)
+                        : null;
+                    const rescheduleCd =
+                      job.status === "pending_customer_acceptance" &&
+                      job.rescheduleProposedAt
+                        ? pendingCountdown(job.rescheduleProposedAt)
+                        : null;
+                    if (!subtext && !clock && !rescheduleCd) return null;
+                    return (
+                      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                        {subtext && (
+                          <span className="text-xs text-muted-foreground">
+                            {subtext}
+                          </span>
+                        )}
+                        {clock && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-700">
+                            <Clock className="h-3 w-3" aria-hidden="true" />
+                            Auto-declines in {clock}
+                          </span>
+                        )}
+                        {rescheduleCd && (
+                          <span className="text-xs font-medium text-purple-600">
+                            {rescheduleCd}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </>
+              ) : (
+                <h2 className="truncate text-base font-semibold text-foreground">
+                  {title}
+                </h2>
+              )}
+            </div>
             <button
               onClick={onClose}
-              className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
+              className="-mt-0.5 p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
             >
               <X className="w-5 h-5" />
             </button>
+            </div>
+            {job ? (
+              <div className="space-y-3 px-5 pb-4">
+                <JobStepIndicator
+                  currentStep={getJobStep(job.status)}
+                  status={job.status}
+                  compact={isStepIndicatorCompact}
+                  className="border-0 bg-transparent px-0 py-0"
+                />
+                {actionBar}
+              </div>
+            ) : null}
           </div>
 
           {/* Body */}
           <div
             ref={scrollContainerRef}
-            className="flex-1 overflow-y-auto px-5 pb-5"
+            className="flex-1 overflow-y-auto px-5 pb-5 pt-5"
           >
             {job === undefined ? (
               <div className="space-y-3">
@@ -1837,270 +2098,31 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 Booking not found.
               </p>
             ) : (
-              <div className="space-y-6">
-                <div className="sticky top-0 z-20 -mx-5 -mt-5 bg-background/95 px-5 pt-5 pb-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-                  <JobStepIndicator
-                    currentStep={getJobStep(job.status)}
-                    status={job.status}
-                    compact={isStepIndicatorCompact}
-                  />
-                </div>
-
+              <div className="divide-y divide-border">
                 <VehiclePassportCard
                   job={job}
                   passport={vehiclePassport ?? null}
+                  customerName={job.customerName}
+                  customerEmail={job.customerEmail}
+                  scheduleLabel={
+                    <>
+                      {formatBookingDate(job.scheduledDate, job.scheduledTime)}
+                      {job.estimatedLaborMinutes != null &&
+                      job.estimatedLaborMinutes > 0 ? (
+                        <span className="text-muted-foreground">
+                          {" · est. "}
+                          {formatDurationMinutes(job.estimatedLaborMinutes)}
+                        </span>
+                      ) : null}
+                      {job.diagnosticSystem ? (
+                        <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                          Diagnostic ·{" "}
+                          {DIAGNOSTIC_SYSTEM_LABELS[job.diagnosticSystem]}
+                        </span>
+                      ) : null}
+                    </>
+                  }
                 />
-
-                {/* Booking info grid */}
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div className={drawerInfoCardClassName}>
-                    <DrawerFieldLabel>Customer</DrawerFieldLabel>
-                    <p className="text-[15px] font-medium text-foreground">
-                      {job.customerName}
-                    </p>
-                    <div className="relative mt-1 pr-9">
-                      {job.customerEmail ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void handleCopyValue(
-                                job.customerEmail,
-                                "email",
-                                "Could not copy customer email."
-                              )
-                            }
-                            className="absolute right-0 top-0 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                            aria-label="Copy customer email"
-                            title={copiedField === "email" ? "Copied" : "Copy email"}
-                          >
-                            {copiedField === "email" ? (
-                              <Check className="h-4 w-4" aria-hidden="true" />
-                            ) : (
-                              <Copy className="h-4 w-4" aria-hidden="true" />
-                            )}
-                          </button>
-                          <p
-                            className="truncate pr-1 text-xs leading-5 text-muted-foreground sm:text-sm"
-                            title={job.customerEmail}
-                          >
-                            {job.customerEmail}
-                          </p>
-                        </>
-                      ) : (
-                        <p className="text-xs leading-5 text-muted-foreground sm:text-sm">
-                          No email on file
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <div className={drawerInfoCardClassName}>
-                    <DrawerFieldLabel>Vehicle</DrawerFieldLabel>
-                    <p className="text-[15px] font-medium text-foreground">
-                      {job.vehicle}
-                    </p>
-                    <div className="relative mt-1 pr-9">
-                      {job.vin ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void handleCopyValue(job.vin, "vin", "Could not copy VIN.")
-                            }
-                            className="absolute right-0 top-0 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                            aria-label="Copy VIN"
-                            title={copiedField === "vin" ? "Copied" : "Copy VIN"}
-                          >
-                            {copiedField === "vin" ? (
-                              <Check className="h-4 w-4" aria-hidden="true" />
-                            ) : (
-                              <Copy className="h-4 w-4" aria-hidden="true" />
-                            )}
-                          </button>
-                          <p className="truncate pr-1 text-sm text-muted-foreground" title={job.vin}>
-                            {job.vin}
-                          </p>
-                        </>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">No VIN on file</p>
-                      )}
-                    </div>
-                  </div>
-                  <div className={drawerInfoCardClassName}>
-                    <DrawerFieldLabel>Schedule</DrawerFieldLabel>
-                    <p className="text-[15px] font-medium text-foreground">
-                      {formatBookingDate(
-                        job.scheduledDate,
-                        job.scheduledTime,
-                      )}
-                    </p>
-                    {job.estimatedLaborMinutes != null && job.estimatedLaborMinutes > 0 && (
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        Est. {formatDurationMinutes(job.estimatedLaborMinutes)}
-                      </p>
-                    )}
-                  </div>
-                  <div className={drawerInfoCardClassName}>
-                    <DrawerFieldLabel>Services</DrawerFieldLabel>
-                    <p className="text-[15px] font-medium text-foreground">
-                      {job.serviceNames.join(", ")}
-                    </p>
-                    {job.diagnosticSystem && (
-                      <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-amber-900">
-                        Diagnostic · {DIAGNOSTIC_SYSTEM_LABELS[job.diagnosticSystem]}
-                      </span>
-                    )}
-                  </div>
-                  {(() => {
-                    // When the customer approved a pre/mid-job adjustment, the
-                    // effective quote (from the approved booking_approvals row)
-                    // becomes the NEW agreed total. Show its breakdown in place
-                    // of the original quote, with the prior figure struck
-                    // through and a "New agreed price" pill, so the drawer
-                    // reflects what the customer actually agreed to.
-                    const hasNewAgreedPrice =
-                      !job.isFixedPrice &&
-                      lockedQuote != null &&
-                      lockedQuote.originalTotalCents != null &&
-                      lockedQuote.originalTotalCents !== lockedQuote.totalCents;
-                    return (
-                  <div className={drawerInfoCardClassName}>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <DrawerFieldLabel>
-                        {job.isFixedPrice
-                          ? "Fixed price"
-                          : hasNewAgreedPrice
-                            ? "Agreed price"
-                            : "Quoted price"}
-                      </DrawerFieldLabel>
-                      {job.isFixedPrice && (
-                        <span className="inline-flex items-center rounded-md bg-[#EFF6FF] px-2 py-0.5 text-[11px] font-semibold text-[#5299FE]">
-                          Fixed price
-                        </span>
-                      )}
-                      {hasNewAgreedPrice && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[11px] font-semibold text-success">
-                          <Check className="h-3 w-3" strokeWidth={3} />
-                          New agreed price
-                        </span>
-                      )}
-                    </div>
-                    {hasNewAgreedPrice && lockedQuote != null ? (
-                      <>
-                        <div className="flex items-baseline gap-2">
-                          <p className="text-[15px] font-semibold text-foreground">
-                            ${(lockedQuote.totalCents / 100).toFixed(2)}
-                          </p>
-                          {lockedQuote.originalTotalCents != null && (
-                            <p className="text-[12px] text-muted-foreground line-through">
-                              ${(lockedQuote.originalTotalCents / 100).toFixed(2)}
-                            </p>
-                          )}
-                        </div>
-                        {lockedQuote.hasBreakdown ? (
-                          <p className="mt-1 text-sm text-muted-foreground">
-                            Parts ${(lockedQuote.partsCents / 100).toFixed(2)} &middot;{" "}
-                            Labor ${(lockedQuote.laborCents / 100).toFixed(2)} &middot;{" "}
-                            Tax+Fee ${((lockedQuote.taxCents + lockedQuote.feeCents) / 100).toFixed(2)}
-                          </p>
-                        ) : null}
-                        <p className="mt-1 text-[12px] text-muted-foreground">
-                          Customer approved this adjusted total.
-                        </p>
-                      </>
-                    ) : job.quotedSetPriceDollars != null && job.quotedBreakdown ? (
-                      <>
-                        <p className="text-[15px] font-medium text-foreground">
-                          ${job.quotedSetPriceDollars.toFixed(2)}
-                        </p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          Parts ${(job.quotedBreakdown.parts_cents / 100).toFixed(2)} &middot;{" "}
-                          Labor ${(job.quotedBreakdown.labor_cents / 100).toFixed(2)} &middot;{" "}
-                          Tax+Fee ${((job.quotedBreakdown.tax_cents + job.quotedBreakdown.service_fee_cents) / 100).toFixed(2)}
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-[15px] font-medium text-foreground">
-                          ${(job.totalCost ?? 0).toFixed(2)} total
-                        </p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          Labor ${(job.laborCost ?? 0).toFixed(2)} &middot; Parts ${(job.partsCost ?? 0).toFixed(2)}
-                        </p>
-                      </>
-                    )}
-                    {job.isFixedPrice && (
-                      <p className="mt-1 text-[12px] text-muted-foreground">
-                        Customer agreed to this flat rate at booking — no
-                        deviation expected.
-                      </p>
-                    )}
-                  </div>
-                    );
-                  })()}
-                  <div className={drawerInfoCardClassName}>
-                    <DrawerFieldLabel>Status</DrawerFieldLabel>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <StatusPill status={job.status} />
-                      {(job.status === "pending" ||
-                        job.status === "pending_shop_acceptance") &&
-                        (job as any).paymentApprovalState !==
-                          "pre_job_pending" &&
-                        (() => {
-                          const cd = pendingCountdown(job._creationTime);
-                          return cd ? (
-                            <span className="text-amber-600 text-xs font-medium">
-                              {cd}
-                            </span>
-                          ) : null;
-                        })()}
-                      {job.status === "pending_customer_acceptance" &&
-                        job.rescheduleProposedAt &&
-                        (() => {
-                          const cd = pendingCountdown(job.rescheduleProposedAt);
-                          return cd ? (
-                            <span className="text-purple-600 text-xs font-medium">
-                              {cd}
-                            </span>
-                          ) : null;
-                        })()}
-                      {(() => {
-                        const pas = (job as any).paymentApprovalState as
-                          | string
-                          | undefined;
-                        if (pas === "reauth_required") {
-                          return (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
-                              Hold reauth needed
-                            </span>
-                          );
-                        }
-                        if (pas === "post_job_pending") {
-                          return (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-                              Actuals &gt; estimate &mdash; customer review
-                            </span>
-                          );
-                        }
-                        if (pas === "pre_job_pending" || pas === "mid_job_pending") {
-                          return (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-                              Pending customer approval
-                            </span>
-                          );
-                        }
-                        if (pas === "captured") {
-                          return (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
-                              Charged
-                            </span>
-                          );
-                        }
-                        return null;
-                      })()}
-                    </div>
-                  </div>
-                </div>
 
                 {job.status === "in_progress" && (
                   <OverrunExtendCard
@@ -2127,22 +2149,27 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 )}
 
                 {job.customerNotes && job.customerNotes.trim().length > 0 && (
-                  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
-                    <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-sky-900">
-                      <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
-                      Customer states
+                  <div className="py-3.5">
+                    <div className="mb-2 flex items-center gap-2.5">
+                      <MessageSquare className="h-4 w-4 text-primary" aria-hidden="true" />
+                      <span className="text-sm font-semibold text-foreground">
+                        Customer states
+                      </span>
                     </div>
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-sky-900">
+                    <p className="whitespace-pre-wrap rounded-lg bg-sky-50 px-3 py-2 text-sm leading-relaxed text-sky-900">
                       {job.customerNotes}
                     </p>
                   </div>
                 )}
 
                 {/* Assign mechanic */}
-                <div className="rounded-2xl bg-muted/20 p-4">
-                  <DrawerFieldLabel className="mb-3">
-                    Assignment
-                  </DrawerFieldLabel>
+                <div className="py-3.5">
+                  <div className="mb-3 flex items-center gap-2.5">
+                    <User className="h-4 w-4 text-primary" aria-hidden="true" />
+                    <span className="text-sm font-semibold text-foreground">
+                      Assignment
+                    </span>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     <div ref={assignTriggerRef}>
                       <Select
@@ -2233,7 +2260,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
                 {/* Pending customer acceptance actions */}
                 {job.status === "pending_customer_acceptance" && (
-                  <div className="rounded-2xl bg-muted/20 p-4">
+                  <div className="py-3.5">
                     <DrawerFieldLabel className="mb-2">
                       Actions
                     </DrawerFieldLabel>
@@ -2292,323 +2319,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   ) : null
                 ) : null}
 
-                {/* Status transitions — grouped by 4-step mechanic flow */}
-                {(() => {
-                  const s = job.status;
-                  const step = getJobStep(s);
-                  // A pre-job quote is sitting with the customer. The booking
-                  // status is still pending_shop_acceptance, but the shop's
-                  // turn is over until the customer approves or declines —
-                  // block the response actions in the meantime.
-                  const quoteAwaitingCustomer =
-                    (job as any).paymentApprovalState === "pre_job_pending";
-                  const isPendingIncoming =
-                    s === "pending" || s === "pending_shop_acceptance";
-                  const canAccept = isPendingIncoming && !quoteAwaitingCustomer;
-                  const canAdjustQuote = isPendingIncoming;
-                  const canComplete = s === "in_progress";
-                  const canMarkVehicleHere = s === "confirmed";
-                  const canStartJob = s === "vehicle_at_shop";
-                  const canMarkNoShow = s === "confirmed";
-                  const canDecline = isPendingIncoming && !quoteAwaitingCustomer;
-                  const canCancel =
-                    s === "confirmed" ||
-                    s === "vehicle_at_shop" ||
-                    s === "in_progress";
-                  const canReschedule =
-                    !!onRequestReschedule &&
-                    !quoteAwaitingCustomer &&
-                    (s === "pending" ||
-                      s === "pending_shop_acceptance" ||
-                      s === "confirmed" ||
-                      s === "vehicle_at_shop" ||
-                      s === "in_progress");
-                  const canAdjustMidJob =
-                    s === "in_progress" &&
-                    (job as any).hasDisclosedRange &&
-                    ((job as any).paymentApprovalState === "in_range" ||
-                      (job as any).paymentApprovalState === "pre_job_approved" ||
-                      (job as any).paymentApprovalState === "mid_job_approved" ||
-                      (job as any).paymentApprovalState === "captured");
-
-                  if (
-                    !canAccept &&
-                    !canAdjustQuote &&
-                    !canMarkVehicleHere &&
-                    !canComplete &&
-                    !canDecline &&
-                    !canCancel &&
-                    !canMarkNoShow &&
-                    !canReschedule &&
-                    !canAdjustMidJob
-                  )
-                    return null;
-
-                  const stepLabel =
-                    step === 1
-                      ? "Step 1 · Incoming"
-                      : step === 2
-                        ? "Step 2 · Confirmed"
-                        : step === 3
-                          ? "Step 3 · Vehicle here"
-                          : step === 4
-                            ? "Step 4 · Active job"
-                            : "Actions";
-
-                  return (
-                    <div className="rounded-2xl bg-muted/20 p-4">
-                      <div className="mb-3 flex items-center justify-between gap-2">
-                        <DrawerFieldLabel className="mb-0">
-                          {stepLabel}
-                        </DrawerFieldLabel>
-                        {canComplete && job.status === "confirmed" && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                type="button"
-                                disabled={isActioning}
-                                aria-label="More booking actions"
-                                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-                              >
-                                <Ellipsis
-                                  className="h-4 w-4"
-                                  aria-hidden="true"
-                                />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onSelect={() => openPostjobDialog()}
-                              >
-                                Mark completed
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-                      </div>
-                      {job.isFixedPrice && (canAdjustQuote || canAdjustMidJob) ? (
-                        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
-                          <span className="font-semibold">Fixed price service.</span>{" "}
-                          Updating parts or time won&apos;t change the price — edits are logged but
-                          will not affect this job. To change what the customer pays, update the
-                          fixed price in the shop&apos;s service catalog.
-                        </div>
-                      ) : null}
-                      {quoteAwaitingCustomer ? (
-                        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
-                          <span className="font-semibold">
-                            Waiting on the customer.
-                          </span>{" "}
-                          Your quote was sent for approval. You can&apos;t
-                          accept, decline, or reschedule this booking until the
-                          customer approves or declines it.
-                        </div>
-                      ) : null}
-                      <div className="flex flex-wrap gap-2">
-                        {canAccept && (
-                          <button
-                            onClick={() =>
-                              handleStatusAction("accept")
-                            }
-                            disabled={isActioning}
-                            className={drawerPrimaryButtonClassName}
-                          >
-                            {isActioning && (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            )}
-                            {isActioning ? (
-                              "Accepting..."
-                            ) : (
-                              <span>
-                                <span
-                                  style={{
-                                    textDecorationLine: "underline",
-                                  }}
-                                >
-                                  A
-                                </span>
-                                ccept
-                              </span>
-                            )}
-                          </button>
-                        )}
-                        {canAdjustQuote &&
-                          (job as any).paymentApprovalState !==
-                            "pre_job_pending" && (
-                            <button
-                              type="button"
-                              onClick={() => setShowPrejobEstimateDialog(true)}
-                              disabled={isActioning}
-                              className={drawerSecondaryButtonClassName}
-                              title="Change parts, labor, or price before accepting — sends a confirmation request to the customer with your reasoning."
-                            >
-                              Adjust quote
-                            </button>
-                          )}
-                        {canStartJob && (
-                          <button
-                            onClick={handleStartJob}
-                            disabled={!job.mechanicId || isActioning}
-                            title={
-                              !job.mechanicId
-                                ? "Assign a mechanic first"
-                                : undefined
-                            }
-                            className={drawerPrimaryButtonClassName}
-                          >
-                            Open vehicle check
-                          </button>
-                        )}
-                        {canMarkVehicleHere && (
-                          <button
-                            onClick={handleVehicleAtShop}
-                            disabled={isActioning}
-                            className={drawerPrimaryButtonClassName}
-                          >
-                            {isActioning ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : null}
-                            Vehicle here
-                          </button>
-                        )}
-                        {job.status === "in_progress" &&
-                          (job as any).hasDisclosedRange &&
-                          ((job as any).paymentApprovalState === "in_range" ||
-                            (job as any).paymentApprovalState === "pre_job_approved" ||
-                            (job as any).paymentApprovalState === "mid_job_approved" ||
-                            (job as any).paymentApprovalState === "captured") && (
-                            <button
-                              type="button"
-                              onClick={() => setShowMidJobDialog(true)}
-                              disabled={isActioning}
-                              className={drawerSecondaryButtonClassName}
-                              title="Found extra work mid-job? Send the new price to the customer for confirmation."
-                            >
-                              Add unforeseen scope
-                            </button>
-                          )}
-                        {(job as any).hasDisclosedRange &&
-                          ((job as any).paymentApprovalState === "pre_job_pending" ||
-                            (job as any).paymentApprovalState === "mid_job_pending" ||
-                            (job as any).paymentApprovalState === "post_job_pending" ||
-                            (job as any).paymentApprovalState === "pre_job_declined" ||
-                            (job as any).paymentApprovalState === "sla_expired") && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                (job as any).paymentApprovalState === "mid_job_pending"
-                                  ? setShowMidJobDialog(true)
-                                  : setShowPrejobEstimateDialog(true)
-                              }
-                              disabled={isActioning}
-                              className={drawerSecondaryButtonClassName}
-                              title="View pending customer confirmation"
-                            >
-                              {(job as any).paymentApprovalState === "post_job_pending"
-                                ? "Customer reviewing final billing"
-                                : (job as any).paymentApprovalState === "mid_job_pending"
-                                  ? "Mid-job pending confirmation"
-                                  : "Open pending estimate"}
-                            </button>
-                          )}
-                        {canComplete && job.status === "in_progress" && (
-                          // TODO: Fix --success usage
-                          <button
-                            onClick={() => openPostjobDialog()}
-                            disabled={isActioning}
-                            className={drawerPrimaryButtonClassName}
-                            style={
-                              job.diagnosticSystem
-                                ? { backgroundColor: "#b45309", color: "#fff" }
-                                : job.status === "in_progress"
-                                  ? undefined
-                                  : {
-                                      backgroundColor: completedColors.text,
-                                      color: "#fff",
-                                    }
-                            }
-                          >
-                            {job.diagnosticSystem ? (
-                              <span>Run diagnostic checklist</span>
-                            ) : (
-                              <span>
-                                Ma
-                                <span
-                                  style={{
-                                    textDecorationLine: "underline",
-                                  }}
-                                >
-                                  r
-                                </span>
-                                k completed
-                              </span>
-                            )}
-                          </button>
-                        )}
-                        {canReschedule && (
-                          <button
-                            onClick={() => onRequestReschedule?.()}
-                            disabled={isActioning}
-                            className={drawerSecondaryButtonClassName}
-                            title="Switch to the day-lane to drag this booking to a new time"
-                          >
-                            Reschedule
-                          </button>
-                        )}
-                        {canDecline && (
-                          <button
-                            onClick={() =>
-                              setShowDeclineModal(true)
-                            }
-                            disabled={isActioning}
-                            className={drawerDestructiveButtonClassName}
-                          >
-                            <span>
-                              <span
-                                style={{
-                                  textDecorationLine: "underline",
-                                }}
-                              >
-                                D
-                              </span>
-                              ecline
-                            </span>
-                          </button>
-                        )}
-                        {canMarkNoShow && (
-                          <button
-                            onClick={handlePostThresholdNoShow}
-                            disabled={isActioning}
-                            className={drawerDestructiveButtonClassName}
-                          >
-                            Mark no-show
-                          </button>
-                        )}
-                        {canCancel && (
-                          <button
-                            onClick={() =>
-                              setShowCancelConfirm(true)
-                            }
-                            disabled={isActioning}
-                            className={drawerDestructiveButtonClassName}
-                          >
-                            <span>
-                              <span
-                                style={{
-                                  textDecorationLine: "underline",
-                                }}
-                              >
-                                C
-                              </span>
-                              ancel booking
-                            </span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()}
-
                 {job.status === "completed" && job._id ? (
                   <PostjobPhotoStrip bookingId={job._id} />
                 ) : null}
@@ -2637,336 +2347,26 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   />
                 )}
 
-                {/* Status history */}
-                <div className="rounded-2xl bg-muted/20 p-4">
-                  <div className="mb-3 flex items-center gap-1.5">
-                    <History className="w-3.5 h-3.5 text-muted-foreground" />
-                    <DrawerFieldLabel className="mb-0">Status History</DrawerFieldLabel>
-                  </div>
-                  <div className="max-h-56 overflow-y-auto rounded-xl bg-background px-3 py-2">
-                    {job.history.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">No history entries yet.</p>
-                    ) : (
-                      <div>
-                        {job.history.map((h, index) => {
-                          const isLast = index === job.history.length - 1;
-                          const label = humanizeStatus(
-                            h.new_status,
-                            h.reason,
-                            h.old_status,
-                          );
-                          const formattedDate = new Date(h.changed_at).toLocaleString("en-US", {
-                            month: "short", day: "numeric", hour: "numeric",
-                            minute: "2-digit", hour12: true,
-                          });
-                          const isPending = h.new_status.startsWith("pending");
-                          const isCancelled = h.new_status === "cancelled";
-                          const isCompleted = h.new_status === "completed";
-                          const isInProgress = h.new_status === "in_progress";
-                          const isRescheduleRevert = h.new_status === "confirmed" && (
-                            h.reason === "shop_cancelled_reschedule" ||
-                            h.reason === "customer_declined_reschedule" ||
-                            h.reason === "reschedule_auto_reverted_24h"
-                          );
-                          const isConfirmed = h.new_status === "confirmed" && !isRescheduleRevert;
-                          return (
-                            <div key={String(h._id)} className="relative flex gap-3 pb-5 last:pb-0">
-                              {!isLast && (
-                                <div className="absolute left-[11px] top-6 bottom-0 w-px bg-border" />
-                              )}
-                                <div className="relative z-10 shrink-0">
-                                {isCompleted && (
-                                  // TODO: Fix --success usage
-                                  <div
-                                    className="w-6 h-6 rounded-full flex items-center justify-center"
-                                    style={{ backgroundColor: completedColors.text }}
-                                  >
-                                    <Check className="w-3 h-3 text-white" strokeWidth={3} />
-                                  </div>
-                                )}
-                                {isInProgress && (
-                                  <div className="w-6 h-6 rounded-full border-2 border-primary bg-card flex items-center justify-center">
-                                    <div className="w-2 h-2 rounded-full bg-primary" />
-                                  </div>
-                                )}
-                                {isPending && (
-                                  <div className="w-6 h-6 rounded-full border-2 border-amber-400 bg-card flex items-center justify-center">
-                                    <Clock className="w-3 h-3 text-amber-400" strokeWidth={3} />
-                                  </div>
-                                )}
-                                {isCancelled && (
-                                  <div className="w-6 h-6 rounded-full bg-destructive/10 flex items-center justify-center">
-                                    <X className="w-3 h-3 text-destructive" />
-                                  </div>
-                                )}
-                                {isRescheduleRevert && (
-                                  <div className="w-6 h-6 rounded-full border-2 border-muted-foreground bg-card flex items-center justify-center">
-                                    <RotateCcw className="w-3 h-3 text-muted-foreground" strokeWidth={2.5} />
-                                  </div>
-                                )}
-                                {isConfirmed && (
-                                  <div className="w-6 h-6 rounded-full border-2 border-primary bg-card flex items-center justify-center">
-                                    <Check className="w-3 h-3 text-primary" strokeWidth={3} />
-                                  </div>
-                                )}
-                                {!isCompleted && !isInProgress && !isPending && !isCancelled && !isConfirmed && !isRescheduleRevert && (
-                                  <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
-                                    <div className="w-2 h-2 rounded-full bg-muted-foreground/60" />
-                                  </div>
-                                )}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex justify-between items-center gap-2">
-                                  <span className={`text-xs font-semibold leading-6 ${
-                                    isCancelled ? "text-destructive" :
-                                    isPending ? "text-amber-600" :
-                                    isCompleted ? "" :
-                                    (isConfirmed || isInProgress) ? "text-primary" :
-                                    "text-foreground"
-                                  }`}
-                                  // TODO: Fix --success usage
-                                  style={isCompleted ? { color: completedColors.text } : undefined}
-                                  >{label}</span>
-                                  <span className="text-[10px] text-muted-foreground shrink-0 leading-6">{formattedDate}</span>
-                                </div>
-                                {(() => {
-                                  const desc = getStatusDescription(h.new_status, h.reason);
-                                  return desc ? <p className="text-xs text-muted-foreground -mt-1">{desc}</p> : null;
-                                })()}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Activity timeline — quote / estimates / decisions / part edits */}
-                <div className="rounded-2xl bg-muted/20 p-4">
-                  <div className="mb-3 flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5 text-muted-foreground" />
-                    <DrawerFieldLabel className="mb-0">Activity Timeline</DrawerFieldLabel>
-                  </div>
-                  <div className="max-h-80 overflow-y-auto rounded-xl bg-background px-3 py-2">
-                    {activityLog === undefined ? (
-                      <p className="text-xs text-muted-foreground">Loading activity…</p>
-                    ) : activityLog.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">No activity yet.</p>
-                    ) : (
-                      <div>
-                        {activityLog.map((ev, index) => {
-                          const isLast = index === activityLog.length - 1;
-                          const formattedDate = formatActivityTimestamp(ev.at);
-                          return (
-                            <div
-                              key={`${ev.type}-${ev.at}-${index}`}
-                              className="relative flex gap-3 pb-5 last:pb-0"
-                            >
-                              {!isLast && (
-                                <div className="absolute left-[11px] top-6 bottom-0 w-px bg-border" />
-                              )}
-                              <div className="relative z-10 shrink-0">
-                                {ev.type === "booking_created" && (
-                                  <div className="w-6 h-6 rounded-full border-2 border-primary bg-card flex items-center justify-center">
-                                    <FileText className="w-3 h-3 text-primary" strokeWidth={2.5} />
-                                  </div>
-                                )}
-                                {ev.type === "status_change" && (
-                                  <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center">
-                                    <ArrowRight className="w-3 h-3 text-muted-foreground" strokeWidth={2.5} />
-                                  </div>
-                                )}
-                                {ev.type === "estimate_submitted" && (
-                                  <div className="w-6 h-6 rounded-full border-2 border-amber-400 bg-card flex items-center justify-center">
-                                    <DollarSign className="w-3 h-3 text-amber-500" strokeWidth={2.5} />
-                                  </div>
-                                )}
-                                {ev.type === "estimate_decision" && (
-                                  <div
-                                    className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                                      ev.data.decision === "approved" ||
-                                      ev.data.decision === "auto_approved_within_range"
-                                        ? "border-2 border-emerald-500 bg-card"
-                                        : "bg-destructive/10"
-                                    }`}
-                                  >
-                                    {ev.data.decision === "approved" ||
-                                    ev.data.decision === "auto_approved_within_range" ? (
-                                      <Check className="w-3 h-3 text-emerald-600" strokeWidth={3} />
-                                    ) : (
-                                      <X className="w-3 h-3 text-destructive" />
-                                    )}
-                                  </div>
-                                )}
-                                {ev.type === "part_edit" && (
-                                  <div className="w-6 h-6 rounded-full border-2 border-muted-foreground/40 bg-card flex items-center justify-center">
-                                    <Wrench className="w-3 h-3 text-muted-foreground" strokeWidth={2.5} />
-                                  </div>
-                                )}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex justify-between items-center gap-2">
-                                  <span className="text-xs font-semibold leading-6 text-foreground">
-                                    {ev.type === "booking_created" && "Booking created"}
-                                    {ev.type === "status_change" &&
-                                      `${humanizeStatus(ev.data.from ?? "", null) || ev.data.from || "—"} → ${humanizeStatus(ev.data.to, ev.data.reason, ev.data.from)}`}
-                                    {ev.type === "estimate_submitted" &&
-                                      `${formatCycleLabel(ev.data.cycle)} estimate submitted`}
-                                    {ev.type === "estimate_decision" &&
-                                      `${formatCycleLabel(ev.data.cycle)} ${formatDecisionLabel(ev.data.decision)}`}
-                                    {ev.type === "part_edit" &&
-                                      `${formatEditType(ev.data.editType)}${ev.data.partName ? ` — ${ev.data.partName}` : ""}`}
-                                  </span>
-                                  <span className="text-[10px] text-muted-foreground shrink-0 leading-6">
-                                    {formattedDate}
-                                  </span>
-                                </div>
-
-                                {/* Per-event detail block */}
-                                {ev.type === "booking_created" && (
-                                  <div className="-mt-1 space-y-0.5 text-xs text-muted-foreground">
-                                    {ev.data.services.length > 0 && (
-                                      <p>{ev.data.services.join(", ")}</p>
-                                    )}
-                                    {ev.data.quotedSetPriceCents != null && (
-                                      <p>
-                                        Quoted{" "}
-                                        <span className="font-medium text-foreground">
-                                          ${(ev.data.quotedSetPriceCents / 100).toFixed(2)}
-                                        </span>
-                                        {!hideDisclosedRange &&
-                                          ev.data.disclosedRangeLowCents != null &&
-                                          ev.data.disclosedRangeHighCents != null && (
-                                            <>
-                                              {" "}
-                                              · Range $
-                                              {(ev.data.disclosedRangeLowCents / 100).toFixed(2)}–$
-                                              {(ev.data.disclosedRangeHighCents / 100).toFixed(2)}
-                                            </>
-                                          )}
-                                      </p>
-                                    )}
-                                    {ev.data.quotedBreakdown && (
-                                      <p className="text-[11px]">
-                                        Parts $
-                                        {(ev.data.quotedBreakdown.parts_cents / 100).toFixed(2)} · Labor $
-                                        {(ev.data.quotedBreakdown.labor_cents / 100).toFixed(2)} · Tax+Fee $
-                                        {((ev.data.quotedBreakdown.tax_cents +
-                                          ev.data.quotedBreakdown.service_fee_cents) /
-                                          100
-                                        ).toFixed(2)}
-                                      </p>
-                                    )}
-                                    {ev.data.pricedPartsSnapshot &&
-                                      ev.data.pricedPartsSnapshot.length > 0 && (
-                                        <ul className="mt-1 list-disc pl-4 text-[11px]">
-                                          {ev.data.pricedPartsSnapshot.map((p, i) => (
-                                            <li key={`${p.oem_number}-${i}`}>
-                                              {p.quantity}× {p.part_name} @ $
-                                              {(p.unit_price_cents / 100).toFixed(2)} = $
-                                              {(p.line_total_cents / 100).toFixed(2)}
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      )}
-                                  </div>
-                                )}
-
-                                {ev.type === "status_change" && ev.data.reason && (
-                                  <p className="text-xs text-muted-foreground -mt-1">
-                                    {ev.data.reason}
-                                  </p>
-                                )}
-
-                                {ev.type === "estimate_submitted" && (
-                                  <div className="-mt-1 space-y-0.5 text-xs text-muted-foreground">
-                                    <p>
-                                      <span className="font-medium text-foreground">
-                                        ${(ev.data.totalCents / 100).toFixed(2)}
-                                      </span>
-                                      {ev.data.autoApprovedInRange ? (
-                                        <span className="ml-2 inline-flex items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
-                                          In range
-                                        </span>
-                                      ) : (
-                                        <span className="ml-2 inline-flex items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700">
-                                          Awaiting customer
-                                        </span>
-                                      )}
-                                      <span className="ml-2 text-[11px]">
-                                        ceiling ${(ev.data.priorCeilingCents / 100).toFixed(2)}
-                                      </span>
-                                    </p>
-                                    {(ev.data.partsSubtotalCents != null ||
-                                      ev.data.laborCents != null) && (
-                                      <p className="text-[11px]">
-                                        {ev.data.partsSubtotalCents != null && (
-                                          <>Parts ${(ev.data.partsSubtotalCents / 100).toFixed(2)}</>
-                                        )}
-                                        {ev.data.laborCents != null && (
-                                          <> · Labor ${(ev.data.laborCents / 100).toFixed(2)}</>
-                                        )}
-                                        {ev.data.taxCents != null && (
-                                          <> · Tax ${(ev.data.taxCents / 100).toFixed(2)}</>
-                                        )}
-                                        {ev.data.serviceFeeCents != null && (
-                                          <> · Fee ${(ev.data.serviceFeeCents / 100).toFixed(2)}</>
-                                        )}
-                                      </p>
-                                    )}
-                                    {ev.actor.label && (
-                                      <p className="text-[11px]">by {ev.actor.label}</p>
-                                    )}
-                                    {ev.data.notes && (
-                                      <p className="italic text-[11px]">“{ev.data.notes}”</p>
-                                    )}
-                                  </div>
-                                )}
-
-                                {ev.type === "estimate_decision" && (
-                                  <div className="-mt-1 space-y-0.5 text-xs text-muted-foreground">
-                                    <p>
-                                      At{" "}
-                                      <span className="font-medium text-foreground">
-                                        ${(ev.data.totalCents / 100).toFixed(2)}
-                                      </span>
-                                      {ev.data.ceilingAfterDecisionCents != null && (
-                                        <span className="text-[11px]">
-                                          {" "}
-                                          · new ceiling $
-                                          {(ev.data.ceilingAfterDecisionCents / 100).toFixed(2)}
-                                        </span>
-                                      )}
-                                    </p>
-                                    {ev.actor.label && (
-                                      <p className="text-[11px]">by {ev.actor.label}</p>
-                                    )}
-                                  </div>
-                                )}
-
-                                {ev.type === "part_edit" && (
-                                  <div className="-mt-1 space-y-0.5 text-xs text-muted-foreground">
-                                    {(ev.data.oldValue || ev.data.newValue) && (
-                                      <p className="text-[11px]">
-                                        {ev.data.oldValue ?? "—"} → {ev.data.newValue ?? "—"}
-                                      </p>
-                                    )}
-                                    {ev.data.oemNumber && (
-                                      <p className="text-[11px]">OEM {ev.data.oemNumber}</p>
-                                    )}
-                                    {ev.actor.label && (
-                                      <p className="text-[11px]">by {ev.actor.label}</p>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                {/* Timeline footer — opens the full status + activity timeline */}
+                <div className="flex items-center justify-between gap-3 py-3.5">
+                  <p className="min-w-0 truncate text-xs text-muted-foreground">
+                    {getTimelineFooterVerb(job.status)}
+                    {(() => {
+                      const lastAt = job.history.reduce(
+                        (mx, h) => Math.max(mx, h.changed_at),
+                        job._creationTime ?? 0,
+                      );
+                      return lastAt ? ` \u00b7 ${formatActivityTimestamp(lastAt)}` : "";
+                    })()}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowTimelineModal(true)}
+                    className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-primary transition-opacity hover:opacity-80"
+                  >
+                    Full timeline
+                    <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
                 </div>
 
                 {/* Customer arrival tracking */}
@@ -3035,17 +2435,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   );
                 })()}
 
-                {/* View in Bookings link (schedule page only) */}
-                {showBookingsLink && (
-                  <div className="rounded-2xl bg-muted/20 p-4">
-                    <a
-                      href={`/bookings?highlight=${job._id}`}
-                      className="text-sm font-medium text-primary hover:underline"
-                    >
-                      View full details in Bookings &rarr;
-                    </a>
-                  </div>
-                )}
+            
 
                 {actionError && !showAssignMechanicError && (
                   <p className="text-xs text-destructive">
@@ -3472,6 +2862,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 setIsActioning(false);
               }
             }}
+          />
+        ) : null}
+
+        {job ? (
+          <BookingTimelineModal
+            open={showTimelineModal}
+            onClose={() => setShowTimelineModal(false)}
+            history={job.history}
+            activityLog={activityLog}
+            hideDisclosedRange={hideDisclosedRange}
           />
         ) : null}
       </>

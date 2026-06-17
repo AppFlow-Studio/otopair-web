@@ -45,6 +45,7 @@ import {
   computePricedPartsSnapshot,
   computeQuotedSetPrice,
   reconcileDisclosedCeilingWithQuote,
+  type PricedPartSnapshotRow,
 } from "./booking_quotes";
 import { deriveServiceVariantsFromOptions } from "./lib/brakeScope";
 import {
@@ -9731,8 +9732,19 @@ export const createByShop = mutation({
           quantity: v.optional(v.number()),
           unit_price_cents: v.optional(v.number()),
           catalog_origin: v.boolean(),
+          // Catalog identity (kept catalog rows only) — threaded into the bill
+          // snapshot so pre/post-job seeding + part-preference accrual work.
+          part_id: v.optional(v.id("oem_parts")),
+          role_key: v.optional(v.string()),
+          quantity_basis: v.optional(v.string()),
         }),
       ),
+    ),
+    // How the mechanic chose to handle parts. "add" → the declared parts become
+    // the booking's priced_parts_snapshot + parts_cost (feeds job scope +
+    // pre/post-job). "none"/"skip"/undefined → labor-only, no snapshot.
+    partsDeclaration: v.optional(
+      v.union(v.literal("none"), v.literal("add"), v.literal("skip")),
     ),
   },
   handler: async (ctx, args) => {
@@ -9884,25 +9896,70 @@ export const createByShop = mutation({
       .filter((c: any) => c.name.length > 0);
     const bookingSource = args.source ?? "mechanic_walk_in";
 
-    // ── Walk-in cost resolution ──────────────────────────────────────
-    // The schedule "Create booking" drawer captures a single all-in figure
-    // on the Mechanic-estimate section (mechanicQuotedPrice) plus a time
-    // estimate — it does NOT split the quote into labor vs parts. Earlier
-    // this path persisted the client's hardcoded labor_cost/parts_cost of 0,
-    // so the job drawer rendered "$0.00" even though the mechanic entered a
-    // quoted price. Treat the quoted price as the authoritative all-in
-    // service charge (recorded on the labor line, since no parts are
-    // itemized here), and fall back to any client-supplied labor/parts for
-    // non-drawer callers that pre-compute their own split.
+    // ── Walk-in cost + parts resolution ──────────────────────────────
+    // The drawer captures a single all-in quoted price plus a parts
+    // declaration. When the mechanic chose "Add parts", their itemized parts
+    // become the booking's priced_parts_snapshot and parts_cost (which feed the
+    // job scope, pre-job and post-job); labor_cost is the remainder of the
+    // quote (clamped ≥ 0) and total_cost stays the quote. "none"/"skip"/
+    // undefined → labor-only, no snapshot (prior behavior). Non-drawer callers
+    // with no quote fall back to their own labor/parts split.
     const quotedPrice = args.mechanicQuotedPrice;
     const hasQuote = quotedPrice != null && quotedPrice > 0;
-    const resolvedLaborCost = hasQuote ? quotedPrice : args.laborCost;
-    const resolvedPartsCost = hasQuote ? 0 : args.partsCost;
+
+    let pricedSnapshot: PricedPartSnapshotRow[] | undefined;
+    let declaredPartsCents = 0;
+    if (
+      args.partsDeclaration === "add" &&
+      (args.mechanicPartEntries?.length ?? 0) > 0
+    ) {
+      const rows: PricedPartSnapshotRow[] = [];
+      for (const m of args.mechanicPartEntries!) {
+        if (!m.part_name.trim() && !m.oem_number.trim()) continue;
+        const qty =
+          m.quantity != null && m.quantity > 0 ? Math.round(m.quantity) : 1;
+        const unit =
+          m.unit_price_cents != null ? Math.round(m.unit_price_cents) : 0;
+        const line = qty * unit;
+        declaredPartsCents += line;
+        rows.push({
+          service_id: m.service_id,
+          part_id: m.part_id,
+          oem_number: m.oem_number.trim().toUpperCase(),
+          part_name: m.part_name.trim(),
+          brand: m.brand?.trim() || undefined,
+          quantity: qty,
+          unit_price_cents: unit,
+          line_total_cents: line,
+          role_key: m.role_key,
+          quantity_basis: m.quantity_basis,
+          price_unknown: m.unit_price_cents == null ? true : undefined,
+        });
+      }
+      if (rows.length > 0) pricedSnapshot = rows;
+    }
+
+    const declaredPartsDollars = declaredPartsCents / 100;
+    let resolvedLaborCost: number;
+    let resolvedPartsCost: number;
+    let resolvedTotalCost: number;
+    if (hasQuote) {
+      resolvedPartsCost = declaredPartsDollars;
+      resolvedLaborCost = Math.max(0, quotedPrice - declaredPartsDollars);
+      resolvedTotalCost = quotedPrice;
+    } else {
+      resolvedLaborCost = args.laborCost;
+      resolvedPartsCost = args.partsCost;
+      resolvedTotalCost = args.laborCost + args.partsCost;
+    }
 
     const bookingId = await ctx.db.insert("bookings", {
       labor_cost: resolvedLaborCost,
       parts_cost: resolvedPartsCost,
-      total_cost: resolvedLaborCost + resolvedPartsCost,
+      total_cost: resolvedTotalCost,
+      // Itemized parts the mechanic declared (Add parts). Undefined for
+      // none/skip — pre-job then seeds from the catalog as before.
+      priced_parts_snapshot: pricedSnapshot,
       estimated_labor_minutes: args.estimatedLaborMinutes,
       mechanic_id: resolvedMechanicId,
       scheduled_date: args.scheduledDate,

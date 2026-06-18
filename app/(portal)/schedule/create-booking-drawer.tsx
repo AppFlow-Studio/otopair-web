@@ -18,8 +18,11 @@ import {
 import {
   drawerInputClassName,
   drawerSelectTriggerClassName,
+  drawerCardClassName,
+  DrawerCardSectionHeader,
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
+import { cn } from "@/lib/utils";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import ServiceOptionsPicker, { type SelectedServiceOption } from "@/components/booking/service-options-picker";
 import TireSpecPicker, { type TireSpecs } from "@/components/booking/tire-spec-picker";
@@ -126,6 +129,7 @@ function CollapsibleSection({
   open,
   onToggle,
   required,
+  meta,
   children,
 }: {
   sectionKey: string;
@@ -134,32 +138,29 @@ function CollapsibleSection({
   open: boolean;
   onToggle: (key: string) => void;
   required?: boolean;
+  meta?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section>
+    <section className={cn(drawerCardClassName, "overflow-hidden")}>
       <button
         type="button"
         onClick={() => onToggle(sectionKey)}
         aria-expanded={open}
-        className="mb-4 flex w-full items-center justify-between gap-2 text-left"
+        className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
       >
-        <span className="flex items-center gap-2">
-          <Icon className="h-4 w-4 text-primary" />
-          <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground">
-            {label}
-            {required ? (
-              <span className="ml-1 text-destructive normal-case tracking-normal font-normal">
-                *
-              </span>
-            ) : null}
-          </h3>
-        </span>
+        <DrawerCardSectionHeader
+          icon={Icon}
+          label={label}
+          required={required}
+          meta={meta}
+          className="flex-1"
+        />
         <ChevronDown
-          className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`}
         />
       </button>
-      {open ? children : null}
+      {open ? <div className="px-4 pb-4">{children}</div> : null}
     </section>
   );
 }
@@ -1328,7 +1329,7 @@ export default function CreateBookingDrawer({
       </div>
 
       {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4">
 
         {isBackfill && (
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -1441,6 +1442,9 @@ export default function CreateBookingDrawer({
           open={openSections.has("services")}
           onToggle={toggleSection}
           required
+          meta={
+            selectedIds.size > 0 ? `${selectedIds.size} selected` : undefined
+          }
         >
 
           {/* Selected chips */}
@@ -1976,6 +1980,13 @@ export default function CreateBookingDrawer({
             open={openSections.has("catalog_parts")}
             onToggle={toggleSection}
             required
+            meta={
+              partsDeclaration
+                ? { add: "Add parts", none: "No parts", skip: "Skip" }[
+                    partsDeclaration
+                  ]
+                : undefined
+            }
           >
             <DrawerFieldLabel>Does this job have parts?</DrawerFieldLabel>
             <div className="space-y-1.5">

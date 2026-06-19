@@ -946,6 +946,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         source: "catalog" as const,
       }));
     }, [effectiveQuote, job?.pricedPartsSnapshot]);
+    // Walk-in bookings have no customer-approved quote — the mechanic gives a
+    // verbal quote and manages parts directly. Billing is never "locked" for
+    // them; the post-job parts step stays editable and shows no catalog
+    // pre-fill (handled server-side in getPrefillData). Customer/self-serve
+    // bookings keep the locked confirmation flow.
+    const isWalkIn =
+      (job as any)?.source === "mechanic_walk_in" ||
+      (job as any)?.source === "mechanic_backfill";
     const postjobReport = useQuery(
       api.job_actuals.getPostjobReportForBooking,
       job ? { bookingId: job._id } : "skip"
@@ -2600,7 +2608,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           isSubmitting={isSubmittingPostjob}
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
-          lockBilling
+          lockBilling={!isWalkIn}
           quotedParts={lockedQuoteParts}
           lockedQuote={lockedQuote}
           isFixedPrice={job?.isFixedPrice}

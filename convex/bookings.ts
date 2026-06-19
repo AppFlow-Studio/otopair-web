@@ -8656,6 +8656,9 @@ export const getJobDetail = query({
           : null,
       quotedBreakdown: (booking as any).quoted_breakdown ?? null,
       pricedPartsSnapshot: (booking as any).priced_parts_snapshot ?? null,
+      // Booking origin — lets the detail panel detect mechanic walk-ins and
+      // unlock billing / suppress catalog parts for them.
+      source: (booking as any).source ?? null,
       // Shop tax + labor-rate context for the post-job-survey-dialog's
       // estimate cycle. The mechanic needs labor_rate so adjusting hours
       // updates the displayed running total, and state/zip so the tax line

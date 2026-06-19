@@ -15,6 +15,19 @@ import {
   type InvoiceData,
 } from "./invoices/template";
 
+// Build the tokenized customer receipt deep-link. Always rooted at
+// NEXT_PUBLIC_APP_URL — note this must be set on the CONVEX deployment env
+// (`npx convex env set NEXT_PUBLIC_APP_URL …`); actions don't read Next's
+// .env.local. APP_URL is a legacy fallback; the otopair.com default only
+// applies when neither is configured.
+function buildReceiptUrl(bookingId: string, token: string): string {
+  const appUrl =
+    process.env.NEXT_PUBLIC_APP_URL ??
+    process.env.APP_URL ??
+    "https://otopair.com";
+  return `${appUrl.replace(/\/$/, "")}/receipts/${bookingId}?t=${encodeURIComponent(token)}`;
+}
+
 export const generateAndEmail = internalAction({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, { bookingId }) => {
@@ -84,11 +97,7 @@ export const generateAndEmail = internalAction({
     let emailedAtMs: number | null = null;
     const to = assembled.customer.email;
     if (to) {
-      const appUrl =
-        process.env.NEXT_PUBLIC_APP_URL ??
-        process.env.APP_URL ??
-        "https://otopair.com";
-      const receiptUrl = `${appUrl.replace(/\/$/, "")}/receipts/${bookingId}?t=${encodeURIComponent(receiptToken)}`;
+      const receiptUrl = buildReceiptUrl(String(bookingId), receiptToken);
       const result = await sendInvoiceEmail({
         to,
         invoiceNumber,
@@ -200,11 +209,7 @@ export const sendInvoiceToEmail = action({
       });
     }
 
-    const appUrl =
-      process.env.NEXT_PUBLIC_APP_URL ??
-      process.env.APP_URL ??
-      "https://otopair.com";
-    const receiptUrl = `${appUrl.replace(/\/$/, "")}/receipts/${bookingId}?t=${encodeURIComponent(allocation.receiptToken)}`;
+    const receiptUrl = buildReceiptUrl(String(bookingId), allocation.receiptToken);
 
     const result = await sendInvoiceEmail({
       to: cleanEmail,

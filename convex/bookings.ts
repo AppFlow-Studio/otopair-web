@@ -252,6 +252,10 @@ const DEFAULT_SHOP_TIMEZONE = "America/New_York";
 const DEFAULT_NO_SHOW_THRESHOLD_MINUTES = 30;
 const MIN_NO_SHOW_THRESHOLD_MINUTES = 15;
 const MAX_NO_SHOW_THRESHOLD_MINUTES = 60;
+// Grace buffer past the no-show threshold before a confirmed, never-arrived
+// booking is auto-transitioned to `no_show`. The front desk gets its decision
+// notification at the threshold; this window lets them act before auto-clear.
+const NO_SHOW_AUTO_MARK_GRACE_MINUTES = 10;
 // DEFAULT_OVERRUN_EXTENSION_PERCENT and DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES
 // are imported from ../lib/scheduling-overhaul above — don't re-declare.
 const CUSTOMER_LATE_PUSH_CAP_MINUTES = 10;
@@ -2257,6 +2261,61 @@ export const markPostThresholdNoShow = mutation({
     });
     // Stripe void is scheduled centrally by applyBookingStatusTransition.
     return result;
+  },
+});
+
+// Manual, staff-initiated no-show. Unlike markPostThresholdNoShow this is NOT
+// gated on the late threshold having elapsed — it's the path used when a shop
+// explicitly marks a customer as a no-show (e.g. via the cancel dialog's
+// "Customer no-show" reason). applyBookingStatusTransition still enforces that
+// the source status allows a `no_show` transition (confirmed/vehicle_at_shop).
+export const markNoShow = mutation({
+  args: { bookingId: v.id("bookings"), reason: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    return await applyBookingStatusTransition(ctx, {
+      booking,
+      newStatus: "no_show",
+      changedBy: user._id,
+      reason: args.reason ?? "manual_customer_no_show",
+    });
+  },
+});
+
+// Tier-aware labor rate for the walk-in create-booking drawer. Mirrors the
+// rate resolution used elsewhere (Pricing v2): resolve the vehicle's tier from
+// its VIN-linked config, look up the shop's per-tier rate, and fall back to the
+// flat legacy `labor_rate` when the vehicle has no resolvable tier. The drawer
+// multiplies this by the estimate time and adds declared parts to prefill the
+// quoted price — kept editable. Returns null when nothing can price the job.
+export const getWalkInSuggestedLaborRate = query({
+  args: { shopId: v.id("shops"), vin: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const shop = await ctx.db.get(args.shopId);
+    if (!shop) return { ratePerHour: null, tier: null as VehicleTier | null };
+
+    let ratePerHour: number | null = null;
+    let tier: VehicleTier | null = null;
+    const vin = args.vin?.trim().toUpperCase();
+    if (vin) {
+      const cfg = await resolveVehicleConfigFromVin(ctx, vin);
+      tier =
+        (cfg?.pricing_tier as VehicleTier | undefined) ??
+        (cfg ? await detectTier(ctx, cfg) : null);
+      if (tier) {
+        const rateRes = resolveLaborRate(shop as any, tier);
+        if (rateRes.rate != null) ratePerHour = rateRes.rate;
+      }
+    }
+    if (ratePerHour == null && typeof shop.labor_rate === "number") {
+      ratePerHour = shop.labor_rate;
+    }
+    return { ratePerHour, tier };
   },
 });
 
@@ -12336,10 +12395,34 @@ export const processCustomerLateMonitors = internalMutation({
         });
       }
 
+      // Auto-clear: once the grace window past the threshold has elapsed and
+      // the customer still hasn't arrived (eligibility checked at the top of
+      // the loop guarantees status === "confirmed" + no vehicle arrival),
+      // auto-transition to no_show. The transition engine releases the slot,
+      // clears live_stage, voids the Stripe auth, and logs history.
+      const autoMarkDueAtMs =
+        monitor.threshold_due_at_ms +
+        NO_SHOW_AUTO_MARK_GRACE_MINUTES * 60 * 1000;
+      if (now >= autoMarkDueAtMs) {
+        await applyBookingStatusTransition(ctx, {
+          booking,
+          newStatus: "no_show",
+          changedBy: undefined,
+          reason: "auto_no_show_post_threshold",
+        });
+        await ctx.db.patch(monitor._id, {
+          status: "resolved",
+          resolved_at_ms: now,
+          updated_at: now,
+        });
+        continue;
+      }
+
       for (const dueAtMs of [
         monitor.push_enqueued_at_ms ? null : monitor.push_due_at_ms,
         monitor.sms_enqueued_at_ms ? null : monitor.sms_due_at_ms,
         monitor.frontdesk_enqueued_at_ms ? null : monitor.threshold_due_at_ms,
+        autoMarkDueAtMs,
       ]) {
         if (typeof dueAtMs === "number" && dueAtMs > now) {
           nextDueAtMs =

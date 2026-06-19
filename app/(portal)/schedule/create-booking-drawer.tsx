@@ -406,6 +406,9 @@ export default function CreateBookingDrawer({
   // (shop, service, engine, chassis).
   const [mechanicEstimateMinutes, setMechanicEstimateMinutes] = useState<number | null>(null);
   const [mechanicQuotedPrice, setMechanicQuotedPrice] = useState<number | null>(null);
+  // Once the mechanic types in the quoted price we stop auto-prefilling it from
+  // the tier rate, so we never clobber a hand-entered quote.
+  const [quotedPriceTouched, setQuotedPriceTouched] = useState(false);
 
   /* ---- Diagnostic system ---- */
   type DiagnosticSystem =
@@ -876,6 +879,42 @@ export default function CreateBookingDrawer({
     () => mechanicEstimateMinutes ?? catalogEstimateMinutes,
     [mechanicEstimateMinutes, catalogEstimateMinutes],
   );
+
+  /* ---- Suggested quoted price (tier labor rate × time + parts) ---- */
+  // Tier-aware $/hr labor rate for this vehicle at this shop. Falls back to the
+  // shop's flat rate server-side when the vehicle has no resolvable tier.
+  const suggestedRate = useQuery(
+    api.bookings.getWalkInSuggestedLaborRate,
+    shopData?.shopId
+      ? {
+          shopId: shopData.shopId as Id<"shops">,
+          vin: validVin || undefined,
+        }
+      : "skip",
+  );
+  // labor = rate × hours; total = labor + declared parts. Rounded to a whole
+  // dollar so the prefill reads like a clean quote. null when we can't price it.
+  const suggestedQuotedPrice = useMemo(() => {
+    const rate = suggestedRate?.ratePerHour;
+    if (rate == null) return null;
+    const mins = effectiveEstimateMinutes || 0;
+    if (mins <= 0) return null;
+    const labor = (rate * mins) / 60;
+    const total = labor + declaredPartsTotal;
+    return total > 0 ? Math.round(total) : null;
+  }, [suggestedRate, effectiveEstimateMinutes, declaredPartsTotal]);
+
+  // Prefill the quoted price from the suggestion and keep it in sync as the
+  // service/time/parts change — until the mechanic edits the field themselves.
+  // Backfill captures actuals, not estimates, so it's left untouched there.
+  useEffect(() => {
+    if (isBackfill) return;
+    if (quotedPriceTouched) return;
+    if (suggestedQuotedPrice == null) return;
+    setMechanicQuotedPrice((prev) =>
+      prev === suggestedQuotedPrice ? prev : suggestedQuotedPrice,
+    );
+  }, [isBackfill, quotedPriceTouched, suggestedQuotedPrice]);
 
   /* ---- Overlap check ---- */
   const overlapError = useMemo(() => {
@@ -1753,6 +1792,7 @@ export default function CreateBookingDrawer({
                 placeholder="e.g. 250"
                 value={mechanicQuotedPrice ?? ""}
                 onChange={(e) => {
+                  if (!isBackfill) setQuotedPriceTouched(true);
                   const raw = e.target.value;
                   if (raw === "") {
                     setMechanicQuotedPrice(null);
@@ -1766,7 +1806,9 @@ export default function CreateBookingDrawer({
               <p className="mt-1 text-xs text-muted-foreground">
                 {isBackfill
                   ? "What you actually charged the customer."
-                  : "What you quoted this walk-in."}
+                  : !quotedPriceTouched && suggestedQuotedPrice != null
+                    ? `Prefilled from ${suggestedRate?.tier ?? "shop"} labor rate × time + parts. Editable.`
+                    : "What you quoted this walk-in."}
               </p>
             </div>
           </div>

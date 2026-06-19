@@ -741,6 +741,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const updateJob = useMutation(api.bookings.update);
     const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
     const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
+    const markNoShow = useMutation(api.bookings.markNoShow);
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
     const savePrejob = useMutation(api.bookings.savePrejob);
     const startWithPrejob = useMutation(api.bookings.startWithPrejob);
@@ -1124,16 +1125,24 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         cancelReason === "Other"
           ? cancelOtherText.trim() || "Other"
           : cancelReason;
+      // "Customer no-show" is a distinct terminal state (orange), not a
+      // cancellation (red) — route it to the no_show transition so history,
+      // colors, and side-effects reflect a no-show rather than a cancel.
+      const isNoShow = cancelReason === "Customer no-show";
       setIsActioning(true);
       try {
-        await cancelJob({
-          bookingId: job._id,
-          reason,
-        });
+        if (isNoShow) {
+          await markNoShow({ bookingId: job._id, reason });
+        } else {
+          await cancelJob({
+            bookingId: job._id,
+            reason,
+          });
+        }
         setShowCancelConfirm(false);
         const shouldOpenNew = createNewAfterCancel;
         setCreateNewAfterCancel(false);
-        onSuccess?.("Booking cancelled");
+        onSuccess?.(isNoShow ? "Booking marked no-show" : "Booking cancelled");
         if (shouldOpenNew && onRequestNewBookingAfterCancel) {
           onRequestNewBookingAfterCancel({
             mechanicId: job.mechanicId ?? null,
@@ -1142,7 +1151,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         }
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not cancel booking.",
+          err instanceof Error
+            ? err.message
+            : isNoShow
+              ? "Could not mark no-show."
+              : "Could not cancel booking.",
         );
       } finally {
         setIsActioning(false);

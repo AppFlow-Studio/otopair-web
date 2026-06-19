@@ -71,6 +71,10 @@ export default function SendReceiptCard({ bookingId }: Props) {
   if (status === null) return null;
 
   const isRefunded = status.paymentStatus === "refunded";
+  // Walk-ins are cash jobs — this is the shop's invoice, not a Stripe receipt.
+  const isInvoice = status.paymentMethod === "cash";
+  const docNoun = isInvoice ? "invoice" : "receipt";
+  const docTitle = isInvoice ? "Customer invoice" : "Customer receipt";
 
   async function handleSend() {
     if (!bookingId) return;
@@ -104,7 +108,7 @@ export default function SendReceiptCard({ bookingId }: Props) {
         <div className="flex items-center gap-2">
           <FileText className="h-4 w-4 text-muted-foreground" />
           <h3 className="text-sm font-semibold text-foreground">
-            Customer receipt
+            {docTitle}
           </h3>
         </div>
         {status.invoiceNumber ? (
@@ -123,8 +127,8 @@ export default function SendReceiptCard({ bookingId }: Props) {
       ) : (
         <p className="mb-3 text-xs text-muted-foreground">
           {isRefunded
-            ? "This receipt reflects a refund. Send the customer an updated copy."
-            : "The customer hasn't received an emailed receipt yet — add their email to send one."}
+            ? `This ${docNoun} reflects a refund. Send the customer an updated copy.`
+            : `The customer hasn't received an emailed ${docNoun} yet — add their email to send one.`}
         </p>
       )}
 

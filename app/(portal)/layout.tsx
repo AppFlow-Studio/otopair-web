@@ -26,6 +26,7 @@ import {
   Trash2,
   Wrench,
   Contact,
+  History,
 } from "lucide-react";
 import { UserSupportPage } from "./user-support-page";
 import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
@@ -38,6 +39,7 @@ import ActiveJobStrip from "@/components/active-job-strip";
 const ownerManagerLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
   { href: "/customers", label: "Customers", icon: Contact },
+  { href: "/previous-bookings", label: "Previous Bookings", icon: History },
   { href: "/team", label: "Team", icon: Users },
   { href: "/payouts", label: "Payouts", icon: CreditCard },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -46,6 +48,7 @@ const ownerManagerLinks = [
 const frontDeskLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
   { href: "/customers", label: "Customers", icon: Contact },
+  { href: "/previous-bookings", label: "Previous Bookings", icon: History },
   { href: "/team", label: "Team", icon: Users },
 ];
 
@@ -53,6 +56,7 @@ const mechanicLinks = [
   { href: "/my-bookings", label: "My Bookings", icon: Briefcase },
   { href: "/schedule", label: "Schedule", icon: Calendar },
   { href: "/customers", label: "Customers", icon: Contact },
+  { href: "/previous-bookings", label: "Previous Bookings", icon: History },
 ];
 
 const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
@@ -103,6 +107,7 @@ export default function PortalLayout({
       }
     | null
     | undefined;
+  const unconfirmedBookingCount = useQuery(api.schedule.getUnconfirmedBookingCount) ?? 0;
   const seedBookings = useMutation(api.seed.seedDashboardBookings);
   const clearDashboardBookingsBatch = useMutation(api.seed.clearDashboardBookingsBatch);
   const seedLateStartReviewScenario = useMutation(api.seed.seedLateStartReviewScenario);
@@ -408,6 +413,10 @@ export default function PortalLayout({
             {sidebarLinks.map((link) => {
               const isActive =
                 pathname === link.href || pathname.startsWith(link.href + "/");
+              const showUnconfirmedBadge =
+                link.href === "/schedule" && unconfirmedBookingCount > 0;
+              const badgeLabel =
+                unconfirmedBookingCount > 99 ? "99+" : String(unconfirmedBookingCount);
               return (
                 <Link
                   key={link.href}
@@ -415,14 +424,34 @@ export default function PortalLayout({
                   onClick={() => setSidebarOpen(false)}
                   title={onboardingTooltip ?? (sidebarCompact ? link.label : undefined)}
                   aria-disabled={isOnboarding || undefined}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  className={`relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                     isActive
                       ? "bg-blue-50 text-blue-700"
                       : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
                   } ${onboardingDisabledClass}`}
                 >
-                  <link.icon className="w-5 h-5 shrink-0" />
-                  <NavText>{link.label}</NavText>
+                  <span className="relative shrink-0">
+                    <link.icon className="w-5 h-5 shrink-0" />
+                    {/* Compact sidebar: badge floats over the icon since the label is hidden */}
+                    {showUnconfirmedBadge && sidebarCompact && (
+                      <span
+                        className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold leading-none text-white"
+                        aria-label={`${unconfirmedBookingCount} unconfirmed bookings`}
+                      >
+                        {badgeLabel}
+                      </span>
+                    )}
+                  </span>
+                  <NavText flex1>{link.label}</NavText>
+                  {/* Expanded sidebar: badge sits at the end of the row */}
+                  {showUnconfirmedBadge && !sidebarCompact && (
+                    <span
+                      className="ml-auto flex h-5 min-w-[20px] items-center justify-center rounded-full bg-blue-600 px-1.5 text-xs font-semibold leading-none text-white"
+                      aria-label={`${unconfirmedBookingCount} unconfirmed bookings`}
+                    >
+                      {badgeLabel}
+                    </span>
+                  )}
                 </Link>
               );
             })}
@@ -499,9 +528,12 @@ export default function PortalLayout({
             <Image src="/logo.png" alt="Otopair" width={28} height={28} />
             <span className="text-base font-semibold text-gray-900">Otopair</span>
             {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
-              <NotificationBell />
+              <ActiveJobStrip />
             )}
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-3">
+              {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
+                <NotificationBell />
+              )}
               <UserButton
                 userProfileProps={{
                   appearance: {
@@ -555,15 +587,19 @@ export default function PortalLayout({
             </div>
           </header>
 
-          {/* Desktop top header */}
-          <header className="sticky top-0 z-40 hidden lg:flex items-center justify-end gap-3 px-6 py-3 bg-white border-b border-gray-200">
+          {/* Desktop top header — active-job pill on the left, notifications on the right */}
+          <header className="sticky top-0 z-40 hidden lg:flex items-center gap-3 px-6 py-3 bg-white border-b border-gray-200">
             {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
-              <NotificationBell />
+              <>
+                <ActiveJobStrip />
+                <div className="ml-auto">
+                  <NotificationBell />
+                </div>
+              </>
             )}
           </header>
 
           <main className="flex-1 px-6 pt-6 pb-0">
-            <ActiveJobStrip />
             <CustomerSchedulingAlerts />
             {children}
           </main>

@@ -2579,6 +2579,52 @@ function PartsStep({
     }
     return present.size;
   }, [parts, oemRecommendedSet]);
+  // Flattened "Otopair OEM Catalog" picker options — every recommended part
+  // across the booking's services, each carrying the resolved service_id so a
+  // picked row attributes correctly. Lets the mechanic drop in a catalog part
+  // instead of typing it; free-form "Add another part" still covers the rest.
+  const catalogOptions = useMemo(() => {
+    const opts: Array<{
+      key: string;
+      part: OemRecommendationPart;
+      serviceId: string | null;
+    }> = [];
+    oemRecommendations.forEach((rec, recIdx) => {
+      const serviceId =
+        partsRequiredServices.find((s) => s.name === rec.service_name)?._id ??
+        partsRequiredServices[0]?._id ??
+        null;
+      rec.parts.forEach((part, partIdx) => {
+        opts.push({ key: `${recIdx}:${partIdx}`, part, serviceId });
+      });
+    });
+    return opts;
+  }, [oemRecommendations, partsRequiredServices]);
+
+  function addCatalogPart(optionKey: string) {
+    const opt = catalogOptions.find((o) => o.key === optionKey);
+    if (!opt) return;
+    const { part, serviceId } = opt;
+    const unit = part.median_price || part.average_price || 0;
+    setParts((current) => [
+      ...current,
+      {
+        part_name: part.part_name,
+        brand: part.brand ?? "",
+        oem_number: part.oem_part_number,
+        cost: unit > 0 ? String(unit) : "",
+        quantity:
+          part.quantity_needed && part.quantity_needed > 0
+            ? part.quantity_needed
+            : 1,
+        supplied_by: "shop",
+        part_tier: part.part_tier ?? "oem",
+        service_id: serviceId,
+        source: "catalog",
+      },
+    ]);
+  }
+
   function updatePart(index: number, next: Partial<PartRowState>) {
     setParts((current) =>
       current.map((part, idx) => (idx === index ? { ...part, ...next } : part))
@@ -3167,6 +3213,42 @@ function PartsStep({
             );
           })
         )}
+
+        {/*
+          Otopair OEM Catalog picker — drop in a recommended part for this
+          vehicle/service with its price prefilled. Selecting acts as an "add";
+          the dropdown resets so it can be used repeatedly. Free-form rows below
+          cover anything not in the catalog.
+        */}
+        {!readOnly && catalogOptions.length > 0 ? (
+          <Select
+            aria-label="Add from Otopair OEM Catalog"
+            selectedKey={null}
+            onSelectionChange={(key) => {
+              if (key != null) addCatalogPart(String(key));
+            }}
+            placeholder="+ Otopair OEM Catalog"
+          >
+            <SelectTrigger className="inline-flex w-auto items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-3 py-1.5 text-[12px] font-medium text-primary">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopover placement="bottom start">
+              <SelectListBox shouldFocusWrap>
+                {catalogOptions.map((o) => {
+                  const unit = o.part.median_price || o.part.average_price || 0;
+                  const label = `${o.part.part_name}${
+                    o.part.oem_part_number ? ` · ${o.part.oem_part_number}` : ""
+                  }${unit > 0 ? ` · $${unit.toFixed(2)}` : ""}`;
+                  return (
+                    <SelectItem key={o.key} id={o.key} textValue={label}>
+                      {label}
+                    </SelectItem>
+                  );
+                })}
+              </SelectListBox>
+            </SelectPopover>
+          </Select>
+        ) : null}
 
         {/*
           Add-row controls. For multi-service bookings each parts-required

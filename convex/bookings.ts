@@ -2063,6 +2063,7 @@ export const getActiveJobsForHeader = query({
         firstBookingId: null,
         firstBookingDate: null,
         firstBookingTime: null,
+        activeBookingIds: [],
       };
     }
 
@@ -2073,6 +2074,8 @@ export const getActiveJobsForHeader = query({
       firstBookingId: inProgress[0]._id,
       firstBookingDate: inProgress[0].scheduled_date ?? null,
       firstBookingTime: inProgress[0].scheduled_time ?? null,
+      // Full set so the header "View" can expand every active job full-screen.
+      activeBookingIds: inProgress.map((b: any) => b._id),
     };
   },
 });
@@ -8973,6 +8976,72 @@ export const savePrejob = mutation({
   },
 });
 
+// Walk-in cash invoice: walk-ins are paid in cash (no Stripe flow), so on
+// completion we record a lightweight cash `payments` row. This unlocks the
+// entire invoice pipeline (sequential numbering, PDF render, the Send Invoice
+// card, the tokenized receipt link) which is otherwise gated on a payment
+// existing. Total = parts (mechanic's bill) + labor (time × tier rate); the
+// invoice itself shows no sales tax / Otopair platform fee for a cash job.
+// Idempotent: skips if a payment row already exists for the booking.
+export async function ensureWalkInCashPayment(
+  ctx: any,
+  {
+    booking,
+    partsDollars,
+    laborMinutes,
+    now,
+  }: {
+    booking: any;
+    partsDollars: number;
+    laborMinutes: number;
+    now: number;
+  },
+): Promise<void> {
+  const isWalkIn =
+    booking?.source === "mechanic_walk_in" ||
+    booking?.source === "mechanic_backfill";
+  if (!isWalkIn || !booking?.shop_id) return;
+
+  const existing = await ctx.db
+    .query("payments")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", booking._id))
+    .unique();
+  if (existing) return;
+
+  const shop = await ctx.db.get(booking.shop_id);
+  let laborRate: number | null = null;
+  if (shop && booking.vin) {
+    const cfg = await resolveVehicleConfigFromVin(ctx, booking.vin);
+    const tier =
+      (cfg?.pricing_tier as VehicleTier | undefined) ??
+      (cfg ? await detectTier(ctx, cfg) : null);
+    if (tier) {
+      const rateRes = resolveLaborRate(shop as any, tier);
+      if (rateRes.rate != null) laborRate = rateRes.rate;
+    }
+  }
+  if (laborRate == null && typeof shop?.labor_rate === "number") {
+    laborRate = shop.labor_rate;
+  }
+
+  const laborDollars =
+    laborRate != null ? (laborMinutes / 60) * laborRate : 0;
+  const totalDollars =
+    Math.round((Number(partsDollars || 0) + laborDollars) * 100) / 100;
+
+  await ctx.db.insert("payments", {
+    booking_id: booking._id,
+    user_id: booking.user_id,
+    shop_id: booking.shop_id,
+    amount: totalDollars,
+    captured_amount_cents: Math.round(totalDollars * 100),
+    payment_method: "cash",
+    status: "completed",
+    created_at: now,
+    updated_at: now,
+  });
+}
+
 export const completeWithPostjob = mutation({
   args: {
     bookingId: v.id("bookings"),
@@ -9105,6 +9174,14 @@ export const completeWithPostjob = mutation({
         now,
       });
     }
+
+    await ensureWalkInCashPayment(ctx, {
+      booking: completedBooking,
+      partsDollars:
+        args.postjob.actual_parts_cost ?? sumPartsCost(normalizedParts),
+      laborMinutes: Number((finalized as any)?.actual_labor_minutes ?? 0),
+      now,
+    });
 
     return await buildVehiclePassportForBooking(ctx, booking);
   },

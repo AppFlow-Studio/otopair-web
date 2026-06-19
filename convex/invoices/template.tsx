@@ -4,12 +4,18 @@
  * Convex file storage AND attached to the Resend email, so what the customer
  * downloads from the mobile app is byte-identical to what landed in their
  * inbox.
+ *
+ * Layout follows a clean "client view" invoice (logo + business header, big
+ * invoice title, a Customer / Invoice Details / Payment column band, an items
+ * table, then Subtotal → Total). The brand mark is the shop's own logo when it
+ * has one, otherwise the Otopair logo.
  */
 "use node";
 
 import * as React from "react";
 import {
   Document,
+  Image,
   Page,
   StyleSheet,
   Text,
@@ -31,18 +37,23 @@ export type InvoiceData = {
   issuedAtMs: number;
   status: "paid" | "refunded";
 
-  customer: { name: string; email: string };
+  customer: { name: string; email: string; phone?: string | null };
   vehicle: {
     year?: number | null;
     make?: string | null;
     model?: string | null;
     trim?: string | null;
     vin?: string | null;
+    licensePlate?: string | null;
+    mileage?: number | null;
   };
   shop: {
     name: string;
     address?: string | null;
     phone?: string | null;
+    email?: string | null;
+    website?: string | null;
+    logoUrl?: string | null;
   };
   mechanicName?: string | null;
 
@@ -63,14 +74,18 @@ export type InvoiceData = {
   stripeChargeId?: string | null;
 };
 
-const BRAND_PRIMARY = "#0d72ff";
-const BRAND_DARK = "#0a4fbf";
+// Hosted Otopair brand mark (same asset the transactional emails use). Used as
+// the header logo when the shop hasn't uploaded its own.
+const OTOPAIR_LOGO_URL = "https://otopair.com/logo.png";
+
 const NEUTRAL_900 = "#111827";
 const NEUTRAL_700 = "#374151";
 const NEUTRAL_500 = "#6b7280";
+const NEUTRAL_400 = "#9ca3af";
 const NEUTRAL_300 = "#d1d5db";
+const NEUTRAL_200 = "#e5e7eb";
 const NEUTRAL_100 = "#f3f4f6";
-const NEUTRAL_50 = "#f9fafb";
+const LOGO_BG = "#1f2937";
 
 const styles = StyleSheet.create({
   page: {
@@ -82,200 +97,181 @@ const styles = StyleSheet.create({
     fontFamily: "Helvetica",
     backgroundColor: "#ffffff",
   },
+
+  // ── Header: logo + business (left), invoice no. + issue date (right) ──
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 28,
   },
-  brand: {
-    flexDirection: "column",
-  },
-  brandMark: {
-    fontSize: 22,
-    fontFamily: "Helvetica-Bold",
-    color: BRAND_PRIMARY,
-    letterSpacing: -0.4,
-  },
-  brandTagline: {
-    marginTop: 4,
-    fontSize: 9,
-    color: NEUTRAL_500,
-  },
-  invoiceMeta: {
-    alignItems: "flex-end",
-  },
-  invoiceTitle: {
-    fontSize: 22,
-    fontFamily: "Helvetica-Bold",
-    color: NEUTRAL_900,
-    letterSpacing: -0.4,
-  },
-  invoiceNumber: {
-    marginTop: 4,
-    fontSize: 10,
-    color: NEUTRAL_700,
-  },
-  statusPill: {
-    marginTop: 8,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 999,
-    fontSize: 9,
-    fontFamily: "Helvetica-Bold",
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
-  },
-  statusPaid: {
-    backgroundColor: "#dcfce7",
-    color: "#166534",
-  },
-  statusRefunded: {
-    backgroundColor: "#fef3c7",
-    color: "#92400e",
-  },
-  twoCol: {
+  headerLeft: {
     flexDirection: "row",
-    gap: 24,
-    marginBottom: 28,
+    alignItems: "center",
+    gap: 12,
+    maxWidth: 360,
   },
-  block: {
-    flex: 1,
+  logoBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: LOGO_BG,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
   },
-  blockLabel: {
-    fontSize: 8,
-    fontFamily: "Helvetica-Bold",
-    color: NEUTRAL_500,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    marginBottom: 6,
+  logoImg: {
+    width: 44,
+    height: 44,
+    objectFit: "contain",
   },
-  blockBody: {
-    fontSize: 10,
-    color: NEUTRAL_900,
-    lineHeight: 1.5,
-  },
-  sectionTitle: {
+  businessName: {
     fontSize: 11,
     fontFamily: "Helvetica-Bold",
     color: NEUTRAL_900,
-    marginBottom: 8,
   },
-  table: {
+  businessMeta: {
+    marginTop: 2,
+    fontSize: 8.5,
+    color: NEUTRAL_500,
+    lineHeight: 1.4,
+  },
+  headerRight: {
+    alignItems: "flex-end",
+  },
+  headerInvoiceNo: {
+    fontSize: 9,
+    color: NEUTRAL_500,
+  },
+  headerIssueLabel: {
+    marginTop: 10,
+    fontSize: 9,
+    fontFamily: "Helvetica-Bold",
+    color: NEUTRAL_700,
+  },
+  headerIssueDate: {
+    marginTop: 1,
+    fontSize: 9,
+    color: NEUTRAL_500,
+  },
+
+  rule: {
+    height: 3,
+    backgroundColor: NEUTRAL_400,
+    borderRadius: 2,
+    marginTop: 22,
+    marginBottom: 26,
+  },
+
+  title: {
+    fontSize: 24,
+    fontFamily: "Helvetica-Bold",
+    color: NEUTRAL_900,
+    letterSpacing: -0.6,
+    marginBottom: 22,
+  },
+
+  // ── Customer / Invoice Details / Payment band ──
+  band: {
+    flexDirection: "row",
+    gap: 20,
     borderTopWidth: 1,
-    borderTopColor: NEUTRAL_300,
-    marginBottom: 18,
+    borderTopColor: NEUTRAL_200,
+    borderBottomWidth: 1,
+    borderBottomColor: NEUTRAL_200,
+    paddingVertical: 16,
+    marginBottom: 24,
   },
+  bandCol: {
+    flex: 1,
+  },
+  bandLabel: {
+    fontSize: 9.5,
+    fontFamily: "Helvetica-Bold",
+    color: NEUTRAL_900,
+    marginBottom: 6,
+  },
+  bandBody: {
+    fontSize: 9.5,
+    color: NEUTRAL_700,
+    lineHeight: 1.5,
+  },
+
+  // ── Items table ──
   tableHeader: {
     flexDirection: "row",
-    backgroundColor: NEUTRAL_50,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: NEUTRAL_300,
   },
-  tableHeaderCell: {
-    fontSize: 8,
+  th: {
+    fontSize: 9.5,
     fontFamily: "Helvetica-Bold",
-    color: NEUTRAL_500,
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
+    color: NEUTRAL_900,
   },
-  tableRow: {
+  row: {
     flexDirection: "row",
-    paddingVertical: 8,
-    paddingHorizontal: 8,
+    alignItems: "flex-start",
+    paddingVertical: 9,
     borderBottomWidth: 1,
     borderBottomColor: NEUTRAL_100,
   },
-  colPart: { flex: 3 },
-  colOem: { flex: 2 },
-  colQty: { flex: 1, textAlign: "right" },
-  colUnit: { flex: 1.4, textAlign: "right" },
-  colLine: { flex: 1.4, textAlign: "right" },
-  partName: {
+  colItem: { flex: 4 },
+  colQty: { flex: 1.2, textAlign: "right" },
+  colPrice: { flex: 1.6, textAlign: "right" },
+  colAmount: { flex: 1.6, textAlign: "right" },
+  itemName: {
     fontSize: 10,
     color: NEUTRAL_900,
   },
-  partBrand: {
+  itemSub: {
     marginTop: 2,
     fontSize: 8,
     color: NEUTRAL_500,
   },
-  mono: {
-    fontFamily: "Courier",
-    fontSize: 9,
+  cell: {
+    fontSize: 10,
     color: NEUTRAL_700,
   },
-  amount: {
-    fontSize: 10,
-    color: NEUTRAL_900,
-  },
-  totalsBox: {
-    marginLeft: "auto",
-    width: 260,
-  },
+
+  // ── Totals ──
   totalsRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 5,
+    paddingTop: 10,
+    paddingBottom: 2,
   },
-  totalsLabel: {
-    color: NEUTRAL_500,
-  },
-  totalsValue: {
-    color: NEUTRAL_900,
-  },
-  grandTotalRow: {
+  totalsLabel: { fontSize: 10, color: NEUTRAL_700 },
+  totalsValue: { fontSize: 10, color: NEUTRAL_900 },
+  grandRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingTop: 10,
+    alignItems: "center",
     marginTop: 6,
-    borderTopWidth: 1.5,
-    borderTopColor: NEUTRAL_900,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: NEUTRAL_200,
   },
-  grandTotalLabel: {
+  grandLabel: {
+    fontSize: 16,
     fontFamily: "Helvetica-Bold",
-    fontSize: 12,
     color: NEUTRAL_900,
   },
-  grandTotalValue: {
+  grandValue: {
+    fontSize: 18,
     fontFamily: "Helvetica-Bold",
-    fontSize: 13,
     color: NEUTRAL_900,
   },
   refundRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingTop: 8,
-    marginTop: 4,
-    color: "#92400e",
+    marginTop: 8,
   },
-  refundLabel: {
-    color: "#92400e",
-    fontFamily: "Helvetica-Bold",
-  },
-  refundValue: {
-    color: "#92400e",
-    fontFamily: "Helvetica-Bold",
-  },
-  servicesList: {
-    flexDirection: "column",
-    gap: 4,
-    marginBottom: 18,
-  },
-  serviceItem: {
+  refundText: {
     fontSize: 10,
-    color: NEUTRAL_900,
+    fontFamily: "Helvetica-Bold",
+    color: "#92400e",
   },
-  laborRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: NEUTRAL_100,
-  },
+
   footer: {
     position: "absolute",
     left: 48,
@@ -283,13 +279,13 @@ const styles = StyleSheet.create({
     bottom: 28,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: NEUTRAL_300,
+    borderTopColor: NEUTRAL_200,
     flexDirection: "row",
     justifyContent: "space-between",
   },
   footerText: {
     fontSize: 8,
-    color: NEUTRAL_500,
+    color: NEUTRAL_400,
   },
 });
 
@@ -302,14 +298,14 @@ function formatCents(c: number): string {
 function formatDate(ms: number): string {
   const d = new Date(ms);
   return d.toLocaleDateString("en-US", {
-    month: "long",
+    month: "short",
     day: "numeric",
     year: "numeric",
   });
 }
 
 function formatLaborTime(minutes: number): string {
-  if (!minutes || minutes <= 0) return "—";
+  if (!minutes || minutes <= 0) return "";
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   if (h > 0 && m > 0) return `${h}h ${m}m`;
@@ -327,183 +323,185 @@ function vehicleTitle(v: InvoiceData["vehicle"]): string {
 function Invoice({ data }: { data: InvoiceData }) {
   const vt = vehicleTitle(data.vehicle);
   const isRefunded = data.status === "refunded";
+  const logoUrl = data.shop.logoUrl || OTOPAIR_LOGO_URL;
+  const usingShopLogo = Boolean(data.shop.logoUrl);
+  const businessContact = [data.shop.email, data.shop.phone]
+    .filter((x): x is string => Boolean(x))
+    .join("  |  ");
+  const paymentLine = isRefunded
+    ? `Refunded ${data.refundedAtMs ? formatDate(data.refundedAtMs) : ""}`.trim()
+    : `Paid ${formatDate(data.issuedAtMs)}`;
+
   return (
     <Document
-      title={`Otopair Invoice ${data.invoiceNumber}`}
-      author="Otopair"
+      title={`${data.shop.name} Invoice ${data.invoiceNumber}`}
+      author={data.shop.name}
       subject={`Invoice ${data.invoiceNumber}`}
     >
       <Page size="LETTER" style={styles.page}>
+        {/* Header */}
         <View style={styles.header}>
-          <View style={styles.brand}>
-            <Text style={styles.brandMark}>Otopair</Text>
-            <Text style={styles.brandTagline}>
-              The future of car repair coordination
-            </Text>
-          </View>
-          <View style={styles.invoiceMeta}>
-            <Text style={styles.invoiceTitle}>INVOICE</Text>
-            <Text style={styles.invoiceNumber}>{data.invoiceNumber}</Text>
-            <Text style={styles.invoiceNumber}>
-              Issued {formatDate(data.issuedAtMs)}
-            </Text>
-            <Text
+          <View style={styles.headerLeft}>
+            <View
               style={[
-                styles.statusPill,
-                isRefunded ? styles.statusRefunded : styles.statusPaid,
+                styles.logoBox,
+                usingShopLogo ? { backgroundColor: "#ffffff" } : {},
               ]}
             >
-              {isRefunded ? "Refunded" : "Paid"}
+              <Image src={logoUrl} style={styles.logoImg} />
+            </View>
+            <View>
+              <Text style={styles.businessName}>{data.shop.name}</Text>
+              {businessContact ? (
+                <Text style={styles.businessMeta}>{businessContact}</Text>
+              ) : null}
+              {data.shop.address ? (
+                <Text style={styles.businessMeta}>{data.shop.address}</Text>
+              ) : null}
+            </View>
+          </View>
+          <View style={styles.headerRight}>
+            <Text style={styles.headerInvoiceNo}>
+              Invoice {data.invoiceNumber}
+            </Text>
+            <Text style={styles.headerIssueLabel}>Issue date</Text>
+            <Text style={styles.headerIssueDate}>
+              {formatDate(data.issuedAtMs)}
             </Text>
           </View>
         </View>
 
-        <View style={styles.twoCol}>
-          <View style={styles.block}>
-            <Text style={styles.blockLabel}>Bill to</Text>
-            <Text style={styles.blockBody}>
+        <View style={styles.rule} />
+
+        <Text style={styles.title}>Invoice {data.invoiceNumber}</Text>
+
+        {/* Customer / Invoice Details / Payment band */}
+        <View style={styles.band}>
+          <View style={styles.bandCol}>
+            <Text style={styles.bandLabel}>Customer</Text>
+            <Text style={styles.bandBody}>
               {data.customer.name}
-              {"\n"}
-              {data.customer.email}
+              {data.customer.email ? `\n${data.customer.email}` : ""}
+              {data.customer.phone ? `\n${data.customer.phone}` : ""}
               {vt ? `\n${vt}` : ""}
-              {data.vehicle.vin ? `\nVIN · ${data.vehicle.vin}` : ""}
+              {data.vehicle.vin ? `\nVIN ${data.vehicle.vin}` : ""}
             </Text>
           </View>
-          <View style={styles.block}>
-            <Text style={styles.blockLabel}>Serviced by</Text>
-            <Text style={styles.blockBody}>
-              {data.shop.name}
-              {data.shop.address ? `\n${data.shop.address}` : ""}
-              {data.shop.phone ? `\n${data.shop.phone}` : ""}
-              {data.mechanicName ? `\nMechanic · ${data.mechanicName}` : ""}
+          <View style={styles.bandCol}>
+            <Text style={styles.bandLabel}>Invoice Details</Text>
+            <Text style={styles.bandBody}>
+              PDF created {formatDate(data.issuedAtMs)}
+              {"\n"}
+              {formatCents(data.totalCents)}
+              {data.mechanicName ? `\nTechnician · ${data.mechanicName}` : ""}
+            </Text>
+          </View>
+          <View style={styles.bandCol}>
+            <Text style={styles.bandLabel}>Payment</Text>
+            <Text style={styles.bandBody}>
+              {paymentLine}
+              {"\n"}
+              {formatCents(isRefunded ? data.refundedCents ?? 0 : data.totalCents)}
             </Text>
           </View>
         </View>
 
-        {data.services.length > 0 ? (
-          <>
-            <Text style={styles.sectionTitle}>Services</Text>
-            <View style={styles.servicesList}>
-              {data.services.map((s, i) => (
-                <Text key={i} style={styles.serviceItem}>
-                  • {s}
-                </Text>
-              ))}
-            </View>
-          </>
-        ) : null}
-
-        <Text style={styles.sectionTitle}>Parts & labor</Text>
-        <View style={styles.table}>
-          <View style={styles.tableHeader}>
-            <Text style={[styles.tableHeaderCell, styles.colPart]}>Part</Text>
-            <Text style={[styles.tableHeaderCell, styles.colOem]}>OEM #</Text>
-            <Text style={[styles.tableHeaderCell, styles.colQty]}>Qty</Text>
-            <Text style={[styles.tableHeaderCell, styles.colUnit]}>Unit</Text>
-            <Text style={[styles.tableHeaderCell, styles.colLine]}>Line</Text>
-          </View>
-
-          {data.parts.length === 0 ? (
-            <View style={styles.tableRow}>
-              <Text style={[styles.partName, { color: NEUTRAL_500 }]}>
-                No parts on this job
-              </Text>
-            </View>
-          ) : (
-            data.parts.map((p, i) => (
-              <View key={i} style={styles.tableRow}>
-                <View style={styles.colPart}>
-                  <Text style={styles.partName}>{p.name}</Text>
-                  {p.brand ? (
-                    <Text style={styles.partBrand}>{p.brand}</Text>
-                  ) : null}
-                </View>
-                <Text style={[styles.mono, styles.colOem]}>
-                  {p.oemNumber ?? "—"}
-                </Text>
-                <Text style={[styles.amount, styles.colQty]}>{p.qty}</Text>
-                <Text style={[styles.amount, styles.colUnit]}>
-                  {formatCents(p.unitCents)}
-                </Text>
-                <Text style={[styles.amount, styles.colLine]}>
-                  {formatCents(p.lineCents)}
-                </Text>
-              </View>
-            ))
-          )}
-
-          <View style={styles.laborRow}>
-            <Text style={styles.partName}>
-              Labor · {formatLaborTime(data.laborMinutes)}
-            </Text>
-            <Text style={styles.amount}>{formatCents(data.laborCents)}</Text>
-          </View>
+        {/* Items table */}
+        <View style={styles.tableHeader}>
+          <Text style={[styles.th, styles.colItem]}>Items</Text>
+          <Text style={[styles.th, styles.colQty]}>Quantity</Text>
+          <Text style={[styles.th, styles.colPrice]}>Price</Text>
+          <Text style={[styles.th, styles.colAmount]}>Amount</Text>
         </View>
 
-        <View style={styles.totalsBox}>
-          <View style={styles.totalsRow}>
-            <Text style={styles.totalsLabel}>Parts subtotal</Text>
-            <Text style={styles.totalsValue}>
-              {formatCents(data.partsTotalCents)}
+        {data.parts.map((p, i) => (
+          <View key={i} style={styles.row}>
+            <View style={styles.colItem}>
+              <Text style={styles.itemName}>{p.name}</Text>
+              {p.brand || p.oemNumber ? (
+                <Text style={styles.itemSub}>
+                  {[p.brand, p.oemNumber].filter(Boolean).join(" · ")}
+                </Text>
+              ) : null}
+            </View>
+            <Text style={[styles.cell, styles.colQty]}>{p.qty}</Text>
+            <Text style={[styles.cell, styles.colPrice]}>
+              {formatCents(p.unitCents)}
+            </Text>
+            <Text style={[styles.cell, styles.colAmount]}>
+              {formatCents(p.lineCents)}
             </Text>
           </View>
-          <View style={styles.totalsRow}>
-            <Text style={styles.totalsLabel}>Labor</Text>
-            <Text style={styles.totalsValue}>
+        ))}
+
+        {data.laborCents > 0 || data.laborMinutes > 0 ? (
+          <View style={styles.row}>
+            <View style={styles.colItem}>
+              <Text style={styles.itemName}>Labor</Text>
+              {formatLaborTime(data.laborMinutes) ? (
+                <Text style={styles.itemSub}>
+                  {formatLaborTime(data.laborMinutes)}
+                </Text>
+              ) : null}
+            </View>
+            <Text style={[styles.cell, styles.colQty]}>—</Text>
+            <Text style={[styles.cell, styles.colPrice]}>—</Text>
+            <Text style={[styles.cell, styles.colAmount]}>
               {formatCents(data.laborCents)}
             </Text>
           </View>
+        ) : null}
+
+        {/* Totals */}
+        <View style={styles.totalsRow}>
+          <Text style={styles.totalsLabel}>Subtotal</Text>
+          <Text style={styles.totalsValue}>
+            {formatCents(data.subtotalCents)}
+          </Text>
+        </View>
+        {data.taxCents != null && data.taxCents > 0 ? (
           <View style={styles.totalsRow}>
-            <Text style={styles.totalsLabel}>Subtotal</Text>
+            <Text style={styles.totalsLabel}>Tax</Text>
+            <Text style={styles.totalsValue}>{formatCents(data.taxCents)}</Text>
+          </View>
+        ) : null}
+        {data.platformFeeCents != null && data.platformFeeCents > 0 ? (
+          <View style={styles.totalsRow}>
+            <Text style={styles.totalsLabel}>Service fee</Text>
             <Text style={styles.totalsValue}>
-              {formatCents(data.subtotalCents)}
+              {formatCents(data.platformFeeCents)}
             </Text>
           </View>
-          {data.taxCents != null && data.taxCents > 0 ? (
-            <View style={styles.totalsRow}>
-              <Text style={styles.totalsLabel}>Tax</Text>
-              <Text style={styles.totalsValue}>
-                {formatCents(data.taxCents)}
-              </Text>
-            </View>
-          ) : null}
-          {data.platformFeeCents != null && data.platformFeeCents > 0 ? (
-            <View style={styles.totalsRow}>
-              <Text style={styles.totalsLabel}>Service fee</Text>
-              <Text style={styles.totalsValue}>
-                {formatCents(data.platformFeeCents)}
-              </Text>
-            </View>
-          ) : null}
-          <View style={styles.grandTotalRow}>
-            <Text style={styles.grandTotalLabel}>Total charged</Text>
-            <Text style={styles.grandTotalValue}>
-              {formatCents(data.totalCents)}
-            </Text>
-          </View>
-          {isRefunded && data.refundedCents ? (
-            <View style={styles.refundRow}>
-              <Text style={styles.refundLabel}>
-                Refunded
-                {data.refundedAtMs
-                  ? ` · ${formatDate(data.refundedAtMs)}`
-                  : ""}
-              </Text>
-              <Text style={styles.refundValue}>
-                −{formatCents(data.refundedCents)}
-              </Text>
-            </View>
-          ) : null}
+        ) : null}
+
+        <View style={styles.grandRow}>
+          <Text style={styles.grandLabel}>Total</Text>
+          <Text style={styles.grandValue}>{formatCents(data.totalCents)}</Text>
         </View>
 
+        {isRefunded && data.refundedCents ? (
+          <View style={styles.refundRow}>
+            <Text style={styles.refundText}>
+              Refunded
+              {data.refundedAtMs ? ` · ${formatDate(data.refundedAtMs)}` : ""}
+            </Text>
+            <Text style={styles.refundText}>
+              −{formatCents(data.refundedCents)}
+            </Text>
+          </View>
+        ) : null}
+
+        {/* Footer */}
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>
-            Otopair · info@otopair.com · otopair.com
+            {[data.shop.name, data.shop.website]
+              .filter((x): x is string => Boolean(x))
+              .join(" · ")}
           </Text>
           <Text style={styles.footerText}>
-            {data.stripeChargeId
-              ? `Payment ref · ${data.stripeChargeId.slice(-12)}`
-              : ""}
+            {data.invoiceNumber}
+            {data.vehicle.vin ? ` · VIN ${data.vehicle.vin}` : ""} · Powered by
+            Otopair
           </Text>
         </View>
       </Page>

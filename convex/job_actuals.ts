@@ -20,6 +20,7 @@ import {
   partNameAxle,
   type AxlePosition,
 } from "./lib/brakeScope";
+import { ensureWalkInCashPayment } from "./bookings";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
@@ -1035,7 +1036,7 @@ export const submitJobActuals = mutation({
     const completedBooking = await ctx.db.get(args.bookingId);
     if (!completedBooking) throw new Error("Booking not found");
 
-    return await finalizeJobActuals(ctx, {
+    const result = await finalizeJobActuals(ctx, {
       booking: completedBooking,
       userId: user._id,
       actuals: {
@@ -1047,5 +1048,16 @@ export const submitJobActuals = mutation({
       },
       now,
     });
+
+    // Walk-in cash invoice record (no Stripe flow) — unlocks the invoice
+    // pipeline (numbering, PDF, Send Invoice card, tokenized receipt).
+    await ensureWalkInCashPayment(ctx, {
+      booking: completedBooking,
+      partsDollars: Number(args.actual_parts_cost ?? 0),
+      laborMinutes: Number(args.actual_labor_minutes ?? 0),
+      now,
+    });
+
+    return result;
   },
 });

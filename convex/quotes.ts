@@ -20,6 +20,8 @@ import {
   resolveQuoteSeries,
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
+import { computePricedPartsSnapshot } from "./booking_quotes";
+import { deriveServiceVariantsFromOptions } from "./lib/brakeScope";
 
 export const build = query({
   args: {
@@ -149,5 +151,106 @@ export const previewForBooking = mutation({
       shop_id: args.shop_id,
     });
     return { ok: true as const, ...series };
+  },
+});
+
+/**
+ * previewCatalogPartsByVin — VIN-keyed parts preview for the shop "Create
+ * booking" drawer's optional catalog-parts data-gathering section.
+ *
+ * The VIN-keyed twin of `serviceParts.getPricedPartsForServices` (which is
+ * keyed by vehicle_owner_id, unusable from the drawer — the drawer only holds
+ * a VIN string). Resolves the vehicle_config from the VIN and returns the same
+ * parts/price/quantity rows the customer-facing app would have shown for the
+ * chosen services + options, grouped by service. Read-only and reactive so the
+ * drawer re-derives the prefill as the mechanic toggles services/options.
+ *
+ * Returns `{ hasConfig: false, services: [] }` for VINs with no resolvable
+ * vehicle_config (unenrolled walk-ins) so the drawer can fall back to blank
+ * editable rows. Parts-only by design — labor is captured by
+ * labor_quote_snapshots, so we skip the heavier resolveQuoteSeries here.
+ */
+export const previewCatalogPartsByVin = query({
+  args: {
+    vin: v.string(),
+    serviceIds: v.array(v.id("services")),
+    selectedServiceOptions: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          option_label: v.optional(v.string()),
+          option_type: v.optional(v.string()),
+        }),
+      ),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const empty = { hasConfig: false as const, services: [] };
+    if (args.serviceIds.length === 0) return empty;
+
+    const canonicalVin = args.vin.trim().toUpperCase();
+    if (!canonicalVin) return empty;
+
+    const config = await resolveVehicleConfigFromVin(ctx, canonicalVin);
+    if (!config) return empty;
+
+    // Confirmed packages gate package-conditional fitments. Best-effort: an
+    // active owner's specs when one exists, else empty (walk-in for a vehicle
+    // no customer has enrolled). Mirrors getPricedPartsForServices but starts
+    // from the VIN instead of a vehicle_owner id.
+    const ownerships = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin", (q) => q.eq("vin", canonicalVin))
+      .collect();
+    const activeOwner = ownerships.find((o) => o.status === "active") ?? null;
+    let confirmedPackages = new Set<string>();
+    if (activeOwner) {
+      const specs = await ctx.db
+        .query("vehicle_owner_specs")
+        .withIndex("by_vehicle_owner", (q) =>
+          q.eq("vehicle_owner_id", activeOwner._id),
+        )
+        .first();
+      confirmedPackages = new Set(specs?.confirmed_packages ?? []);
+    }
+
+    const snap = await computePricedPartsSnapshot(ctx, {
+      serviceIds: args.serviceIds,
+      vehicleConfigId: config._id,
+      vin: canonicalVin,
+      confirmedPackages,
+      serviceVariants: deriveServiceVariantsFromOptions(
+        args.selectedServiceOptions,
+      ),
+    });
+
+    // Group the flat snapshot rows by service, preserving the caller's order.
+    const rowsByService = new Map<string, typeof snap.rows>();
+    for (const row of snap.rows) {
+      const key = String(row.service_id);
+      const list = rowsByService.get(key);
+      if (list) list.push(row);
+      else rowsByService.set(key, [row]);
+    }
+
+    const services = [];
+    for (const serviceId of args.serviceIds) {
+      const rows = rowsByService.get(String(serviceId));
+      if (!rows || rows.length === 0) continue;
+      const svc = await ctx.db.get(serviceId);
+      services.push({
+        service_id: serviceId,
+        service_name: svc?.name ?? "Service",
+        service_slug: svc?.slug ?? null,
+        rows,
+        catalog_parts_total_cents: rows.reduce(
+          (sum, r) => sum + r.line_total_cents,
+          0,
+        ),
+        low_confidence: rows.some((r) => r.price_unknown === true),
+      });
+    }
+
+    return { hasConfig: true as const, services };
   },
 });

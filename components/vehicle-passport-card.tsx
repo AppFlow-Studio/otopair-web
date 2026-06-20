@@ -4,15 +4,17 @@ import { useState, type ReactNode } from "react";
 import { useQuery } from "convex/react";
 import {
   AlertCircle,
+  Calendar,
   Car,
   Check,
   ChevronDown,
   ChevronRight,
-  ClipboardList,
   Copy,
+  Gauge,
   History,
   MessageSquare,
-  Settings2,
+  StickyNote,
+  User,
   Wrench,
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -81,11 +83,15 @@ interface VehiclePassportCardJob {
     line_total_cents: number;
   }> | null;
   customerNotes?: string | null;
+  customerName?: string;
+  customerEmail?: string | null;
 }
 
 interface VehiclePassportCardProps {
   job: VehiclePassportCardJob;
   passport: VehiclePassportData | null | undefined;
+  /** Preformatted schedule line, e.g. "Today, 4:30 PM · est. 30 min". */
+  scheduleLabel?: ReactNode;
   className?: string;
 }
 
@@ -125,6 +131,46 @@ function formatLaborMinutes(minutes?: number | null): string {
   return `${hours}h ${mins}m`;
 }
 
+/**
+ * Format a visit date for display. Prefers the completion timestamp; otherwise
+ * falls back to the scheduled `YYYY-MM-DD` string. Either way the result uses a
+ * spelled-out month (e.g. "May 26, 2026") rather than a raw numeric ISO date.
+ * The scheduled string is parsed as local midnight so the day never shifts.
+ */
+function formatVisitDate(
+  completedAtMs?: number | null,
+  scheduledDate?: string | null,
+): string {
+  if (typeof completedAtMs === "number" && Number.isFinite(completedAtMs)) {
+    return new Date(completedAtMs).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
+  if (scheduledDate) {
+    const parsed = new Date(`${scheduledDate}T00:00:00`);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+    }
+    return scheduledDate;
+  }
+  return "—";
+}
+
+// Turn a passport field key (e.g. "tires.model" or "tire_model") into a
+// human-readable spec name for the "Missing: …" summary.
+function humanizePassportField(field: string): string {
+  const leaf = field.split(".").pop() ?? field;
+  return leaf
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 interface SectionShellProps {
   icon: typeof Car;
   title: string;
@@ -142,11 +188,11 @@ function Section({
 }: SectionShellProps) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-card">
+    <div className="py-3.5">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40"
+        className="-my-1 flex w-full items-center justify-between gap-3 py-1 text-left transition-opacity hover:opacity-80"
         aria-expanded={open}
       >
         <span className="inline-flex items-center gap-2.5">
@@ -162,11 +208,7 @@ function Section({
           )}
         </span>
       </button>
-      {open && (
-        <div className="border-t border-border bg-background px-4 py-3">
-          {children}
-        </div>
-      )}
+      {open && <div className="mt-3">{children}</div>}
     </div>
   );
 }
@@ -346,13 +388,7 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
 
 function HistoryEntryRow({ entry }: { entry: VinHistoryEntry }) {
   const [open, setOpen] = useState(false);
-  const when = entry.completedAtMs
-    ? new Date(entry.completedAtMs).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      })
-    : entry.scheduledDate ?? "—";
+  const when = formatVisitDate(entry.completedAtMs, entry.scheduledDate);
 
   return (
     <li>
@@ -529,13 +565,7 @@ function PreviousMechanicFeedbackSection({
   return (
     <ul className="divide-y divide-border">
       {withFeedback.map((entry: VinHistoryEntry) => {
-        const when = entry.completedAtMs
-          ? new Date(entry.completedAtMs).toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })
-          : entry.scheduledDate ?? "—";
+        const when = formatVisitDate(entry.completedAtMs, entry.scheduledDate);
         return (
           <li key={String(entry.bookingId)} className="py-2.5 first:pt-0 last:pb-0">
             <div className="mb-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
@@ -648,9 +678,38 @@ function VinCopyButton({ vin }: { vin: string }) {
   );
 }
 
+function EmailCopyButton({ email }: { email: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(email);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* ignore */
+        }
+      }}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      aria-label={copied ? "Email copied" : "Copy email"}
+      title={copied ? "Copied" : "Copy email"}
+    >
+      {copied ? (
+        <Check className="h-4 w-4" aria-hidden="true" />
+      ) : (
+        <Copy className="h-4 w-4" aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
 export function VehiclePassportCard({
   job,
   passport,
+  scheduleLabel,
   className,
 }: VehiclePassportCardProps) {
   const partsCount = job.pricedPartsSnapshot?.length ?? 0;
@@ -661,13 +720,28 @@ export function VehiclePassportCard({
     excludeBookingId: job._id,
     limit: 10,
   }) as VinHistoryEntry[] | undefined;
-  const hasPriorVisits = (history?.length ?? 0) > 0;
+  const priorVisitCount = history?.length ?? 0;
+  const hasPriorVisits = priorVisitCount > 0;
+
+  // Collapsed-section summaries (mockup-style one-liners).
+  const missingFields = passport?.missing_fields ?? [];
+  const missingCount = missingFields.length;
+  const feedbackCount =
+    history?.filter(
+      (h) =>
+        h.mechanicFindings || h.technicianNotes || h.difficultyRating != null,
+    ).length ?? 0;
+  const hasNotes = Boolean(
+    job.customerNotes?.trim() ||
+      passport?.passport.modifications?.status === "aftermarket_observed" ||
+      passport?.passport.modifications?.notes,
+  );
 
   return (
-    <div className={cn("space-y-2.5", className)}>
-      {/* Always-visible header */}
-      <div className="rounded-2xl border border-border bg-card px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
+    <div className={cn("space-y-4", className)}>
+      {/* Hero summary card — vehicle + Service / Labor / Parts */}
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <div className="flex items-start justify-between gap-3 px-4 py-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Car className="h-4 w-4 text-primary" aria-hidden="true" />
@@ -689,7 +763,7 @@ export function VehiclePassportCard({
                 ? formatMileage(mileage)
                 : "Mileage unknown"}
               {hasPriorVisits
-                ? ` · ${history?.length ?? 0} prior visit${(history?.length ?? 0) === 1 ? "" : "s"}`
+                ? ` · ${priorVisitCount} prior visit${priorVisitCount === 1 ? "" : "s"}`
                 : ""}
             </p>
           </div>
@@ -698,61 +772,172 @@ export function VehiclePassportCard({
               {formatCurrency(job.totalCost)}
             </p>
             <p className="text-[11px] text-muted-foreground">
-              {partsCount} part{partsCount === 1 ? "" : "s"} ·{" "}
-              {formatLaborHours(job.estimatedLaborMinutes)}
+              {job.serviceNames.length} svc · {partsCount} part
+              {partsCount === 1 ? "" : "s"}
+            </p>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 divide-x divide-border border-t border-border">
+          <div className="px-4 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Service
+            </p>
+            <p
+              className="mt-0.5 truncate text-sm font-medium text-foreground"
+              title={job.serviceNames.join(", ")}
+            >
+              {job.serviceNames.join(", ") || "—"}
+            </p>
+          </div>
+          <div className="px-4 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Labor
+              {job.estimatedLaborMinutes
+                ? ` (${formatLaborMinutes(job.estimatedLaborMinutes)})`
+                : ""}
+            </p>
+            <p className="mt-0.5 text-sm font-medium text-foreground">
+              {formatCurrency(job.laborCost)}
+            </p>
+          </div>
+          <div className="px-4 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Parts
+            </p>
+            <p className="mt-0.5 text-sm font-medium text-foreground">
+              {formatCurrency(job.partsCost)}
             </p>
           </div>
         </div>
       </div>
 
-      <Section
-        icon={ClipboardList}
-        title="This job's scope"
-        rightSlot={
-          <span className="text-[11px] text-muted-foreground">
-            {job.serviceNames.length} service
-            {job.serviceNames.length === 1 ? "" : "s"} · {partsCount} part
-            {partsCount === 1 ? "" : "s"}
-          </span>
-        }
-        defaultOpen
-      >
-        <JobScopeSection job={job} />
-      </Section>
-
-      <div className="px-1">
-        <div className="mb-2 flex items-baseline justify-between gap-3">
-          <p className="text-[10px] font-bold tracking-widest text-muted-foreground">
-            VEHICLE CONDITION
+      {/* Flat sections */}
+      <div className="divide-y divide-border">
+        {/* Customer */}
+        <div className="py-3.5">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2.5">
+              <User className="h-4 w-4 text-primary" aria-hidden="true" />
+              <span className="text-sm font-semibold text-foreground">
+                Customer
+              </span>
+            </span>
+            {job.customerEmail ? (
+              <EmailCopyButton email={job.customerEmail} />
+            ) : null}
+          </div>
+          <p className="text-sm text-foreground">{job.customerName || "—"}</p>
+          <p
+            className="truncate text-xs text-muted-foreground"
+            title={job.customerEmail || undefined}
+          >
+            {job.customerEmail || "No email on file"}
           </p>
-          {passport ? (
-            <p className="text-[10px] text-muted-foreground">
-              {passport.completion_percent}% complete
+        </div>
+
+        {/* Schedule */}
+        <div className="py-3.5">
+          <div className="mb-2 flex items-center gap-2.5">
+            <Calendar className="h-4 w-4 text-primary" aria-hidden="true" />
+            <span className="text-sm font-semibold text-foreground">
+              Schedule
+            </span>
+          </div>
+          <p className="text-sm text-foreground">{scheduleLabel ?? "—"}</p>
+        </div>
+
+        {/* Parts */}
+        <Section
+          icon={Wrench}
+          title="Parts"
+          rightSlot={
+            <span className="text-[11px] text-muted-foreground">
+              {partsCount} part{partsCount === 1 ? "" : "s"} ·{" "}
+              {formatCurrency(job.partsCost)} catalog
+            </span>
+          }
+        >
+          <JobScopeSection job={job} />
+        </Section>
+
+        {/* Vehicle condition */}
+        <div className="py-3.5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2.5">
+              <Gauge className="h-4 w-4 text-primary" aria-hidden="true" />
+              <span className="text-sm font-semibold text-foreground">
+                Vehicle condition
+              </span>
+            </span>
+            {passport ? (
+              <span className="text-[11px] text-muted-foreground">
+                {passport.completion_percent}% complete
+                {missingCount > 0
+                  ? ` · ${missingCount} missing spec${missingCount === 1 ? "" : "s"}`
+                  : ""}
+              </span>
+            ) : null}
+          </div>
+          {missingCount > 0 ? (
+            <p className="mb-2 text-[11px] text-muted-foreground">
+              Missing:{" "}
+              <span className="text-foreground">
+                {humanizePassportField(missingFields[0])}
+              </span>
+              {missingCount > 1 ? ` +${missingCount - 1} more` : ""}
             </p>
           ) : null}
+          <VehiclePassportSection
+            data={passport}
+            bookingServices={job.serviceNames}
+            hasPriorVisits={hasPriorVisits}
+            inline
+          />
         </div>
-        <VehiclePassportSection
-          data={passport}
-          bookingServices={job.serviceNames}
-          hasPriorVisits={hasPriorVisits}
-          inline
-        />
+
+        {/* Service history */}
+        <Section
+          icon={History}
+          title="Service history"
+          rightSlot={
+            <span className="text-[11px] text-muted-foreground">
+              {hasPriorVisits
+                ? `${priorVisitCount} prior visit${priorVisitCount === 1 ? "" : "s"} for this VIN`
+                : "No prior visits"}
+            </span>
+          }
+        >
+          <ServiceHistorySection history={history} />
+        </Section>
+
+        {/* Previous mechanic comments */}
+        <Section
+          icon={MessageSquare}
+          title="Previous mechanic comments"
+          rightSlot={
+            <span className="text-[11px] text-muted-foreground">
+              {feedbackCount > 0
+                ? `${feedbackCount} comment${feedbackCount === 1 ? "" : "s"}`
+                : "None"}
+            </span>
+          }
+        >
+          <PreviousMechanicFeedbackSection history={history} />
+        </Section>
+
+        {/* Customer notes */}
+        <Section
+          icon={StickyNote}
+          title="Customer notes"
+          rightSlot={
+            <span className="text-[11px] text-muted-foreground">
+              {hasNotes ? "View" : "No notes on this booking"}
+            </span>
+          }
+        >
+          <NotesSection job={job} passport={passport} />
+        </Section>
       </div>
-
-      <Section icon={History} title="Service history for this VIN">
-        <ServiceHistorySection history={history} />
-      </Section>
-
-      <Section
-        icon={MessageSquare}
-        title="Previous mechanic feedback"
-      >
-        <PreviousMechanicFeedbackSection history={history} />
-      </Section>
-
-      <Section icon={Settings2} title="Modifications & customer notes">
-        <NotesSection job={job} passport={passport} />
-      </Section>
     </div>
   );
 }

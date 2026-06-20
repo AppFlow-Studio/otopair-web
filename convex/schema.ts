@@ -608,6 +608,63 @@ export default defineSchema({
     .index("by_service_chassis", ["service_id", "chassis_id"])
     .index("by_recorded_at", ["recorded_at"]),
 
+  // Per-PART observation rows capturing the catalog's parts/price/quantity
+  // guess (what the customer-facing app would have shown) alongside whatever
+  // the mechanic corrected on the shop "Create booking" drawer. Pure
+  // data-gathering: nothing here changes the booking's charged price. Mirrors
+  // labor_quote_snapshots' denormalized shop+service+engine+chassis shape so
+  // catalog-vs-reality aggregations don't need joins. One row per catalog part;
+  // mechanic-added parts the catalog missed get a row with catalog_* unset.
+  // Raw values only — diffs are computed at query time (no precomputed deltas).
+  parts_quote_snapshots: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    mechanic_id: v.optional(v.id("mechanics")),
+
+    vehicle_id: v.id("vehicles"),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    engine_id: v.optional(v.id("engines")),
+    chassis_id: v.optional(v.id("chassis_variants")),
+    trim_id: v.optional(v.id("trims")),
+
+    service_id: v.optional(v.id("services")),
+    custom_service_name: v.optional(v.string()),
+
+    // Selector metadata (for grouping/analysis).
+    role_key: v.optional(v.string()),
+    quantity_basis: v.optional(v.string()),
+    price_unknown: v.optional(v.boolean()),
+
+    // Catalog side (the app's guess). Undefined when the mechanic added a part
+    // the catalog never surfaced.
+    catalog_part_id: v.optional(v.id("oem_parts")),
+    catalog_oem_number: v.optional(v.string()),
+    catalog_part_name: v.optional(v.string()),
+    catalog_brand: v.optional(v.string()),
+    catalog_part_tier: v.optional(v.string()),
+    catalog_quantity: v.optional(v.number()),
+    catalog_unit_price_cents: v.optional(v.number()),
+    catalog_line_total_cents: v.optional(v.number()),
+
+    // Mechanic side. Undefined when the mechanic left the catalog row untouched.
+    mechanic_oem_number: v.optional(v.string()),
+    mechanic_part_name: v.optional(v.string()),
+    mechanic_brand: v.optional(v.string()),
+    mechanic_quantity: v.optional(v.number()),
+    mechanic_unit_price_cents: v.optional(v.number()),
+
+    source: v.string(),
+    recorded_at: v.number(),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_vehicle", ["vehicle_id"])
+    .index("by_shop_service", ["shop_id", "service_id"])
+    .index("by_shop_service_config", ["shop_id", "service_id", "vehicle_config_id"])
+    .index("by_service_engine", ["service_id", "engine_id"])
+    .index("by_service_chassis", ["service_id", "chassis_id"])
+    .index("by_part", ["catalog_part_id"])
+    .index("by_recorded_at", ["recorded_at"]),
+
   // ===== ENRICHMENT PIPELINE (all Waleed unique) =====
 
   enrichment_evidence: defineTable({

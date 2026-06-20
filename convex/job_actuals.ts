@@ -20,6 +20,7 @@ import {
   partNameAxle,
   type AxlePosition,
 } from "./lib/brakeScope";
+import { ensureWalkInCashPayment } from "./bookings";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
@@ -352,6 +353,16 @@ export const getPrefillData = query({
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
+    // Walk-in bookings give the mechanic full control over parts: we only
+    // pre-fill what they explicitly declared ("Add parts" → priced_parts_snapshot).
+    // The catalog cascade / floor / OEM-fitment auto-fill below is suppressed so
+    // a "Skip" / "No parts" walk-in starts with an empty, editable parts step
+    // instead of injecting catalog parts the mechanic never chose. Customer
+    // self-serve bookings keep the full cascade behavior.
+    const isWalkIn =
+      (booking as any).source === "mechanic_walk_in" ||
+      (booking as any).source === "mechanic_backfill";
+
     const serviceId = primaryServiceId(booking);
     const service = serviceId ? await ctx.db.get(serviceId) : null;
 
@@ -450,7 +461,7 @@ export const getPrefillData = query({
 
       const before = suggestedParts.length;
 
-      if (vehicle.vehicle_config_id && booking.shop_id) {
+      if (!isWalkIn && vehicle.vehicle_config_id && booking.shop_id) {
         const cascadeSuggestions = await resolveSuggestedPartsFromCascade(ctx, {
           shopId: booking.shop_id,
           serviceId: sid,
@@ -476,6 +487,7 @@ export const getPrefillData = query({
       // canonical parts even with zero historical data. Skipping
       // snapshot-covered services keeps post-job anchored to what was quoted.
       if (
+        !isWalkIn &&
         suggestedParts.length === before &&
         specs &&
         !snapshotServiceIds.has(String(sid))
@@ -696,14 +708,16 @@ export const getPrefillData = query({
 
     // Merge any OEM-recommended parts that aren't already represented in
     // suggestedParts (by normalized oem_number) so they appear as
-    // pre-listed rows in the post-job parts step ready to confirm.
+    // pre-listed rows in the post-job parts step ready to confirm. Suppressed
+    // for walk-ins — they only pre-fill explicitly-declared parts; the
+    // oemRecommendations list is still returned below as a reference strip.
     const normalize = (n: string) => n.trim().toUpperCase().replace(/\s+/g, "");
     const existingByOem = new Map<string, SuggestedPart>();
     for (const p of suggestedParts) {
       const key = p.oem_number ? normalize(p.oem_number) : "";
       if (key) existingByOem.set(key, p);
     }
-    for (const rec of oemRecommendations) {
+    for (const rec of isWalkIn ? [] : oemRecommendations) {
       for (const part of rec.parts) {
         const key = normalize(part.oem_part_number);
         if (!key) continue;
@@ -1022,7 +1036,7 @@ export const submitJobActuals = mutation({
     const completedBooking = await ctx.db.get(args.bookingId);
     if (!completedBooking) throw new Error("Booking not found");
 
-    return await finalizeJobActuals(ctx, {
+    const result = await finalizeJobActuals(ctx, {
       booking: completedBooking,
       userId: user._id,
       actuals: {
@@ -1034,5 +1048,16 @@ export const submitJobActuals = mutation({
       },
       now,
     });
+
+    // Walk-in cash invoice record (no Stripe flow) — unlocks the invoice
+    // pipeline (numbering, PDF, Send Invoice card, tokenized receipt).
+    await ensureWalkInCashPayment(ctx, {
+      booking: completedBooking,
+      partsDollars: Number(args.actual_parts_cost ?? 0),
+      laborMinutes: Number(args.actual_labor_minutes ?? 0),
+      now,
+    });
+
+    return result;
   },
 });

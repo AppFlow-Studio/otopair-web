@@ -34,10 +34,14 @@ import {
 } from "@/components/vehicle-passport-section";
 import EnrichmentStatusBanner from "@/components/enrichment-status-banner";
 import {
+  FILTER_STATUSES,
+  filterStatusLabel,
   hasText,
+  isFilterStatus,
   isTireCondition,
   passportSourceLabel,
   tireConditionLabel,
+  type FilterStatus,
   type PassportSource,
   type RotorCondition,
   type PreJobSurveyPayload,
@@ -53,15 +57,15 @@ const conditionPalette: Record<
 > = {
   good: {
     label: "Good",
-    activeClassName: "border-primary/40 bg-primary/10 text-primary",
+    activeClassName: "border-emerald-300 bg-emerald-50 text-emerald-700",
   },
   fair: {
     label: "Fair",
-    activeClassName: "border-primary/40 bg-primary/10 text-primary",
+    activeClassName: "border-sky-300 bg-sky-50 text-sky-700",
   },
   replace_soon: {
     label: "Replace soon",
-    activeClassName: "border-primary/40 bg-primary/10 text-primary",
+    activeClassName: "border-red-300 bg-red-50 text-red-700",
   },
 };
 
@@ -209,6 +213,7 @@ type SectionTabId =
   | "tire-condition"
   | "brakes"
   | "fluids"
+  | "filters"
   | "inspection"
   | "modifications"
   | "review";
@@ -226,6 +231,10 @@ const SECTION_TABS: Array<{
   },
   { id: "brakes", label: "Brakes", requiredWhen: "brake-work" },
   { id: "fluids", label: "Fluids", requiredWhen: "oil-change" },
+  {
+    id: "filters",
+    label: "Filters",
+  },
   {
     id: "inspection",
     label: "Inspection",
@@ -389,6 +398,10 @@ function modificationStatusLabel(value: string) {
   if (value === "none_observed") return "None observed";
   if (value === "aftermarket_observed") return "Yes - see notes";
   return "Select...";
+}
+
+function initialFilterStatus(value?: string | null): FilterStatus {
+  return isFilterStatus(value) ? value : "not_checked";
 }
 
 function getInitials(label: string): string {
@@ -643,6 +656,12 @@ function PreJobSurveyDialogBody({
       passportData?.passport.fluids.transmission_fluid_type ??
       ""
   );
+  const [engineAirFilterStatus, setEngineAirFilterStatus] = useState<FilterStatus>(
+    initialFilterStatus(prefillData?.filters?.engine_air_filter)
+  );
+  const [cabinAirFilterStatus, setCabinAirFilterStatus] = useState<FilterStatus>(
+    initialFilterStatus(prefillData?.filters?.cabin_air_filter)
+  );
   const [inspectionLooksCurrent, setInspectionLooksCurrent] = useState<
     "" | "yes" | "no"
   >(
@@ -705,6 +724,7 @@ function PreJobSurveyDialogBody({
     "tire-condition": null,
     brakes: null,
     fluids: null,
+    filters: null,
     inspection: null,
     modifications: null,
     review: null,
@@ -757,6 +777,12 @@ function PreJobSurveyDialogBody({
           prefillData?.fluid_overrides?.transmission_fluid_type ??
           passportData?.passport.fluids.transmission_fluid_type ??
           "",
+        engineAirFilterStatus: initialFilterStatus(
+          prefillData?.filters?.engine_air_filter
+        ),
+        cabinAirFilterStatus: initialFilterStatus(
+          prefillData?.filters?.cabin_air_filter
+        ),
         inspectionLooksCurrent:
           prefillData?.inspection?.looks_current == null
             ? passportData?.passport.inspection.looks_current == null
@@ -812,6 +838,8 @@ function PreJobSurveyDialogBody({
     coolantType,
     brakeFluidType,
     transmissionFluidType,
+    engineAirFilterStatus,
+    cabinAirFilterStatus,
     inspectionLooksCurrent,
     inspectionExpiresAt,
     modificationsStatus,
@@ -859,6 +887,10 @@ function PreJobSurveyDialogBody({
         coolant_type: coolantType.trim() || null,
         brake_fluid_type: brakeFluidType.trim() || null,
         transmission_fluid_type: transmissionFluidType.trim() || null,
+      },
+      filters: {
+        engine_air_filter: engineAirFilterStatus,
+        cabin_air_filter: cabinAirFilterStatus,
       },
       inspection: {
         looks_current:
@@ -1234,7 +1266,7 @@ function PreJobSurveyDialogBody({
               {isSubmitting && activeSubmitAction === "start" ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : null}
-              Save and start job
+              Save and continue
             </button>
           </div>
         }
@@ -1832,6 +1864,31 @@ function PreJobSurveyDialogBody({
 
             <SectionBlock
               sectionRef={(element) => {
+                sectionRefs.current.filters = element;
+              }}
+              sectionId="prejob-section-filters"
+              eyebrow="Filters"
+              badge="Optional"
+              accent="muted"
+            >
+              <div className="rounded-lg border border-primary/10 bg-muted/30 px-3 py-2">
+                <FieldRow label="Engine air filter">
+                  <FilterStatusSelect
+                    value={engineAirFilterStatus}
+                    onChange={setEngineAirFilterStatus}
+                  />
+                </FieldRow>
+                <FieldRow label="Cabin air filter">
+                  <FilterStatusSelect
+                    value={cabinAirFilterStatus}
+                    onChange={setCabinAirFilterStatus}
+                  />
+                </FieldRow>
+              </div>
+            </SectionBlock>
+
+            <SectionBlock
+              sectionRef={(element) => {
                 sectionRefs.current.inspection = element;
               }}
               sectionId="prejob-section-inspection"
@@ -2107,7 +2164,7 @@ function PriorRecommendationsCard({
     <section className="rounded-lg border border-primary/15 bg-card p-3.5">
       <div className="mb-2 flex items-baseline justify-between gap-2">
         <h3 className="text-[13px] font-semibold uppercase tracking-wide text-foreground">
-          Last visit's recommendations
+          Last visit&apos;s recommendations
         </h3>
         <span className="text-[11px] text-muted-foreground">
           Confirm or skip
@@ -2248,6 +2305,44 @@ function FieldRow({
       <span className="text-muted-foreground">{label}</span>
       <div className="flex items-center gap-2 sm:justify-end">{children}</div>
     </div>
+  );
+}
+
+function FilterStatusSelect({
+  value,
+  onChange,
+}: {
+  value: FilterStatus;
+  onChange: (next: FilterStatus) => void;
+}) {
+  return (
+    <Select
+      selectedKey={value}
+      onSelectionChange={(key) => {
+        const next = String(key);
+        if (isFilterStatus(next)) {
+          onChange(next);
+        }
+      }}
+    >
+      <SelectTrigger className={cn(selectTriggerClassName, "w-[180px] justify-end")}>
+        <SelectValue>{filterStatusLabel(value)}</SelectValue>
+      </SelectTrigger>
+      <SelectPopover className={selectPopoverClassName}>
+        <SelectListBox shouldFocusWrap className={selectListBoxClassName}>
+          {FILTER_STATUSES.map((status) => (
+            <SelectItem
+              key={status}
+              id={status}
+              textValue={filterStatusLabel(status)}
+              className={selectItemClassName}
+            >
+              {filterStatusLabel(status)}
+            </SelectItem>
+          ))}
+        </SelectListBox>
+      </SelectPopover>
+    </Select>
   );
 }
 

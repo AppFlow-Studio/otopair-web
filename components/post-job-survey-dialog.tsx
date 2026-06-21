@@ -1328,7 +1328,7 @@ function PostJobSurveyDialogBody({
       }
     } else if (requiresParts && normalizedParts.length === 0) {
       setError(
-        "This service requires parts — please add at least one part used before submitting."
+        "This service requires parts — please add at least one part to be installed before submitting."
       );
       const partsIdx = visibleSteps.indexOf("parts");
       if (partsIdx >= 0) setStepIndex(partsIdx);
@@ -2646,15 +2646,15 @@ function PartsStep({
   const hasFilledPart = parts.some((p) => p.part_name.trim() !== "");
   const prefilled = suggestedParts.length > 0;
   // Step copy adapts: when the cascade pre-loaded suggestions, the step is
-  // "confirm what we already think you used" — otherwise it's "tell us what
-  // you used."
+  // "confirm what we expect you to use" — otherwise it's "tell us what
+  // you're using."
   const eyebrow = prefilled ? "Confirm" : requiresParts ? "Required" : "Optional";
-  const question = prefilled ? "Confirm parts used" : "What parts did you use?";
+  const question = prefilled ? "Confirm parts to use" : "What parts are you using?";
   const hint = prefilled
-    ? "Verify the inventory used during this service task."
+    ? "Verify the inventory planned for this service task."
     : requiresParts
-      ? "This service requires parts — please add at least one part used before continuing."
-      : "Add each part you installed. Skip if none.";
+      ? "This service requires parts — please add at least one part to be installed before continuing."
+      : "Add each part to be installed. Skip if none.";
 
   const [swapIndex, setSwapIndex] = useState<number | null>(null);
   const closeSwap = () => setSwapIndex(null);
@@ -2716,7 +2716,7 @@ function PartsStep({
     return (
       <QuestionScreen
         eyebrow="Confirm"
-        question="Confirm parts used"
+        question="Confirm parts to use"
         hint="Billing is locked to the customer-approved quote — review only."
       >
         <div className="space-y-3">
@@ -3089,7 +3089,7 @@ function PartsStep({
                             justification_text: event.target.value,
                           })
                         }
-                        placeholder="Explain why this part was needed (vehicle condition, OEM unavailable, customer request, etc.)"
+                        placeholder="Explain why this part is needed (vehicle condition, OEM unavailable, customer request, etc.)"
                         rows={2}
                         className="mt-1 w-full resize-y rounded-md border border-primary/10 bg-background px-2 py-1.5 text-[12px] leading-snug text-foreground outline-none placeholder:text-muted-foreground focus:border-primary/30"
                       />
@@ -3308,7 +3308,7 @@ function PartsStep({
               {" "}
               OEM-recommended part{totalRecommended === 1 ? "" : "s"} confirmed
               {confirmedRecommended < totalRecommended
-                ? " — swap any rows that aren't what you installed."
+                ? " — swap any rows that aren't what you're using."
                 : "."}
             </span>
           </div>

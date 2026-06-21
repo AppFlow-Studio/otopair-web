@@ -32,6 +32,13 @@ export const modificationStatusValidator = v.union(
   v.literal("aftermarket_observed")
 );
 
+export const filterStatusValidator = v.union(
+  v.literal("not_checked"),
+  v.literal("looks_clean"),
+  v.literal("fair"),
+  v.literal("recommend_replace")
+);
+
 export const partsAccuracyStatusValidator = v.union(
   v.literal("correct"),
   v.literal("different_parts")
@@ -81,6 +88,11 @@ export const vehiclePassportModificationsValidator = v.object({
   notes: v.optional(nullableStringValidator),
 });
 
+export const prejobFilterChecksValidator = v.object({
+  engine_air_filter: v.optional(v.union(filterStatusValidator, v.null())),
+  cabin_air_filter: v.optional(v.union(filterStatusValidator, v.null())),
+});
+
 export const vehiclePassportUpdateValidator = v.object({
   mileage: v.optional(nullableNumberValidator),
   tires: v.optional(vehiclePassportTiresValidator),
@@ -100,6 +112,7 @@ export const prejobReportValidator = v.object({
   brakes: v.optional(v.union(vehiclePassportBrakesValidator, v.null())),
   fluids_match_oem: v.optional(v.boolean()),
   fluid_overrides: v.optional(v.union(vehiclePassportFluidsValidator, v.null())),
+  filters: v.optional(v.union(prejobFilterChecksValidator, v.null())),
   inspection: v.optional(v.union(vehiclePassportInspectionValidator, v.null())),
   modifications: v.optional(v.union(vehiclePassportModificationsValidator, v.null())),
   flagged_vehicle_specs: v.optional(v.boolean()),

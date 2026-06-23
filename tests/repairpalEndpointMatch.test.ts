@@ -141,3 +141,35 @@ describe("trimTokenSet", () => {
     expect(eq(trimTokenSet("  "), [])).toBe(true);
   });
 });
+
+describe("resolveBaseVehicleId — token-set rung", () => {
+  const MB2018 = [
+    { id: 76427, modelName: "C63 AMG S" },
+    { id: 76426, modelName: "C63 AMG" },
+    { id: 76423, modelName: "C300" },
+  ];
+  it("recovers a reordered/space-different trim (AMG C 63 S -> C63 AMG S)", () => {
+    expect(resolveBaseVehicleId(MB2018, { model: "C-Class", trim: "AMG C 63 S" })).toBe(76427);
+  });
+  it("does not downgrade specificity (C63 AMG S must NOT match C63 AMG)", () => {
+    const only = [{ id: 76426, modelName: "C63 AMG" }, { id: 76423, modelName: "C300" }];
+    expect(resolveBaseVehicleId(only, { model: "C-Class", trim: "C63 AMG S" })).toBe(null);
+  });
+  it("never false-matches an RP-absent trim (M550i)", () => {
+    const BMW2020 = [
+      { id: 78124, modelName: "530i" },
+      { id: 78121, modelName: "540i xDrive" },
+      { id: 77823, modelName: "M850i xDrive" },
+      { id: 77836, modelName: "750i xDrive" },
+      { id: 77822, modelName: "M5" },
+    ];
+    expect(resolveBaseVehicleId(BMW2020, { model: "5 Series", trim: "M550i xDrive" })).toBe(null);
+  });
+  it("regression: exact model-line and exact trim still win", () => {
+    expect(resolveBaseVehicleId([{ id: 78290, modelName: "Civic" }], { model: "Civic", trim: "LX" })).toBe(78290);
+    expect(resolveBaseVehicleId(
+      [{ id: 78121, modelName: "540i xDrive" }],
+      { model: "5 Series", trim: "540i xDrive" },
+    )).toBe(78121);
+  });
+});

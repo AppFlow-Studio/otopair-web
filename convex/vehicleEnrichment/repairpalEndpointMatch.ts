@@ -144,6 +144,17 @@ export function resolveBaseVehicleId(
       || baseVehicles.find((b) => norm(b.modelName).startsWith(trim));
     if (m) return m.id;
   }
+  // Token-set rung: our trim vs candidate modelName, order-independent, with
+  // letter+digit merge. EXACT set equality only (conservative — no subset
+  // match, so "C63 AMG S" never collapses to "C63 AMG"). Unique winner only.
+  if (cfg.trim) {
+    const qset = trimTokenSet(cfg.trim);
+    if (qset.size) {
+      const hits = baseVehicles.filter((b) => setEq(trimTokenSet(b.modelName), qset));
+      if (hits.length === 1) return hits[0].id;
+      // 0 or ambiguous (>1) -> fall through to the loose model rung below.
+    }
+  }
   m = baseVehicles.find((b) => norm(b.modelName).startsWith(model))
     || baseVehicles.find((b) => norm(b.modelName).includes(model));
   return m ? m.id : null;

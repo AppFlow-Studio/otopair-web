@@ -305,6 +305,7 @@ import type * as vehicleEnrichment_prompts_batch2Prompt from "../vehicleEnrichme
 import type * as vehicleEnrichment_queries from "../vehicleEnrichment/queries.js";
 import type * as vehicleEnrichment_repairpalEndpoint from "../vehicleEnrichment/repairpalEndpoint.js";
 import type * as vehicleEnrichment_repairpalEndpointMatch from "../vehicleEnrichment/repairpalEndpointMatch.js";
+import type * as vehicleEnrichment_repairpalEndpointMutations from "../vehicleEnrichment/repairpalEndpointMutations.js";
 import type * as vehicleEnrichment_repairpalEndpointProbe from "../vehicleEnrichment/repairpalEndpointProbe.js";
 import type * as vehicleEnrichment_repairpalLaborFirecrawl from "../vehicleEnrichment/repairpalLaborFirecrawl.js";
 import type * as vehicleEnrichment_runHeadless from "../vehicleEnrichment/runHeadless.js";
@@ -644,6 +645,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/queries": typeof vehicleEnrichment_queries;
   "vehicleEnrichment/repairpalEndpoint": typeof vehicleEnrichment_repairpalEndpoint;
   "vehicleEnrichment/repairpalEndpointMatch": typeof vehicleEnrichment_repairpalEndpointMatch;
+  "vehicleEnrichment/repairpalEndpointMutations": typeof vehicleEnrichment_repairpalEndpointMutations;
   "vehicleEnrichment/repairpalEndpointProbe": typeof vehicleEnrichment_repairpalEndpointProbe;
   "vehicleEnrichment/repairpalLaborFirecrawl": typeof vehicleEnrichment_repairpalLaborFirecrawl;
   "vehicleEnrichment/runHeadless": typeof vehicleEnrichment_runHeadless;

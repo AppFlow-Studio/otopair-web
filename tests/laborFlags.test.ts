@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { laborFlagsFromEnv } from "../convex/vehicleEnrichment/laborResearch";
 
-const ENV_KEYS = ["LABOR_SOURCE_OLP", "LABOR_SOURCE_REPAIRPAL", "LABOR_SOURCE_WEB", "LABOR_SOURCE_REPAIRPAL_ENDPOINT"] as const;
+const ENV_KEYS = ["LABOR_SOURCE_OLP", "LABOR_SOURCE_WEB", "LABOR_SOURCE_REPAIRPAL_ENDPOINT"] as const;
 
 describe("laborFlagsFromEnv", () => {
   // Snapshot and restore env vars so tests don't leak state into the suite.
@@ -26,8 +26,8 @@ describe("laborFlagsFromEnv", () => {
     }
   });
 
-  it("all vars absent → OLP + repairpalEndpoint default-on; repairpal($→hr) + web default-off", () => {
-    expect(laborFlagsFromEnv()).toEqual({ olp: true, repairpal: false, web: false, repairpalEndpoint: true });
+  it("all vars absent → OLP + repairpalEndpoint default-on; web default-off", () => {
+    expect(laborFlagsFromEnv()).toEqual({ olp: true, web: false, repairpalEndpoint: true });
   });
 
   it("LABOR_SOURCE_REPAIRPAL_ENDPOINT='on' → repairpalEndpoint: true", () => {
@@ -43,11 +43,6 @@ describe("laborFlagsFromEnv", () => {
   it("LABOR_SOURCE_OLP='off' → olp: false", () => {
     process.env.LABOR_SOURCE_OLP = "off";
     expect(laborFlagsFromEnv()).toMatchObject({ olp: false });
-  });
-
-  it("LABOR_SOURCE_REPAIRPAL='on' → repairpal: true", () => {
-    process.env.LABOR_SOURCE_REPAIRPAL = "on";
-    expect(laborFlagsFromEnv()).toMatchObject({ repairpal: true });
   });
 
   it("LABOR_SOURCE_WEB='on' → web: true", () => {

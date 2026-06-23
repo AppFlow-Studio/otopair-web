@@ -28,7 +28,6 @@ const SOURCE_WEIGHTS = {
   repairpal_endpoint: 0.9, // exact MOTOR minutes via the estimate endpoint — strongest
   olp_labor: 0.7,
   web_labor: 0.6,
-  repairpal_labor: 0.4,    // legacy $→hr; being retired (see 2026-06-22 parts/labor design)
 } as const;
 
 export type SourceHours = Record<string, number>; // serviceSlug -> hours
@@ -38,18 +37,17 @@ export type LaborAllSourcesResult = {
   resolved: boolean;
   written: number;
   failed: string[];
-  sources: { olp: number; web: number; repairpal: number; repairpalEndpoint: number };
+  sources: { olp: number; web: number; repairpalEndpoint: number };
 };
 
 /** The multi-source labor flags, read from env in ONE place so the enrichment
  *  pipeline and the laborRelabor backfill can never drift on what's default-on/off.
  *  OLP + the RepairPal estimate ENDPOINT are on unless explicitly "off" (the
- *  endpoint is the authoritative labor source — see resolveBookHours); the legacy
- *  repairpal($→hr) + open-web sources stay opt-in (=== "on"). */
-export function laborFlagsFromEnv(): { olp: boolean; repairpal: boolean; web: boolean; repairpalEndpoint: boolean } {
+ *  endpoint is the authoritative labor source — see resolveBookHours); the
+ *  open-web source stays opt-in (=== "on"). */
+export function laborFlagsFromEnv(): { olp: boolean; web: boolean; repairpalEndpoint: boolean } {
   return {
     olp: process.env.LABOR_SOURCE_OLP !== "off",
-    repairpal: process.env.LABOR_SOURCE_REPAIRPAL === "on",
     web: process.env.LABOR_SOURCE_WEB === "on",
     repairpalEndpoint: process.env.LABOR_SOURCE_REPAIRPAL_ENDPOINT !== "off",
   };
@@ -59,7 +57,6 @@ export function laborFlagsFromEnv(): { olp: boolean; repairpal: boolean; web: bo
 export function mergeLaborSources(by: {
   olp?: SourceHours;
   web?: SourceHours;
-  repairpal?: SourceHours;
   repairpalEndpoint?: SourceHours;
 }): LaborObsRow[] {
   const rows: LaborObsRow[] = [];
@@ -73,7 +70,6 @@ export function mergeLaborSources(by: {
   add(by.repairpalEndpoint, "repairpal_endpoint");
   add(by.olp, "olp_labor");
   add(by.web, "web_labor");
-  add(by.repairpal, "repairpal_labor");
   return rows;
 }
 
@@ -107,12 +103,11 @@ export const laborAllSources = internalAction({
       name: v.string(),
       repairpal_slug: v.optional(v.union(v.string(), v.null())),
     })),
-    flags: v.object({ olp: v.boolean(), repairpal: v.boolean(), web: v.boolean(), repairpalEndpoint: v.boolean() }),
+    flags: v.object({ olp: v.boolean(), web: v.boolean(), repairpalEndpoint: v.boolean() }),
   },
   handler: async (ctx, args): Promise<LaborAllSourcesResult> => {
     let olp: SourceHours = {};
     let web: SourceHours = {};
-    let repairpal: SourceHours = {};
     let repairpalEndpoint: SourceHours = {};
 
     // --- OLP (only if flagged AND we have a buildId) -------------------------
@@ -135,28 +130,6 @@ export const laborAllSources = internalAction({
         else console.warn(`laborAllSources: OLP not resolved:`, res?.error);
       } catch (e) {
         console.warn(`laborAllSources: OLP resolver threw:`, e);
-      }
-    }
-
-    // --- RepairPal (corroborator) -------------------------------------------
-    if (args.flags.repairpal) {
-      try {
-        const res: any = await ctx.runAction(
-          internal.vehicleEnrichment.repairpalLaborFirecrawl.resolveRepairpalLaborForConfig,
-          {
-            make: args.make,
-            model: args.model,
-            year: args.year,
-            services: args.services.map((s) => ({
-              slug: s.slug,
-              repairpal_slug: s.repairpal_slug ?? null,
-            })),
-          },
-        );
-        if (res?.resolved) repairpal = res.services ?? {};
-        else console.warn(`laborAllSources: RepairPal not resolved`); // RepairPal resolver returns no error field (unlike OLP), so none to log.
-      } catch (e) {
-        console.warn(`laborAllSources: RepairPal resolver threw:`, e);
       }
     }
 
@@ -216,7 +189,7 @@ export const laborAllSources = internalAction({
     }
 
     // --- Merge to weighted observation rows ---------------------------------
-    const rows = mergeLaborSources({ olp, web, repairpal, repairpalEndpoint });
+    const rows = mergeLaborSources({ olp, web, repairpalEndpoint });
 
     // --- Write each row through the aggregation machinery (per-row isolation) -
     const serviceIdBySlug: Record<string, any> = Object.fromEntries(
@@ -259,7 +232,6 @@ export const laborAllSources = internalAction({
       sources: {
         olp: Object.keys(olp).length,
         web: Object.keys(web).length,
-        repairpal: Object.keys(repairpal).length,
         repairpalEndpoint: Object.keys(repairpalEndpoint).length,
       },
     };

@@ -2407,7 +2407,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
 
       console.log(
         `[v8/labor] laborAllSources for ${args.make} ${args.model} ${args.trim ?? ""}: ` +
-        `flags={olp:${laborFlags.olp},repairpal:${laborFlags.repairpal},web:${laborFlags.web}}, ` +
+        `flags={olp:${laborFlags.olp},web:${laborFlags.web}}, ` +
         `${laborServices.length} services, buildId=${laborBuildId ? "resolved" : "none"}`,
       );
 

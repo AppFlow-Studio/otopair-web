@@ -4,10 +4,8 @@
  * `web_labor` is a STRONG open-web labor-hours source: for a given vehicle +
  * service it searches the open web, firecrawl-`json`-extracts the flat-rate/book
  * labor TIME IN HOURS from each of the top result pages, and returns the MEDIAN
- * of the accepted extractions per service. Unlike the `repairpal_labor`
- * corroborator (which reverses a dollar range through a reference rate), this
- * source reads published labor HOURS directly, so it carries full weight in the
- * multi-source labor aggregation.
+ * of the accepted extractions per service. This source reads published labor
+ * HOURS directly, so it carries full weight in the multi-source labor aggregation.
  *
  * Two layers:
  *  - `acceptWebLabor` is the pure, unit-tested acceptance gate
@@ -21,12 +19,10 @@
  *    via backfill — it is NOT unit-testable under the fakeDb harness (no real
  *    network / no FIRECRAWL_API_KEY), so it carries no unit test by design.
  *
- * Resolver-action shape + observability mirror the Task-3 sibling
- * `resolveRepairpalLaborForConfig` (repairpalLaborFirecrawl.ts): both share the
- * EXPORTED `firecrawlJsonExtract` helper from firecrawl.ts for the `json` POST
- * (which warns + safe-skips on a missing key), with per-item try/catch and
- * console.error on a real fetch error. The web search itself reuses the EXPORTED
- * `searchAndFetch` from firecrawl.ts.
+ * Resolver-action shape + observability use the EXPORTED `firecrawlJsonExtract`
+ * helper from firecrawl.ts for the `json` POST (which warns + safe-skips on a
+ * missing key), with per-item try/catch and console.error on a real fetch error.
+ * The web search itself reuses the EXPORTED `searchAndFetch` from firecrawl.ts.
  */
 import { internalAction } from "../_generated/server";
 import { v } from "convex/values";

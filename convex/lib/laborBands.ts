@@ -20,10 +20,9 @@ export const AGREEMENT_BAND_PCT = 0.1;
 
 /**
  * Web/portal-extracted labor sources eligible to anchor a quote-grade value.
- * VDB (too generic) and LLM (guesswork) are NOT strong; the deprecated
- * `repairpal_motor` (the removed $→hr hack) is NOT strong. `repairpal_labor`
- * is a low-weight $→hr corroborator, NOT a strong source. `web_labor` and
- * `oem_labor` are added by later phases but classified now so the agreement
+ * VDB (too generic) and LLM (guesswork) are NOT strong; the retired
+ * `repairpal_motor` / `repairpal_labor` ($→hr hacks) are NOT strong. `web_labor`
+ * and `oem_labor` are added by later phases but classified now so the agreement
  * rule is forward-compatible.
  */
 export const STRONG_LABOR_SOURCES: ReadonlySet<string> = new Set([

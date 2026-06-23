@@ -14,8 +14,9 @@
  *   - `laborRelaborAll`     — internalAction: fleet driver; pages over enriched
  *                             vehicle_configs and runs laborRelaborConfig for each.
  *
- * Flags (same as the v3pipeline path): OLP on-by-default (LABOR_SOURCE_OLP="off"
- * to disable); RepairPal/web opt-in (LABOR_SOURCE_REPAIRPAL/_WEB="on").
+ * Flags (same as the v3pipeline path): OLP + repairpal_endpoint on-by-default
+ * (LABOR_SOURCE_OLP/LABOR_SOURCE_REPAIRPAL_ENDPOINT="off" to disable); web
+ * opt-in (LABOR_SOURCE_WEB="on").
  */
 import { v } from "convex/values";
 import { internalAction, internalQuery } from "../_generated/server";
@@ -56,9 +57,8 @@ export const _laborConfigInputs = internalQuery({
     // The live enrichment path only resolves labor for services applicable to
     // THIS vehicle. This backfill must do the same, otherwise running it with
     // RepairPal/web flags on burns firecrawl credits on inapplicable services and
-    // writes spurious web_labor/repairpal_labor observations for services the
-    // vehicle doesn't have (e.g. timing_belt on a chain engine, differential
-    // service on FWD).
+    // writes spurious web_labor observations for services the vehicle doesn't
+    // have (e.g. timing_belt on a chain engine, differential service on FWD).
     //
     // The gate uses the CANONICAL structural applicability helper
     // `getApplicableServices` (services/applicability.ts) — the same per-config

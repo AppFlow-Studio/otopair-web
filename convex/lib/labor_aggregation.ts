@@ -137,11 +137,10 @@ export async function recomputeLaborForConfigService(
   let engineFamily: string | undefined;
   if (catalog.length > 0) {
     // Weighted robust median over the catalog sources, each carrying its own
-    // weight: olp_labor (0.7) anchors, with web_labor (0.6) and repairpal_labor
-    // (0.4) as additional sources, ahead of LLM (0.3-0.5) and VDB (0.05). A wrong
-    // high-weight value is guarded at WRITE time by the scrape's sanity gate, not here.
-    // repairpal_endpoint (exact MOTOR minutes) wins outright when present;
-    // otherwise the robust weighted median of the remaining sources.
+    // weight: repairpal_endpoint (0.9) wins outright when present; otherwise
+    // olp_labor (0.7) anchors with web_labor (0.6) as additional corroboration,
+    // ahead of LLM (0.3-0.5) and VDB (0.05). A wrong high-weight value is
+    // guarded at WRITE time by the scrape's sanity gate, not here.
     bookHours = resolveBookHours(catalog as { hours: number; weight?: number; source: string }[]);
     engineFamily = catalog.find((o: any) => o.engine_family)?.engine_family;
   }

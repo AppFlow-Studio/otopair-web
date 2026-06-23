@@ -43,13 +43,15 @@ export type LaborAllSourcesResult = {
 
 /** The multi-source labor flags, read from env in ONE place so the enrichment
  *  pipeline and the laborRelabor backfill can never drift on what's default-on/off.
- *  OLP is on unless explicitly "off"; web + RepairPal are opt-in (=== "on"). */
+ *  OLP + the RepairPal estimate ENDPOINT are on unless explicitly "off" (the
+ *  endpoint is the authoritative labor source — see resolveBookHours); the legacy
+ *  repairpal($→hr) + open-web sources stay opt-in (=== "on"). */
 export function laborFlagsFromEnv(): { olp: boolean; repairpal: boolean; web: boolean; repairpalEndpoint: boolean } {
   return {
     olp: process.env.LABOR_SOURCE_OLP !== "off",
     repairpal: process.env.LABOR_SOURCE_REPAIRPAL === "on",
     web: process.env.LABOR_SOURCE_WEB === "on",
-    repairpalEndpoint: process.env.LABOR_SOURCE_REPAIRPAL_ENDPOINT === "on",
+    repairpalEndpoint: process.env.LABOR_SOURCE_REPAIRPAL_ENDPOINT !== "off",
   };
 }
 

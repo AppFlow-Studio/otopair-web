@@ -26,13 +26,18 @@ describe("laborFlagsFromEnv", () => {
     }
   });
 
-  it("all vars absent → OLP default-on; repairpal, web, repairpalEndpoint default-off", () => {
-    expect(laborFlagsFromEnv()).toEqual({ olp: true, repairpal: false, web: false, repairpalEndpoint: false });
+  it("all vars absent → OLP + repairpalEndpoint default-on; repairpal($→hr) + web default-off", () => {
+    expect(laborFlagsFromEnv()).toEqual({ olp: true, repairpal: false, web: false, repairpalEndpoint: true });
   });
 
   it("LABOR_SOURCE_REPAIRPAL_ENDPOINT='on' → repairpalEndpoint: true", () => {
     process.env.LABOR_SOURCE_REPAIRPAL_ENDPOINT = "on";
     expect(laborFlagsFromEnv()).toMatchObject({ repairpalEndpoint: true });
+  });
+
+  it("LABOR_SOURCE_REPAIRPAL_ENDPOINT='off' → repairpalEndpoint: false (explicit opt-out)", () => {
+    process.env.LABOR_SOURCE_REPAIRPAL_ENDPOINT = "off";
+    expect(laborFlagsFromEnv()).toMatchObject({ repairpalEndpoint: false });
   });
 
   it("LABOR_SOURCE_OLP='off' → olp: false", () => {

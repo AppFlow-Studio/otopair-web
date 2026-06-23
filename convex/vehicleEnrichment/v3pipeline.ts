@@ -2323,6 +2323,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       const laborCylinders = laborEngineDoc?.cylinders ?? null;
       const laborTurbo =
         laborEngineDoc?.aspiration != null ? /turbo|supercharg/i.test(laborEngineDoc.aspiration) : null;
+      const laborVc: any = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getVehicleConfigById,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
 
       // Write labor times from Batch 2 pricing
       for (const svc of services) {
@@ -2420,6 +2424,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           engine_family: laborEngineFamily,
           displacementL: laborDisplacementL,
           cylinders: laborCylinders,
+          drivetrain: laborVc?.drivetrain ?? null,
           turbo: laborTurbo,
           buildId: laborBuildId,
           services: laborServices,

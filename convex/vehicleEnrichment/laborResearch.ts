@@ -96,6 +96,7 @@ export const laborAllSources = internalAction({
     engine_family: v.optional(v.string()),
     displacementL: v.optional(v.union(v.number(), v.null())),
     cylinders: v.optional(v.union(v.number(), v.null())),
+    drivetrain: v.optional(v.union(v.string(), v.null())),
     turbo: v.optional(v.union(v.boolean(), v.null())),
     buildId: v.optional(v.string()),                            // OLP Next.js buildId; required only if flags.olp
     services: v.array(v.object({
@@ -173,7 +174,7 @@ export const laborAllSources = internalAction({
             year: args.year,
             displacementL: args.displacementL,
             cylinders: args.cylinders,
-            drivetrain: null, // TODO(plan): thread cfg.drivetrain from v3pipeline
+            drivetrain: args.drivetrain ?? null,
             services: args.services.map((s) => ({ slug: s.slug, serviceId: s.serviceId })),
           },
         );

@@ -145,3 +145,23 @@ export function endpointPartCategory(name: string): { category: string; position
   if (!category) return null;
   return position && (category === "brake_pad" || category === "brake_rotor") ? { category, position } : { category };
 }
+
+/** otopair service slug → RepairPal serviceId(s). Multi-id = scope (sum/prefer).
+ *  Source: docs/superpowers/reviews/2026-06-15-otopair-services-repairpal-coverage.md. */
+export const SERVICE_REPAIRPAL_IDS: Record<string, { serviceIds: number[] }> = {
+  oil_change: { serviceIds: [107] },
+  filter_replacement: { serviceIds: [14, 35] },   // air (14) + cabin (35)
+  spark_plugs: { serviceIds: [128] },
+  timing_belt: { serviceIds: [144] },
+  coolant_flush: { serviceIds: [52] },
+  transmission_service: { serviceIds: [507] },     // full-pan (higher coverage than drain&fill 158)
+  tire_rotation: { serviceIds: [569] },
+  tire_balance: { serviceIds: [971] },
+  wheel_alignment: { serviceIds: [169] },
+  brake_pad_replacement: { serviceIds: [30] },
+  rotor_replacement: { serviceIds: [31, 4453439] }, // standalone (31) + composite pad+rotor
+  brake_fluid_flush: { serviceIds: [33] },
+  battery_replacement: { serviceIds: [590] },
+  battery_test: { serviceIds: [261] },
+  check_engine_diagnosis: { serviceIds: [5520] },
+};

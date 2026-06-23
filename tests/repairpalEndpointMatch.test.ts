@@ -6,6 +6,7 @@ import {
   resolveBaseVehicleId,
   endpointPartCategory,
   trimTokenSet,
+  pickValidSibling,
 } from "../convex/vehicleEnrichment/repairpalEndpointMatch";
 
 describe("extractVariants — recursive parse of the estimate payload", () => {
@@ -171,5 +172,20 @@ describe("resolveBaseVehicleId — token-set rung", () => {
       [{ id: 78121, modelName: "540i xDrive" }],
       { model: "5 Series", trim: "540i xDrive" },
     )).toBe(78121);
+  });
+});
+
+describe("pickValidSibling", () => {
+  const cands = [{ id: 77836, modelName: "750i xDrive" }, { id: 77823, modelName: "M850i xDrive" }];
+  it("returns the candidate when the LLM names one in the list (case/space tolerant)", () => {
+    expect(pickValidSibling("750i xDrive", cands)).toEqual({ id: 77836, modelName: "750i xDrive" });
+    expect(pickValidSibling("750I  XDRIVE", cands)).toEqual({ id: 77836, modelName: "750i xDrive" });
+  });
+  it("returns null for a hallucinated name not in the list", () => {
+    expect(pickValidSibling("M550i xDrive", cands)).toBe(null);
+  });
+  it("returns null for null/empty", () => {
+    expect(pickValidSibling(null, cands)).toBe(null);
+    expect(pickValidSibling("", cands)).toBe(null);
   });
 });

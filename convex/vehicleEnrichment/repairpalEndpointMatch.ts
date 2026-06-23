@@ -118,6 +118,20 @@ export function trimTokenSet(s: string): Set<string> {
 const setEq = (a: Set<string>, b: Set<string>): boolean =>
   a.size === b.size && [...a].every((x) => b.has(x));
 
+/**
+ * Validate an LLM-proposed engine-sibling: the answer must be an EXACT member
+ * (whitespace/case-insensitive via norm) of the candidate list, else null —
+ * the hallucination guard for Tier 2. Returns the matched candidate.
+ */
+export function pickValidSibling(
+  answerName: string | null | undefined,
+  candidates: { id: number; modelName: string }[],
+): { id: number; modelName: string } | null {
+  if (!answerName) return null;
+  const a = norm(answerName);
+  return candidates.find((c) => norm(c.modelName) === a) ?? null;
+}
+
 /** make name → makeId (case-insensitive). */
 export function resolveMakeId(makes: { id: number; name: string }[], makeName: string): number | null {
   const n = norm(makeName);

@@ -1,7 +1,7 @@
 'use client'
 
 import { ReactNode, CSSProperties } from 'react'
-import { IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe, IconAudit, IconSearch, IconSettings, IconCar, IconBolt, IconTag, Avatar } from './Primitives'
+import { IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe, IconAudit, IconSearch, IconSettings, IconCar, IconBolt, IconTag, IconClock, Avatar } from './Primitives'
 
 const NAV_ITEMS = [
   { id:'overview',     label:'Overview',     Icon:IconHome },
@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { id:'configs',      label:'Vehicle configs', Icon:IconSettings },
   { id:'pricing',      label:'Pricing & tiers', Icon:IconBolt },
   { id:'serviceParts', label:'Service Parts', Icon:IconTag },
+  { id:'repairpalLabor', label:'RepairPal & Labor', Icon:IconClock },
   { id:'bugs',         label:'Bugs',         Icon:IconBug,     badge:'bugs' },
   { id:'feedback',     label:'Feedback',     Icon:IconMessage, badge:'feedback' },
   { id:'otoFeedback',  label:'Oto feedback', Icon:IconBolt,    badge:'otoFeedback' },

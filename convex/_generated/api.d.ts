@@ -58,6 +58,7 @@ import type * as directorConfigBackfills from "../directorConfigBackfills.js";
 import type * as directorGate from "../directorGate.js";
 import type * as directorOverview from "../directorOverview.js";
 import type * as directorPricing from "../directorPricing.js";
+import type * as directorRepairpal from "../directorRepairpal.js";
 import type * as directorSettings from "../directorSettings.js";
 import type * as directorShopActions from "../directorShopActions.js";
 import type * as directorStripe from "../directorStripe.js";
@@ -402,6 +403,7 @@ declare const fullApi: ApiFromModules<{
   directorGate: typeof directorGate;
   directorOverview: typeof directorOverview;
   directorPricing: typeof directorPricing;
+  directorRepairpal: typeof directorRepairpal;
   directorSettings: typeof directorSettings;
   directorShopActions: typeof directorShopActions;
   directorStripe: typeof directorStripe;

@@ -1,7 +1,7 @@
 # RepairPal vehicle matcher — trim-as-model token matching (Tier 1) + engine-sibling fallback (Tier 2, deferred)
 
 **Date:** 2026-06-23 · **Branch:** `waleed-fix` · **Status:** design, pending review
-**Scope of THIS spec:** Tier 1 only (token-set trim matching). Tier 2 (engine-sibling) is documented as a deferred follow-up with its blocker, not built here.
+**Scope:** Tier 1 (token-set trim matching) — implemented + green. Tier 2 (LLM engine-sibling) — design approved 2026-06-23 (§5), building next.
 
 ## 1. Context / problem
 
@@ -24,10 +24,13 @@ Today the matcher's ladder is: (1) exact model-line, (2) exact trim / trim-prefi
 2. Stay conservative — never resolve to the *wrong* RP vehicle (e.g. `M550i` must match nothing, not a near-name).
 3. Pure + unit-tested (no Convex), composing into the existing resolver unchanged.
 
+**Goals (Tier 2, added 2026-06-23)**
+4. For trims genuinely absent from RP (M550i), substitute the closest **engine-equivalent** RP base vehicle, chosen by an LLM, flagged `engine_sibling` so it's never mistaken for an exact match.
+
 **Non-goals (this spec)**
-- The engine-sibling fallback for RP-absent trims (M550i). Documented in §5 as deferred; needs a per-candidate engine source we don't currently have.
-- Any change to `selectVariant`, the resolver's network flow, or the endpoint schema.
-- Fuzzy/edit-distance matching (rejected — false-match risk).
+- Fuzzy/edit-distance *name* matching (rejected — false-match risk; Tier 2 uses engine equivalence, not name fuzzing).
+- A resolution cache (v1 — LLM fires only on rare absent trims during enrichment, never at quote time; cache is a noted follow-up).
+- Any change to `selectVariant` or the resolver's per-service fetch/parse flow (Tier 2 only changes which `baseVehicleId` is chosen + adds two provenance fields).
 
 ## 3. Tier 1 design — token-set trim matching
 
@@ -64,7 +67,7 @@ Pure unit tests in `tests/repairpalEndpointMatch.test.ts` (extends the existing 
 - **Existing exact/model-line matches still pass** (regression): Civic, exact `540i xDrive`.
 - **Token merge unit tests:** `trimTokenSet("AMG C 63 S")` → `{amg,c63,s}`; `trimTokenSet("E 350")` → `{e350}`; `trimTokenSet("750i xDrive")` → `{750i,xdrive}`.
 
-## 5. Tier 2 — engine-sibling fallback (DEFERRED, documented)
+## 5. Tier 2 — LLM engine-sibling fallback (design — approved 2026-06-23)
 
 For trims genuinely absent from RP (M550i): use a *different* RP base vehicle with the **same engine** (M550i 4.4 V8 → RP's 750i/M850i, both 4.4 V8), writing rows flagged `match_quality:"engine_sibling"` + `matched_via`.
 
@@ -73,12 +76,25 @@ For trims genuinely absent from RP (M550i): use a *different* RP base vehicle wi
 - NHTSA needs a VIN — we have VINs for *our* cars, not for RP's catalog cars (`750i`); NHTSA `GetModelsForMakeYear` returns model lines with no engine, and a partial VIN returns no displacement/cylinders (verified).
 - VDB `ymm-specs/v3/{year}/{make}/{model}/{trim}` *has* the data but is **not provisioned on our key** — probe returned `400 "Record(s) were not found"` for every vehicle including VDB's own canonical spelling (`2024 VW Tiguan 2.0T SE R Line Black`), while VIN-decode works. So it's a plan gap, not a spelling gap.
 
-**Resolution options when Tier 2 is taken up (pick later):**
-- **VDB ymm-specs provisioning** (real/deterministic engine data — the preferred source; needs a billing/account action), or
-- **LLM sibling-selector** (Haiku, already wired via `mapVDBActionsToSlugsWithHaiku`; flagged approximation, cached).
-- Until then, RP-absent trims are **logged gaps** (reason recorded), not silently mismatched.
+**Chosen approach (2026-06-23): LLM sibling-selector.** VDB ymm-specs is the deterministic ideal but isn't provisioned; the LLM does the same job (identify the engine of an RP catalog car we have no VIN for) with **zero new dependencies**, reusing the Haiku client already wired in `vehicleDatabases.ts`. Rows are flagged `engine_sibling`, so a model-sourced match is honest by construction.
 
-When built, Tier 2 adds `match_quality` + `matched_via` to `repairpal_endpoint_estimates`; Tier 1 needs no schema change.
+**Architecture** — plugs into the resolver `repairpalEndpoint.ts` ONLY when Tier 1 (`resolveBaseVehicleId`) returns `null`; everything stays behind the existing default-off resolver (no new flag, inert in prod; the LLM never runs at quote time).
+
+Two new units, split for testability:
+1. **Pure `pickValidSibling(answerName: string | null, candidates: {id,modelName}[]): {id,modelName} | null`** (in `repairpalEndpointMatch.ts`) — the LLM's chosen name must be an **exact member** of the candidate list, else `null` (hallucination guard). Unit-tested.
+2. **Impure `selectEngineSiblingLLM(config, candidates)`** (new `repairpalEndpointSibling.ts`, mirrors `mapVDBActionsToSlugsWithHaiku`) — builds the prompt, calls Haiku (`HAIKU_MODEL`, `temperature:0`, JSON out), parses, runs `pickValidSibling`. **Graceful fallback → `null`** when `ANTHROPIC_API_KEY` is absent, the call errors, or the name fails validation. Not unit-tested (network), per the existing Haiku-mapper convention.
+
+**LLM contract:**
+> Our vehicle: `{year} {make} {model} {trim}`, engine `{displacementL}L / {cylinders}-cyl`. RepairPal has no listing for it. From this list of RP's `{make}` `{year}` models `[…]`, pick the ONE that is the closest **engine equivalent** (same displacement + cylinders + forced-induction class; prefer same drivetrain) for service-labor purposes, or `null` if none truly shares the engine.
+> → `{ "sibling": "<exact modelName from the list>" | null, "reason": "…" }`
+
+**Resolver flow:** Tier-1 `null` → `selectEngineSiblingLLM` → if a candidate is returned, fetch/write its estimates tagged `match_quality:"engine_sibling"`, `matched_via:"<modelName>"`; else `{ resolved:false }` (logged gap). Tier-1 hits tag `match_quality:"exact"`, `matched_via:null`.
+
+**Schema delta:** add `match_quality: v.optional(v.string())` + `matched_via: v.optional(v.string())` to `repairpal_endpoint_estimates` and to `upsertRepairpalEndpointEstimate`'s args. Tier 1 needs no schema change (it already resolves; these fields just annotate provenance).
+
+**No cache in v1** — the LLM fires only on RP-absent trims, only during enrichment/backfill (never at quote time), so repeat cost is negligible. A per-`(year,make,model,trim)` resolution cache is a documented follow-up if call volume grows.
+
+**Testing:** pure `pickValidSibling` unit tests (in-list → returns it; not-in-list → null; null → null; case/space tolerance optional). Live integration: run the M550i config through the resolver → expect `match_quality:"engine_sibling"`, `matched_via` a 4.4 V8 BMW (750i/M850i), rows written with labor minutes + parts.
 
 ## 6. Rollout (Tier 1)
 

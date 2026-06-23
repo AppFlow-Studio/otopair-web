@@ -477,6 +477,8 @@ export default defineSchema({
       ),
     ),
     zip: v.optional(v.string()),
+    match_quality: v.optional(v.string()),   // "exact" | "engine_sibling"
+    matched_via: v.optional(v.string()),     // RP modelName substituted when engine_sibling
     fetched_at: v.number(),
   })
     .index("by_config_service", ["vehicle_config_id", "service_id"])

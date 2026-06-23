@@ -38,6 +38,8 @@ describe("upsertRepairpalEndpointEstimate", () => {
           price_high: 14,
         },
       ],
+      match_quality: "engine_sibling",
+      matched_via: "750i xDrive",
       fetched_at: 1,
     };
 
@@ -61,5 +63,7 @@ describe("upsertRepairpalEndpointEstimate", () => {
 
     expect(rows.length).toBe(1);
     expect(rows[0].labor_minutes).toBe(36);
+    expect(rows[0].match_quality).toBe("engine_sibling");
+    expect(rows[0].matched_via).toBe("750i xDrive");
   });
 });

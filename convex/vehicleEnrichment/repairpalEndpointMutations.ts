@@ -26,6 +26,8 @@ export const upsertRepairpalEndpointEstimate = internalMutation({
     total_dealer_high: v.optional(v.number()),
     parts: v.optional(v.array(PART)),
     zip: v.optional(v.string()),
+    match_quality: v.optional(v.string()),
+    matched_via: v.optional(v.string()),
     fetched_at: v.number(),
   },
   handler: async (ctx, args) => {

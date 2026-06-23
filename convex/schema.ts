@@ -444,6 +444,44 @@ export default defineSchema({
     .index("by_part", ["part_id"])
     .index("by_part_source", ["part_id", "source_domain"]),
 
+  // Raw per-config RepairPal estimate-endpoint cache — one row per (config,
+  // service), storing the whole endpoint response at its natural granularity so
+  // `part_prices` stays SKU-only. Labor is ALSO projected into labor_observations
+  // (source repairpal_endpoint, weight 0.9); the per-role parts ranges here are
+  // read at quote/recompute time and joined to part_fitments by role, then
+  // combined with part_prices SKU points via aggregatePartsBand (peers). See
+  // docs/superpowers/specs/2026-06-22-parts-real-primary-endpoint-design.md.
+  repairpal_endpoint_estimates: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    base_vehicle_id: v.number(),               // resolved RepairPal baseVehicleId
+    variant_label: v.optional(v.string()),     // matched engine/position variant
+    labor_minutes: v.optional(v.number()),
+    labor_hours: v.optional(v.number()),
+    labor_low: v.optional(v.number()),         // labor $ band (unrounded)
+    labor_high: v.optional(v.number()),
+    total_independent_low: v.optional(v.number()),
+    total_independent_high: v.optional(v.number()),
+    total_dealer_low: v.optional(v.number()),
+    total_dealer_high: v.optional(v.number()),
+    parts: v.optional(
+      v.array(
+        v.object({
+          role: v.optional(v.string()),        // oem_parts.subcategory (+position) via endpointPartCategory
+          name: v.string(),                    // RepairPal part name (verbatim)
+          quantity: v.optional(v.number()),
+          price_low: v.optional(v.number()),
+          price_high: v.optional(v.number()),
+          position: v.optional(v.string()),    // "front" | "rear" for brakes
+        }),
+      ),
+    ),
+    zip: v.optional(v.string()),
+    fetched_at: v.number(),
+  })
+    .index("by_config_service", ["vehicle_config_id", "service_id"])
+    .index("by_config", ["vehicle_config_id"]),
+
   // Materialized view of "which part does this shop reach for on this
   // service+vehicle_config?" Built from observation: every shop-supplied
   // part_snapshot bumps use_count via recordPartUsage. Once a (shop, service,

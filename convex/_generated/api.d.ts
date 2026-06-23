@@ -100,6 +100,7 @@ import type * as lib_notificationScope from "../lib/notificationScope.js";
 import type * as lib_packageRules from "../lib/packageRules.js";
 import type * as lib_partRoleQuantity from "../lib/partRoleQuantity.js";
 import type * as lib_partSubcategories from "../lib/partSubcategories.js";
+import type * as lib_partsBand from "../lib/partsBand.js";
 import type * as lib_payment_constants from "../lib/payment_constants.js";
 import type * as lib_priceTypes from "../lib/priceTypes.js";
 import type * as lib_push_dispatcher from "../lib/push_dispatcher.js";
@@ -302,6 +303,9 @@ import type * as vehicleEnrichment_prompts_batch1Prompt from "../vehicleEnrichme
 import type * as vehicleEnrichment_prompts_batch1bPrompt from "../vehicleEnrichment/prompts/batch1bPrompt.js";
 import type * as vehicleEnrichment_prompts_batch2Prompt from "../vehicleEnrichment/prompts/batch2Prompt.js";
 import type * as vehicleEnrichment_queries from "../vehicleEnrichment/queries.js";
+import type * as vehicleEnrichment_repairpalEndpoint from "../vehicleEnrichment/repairpalEndpoint.js";
+import type * as vehicleEnrichment_repairpalEndpointMatch from "../vehicleEnrichment/repairpalEndpointMatch.js";
+import type * as vehicleEnrichment_repairpalEndpointProbe from "../vehicleEnrichment/repairpalEndpointProbe.js";
 import type * as vehicleEnrichment_repairpalLaborFirecrawl from "../vehicleEnrichment/repairpalLaborFirecrawl.js";
 import type * as vehicleEnrichment_runHeadless from "../vehicleEnrichment/runHeadless.js";
 import type * as vehicleEnrichment_runPublic from "../vehicleEnrichment/runPublic.js";
@@ -435,6 +439,7 @@ declare const fullApi: ApiFromModules<{
   "lib/packageRules": typeof lib_packageRules;
   "lib/partRoleQuantity": typeof lib_partRoleQuantity;
   "lib/partSubcategories": typeof lib_partSubcategories;
+  "lib/partsBand": typeof lib_partsBand;
   "lib/payment_constants": typeof lib_payment_constants;
   "lib/priceTypes": typeof lib_priceTypes;
   "lib/push_dispatcher": typeof lib_push_dispatcher;
@@ -637,6 +642,9 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/prompts/batch1bPrompt": typeof vehicleEnrichment_prompts_batch1bPrompt;
   "vehicleEnrichment/prompts/batch2Prompt": typeof vehicleEnrichment_prompts_batch2Prompt;
   "vehicleEnrichment/queries": typeof vehicleEnrichment_queries;
+  "vehicleEnrichment/repairpalEndpoint": typeof vehicleEnrichment_repairpalEndpoint;
+  "vehicleEnrichment/repairpalEndpointMatch": typeof vehicleEnrichment_repairpalEndpointMatch;
+  "vehicleEnrichment/repairpalEndpointProbe": typeof vehicleEnrichment_repairpalEndpointProbe;
   "vehicleEnrichment/repairpalLaborFirecrawl": typeof vehicleEnrichment_repairpalLaborFirecrawl;
   "vehicleEnrichment/runHeadless": typeof vehicleEnrichment_runHeadless;
   "vehicleEnrichment/runPublic": typeof vehicleEnrichment_runPublic;

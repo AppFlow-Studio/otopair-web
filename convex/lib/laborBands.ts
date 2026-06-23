@@ -27,6 +27,7 @@ export const AGREEMENT_BAND_PCT = 0.1;
  * rule is forward-compatible.
  */
 export const STRONG_LABOR_SOURCES: ReadonlySet<string> = new Set([
+  "repairpal_endpoint", // exact MOTOR flat-rate minutes — authoritative; drives book_hours when present
   "olp_labor",
   "web_labor",
   "oem_labor",

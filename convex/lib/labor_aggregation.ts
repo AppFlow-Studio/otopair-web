@@ -44,6 +44,28 @@ function clampRound(hours: number): number {
 }
 
 /**
+ * Book-hours precedence. The RepairPal estimate endpoint is exact MOTOR/Chilton
+ * flat-rate time — the most authoritative labor source we have — so when an
+ * `repairpal_endpoint` observation exists it IS the book value (the face value),
+ * never averaged down by lower-weight sources (a real disagreement is surfaced
+ * by the confidence/`labor_sources_disagree` flag, not resolved away). When no
+ * endpoint observation exists, book_hours is the robust WEIGHTED median of the
+ * remaining catalog sources (OLP/web/LLM/…) — the agreement model. Clamped.
+ */
+export function resolveBookHours(
+  catalog: { hours: number; weight?: number; source: string }[],
+): number {
+  const endpoint = catalog.find((o) => o.source === "repairpal_endpoint" && o.hours > 0);
+  if (endpoint) return clampRound(endpoint.hours);
+  return clampRound(
+    weightedMedian(
+      catalog.map((o) => o.hours),
+      catalog.map((o) => o.weight ?? 1),
+    ),
+  );
+}
+
+/**
  * Collect post-job actual labor hours for a (config, service) from SINGLE-service
  * bookings only. A booking with N services has ONE total `actual_labor_minutes`
  * that cannot be split per service, so multi-service bookings are excluded to
@@ -118,12 +140,9 @@ export async function recomputeLaborForConfigService(
     // weight: olp_labor (0.7) anchors, with web_labor (0.6) and repairpal_labor
     // (0.4) as additional sources, ahead of LLM (0.3-0.5) and VDB (0.05). A wrong
     // high-weight value is guarded at WRITE time by the scrape's sanity gate, not here.
-    bookHours = clampRound(
-      weightedMedian(
-        catalog.map((o: any) => o.hours as number),
-        catalog.map((o: any) => (o.weight ?? 1) as number),
-      ),
-    );
+    // repairpal_endpoint (exact MOTOR minutes) wins outright when present;
+    // otherwise the robust weighted median of the remaining sources.
+    bookHours = resolveBookHours(catalog as { hours: number; weight?: number; source: string }[]);
     engineFamily = catalog.find((o: any) => o.engine_family)?.engine_family;
   }
 

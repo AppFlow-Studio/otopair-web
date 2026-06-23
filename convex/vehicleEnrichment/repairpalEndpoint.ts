@@ -24,6 +24,7 @@ import {
   type EndpointVariant,
 } from "./repairpalEndpointMatch";
 import { internal } from "../_generated/api";
+import { selectEngineSiblingLLM } from "./repairpalEndpointSibling";
 
 export type RepairpalEndpointResult = {
   resolved: boolean;
@@ -92,9 +93,25 @@ export const resolveRepairpalEndpointForConfig = internalAction({
     if (makeId == null) return { resolved: false, services: {} };
 
     const baseVehicles = await getJson(`${BASE}/base-vehicles?year=${args.year}&makeId=${makeId}`);
-    const baseVehicleId = Array.isArray(baseVehicles)
+    let baseVehicleId: number | null = Array.isArray(baseVehicles)
       ? resolveBaseVehicleId(baseVehicles, { model: args.model, trim: args.trim ?? null })
       : null;
+    let matchQuality = "exact";
+    let matchedVia: string | undefined = undefined;
+
+    // Tier 2: exact/token-set miss -> ask the LLM for the closest engine-equivalent
+    // RP base vehicle (flagged engine_sibling). Inert if no ANTHROPIC_API_KEY.
+    if (baseVehicleId == null && Array.isArray(baseVehicles)) {
+      const sib = await selectEngineSiblingLLM(
+        {
+          year: args.year, make: args.make, model: args.model, trim: args.trim ?? null,
+          displacementL: args.displacementL ?? null, cylinders: args.cylinders ?? null,
+          drivetrain: args.drivetrain ?? null,
+        },
+        baseVehicles,
+      );
+      if (sib) { baseVehicleId = sib.id; matchQuality = "engine_sibling"; matchedVia = sib.modelName; }
+    }
     if (baseVehicleId == null) return { resolved: false, services: {} };
 
     const services: Record<string, number> = {};
@@ -139,7 +156,7 @@ export const resolveRepairpalEndpointForConfig = internalAction({
           labor_low: sum((vrt) => vrt.laborLow), labor_high: sum((vrt) => vrt.laborHigh),
           total_independent_low: sum((vrt) => vrt.total?.independent?.low), total_independent_high: sum((vrt) => vrt.total?.independent?.high),
           total_dealer_low: sum((vrt) => vrt.total?.dealer?.low), total_dealer_high: sum((vrt) => vrt.total?.dealer?.high),
-          parts, zip: ZIP, fetched_at: Date.now(),
+          parts, zip: ZIP, match_quality: matchQuality, matched_via: matchedVia, fetched_at: Date.now(),
         });
         continue;
       }
@@ -158,7 +175,7 @@ export const resolveRepairpalEndpointForConfig = internalAction({
           labor_low: picked.laborLow, labor_high: picked.laborHigh,
           total_independent_low: picked.total?.independent?.low, total_independent_high: picked.total?.independent?.high,
           total_dealer_low: picked.total?.dealer?.low, total_dealer_high: picked.total?.dealer?.high,
-          parts, zip: ZIP, fetched_at: Date.now(),
+          parts, zip: ZIP, match_quality: matchQuality, matched_via: matchedVia, fetched_at: Date.now(),
         });
         break; // this service resolved
       }

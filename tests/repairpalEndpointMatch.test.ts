@@ -5,6 +5,7 @@ import {
   resolveMakeId,
   resolveBaseVehicleId,
   endpointPartCategory,
+  trimTokenSet,
 } from "../convex/vehicleEnrichment/repairpalEndpointMatch";
 
 describe("extractVariants — recursive parse of the estimate payload", () => {
@@ -120,5 +121,23 @@ describe("endpointPartCategory — map endpoint part NAME to a fitment category/
   });
   it("returns null for an unmapped name", () => {
     expect(endpointPartCategory("Headlight Assembly")).toBeNull();
+  });
+});
+
+describe("trimTokenSet", () => {
+  const eq = (a: Set<string>, b: string[]) =>
+    a.size === b.length && b.every((x) => a.has(x));
+  it("merges a 1-2 letter token followed by a number ('C 63' -> 'c63')", () => {
+    expect(eq(trimTokenSet("AMG C 63 S"), ["amg", "c63", "s"])).toBe(true);
+    expect(eq(trimTokenSet("E 350"), ["e350"])).toBe(true);
+  });
+  it("leaves already-merged trim tokens intact, lowercased", () => {
+    expect(eq(trimTokenSet("C63 AMG S"), ["c63", "amg", "s"])).toBe(true);
+    expect(eq(trimTokenSet("750i xDrive"), ["750i", "xdrive"])).toBe(true);
+    expect(eq(trimTokenSet("M550i xDrive"), ["m550i", "xdrive"])).toBe(true);
+  });
+  it("strips punctuation and collapses whitespace", () => {
+    expect(eq(trimTokenSet("T6 Momentum 7-Passenger"), ["t6", "momentum", "7", "passenger"])).toBe(true);
+    expect(eq(trimTokenSet("  "), [])).toBe(true);
   });
 });

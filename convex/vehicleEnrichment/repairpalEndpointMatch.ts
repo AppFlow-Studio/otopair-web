@@ -93,6 +93,31 @@ export function selectVariant<T extends { label: string }>(variants: T[], sel: S
 
 const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
 
+/**
+ * Normalize a trim/model string to an order-independent token SET, collapsing
+ * a 1-2 letter token immediately followed by a digit-leading token ("C 63" ->
+ * "c63") so our "AMG C 63 S" aligns with RP's "C63 AMG S". Pure; used by the
+ * token-set matching rung in resolveBaseVehicleId.
+ */
+export function trimTokenSet(s: string): Set<string> {
+  const raw = s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  const merged: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const t = raw[i];
+    const next = raw[i + 1];
+    if (/^[a-z]{1,2}$/.test(t) && next && /^[0-9]/.test(next)) {
+      merged.push(t + next);
+      i++; // consume the number token we just merged
+    } else {
+      merged.push(t);
+    }
+  }
+  return new Set(merged);
+}
+
+const setEq = (a: Set<string>, b: Set<string>): boolean =>
+  a.size === b.size && [...a].every((x) => b.has(x));
+
 /** make name → makeId (case-insensitive). */
 export function resolveMakeId(makes: { id: number; name: string }[], makeName: string): number | null {
   const n = norm(makeName);

@@ -36,6 +36,8 @@ import type * as devOnly_auditConfigs from "../devOnly/auditConfigs.js";
 import type * as devOnly_backfillBrakeSystem from "../devOnly/backfillBrakeSystem.js";
 import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
 import type * as devOnly_dedupeConfig from "../devOnly/dedupeConfig.js";
+import type * as devOnly_endpointBackfill from "../devOnly/endpointBackfill.js";
+import type * as devOnly_endpointResearch from "../devOnly/endpointResearch.js";
 import type * as devOnly_fallbackVsOlp from "../devOnly/fallbackVsOlp.js";
 import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
 import type * as devOnly_laborWebSpread from "../devOnly/laborWebSpread.js";
@@ -45,6 +47,7 @@ import type * as devOnly_purgeRepairpalObs from "../devOnly/purgeRepairpalObs.js
 import type * as devOnly_repairpalMinutesSpread from "../devOnly/repairpalMinutesSpread.js";
 import type * as devOnly_repriceJsonProbe from "../devOnly/repriceJsonProbe.js";
 import type * as devOnly_validateQuoteEngine from "../devOnly/validateQuoteEngine.js";
+import type * as devOnly_vdbProbe from "../devOnly/vdbProbe.js";
 import type * as devOnly_verifyLabor from "../devOnly/verifyLabor.js";
 import type * as devOnly_verifyParts from "../devOnly/verifyParts.js";
 import type * as diagnoseVin from "../diagnoseVin.js";
@@ -307,6 +310,7 @@ import type * as vehicleEnrichment_repairpalEndpoint from "../vehicleEnrichment/
 import type * as vehicleEnrichment_repairpalEndpointMatch from "../vehicleEnrichment/repairpalEndpointMatch.js";
 import type * as vehicleEnrichment_repairpalEndpointMutations from "../vehicleEnrichment/repairpalEndpointMutations.js";
 import type * as vehicleEnrichment_repairpalEndpointProbe from "../vehicleEnrichment/repairpalEndpointProbe.js";
+import type * as vehicleEnrichment_repairpalEndpointSibling from "../vehicleEnrichment/repairpalEndpointSibling.js";
 import type * as vehicleEnrichment_repairpalLaborFirecrawl from "../vehicleEnrichment/repairpalLaborFirecrawl.js";
 import type * as vehicleEnrichment_runHeadless from "../vehicleEnrichment/runHeadless.js";
 import type * as vehicleEnrichment_runPublic from "../vehicleEnrichment/runPublic.js";
@@ -376,6 +380,8 @@ declare const fullApi: ApiFromModules<{
   "devOnly/backfillBrakeSystem": typeof devOnly_backfillBrakeSystem;
   "devOnly/dataFixes": typeof devOnly_dataFixes;
   "devOnly/dedupeConfig": typeof devOnly_dedupeConfig;
+  "devOnly/endpointBackfill": typeof devOnly_endpointBackfill;
+  "devOnly/endpointResearch": typeof devOnly_endpointResearch;
   "devOnly/fallbackVsOlp": typeof devOnly_fallbackVsOlp;
   "devOnly/laborValidation": typeof devOnly_laborValidation;
   "devOnly/laborWebSpread": typeof devOnly_laborWebSpread;
@@ -385,6 +391,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/repairpalMinutesSpread": typeof devOnly_repairpalMinutesSpread;
   "devOnly/repriceJsonProbe": typeof devOnly_repriceJsonProbe;
   "devOnly/validateQuoteEngine": typeof devOnly_validateQuoteEngine;
+  "devOnly/vdbProbe": typeof devOnly_vdbProbe;
   "devOnly/verifyLabor": typeof devOnly_verifyLabor;
   "devOnly/verifyParts": typeof devOnly_verifyParts;
   diagnoseVin: typeof diagnoseVin;
@@ -647,6 +654,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/repairpalEndpointMatch": typeof vehicleEnrichment_repairpalEndpointMatch;
   "vehicleEnrichment/repairpalEndpointMutations": typeof vehicleEnrichment_repairpalEndpointMutations;
   "vehicleEnrichment/repairpalEndpointProbe": typeof vehicleEnrichment_repairpalEndpointProbe;
+  "vehicleEnrichment/repairpalEndpointSibling": typeof vehicleEnrichment_repairpalEndpointSibling;
   "vehicleEnrichment/repairpalLaborFirecrawl": typeof vehicleEnrichment_repairpalLaborFirecrawl;
   "vehicleEnrichment/runHeadless": typeof vehicleEnrichment_runHeadless;
   "vehicleEnrichment/runPublic": typeof vehicleEnrichment_runPublic;

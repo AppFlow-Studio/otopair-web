@@ -132,7 +132,8 @@ function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; 
                   <td style={td}>
                     {pricedParts.length === 0 ? '—' : pricedParts.map((p: any, i: number) => (
                       <div key={i} style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                        {p.role}{p.position ? ` ${p.position}` : ''} · {fmtBand(p.band, '$')}{p.qty && p.qty > 1 ? ` ×${p.qty}` : ''}
+                        {p.role}{p.position ? ` ${p.position}` : ''} · {fmtBand(p.band, '$')}
+                        {p.qty && p.qty > 1 ? <span style={{ color: 'var(--slate-400)' }}> ({p.qty} pcs, total)</span> : ''}
                       </div>
                     ))}
                   </td>

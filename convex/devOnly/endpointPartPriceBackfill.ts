@@ -83,6 +83,12 @@ export const backfill = internalAction({
           { vehicle_config_id: row.vehicle_config_id, service_slug: slug, subcategory: sub },
         );
         if (!match) { skipped++; continue; }
+        // Divisor is the ENDPOINT's reported unit count (p.quantity) — that is
+        // the count RepairPal's total_price covers, so avg / p.quantity is the
+        // true PER-UNIT price. Do NOT divide by the fitment's quantity_needed:
+        // the config's canonical quantity is applied later at READ time
+        // (resolvePartsCost → resolveRoleQuantity), which re-multiplies the
+        // per-unit point by the actual vehicle's count.
         const avg = (p.price_low + p.price_high) / 2;
         await ctx.runMutation(
           internal.vehicleEnrichment.endpointPartPriceMutations.upsertEndpointPartPrice,

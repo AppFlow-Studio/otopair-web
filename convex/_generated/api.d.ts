@@ -180,6 +180,7 @@ import type * as oto_vehicleFacts from "../oto/vehicleFacts.js";
 import type * as oto_vehicleFactsEditing from "../oto/vehicleFactsEditing.js";
 import type * as oto_vehicleFactsKB from "../oto/vehicleFactsKB.js";
 import type * as oto_vehicleHealth from "../oto/vehicleHealth.js";
+import type * as oto_vehicleTruthGuard from "../oto/vehicleTruthGuard.js";
 import type * as partSelector from "../partSelector.js";
 import type * as part_prices from "../part_prices.js";
 import type * as part_snapshots from "../part_snapshots.js";
@@ -336,6 +337,7 @@ import type * as vehicleEnrichment_v3queries from "../vehicleEnrichment/v3querie
 import type * as vehicleEnrichment_validation_oemValidation from "../vehicleEnrichment/validation/oemValidation.js";
 import type * as vehicleEnrichment_validation_sanityChecks from "../vehicleEnrichment/validation/sanityChecks.js";
 import type * as vehicleEnrichment_verificationApi from "../vehicleEnrichment/verificationApi.js";
+import type * as vehicleTruth from "../vehicleTruth.js";
 import type * as vehicle_history from "../vehicle_history.js";
 import type * as vehicle_mutations from "../vehicle_mutations.js";
 import type * as vehicle_owners from "../vehicle_owners.js";
@@ -524,6 +526,7 @@ declare const fullApi: ApiFromModules<{
   "oto/vehicleFactsEditing": typeof oto_vehicleFactsEditing;
   "oto/vehicleFactsKB": typeof oto_vehicleFactsKB;
   "oto/vehicleHealth": typeof oto_vehicleHealth;
+  "oto/vehicleTruthGuard": typeof oto_vehicleTruthGuard;
   partSelector: typeof partSelector;
   part_prices: typeof part_prices;
   part_snapshots: typeof part_snapshots;
@@ -680,6 +683,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/validation/oemValidation": typeof vehicleEnrichment_validation_oemValidation;
   "vehicleEnrichment/validation/sanityChecks": typeof vehicleEnrichment_validation_sanityChecks;
   "vehicleEnrichment/verificationApi": typeof vehicleEnrichment_verificationApi;
+  vehicleTruth: typeof vehicleTruth;
   vehicle_history: typeof vehicle_history;
   vehicle_mutations: typeof vehicle_mutations;
   vehicle_owners: typeof vehicle_owners;

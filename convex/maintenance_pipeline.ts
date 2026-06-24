@@ -344,7 +344,9 @@ export const runPipeline = internalAction({
       return;
     }
 
-    // Determine scope: "full" for onboarding/checkin, "intervals_only" for mileage/quick_read/booking
+    // Determine scope: "full" for onboarding/checkin, "intervals_only" for
+    // mileage/quick_read/booking/oto_chat (Oto vehicle-truth re-runs intervals
+    // after writing knownIssues — it must NOT re-onboard).
     const isFullPipeline = args.triggeredBy === "onboarding" || args.triggeredBy === "checkin";
 
     let raw: RawModifiers;

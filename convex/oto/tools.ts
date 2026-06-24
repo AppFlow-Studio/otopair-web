@@ -627,6 +627,49 @@ const RENDER_TOOLS: OtoToolSchema[] = [
   },
 
   {
+    name: "render_vehicle_update",
+    description:
+      "Surface a one-tap confirm card that lets the user approve pending vehicle-truth updates (odometer reading, service claims, and/or warning lights Oto captured during the conversation). Call this when you have gathered one or more of: a user-stated mileage, service-due claims, or active fault lights — and you want the user to confirm before writing them to the vehicle record. On confirm the mobile component calls vehicleTruth.applyVehicleTruth with the supplied inputs. Terminal render tool — calling it ends your turn.",
+    input_schema: {
+      type: "object",
+      properties: {
+        mileage: {
+          type: "number",
+          description:
+            "Optional. User-stated odometer reading in miles. Set only when the user explicitly mentioned their current mileage.",
+        },
+        service_claims: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              service_slug: {
+                type: "string",
+                description: "Canonical snake_case service slug from OTOPAIR_SERVICE_SLUGS.",
+              },
+              kind: {
+                type: "string",
+                enum: ["due", "light_on"],
+                description: "Whether this service is past-due or flagged by a dashboard light.",
+              },
+            },
+            required: ["service_slug", "kind"],
+          },
+          description:
+            "Optional. Array of service claims the user stated (e.g. overdue oil change, brake warning). Each entry must have a service_slug and a kind.",
+        },
+        fault_lights: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Array of warning-light id strings the user reported (e.g. [\"check_engine\", \"tire_pressure\"]).",
+        },
+      },
+      required: [],
+    },
+  },
+
+  {
     name: "render_link_button",
     description:
       "Render a tap-to-redirect button that opens a specific in-app screen. Use when the user asks to go to (or perform an action that lives on) one of the 9 supported destinations — DO NOT recompose screen content in chat. TERMINAL render — calling this ENDS YOUR TURN; do not call other tools after it. Pair with a short framing sentence in your prose (e.g. 'Settings is in your account area — tap to open.'). Destinations and when to fire each: " +
@@ -867,6 +910,7 @@ export const OTO_TOOL_CATEGORY: Record<string, OtoToolCategory> = {
   // handles every sub-stage internally including pay-screen redirect.
   render_book_service: "render",
   render_record_confirmation: "render",
+  render_vehicle_update: "render",
   render_link_button: "render",
   // Booking Status — Sprint 3 Day 5 §14.3 (single + list booking surfaces)
   render_booking_card: "render",

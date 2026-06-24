@@ -116,6 +116,7 @@ const TOOL_NAMES_V1 = [
   // Render tools — general-purpose chat UI affordances.
   "render_quick_replies",
   "render_record_confirmation",
+  "render_vehicle_update",
   // Booking flow — Sprint 4 Day 1 Pass B consolidation. Single terminal
   // render replacing the prior 6-tool chain (render_service_picker /
   // render_diagnostic_form / render_shop_carousel / render_time_selector /

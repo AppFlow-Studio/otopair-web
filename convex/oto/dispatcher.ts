@@ -207,6 +207,27 @@ function packageRenderDirective(toolUse: ToolUseBlock): ToolResultBlock {
         }),
       );
 
+    case "render_vehicle_update":
+      // Trigger-only: pass the vehicle-truth inputs Oto captured. The mobile
+      // component renders a one-tap confirm card; on confirm it calls
+      // vehicleTruth.applyVehicleTruth with the supplied mileage,
+      // service_claims, and fault_lights. All three inputs are optional —
+      // pass only what the user actually stated.
+      return ok(
+        toolUse.id,
+        renderD("showVehicleUpdate", {
+          ...(toolUse.input.mileage !== undefined
+            ? { mileage: toolUse.input.mileage }
+            : {}),
+          ...(toolUse.input.service_claims !== undefined
+            ? { service_claims: toolUse.input.service_claims }
+            : {}),
+          ...(toolUse.input.fault_lights !== undefined
+            ? { fault_lights: toolUse.input.fault_lights }
+            : {}),
+        }),
+      );
+
     case "render_link_button":
       // Sprint 3 §14.1 — terminal app-nav redirect surface. Trigger-only: pass
       // `destination` (one of 8 enum values: terms_of_service / privacy_policy

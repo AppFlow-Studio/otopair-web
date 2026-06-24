@@ -851,7 +851,14 @@ export async function buildQuote(
       per_unit_high: round2(partsRes.high),
       unit_count: bypassUnitScale ? 1 : unitRes.count,
       baseline_count: bypassUnitScale ? 1 : unitRes.baseline,
-      unit_label: bypassUnitScale ? "axle" : unitRes.label,
+      // ccb_absolute is a flat per-axle price → "axle". A real_parts band is
+      // pre-totaled over the config's own units, so there's no single per-unit
+      // label to show → null (UI renders it as a per-service total, not "1 axle").
+      unit_label: bypassUnitScale
+        ? partsRes.source === "ccb_absolute"
+          ? "axle"
+          : null
+        : unitRes.label,
       unit_count_estimated: bypassUnitScale ? false : unitRes.is_estimate,
     },
     flags,

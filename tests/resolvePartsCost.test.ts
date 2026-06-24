@@ -319,5 +319,9 @@ describe("buildQuote — real_parts band is not re-scaled by unit count", () => 
     // After fix:  parts.low = 48 (the pre-totaled per-config band).
     expect(quote.parts.low).toBe(48);
     expect(quote.parts.high).toBe(72);
+    // real_parts band is pre-totaled → unit_label is null (not "axle"), and the
+    // count metadata is the bypass sentinel 1/1.
+    expect(quote.parts.unit_label).toBeNull();
+    expect(quote.parts.unit_count).toBe(1);
   });
 });

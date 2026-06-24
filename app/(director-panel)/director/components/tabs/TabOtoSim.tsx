@@ -7,9 +7,10 @@ import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Input, Card, Badge, IconSearch, IconCar } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
+import { summarizeRenderDirectives, type RenderDirectiveRow } from './renderDirectiveSummary'
 
 type QuickReply = { id?: string; text: string; value?: string; variant?: string }
-type ChatMsg = { role: 'user' | 'assistant'; text: string; quickReplies?: QuickReply[] }
+type ChatMsg = { role: 'user' | 'assistant'; text: string; quickReplies?: QuickReply[]; render?: RenderDirectiveRow[] }
 type UserCar = { vehicleId: string | null; vin: string; ymm: string; nickname?: string; mileage?: number }
 
 const levelLabel = (lvl: number | string | null | undefined): string | null => {
@@ -73,10 +74,15 @@ export const TabOtoSim = () => {
         ...(convoId ? { conversationId: convoId } : {}),
         message: body,
         vehicleVin: car.vin, // a car is always selected before chatting (mirrors the app)
-      }) as { conversationId: Id<'ai_conversations'>; result?: { text?: string; quickReplies?: QuickReply[] }; convoState?: typeof convoState }
+      }) as { conversationId: Id<'ai_conversations'>; result?: Record<string, any>; convoState?: typeof convoState }
       setConvoId(res.conversationId)
-      const r = res.result ?? {}
-      setMessages(m => [...m, { role: 'assistant', text: r.text ?? '(no text returned)', quickReplies: r.quickReplies ?? [] }])
+      const r = (res.result ?? {}) as Record<string, any>
+      setMessages(m => [...m, {
+        role: 'assistant',
+        text: r.text ?? '(no text returned)',
+        quickReplies: (r.quickReplies as QuickReply[]) ?? [],
+        render: summarizeRenderDirectives(r),
+      }])
       if (res.convoState) setConvoState(res.convoState)
     } catch (e) {
       setError((e as Error).message)
@@ -188,13 +194,30 @@ export const TabOtoSim = () => {
               </div>
             )}
             {messages.map((m, i) => (
-              <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth:'78%' }}>
+              <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth:'78%',
+                display:'flex', flexDirection:'column', gap:6, alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
                 <div style={{
                   padding:'9px 12px', borderRadius:12, fontSize:13, lineHeight:1.5, whiteSpace:'pre-wrap',
                   ...(m.role === 'user'
                     ? { background:'var(--blue-700)', color:'#fff', borderBottomRightRadius:4 }
                     : { background:'#fff', color:'var(--slate-800)', border:'1px solid var(--slate-200)', borderBottomLeftRadius:4 }),
                 }}>{m.text}</div>
+                {/* Render-tool components Oto fired this turn — so the director SEES the
+                    card/button the mobile app would draw, instead of just Oto's text. */}
+                {m.role === 'assistant' && (m.render?.length ?? 0) > 0 && (
+                  <div style={{ display:'flex', flexDirection:'column', gap:6, width:'100%' }}>
+                    {m.render!.map(d => (
+                      <div key={d.key} style={{ display:'flex', alignItems:'center', gap:9, padding:'8px 11px',
+                        border:'1px solid var(--blue-200, #BFDBFE)', background:'var(--blue-50)', borderRadius:10 }}>
+                        <Badge tone="blue" dot>render</Badge>
+                        <div style={{ display:'flex', flexDirection:'column', minWidth:0 }}>
+                          <span style={{ fontSize:12, fontWeight:600, color:'var(--slate-800)' }}>{d.label}</span>
+                          <span style={{ fontSize:11, color:'var(--slate-500)', whiteSpace:'pre-wrap' }}>{d.detail}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
             {busy && <div style={{ alignSelf:'flex-start', fontSize:12, color:'var(--slate-400)', padding:'4px 8px' }}>Oto is thinking…</div>}

@@ -19,6 +19,11 @@ import {
   getBookingServiceFlags,
   serviceListsOverlap,
 } from "@/lib/vehicle-service-relevance";
+import {
+  TIRE_POSITIONS,
+  formatRotorValue,
+  type TirePosition,
+} from "@/lib/inspection-measurements";
 import { cn } from "@/lib/utils";
 
 const EMPTY_SECTION_COPY =
@@ -30,6 +35,13 @@ type SectionRow = {
   label: string;
   value: string;
   source?: PassportSource;
+};
+
+const MEASUREMENT_POSITION_LABELS: Record<TirePosition, string> = {
+  front_left: "Front left",
+  front_right: "Front right",
+  rear_left: "Rear left",
+  rear_right: "Rear right",
 };
 
 export function sourceBadgeClassName(source?: PassportSource) {
@@ -198,6 +210,17 @@ function VehiclePassportSectionBody({
             : "No",
       source: data.sources["tires.run_flat"],
     },
+    ...TIRE_POSITIONS.map((position) => {
+      const value =
+        data.passport.tires.tread_depths?.[position]?.reported_min_32nds;
+      return {
+        label: `${MEASUREMENT_POSITION_LABELS[position]} tread`,
+        value:
+          typeof value === "number" && Number.isFinite(value)
+            ? `${value}/32"`
+            : "Unknown",
+      };
+    }),
   ]);
 
   const brakeRows = getSectionRows([
@@ -213,6 +236,15 @@ function VehiclePassportSectionBody({
       label: "Rotor condition",
       value: rotorConditionLabel(data.passport.brakes.rotor_condition),
     },
+    ...TIRE_POSITIONS.map((position) => {
+      const reading = data.passport.brakes.rotor_thickness?.[position];
+      return {
+        label: `${MEASUREMENT_POSITION_LABELS[position]} rotor`,
+        value: reading
+          ? `${formatRotorValue(reading.entered_value, reading.entered_unit)} ${reading.entered_unit}`
+          : "Unknown",
+      };
+    }),
   ]);
 
   const fluidRows = getSectionRows([

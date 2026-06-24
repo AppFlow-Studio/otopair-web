@@ -47,7 +47,11 @@ import {
   reconcileDisclosedCeilingWithQuote,
   type PricedPartSnapshotRow,
 } from "./booking_quotes";
-import { deriveServiceVariantsFromOptions } from "./lib/brakeScope";
+import {
+  deriveServiceVariantsFromOptions,
+  resolveBrakeScopeForBooking,
+  type BrakeScope,
+} from "./lib/brakeScope";
 import {
   detectTier,
   resolveLaborHours,
@@ -108,6 +112,7 @@ import {
   vehiclePassportUpdateValidator,
 } from "./lib/vehicle_passports";
 import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
+import { validateInspectionMeasurements } from "../lib/inspection-measurements";
 import { insertSnapshotImpl } from "./part_snapshots";
 import {
   closeRecForCompletedBooking,
@@ -4081,6 +4086,7 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
       brand: prejob.tire_brand ?? undefined,
       size_front: prejob.tire_size_front ?? undefined,
       size_rear: prejob.tire_size_rear ?? undefined,
+      tread_depths: prejob.tire_tread ?? undefined,
       front_condition: frontCondition,
       rear_condition: rearCondition,
       overall_condition:
@@ -4334,6 +4340,7 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       overall_condition: passportRecord?.tires?.overall_condition ?? null,
       front_condition: passportRecord?.tires?.front_condition ?? null,
       rear_condition: passportRecord?.tires?.rear_condition ?? null,
+      tread_depths: passportRecord?.tires?.tread_depths ?? null,
       last_verified_at: firstDefinedNumber(
         passportRecord?.tires?.last_verified_at,
         passportRecord?.last_shop_confirmed_at
@@ -4371,6 +4378,7 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       front_pad_mm: coerceNumberOrNull(passportRecord?.brakes?.front_pad_mm),
       rear_pad_mm: coerceNumberOrNull(passportRecord?.brakes?.rear_pad_mm),
       rotor_condition: passportRecord?.brakes?.rotor_condition ?? null,
+      rotor_thickness: passportRecord?.brakes?.rotor_thickness ?? null,
     },
     inspection: {
       looks_current: firstDefinedBoolean(passportRecord?.inspection?.looks_current),
@@ -4550,7 +4558,8 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
 function validatePrejobReport(
   prejob: any,
   baselineMileage: number | null,
-  serviceFlags: ReturnType<typeof getBookingServiceFlags>
+  serviceFlags: ReturnType<typeof getBookingServiceFlags>,
+  brakeScope: BrakeScope,
 ) {
   if (typeof prejob.mileage !== "number" || !Number.isFinite(prejob.mileage)) {
     throw new Error("Mileage is required before starting this booking.");
@@ -4580,20 +4589,30 @@ function validatePrejobReport(
   }
   if (serviceFlags.hasBrakeWork) {
     if (
-      typeof prejob.brakes?.front_pad_mm !== "number" ||
-      !Number.isFinite(prejob.brakes.front_pad_mm)
+      brakeScope.front &&
+      (typeof prejob.brakes?.front_pad_mm !== "number" ||
+        !Number.isFinite(prejob.brakes.front_pad_mm))
     ) {
       throw new Error("Front pad thickness is required for brake-related work.");
     }
     if (
-      typeof prejob.brakes?.rear_pad_mm !== "number" ||
-      !Number.isFinite(prejob.brakes.rear_pad_mm)
+      brakeScope.rear &&
+      (typeof prejob.brakes?.rear_pad_mm !== "number" ||
+        !Number.isFinite(prejob.brakes.rear_pad_mm))
     ) {
       throw new Error("Rear pad thickness is required for brake-related work.");
     }
     if (!hasText(prejob.brakes?.rotor_condition)) {
       throw new Error("Rotor condition is required for brake-related work.");
     }
+  }
+  const measurementResult = validateInspectionMeasurements({
+    tire_tread: prejob.tire_tread,
+    brakes: prejob.brakes,
+    brake_scope: brakeScope,
+  });
+  if (!measurementResult.valid) {
+    throw new Error(measurementResult.error);
   }
   if (serviceFlags.hasOilChange) {
     if (!hasText(prejob.fluid_overrides?.oil_viscosity)) {
@@ -8800,7 +8819,8 @@ export const startWithPrejob = mutation({
     validatePrejobReport(
       args.prejob,
       passportView.passport.mileage ?? null,
-      serviceFlags
+      serviceFlags,
+      await resolveBrakeScopeForBooking(ctx, booking),
     );
 
     const now = Date.now();
@@ -8901,6 +8921,7 @@ export const commitInspectionAndAwaitEstimate = mutation({
       args.prejob,
       passportView.passport.mileage ?? null,
       serviceFlags,
+      await resolveBrakeScopeForBooking(ctx, booking),
     );
 
     const now = Date.now();

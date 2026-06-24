@@ -25,6 +25,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
+  customerInspectionSnapshotValidator,
   postjobPartValidator,
   postjobPhotoValidator,
   postjobReportValidator,
@@ -4318,6 +4319,7 @@ export default defineSchema({
     labor_hours: v.optional(v.number()),
     labor_rate_cents: v.optional(v.number()),
     notes: v.optional(v.string()),
+    inspection_snapshot: v.optional(customerInspectionSnapshotValidator),
 
     // Gating context: the ceiling the submission was evaluated against.
     // For pre_job this is disclosed_range_high_cents; for mid/post it's

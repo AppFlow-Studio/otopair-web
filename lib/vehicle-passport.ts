@@ -61,6 +61,7 @@ export type VehiclePassportTires = {
   overall_condition?: TireCondition | null;
   front_condition?: TireCondition | null;
   rear_condition?: TireCondition | null;
+  tread_depths?: TireTreadMeasurements | null;
   last_verified_at?: number | null;
 };
 
@@ -79,6 +80,7 @@ export type VehiclePassportBrakes = {
   front_pad_mm?: number | null;
   rear_pad_mm?: number | null;
   rotor_condition?: RotorCondition | null;
+  rotor_thickness?: RotorThicknessMeasurements | null;
 };
 
 export type VehiclePassportInspection = {
@@ -193,6 +195,7 @@ export type PreJobSurveyPayload = {
   tire_size_rear?: string | null;
   front_tire_condition: TireCondition | null;
   rear_tire_condition: TireCondition | null;
+  tire_tread?: TireTreadMeasurements | null;
   brakes?: VehiclePassportBrakes | null;
   fluids_match_oem?: boolean;
   fluid_overrides?: VehiclePassportFluids | null;
@@ -550,3 +553,7 @@ export function sumJobActualParts(parts: JobActualPartPayload[]) {
     return sum + cost * qty;
   }, 0);
 }
+import type {
+  RotorThicknessMeasurements,
+  TireTreadMeasurements,
+} from "./inspection-measurements";

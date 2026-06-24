@@ -37,6 +37,7 @@ import {
   axlePositionByServiceId,
   fitmentMatchesPosition,
   isBrakeSlug,
+  resolveBrakeScopeForBooking,
   type BrakeScope,
 } from "./lib/brakeScope";
 
@@ -419,33 +420,7 @@ export const getBrakeScopeForBooking = query({
   handler: async (ctx, args): Promise<BrakeScope> => {
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return { hasBrakeWork: false, front: false, rear: false };
-
-    const axleByServiceId = axlePositionByServiceId(booking);
-    let hasBrakeWork = false;
-    let sawAxleSignal = false;
-    let front = false;
-    let rear = false;
-
-    for (const serviceId of booking.service_ids ?? []) {
-      const service = await ctx.db.get(serviceId);
-      if (!service?.slug || !isBrakeSlug(service.slug)) continue;
-      hasBrakeWork = true;
-      const axle = axleForBrakeService(
-        booking,
-        String(serviceId),
-        service.slug,
-        axleByServiceId,
-      );
-      if (!axle) continue;
-      sawAxleSignal = true;
-      if (axle === "front" || axle === "both") front = true;
-      if (axle === "rear" || axle === "both") rear = true;
-    }
-
-    if (!hasBrakeWork) return { hasBrakeWork: false, front: false, rear: false };
-    // Default to both axles when the booking recorded no axle option.
-    if (!sawAxleSignal) return { hasBrakeWork: true, front: true, rear: true };
-    return { hasBrakeWork: true, front, rear };
+    return await resolveBrakeScopeForBooking(ctx, booking);
   },
 });
 

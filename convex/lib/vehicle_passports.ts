@@ -48,6 +48,59 @@ export const nullableStringValidator = v.union(v.string(), v.null());
 export const nullableNumberValidator = v.union(v.float64(), v.null());
 export const nullableBooleanValidator = v.union(v.boolean(), v.null());
 
+export const tireTreadReadingValidator = v.object({
+  reported_min_32nds: v.optional(nullableNumberValidator),
+  inner_32nds: v.optional(nullableNumberValidator),
+  center_32nds: v.optional(nullableNumberValidator),
+  outer_32nds: v.optional(nullableNumberValidator),
+});
+
+export const tireTreadMeasurementsValidator = v.object({
+  front_left: v.optional(tireTreadReadingValidator),
+  front_right: v.optional(tireTreadReadingValidator),
+  rear_left: v.optional(tireTreadReadingValidator),
+  rear_right: v.optional(tireTreadReadingValidator),
+});
+
+export const rotorUnitValidator = v.union(v.literal("in"), v.literal("mm"));
+
+export const rotorThicknessReadingValidator = v.object({
+  entered_value: v.float64(),
+  entered_unit: rotorUnitValidator,
+  normalized_um: v.float64(),
+});
+
+export const rotorThicknessMeasurementsValidator = v.object({
+  front_left: v.optional(rotorThicknessReadingValidator),
+  front_right: v.optional(rotorThicknessReadingValidator),
+  rear_left: v.optional(rotorThicknessReadingValidator),
+  rear_right: v.optional(rotorThicknessReadingValidator),
+});
+
+const customerRotorReadingValidator = v.object({
+  entered_value: v.float64(),
+  entered_unit: rotorUnitValidator,
+});
+
+export const customerInspectionSnapshotValidator = v.object({
+  tire_tread_32nds: v.optional(
+    v.object({
+      front_left: v.optional(v.float64()),
+      front_right: v.optional(v.float64()),
+      rear_left: v.optional(v.float64()),
+      rear_right: v.optional(v.float64()),
+    }),
+  ),
+  rotor_thickness: v.optional(
+    v.object({
+      front_left: v.optional(customerRotorReadingValidator),
+      front_right: v.optional(customerRotorReadingValidator),
+      rear_left: v.optional(customerRotorReadingValidator),
+      rear_right: v.optional(customerRotorReadingValidator),
+    }),
+  ),
+});
+
 export const vehiclePassportTiresValidator = v.object({
   brand: v.optional(nullableStringValidator),
   model: v.optional(nullableStringValidator),
@@ -57,6 +110,9 @@ export const vehiclePassportTiresValidator = v.object({
   overall_condition: v.optional(v.union(tireConditionValidator, v.null())),
   front_condition: v.optional(v.union(tireConditionValidator, v.null())),
   rear_condition: v.optional(v.union(tireConditionValidator, v.null())),
+  tread_depths: v.optional(
+    v.union(tireTreadMeasurementsValidator, v.null()),
+  ),
   last_verified_at: v.optional(nullableNumberValidator),
 });
 
@@ -75,6 +131,9 @@ export const vehiclePassportBrakesValidator = v.object({
   front_pad_mm: v.optional(nullableNumberValidator),
   rear_pad_mm: v.optional(nullableNumberValidator),
   rotor_condition: v.optional(v.union(rotorConditionValidator, v.null())),
+  rotor_thickness: v.optional(
+    v.union(rotorThicknessMeasurementsValidator, v.null()),
+  ),
 });
 
 export const vehiclePassportInspectionValidator = v.object({
@@ -109,6 +168,9 @@ export const prejobReportValidator = v.object({
   tire_size_rear: v.optional(nullableStringValidator),
   front_tire_condition: v.union(tireConditionValidator, v.null()),
   rear_tire_condition: v.union(tireConditionValidator, v.null()),
+  tire_tread: v.optional(
+    v.union(tireTreadMeasurementsValidator, v.null()),
+  ),
   brakes: v.optional(v.union(vehiclePassportBrakesValidator, v.null())),
   fluids_match_oem: v.optional(v.boolean()),
   fluid_overrides: v.optional(v.union(vehiclePassportFluidsValidator, v.null())),

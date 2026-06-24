@@ -12,6 +12,19 @@
  * The band returned is the PER-CONFIG TOTAL (Σ over roles of pooled-per-unit
  * [min,max] × the config's resolved quantity), so the caller must NOT re-apply
  * unit-scaling.
+ *
+ * PLANNED (not done) — blend SKU + endpoint into one AVERAGED price:
+ * The intent was to average our gathered SKU prices (often aftermarket) with the
+ * RepairPal endpoint price (OEM/dealer-flavored) into a single representative
+ * number — i.e. pool them and quote the blended mean/median. This is deliberately
+ * NOT enabled yet because the shadow-diff (2026-06-23,
+ * docs/superpowers/reviews/2026-06-23-parts-real-primary-shadow-diff.md) found the
+ * endpoint's price RANGE is sometimes far too large to average cleanly: RepairPal
+ * occasionally returns a wrong-variant value (e.g. a RAV4 12V battery came back at
+ * $1507 — the hybrid traction pack — vs the real ~$130 dealer SKU). Today this
+ * helper takes raw [min,max], so such an outlier blows the band wide. Revisit by
+ * switching to a robust blended average + an outlier/large-gap guard before the
+ * PARTS_SOURCE_REAL_PRIMARY flag is flipped on.
  */
 
 export type PartsRoleInput = {

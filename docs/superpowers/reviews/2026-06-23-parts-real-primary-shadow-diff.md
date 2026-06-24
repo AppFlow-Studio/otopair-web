@@ -36,15 +36,21 @@ The real band spans `[min, max]` over the pooled per-unit prices (SKU points + e
 
 Root cause: `aggregatePartsBand` pools raw `min/max`, but `summarizePriceRows` (the existing customer-facing aggregator) applies **MAD outlier rejection** for exactly this reason. The real-band path skips that, so one poisoned SKU row dominates the high. This is precisely what the shadow-diff gate exists to catch.
 
-## Recommendation — before any prod flip (v1.1)
+## Root cause (corrected after pulling the raw rows)
 
-1. **Apply outlier rejection to the SKU pool in the real band.** Reuse `convex/lib/robustStats.ts:nonOutlierIndices` (already used by `summarizePriceRows`) on the per-role SKU prices before taking min/max — or, cleaner, have `resolvePartsCost` source each role's SKU band from `summarizePriceRows` (which already MAD-rejects + drops poison) instead of raw `part_prices` rows, and pool the endpoint point with that robust band. This removes the battery/oil blow-ups without changing the endpoint-fallback semantics.
-2. **Investigate the bad battery/oil SKU data** on dev (the $1507 RAV4 / $2480 BMW battery rows, the VW oil rows) — likely per-pack or mis-scraped listings that should be poisoned upstream regardless of this feature.
-3. **Re-run the shadow-diff** after (1); confirm the highs collapse to plausible ranges, then bring the numbers back for sign-off.
-4. **Quantity round-trip** (the plan's flagged risk) looked sane on this sample (spark_plugs/coolant/oil totals scale with the config) — no obvious per-unit ÷/× error. Re-verify after the outlier fix removes the noise.
+The blow-up is **not** bad SKU data — the gathered SKUs are clean (RAV4 battery $129.95 from a Toyota *dealer* = OEM; BMW $230.29 from a BMW parts dealer). The large value is the **endpoint price itself**: RepairPal returned **$1507.47** for the RAV4 "Vehicle Battery" (the hybrid traction pack — a wrong-variant match) vs the real ~$130. A 10× gap is the tell that it's a different part, not an OEM-vs-aftermarket tier (those run ~1.5–3×).
+
+## Decision (2026-06-23): document + defer; do NOT change the math now
+
+The **intended** design is to **average/blend** our (often aftermarket) SKU prices with the (OEM/dealer-flavored) endpoint price into one representative number — pooling is correct for that. It is left **as-built (raw min/max span) and OFF** for now because the endpoint range is sometimes too large to average cleanly (the wrong-variant cases above). Recorded in code at `convex/lib/partsBand.ts` (header NOTE). When revisited:
+
+1. **Switch the real band from raw `[min,max]` to a robust BLENDED average** (mean/median, the `summarizePriceRows` style) so OEM+aftermarket blend instead of spanning the extremes.
+2. **Add a large-gap guard** (e.g. distrust a pooled value >3–4× the others) so a wrong-variant endpoint (the $1507 hybrid battery) can't drag the blend.
+3. **Re-run the shadow-diff**, confirm the highs collapse, then bring numbers back for sign-off.
+4. **Quantity round-trip** (the plan's flagged risk) looked sane on this sample (spark_plugs/coolant/oil scale with the config) — re-verify after the change.
 
 ## Disposition
 
-- **PROD `PARTS_SOURCE_REAL_PRIMARY` = OFF** (unchanged). Do not flip until the outlier-rejection fix lands and a clean re-diff is signed off.
+- **PROD `PARTS_SOURCE_REAL_PRIMARY` = OFF** (unchanged). Do not flip until the blended-average + large-gap-guard change lands and a clean re-diff is signed off.
 - Dev env flag also left OFF (diff used `forceRealPrimary`); the 129 inert endpoint points remain in dev `part_prices` for the re-diff.
 - All code (Tasks 1–8) is committed on `waleed-fix`, tests green, nothing pushed.

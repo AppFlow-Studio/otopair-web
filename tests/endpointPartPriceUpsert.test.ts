@@ -21,5 +21,7 @@ describe("upsertEndpointPartPrice", () => {
     expect(rows.length).toBe(1);
     expect(rows[0].price).toBe(11);
     expect(rows[0].price_type).toBe(REPAIRPAL_ENDPOINT_PRICE_TYPE);
+    expect(rows[0].created_at).toBe(1); // insert-only: preserved from the first upsert
+    expect(rows[0].refreshed_at).toBe(2); // updated by the patch
   });
 });

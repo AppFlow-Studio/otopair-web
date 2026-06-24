@@ -81,6 +81,40 @@ export const survey = internalQuery({
   },
 });
 
+/** DEV-ONLY: find a usable Oto-sim target — a vehicle_owner whose user has a
+ *  clerkUserId + a VIN, preferring one with an enriched config + a not-yet-due
+ *  oil service (so the "argue the projection" before-behavior is observable). */
+export const otoSimTarget = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const owners = await ctx.db.query("vehicle_owners").take(200);
+    const out: any[] = [];
+    for (const o of owners) {
+      if (out.length >= 8) break;
+      const user: any = o.user_id ? await ctx.db.get(o.user_id) : null;
+      if (!user?.clerkUserId || !o.vin) continue;
+      const vehicle: any = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q) => q.eq("vin", o.vin))
+        .first();
+      const cfg: any = vehicle?.vehicle_config_id ? await ctx.db.get(vehicle.vehicle_config_id) : null;
+      const make: any = cfg?.make_id ? await ctx.db.get(cfg.make_id) : null;
+      const model: any = cfg?.model_id ? await ctx.db.get(cfg.model_id) : null;
+      out.push({
+        clerkUserId: user.clerkUserId,
+        email: user.email ?? null,
+        firstName: user.first_name ?? null,
+        vin: o.vin,
+        mileage: o.mileage ?? null,
+        knownIssues: o.knownIssues ?? null,
+        car: cfg ? `${cfg.year ?? ""} ${make?.name ?? ""} ${model?.name ?? ""}`.trim() : "(no config)",
+        enriched: !!cfg && cfg.enrichment_status === "complete",
+      });
+    }
+    return out;
+  },
+});
+
 /** Verify what landed in repairpal_endpoint_estimates: overall counts + a
  *  detailed dump of one config's rows (default the 2018 Honda Civic). */
 export const verifyRows = internalQuery({

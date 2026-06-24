@@ -1096,6 +1096,8 @@ export default defineSchema({
     nickname: v.optional(v.string()),
     is_primary: v.optional(v.boolean()),
     mileage: v.optional(v.number()),
+    mileage_source: v.optional(v.string()),      // e.g. "chat_self_reported" | "onboarding" | "verified"
+    mileage_updated_at: v.optional(v.number()),  // ms epoch of the last mileage write
     added_at: v.optional(v.number()),
     removed_at: v.optional(v.number()),
     ownershipType: v.optional(v.string()),

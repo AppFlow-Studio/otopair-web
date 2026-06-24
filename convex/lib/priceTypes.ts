@@ -35,6 +35,8 @@ export function isPoisonPriceType(priceType: string | null | undefined): boolean
  *  must not. */
 export const REPAIRPAL_ENDPOINT_PRICE_TYPE = "repairpal_endpoint";
 
+/** price_type values that are valid but reserved as per-part fallbacks —
+ *  excluded from the pooled SKU aggregate (mirrors POISON_PRICE_TYPES' shape). */
 export const NON_POOLED_PRICE_TYPES = new Set<string>([REPAIRPAL_ENDPOINT_PRICE_TYPE]);
 
 /** True when a row is valid but must NOT enter the pooled per-part aggregate. */

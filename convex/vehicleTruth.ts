@@ -1,20 +1,21 @@
 /**
  * vehicleTruth.ts — one-tap-confirm write-back of user-stated vehicle truth from
  * Oto chat. Called by the render_vehicle_update mobile confirm component. Guards
- * mileage (monotonic + plausible), flags maintenance-reminder claims via the
- * existing quick_read override (self_reported provenance), appends fault lights to
- * knownIssues, and re-runs the maintenance pipeline.
+ * mileage (monotonic + plausible), maps maintenance-reminder claims to the pipeline's
+ * knownIssues warning-light vocabulary (maintenance_pipeline.ts:564 derives
+ * quick-read overrides from knownIssues — writing quick_read_flag directly is
+ * clobbered by runPipeline), appends fault lights to knownIssues, and re-runs the
+ * maintenance pipeline.
  *
  * Auth/owner resolve mirrors recordConfirmation.ts:54-79.
  * Pipeline trigger mirrors maintenance.ts:107-114 (preOnboardingComplete gate).
- * quick_read_flag / quick_read_urgency values mirror the quarterly check-in
- * override convention: flag = "due", urgency = "self_reported".
  */
 import { mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { computeMaxDelta, validateMileageUpdate } from "./oto/vehicleTruthGuard";
+import { symptomForServiceSlug } from "./lib/serviceSymptoms";
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -80,54 +81,24 @@ export const applyVehicleTruth = mutation({
       mileageUpdated = true;
     }
 
-    // ── Maintenance-reminder claims → quick_read flag on the service state ──
-    // Convention (mirrors the quarterly check-in override path):
-    //   quick_read_flag    = "due"           (service is flagged as due)
-    //   quick_read_urgency = "self_reported" (provenance: user stated this turn)
-    // services has a by_slug index (schema.ts:902) — use it directly.
+    // Collect knownIssues additions: maintenance-reminder claims map to the
+    // pipeline's warning-light code (it derives quick-read overrides from
+    // knownIssues), and fault lights are codes already. A direct quick_read_flag
+    // write would be clobbered by the runPipeline this mutation triggers.
     const servicesFlagged: string[] = [];
+    const codesToAdd: string[] = [];
     for (const claim of args.service_claims ?? []) {
-      const service: Doc<"services"> | null = await ctx.db
-        .query("services")
-        .withIndex("by_slug", (q: any) => q.eq("slug", claim.service_slug))
-        .unique();
-      if (!service) continue;
-
-      const existing = await ctx.db
-        .query("vehicle_service_states")
-        .withIndex("by_vehicle_service", (q: any) =>
-          q.eq("vehicle_owner_id", owner._id).eq("service_id", service._id),
-        )
-        .unique();
-
-      const patch = {
-        quick_read_flag: "due",
-        quick_read_urgency: "self_reported",
-      } as any;
-
-      if (existing) {
-        await ctx.db.patch(existing._id, patch);
-      } else {
-        await ctx.db.insert("vehicle_service_states", {
-          vehicle_owner_id: owner._id,
-          service_id: service._id,
-          ...patch,
-        } as any);
-      }
-      servicesFlagged.push(claim.service_slug);
+      const code = symptomForServiceSlug(claim.service_slug);
+      if (code) { codesToAdd.push(code); servicesFlagged.push(claim.service_slug); }
     }
-
-    // ── Fault lights → knownIssues (dedup append) ──
-    const faultLightsAdded: string[] = [];
-    if (args.fault_lights?.length) {
-      const current: string[] = Array.isArray(owner.knownIssues)
-        ? (owner.knownIssues as string[])
-        : [];
-      const toAdd = args.fault_lights.filter((f) => !current.includes(f));
-      if (toAdd.length > 0) {
-        await ctx.db.patch(owner._id, { knownIssues: [...current, ...toAdd] } as any);
-        faultLightsAdded.push(...toAdd);
-      }
+    const faultLights = args.fault_lights ?? [];
+    let faultLightsAdded: string[] = [];
+    if (codesToAdd.length || faultLights.length) {
+      const current: string[] = Array.isArray(owner.knownIssues) ? owner.knownIssues : [];
+      const incoming = [...codesToAdd, ...faultLights];
+      faultLightsAdded = faultLights.filter((f) => !current.includes(f));
+      const merged = Array.from(new Set([...current, ...incoming]));
+      await ctx.db.patch(owner._id, { knownIssues: merged } as any);
     }
 
     // ── Re-run the maintenance pipeline (mirrors maintenance.ts:107-114) ──

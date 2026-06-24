@@ -17,6 +17,7 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { claimContributionRewardImpl } from "./rewards";
 import { awardPointsImpl } from "./healthPoints";
+import { symptomForRecordType } from "./lib/serviceSymptoms";
 
 /**
  * QUERY: getRecordsByVehicle
@@ -105,6 +106,14 @@ export const upsertRecord = mutation({
 
     // Re-run pipeline so health score reflects the updated service data
     const owner = await ctx.db.get(args.vehicleOwnerId);
+
+    // Service recorded as done → clear its warning-light code from knownIssues so
+    // the pipeline stops flagging it (mirrors vehicleTruth's add). See serviceSymptoms.
+    const clearedCode = symptomForRecordType(args.type);
+    if (clearedCode && owner && Array.isArray(owner.knownIssues) && owner.knownIssues.includes(clearedCode)) {
+      await ctx.db.patch(owner._id, { knownIssues: owner.knownIssues.filter((x: string) => x !== clearedCode) } as any);
+    }
+
     if (owner?.preOnboardingComplete) {
       await ctx.scheduler.runAfter(
         0,

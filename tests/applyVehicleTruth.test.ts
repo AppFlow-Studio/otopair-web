@@ -33,12 +33,13 @@ describe("applyVehicleTruth", () => {
     const owner = await t.run((ctx: any) => ctx.db.get(s.ownerId));
     expect(owner.mileage).toBe(40000);
   });
-  it("flags a service due (quick_read) from a maintenance-reminder claim", async () => {
+  it("adds the service warning-light code to knownIssues from a maintenance-reminder claim", async () => {
     const t = makeT(); const s = await seed(t);
-    await t.withIdentity(ident).mutation(api.vehicleTruth.applyVehicleTruth, { vehicle_id: s.vehicleId, service_claims: [{ service_slug: "oil_change", kind: "light_on" }] });
-    const state = await t.run((ctx: any) => ctx.db.query("vehicle_service_states").withIndex("by_vehicle_service", (q: any) => q.eq("vehicle_owner_id", s.ownerId).eq("service_id", s.serviceId)).unique());
-    expect(state).not.toBeNull();
-    expect(state.quick_read_flag).toBeTruthy();
+    await t.withIdentity(ident).mutation(api.vehicleTruth.applyVehicleTruth, {
+      vehicle_id: s.vehicleId, service_claims: [{ service_slug: "oil_change", kind: "light_on" }],
+    });
+    const owner = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+    expect((owner.knownIssues ?? []).includes("oil_pressure")).toBe(true);
   });
   it("appends a fault light to knownIssues", async () => {
     const t = makeT(); const s = await seed(t);

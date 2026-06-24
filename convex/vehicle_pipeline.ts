@@ -52,6 +52,11 @@ type ProcessVinResult = {
    *  Surfaced to the review screen so the loading-state silhouette can
    *  pick SUV vs sedan. */
   bodyClass: string;
+  /** NHTSA "VehicleType" — high-level category (PASSENGER CAR,
+   *  MULTIPURPOSE PASSENGER VEHICLE (MPV), TRUCK, MOTORCYCLE, BUS,
+   *  TRAILER, INCOMPLETE VEHICLE, LOW SPEED VEHICLE (LSV)). Surfaced
+   *  so the client can gate add-vehicle on supported types. */
+  vehicleType: string;
   nhtsaVinKey: string;
   // Raw NHTSA decode passthrough — downstream VDB image/color lookups
   // use these to discover the catalog's canonical model designation.
@@ -518,6 +523,7 @@ export const processVin = internalAction({
         fuelType: merged.fuelType,
         drivetrain: canonicalDrivetrain ?? "unknown",
         bodyClass: merged.bodyClass || "",
+        vehicleType: merged.vehicleType || "",
         // Specs-card fields (flat, for router param forwarding).
         ...specsForCard,
         // NHTSA-only base key (deterministic per VIN, computed before
@@ -1166,6 +1172,10 @@ type DecodeVinResult =
        *  "Sedan/Saloon"). Used by the review screen's loading-state
        *  silhouette to pick SUV vs sedan. */
       bodyClass: string;
+      /** NHTSA "VehicleType" — high-level class. Used by the client's
+       *  eligibility gate (we don't service motorcycles, semis,
+       *  buses, trailers). */
+      vehicleType: string;
     };
 
 export const decodeVin = action({
@@ -1230,6 +1240,7 @@ export const decodeVin = action({
       transSpeeds: result.transSpeeds,
       drivetrain: result.drivetrain,
       bodyClass: result.bodyClass,
+      vehicleType: result.vehicleType,
     };
   },
 });

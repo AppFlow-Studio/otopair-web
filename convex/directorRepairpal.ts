@@ -169,6 +169,12 @@ export const repairpalLaborByConfig = query({
  *
  * Returns up to 5000 rows (capped). Takes an optional configIds filter to
  * scope the diff to a subset of configs.
+ *
+ * PERF: each pair runs resolvePartsCost TWICE (each is DB-heavy: fitments +
+ * per-part price scans). The director UI always passes a single configId, which
+ * is cheap. The UNSCOPED call (no configIds) is a dev/audit tool only — do NOT
+ * call it fleet-wide from production UI without a configId filter or pagination,
+ * or it will N+1 across the whole endpoint table.
  */
 export const partsShadowDiff = query({
   args: {

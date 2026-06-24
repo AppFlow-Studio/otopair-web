@@ -2901,6 +2901,19 @@ function buildCallables(
           }
           for (const factText of newEntries) {
             try {
+              // CROSS-CONVERSATION-INELIGIBLE by contract. These mirrored
+              // established_facts are conversation-scoped session observations
+              // (a symptom, a warning light, "checking health score"); they are
+              // retained here as forensic/replay substrate but MUST NOT surface
+              // in a FUTURE conversation's <recent_context> — the model
+              // mis-attributes them to the user ("you mentioned…") and lets a
+              // stale "now completed" observation override the live
+              // get_vehicle_health record. The read side enforces this in
+              // memoryEditing.getCrossConversationMemory (Pool A loop) by
+              // skipping exactly the (fact_type:"observation",
+              // written_by:"chat_agent") tuple written below. If you change
+              // either value here, update that read-side guard in lock-step or
+              // the pollution re-leaks silently.
               await ctx.runMutation(
                 internal.oto.memoryEditing.recordConversationFact,
                 {

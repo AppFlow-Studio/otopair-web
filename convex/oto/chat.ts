@@ -312,6 +312,11 @@ export const sendMessage = action({
     // evolve with the render-tool inventory.
     quickReplies: v.optional(v.array(v.any())),
     showRecordConfirmation: v.optional(v.any()),
+    // render_vehicle_update (vehicle-truth capture) — dispatcher produces
+    // renderD("showVehicleUpdate", { mileage?, service_claims?, fault_lights? }).
+    // Pulled through below so the mobile confirm card (and the director sim)
+    // actually receive it; without this the directive dies after the merge.
+    showVehicleUpdate: v.optional(v.any()),
     // Sprint 4 Day 1 Pass B — single terminal booking render. Replaces the
     // legacy 7 booking-flow fields (showServicePicker / pickerServices /
     // pickerPreSelectedId / showDiagnosticForm / shopCarousel / timeSelector /
@@ -352,6 +357,13 @@ type SendMessageResult = {
   text: string;
   quickReplies?: unknown[];
   showRecordConfirmation?: { vehicle_id: string; maintenance_type: string };
+  // render_vehicle_update — vehicle-truth confirm card (mileage / service
+  // claims / fault lights the user stated this turn). All three optional.
+  showVehicleUpdate?: {
+    mileage?: number;
+    service_claims?: Array<{ service_slug: string; kind: "due" | "light_on" }>;
+    fault_lights?: string[];
+  };
   bookService?: {
     service_slugs: string[];
     diagnostic_system?:
@@ -1422,6 +1434,7 @@ export async function sendMessageHandlerCore(
   const hasAnyRender =
     !!quickReplies ||
     !!showRecordConfirmation ||
+    renderEnvelope.showVehicleUpdate !== undefined ||
     renderEnvelope.bookService !== undefined ||
     renderEnvelope.linkButton !== undefined ||
     renderEnvelope.bookingCard !== undefined ||
@@ -1823,11 +1836,20 @@ export async function sendMessageHandlerCore(
       : undefined;
   const reasoning = renderEnvelope.reasoning;
   const sources = renderEnvelope.sources;
+  // render_vehicle_update — pull the merged directive through to the result so
+  // the mobile confirm card and the director sim receive it (the dispatcher
+  // produces it, mergeRenderDirectives carries it, but it was never forwarded
+  // here — so the tool fired and silently rendered nothing).
+  const showVehicleUpdate =
+    renderEnvelope.showVehicleUpdate !== undefined
+      ? (renderEnvelope.showVehicleUpdate as SendMessageResult["showVehicleUpdate"])
+      : undefined;
 
   return {
     text: finalText,
     ...(quickReplies ? { quickReplies } : {}),
     ...(showRecordConfirmation ? { showRecordConfirmation } : {}),
+    ...(showVehicleUpdate !== undefined ? { showVehicleUpdate } : {}),
     ...(bookService !== undefined ? { bookService } : {}),
     ...(linkButton !== undefined ? { linkButton } : {}),
     ...(bookingCard !== undefined ? { bookingCard } : {}),

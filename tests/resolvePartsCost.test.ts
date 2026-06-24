@@ -78,6 +78,8 @@ describe("resolvePartsCost — real band primary (gated)", () => {
       }),
     );
     expect(res.source).not.toBe("real_parts");
+    // Flag-off byte-identical contract: the real-primary fallback tag is never added.
+    expect(res.flags ?? []).not.toContain("parts_fallback_multiplier");
   });
 
   it("flag ON: pools the SKU prices WITH the endpoint point × quantity as real_parts", async () => {

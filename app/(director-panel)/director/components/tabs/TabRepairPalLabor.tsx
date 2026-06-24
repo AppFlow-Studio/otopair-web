@@ -4,7 +4,7 @@ import { Fragment, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
-import { Badge, Button, Card, Modal } from '../Primitives'
+import { Badge, Button, Card, IconChevronDown, Modal } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 
 const th: React.CSSProperties = {
@@ -165,18 +165,20 @@ function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; 
                 <Fragment key={sid}>
                 <tr style={rowStyle}>
                   <td style={td}>
-                    <div>{r.serviceName}</div>
-                    <button
-                      type="button"
+                    <div style={{ marginBottom: 6 }}>{r.serviceName}</div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       onClick={() => toggleRaw(sid)}
-                      style={{
-                        marginTop: 4, fontSize: 11, color: 'var(--blue-600, #2563eb)',
-                        background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                        textDecoration: 'underline',
-                      }}
+                      icon={
+                        <IconChevronDown
+                          size={13}
+                          style={{ transform: isRawOpen ? 'rotate(180deg)' : 'none', transition: 'transform 120ms' }}
+                        />
+                      }
                     >
-                      {isRawOpen ? 'Hide raw' : 'Raw ▾'}
-                    </button>
+                      {isRawOpen ? 'Hide raw' : 'Raw'}
+                    </Button>
                   </td>
                   <td style={{ ...td, fontWeight: 700, whiteSpace: 'nowrap' }}>
                     {r.rp.minutes != null ? `${r.rp.minutes}m / ${fmtH(r.rp.hours)}` : '—'}

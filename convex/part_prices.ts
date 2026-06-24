@@ -12,7 +12,7 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { median, nonOutlierIndices } from "./lib/robustStats";
-import { isPoisonPriceType } from "./lib/priceTypes";
+import { isPoisonPriceType, isNonPooledPriceType } from "./lib/priceTypes";
 
 export type PriceSummary = {
   part_id: Id<"oem_parts">;
@@ -90,6 +90,7 @@ export function summarizePriceRows(
   const validRows = rows.filter(
     (r) =>
       !isPoisonPriceType(r.price_type) &&
+      !isNonPooledPriceType(r.price_type) &&
       typeof r.price === "number" &&
       Number.isFinite(r.price) &&
       (r.price as number) > 0,

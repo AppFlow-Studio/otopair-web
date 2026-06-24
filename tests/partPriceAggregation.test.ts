@@ -74,3 +74,23 @@ describe("summarizePriceRows — excludes poison rows", () => {
     expect(out.median).toBeCloseTo(41, 2);
   });
 });
+
+import { REPAIRPAL_ENDPOINT_PRICE_TYPE } from "../convex/lib/priceTypes";
+
+describe("summarizePriceRows — endpoint fallback points are excluded from the pooled aggregate", () => {
+  it("ignores repairpal_endpoint rows so existing consumers are unchanged", () => {
+    const partId = "x" as any;
+    const withEndpoint = summarizePriceRows(partId, [
+      { price: 10, price_type: "sale", source_domain: "rockauto.com" },
+      { price: 14, price_type: "sale", source_domain: "partsgeek.com" },
+      { price: 999, price_type: REPAIRPAL_ENDPOINT_PRICE_TYPE, source_domain: "repairpal_endpoint" },
+    ]);
+    const withoutEndpoint = summarizePriceRows(partId, [
+      { price: 10, price_type: "sale", source_domain: "rockauto.com" },
+      { price: 14, price_type: "sale", source_domain: "partsgeek.com" },
+    ]);
+    expect(withEndpoint.sample_size).toBe(2);
+    expect(withEndpoint.average).toBe(withoutEndpoint.average);
+    expect(withEndpoint.max).toBe(14); // 999 never counted
+  });
+});

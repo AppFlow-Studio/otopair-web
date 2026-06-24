@@ -24,6 +24,17 @@ export { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig } from "./laborFallback";
 import { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig, computeLaborTierFloorHours } from "./laborFallback";
 import { withinGuardrail } from "./laborBands";
 import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./laborConstants";
+import { aggregatePartsBand, type PartsRoleInput } from "./partsBand";
+import { resolveRoleQuantity, type VehicleSpecBundle } from "./partRoleQuantity";
+import { roleForSubcategory } from "./servicePartsReference";
+import { isNonPooledPriceType, isPoisonPriceType, REPAIRPAL_ENDPOINT_PRICE_TYPE } from "./priceTypes";
+
+/** PARTS_SOURCE_REAL_PRIMARY gates the real per-config parts band in
+ *  resolvePartsCost. Default OFF — when unset, resolvePartsCost output is
+ *  byte-identical to the locked Pricing-Spec-v2 multiplier path. */
+export function partsRealPrimaryEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.PARTS_SOURCE_REAL_PRIMARY === "on";
+}
 
 // ─── vdb quality gate ───────────────────────────────────────────────────────
 // Lived experience: vdb-seeded labor_times "wrong often" — chassis/engine
@@ -416,6 +427,75 @@ export async function resolvePartsCost(
     }
   }
 
+  // ── Real per-config parts band (gated; default OFF) ─────────────────────
+  // Per role: pool the gathered SKU per-unit prices WITH the RepairPal endpoint
+  // per-unit point (peers), × the config's resolved quantity. Reliable iff every
+  // core role has at least one real price; else fall through to the multiplier.
+  // Skip brake/per_axle services in v1 (front-only endpoint + booking-position
+  // scaling don't compose with the per-config-total / bypass-scale model).
+  const isPerAxle = service.parts_kind === "per_axle";
+  if (partsRealPrimaryEnabled() && !isBrakeService && !isPerAxle) {
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_config_service", (q) =>
+        q.eq("vehicle_config_id", args.vehicle_config_id).eq("service_type", slug))
+      .collect();
+
+    if (fitments.length > 0) {
+      const engine = cfg.engine_id ? await ctx.db.get(cfg.engine_id) : null;
+      const bundle: VehicleSpecBundle = {
+        config: {
+          brake_fluid_capacity_oz: (cfg as any).brake_fluid_capacity_oz ?? null,
+          ps_fluid_capacity_oz: (cfg as any).ps_fluid_capacity_oz ?? null,
+          has_brake_pad_sensor: (cfg as any).has_brake_pad_sensor ?? null,
+        },
+        engine: engine
+          ? {
+              oil_capacity_qts: (engine as any).oil_capacity_qts ?? null,
+              coolant_capacity_qts: (engine as any).coolant_capacity_qts ?? null,
+              spark_plug_quantity: (engine as any).spark_plug_quantity ?? null,
+              cylinders: (engine as any).cylinders ?? null,
+            }
+          : null,
+      };
+
+      const roles: PartsRoleInput[] = [];
+      for (const f of fitments) {
+        const part = await ctx.db.get(f.part_id);
+        const sub = (part as any)?.subcategory ?? null;
+        const roleSpec = roleForSubcategory(slug, sub, (part as any)?.category);
+        // Only CORE roles bind the real band (as_needed/kit are discovery/variant).
+        if ((f.service_role ?? roleSpec?.serviceRole) !== "core") continue;
+
+        const prices = await ctx.db
+          .query("part_prices")
+          .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
+          .collect();
+        const skuPrices = prices
+          .filter((p) => !isPoisonPriceType(p.price_type) && !isNonPooledPriceType(p.price_type))
+          .map((p) => p.price)
+          .filter((n): n is number => typeof n === "number" && n > 0);
+        const endpointRow = prices.find(
+          (p) => p.price_type === REPAIRPAL_ENDPOINT_PRICE_TYPE && typeof p.price === "number" && p.price > 0,
+        );
+        const { quantity } = resolveRoleQuantity(roleSpec, bundle, f.quantity_needed);
+        roles.push({
+          role: sub ?? f.part_id,
+          quantity,
+          skuPrices,
+          endpointUnitPrice: endpointRow?.price ?? null,
+        });
+      }
+
+      if (roles.length > 0) {
+        const band = aggregatePartsBand(roles);
+        if (band.reliable) {
+          return { ok: true, low: band.low, high: band.high, source: "real_parts", flags: ["real_parts_band"] };
+        }
+      }
+    }
+  }
+
   if (!service.parts_multiplier_category_id) {
     return {
       ok: false,
@@ -488,6 +568,8 @@ export async function resolvePartsCost(
       reason: `differential service not applicable to drivetrain=${cfg.drivetrain ?? "unknown"}`,
     };
   }
+
+  if (partsRealPrimaryEnabled()) flags.push("parts_fallback_multiplier");
 
   return {
     ok: true,

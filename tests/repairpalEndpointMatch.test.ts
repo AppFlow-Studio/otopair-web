@@ -213,6 +213,7 @@ describe("endpointRoleToSubcategory — endpoint vocab → oem_parts.subcategory
     expect(endpointRoleToSubcategory("brake_pad")).toBeNull();
     expect(endpointRoleToSubcategory("brake_rotor")).toBeNull();
     expect(endpointRoleToSubcategory(undefined)).toBeNull();
+    expect(endpointRoleToSubcategory(null)).toBeNull();
     expect(endpointRoleToSubcategory("mystery")).toBeNull();
   });
 });

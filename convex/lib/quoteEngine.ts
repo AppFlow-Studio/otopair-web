@@ -800,10 +800,11 @@ export async function buildQuote(
         is_estimate: true,
       };
 
-  // CCB absolute pricing is a flat per-axle price already, so don't scale
-  // it again — treat as unit_count=1 baseline=1.
-  const isCcbAbsolute = partsRes.source === "ccb_absolute";
-  const scale = isCcbAbsolute ? 1 : unitScale(unitRes);
+  // ccb_absolute and real_parts bands are already per-config totals — don't re-scale.
+  // ccb_absolute: flat per-axle price. real_parts: Σ per-role pooled-per-unit × resolved qty.
+  const bypassUnitScale =
+    partsRes.source === "ccb_absolute" || partsRes.source === "real_parts";
+  const scale = bypassUnitScale ? 1 : unitScale(unitRes);
   const scaledPartsLow = partsRes.low * scale;
   const scaledPartsHigh = partsRes.high * scale;
 
@@ -820,7 +821,7 @@ export async function buildQuote(
   }
   if (hoursRes.tier_floor_applied) flags.push("labor_below_tier_floor");
   if (hoursRes.above_tier_floor) flags.push("labor_above_tier_expected");
-  if (unitRes.is_estimate && !isCcbAbsolute) {
+  if (unitRes.is_estimate && !bypassUnitScale) {
     flags.push("unit_count_estimated");
   }
   if (spreadPct > 10) flags.push("spread_exceeded");
@@ -848,10 +849,10 @@ export async function buildQuote(
       source: partsRes.source,
       per_unit_low: round2(partsRes.low),
       per_unit_high: round2(partsRes.high),
-      unit_count: isCcbAbsolute ? 1 : unitRes.count,
-      baseline_count: isCcbAbsolute ? 1 : unitRes.baseline,
-      unit_label: isCcbAbsolute ? "axle" : unitRes.label,
-      unit_count_estimated: isCcbAbsolute ? false : unitRes.is_estimate,
+      unit_count: bypassUnitScale ? 1 : unitRes.count,
+      baseline_count: bypassUnitScale ? 1 : unitRes.baseline,
+      unit_label: bypassUnitScale ? "axle" : unitRes.label,
+      unit_count_estimated: bypassUnitScale ? false : unitRes.is_estimate,
     },
     flags,
     display_label,

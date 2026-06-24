@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { makeT } from "./helpers";
-import { resolvePartsCost } from "../convex/lib/quoteEngine";
+import { resolvePartsCost, buildQuote } from "../convex/lib/quoteEngine";
 import { REPAIRPAL_ENDPOINT_PRICE_TYPE } from "../convex/lib/priceTypes";
 import { CAMRY_FWD_CONFIG_KEY } from "../convex/lib/laborFallback";
 
@@ -252,5 +252,72 @@ describe("resolvePartsCost — real band primary (gated)", () => {
       }),
     );
     expect(res.source).not.toBe("real_parts");
+  });
+});
+
+describe("buildQuote — real_parts band is not re-scaled by unit count", () => {
+  it("uses the per-config band as-is (no unitScale double-count)", async () => {
+    process.env.PARTS_SOURCE_REAL_PRIMARY = "on";
+    const t = makeT();
+
+    // seedSparkPlugs: 6-cyl config, sku=[8,10], endpoint=12
+    // → resolvePartsCost pools [8,10,12] × 6 → low=48, high=72 (already per-config total)
+    const { configId, serviceId } = await seedSparkPlugs(t, {
+      sku: [8, 10],
+      endpoint: 12,
+    });
+
+    // Seed a shop with a per-tier labor rate for T2a (the config's pricing_tier).
+    // resolveLaborRate reads shop.labor_rates_by_tier[tier].
+    const shopId = await t.run(async (ctx: any) => {
+      const ownerId = await ctx.db.insert("users", {
+        clerkUserId: "clerk_bq_test_owner",
+        email: "bqowner@test.local",
+        first_name: "Owner",
+        role: "shop_owner",
+        createdAt: Date.now(),
+      });
+      return ctx.db.insert("shops", {
+        name: "Test Shop",
+        owner_user_id: ownerId,
+        is_active: true,
+        timezone: "America/New_York",
+        no_show_threshold_minutes: 30,
+        overrun_default_extension_percent: 25,
+        overrun_extension_floor_minutes: 5,
+        max_bookings_per_mechanic_rolling_hour: 2,
+        entity_label_mode: "mechanic",
+        labor_rates_by_tier: { T2a: 100 },
+      });
+    });
+
+    // Seed a labor_times row with empirical data (Layer 1 empirical — bypasses
+    // computeTierFloor entirely, no Camry anchor needed).
+    // empirical_sample_size >= LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES (5) is required.
+    await t.run(async (ctx: any) => {
+      await ctx.db.insert("labor_times", {
+        vehicle_config_id: configId,
+        service_id: serviceId,
+        empirical_hours: 1.0,
+        empirical_sample_size: 5,
+        source: "empirical",
+        confidence: 0.9,
+      });
+    });
+
+    const quote: any = await t.run((ctx: any) =>
+      buildQuote(ctx, {
+        vehicle_config_id: configId,
+        service_id: serviceId,
+        shop_id: shopId,
+      }),
+    );
+
+    expect(quote.ok).toBe(true);
+    // real_parts band [48,72] must NOT be re-scaled by unitScale(6/1)=6.
+    // Before fix: parts.low = 48 * 6 = 288 (double-count bug).
+    // After fix:  parts.low = 48 (the pre-totaled per-config band).
+    expect(quote.parts.low).toBe(48);
+    expect(quote.parts.high).toBe(72);
   });
 });

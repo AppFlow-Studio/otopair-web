@@ -9,9 +9,11 @@
 1. **Backfill** `npx convex run devOnly/endpointPartPriceBackfill:backfill` → `{ rows: 183, written: 129, skipped: 95 }`. 129 endpoint averaged per-unit points written into `part_prices` (`source_domain="repairpal_endpoint"`, `price_type="repairpal_endpoint"`). 95 skipped = unmapped role (`endpointRoleToSubcategory` null, e.g. ATF fluid, plain "engine oil"), no fitment match, missing quantity/price, or position-brake parts deferred in v1.
 2. **Shadow-diff** `npx convex run directorRepairpal:partsShadowDiff` on 5 representative configs spanning the tier range (Honda Civic LX, Toyota RAV4 LE, VW Jetta S, BMW M550i, Porsche 911 Turbo S) → 59 (config, service) rows. Each row computes `resolvePartsCost` twice: `forceRealPrimary:false` (multiplier) vs `forceRealPrimary:true` (real band).
 
-## Write is inert (confirmed by construction + test)
+## Write is inert for QUOTING (confirmed by construction + test); coverage-count leak found + fixed
 
-The 129 rows all carry `price_type="repairpal_endpoint"`, which `summarizePriceRows` excludes from the pooled SKU aggregate (`tests/partPriceAggregation.test.ts`). So `booking_quotes` / `serviceParts` / `job_actuals` (which read `part_prices` via `summarizePartPrices`/`quoteUnitPrice`) are **unchanged** by the backfill. Only `resolvePartsCost`'s real-band block reads the endpoint rows, and that block is gated off (env flag unset; the diff used the `forceRealPrimary` opt, not the env). Net: nothing in dev quoting changed.
+The 129 rows all carry `price_type="repairpal_endpoint"`, which `summarizePriceRows` excludes from the pooled SKU aggregate (`tests/partPriceAggregation.test.ts`). So `booking_quotes` / `serviceParts` / `job_actuals` (the customer-facing price paths, which read `part_prices` via `summarizePartPrices`/`quoteUnitPrice`) are **unchanged** by the backfill. Only `resolvePartsCost`'s real-band block reads the endpoint rows, and that block is gated off (env flag unset; the diff used the `forceRealPrimary` opt, not the env). Net: **no dev quote changed.**
+
+**Caveat caught by the final review (now FIXED, commit `dd5f6ef`):** three *coverage/count* consumers read `part_prices` row-presence directly rather than through `summarizePriceRows`, so the ungated backfill briefly made endpoint-only parts look "priced" — which would have made the enrichment pipeline SKIP fetching a real SKU price for them (fill-rate inflation). Patched with the same `isNonPooledPriceType` guard at `v3queries.ts:getPricedPartCount`, `v3queries.ts:partCoverageForConfig`, and `diagnoseVin.ts` (`skipExisting`). Redeployed to dev, so dev coverage metrics are correct again. (`directorCars.ts` drill-down count is display-only — left as-is.)
 
 ## Mechanism verification — ✅ working as designed
 

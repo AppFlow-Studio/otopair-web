@@ -8,6 +8,8 @@
  */
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import { resolvePartsCost } from "./lib/quoteEngine";
+import type { VehicleTier } from "./lib/vehicleTiers";
 
 /** Overview: counts + the list of configs that have endpoint data. */
 export const repairpalLaborOverview = query({
@@ -156,5 +158,89 @@ export const repairpalLaborByConfig = query({
 
     rows.sort((a, b) => a.serviceName.localeCompare(b.serviceName));
     return rows;
+  },
+});
+
+/**
+ * partsShadowDiff — for every (config, service) pair that has a RepairPal
+ * endpoint row, compute BOTH the multiplier band (forceRealPrimary:false) and
+ * the real band (forceRealPrimary:true) so the director can show them side-by-
+ * side regardless of the PARTS_SOURCE_REAL_PRIMARY env flag.
+ *
+ * Returns up to 5000 rows (capped). Takes an optional configIds filter to
+ * scope the diff to a subset of configs.
+ */
+export const partsShadowDiff = query({
+  args: {
+    configIds: v.optional(v.array(v.id("vehicle_configs"))),
+  },
+  handler: async (ctx, { configIds }) => {
+    // Enumerate (config, service) pairs via the endpoint estimates table —
+    // same population as repairpalLaborOverview / repairpalLaborByConfig.
+    let eps;
+    if (configIds && configIds.length > 0) {
+      const rows: any[] = [];
+      for (const cid of configIds) {
+        const epRows = await ctx.db
+          .query("repairpal_endpoint_estimates")
+          .withIndex("by_config", (q) => q.eq("vehicle_config_id", cid))
+          .collect();
+        rows.push(...epRows);
+      }
+      eps = rows;
+    } else {
+      eps = await ctx.db.query("repairpal_endpoint_estimates").take(5000);
+    }
+
+    const results: Array<{
+      config_label: string;
+      service_slug: string | null;
+      parts_multiplier: { low: number; high: number } | null;
+      parts_real: { low: number; high: number; source: string } | null;
+    }> = [];
+
+    for (const ep of eps) {
+      const cfg: any = await ctx.db.get(ep.vehicle_config_id);
+      const svc: any = await ctx.db.get(ep.service_id);
+
+      const vehicle_tier = (cfg?.pricing_tier ?? "T2a") as VehicleTier;
+
+      const make: any = cfg?.make_id ? await ctx.db.get(cfg.make_id) : null;
+      const model: any = cfg?.model_id ? await ctx.db.get(cfg.model_id) : null;
+      const config_label = [cfg?.year, make?.name, model?.name, cfg?.trim_name]
+        .filter(Boolean)
+        .join(" ");
+
+      const [multRes, realRes] = await Promise.all([
+        resolvePartsCost(
+          ctx,
+          { vehicle_config_id: ep.vehicle_config_id, service_id: ep.service_id, vehicle_tier },
+          { forceRealPrimary: false },
+        ),
+        resolvePartsCost(
+          ctx,
+          { vehicle_config_id: ep.vehicle_config_id, service_id: ep.service_id, vehicle_tier },
+          { forceRealPrimary: true },
+        ),
+      ]);
+
+      results.push({
+        config_label,
+        service_slug: svc?.slug ?? null,
+        parts_multiplier: multRes.ok ? { low: multRes.low, high: multRes.high } : null,
+        parts_real: realRes.ok && realRes.source === "real_parts"
+          ? { low: realRes.low, high: realRes.high, source: realRes.source }
+          : null,
+      });
+    }
+
+    // Sort by config then service for stable director display
+    results.sort((a, b) => {
+      const cl = a.config_label.localeCompare(b.config_label);
+      if (cl !== 0) return cl;
+      return (a.service_slug ?? "").localeCompare(b.service_slug ?? "");
+    });
+
+    return results;
   },
 });

@@ -255,6 +255,25 @@ describe("resolvePartsCost — real band primary (gated)", () => {
   });
 });
 
+describe("resolvePartsCost — forceRealPrimary override", () => {
+  it("forceRealPrimary:true computes the real band even when the env flag is OFF", async () => {
+    // env intentionally NOT set
+    const t = makeT();
+    const { configId, serviceId } = await seedSparkPlugs(t, { sku: [8, 10], endpoint: 12 });
+    const res: any = await t.run((ctx: any) =>
+      resolvePartsCost(ctx, { vehicle_config_id: configId, service_id: serviceId, vehicle_tier: "T2a" }, { forceRealPrimary: true }));
+    expect(res).toMatchObject({ ok: true, source: "real_parts", low: 48, high: 72 });
+  });
+  it("forceRealPrimary:false ignores the real band even when the env flag is ON", async () => {
+    process.env.PARTS_SOURCE_REAL_PRIMARY = "on";
+    const t = makeT();
+    const { configId, serviceId } = await seedSparkPlugs(t, { sku: [8, 10], endpoint: 12 });
+    const res: any = await t.run((ctx: any) =>
+      resolvePartsCost(ctx, { vehicle_config_id: configId, service_id: serviceId, vehicle_tier: "T2a" }, { forceRealPrimary: false }));
+    expect(res.source).not.toBe("real_parts");
+  });
+});
+
 describe("buildQuote — real_parts band is not re-scaled by unit count", () => {
   it("uses the per-config band as-is (no unitScale double-count)", async () => {
     process.env.PARTS_SOURCE_REAL_PRIMARY = "on";

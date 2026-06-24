@@ -20,6 +20,21 @@ const td: React.CSSProperties = {
 const fmtH = (h: number | null | undefined) => (h != null ? `${h.toFixed(1)}h` : '—')
 const fmtBand = (b: number[] | null, prefix = '') =>
   b && b[0] != null ? `${prefix}${Math.round(b[0])}–${prefix}${Math.round(b[1])}` : '—'
+const fmtPartsBand = (b: { low: number; high: number } | null | undefined, prefix = '$') =>
+  b != null ? `${prefix}${Math.round(b.low)}–${prefix}${Math.round(b.high)}` : '—'
+
+/** Returns true when the real band diverges > 15% from the multiplier band
+ *  (compared on midpoints). */
+function partsBandDiverges(
+  mult: { low: number; high: number } | null | undefined,
+  real: { low: number; high: number } | null | undefined,
+): boolean {
+  if (!mult || !real) return false
+  const midMult = (mult.low + mult.high) / 2
+  const midReal = (real.low + real.high) / 2
+  if (midMult === 0) return false
+  return Math.abs(midReal - midMult) / midMult > 0.15
+}
 
 function MatchBadge({ q, via }: { q: string | null; via: string | null }) {
   if (q === 'engine_sibling') return <Badge tone="orange" dot>sibling{via ? ` · ${via}` : ''}</Badge>
@@ -93,11 +108,19 @@ export const TabRepairPalLabor = () => {
 
 function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; onClose: () => void }) {
   const rows = useQuery(api.directorRepairpal.repairpalLaborByConfig, { vehicle_config_id: configId })
+  const shadowDiff = useQuery(api.directorRepairpal.partsShadowDiff, { configIds: [configId] })
+
+  // Build slug → shadow-diff row lookup for O(1) access in the table
+  const shadowBySlug = new Map<string, { parts_multiplier: { low: number; high: number } | null; parts_real: { low: number; high: number; source: string } | null }>()
+  for (const sd of shadowDiff ?? []) {
+    if (sd.service_slug) shadowBySlug.set(sd.service_slug, sd)
+  }
+
   return (
     <Modal
       open
       onClose={onClose}
-      width={1140}
+      width={1400}
       eyebrow={<span>RepairPal endpoint — authoritative labor</span>}
       title="Per-service labor &amp; parts"
       footer={<Button variant="secondary" onClick={onClose}>Close</Button>}
@@ -114,6 +137,8 @@ function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; 
               <th style={th}>RP labor</th>
               <th style={th}>RP labor $</th>
               <th style={th}>Parts (role · $band)</th>
+              <th style={th}>Parts (mult)</th>
+              <th style={th}>Parts (real)</th>
               <th style={th}>Variant / Match</th>
               <th style={th}>Current book (secondary)</th>
               <th style={th}>Corroboration</th>
@@ -122,8 +147,13 @@ function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; 
           <tbody>
             {(rows as any[]).map((r) => {
               const pricedParts = r.rp.parts.filter((p: any) => p.role)
+              const sd = shadowBySlug.get(r.slug ?? '')
+              const diverges = partsBandDiverges(sd?.parts_multiplier, sd?.parts_real)
+              const rowStyle: React.CSSProperties = diverges
+                ? { background: 'rgba(234,179,8,0.07)' }
+                : {}
               return (
-                <tr key={String(r.serviceId)}>
+                <tr key={String(r.serviceId)} style={rowStyle}>
                   <td style={td}>{r.serviceName}</td>
                   <td style={{ ...td, fontWeight: 700, whiteSpace: 'nowrap' }}>
                     {r.rp.minutes != null ? `${r.rp.minutes}m / ${fmtH(r.rp.hours)}` : '—'}
@@ -136,6 +166,23 @@ function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; 
                         {p.qty && p.qty > 1 ? <span style={{ color: 'var(--slate-400)' }}> ({p.qty} pcs, total)</span> : ''}
                       </div>
                     ))}
+                  </td>
+                  <td style={{ ...td, whiteSpace: 'nowrap', color: 'var(--slate-500)' }}>
+                    {shadowDiff === undefined ? '…' : fmtPartsBand(sd?.parts_multiplier)}
+                  </td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                    {shadowDiff === undefined ? '…' : (
+                      sd?.parts_real ? (
+                        <span>
+                          {fmtPartsBand(sd.parts_real)}
+                          {diverges && (
+                            <span style={{ marginLeft: 5 }}>
+                              <Badge tone="yellow">diverges</Badge>
+                            </span>
+                          )}
+                        </span>
+                      ) : <span style={{ color: 'var(--slate-400)' }}>—</span>
+                    )}
                   </td>
                   <td style={td}>
                     <div style={{ fontSize: 12, color: 'var(--slate-500)' }}>{r.rp.variant ?? '—'}</div>

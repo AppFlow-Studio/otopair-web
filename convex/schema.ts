@@ -447,10 +447,14 @@ export default defineSchema({
   // Raw per-config RepairPal estimate-endpoint cache — one row per (config,
   // service), storing the whole endpoint response at its natural granularity so
   // `part_prices` stays SKU-only. Labor is ALSO projected into labor_observations
-  // (source repairpal_endpoint, weight 0.9); the per-role parts ranges here are
-  // read at quote/recompute time and joined to part_fitments by role, then
-  // combined with part_prices SKU points via aggregatePartsBand (peers). See
-  // docs/superpowers/specs/2026-06-22-parts-real-primary-endpoint-design.md.
+  // (source repairpal_endpoint, weight 0.9).
+  // Parts: each endpoint part's averaged per-unit price (total_price avg ÷
+  // quantity) is ALSO projected into part_prices as a fallback POINT
+  // (source_domain="repairpal_endpoint", a price_type excluded from the pooled
+  // SKU aggregate). resolvePartsCost (flag PARTS_SOURCE_REAL_PRIMARY) pools SKU
+  // prices WITH this endpoint point per role, falling back to it when a part has
+  // no SKU price, then to Camry×multiplier. See
+  // docs/superpowers/plans/2026-06-23-parts-real-primary-endpoint-point.md.
   repairpal_endpoint_estimates: defineTable({
     vehicle_config_id: v.id("vehicle_configs"),
     service_id: v.id("services"),

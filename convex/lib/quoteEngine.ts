@@ -377,7 +377,9 @@ export async function resolvePartsCost(
     service_id: Id<"services">;
     vehicle_tier: VehicleTier;
   },
+  opts?: { forceRealPrimary?: boolean },
 ): Promise<PartsCostResult> {
+  const realPrimary = opts?.forceRealPrimary ?? partsRealPrimaryEnabled();
   const cfg = await ctx.db.get(args.vehicle_config_id);
   if (!cfg) return { ok: false, reason: "vehicle config not found" };
 
@@ -434,7 +436,7 @@ export async function resolvePartsCost(
   // Skip brake/per_axle services in v1 (front-only endpoint + booking-position
   // scaling don't compose with the per-config-total / bypass-scale model).
   const isPerAxle = service.parts_kind === "per_axle";
-  if (partsRealPrimaryEnabled() && !isBrakeService && !isPerAxle) {
+  if (realPrimary && !isBrakeService && !isPerAxle) {
     const fitments = await ctx.db
       .query("part_fitments")
       .withIndex("by_config_service", (q) =>
@@ -577,7 +579,7 @@ export async function resolvePartsCost(
     };
   }
 
-  if (partsRealPrimaryEnabled()) flags.push("parts_fallback_multiplier");
+  if (realPrimary) flags.push("parts_fallback_multiplier");
 
   return {
     ok: true,

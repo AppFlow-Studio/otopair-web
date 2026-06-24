@@ -196,6 +196,38 @@ export function endpointPartCategory(name: string): { category: string; position
   return position && (category === "brake_pad" || category === "brake_rotor") ? { category, position } : { category };
 }
 
+/**
+ * Map an endpoint part role (endpointPartCategory output) onto the canonical
+ * oem_parts.subcategory / servicePartsReference roleKey, so the endpoint price
+ * can be attached to the fitment we already gathered. Consumables pass through;
+ * brakes/rotors require a position to choose the front/rear roleKey. Returns
+ * null when it cannot be placed (caller skips that part).
+ */
+export function endpointRoleToSubcategory(
+  role: string | null | undefined,
+  position?: string | null,
+): string | null {
+  if (!role) return null;
+  const pos = position === "front" || position === "rear" ? position : null;
+  switch (role) {
+    case "brake_pad":
+      return pos ? `${pos}_brake_pad` : null;
+    case "brake_rotor":
+      return pos ? `${pos}_rotor` : null;
+    case "transmission_filter":
+      return "trans_filter";
+    case "oil_filter":
+    case "air_filter":
+    case "cabin_filter":
+    case "spark_plug":
+    case "coolant":
+    case "battery":
+      return role;
+    default:
+      return null;
+  }
+}
+
 /** otopair service slug → RepairPal serviceId(s). Multi-id = scope (sum/prefer).
  *  Source: docs/superpowers/reviews/2026-06-15-otopair-services-repairpal-coverage.md. */
 export const SERVICE_REPAIRPAL_IDS: Record<string, { serviceIds: number[] }> = {

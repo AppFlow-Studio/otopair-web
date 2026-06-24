@@ -7,6 +7,7 @@ import {
   endpointPartCategory,
   trimTokenSet,
   pickValidSibling,
+  endpointRoleToSubcategory,
 } from "../convex/vehicleEnrichment/repairpalEndpointMatch";
 
 describe("extractVariants — recursive parse of the estimate payload", () => {
@@ -187,5 +188,31 @@ describe("pickValidSibling", () => {
   it("returns null for null/empty", () => {
     expect(pickValidSibling(null, cands)).toBe(null);
     expect(pickValidSibling("", cands)).toBe(null);
+  });
+});
+
+describe("endpointRoleToSubcategory — endpoint vocab → oem_parts.subcategory roleKey", () => {
+  it("passes consumable roles through unchanged", () => {
+    expect(endpointRoleToSubcategory("oil_filter")).toBe("oil_filter");
+    expect(endpointRoleToSubcategory("air_filter")).toBe("air_filter");
+    expect(endpointRoleToSubcategory("cabin_filter")).toBe("cabin_filter");
+    expect(endpointRoleToSubcategory("spark_plug")).toBe("spark_plug");
+    expect(endpointRoleToSubcategory("coolant")).toBe("coolant");
+    expect(endpointRoleToSubcategory("battery")).toBe("battery");
+  });
+  it("maps transmission_filter to the roleKey trans_filter", () => {
+    expect(endpointRoleToSubcategory("transmission_filter")).toBe("trans_filter");
+  });
+  it("maps brakes to the front/rear roleKey using position", () => {
+    expect(endpointRoleToSubcategory("brake_pad", "front")).toBe("front_brake_pad");
+    expect(endpointRoleToSubcategory("brake_pad", "rear")).toBe("rear_brake_pad");
+    expect(endpointRoleToSubcategory("brake_rotor", "front")).toBe("front_rotor");
+    expect(endpointRoleToSubcategory("brake_rotor", "rear")).toBe("rear_rotor");
+  });
+  it("returns null for a position-less brake role (cannot place it) and unknown roles", () => {
+    expect(endpointRoleToSubcategory("brake_pad")).toBeNull();
+    expect(endpointRoleToSubcategory("brake_rotor")).toBeNull();
+    expect(endpointRoleToSubcategory(undefined)).toBeNull();
+    expect(endpointRoleToSubcategory("mystery")).toBeNull();
   });
 });

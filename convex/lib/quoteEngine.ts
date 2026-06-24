@@ -464,13 +464,21 @@ export async function resolvePartsCost(
         const part = await ctx.db.get(f.part_id);
         const sub = (part as any)?.subcategory ?? null;
         const roleSpec = roleForSubcategory(slug, sub, (part as any)?.category);
-        // Only CORE roles bind the real band (as_needed/kit are discovery/variant).
-        if ((f.service_role ?? roleSpec?.serviceRole) !== "core") continue;
+        const serviceRole = f.service_role ?? roleSpec?.serviceRole;
+        // Positively non-core roles (as_needed/kit) are discovery/variant items —
+        // they don't bind the band, so skip them. A CORE or UNCLASSIFIABLE fitment
+        // (an orphaned/legacy row we cannot confirm as non-core) MUST be priced:
+        // if its catalog part is gone or it has no real price, the whole service
+        // falls back to the multiplier rather than silently dropping a possibly-
+        // core part and under-pricing the quote.
+        if (serviceRole === "as_needed" || serviceRole === "kit") continue;
 
-        const prices = await ctx.db
-          .query("part_prices")
-          .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
-          .collect();
+        const prices = part
+          ? await ctx.db
+              .query("part_prices")
+              .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
+              .collect()
+          : [];
         const skuPrices = prices
           .filter((p) => !isPoisonPriceType(p.price_type) && !isNonPooledPriceType(p.price_type))
           .map((p) => p.price)
@@ -480,7 +488,7 @@ export async function resolvePartsCost(
         );
         const { quantity } = resolveRoleQuantity(roleSpec, bundle, f.quantity_needed);
         roles.push({
-          role: sub ?? f.part_id,
+          role: sub ?? `unknown_sub:${f.part_id}`,
           quantity,
           skuPrices,
           endpointUnitPrice: endpointRow?.price ?? null,

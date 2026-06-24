@@ -221,4 +221,36 @@ describe("resolvePartsCost — real band primary (gated)", () => {
     expect(String(res.source)).toContain("multiplier");
     expect(res.flags).toContain("parts_fallback_multiplier");
   });
+
+  it("flag ON: a core-eligible fitment whose catalog part is missing forces fallback (no silent drop)", async () => {
+    process.env.PARTS_SOURCE_REAL_PRIMARY = "on";
+    const t = makeT();
+    // One priced core spark_plug role — on its own this yields a real_parts band.
+    const { configId, serviceId } = await seedSparkPlugs(t, { sku: [8, 10] });
+    // Add a SECOND, unclassifiable fitment: its catalog part is deleted and it
+    // carries no service_role. The OLD code silently skipped it (band stayed
+    // reliable → under-pricing); it must now block the band → fallback.
+    await t.run(async (ctx: any) => {
+      const ghostPartId = await ctx.db.insert("oem_parts", {
+        oem_part_number: "GHOST",
+        name: "Ghost",
+        subcategory: "ignition_coil",
+      });
+      await ctx.db.delete(ghostPartId);
+      await ctx.db.insert("part_fitments", {
+        part_id: ghostPartId,
+        vehicle_config_id: configId,
+        service_type: "spark_plugs",
+        quantity_needed: 6,
+      });
+    });
+    const res: any = await t.run((ctx: any) =>
+      resolvePartsCost(ctx, {
+        vehicle_config_id: configId,
+        service_id: serviceId,
+        vehicle_tier: "T2a",
+      }),
+    );
+    expect(res.source).not.toBe("real_parts");
+  });
 });

@@ -113,6 +113,7 @@ import type * as lib_quoteEngine from "../lib/quoteEngine.js";
 import type * as lib_robustStats from "../lib/robustStats.js";
 import type * as lib_schedule_overlap from "../lib/schedule_overlap.js";
 import type * as lib_servicePartsReference from "../lib/servicePartsReference.js";
+import type * as lib_serviceRecordType from "../lib/serviceRecordType.js";
 import type * as lib_serviceSymptoms from "../lib/serviceSymptoms.js";
 import type * as lib_serviceUnits from "../lib/serviceUnits.js";
 import type * as lib_serviceWindow from "../lib/serviceWindow.js";
@@ -462,6 +463,7 @@ declare const fullApi: ApiFromModules<{
   "lib/robustStats": typeof lib_robustStats;
   "lib/schedule_overlap": typeof lib_schedule_overlap;
   "lib/servicePartsReference": typeof lib_servicePartsReference;
+  "lib/serviceRecordType": typeof lib_serviceRecordType;
   "lib/serviceSymptoms": typeof lib_serviceSymptoms;
   "lib/serviceUnits": typeof lib_serviceUnits;
   "lib/serviceWindow": typeof lib_serviceWindow;

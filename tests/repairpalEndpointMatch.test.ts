@@ -117,6 +117,19 @@ describe("endpointPartCategory — map endpoint part NAME to a fitment category/
     expect(endpointPartCategory("Engine Oil Filter Element")).toEqual({ category: "oil_filter" });
     expect(endpointPartCategory("Engine Coolant / Antifreeze")).toEqual({ category: "coolant" });
   });
+  it("splits the oil-filter family, recognizes engine oil, routes trans filter (911 Turbo S data)", () => {
+    // the actual filter element stays oil_filter
+    expect(endpointPartCategory("Engine Oil Filter Element")).toEqual({ category: "oil_filter" });
+    // its seals / o-rings / gaskets are NOT collapsed into oil_filter
+    expect(endpointPartCategory("Engine Oil Filter Housing O-Ring")).toEqual({ category: "oil_filter_housing_oring" });
+    expect(endpointPartCategory("Engine Oil Filter Gasket")).toEqual({ category: "oil_filter_housing_oring" });
+    expect(endpointPartCategory("Engine Oil Filter Element Seal")).toEqual({ category: "oil_filter_housing_oring" });
+    // the engine oil itself is recognized (was unmapped → role none)
+    expect(endpointPartCategory("Engine Oil")).toEqual({ category: "engine_oil" });
+    // a transmission filter routes to transmission_filter, NOT the engine oil filter
+    expect(endpointPartCategory("Transmission Oil Filter")).toEqual({ category: "transmission_filter" });
+    expect(endpointPartCategory("Transmission Fluid")).toEqual({ category: "atf_fluid" });
+  });
   it("captures brake position", () => {
     expect(endpointPartCategory("Disc Brake Pad Set (Front)")).toEqual({ category: "brake_pad", position: "front" });
     expect(endpointPartCategory("Disc Brake Rotor (Rear Left)")).toEqual({ category: "brake_rotor", position: "rear" });
@@ -199,6 +212,11 @@ describe("endpointRoleToSubcategory — endpoint vocab → oem_parts.subcategory
     expect(endpointRoleToSubcategory("spark_plug")).toBe("spark_plug");
     expect(endpointRoleToSubcategory("coolant")).toBe("coolant");
     expect(endpointRoleToSubcategory("battery")).toBe("battery");
+  });
+  it("passes the new oil / trans roles through to their roleKeys", () => {
+    expect(endpointRoleToSubcategory("engine_oil")).toBe("engine_oil");
+    expect(endpointRoleToSubcategory("oil_filter_housing_oring")).toBe("oil_filter_housing_oring");
+    expect(endpointRoleToSubcategory("atf_fluid")).toBe("atf_fluid");
   });
   it("maps transmission_filter to the roleKey trans_filter", () => {
     expect(endpointRoleToSubcategory("transmission_filter")).toBe("trans_filter");

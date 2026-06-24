@@ -8,10 +8,48 @@
  *   npx convex run devOnly/endpointPartPriceBackfill:backfill
  *   npx convex run devOnly/endpointPartPriceBackfill:backfill '{"configIds":["xd7.."]}'
  */
-import { internalAction, internalQuery } from "../_generated/server";
+import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
-import { endpointRoleToSubcategory } from "../vehicleEnrichment/repairpalEndpointMatch";
+import { endpointPartCategory, endpointRoleToSubcategory } from "../vehicleEnrichment/repairpalEndpointMatch";
+
+/**
+ * One-shot DB migration: re-map every stored repairpal_endpoint_estimates part's
+ * `role`/`position` from its `name` using the current endpointPartCategory — so
+ * existing rows pick up role-mapper fixes (engine oil recognized, filter seals
+ * split out of oil_filter, transmission filter routed correctly) WITHOUT
+ * re-fetching from RepairPal. The position from the name wins; otherwise the
+ * already-stored position is kept (brake parts carry position with no front/rear
+ * in the name). Idempotent.
+ */
+export const remapEndpointPartRoles = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("repairpal_endpoint_estimates").collect();
+    let rowsTouched = 0;
+    let partsChanged = 0;
+    for (const row of rows) {
+      const parts = row.parts ?? [];
+      if (!parts.length) continue;
+      let changed = false;
+      const next = parts.map((p: any) => {
+        const cat = endpointPartCategory(p.name ?? "");
+        const role = cat?.category;
+        const position = cat?.position ?? p.position;
+        if (role !== p.role || position !== p.position) {
+          changed = true;
+          partsChanged++;
+        }
+        return { ...p, role, position };
+      });
+      if (changed) {
+        await ctx.db.patch(row._id, { parts: next });
+        rowsTouched++;
+      }
+    }
+    return { rows: rows.length, rowsTouched, partsChanged };
+  },
+});
 
 /** Resolve the (config, service slug, endpoint part) → part_id by subcategory. */
 export const matchFitmentForEndpointPart = internalQuery({

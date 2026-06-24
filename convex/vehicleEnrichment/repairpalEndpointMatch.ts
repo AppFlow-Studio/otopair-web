@@ -185,13 +185,23 @@ export function endpointPartCategory(name: string): { category: string; position
   let category: string | null = null;
   if (n.includes("cabin")) category = "cabin_filter";
   else if (n.includes("air filter")) category = "air_filter";
-  else if (n.includes("oil filter")) category = "oil_filter";
+  // Transmission filter BEFORE the generic "oil filter" check — RP names it
+  // "Transmission Oil Filter", which would otherwise mis-role as the engine oil filter.
+  else if (n.includes("transmission") && n.includes("filter")) category = "transmission_filter";
+  else if (n.includes("oil filter")) {
+    // Split the oil-filter family: the element/cartridge is THE filter; the cap/
+    // housing o-ring, gasket and element seal are separate seal parts and must
+    // not be summed into the oil_filter price band.
+    category = /o-?ring|gasket|seal|housing/.test(n) ? "oil_filter_housing_oring" : "oil_filter";
+  }
   else if (n.includes("spark plug")) category = "spark_plug";
   else if (n.includes("battery")) category = "battery";
   else if (n.includes("coolant") || n.includes("antifreeze")) category = "coolant";
   else if (n.includes("brake pad")) category = "brake_pad";
   else if (n.includes("rotor")) category = "brake_rotor";
-  else if (n.includes("transmission") && n.includes("filter")) category = "transmission_filter";
+  else if (n.includes("transmission") && (n.includes("fluid") || n.includes("atf"))) category = "atf_fluid";
+  // The engine oil itself (NOT "...oil filter...", which is handled above).
+  else if (n.includes("engine oil") || n.includes("motor oil")) category = "engine_oil";
   if (!category) return null;
   return position && (category === "brake_pad" || category === "brake_rotor") ? { category, position } : { category };
 }
@@ -217,10 +227,13 @@ export function endpointRoleToSubcategory(
     case "transmission_filter":
       return "trans_filter";
     case "oil_filter":
+    case "oil_filter_housing_oring":
+    case "engine_oil":
     case "air_filter":
     case "cabin_filter":
     case "spark_plug":
     case "coolant":
+    case "atf_fluid":
     case "battery":
       return role;
     default:

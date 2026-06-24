@@ -127,9 +127,12 @@ export const repairpalLaborByConfig = query({
           hours: ep.labor_hours ?? null,
           laborBand: ep.labor_low != null ? [ep.labor_low, ep.labor_high] : null,
           independentTotal: ep.total_independent_low != null ? [ep.total_independent_low, ep.total_independent_high] : null,
+          dealerTotal: ep.total_dealer_low != null ? [ep.total_dealer_low, ep.total_dealer_high] : null,
           variant: ep.variant_label ?? null,
           matchQuality: ep.match_quality ?? "exact",
           matchedVia: ep.matched_via ?? null,
+          baseVehicleId: ep.base_vehicle_id ?? null,
+          zip: ep.zip ?? null,
           parts: (ep.parts ?? []).map((p: any) => ({
             role: p.role ?? null,
             name: p.name,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
@@ -109,6 +109,13 @@ export const TabRepairPalLabor = () => {
 function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; onClose: () => void }) {
   const rows = useQuery(api.directorRepairpal.repairpalLaborByConfig, { vehicle_config_id: configId })
   const shadowDiff = useQuery(api.directorRepairpal.partsShadowDiff, { configIds: [configId] })
+  const [rawOpen, setRawOpen] = useState<Set<string>>(new Set())
+  const toggleRaw = (id: string) =>
+    setRawOpen((s) => {
+      const n = new Set(s)
+      n.has(id) ? n.delete(id) : n.add(id)
+      return n
+    })
 
   // Build slug → shadow-diff row lookup for O(1) access in the table
   const shadowBySlug = new Map<string, { parts_multiplier: { low: number; high: number } | null; parts_real: { low: number; high: number; source: string } | null }>()
@@ -146,15 +153,31 @@ function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; 
           </thead>
           <tbody>
             {(rows as any[]).map((r) => {
+              const sid = String(r.serviceId)
               const pricedParts = r.rp.parts.filter((p: any) => p.role)
               const sd = shadowBySlug.get(r.slug ?? '')
               const diverges = partsBandDiverges(sd?.parts_multiplier, sd?.parts_real)
               const rowStyle: React.CSSProperties = diverges
                 ? { background: 'rgba(234,179,8,0.07)' }
                 : {}
+              const isRawOpen = rawOpen.has(sid)
               return (
-                <tr key={String(r.serviceId)} style={rowStyle}>
-                  <td style={td}>{r.serviceName}</td>
+                <Fragment key={sid}>
+                <tr style={rowStyle}>
+                  <td style={td}>
+                    <div>{r.serviceName}</div>
+                    <button
+                      type="button"
+                      onClick={() => toggleRaw(sid)}
+                      style={{
+                        marginTop: 4, fontSize: 11, color: 'var(--blue-600, #2563eb)',
+                        background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                        textDecoration: 'underline',
+                      }}
+                    >
+                      {isRawOpen ? 'Hide raw' : 'Raw ▾'}
+                    </button>
+                  </td>
                   <td style={{ ...td, fontWeight: 700, whiteSpace: 'nowrap' }}>
                     {r.rp.minutes != null ? `${r.rp.minutes}m / ${fmtH(r.rp.hours)}` : '—'}
                   </td>
@@ -202,11 +225,87 @@ function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; 
                     {r.corroboration.length === 0 ? '—' : r.corroboration.map((o: any) => `${o.source} ${o.hours}h`).join(', ')}
                   </td>
                 </tr>
+                {isRawOpen && (
+                  <tr>
+                    <td colSpan={9} style={{ ...td, background: 'var(--slate-50)', padding: '12px 14px' }}>
+                      <RawEndpoint rp={r.rp} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               )
             })}
           </tbody>
         </table>
       )}
     </Modal>
+  )
+}
+
+/**
+ * RawEndpoint — the unfiltered RepairPal endpoint payload for one service, so a
+ * director can verify the mapper for themselves: EVERY part (including ones we
+ * could not map → role "(unmapped)"), the labor + totals bands, and the match
+ * metadata (variant, base_vehicle_id, zip, fetched_at). This is the source data
+ * behind the priced "Parts (role · $band)" column; an unmapped/wrong role here
+ * explains a missing or off real-parts band.
+ */
+function RawEndpoint({ rp }: { rp: any }) {
+  const meta: Array<[string, string]> = [
+    ['Variant', rp.variant ?? '—'],
+    ['Match', `${rp.matchQuality ?? 'exact'}${rp.matchedVia ? ` · ${rp.matchedVia}` : ''}`],
+    ['base_vehicle_id', rp.baseVehicleId != null ? String(rp.baseVehicleId) : '—'],
+    ['ZIP', rp.zip ?? '—'],
+    ['Labor', rp.minutes != null ? `${rp.minutes}m / ${fmtH(rp.hours)}` : '—'],
+    ['Labor $', fmtBand(rp.laborBand, '$')],
+    ['Total (independent)', fmtBand(rp.independentTotal, '$')],
+    ['Total (dealer)', fmtBand(rp.dealerTotal, '$')],
+    ['Fetched', rp.fetchedAt ? new Date(rp.fetchedAt).toISOString().slice(0, 10) : '—'],
+  ]
+  const parts: any[] = rp.parts ?? []
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
+        {meta.map(([k, val]) => (
+          <div key={k} style={{ fontSize: 11 }}>
+            <span style={{ color: 'var(--slate-500)', textTransform: 'uppercase', letterSpacing: 0.3 }}>{k}: </span>
+            <span style={{ color: 'var(--slate-800)', fontWeight: 600 }}>{val}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--slate-500)', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 4 }}>
+        Endpoint parts ({parts.length})
+      </div>
+      {parts.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--slate-400)' }}>No parts on this endpoint estimate.</div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse', background: 'white', border: '1px solid var(--slate-200)' }}>
+          <thead>
+            <tr>
+              <th style={{ ...th, fontSize: 10 }}>RP part name</th>
+              <th style={{ ...th, fontSize: 10 }}>Mapped role</th>
+              <th style={{ ...th, fontSize: 10 }}>Position</th>
+              <th style={{ ...th, fontSize: 10 }}>Qty</th>
+              <th style={{ ...th, fontSize: 10 }}>Price (total band)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {parts.map((p, i) => (
+              <tr key={i}>
+                <td style={{ ...td, fontSize: 12 }}>{p.name}</td>
+                <td style={{ ...td, fontSize: 12 }}>
+                  {p.role
+                    ? <Badge tone="green">{p.role}</Badge>
+                    : <Badge tone="slate">(unmapped)</Badge>}
+                </td>
+                <td style={{ ...td, fontSize: 12, color: 'var(--slate-500)' }}>{p.position ?? '—'}</td>
+                <td style={{ ...td, fontSize: 12, color: 'var(--slate-500)' }}>{p.qty ?? '—'}</td>
+                <td style={{ ...td, fontSize: 12, whiteSpace: 'nowrap' }}>{fmtBand(p.band, '$')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   )
 }

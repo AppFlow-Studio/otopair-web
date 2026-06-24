@@ -37,6 +37,7 @@ import type * as devOnly_backfillBrakeSystem from "../devOnly/backfillBrakeSyste
 import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
 import type * as devOnly_dedupeConfig from "../devOnly/dedupeConfig.js";
 import type * as devOnly_endpointBackfill from "../devOnly/endpointBackfill.js";
+import type * as devOnly_endpointPartPriceBackfill from "../devOnly/endpointPartPriceBackfill.js";
 import type * as devOnly_endpointResearch from "../devOnly/endpointResearch.js";
 import type * as devOnly_fallbackVsOlp from "../devOnly/fallbackVsOlp.js";
 import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
@@ -284,6 +285,7 @@ import type * as vehicleEnrichment_buildSearchQueries from "../vehicleEnrichment
 import type * as vehicleEnrichment_cacheValidation from "../vehicleEnrichment/cacheValidation.js";
 import type * as vehicleEnrichment_claudeExtractor from "../vehicleEnrichment/claudeExtractor.js";
 import type * as vehicleEnrichment_contentSanitization from "../vehicleEnrichment/contentSanitization.js";
+import type * as vehicleEnrichment_endpointPartPriceMutations from "../vehicleEnrichment/endpointPartPriceMutations.js";
 import type * as vehicleEnrichment_evidenceConsensus from "../vehicleEnrichment/evidenceConsensus.js";
 import type * as vehicleEnrichment_extractionPrompts from "../vehicleEnrichment/extractionPrompts.js";
 import type * as vehicleEnrichment_firecrawl from "../vehicleEnrichment/firecrawl.js";
@@ -384,6 +386,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/dataFixes": typeof devOnly_dataFixes;
   "devOnly/dedupeConfig": typeof devOnly_dedupeConfig;
   "devOnly/endpointBackfill": typeof devOnly_endpointBackfill;
+  "devOnly/endpointPartPriceBackfill": typeof devOnly_endpointPartPriceBackfill;
   "devOnly/endpointResearch": typeof devOnly_endpointResearch;
   "devOnly/fallbackVsOlp": typeof devOnly_fallbackVsOlp;
   "devOnly/laborValidation": typeof devOnly_laborValidation;
@@ -631,6 +634,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/cacheValidation": typeof vehicleEnrichment_cacheValidation;
   "vehicleEnrichment/claudeExtractor": typeof vehicleEnrichment_claudeExtractor;
   "vehicleEnrichment/contentSanitization": typeof vehicleEnrichment_contentSanitization;
+  "vehicleEnrichment/endpointPartPriceMutations": typeof vehicleEnrichment_endpointPartPriceMutations;
   "vehicleEnrichment/evidenceConsensus": typeof vehicleEnrichment_evidenceConsensus;
   "vehicleEnrichment/extractionPrompts": typeof vehicleEnrichment_extractionPrompts;
   "vehicleEnrichment/firecrawl": typeof vehicleEnrichment_firecrawl;

@@ -649,14 +649,15 @@ const RENDER_TOOLS: OtoToolSchema[] = [
               },
               kind: {
                 type: "string",
-                enum: ["due", "light_on"],
-                description: "Whether this service is past-due or flagged by a dashboard light.",
+                enum: ["due", "light_on", "completed"],
+                description:
+                  "\"due\" = the user says this service is past-due; \"light_on\" = a dashboard light flagged it; \"completed\" = the user says they ALREADY HAD this service done (e.g. \"I did my brakes\", \"just changed the oil\", \"replaced the battery last week\"). \"completed\" clears the flag and records the service done — NEVER use \"due\" for a service the user reports as finished.",
               },
             },
             required: ["service_slug", "kind"],
           },
           description:
-            "Optional. Array of service claims the user stated (e.g. overdue oil change, brake warning). Each entry must have a service_slug and a kind.",
+            "Optional. Array of service claims the user stated. Each entry has a service_slug + a kind: \"due\"/\"light_on\" FLAG a service that needs attention; \"completed\" RECORDS a service the user says they already had done (clears the flag, improves health). e.g. overdue oil change → due; \"I did my brakes 2 weeks ago\" → {brake_pad_replacement, completed}.",
         },
         fault_lights: {
           type: "array",

@@ -17,6 +17,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { computeMaxDelta, validateMileageUpdate } from "./oto/vehicleTruthGuard";
 import { symptomForServiceSlug } from "./lib/serviceSymptoms";
+import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -26,7 +27,9 @@ const serviceClaimsValidator = v.optional(
   v.array(
     v.object({
       service_slug: v.string(),
-      kind: v.union(v.literal("due"), v.literal("light_on")),
+      // "due" / "light_on" FLAG the service (it needs attention); "completed"
+      // RECORDS it done (clears the flag + resets the due clock).
+      kind: v.union(v.literal("due"), v.literal("light_on"), v.literal("completed")),
     }),
   ),
 );
@@ -34,7 +37,7 @@ const faultLightsValidator = v.optional(v.array(v.string()));
 
 type VehicleTruthInputs = {
   mileage?: number;
-  service_claims?: Array<{ service_slug: string; kind: "due" | "light_on" }>;
+  service_claims?: Array<{ service_slug: string; kind: "due" | "light_on" | "completed" }>;
   fault_lights?: string[];
   // Set true ONLY after the user explicitly reconfirms a large-but-real forward
   // mileage jump (reason "absurd_forward"). Never overrides "backward" or
@@ -102,24 +105,68 @@ async function applyVehicleTruthImpl(
     mileageUpdated = true;
   }
 
-  // Collect knownIssues additions: maintenance-reminder claims map to the
-  // pipeline's warning-light code (it derives quick-read overrides from
-  // knownIssues), and fault lights are codes already. A direct quick_read_flag
-  // write would be clobbered by the runPipeline this mutation triggers.
+  // Split service claims by KIND. "due" / "light_on" FLAG the service: add its
+  // warning-light code to knownIssues (the pipeline derives quick-read overrides
+  // from knownIssues; a direct quick_read_flag write would be clobbered by the
+  // runPipeline below). "completed" RECORDS it done: clear that code AND write a
+  // fresh maintenance_record so the pipeline marks it on-time. Routing a
+  // "completed" report ("I did my brakes") through the "due" path was the
+  // inversion bug — it flagged a just-finished service and DROPPED the score.
   const servicesFlagged: string[] = [];
+  const servicesCompleted: string[] = [];
   const codesToAdd: string[] = [];
+  const codesToClear: string[] = [];
+  const completedRecordTypes = new Set<string>();
   for (const claim of args.service_claims ?? []) {
-    const code = symptomForServiceSlug(claim.service_slug);
-    if (code) { codesToAdd.push(code); servicesFlagged.push(claim.service_slug); }
+    if (claim.kind === "completed") {
+      const code = symptomForServiceSlug(claim.service_slug);
+      if (code) codesToClear.push(code);
+      const recordType = recordTypeForServiceSlug(claim.service_slug);
+      if (recordType) completedRecordTypes.add(recordType);
+      servicesCompleted.push(claim.service_slug);
+    } else {
+      const code = symptomForServiceSlug(claim.service_slug);
+      if (code) { codesToAdd.push(code); servicesFlagged.push(claim.service_slug); }
+    }
   }
   const faultLights = args.fault_lights ?? [];
   let faultLightsAdded: string[] = [];
-  if (codesToAdd.length || faultLights.length) {
+  if (codesToAdd.length || faultLights.length || codesToClear.length) {
     const current: string[] = Array.isArray(owner.knownIssues) ? owner.knownIssues : [];
-    const incoming = [...codesToAdd, ...faultLights];
     faultLightsAdded = faultLights.filter((f) => !current.includes(f));
-    const merged = Array.from(new Set([...current, ...incoming]));
-    await ctx.db.patch(owner._id, { knownIssues: merged } as any);
+    let next = Array.from(new Set([...current, ...codesToAdd, ...faultLights]));
+    if (codesToClear.length) next = next.filter((c) => !codesToClear.includes(c));
+    await ctx.db.patch(owner._id, { knownIssues: next } as any);
+  }
+
+  // Record each completed service done (mirrors maintenance.upsertRecord): fresh
+  // last-service date + the stated/current mileage, and clear stale symptom
+  // inputs (e.g. brakeFeel="soft_slow") so the health layer stops surfacing the
+  // old problem. The runPipeline below then recomputes the status as on-time.
+  const serviceMileage: number | undefined = args.mileage ?? owner.mileage ?? undefined;
+  for (const recordType of completedRecordTypes) {
+    const existing = await ctx.db
+      .query("maintenance_records")
+      .withIndex("by_vehicle_and_type", (q: any) =>
+        q.eq("vehicleOwnerId", owner._id).eq("type", recordType))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        lastServiceDate: now,
+        lastServiceMileage: serviceMileage,
+        customInputs: undefined,
+        updatedAt: now,
+      } as any);
+    } else {
+      await ctx.db.insert("maintenance_records", {
+        vehicleOwnerId: owner._id,
+        type: recordType,
+        lastServiceDate: now,
+        lastServiceMileage: serviceMileage,
+        createdAt: now,
+        updatedAt: now,
+      } as any);
+    }
   }
 
   // ── Re-run the maintenance pipeline (mirrors maintenance.ts:107-114) ──
@@ -130,7 +177,7 @@ async function applyVehicleTruthImpl(
     });
   }
 
-  return { ok: true, mileageUpdated, servicesFlagged, faultLightsAdded };
+  return { ok: true, mileageUpdated, servicesFlagged, servicesCompleted, faultLightsAdded };
 }
 
 export const applyVehicleTruth = mutation({

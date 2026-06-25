@@ -13,6 +13,42 @@ type QuickReply = { id?: string; text: string; value?: string; variant?: string 
 type ChatMsg = { role: 'user' | 'assistant'; text: string; quickReplies?: QuickReply[]; render?: RenderDirectiveRow[] }
 type UserCar = { vehicleId: string | null; vin: string; ymm: string; nickname?: string; mileage?: number }
 
+type CardState = {
+  busy?: boolean
+  result?: string
+  ok?: boolean
+  // Set when applyVehicleTruth returns a reconfirmable (absurd_forward)
+  // rejection — drives the inline reconfirm component on the card.
+  reconfirm?: { message: string; payload: any }
+}
+
+type TruthResult = {
+  ok?: boolean; needsReconfirm?: boolean; reconfirmable?: boolean; reason?: string
+  current?: number | null; proposed?: number; maxAllowed?: number
+  mileageUpdated?: boolean; servicesFlagged?: string[]; faultLightsAdded?: string[]
+}
+
+const num = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString())
+
+// Plain-language copy for a HARD (non-reconfirmable) mileage rejection.
+function rejectionMessage(res: TruthResult): string {
+  switch (res?.reason) {
+    case 'backward':
+      return `Can't apply — ${num(res.proposed)} mi is below the recorded ${num(res.current)} mi. An odometer can't go backward.`
+    case 'implausible':
+      return `Can't apply — that isn't a valid odometer reading.`
+    default:
+      return `Couldn't apply: ${res?.reason ?? 'rejected'}.`
+  }
+}
+
+// Applied-success summary line.
+function appliedMessage(res: TruthResult): string {
+  return `✓ Applied${res.mileageUpdated ? ' · mileage' : ''}` +
+    `${res.servicesFlagged?.length ? ` · flagged ${res.servicesFlagged.join(', ')}` : ''}` +
+    `${res.faultLightsAdded?.length ? ` · lights ${res.faultLightsAdded.join(', ')}` : ''}`
+}
+
 const levelLabel = (lvl: number | string | null | undefined): string | null => {
   if (lvl == null) return null
   if (typeof lvl === 'number') return lvl <= 1 ? 'beginner' : lvl === 2 ? 'intermediate' : 'experienced'
@@ -25,7 +61,7 @@ export const TabOtoSim = () => {
   const sim = useAction(api.oto.simulate.simulateOtoForDirector)
   const applyTruth = useAction(api.vehicleTruth.applyVehicleTruthForDirector)
   // Per-card interaction state, keyed `${messageIndex}:${directiveKey}`.
-  const [cardState, setCardState] = useState<Record<string, { busy?: boolean; result?: string; ok?: boolean }>>({})
+  const [cardState, setCardState] = useState<Record<string, CardState>>({})
 
   // ── user picker (reuses the Users-tab list + the same client filter) ──────
   const users = useQuery(api.director.usersList)
@@ -61,9 +97,11 @@ export const TabOtoSim = () => {
   const resetConversation = () => { setConvoId(null); setMessages([]); setError(null); setConvoState(null); setCardState({}) }
 
   // Interact with a render_vehicle_update card the same way the mobile confirm
-  // tap does — apply the exact captured payload for the simulated user via the
-  // director-gated wrapper, then surface the write-back result on the card.
-  const confirmVehicleUpdate = async (cardId: string, payload: any) => {
+  // tap does — apply the captured payload for the simulated user via the
+  // director-gated wrapper. A big-but-real forward jump (absurd_forward) comes
+  // back reconfirmable: we show an inline reconfirm prompt, and "Apply anyway"
+  // re-sends with reconfirmed:true. backward / implausible are hard rejections.
+  const confirmVehicleUpdate = async (cardId: string, payload: any, reconfirmed = false) => {
     if (!selected || !car || cardState[cardId]?.busy) return
     setCardState(s => ({ ...s, [cardId]: { busy: true } }))
     try {
@@ -74,11 +112,16 @@ export const TabOtoSim = () => {
         ...(payload?.mileage !== undefined ? { mileage: payload.mileage } : {}),
         ...(payload?.service_claims !== undefined ? { service_claims: payload.service_claims } : {}),
         ...(payload?.fault_lights !== undefined ? { fault_lights: payload.fault_lights } : {}),
-      }) as { ok?: boolean; needsReconfirm?: boolean; reason?: string; mileageUpdated?: boolean; servicesFlagged?: string[]; faultLightsAdded?: string[] }
-      const msg = res?.ok
-        ? `✓ Applied${res.mileageUpdated ? ' · mileage' : ''}${res.servicesFlagged?.length ? ` · flagged ${res.servicesFlagged.join(', ')}` : ''}${res.faultLightsAdded?.length ? ` · lights ${res.faultLightsAdded.join(', ')}` : ''}`
-        : `Needs reconfirm: ${res?.reason ?? 'rejected'}`
-      setCardState(s => ({ ...s, [cardId]: { result: msg, ok: !!res?.ok } }))
+        ...(reconfirmed ? { reconfirmed: true } : {}),
+      }) as TruthResult
+      if (res?.ok) {
+        setCardState(s => ({ ...s, [cardId]: { result: appliedMessage(res), ok: true } }))
+      } else if (res?.needsReconfirm && res?.reconfirmable) {
+        const message = `Big jump — record shows ${num(res.current)} mi, and ${num(res.proposed)} mi is past the one-step limit of ${num(res.maxAllowed)} mi. Confirm it's real?`
+        setCardState(s => ({ ...s, [cardId]: { reconfirm: { message, payload } } }))
+      } else {
+        setCardState(s => ({ ...s, [cardId]: { result: rejectionMessage(res), ok: false } }))
+      }
     } catch (e) {
       setCardState(s => ({ ...s, [cardId]: { result: (e as Error).message, ok: false } }))
     }
@@ -245,13 +288,24 @@ export const TabOtoSim = () => {
                             <span style={{ fontSize:12, fontWeight:600, color:'var(--slate-800)' }}>{d.label}</span>
                             <span style={{ fontSize:11, color:'var(--slate-500)', whiteSpace:'pre-wrap' }}>{d.detail}</span>
                           </div>
-                          {interactive && (st?.result
-                            ? <span style={{ fontSize:11, fontWeight:600, flexShrink:0,
-                                color: st.ok ? 'var(--green-700)' : 'var(--orange-700, #c2410c)' }}>{st.result}</span>
-                            : <Button size="sm" variant="primary" disabled={!!st?.busy || !canChat}
-                                onClick={() => confirmVehicleUpdate(cardId, d.payload)}>
-                                {st?.busy ? 'Applying…' : 'Confirm update'}
-                              </Button>
+                          {interactive && (
+                            st?.reconfirm
+                              ? <div style={{ display:'flex', flexDirection:'column', gap:6, flexShrink:0, maxWidth:300 }}>
+                                  <span style={{ fontSize:11, color:'var(--orange-700, #c2410c)' }}>{st.reconfirm.message}</span>
+                                  <div style={{ display:'flex', gap:6 }}>
+                                    <Button size="sm" variant="primary"
+                                      onClick={() => confirmVehicleUpdate(cardId, st!.reconfirm!.payload, true)}>Apply anyway</Button>
+                                    <Button size="sm" variant="ghost"
+                                      onClick={() => setCardState(s => ({ ...s, [cardId]: {} }))}>Cancel</Button>
+                                  </div>
+                                </div>
+                              : st?.result
+                                ? <span style={{ fontSize:11, fontWeight:600, flexShrink:0,
+                                    color: st.ok ? 'var(--green-700)' : 'var(--orange-700, #c2410c)' }}>{st.result}</span>
+                                : <Button size="sm" variant="primary" disabled={!!st?.busy || !canChat}
+                                    onClick={() => confirmVehicleUpdate(cardId, d.payload)}>
+                                    {st?.busy ? 'Applying…' : 'Confirm update'}
+                                  </Button>
                           )}
                         </div>
                       )

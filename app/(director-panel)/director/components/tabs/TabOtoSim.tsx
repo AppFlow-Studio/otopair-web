@@ -25,7 +25,7 @@ type CardState = {
 type TruthResult = {
   ok?: boolean; needsReconfirm?: boolean; reconfirmable?: boolean; reason?: string
   current?: number | null; proposed?: number; maxAllowed?: number
-  mileageUpdated?: boolean; servicesFlagged?: string[]; faultLightsAdded?: string[]
+  mileageUpdated?: boolean; servicesFlagged?: string[]; servicesCompleted?: string[]; faultLightsAdded?: string[]
 }
 
 const num = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString())
@@ -45,6 +45,7 @@ function rejectionMessage(res: TruthResult): string {
 // Applied-success summary line.
 function appliedMessage(res: TruthResult): string {
   return `✓ Applied${res.mileageUpdated ? ' · mileage' : ''}` +
+    `${res.servicesCompleted?.length ? ` · recorded done ${res.servicesCompleted.join(', ')}` : ''}` +
     `${res.servicesFlagged?.length ? ` · flagged ${res.servicesFlagged.join(', ')}` : ''}` +
     `${res.faultLightsAdded?.length ? ` · lights ${res.faultLightsAdded.join(', ')}` : ''}`
 }

@@ -51,11 +51,17 @@ export default function BookingsPage() {
   const [vehicleFilter, setVehicleFilter] = useState("");
   const [serviceFilter, setServiceFilter] = useState<string[]>([]);
   const [mechanicFilter, setMechanicFilter] = useState<string[]>([]);
-  const initialDate = searchParams.get("date") || todayString();
+  // Default to no date constraint so "All" shows every booking; a `date` query
+  // param (e.g. deep-link from the schedule) still pins a specific day.
+  const initialDate = searchParams.get("date") || "";
   const [dateFrom, setDateFrom] = useState(initialDate);
   const [timeFrom, setTimeFrom] = useState("");
   const [dateTo, setDateTo] = useState(initialDate);
   const [timeTo, setTimeTo] = useState("");
+  // "Today" quick filter — scheduled today OR created today.
+  const [todayOnly, setTodayOnly] = useState(false);
+  // Render window — show 50 rows at a time, "Load more" reveals the next 50.
+  const [visibleCount, setVisibleCount] = useState(50);
 
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [focusedRowIndex, setFocusedRowIndex] = useState<number>(-1);
@@ -124,6 +130,14 @@ export default function BookingsPage() {
     return new Set(customerLateNotificationSent.map((a: any) => String(a.bookingId)));
   }, [customerLateNotificationSent]);
 
+  const today = todayString();
+  // Local-midnight window for the "created today" half of the Today filter.
+  const todayWindow = useMemo(() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    return { start, end: start + 86_400_000 };
+  }, []);
+
   const filteredJobs = useMemo(() => {
     if (!allJobs) return undefined;
     return allJobs.filter((j) => {
@@ -131,6 +145,11 @@ export default function BookingsPage() {
         const isPending = statusFilter === "pending_shop_acceptance";
         const jobIsPending = j.status === "pending" || j.status === "pending_shop_acceptance";
         if (isPending ? !jobIsPending : j.status !== statusFilter) return false;
+      }
+      if (todayOnly) {
+        const scheduledToday = j.scheduledDate === today;
+        const createdToday = j._creationTime >= todayWindow.start && j._creationTime < todayWindow.end;
+        if (!scheduledToday && !createdToday) return false;
       }
       if (customerFilter && !j.customerName.toLowerCase().includes(customerFilter.toLowerCase()) && !j.customerEmail.toLowerCase().includes(customerFilter.toLowerCase())) return false;
       if (vehicleFilter && !j.vehicle.toLowerCase().includes(vehicleFilter.toLowerCase())) return false;
@@ -148,22 +167,34 @@ export default function BookingsPage() {
       }
       return true;
     });
-  }, [allJobs, statusFilter, customerFilter, vehicleFilter, serviceFilter, mechanicFilter, dateFrom, timeFrom, dateTo, timeTo]);
+  }, [allJobs, statusFilter, todayOnly, today, todayWindow, customerFilter, vehicleFilter, serviceFilter, mechanicFilter, dateFrom, timeFrom, dateTo, timeTo]);
 
-  const today = todayString();
-  const isDefaultDateRange = dateFrom === today && dateTo === today && !timeFrom && !timeTo;
-  const hasAnyFilter = statusFilter !== "all" || customerFilter || vehicleFilter || serviceFilter.length > 0 || mechanicFilter.length > 0 || !isDefaultDateRange;
+  const isDefaultDateRange = !dateFrom && !dateTo && !timeFrom && !timeTo;
+  const hasAnyFilter = statusFilter !== "all" || todayOnly || customerFilter || vehicleFilter || serviceFilter.length > 0 || mechanicFilter.length > 0 || !isDefaultDateRange;
   const highlightedJobId = searchParams.get("highlight");
+
+  // Collapse the render window back to the first page whenever the filtered
+  // result set changes, so "Load more" always starts fresh.
+  useEffect(() => {
+    setVisibleCount(50);
+  }, [statusFilter, todayOnly, customerFilter, vehicleFilter, serviceFilter, mechanicFilter, dateFrom, timeFrom, dateTo, timeTo]);
+
+  const visibleJobs = useMemo(
+    () => (filteredJobs ? filteredJobs.slice(0, visibleCount) : undefined),
+    [filteredJobs, visibleCount],
+  );
+  const hasMore = !!filteredJobs && filteredJobs.length > visibleCount;
 
   function clearAllFilters() {
     setStatusFilter("all");
+    setTodayOnly(false);
     setCustomerFilter("");
     setVehicleFilter("");
     setServiceFilter([]);
     setMechanicFilter([]);
-    setDateFrom(today);
+    setDateFrom("");
     setTimeFrom("");
-    setDateTo(today);
+    setDateTo("");
     setTimeTo("");
   }
 
@@ -189,14 +220,14 @@ export default function BookingsPage() {
   }, [highlightedJobId]);
 
   useEffect(() => {
-    if (!highlightedJobId || !filteredJobs) return;
-    const highlightedIndex = filteredJobs.findIndex(
+    if (!highlightedJobId || !visibleJobs) return;
+    const highlightedIndex = visibleJobs.findIndex(
       (job) => String(job._id) === highlightedJobId,
     );
     if (highlightedIndex >= 0) {
       setFocusedRowIndex(highlightedIndex);
     }
-  }, [filteredJobs, highlightedJobId]);
+  }, [visibleJobs, highlightedJobId]);
 
   const handleProposeReschedule = useCallback((proposal: RescheduleConfirmationProposal) => {
     setRescheduleProposal(proposal);
@@ -250,10 +281,10 @@ export default function BookingsPage() {
         return;
       }
 
-      if (!filteredJobs || filteredJobs.length === 0) return;
+      if (!visibleJobs || visibleJobs.length === 0) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setFocusedRowIndex((prev) => Math.min(prev + 1, filteredJobs.length - 1));
+        setFocusedRowIndex((prev) => Math.min(prev + 1, visibleJobs.length - 1));
         return;
       }
       if (e.key === "ArrowUp") {
@@ -261,8 +292,8 @@ export default function BookingsPage() {
         setFocusedRowIndex((prev) => Math.max(prev - 1, 0));
         return;
       }
-      if (e.key === "Enter" && focusedRowIndex >= 0 && focusedRowIndex < filteredJobs.length) {
-        const job = filteredJobs[focusedRowIndex];
+      if (e.key === "Enter" && focusedRowIndex >= 0 && focusedRowIndex < visibleJobs.length) {
+        const job = visibleJobs[focusedRowIndex];
         setSelectedJobId((prev) => (prev === job._id ? null : job._id));
         return;
       }
@@ -292,7 +323,7 @@ export default function BookingsPage() {
     }
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [filteredJobs, focusedRowIndex, selectedJobId, selectedJob]);
+  }, [visibleJobs, focusedRowIndex, selectedJobId, selectedJob]);
 
   const drawerOpen = !!selectedJobId;
 
@@ -456,6 +487,22 @@ export default function BookingsPage() {
                 {/* Filter row */}
                 <div className="flex items-center justify-between px-5 py-3 border-b border-border shrink-0">
                   <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setTodayOnly((v) => !v)}
+                      className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                        todayOnly
+                          ? "font-medium text-primary border-primary/30 bg-primary/5"
+                          : "text-muted-foreground border-border bg-card hover:bg-muted/50"
+                      }`}
+                      title="Scheduled today or created today"
+                    >
+                      <Calendar className="w-3 h-3" />
+                      Today
+                    </button>
+
+                    <div className="w-px h-5 bg-border mx-1" />
+
                     <TextFilterPill
                       ref={customerFilterRef}
                       label="Customer"
@@ -492,7 +539,7 @@ export default function BookingsPage() {
                       timeFrom={timeFrom}
                       dateTo={dateTo}
                       timeTo={timeTo}
-                      defaultDate={today}
+                      defaultDate=""
                       onDateFromChange={setDateFrom}
                       onTimeFromChange={setTimeFrom}
                       onDateToChange={setDateTo}
@@ -549,7 +596,7 @@ export default function BookingsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredJobs === undefined ? (
+                      {visibleJobs === undefined ? (
                         // Loading skeleton: 5 shimmer rows
                         Array.from({ length: 5 }).map((_, i) => (
                           <tr key={i} className="border-b border-border last:border-b-0">
@@ -577,7 +624,7 @@ export default function BookingsPage() {
                             </td>
                           </tr>
                         ))
-                      ) : filteredJobs.length === 0 ? (
+                      ) : visibleJobs.length === 0 ? (
                         <tr>
                           <td colSpan={7} className="px-5 py-14">
                             <div className="flex flex-col items-center gap-2">
@@ -593,12 +640,17 @@ export default function BookingsPage() {
                           </td>
                         </tr>
                       ) : (
-                        filteredJobs.map((job, idx) => {
+                        visibleJobs.map((job, idx) => {
                           const isSelected = selectedJobId === job._id;
                           const isFocused = focusedRowIndex === idx;
                           const isPending =
                             job.status === "pending" || job.status === "pending_shop_acceptance";
-                          const countdown = isPending
+                          // A pre-job quote pending the customer's decision is
+                          // the customer's turn, not the shop's — don't run the
+                          // "shop needs to respond" countdown for it.
+                          const awaitingCustomerQuote =
+                            (job as any).paymentApprovalState === "pre_job_pending";
+                          const countdown = isPending && !awaitingCustomerQuote
                             ? pendingCountdown(job._creationTime)
                             : null;
                           return (
@@ -679,6 +731,21 @@ export default function BookingsPage() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Load more — reveals the next 50 filtered rows */}
+                {hasMore ? (
+                  <div className="flex items-center justify-center gap-2 border-t border-border p-4 shrink-0">
+                    <button
+                      onClick={() => setVisibleCount((c) => c + 50)}
+                      className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted/50"
+                    >
+                      Load more
+                    </button>
+                    <span className="text-xs text-muted-foreground">
+                      Showing {visibleJobs?.length ?? 0} of {filteredJobs?.length ?? 0}
+                    </span>
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -1021,7 +1088,7 @@ function DateTimeFilterPill({
         ) : (
           <>
             <Calendar className="w-3 h-3" />
-            Today
+            All dates
           </>
         )}
       </button>

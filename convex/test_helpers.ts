@@ -16,6 +16,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { mutation, query, type MutationCtx } from "./_generated/server";
+import { normalizeBufferMinutes } from "./lib/schedule_overlap";
 
 const TEST_VIN_PREFIX = "TESTVIN";
 
@@ -120,25 +121,19 @@ function pad2(n: number) {
   return n.toString().padStart(2, "0");
 }
 
-function todayLocalISO() {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+function todayInTz(tz: string): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: tz });
 }
 
-function offsetDateISO(days: number) {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+function offsetDateInTz(days: number, tz: string): string {
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1000)
+    .toLocaleDateString("en-CA", { timeZone: tz });
 }
 
-function nowPlusMinutesAsHHMM(minutes: number) {
-  const d = new Date(Date.now() + minutes * 60 * 1000);
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-
-function nowAsHHMM() {
-  const d = new Date();
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+function nowHHMMInTz(tz: string, offsetMinutes = 0): string {
+  return new Date(Date.now() + offsetMinutes * 60 * 1000)
+    .toLocaleTimeString("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false })
+    .substring(0, 5);
 }
 
 function generateTestVin() {
@@ -232,18 +227,24 @@ export const listMechanicsForShop = query({
 // ---------------------------------------------------------------------------
 
 export const setupEarlyCheckinScenario = mutation({
-  args: { shopId: v.id("shops"), mechanicId: v.optional(v.id("mechanics")) },
+  args: {
+    shopId: v.id("shops"),
+    mechanicId: v.optional(v.id("mechanics")),
+    scheduledDate: v.optional(v.string()),
+    scheduledTime: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     assertDevEnv();
     const user = await getCurrentUser(ctx);
     await requireShopStaff(ctx, user._id, args.shopId);
+    const tz = ((await ctx.db.get(args.shopId)) as any)?.timezone ?? "UTC";
 
     const mechanicId = await pickMechanicForShop(ctx, args.shopId, args.mechanicId);
     const customer = await getOrCreateTestCustomer(ctx);
     const serviceId = await getOrCreateTestService(ctx, args.shopId);
 
-    const scheduledDate = todayLocalISO();
-    const scheduledTime = nowPlusMinutesAsHHMM(30);
+    const scheduledDate = args.scheduledDate ?? todayInTz(tz);
+    const scheduledTime = args.scheduledTime ?? nowHHMMInTz(tz, 30);
     const bookingId = await insertScenarioBooking(ctx, {
       shopId: args.shopId,
       mechanicId,
@@ -259,18 +260,24 @@ export const setupEarlyCheckinScenario = mutation({
 });
 
 export const setupEarlyEndScenario = mutation({
-  args: { shopId: v.id("shops"), mechanicId: v.optional(v.id("mechanics")) },
+  args: {
+    shopId: v.id("shops"),
+    mechanicId: v.optional(v.id("mechanics")),
+    scheduledDate: v.optional(v.string()),
+    scheduledTime: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     assertDevEnv();
     const user = await getCurrentUser(ctx);
     await requireShopStaff(ctx, user._id, args.shopId);
+    const tz = ((await ctx.db.get(args.shopId)) as any)?.timezone ?? "UTC";
 
     const mechanicId = await pickMechanicForShop(ctx, args.shopId, args.mechanicId);
     const customer = await getOrCreateTestCustomer(ctx);
     const serviceId = await getOrCreateTestService(ctx, args.shopId);
 
-    const scheduledDate = todayLocalISO();
-    const scheduledTime = nowPlusMinutesAsHHMM(-10);
+    const scheduledDate = args.scheduledDate ?? todayInTz(tz);
+    const scheduledTime = args.scheduledTime ?? nowHHMMInTz(tz, -10);
     const bookingId = await insertScenarioBooking(ctx, {
       shopId: args.shopId,
       mechanicId,
@@ -295,18 +302,24 @@ export const setupEarlyEndScenario = mutation({
 });
 
 export const setupCustomerLateScenario = mutation({
-  args: { shopId: v.id("shops"), mechanicId: v.optional(v.id("mechanics")) },
+  args: {
+    shopId: v.id("shops"),
+    mechanicId: v.optional(v.id("mechanics")),
+    scheduledDate: v.optional(v.string()),
+    scheduledTime: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     assertDevEnv();
     const user = await getCurrentUser(ctx);
     await requireShopStaff(ctx, user._id, args.shopId);
+    const tz = ((await ctx.db.get(args.shopId)) as any)?.timezone ?? "UTC";
 
     const mechanicId = await pickMechanicForShop(ctx, args.shopId, args.mechanicId);
     const customer = await getOrCreateTestCustomer(ctx);
     const serviceId = await getOrCreateTestService(ctx, args.shopId);
 
-    const scheduledDate = todayLocalISO();
-    const scheduledTime = nowAsHHMM();
+    const scheduledDate = args.scheduledDate ?? todayInTz(tz);
+    const scheduledTime = args.scheduledTime ?? nowHHMMInTz(tz);
     const bookingId = await insertScenarioBooking(ctx, {
       shopId: args.shopId,
       mechanicId,
@@ -322,18 +335,24 @@ export const setupCustomerLateScenario = mutation({
 });
 
 export const setupRescheduleScenario = mutation({
-  args: { shopId: v.id("shops"), mechanicId: v.optional(v.id("mechanics")) },
+  args: {
+    shopId: v.id("shops"),
+    mechanicId: v.optional(v.id("mechanics")),
+    scheduledDate: v.optional(v.string()),
+    scheduledTime: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     assertDevEnv();
     const user = await getCurrentUser(ctx);
     await requireShopStaff(ctx, user._id, args.shopId);
+    const tz = ((await ctx.db.get(args.shopId)) as any)?.timezone ?? "UTC";
 
     const mechanicId = await pickMechanicForShop(ctx, args.shopId, args.mechanicId);
     const customer = await getOrCreateTestCustomer(ctx);
     const serviceId = await getOrCreateTestService(ctx, args.shopId);
 
-    const scheduledDate = offsetDateISO(1);
-    const scheduledTime = "12:00";
+    const scheduledDate = args.scheduledDate ?? offsetDateInTz(1, tz);
+    const scheduledTime = args.scheduledTime ?? "12:00";
     const bookingId = await insertScenarioBooking(ctx, {
       shopId: args.shopId,
       mechanicId,
@@ -349,18 +368,24 @@ export const setupRescheduleScenario = mutation({
 });
 
 export const setupMechanicActiveJobScenario = mutation({
-  args: { shopId: v.id("shops"), mechanicId: v.id("mechanics") },
+  args: {
+    shopId: v.id("shops"),
+    mechanicId: v.id("mechanics"),
+    scheduledDate: v.optional(v.string()),
+    scheduledTime: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     assertDevEnv();
     const user = await getCurrentUser(ctx);
     await requireShopStaff(ctx, user._id, args.shopId);
+    const tz = ((await ctx.db.get(args.shopId)) as any)?.timezone ?? "UTC";
 
     const mechanicId = await pickMechanicForShop(ctx, args.shopId, args.mechanicId);
     const customer = await getOrCreateTestCustomer(ctx);
     const serviceId = await getOrCreateTestService(ctx, args.shopId);
 
-    const scheduledDate = todayLocalISO();
-    const scheduledTime = nowAsHHMM();
+    const scheduledDate = args.scheduledDate ?? todayInTz(tz);
+    const scheduledTime = args.scheduledTime ?? nowHHMMInTz(tz);
     const bookingId = await insertScenarioBooking(ctx, {
       shopId: args.shopId,
       mechanicId,
@@ -535,6 +560,7 @@ export const triggerRescheduleProposal = mutation({
     const booking: any = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("Booking not found.");
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    const tz = ((await ctx.db.get(booking.shop_id)) as any)?.timezone ?? "UTC";
 
     const allowed = ["pending", "pending_shop_acceptance", "confirmed", "vehicle_at_shop"];
     if (!allowed.includes(booking.status)) {
@@ -545,7 +571,7 @@ export const triggerRescheduleProposal = mutation({
 
     // Bump the schedule forward by 2 days at 10:00 — far enough not to
     // collide with the original Setup slot (which is +1 day @ 12:00).
-    const newDate = offsetDateISO(2);
+    const newDate = offsetDateInTz(2, tz);
     const newTime = "10:00";
     const now = Date.now();
 
@@ -734,6 +760,147 @@ export const clearTestArtifacts = mutation({
     }
 
     return { deletedOutbox, deletedMonitors, deletedCheckins, deletedBookings };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// JOB OVERRUN — creates an in_progress upstream job + a confirmed downstream
+// job on the same mechanic so the mechanic dashboard cascade card can be
+// exercised without waiting for the real overrun timer.
+// ---------------------------------------------------------------------------
+
+export const setupJobOverrunScenario = mutation({
+  args: {
+    shopId: v.id("shops"),
+    mechanicId: v.optional(v.id("mechanics")),
+    scheduledDate: v.optional(v.string()),
+    upstreamTime: v.optional(v.string()),
+    downstreamTime: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    assertDevEnv();
+    const user = await getCurrentUser(ctx);
+    await requireShopStaff(ctx, user._id, args.shopId);
+    const shop: any = await ctx.db.get(args.shopId);
+    const tz = shop?.timezone ?? "UTC";
+    const bufferMinutes = normalizeBufferMinutes(shop?.buffer_minutes);
+
+    const mechanicId = await pickMechanicForShop(ctx, args.shopId, args.mechanicId);
+    const customer = await getOrCreateTestCustomer(ctx);
+    const serviceId = await getOrCreateTestService(ctx, args.shopId);
+
+    const scheduledDate = args.scheduledDate ?? todayInTz(tz);
+    const upstreamTime = args.upstreamTime ?? nowHHMMInTz(tz);
+
+    // Downstream defaults to right after the upstream job ends (30 min),
+    // plus the shop's buffer — matching the gap real bookings would have.
+    const downstreamTime = args.downstreamTime ?? (() => {
+      const [h, m] = upstreamTime.split(":").map(Number);
+      const total = h * 60 + m + 30 + bufferMinutes;
+      return `${pad2(Math.floor(total / 60) % 24)}:${pad2(total % 60)}`;
+    })();
+
+    const now = Date.now();
+
+    const upstreamBookingId = await insertScenarioBooking(ctx, {
+      shopId: args.shopId,
+      mechanicId,
+      customerId: customer._id,
+      serviceId,
+      scheduledDate,
+      scheduledTime: upstreamTime,
+      status: "in_progress",
+      liveStage: "service_in_progress",
+      estimatedLaborMinutes: 30,
+    });
+    await ctx.db.insert("job_actuals", {
+      booking_id: upstreamBookingId,
+      mechanic_id: mechanicId,
+      started_at: now,
+      created_at: now,
+      updated_at: now,
+    } as any);
+
+    const downstreamBookingId = await insertScenarioBooking(ctx, {
+      shopId: args.shopId,
+      mechanicId,
+      customerId: customer._id,
+      serviceId,
+      scheduledDate,
+      scheduledTime: downstreamTime,
+      status: "confirmed",
+      liveStage: "booking_confirmed",
+      estimatedLaborMinutes: 30,
+    });
+
+    return {
+      bookingId: upstreamBookingId,
+      downstreamBookingId,
+      mechanicId,
+      scheduledDate,
+      scheduledTime: upstreamTime,
+      downstreamTime,
+    };
+  },
+});
+
+export const triggerJobOverrun = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    assertDevEnv();
+    const user = await getCurrentUser(ctx);
+    const booking: any = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    if (booking.status !== "in_progress") {
+      throw new Error(
+        `Booking is in status "${booking.status}"; overrun requires "in_progress". Run Setup again.`,
+      );
+    }
+
+    const now = Date.now();
+    let checkin: any = await ctx.db
+      .query("overrun_checkins")
+      .withIndex("by_booking_id", (q: any) => q.eq("booking_id", args.bookingId))
+      .first();
+
+    if (!checkin) {
+      // Create a check-in already past its due time so the processor fires immediately.
+      const dueAtMs = now - 60 * 1000;
+      const checkinId = await ctx.db.insert("overrun_checkins", {
+        shop_id: booking.shop_id,
+        booking_id: booking._id,
+        mechanic_id: booking.mechanic_id,
+        status: "scheduled",
+        due_at_ms: dueAtMs,
+        escalation_due_at_ms: dueAtMs + 3 * 60 * 1000,
+        auto_apply_at_ms: now + 6 * 60 * 1000,
+        default_extension_minutes: 15,
+        created_at: now,
+        updated_at: now,
+      } as any);
+      checkin = await ctx.db.get(checkinId);
+    } else {
+      const open = ["scheduled", "mechanic_prompted", "awaiting_extension", "front_desk_escalated"];
+      if (!open.includes(checkin.status)) {
+        throw new Error(
+          `Overrun check-in is already "${checkin.status}". Run Setup again to create a fresh booking.`,
+        );
+      }
+      // Push all timestamps into the past so the processor fires the prompt now.
+      await ctx.db.patch(checkin._id, {
+        due_at_ms: now - 60 * 1000,
+        escalation_due_at_ms: now - 60 * 1000,
+        auto_apply_at_ms: now + 6 * 60 * 1000,
+        updated_at: now,
+      } as any);
+    }
+
+    // Run synchronously so the mechanic dashboard updates before the response.
+    await ctx.runMutation(internal.bookings.processOverrunCheckins, {});
+
+    return { checkinId: checkin._id };
   },
 });
 

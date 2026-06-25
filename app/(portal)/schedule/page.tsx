@@ -340,6 +340,9 @@ export default function SchedulePage() {
 
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
   const rescheduleFromNoShowAlert = useMutation(api.bookings.rescheduleFromNoShowAlert);
+  const rescheduleFromManualSchedulingAlert = useMutation(
+    api.bookings.rescheduleFromManualSchedulingAlert,
+  );
   const acceptLateStartReview = useMutation(api.bookings.acceptLateStartReview);
   const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
   const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
@@ -372,6 +375,7 @@ export default function SchedulePage() {
     }
   }, [isMechanicViewer, viewerMechanicId]);
   const lateStartReviews = useQuery(api.bookings.getOpenLateStartReviews);
+  const manualSchedulingAlerts = useQuery(api.bookings.getOpenManualSchedulingAlerts);
 
   const selectedJobDetail = useQuery(
     api.bookings.getJobDetail,
@@ -680,6 +684,27 @@ export default function SchedulePage() {
     setIsRescheduling(true);
     setRescheduleError("");
     try {
+      // A booking flagged for manual scheduling review (e.g. a cascade push
+      // that couldn't be auto-applied) is moved directly — same as the
+      // automatic cascade — instead of going through customer approval.
+      const hasManualSchedulingAlert = (manualSchedulingAlerts ?? []).some(
+        (a: any) => String(a.bookingId) === rescheduleProposal.eventId,
+      );
+
+      if (hasManualSchedulingAlert) {
+        await rescheduleFromManualSchedulingAlert({
+          bookingId: rescheduleProposal.eventId as Id<"bookings">,
+          newScheduledDate: rescheduleProposal.newDate,
+          newScheduledTime: rescheduleProposal.newTime,
+          newMechanicId: rescheduleProposal.newMechanicId
+            ? (rescheduleProposal.newMechanicId as Id<"mechanics">)
+            : undefined,
+        });
+        setRescheduleProposal(null);
+        setToast({ msg: "Booking moved — customer notified", key: Date.now() });
+        return;
+      }
+
       await proposeReschedule({
         bookingId: rescheduleProposal.eventId as Id<"bookings">,
         newScheduledDate: rescheduleProposal.newDate,
@@ -2392,6 +2417,9 @@ export default function SchedulePage() {
         onCancel={() => setRescheduleProposal(null)}
         onConfirm={() => void handleConfirmReschedule()}
         reserveOriginalSlotMessage="The booking will be set to Pending Customer until the customer responds. If they don't respond within 24 hours, the original time will be restored automatically."
+        skipsCustomerApproval={(manualSchedulingAlerts ?? []).some(
+          (a: any) => String(a.bookingId) === rescheduleProposal?.eventId,
+        )}
       />
 
       <LateStartReviewDialog

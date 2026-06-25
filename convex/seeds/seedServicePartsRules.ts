@@ -59,14 +59,14 @@ const SPECS: ServiceRuleSpec[] = [
     slug: "oil_change",
     parts_kind: "fixed_kit", parts_unit_label: "filter",
     core: ["oil_filter"],
-    as_needed: ["drain_plug_crush_washer", "oil_filter_housing_o_ring"],
+    as_needed: ["drain_plug_gasket", "oil_filter_housing_oring"],
   },
 
   // 7 · Filter Replacement (air + cabin)
   {
     slug: "filter_replacement",
     parts_kind: "fixed_kit", parts_unit_label: "kit",
-    core: ["engine_air_filter", "cabin_air_filter"],
+    core: ["air_filter", "cabin_filter"],
     as_needed: [],
   },
 
@@ -74,16 +74,16 @@ const SPECS: ServiceRuleSpec[] = [
   {
     slug: "spark_plugs",
     parts_kind: "per_cylinder", parts_unit_label: "cyl",
-    core: ["spark_plugs"],
-    as_needed: ["ignition_coils", "intake_manifold_gasket"],
+    core: ["spark_plug"],
+    as_needed: ["ignition_coil", "intake_manifold_gasket"],
   },
 
   // 9 · Timing Belt — bundled kit
   {
     slug: "timing_belt",
     parts_kind: "fixed_kit", parts_unit_label: "kit",
-    core: ["timing_belt", "belt_tensioner", "idler_pulley", "camshaft_seal", "crankshaft_seal"],
-    as_needed: ["water_pump", "coolant", "accessory_belt"],
+    core: ["timing_belt", "timing_kit", "belt_tensioner", "idler_pulley", "camshaft_seal", "crankshaft_seal"],
+    as_needed: ["water_pump", "coolant", "serpentine_belt"],
   },
 
   // 10 · Coolant Flush — per_unit_spec on coolant_capacity_qts
@@ -100,8 +100,8 @@ const SPECS: ServiceRuleSpec[] = [
     slug: "transmission_service",
     parts_kind: "per_unit_spec", parts_unit_label: "qt",
     parts_unit_spec_source: "transmission_fluid_capacity_qts",
-    core: ["transmission_fluid", "drain_plug_crush_washer"],
-    as_needed: ["transmission_filter", "pan_gasket", "cvt_internal_filter", "cvt_external_filter"],
+    core: ["atf_fluid", "drain_plug_gasket"],
+    as_needed: ["trans_filter", "trans_pan_gasket", "cvt_internal_filter", "cvt_external_filter"],
   },
 
   // 13 · Tire Balance — per_wheel (only wheel weights are consumable)
@@ -124,16 +124,22 @@ const SPECS: ServiceRuleSpec[] = [
   {
     slug: "brake_pad_replacement",
     parts_kind: "per_axle", parts_unit_label: "axle",
-    core: ["brake_pads", "brake_grease"],
-    as_needed: ["hardware_kit", "wear_sensor"],
+    core: ["front_brake_pad", "rear_brake_pad", "caliper_grease"],
+    as_needed: [
+      "front_brake_hardware_kit", "rear_brake_hardware_kit",
+      "front_brake_wear_sensor", "rear_brake_wear_sensor",
+    ],
   },
 
   // 17 · Rotor Replacement — per_axle (rotors + pads together)
   {
     slug: "rotor_replacement",
     parts_kind: "per_axle", parts_unit_label: "axle",
-    core: ["brake_rotors", "brake_pads", "brake_grease"],
-    as_needed: ["hardware_kit", "wear_sensor"],
+    core: ["front_rotor", "rear_rotor", "front_brake_pad", "rear_brake_pad", "caliper_grease"],
+    as_needed: [
+      "front_brake_hardware_kit", "rear_brake_hardware_kit",
+      "front_brake_wear_sensor", "rear_brake_wear_sensor",
+    ],
   },
 
   // 18 · Brake Fluid Flush — fluid only
@@ -149,22 +155,22 @@ const SPECS: ServiceRuleSpec[] = [
     slug: "battery_replacement",
     parts_kind: "fixed_kit", parts_unit_label: "kit",
     core: ["battery"],
-    as_needed: ["terminal_grease", "terminal_clamp"],
+    as_needed: ["terminal_protection"],
   },
 
   // 21 · Power Steering Flush
   {
     slug: "power_steering_flush",
     parts_kind: "fixed_kit", parts_unit_label: "kit",
-    core: ["power_steering_fluid"],
-    as_needed: ["reservoir_filter", "reservoir_cap_o_ring"],
+    core: ["ps_fluid"],
+    as_needed: ["ps_reservoir_filter", "reservoir_cap_oring"],
   },
 
   // 22 · Differential Service
   {
     slug: "differential_service",
     parts_kind: "fixed_kit", parts_unit_label: "kit",
-    core: ["gear_oil", "drain_plug_crush_washer"],
+    core: ["gear_oil", "drain_plug_gasket"],
     as_needed: ["friction_modifier", "diff_cover_gasket"],
   },
 
@@ -172,7 +178,7 @@ const SPECS: ServiceRuleSpec[] = [
   {
     slug: "fuel_system_cleaning",
     parts_kind: "fixed_kit", parts_unit_label: "kit",
-    core: ["fuel_induction_additive"],
+    core: ["fuel_system_cleaner"],
     as_needed: ["throttle_cleaner", "walnut_media", "intake_manifold_gasket", "throttle_body_cleaner"],
   },
 ];

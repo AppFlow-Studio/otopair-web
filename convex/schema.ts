@@ -654,6 +654,63 @@ export default defineSchema({
     .index("by_service_chassis", ["service_id", "chassis_id"])
     .index("by_recorded_at", ["recorded_at"]),
 
+  // Per-PART observation rows capturing the catalog's parts/price/quantity
+  // guess (what the customer-facing app would have shown) alongside whatever
+  // the mechanic corrected on the shop "Create booking" drawer. Pure
+  // data-gathering: nothing here changes the booking's charged price. Mirrors
+  // labor_quote_snapshots' denormalized shop+service+engine+chassis shape so
+  // catalog-vs-reality aggregations don't need joins. One row per catalog part;
+  // mechanic-added parts the catalog missed get a row with catalog_* unset.
+  // Raw values only — diffs are computed at query time (no precomputed deltas).
+  parts_quote_snapshots: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    mechanic_id: v.optional(v.id("mechanics")),
+
+    vehicle_id: v.id("vehicles"),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    engine_id: v.optional(v.id("engines")),
+    chassis_id: v.optional(v.id("chassis_variants")),
+    trim_id: v.optional(v.id("trims")),
+
+    service_id: v.optional(v.id("services")),
+    custom_service_name: v.optional(v.string()),
+
+    // Selector metadata (for grouping/analysis).
+    role_key: v.optional(v.string()),
+    quantity_basis: v.optional(v.string()),
+    price_unknown: v.optional(v.boolean()),
+
+    // Catalog side (the app's guess). Undefined when the mechanic added a part
+    // the catalog never surfaced.
+    catalog_part_id: v.optional(v.id("oem_parts")),
+    catalog_oem_number: v.optional(v.string()),
+    catalog_part_name: v.optional(v.string()),
+    catalog_brand: v.optional(v.string()),
+    catalog_part_tier: v.optional(v.string()),
+    catalog_quantity: v.optional(v.number()),
+    catalog_unit_price_cents: v.optional(v.number()),
+    catalog_line_total_cents: v.optional(v.number()),
+
+    // Mechanic side. Undefined when the mechanic left the catalog row untouched.
+    mechanic_oem_number: v.optional(v.string()),
+    mechanic_part_name: v.optional(v.string()),
+    mechanic_brand: v.optional(v.string()),
+    mechanic_quantity: v.optional(v.number()),
+    mechanic_unit_price_cents: v.optional(v.number()),
+
+    source: v.string(),
+    recorded_at: v.number(),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_vehicle", ["vehicle_id"])
+    .index("by_shop_service", ["shop_id", "service_id"])
+    .index("by_shop_service_config", ["shop_id", "service_id", "vehicle_config_id"])
+    .index("by_service_engine", ["service_id", "engine_id"])
+    .index("by_service_chassis", ["service_id", "chassis_id"])
+    .index("by_part", ["catalog_part_id"])
+    .index("by_recorded_at", ["recorded_at"]),
+
   // ===== ENRICHMENT PIPELINE (all Waleed unique) =====
 
   enrichment_evidence: defineTable({
@@ -1644,6 +1701,8 @@ export default defineSchema({
     no_show_threshold_minutes: v.optional(v.number()),
     overrun_default_extension_percent: v.optional(v.number()),
     overrun_extension_floor_minutes: v.optional(v.number()),
+    overrun_escalation_minutes: v.optional(v.number()),
+    overrun_auto_apply_minutes: v.optional(v.number()),
     buffer_minutes: v.optional(v.number()),
     max_bookings_per_mechanic_rolling_hour: v.optional(v.number()),
     entity_label_mode: v.optional(v.string()),
@@ -1979,6 +2038,16 @@ export default defineSchema({
     schedule_change_mode: v.optional(v.string()),
     schedule_change_source_booking_id: v.optional(v.id("bookings")),
     customer_can_restore_original: v.optional(v.boolean()),
+    // Per-booking delay-cascade cap tracking. Each time this booking is
+    // auto-pushed downstream by an upstream overrun, cascade_push_count is
+    // incremented and the shifted minutes accrue into
+    // cascade_pushed_minutes_total. Once a further push would exceed the cap
+    // (CASCADE_MAX_PUSHES_PER_BOOKING or CASCADE_MAX_PUSHED_MINUTES), the
+    // booking is routed to a manual scheduling alert instead of being moved
+    // silently again — stops the "pushed at 9:00, again 9:20, again 9:50"
+    // spiral. See buildDownstreamMovementPlan in convex/bookings.ts.
+    cascade_push_count: v.optional(v.number()),
+    cascade_pushed_minutes_total: v.optional(v.number()),
     custom_services: v.optional(
       v.array(
         v.object({
@@ -2618,6 +2687,22 @@ export default defineSchema({
     .index("by_job_actual_id", ["job_actual_id"])
     .index("by_edited_at", ["edited_at"]),
 
+  // Append-only audit log of mechanic labor-time changes on a job_actual —
+  // the labor counterpart to job_actual_part_edits. One row per change to
+  // actual_labor_minutes that the mechanic explicitly submits (auto-derived
+  // labor from elapsed time is not logged). old/new are minutes.
+  job_actual_labor_edits: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.id("job_actuals"),
+    old_minutes: v.optional(v.number()),
+    new_minutes: v.optional(v.number()),
+    edited_by_user_id: v.id("users"),
+    edited_at: v.number(),
+  })
+    .index("by_booking_id", ["booking_id"])
+    .index("by_job_actual_id", ["job_actual_id"])
+    .index("by_edited_at", ["edited_at"]),
+
   // ===== AI & ANALYTICS =====
 
   // [I]
@@ -3102,6 +3187,15 @@ export default defineSchema({
     is_complete: v.optional(v.boolean()),
     extension_minutes: v.optional(v.number()),
     cascade_depth: v.optional(v.number()),
+    // Blocking vs non-blocking extension (Dynamic Scheduling spec). Captured at
+    // extension time: true = the bay stays occupied during the extra time, so
+    // downstream same-bay bookings cascade; false = the bay is free (mechanic
+    // waiting on a part/approval), so the job's own end moves but NOTHING
+    // downstream is pushed. Unset is treated as blocking (conservative default,
+    // also used for system auto-applied extensions). reason_code optionally
+    // drives the customer message + pre-selects the toggle default.
+    blocks_bay: v.optional(v.boolean()),
+    reason_code: v.optional(v.string()),
     resolved_at_ms: v.optional(v.number()),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),

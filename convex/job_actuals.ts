@@ -12,6 +12,15 @@ import {
   saveJobActualDraft,
 } from "./lib/job_actuals";
 import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
+import {
+  axleForBrakeService,
+  axlePositionByServiceId,
+  fitmentMatchesPosition,
+  isBrakeSlug,
+  partNameAxle,
+  type AxlePosition,
+} from "./lib/brakeScope";
+import { ensureWalkInCashPayment } from "./bookings";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
@@ -344,6 +353,16 @@ export const getPrefillData = query({
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
+    // Walk-in bookings give the mechanic full control over parts: we only
+    // pre-fill what they explicitly declared ("Add parts" → priced_parts_snapshot).
+    // The catalog cascade / floor / OEM-fitment auto-fill below is suppressed so
+    // a "Skip" / "No parts" walk-in starts with an empty, editable parts step
+    // instead of injecting catalog parts the mechanic never chose. Customer
+    // self-serve bookings keep the full cascade behavior.
+    const isWalkIn =
+      (booking as any).source === "mechanic_walk_in" ||
+      (booking as any).source === "mechanic_backfill";
+
     const serviceId = primaryServiceId(booking);
     const service = serviceId ? await ctx.db.get(serviceId) : null;
 
@@ -374,6 +393,24 @@ export const getPrefillData = query({
 
     const suggestedParts: SuggestedPart[] = [];
 
+    // Per-service axle scope (front/rear/both) from the customer's chosen
+    // options. Drives the brake-pad/rotor scoping below so a "Rear pads only"
+    // job doesn't pre-list front pads. Services with no axle signal stay
+    // undefined → no filtering (both axles shown).
+    const axleByServiceId = axlePositionByServiceId(booking);
+    const brakeAxleByServiceId = new Map<string, AxlePosition>();
+    for (const sid of booking.service_ids ?? []) {
+      const svc: any = await ctx.db.get(sid);
+      if (!svc?.slug || !isBrakeSlug(svc.slug)) continue;
+      const axle = axleForBrakeService(
+        booking,
+        String(sid),
+        svc.slug,
+        axleByServiceId,
+      );
+      if (axle) brakeAxleByServiceId.set(String(sid), axle);
+    }
+
     // Pre-Job Approval flow: when the booking was created with a priced
     // parts snapshot (frozen per-unit prices from `getPricedPartsForServices`
     // at booking time), seed `suggestedParts` from that first. This is the
@@ -383,6 +420,13 @@ export const getPrefillData = query({
     // afterward and skip anything already covered by the snapshot.
     const snapshot: any[] = ((booking as any).priced_parts_snapshot ?? []);
     const snapshotOems = new Set<string>();
+    // Services the quote already covers. The hardcoded catalog floor (layer 3)
+    // below must NOT fire for these — its gate (`length === before`) is true
+    // whenever the cascade added nothing, which INCLUDES the case where every
+    // cascade row was deduped against the snapshot. Without this guard a
+    // fully-quoted oil change re-adds catalog "Oil Filter / Synthetic Oil /
+    // Drain Plug Gasket" rows that were never on the quote.
+    const snapshotServiceIds = new Set<string>();
     const normalizeOem = (n: string) =>
       n.trim().toUpperCase().replace(/\s+/g, "");
     if (snapshot && snapshot.length > 0) {
@@ -397,6 +441,7 @@ export const getPrefillData = query({
           learned_from: "config",
         });
         if (row.oem_number) snapshotOems.add(normalizeOem(row.oem_number));
+        if (row.service_id) snapshotServiceIds.add(String(row.service_id));
       }
     }
 
@@ -416,7 +461,7 @@ export const getPrefillData = query({
 
       const before = suggestedParts.length;
 
-      if (vehicle.vehicle_config_id && booking.shop_id) {
+      if (!isWalkIn && vehicle.vehicle_config_id && booking.shop_id) {
         const cascadeSuggestions = await resolveSuggestedPartsFromCascade(ctx, {
           shopId: booking.shop_id,
           serviceId: sid,
@@ -437,9 +482,16 @@ export const getPrefillData = query({
       }
 
       // Layer 3 catalog floor — only when the cascade produced nothing for
-      // this service. Uses service_vehicle_specs OEM columns indexed by
-      // engine to suggest canonical parts even with zero historical data.
-      if (suggestedParts.length === before && specs) {
+      // this service AND the quote snapshot doesn't already cover it. Uses
+      // service_vehicle_specs OEM columns indexed by engine to suggest
+      // canonical parts even with zero historical data. Skipping
+      // snapshot-covered services keeps post-job anchored to what was quoted.
+      if (
+        !isWalkIn &&
+        suggestedParts.length === before &&
+        specs &&
+        !snapshotServiceIds.has(String(sid))
+      ) {
         // TODO(ts-fix): service_vehicle_specs schema is missing OEM-part fields used below:
         //   oil_filter_oem, oil_capacity_qts (lives on engines), oil_viscocity (note: actual field on engines is oil_viscosity),
         //   oil_drain_plug_gasket_oem, front_brake_pad_oem, rear_brake_pad_oem, engine_air_filter_oem,
@@ -470,18 +522,23 @@ export const getPrefillData = query({
             });
           }
         } else if (slug === "brake-pads") {
-          suggestedParts.push({
-            part_name: "Front Brake Pads",
-            oem_number: s.front_brake_pad_oem ?? "",
-            cost: 45,
-            service_id: sid,
-          });
-          suggestedParts.push({
-            part_name: "Rear Brake Pads",
-            oem_number: s.rear_brake_pad_oem ?? "",
-            cost: 40,
-            service_id: sid,
-          });
+          const axle = brakeAxleByServiceId.get(String(sid));
+          if (axle !== "rear") {
+            suggestedParts.push({
+              part_name: "Front Brake Pads",
+              oem_number: s.front_brake_pad_oem ?? "",
+              cost: 45,
+              service_id: sid,
+            });
+          }
+          if (axle !== "front") {
+            suggestedParts.push({
+              part_name: "Rear Brake Pads",
+              oem_number: s.rear_brake_pad_oem ?? "",
+              cost: 40,
+              service_id: sid,
+            });
+          }
         } else if (slug === "engine-air-filter" && s.engine_air_filter_oem) {
           suggestedParts.push({
             part_name: "Engine Air Filter",
@@ -516,13 +573,16 @@ export const getPrefillData = query({
             service_id: sid,
           });
         } else if (slug === "brake-rotors" && s.front_brake_rotor_oem) {
-          suggestedParts.push({
-            part_name: "Front Brake Rotors",
-            oem_number: s.front_brake_rotor_oem ?? "",
-            cost: 85,
-            service_id: sid,
-          });
-          if (s.rear_brake_rotor_oem) {
+          const axle = brakeAxleByServiceId.get(String(sid));
+          if (axle !== "rear") {
+            suggestedParts.push({
+              part_name: "Front Brake Rotors",
+              oem_number: s.front_brake_rotor_oem ?? "",
+              cost: 85,
+              service_id: sid,
+            });
+          }
+          if (axle !== "front" && s.rear_brake_rotor_oem) {
             suggestedParts.push({
               part_name: "Rear Brake Rotors",
               oem_number: s.rear_brake_rotor_oem,
@@ -606,11 +666,19 @@ export const getPrefillData = query({
               .eq("service_type", svc.slug!),
           )
           .collect();
+        const recPosition = isBrakeSlug(svc.slug)
+          ? brakeAxleByServiceId.get(String(sid))
+          : undefined;
         const parts: OemRecommendationPart[] = [];
         for (const f of fitments) {
           if (f.package_code != null) continue;
           const part = await ctx.db.get(f.part_id);
           if (!part) continue;
+          // Scope to the booked axle — position-neutral parts (hardware,
+          // grease) survive a single-axle filter.
+          if (!fitmentMatchesPosition(f.position, part.subcategory, recPosition)) {
+            continue;
+          }
           const priceSummary = await summarizePartPrices(ctx, f.part_id);
           parts.push({
             part_id: f.part_id,
@@ -640,14 +708,16 @@ export const getPrefillData = query({
 
     // Merge any OEM-recommended parts that aren't already represented in
     // suggestedParts (by normalized oem_number) so they appear as
-    // pre-listed rows in the post-job parts step ready to confirm.
+    // pre-listed rows in the post-job parts step ready to confirm. Suppressed
+    // for walk-ins — they only pre-fill explicitly-declared parts; the
+    // oemRecommendations list is still returned below as a reference strip.
     const normalize = (n: string) => n.trim().toUpperCase().replace(/\s+/g, "");
     const existingByOem = new Map<string, SuggestedPart>();
     for (const p of suggestedParts) {
       const key = p.oem_number ? normalize(p.oem_number) : "";
       if (key) existingByOem.set(key, p);
     }
-    for (const rec of oemRecommendations) {
+    for (const rec of isWalkIn ? [] : oemRecommendations) {
       for (const part of rec.parts) {
         const key = normalize(part.oem_part_number);
         if (!key) continue;
@@ -721,6 +791,19 @@ export const getPrefillData = query({
       }),
     );
 
+    // Final axle net: drop any brake suggestion whose name names the OTHER
+    // axle than the booking covers. Catches rows from sources that don't carry
+    // a subcategory — the priced-snapshot seed (which can mis-default to front
+    // on older bookings) and the learned cascade. Position-neutral names are
+    // kept (partNameAxle returns null).
+    const scopedSuggestedParts = suggestedParts.filter((p) => {
+      const sid = p.service_id ? String(p.service_id) : null;
+      const axle = sid ? brakeAxleByServiceId.get(sid) : undefined;
+      if (!axle || axle === "both") return true;
+      const nameAxle = partNameAxle(p.part_name);
+      return nameAxle == null || nameAxle === axle;
+    });
+
     return {
       vehicleLabel,
       serviceName: service?.name ?? "",
@@ -729,7 +812,7 @@ export const getPrefillData = query({
       engineId: engine._id,
       serviceId,
       mechanicName,
-      suggestedParts,
+      suggestedParts: scopedSuggestedParts,
       oemRecommendations,
       vehicleConfigId: vehicle.vehicle_config_id ?? null,
       priorOpenRecommendations,
@@ -953,7 +1036,7 @@ export const submitJobActuals = mutation({
     const completedBooking = await ctx.db.get(args.bookingId);
     if (!completedBooking) throw new Error("Booking not found");
 
-    return await finalizeJobActuals(ctx, {
+    const result = await finalizeJobActuals(ctx, {
       booking: completedBooking,
       userId: user._id,
       actuals: {
@@ -965,5 +1048,16 @@ export const submitJobActuals = mutation({
       },
       now,
     });
+
+    // Walk-in cash invoice record (no Stripe flow) — unlocks the invoice
+    // pipeline (numbering, PDF, Send Invoice card, tokenized receipt).
+    await ensureWalkInCashPayment(ctx, {
+      booking: completedBooking,
+      partsDollars: Number(args.actual_parts_cost ?? 0),
+      laborMinutes: Number(args.actual_labor_minutes ?? 0),
+      now,
+    });
+
+    return result;
   },
 });

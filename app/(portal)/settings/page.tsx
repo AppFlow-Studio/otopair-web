@@ -6,12 +6,15 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { LogOut, MapPin, Phone, Globe, Mail, ExternalLink, Loader2, Save } from "lucide-react";
+import { Clock, LogOut, MapPin, Phone, Globe, Mail, ExternalLink, Loader2, Save, Zap } from "lucide-react";
 import {
   DEFAULT_NO_SHOW_THRESHOLD_MINUTES,
+  DEFAULT_OVERRUN_AUTO_APPLY_MINUTES,
+  DEFAULT_OVERRUN_ESCALATION_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_PERCENT,
 } from "@/lib/scheduling-overhaul";
+import { detectTimezoneFromState, US_TIMEZONES } from "@/lib/shopTimezone";
 import HoursEditor from "./hours-editor";
 import ServicesEditor from "./services-editor";
 import LaborRateCard from "./labor-rate-card";
@@ -23,22 +26,31 @@ export default function SettingsPage() {
   const router = useRouter();
   const shops = useQuery(api.shops.getMyShops);
   const updateSchedulingSettings = useMutation(api.shops.updateMySchedulingSettings);
+  const setShopTimezone = useMutation(api.shops.setShopTimezone);
   const shop = shops?.[0] ?? null;
   const [noShowThreshold, setNoShowThreshold] = useState(DEFAULT_NO_SHOW_THRESHOLD_MINUTES);
   const [overrunPercent, setOverrunPercent] = useState(DEFAULT_OVERRUN_EXTENSION_PERCENT);
   const [overrunFloor, setOverrunFloor] = useState(DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
+  const [overrunEscalationMinutes, setOverrunEscalationMinutes] = useState(DEFAULT_OVERRUN_ESCALATION_MINUTES);
+  const [overrunAutoApplyMinutes, setOverrunAutoApplyMinutes] = useState(DEFAULT_OVERRUN_AUTO_APPLY_MINUTES);
   const [bufferMinutes, setBufferMinutes] = useState(10);
   const [maxPerMechanic, setMaxPerMechanic] = useState(2);
   const [entityLabelMode, setEntityLabelMode] = useState<"mechanic" | "bay">("mechanic");
   const [reminderLeadMinutes, setReminderLeadMinutes] = useState(0);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [timezone, setTimezone] = useState("");
+  const [isSavingTimezone, setIsSavingTimezone] = useState(false);
+  const [timezoneMessage, setTimezoneMessage] = useState("");
 
   useEffect(() => {
     if (!shop) return;
+    setTimezone((shop as any).timezone ?? "");
     setNoShowThreshold(shop.no_show_threshold_minutes ?? DEFAULT_NO_SHOW_THRESHOLD_MINUTES);
     setOverrunPercent(shop.overrun_default_extension_percent ?? DEFAULT_OVERRUN_EXTENSION_PERCENT);
     setOverrunFloor(shop.overrun_extension_floor_minutes ?? DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES);
+    setOverrunEscalationMinutes(shop.overrun_escalation_minutes ?? DEFAULT_OVERRUN_ESCALATION_MINUTES);
+    setOverrunAutoApplyMinutes(shop.overrun_auto_apply_minutes ?? DEFAULT_OVERRUN_AUTO_APPLY_MINUTES);
     setBufferMinutes(shop.buffer_minutes ?? 10);
     setMaxPerMechanic(shop.max_bookings_per_mechanic_rolling_hour ?? 2);
     setEntityLabelMode(shop.entity_label_mode === "bay" ? "bay" : "mechanic");
@@ -50,6 +62,30 @@ export default function SettingsPage() {
   async function handleSignOut() {
     await signOut();
     router.push("/");
+  }
+
+  function handleAutoDetectTimezone() {
+    const detected = detectTimezoneFromState((shop as any)?.state);
+    if (detected) {
+      setTimezone(detected);
+      setTimezoneMessage(`Auto-detected from state (${(shop as any)?.state}). Save to apply.`);
+    } else {
+      setTimezoneMessage("Couldn't auto-detect — please select a timezone manually.");
+    }
+  }
+
+  async function handleSaveTimezone() {
+    if (!timezone) return;
+    setIsSavingTimezone(true);
+    setTimezoneMessage("");
+    try {
+      await setShopTimezone({ timezone });
+      setTimezoneMessage("Timezone saved.");
+    } catch (error: unknown) {
+      setTimezoneMessage(error instanceof Error ? error.message : "Could not save timezone.");
+    } finally {
+      setIsSavingTimezone(false);
+    }
   }
 
   async function handleSaveSchedulingSettings() {
@@ -64,6 +100,8 @@ export default function SettingsPage() {
         maxBookingsPerMechanicRollingHour: maxPerMechanic,
         entityLabelMode,
         appointmentReminderLeadMinutes: reminderLeadMinutes,
+        overrunEscalationMinutes,
+        overrunAutoApplyMinutes,
       });
       setSettingsMessage("Scheduling settings saved.");
     } catch (error: unknown) {
@@ -179,6 +217,64 @@ export default function SettingsPage() {
           )}
         </div>
 
+        {shop && process.env.NODE_ENV === "development" && (
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Clock className="h-4 w-4 text-gray-500" />
+              <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">
+                Shop Timezone
+              </h2>
+            </div>
+            <p className="text-sm text-gray-500 mb-4">
+              Used to determine today&apos;s schedule and compute appointment
+              times correctly. Should match the physical location of the shop.
+            </p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-[280px]">
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Timezone
+                </label>
+                <select
+                  value={timezone}
+                  onChange={(e) => setTimezone(e.target.value)}
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                >
+                  <option value="">— Select timezone —</option>
+                  {US_TIMEZONES.map((tz) => (
+                    <option key={tz.value} value={tz.value}>
+                      {tz.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={handleAutoDetectTimezone}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3.5 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+              >
+                <Zap className="h-3.5 w-3.5 text-amber-500" />
+                Auto-detect from state
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveTimezone()}
+                disabled={isSavingTimezone || !timezone}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
+              >
+                {isSavingTimezone ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                Save timezone
+              </button>
+            </div>
+            {timezoneMessage && (
+              <p className="mt-2 text-sm text-gray-600">{timezoneMessage}</p>
+            )}
+          </div>
+        )}
+
         {shop && <HoursEditor />}
         {shop && <ServicesEditor />}
         {shop ? <LaborRateCard shopId={shop._id} /> : null}
@@ -244,6 +340,38 @@ export default function SettingsPage() {
                   className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
                 />
                 <span className="mt-1 block text-xs text-gray-500">Minimum minutes applied by system default</span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Front desk escalation</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  step={1}
+                  value={overrunEscalationMinutes}
+                  onChange={(event) => setOverrunEscalationMinutes(Number(event.target.value))}
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                />
+                <span className="mt-1 block text-xs text-gray-500">
+                  Minutes after an overrun before the front desk is alerted.
+                </span>
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Auto-apply extension</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  step={1}
+                  value={overrunAutoApplyMinutes}
+                  onChange={(event) => setOverrunAutoApplyMinutes(Number(event.target.value))}
+                  className="mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500"
+                />
+                <span className="mt-1 block text-xs text-gray-500">
+                  Minutes after an overrun before the system auto-applies the default extension. Must be at or after front desk escalation.
+                </span>
               </label>
 
               <label className="block">

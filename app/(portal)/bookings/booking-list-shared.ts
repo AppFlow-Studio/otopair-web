@@ -22,7 +22,7 @@ export const STATUS_TABS: { key: JobStatusFilter; label: string }[] = [
 ];
 
 export function todayString() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date().toLocaleDateString("en-CA");
 }
 
 export function formatTime(time: string): string {

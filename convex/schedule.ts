@@ -265,6 +265,33 @@ export const getScheduleContext = query({
   },
 });
 
+/**
+ * QUERY: getUnconfirmedBookingCount
+ * Number of bookings still awaiting the shop's confirmation
+ * (status = "pending_shop_acceptance") for the viewer's primary shop.
+ * Powers the badge on the Schedule nav item in the portal sidebar.
+ * Returns 0 when there is no authenticated user / authorized shop.
+ */
+export const getUnconfirmedBookingCount = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return 0;
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return 0;
+
+    const pending = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_status", (q: any) =>
+        q.eq("shop_id", primary.shopId).eq("status", "pending_shop_acceptance"),
+      )
+      .collect();
+
+    return pending.length;
+  },
+});
+
 export const getBookingsForRange = query({
   args: {
     dateFrom: v.string(),

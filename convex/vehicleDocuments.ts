@@ -124,7 +124,8 @@ export const listByVin = query({
           .withIndex("by_document", (q) => q.eq("document_id", doc._id))
           .order("desc")
           .first();
-        return { doc, extraction };
+        const storage_url = await ctx.storage.getUrl(doc.storage_id);
+        return { doc, extraction, storage_url };
       }),
     );
   },
@@ -239,6 +240,38 @@ export const internalGetDocumentMeta = internalQuery({
   },
 });
 
+// Bundles everything internalDeriveSemantics (the node action) needs in a
+// single read: the confirmed extraction payload plus the resolved vehicles
+// catalog row for the doc's VIN (so facts scope to the right car).
+export const internalGetSemanticInput = internalQuery({
+  args: { documentId: v.id("vehicle_documents") },
+  handler: async (ctx, { documentId }) => {
+    const doc = await ctx.db.get(documentId);
+    if (!doc) return null;
+
+    const extraction = await ctx.db
+      .query("vehicle_document_extractions")
+      .withIndex("by_document", (q) => q.eq("document_id", documentId))
+      .order("desc")
+      .first();
+    if (!extraction) return null;
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", doc.vin))
+      .first();
+
+    return {
+      userId: doc.user_id,
+      vin: doc.vin,
+      vehicleId: vehicle?._id ?? null,
+      vehicleConfigId: vehicle?.vehicle_config_id ?? null,
+      reviewState: extraction.review_state,
+      payload: extraction.payload,
+    };
+  },
+});
+
 export const internalSetParseStatus = internalMutation({
   args: {
     documentId: v.id("vehicle_documents"),
@@ -335,6 +368,7 @@ interface TireMeasurement {
   pressure_psi?: number;
   brand?: string;
   size?: string;
+  dot_date?: string;
 }
 
 interface BatteryTest {
@@ -370,6 +404,23 @@ function isoToMs(iso: string | undefined): number | undefined {
   if (!iso) return undefined;
   const t = Date.parse(iso);
   return Number.isNaN(t) ? undefined : t;
+}
+
+// DOT tire codes end in WWYY (week + 2-digit year, e.g. "2419" → 2024). Also
+// tolerate a plain ISO date or a 4-digit year. Returns a 4-digit year or undefined.
+function parseDotYear(dot: string | undefined): number | undefined {
+  if (!dot) return undefined;
+  const digits = dot.replace(/\D/g, "");
+  if (digits.length >= 4) {
+    const yy = Number(digits.slice(-2));
+    if (!Number.isNaN(yy)) {
+      // DOT codes have only run with a 2-digit year since 2000; map to 20xx.
+      return 2000 + yy;
+    }
+  }
+  const ms = isoToMs(dot);
+  if (ms !== undefined) return new Date(ms).getUTCFullYear();
+  return undefined;
 }
 
 function matchesAlias(desc: string, aliases: string[]): boolean {
@@ -454,21 +505,32 @@ function deriveCategories(payload: ExtractionPayload): Derivation[] {
   ) {
     const pressureByWheel: Record<string, number | undefined> = {};
     const treadByWheel: Record<string, number | undefined> = {};
+    const dotDateByWheel: Record<string, string | undefined> = {};
     let brand: string | undefined;
     let size: string | undefined;
+    let dotYear: number | undefined;
     payload.tire_measurements?.forEach((m) => {
       if (m.position) {
         pressureByWheel[m.position] = m.pressure_psi;
         treadByWheel[m.position] = m.tread_32nds;
+        if (m.dot_date) dotDateByWheel[m.position] = m.dot_date;
       }
       if (m.brand) brand = m.brand;
       if (m.size) size = m.size;
+      // DOT date is a 4-digit week+year stamp (e.g. "2419" = week 24 of 2024)
+      // or a free-form date; keep the freshest 4-digit year we can parse.
+      const year = parseDotYear(m.dot_date);
+      if (year !== undefined && (dotYear === undefined || year > dotYear)) {
+        dotYear = year;
+      }
     });
     out.push({
       type: "tires",
       customInputs: {
         tirePressure: pressureByWheel,
         tread_32nds_by_wheel: treadByWheel,
+        dot_year: dotYear,
+        dot_date_by_wheel: dotDateByWheel,
         brand,
         size,
       },
@@ -624,5 +686,41 @@ export const internalDeriveMaintenance = internalMutation({
     if (Object.keys(ownerPatch).length > 0) {
       await ctx.db.patch(doc.vehicle_owner_id, ownerPatch);
     }
+
+    // 5. (B3) Odometer-history backfill — record the receipt's mileage point.
+    // Idempotent: skip if a row already exists at this exact recordedAt so
+    // re-deriving a confirmed doc doesn't duplicate the data point.
+    if (
+      typeof odometer === "number" &&
+      odometer > 0 &&
+      typeof serviceDateMs === "number"
+    ) {
+      const dupe = await ctx.db
+        .query("odometer_history")
+        .withIndex("by_vehicle_and_date", (q) =>
+          q
+            .eq("vehicleOwnerId", doc.vehicle_owner_id)
+            .eq("recordedAt", serviceDateMs),
+        )
+        .first();
+      if (!dupe) {
+        await ctx.db.insert("odometer_history", {
+          vehicleOwnerId: doc.vehicle_owner_id,
+          distance: odometer,
+          unit: "mi",
+          recordedAt: serviceDateMs,
+        });
+      }
+    }
+
+    // 6. (B6 + B1/B10) Semantic derivation — engine/fluid specs → vehicle_facts,
+    // mechanic findings + customer concern → user_semantic_facts. Runs in an
+    // action (async SHA-256 for canonical keys + payload sanitizer that may
+    // throw), scheduled so a rejection there can't roll back the writes above.
+    await ctx.scheduler.runAfter(
+      0,
+      internal.vehicleDocuments_node.internalDeriveSemantics,
+      { documentId },
+    );
   },
 });

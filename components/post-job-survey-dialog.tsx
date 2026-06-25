@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Info,
   Loader2,
+  Lock,
   Minus,
   Plus,
   Search,
@@ -64,7 +65,21 @@ import {
   type TimeVarianceReason,
   type VehiclePassportData,
 } from "@/lib/vehicle-passport";
+import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
+
+/** Best-effort axle from a part name ("Front Brake Pads" → "front"). Mirrors
+ *  convex/lib/brakeScope.partNameAxle; kept inline so the client bundle
+ *  doesn't import the Convex module. Null for neutral/ambiguous names. */
+function partNameAxleClient(name: string | null | undefined): "front" | "rear" | null {
+  if (!name) return null;
+  const n = name.toLowerCase();
+  const hasFront = /\bfront\b/.test(n);
+  const hasRear = /\brear\b/.test(n);
+  if (hasFront && !hasRear) return "front";
+  if (hasRear && !hasFront) return "rear";
+  return null;
+}
 
 type OemRecommendationPart = {
   oem_part_number: string;
@@ -84,6 +99,25 @@ type OemRecommendation = {
   service_slug: string;
   service_name: string;
   parts: OemRecommendationPart[];
+};
+
+/** The locked, customer-approved quote breakdown shown read-only on the
+ *  post-job confirmation so the mechanic sees how parts roll up to the agreed
+ *  total. All values in cents. */
+type LockedQuote = {
+  partsCents: number;
+  laborCents: number;
+  taxCents: number;
+  feeCents: number;
+  totalCents: number;
+  /** The pre-adjustment quote total (cents). Set only when the mechanic's
+   *  adjustment changed the price, so the confirmation can show original →
+   *  new. Null when the quote was never adjusted. */
+  originalTotalCents?: number | null;
+  /** Whether partsCents/laborCents/taxCents/feeCents reconcile to totalCents.
+   *  False in the robust fallback where only the agreed TOTAL is known (the
+   *  per-line breakdown isn't available) — callers hide the per-line rows. */
+  hasBreakdown?: boolean;
 };
 
 type PriorOpenRecommendation = {
@@ -776,6 +810,7 @@ export default function PostJobSurveyDialog({
   shopZip,
   lockBilling,
   quotedParts,
+  lockedQuote,
   isFixedPrice,
 }: {
   open: boolean;
@@ -823,10 +858,15 @@ export default function PostJobSurveyDialog({
    *  mechanic adjusts the parts ACTUALLY on the quote — not every part the
    *  catalog suggests for this service. */
   quotedParts?: JobActualPartPayload[] | null;
+  /** Locked customer-approved quote breakdown (cents). When set alongside
+   *  `lockBilling`, the post-job parts step renders read-only and shows the
+   *  parts → labor → tax/fee → agreed-total flow instead of editable fields. */
+  lockedQuote?: LockedQuote | null;
 }) {
   return (
     <PostJobSurveyDialogBody
       key={`${passportData?.vin ?? "no-vin"}-${bookingLabel}-${prefillData?.serviceSlug ?? "no-service"}-${cycle ?? "postjob"}`}
+      lockedQuote={lockedQuote ?? null}
       open={open}
       bookingId={bookingId ?? null}
       bookingLabel={bookingLabel}
@@ -873,6 +913,7 @@ function PostJobSurveyDialogBody({
   shopZip,
   lockBilling,
   quotedParts,
+  lockedQuote,
   isFixedPrice,
 }: {
   open: boolean;
@@ -899,6 +940,7 @@ function PostJobSurveyDialogBody({
   shopZip: string | null;
   lockBilling: boolean;
   quotedParts: JobActualPartPayload[] | null;
+  lockedQuote: LockedQuote | null;
   isFixedPrice: boolean;
 }) {
   // Phase 2 — Pre-Job Approval mutation handles (only invoked when cycle is set).
@@ -978,14 +1020,65 @@ function PostJobSurveyDialogBody({
       : ""
   );
   const [parts, setParts] = useState<PartRowState[]>(() => {
-    // Pre-job ("Adjust quote") seeds from the parts ACTUALLY on this
-    // booking's quote, not the cascade's broader suggestions. Falls back to
-    // the cascade if the booking has no priced parts snapshot yet.
-    if (cycle === "pre_job" && quotedParts && quotedParts.length > 0) {
+    // Read the parts ACTUALLY quoted on this booking first — the snapshot the
+    // customer confirmed — not the catalog's broader suggestions. This is what
+    // keeps the list to what was booked (e.g. rear pads only). Falls back to
+    // the cascade/catalog prefill when the booking has no priced snapshot
+    // (walk-ins, legacy jobs).
+    if (quotedParts && quotedParts.length > 0) {
       return buildPartRows(quotedParts);
     }
     return buildPartRows(prefillData?.suggestedParts ?? []);
   });
+
+  // Hard guard: never offer a brake axle the customer didn't book. Even if the
+  // prefill (or a stale snapshot) carries an off-axle part, prune it from the
+  // initial seed once the booking's scope resolves. Runs once, before any
+  // mechanic edits — mechanics add genuinely-extra parts via "Add another
+  // part" / "Add unforeseen scope", which this never touches.
+  const brakeScope = useQuery(
+    api.serviceParts.getBrakeScopeForBooking,
+    open && bookingId
+      ? ({ bookingId } as { bookingId: Id<"bookings"> })
+      : "skip",
+  );
+  const axlePrunedRef = useRef(false);
+  useEffect(() => {
+    if (axlePrunedRef.current) return;
+    if (!brakeScope) return;
+    axlePrunedRef.current = true;
+    // In the locked confirmation the seeded rows ARE the agreed quote — leave
+    // them exactly as quoted so they reconcile with the breakdown total.
+    if (lockBilling && !cycle) return;
+    if (!brakeScope.hasBrakeWork) return;
+    if (brakeScope.front && brakeScope.rear) return;
+    setParts((current) =>
+      current.filter((p) => {
+        const axle = partNameAxleClient(p.part_name);
+        if (axle == null) return true;
+        return axle === "front" ? brakeScope.front : brakeScope.rear;
+      }),
+    );
+  }, [brakeScope]);
+  // Scope the catalog's OEM recommendations to the booked axle too, so the
+  // "N of M confirmed" counter and the swap/suggestion rows only count what
+  // was actually quoted (rear-only → 1 of 1, never 1 of 2).
+  const scopedOemRecommendations = useMemo<OemRecommendation[]>(() => {
+    const recs = prefillData?.oemRecommendations ?? [];
+    if (!brakeScope?.hasBrakeWork) return recs;
+    if (brakeScope.front && brakeScope.rear) return recs;
+    return recs.map((rec) => ({
+      ...rec,
+      parts: rec.parts.filter((p) => {
+        const axle =
+          p.position === "front" || p.position === "rear"
+            ? p.position
+            : partNameAxleClient(p.part_name);
+        if (axle == null) return true;
+        return axle === "front" ? brakeScope.front : brakeScope.rear;
+      }),
+    }));
+  }, [prefillData?.oemRecommendations, brakeScope]);
   const [vehicleUpdates, setVehicleUpdates] = useState<
     Record<string, string | boolean>
   >(
@@ -1493,12 +1586,12 @@ function PostJobSurveyDialogBody({
           <span
             key={idx}
             className={cn(
-              "h-1 rounded-full transition-all",
+              "h-1.5 rounded-full transition-all duration-300",
               idx === stepIndex
-                ? "w-6 bg-primary"
+                ? "w-7 bg-primary"
                 : idx < stepIndex
-                  ? "w-3 bg-primary/40"
-                  : "w-3 bg-primary/10"
+                  ? "w-1.5 bg-primary/40"
+                  : "w-1.5 bg-primary/15"
             )}
           />
         ))}
@@ -1570,58 +1663,59 @@ function PostJobSurveyDialogBody({
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-6 sm:px-10 sm:py-10">
           {passportData?.vehicle_spec_label || prefillData?.serviceName ? (
-            <div className="mx-auto mb-6 w-full max-w-xl rounded-xl border border-primary/10 bg-muted/40 px-3 py-2">
+            <div className="mx-auto mb-7 flex w-full max-w-xl flex-wrap items-center justify-center gap-x-2.5 gap-y-1 rounded-full border border-primary/10 bg-muted/40 px-4 py-2">
               {prefillData?.serviceName ? (
-                <p className="truncate text-center text-[10px] font-semibold uppercase tracking-[0.1em] text-primary">
-                  {prefillData.serviceName}
-                </p>
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-primary">
+                  <Car className="h-3.5 w-3.5" />
+                  <span className="truncate">{prefillData.serviceName}</span>
+                </span>
+              ) : null}
+              {prefillData?.serviceName && passportData?.vehicle_spec_label ? (
+                <span className="h-3 w-px bg-primary/15" aria-hidden />
               ) : null}
               {passportData?.vehicle_spec_label ? (
-                <p className="truncate text-center text-[12px] font-medium text-foreground/80">
+                <span className="truncate text-[12px] font-medium text-foreground/70">
                   {passportData.vehicle_spec_label}
-                </p>
+                </span>
               ) : null}
             </div>
           ) : null}
 
           {isFixedPrice ? (
-            <div className="mx-auto mb-6 w-full max-w-xl rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
-                Fixed price service
-              </p>
-              <p className="mt-1 text-sm leading-relaxed">
-                Updating parts and time won&apos;t change the price. Edits are
-                logged for the audit trail only and will not affect this job.
-              </p>
-              <p className="mt-2 text-xs leading-relaxed text-amber-800">
-                Need to change what the customer pays? Update the{" "}
-                <span className="font-semibold">fixed price</span> in the
-                shop&apos;s service catalog — it applies to future bookings,
-                not this one.
-              </p>
-            </div>
+            <LockedNote
+              icon={Info}
+              title="Fixed price service"
+              body="Updating parts and time won't change the price. Edits are logged for the audit trail only."
+              footnote={
+                <>
+                  Need to change what the customer pays? Update the{" "}
+                  <span className="font-semibold">fixed price</span> in the
+                  shop&apos;s service catalog — it applies to future bookings,
+                  not this one.
+                </>
+              }
+            />
           ) : null}
 
           {lockBilling && !cycle ? (
-            <div className="mx-auto mb-6 w-full max-w-xl rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
-              <p className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
-                Billing locked
-              </p>
-              <p className="mt-1 text-sm leading-relaxed">
-                Parts and labor were locked when the customer confirmed the
-                quote. Use this survey to record what you found, vehicle
-                condition, and recommendations only.
-              </p>
-              <p className="mt-2 text-xs leading-relaxed text-amber-800">
-                Need to change parts or labor? Back out and use{" "}
-                <span className="font-semibold">Add unforeseen scope</span>{" "}
-                before marking the job completed.
-              </p>
-            </div>
+            <LockedNote
+              icon={Lock}
+              title="Billing locked"
+              body="Parts and labor were locked when the customer confirmed the quote. This survey records what you found, vehicle condition, and recommendations only."
+              footnote={
+                <>
+                  Need to change parts or labor? Back out and use{" "}
+                  <span className="font-semibold">Add unforeseen scope</span>{" "}
+                  before marking the job completed.
+                </>
+              }
+            />
           ) : null}
 
           <StepContent
             step={currentStep}
+            readOnlyBilling={lockBilling && !cycle}
+            lockedQuote={lockedQuote}
             bookingLabel={bookingLabel}
             bookingSubLabel={bookingSubLabel}
             serviceLabel={prefillData?.serviceName ?? null}
@@ -1651,7 +1745,7 @@ function PostJobSurveyDialogBody({
             requiresParts={requiresParts}
             partsRequiredServices={passportData?.parts_required_services ?? []}
             suggestedParts={prefillData?.suggestedParts ?? []}
-            oemRecommendations={prefillData?.oemRecommendations ?? []}
+            oemRecommendations={scopedOemRecommendations}
             difficultyRating={difficultyRating}
             setDifficultyRating={(value) => {
               setDifficultyRating(value);
@@ -1848,6 +1942,8 @@ function canAdvance(
 
 function StepContent(props: {
   step: StepKey;
+  readOnlyBilling: boolean;
+  lockedQuote: LockedQuote | null;
   bookingLabel: string;
   bookingSubLabel: string;
   serviceLabel: string | null;
@@ -1981,34 +2077,51 @@ function StepContent(props: {
           question="What's the current odometer?"
           hint="Vehicle passport keeps this on the VIN."
         >
-          <input
-            value={props.completionMileage}
-            onChange={(event) => props.setCompletionMileage(event.target.value)}
-            inputMode="numeric"
-            autoFocus
-            placeholder="0"
-            className="w-full rounded-2xl border border-primary/15 bg-background py-5 text-center text-[36px] font-semibold tracking-tight outline-none focus:border-primary"
-          />
-          <p className="mt-3 text-center text-[11px] text-muted-foreground">
-            miles
-          </p>
+          <div className="mx-auto flex max-w-md items-center gap-3 rounded-2xl border border-primary/15 bg-card px-5 py-4 shadow-[0_1px_2px_rgba(17,24,28,0.04)] transition-colors focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
+            <Gauge className="h-5 w-5 shrink-0 text-primary/70" />
+            <input
+              value={
+                props.completionMileage
+                  ? Number(props.completionMileage).toLocaleString("en-US")
+                  : ""
+              }
+              onChange={(event) =>
+                props.setCompletionMileage(
+                  event.target.value.replace(/\D+/g, "")
+                )
+              }
+              inputMode="numeric"
+              autoFocus
+              placeholder="0"
+              className="min-w-0 flex-1 bg-transparent text-center text-[32px] font-semibold tabular-nums tracking-tight text-foreground outline-none placeholder:text-muted-foreground/40"
+            />
+            <span className="shrink-0 text-[13px] font-medium text-muted-foreground">
+              mi
+            </span>
+          </div>
           {props.estimatedLaborMinutes ? (
-            <div className="mt-8">
+            <div className="mx-auto mt-6 flex max-w-md flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
               <label className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                Actual labor time (optional)
+                Actual labor time
+                <span className="ml-1 text-muted-foreground/60">· optional</span>
               </label>
-              <div className="mt-1.5 flex items-center gap-2">
-                <input
-                  value={props.actualLaborMinutes}
-                  onChange={(event) =>
-                    props.setActualLaborMinutes(event.target.value)
-                  }
-                  inputMode="numeric"
-                  placeholder="Minutes"
-                  className="w-32 rounded-lg border border-primary/15 bg-background px-3 py-2 text-[13px] outline-none focus:border-primary"
-                />
-                <span className="text-[11px] text-muted-foreground">
-                  Est. {props.estimatedLaborMinutes} min
+              <div className="flex items-center gap-2">
+                <div className="flex items-center rounded-lg border border-primary/15 bg-card pr-3 transition-colors focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
+                  <input
+                    value={props.actualLaborMinutes}
+                    onChange={(event) =>
+                      props.setActualLaborMinutes(
+                        event.target.value.replace(/\D+/g, "")
+                      )
+                    }
+                    inputMode="numeric"
+                    placeholder="0"
+                    className="w-20 bg-transparent px-3 py-2 text-right text-[13px] font-medium tabular-nums outline-none placeholder:text-muted-foreground/40"
+                  />
+                  <span className="text-[11px] text-muted-foreground">min</span>
+                </div>
+                <span className="whitespace-nowrap text-[11px] text-muted-foreground">
+                  Est. {props.estimatedLaborMinutes}
                 </span>
               </div>
             </div>
@@ -2030,6 +2143,8 @@ function StepContent(props: {
           vehicleLabel={props.vehicleLabel}
           engineCode={props.engineCode}
           cycle={props.cycle}
+          readOnly={props.readOnlyBilling}
+          lockedQuote={props.lockedQuote}
         />
       );
     case "difficulty":
@@ -2294,6 +2409,37 @@ function StepContent(props: {
   }
 }
 
+function LockedNote({
+  icon: Icon,
+  title,
+  body,
+  footnote,
+}: {
+  icon: typeof Lock;
+  title: string;
+  body: string;
+  footnote?: ReactNode;
+}) {
+  return (
+    <div className="mx-auto mb-6 flex w-full max-w-xl gap-3 rounded-xl border border-amber-500/25 bg-amber-50/70 px-4 py-3">
+      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-600">
+        <Icon className="h-3.5 w-3.5" />
+      </span>
+      <div className="min-w-0">
+        <p className="text-[12px] font-semibold text-amber-900">{title}</p>
+        <p className="mt-1 text-[12px] leading-relaxed text-amber-900/75">
+          {body}
+        </p>
+        {footnote ? (
+          <p className="mt-1.5 text-[11px] leading-relaxed text-amber-800/70">
+            {footnote}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function QuestionScreen({
   eyebrow,
   question,
@@ -2308,19 +2454,19 @@ function QuestionScreen({
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col">
       {eyebrow ? (
-        <p className="text-center text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+        <p className="text-center text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
           {eyebrow}
         </p>
       ) : null}
-      <h2 className="mt-2 text-center text-[24px] font-semibold leading-tight text-foreground sm:text-[28px]">
+      <h2 className="mt-2.5 text-center text-[22px] font-semibold leading-[1.15] tracking-tight text-foreground sm:text-[26px]">
         {question}
       </h2>
       {hint ? (
-        <p className="mt-2 text-center text-[12px] text-muted-foreground">
+        <p className="mx-auto mt-2 max-w-sm text-center text-[12px] leading-relaxed text-muted-foreground">
           {hint}
         </p>
       ) : null}
-      <div className="mt-8">{children}</div>
+      <div className="mt-7">{children}</div>
     </div>
   );
 }
@@ -2384,6 +2530,8 @@ function PartsStep({
   vehicleLabel,
   engineCode,
   cycle,
+  readOnly,
+  lockedQuote,
 }: {
   parts: PartRowState[];
   setParts: React.Dispatch<React.SetStateAction<PartRowState[]>>;
@@ -2401,6 +2549,10 @@ function PartsStep({
   // When set, this dialog is in an approval flow (pre/mid/post) — manual
   // (mechanic-added) part rows must collect a justification.
   cycle?: PostJobSurveyCycle;
+  // Billing is locked (post-job completion of a customer-confirmed quote):
+  // render parts read-only with the agreed breakdown instead of the editor.
+  readOnly?: boolean;
+  lockedQuote?: LockedQuote | null;
 }) {
   const normalizeOem = (n: string) =>
     n.trim().toUpperCase().replace(/\s+/g, "");
@@ -2427,6 +2579,52 @@ function PartsStep({
     }
     return present.size;
   }, [parts, oemRecommendedSet]);
+  // Flattened "Otopair OEM Catalog" picker options — every recommended part
+  // across the booking's services, each carrying the resolved service_id so a
+  // picked row attributes correctly. Lets the mechanic drop in a catalog part
+  // instead of typing it; free-form "Add another part" still covers the rest.
+  const catalogOptions = useMemo(() => {
+    const opts: Array<{
+      key: string;
+      part: OemRecommendationPart;
+      serviceId: string | null;
+    }> = [];
+    oemRecommendations.forEach((rec, recIdx) => {
+      const serviceId =
+        partsRequiredServices.find((s) => s.name === rec.service_name)?._id ??
+        partsRequiredServices[0]?._id ??
+        null;
+      rec.parts.forEach((part, partIdx) => {
+        opts.push({ key: `${recIdx}:${partIdx}`, part, serviceId });
+      });
+    });
+    return opts;
+  }, [oemRecommendations, partsRequiredServices]);
+
+  function addCatalogPart(optionKey: string) {
+    const opt = catalogOptions.find((o) => o.key === optionKey);
+    if (!opt) return;
+    const { part, serviceId } = opt;
+    const unit = part.median_price || part.average_price || 0;
+    setParts((current) => [
+      ...current,
+      {
+        part_name: part.part_name,
+        brand: part.brand ?? "",
+        oem_number: part.oem_part_number,
+        cost: unit > 0 ? String(unit) : "",
+        quantity:
+          part.quantity_needed && part.quantity_needed > 0
+            ? part.quantity_needed
+            : 1,
+        supplied_by: "shop",
+        part_tier: part.part_tier ?? "oem",
+        service_id: serviceId,
+        source: "catalog",
+      },
+    ]);
+  }
+
   function updatePart(index: number, next: Partial<PartRowState>) {
     setParts((current) =>
       current.map((part, idx) => (idx === index ? { ...part, ...next } : part))
@@ -2493,6 +2691,136 @@ function PartsStep({
   const vehicleBarSubtitle = [vehicleLabel, engineCode]
     .filter((v) => typeof v === "string" && v.trim().length > 0)
     .join(" · ");
+
+  // Locked post-job confirmation: billing was fixed when the customer
+  // approved the quote, so the mechanic only verifies what was installed —
+  // no price edits, swaps, or overrides. Show the agreed parts → labor →
+  // tax/fee → total flow read-only.
+  if (readOnly) {
+    const usedParts = parts.filter((p) => p.not_used !== true);
+    // Per-line breakdown reconciles only when the locked quote carries it
+    // (hasBreakdown). In the robust fallback (only the agreed TOTAL is known)
+    // we show the total + the summed rows for Parts, and hide labor/tax/fee.
+    const showBreakdown = lockedQuote?.hasBreakdown === true;
+    const partsCents = showBreakdown
+      ? lockedQuote!.partsCents
+      : Math.round(partsCostSum * 100);
+    const totalCents = lockedQuote
+      ? lockedQuote.totalCents
+      : Math.round(partsCostSum * 100);
+    const originalCents = lockedQuote?.originalTotalCents ?? null;
+    const wasAdjusted =
+      originalCents != null && originalCents !== totalCents;
+    return (
+      <QuestionScreen
+        eyebrow="Confirm"
+        question="Confirm parts used"
+        hint="Billing is locked to the customer-approved quote — review only."
+      >
+        <div className="space-y-3">
+          {usedParts.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-primary/20 bg-muted/30 px-4 py-6 text-center text-[12px] text-muted-foreground">
+              No parts on this quote.
+            </div>
+          ) : (
+            usedParts.map((part, index) => {
+              const qty = Math.max(1, part.quantity || 1);
+              const unit =
+                part.supplied_by === "customer" ? 0 : Number(part.cost) || 0;
+              const tierLabel = tierLabelOf(part.part_tier);
+              return (
+                <div
+                  key={index}
+                  className="rounded-2xl border border-primary/15 bg-muted/20 px-3 py-2.5"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-[13px] font-semibold text-foreground">
+                          {part.part_name}
+                        </span>
+                        {tierLabel ? (
+                          <span className="inline-flex shrink-0 items-center rounded-md bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">
+                            {tierLabel}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+                        {part.oem_number || "—"}
+                        {qty > 1 ? ` · qty ${qty}` : ""}
+                        {part.supplied_by === "customer"
+                          ? " · customer-supplied"
+                          : ""}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-[13px] font-medium tabular-nums text-foreground">
+                      ${(unit * qty).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })
+          )}
+
+          {/* Agreed-quote breakdown: parts → labor → tax/fee → total. */}
+          <div className="overflow-hidden rounded-2xl border border-primary/15">
+            <div className="space-y-1.5 bg-muted/30 px-4 py-3 text-[12px]">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Parts</span>
+                <span className="font-medium tabular-nums text-foreground">
+                  ${(partsCents / 100).toFixed(2)}
+                </span>
+              </div>
+              {showBreakdown && lockedQuote ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Labor</span>
+                    <span className="font-medium tabular-nums text-foreground">
+                      ${(lockedQuote.laborCents / 100).toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Tax + fee</span>
+                    <span className="font-medium tabular-nums text-foreground">
+                      $
+                      {(
+                        (lockedQuote.taxCents + lockedQuote.feeCents) /
+                        100
+                      ).toFixed(2)}
+                    </span>
+                  </div>
+                </>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-between border-t border-primary/15 bg-primary/5 px-4 py-3">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                <Lock className="h-3 w-3" />
+                {wasAdjusted ? "New quoted total" : "Quoted total"}
+              </span>
+              <span className="flex items-baseline gap-2">
+                {wasAdjusted && originalCents != null ? (
+                  <span className="text-[13px] font-medium tabular-nums text-muted-foreground line-through">
+                    ${(originalCents / 100).toFixed(2)}
+                  </span>
+                ) : null}
+                <span className="text-[18px] font-bold tabular-nums text-foreground">
+                  ${(totalCents / 100).toFixed(2)}
+                </span>
+              </span>
+            </div>
+          </div>
+          <p className="text-center text-[11px] text-muted-foreground">
+            Parts and labor are locked to what the customer approved. To change
+            them, back out and use{" "}
+            <span className="font-medium text-foreground">
+              Add unforeseen scope
+            </span>
+            .
+          </p>
+        </div>
+      </QuestionScreen>
+    );
+  }
 
   return (
     <QuestionScreen eyebrow={eyebrow} question={question} hint={hint}>
@@ -2885,6 +3213,42 @@ function PartsStep({
             );
           })
         )}
+
+        {/*
+          Otopair OEM Catalog picker — drop in a recommended part for this
+          vehicle/service with its price prefilled. Selecting acts as an "add";
+          the dropdown resets so it can be used repeatedly. Free-form rows below
+          cover anything not in the catalog.
+        */}
+        {!readOnly && catalogOptions.length > 0 ? (
+          <Select
+            aria-label="Add from Otopair OEM Catalog"
+            selectedKey={null}
+            onSelectionChange={(key) => {
+              if (key != null) addCatalogPart(String(key));
+            }}
+            placeholder="+ Otopair OEM Catalog"
+          >
+            <SelectTrigger className="inline-flex w-auto items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-3 py-1.5 text-[12px] font-medium text-primary">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopover placement="bottom start">
+              <SelectListBox shouldFocusWrap>
+                {catalogOptions.map((o) => {
+                  const unit = o.part.median_price || o.part.average_price || 0;
+                  const label = `${o.part.part_name}${
+                    o.part.oem_part_number ? ` · ${o.part.oem_part_number}` : ""
+                  }${unit > 0 ? ` · $${unit.toFixed(2)}` : ""}`;
+                  return (
+                    <SelectItem key={o.key} id={o.key} textValue={label}>
+                      {label}
+                    </SelectItem>
+                  );
+                })}
+              </SelectListBox>
+            </SelectPopover>
+          </Select>
+        ) : null}
 
         {/*
           Add-row controls. For multi-service bookings each parts-required
@@ -4063,7 +4427,7 @@ function ApprovalStatusPanel({
                 {busyAction === "start" ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : null}
-                Start work →
+                {workflow.startWorkBeginsJob ? "Start work →" : "Confirm booking →"}
               </button>
             )}
           </div>
@@ -4119,7 +4483,9 @@ function ApprovalStatusPanel({
                 ? `Final billing confirmed${setPrice ? ` · ${setPrice}` : ""}. Capture is processing.`
                 : cycle === "mid_job"
                   ? `Added scope confirmed${setPrice ? ` · ${setPrice}` : ""}.`
-                  : `You're cleared to start work${setPrice ? ` · ${setPrice}` : ""}.`}
+                  : workflow.startWorkBeginsJob
+                    ? `You're cleared to start work${setPrice ? ` · ${setPrice}` : ""}.`
+                    : `Price locked in${setPrice ? ` · ${setPrice}` : ""}. Confirm the booking — you can start work once the vehicle is here.`}
             </p>
             {cycle === "pre_job" ? (
               <button
@@ -4134,7 +4500,7 @@ function ApprovalStatusPanel({
                 {busyAction === "start" ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : null}
-                Start work →
+                {workflow.startWorkBeginsJob ? "Start work →" : "Confirm booking →"}
               </button>
             ) : (
               <button

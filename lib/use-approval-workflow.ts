@@ -8,6 +8,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 export type ApprovalCycle = "pre_job" | "mid_job" | "post_job_reapproval";
 
 export type ApprovalStateSnapshot = {
+  booking_status: string;
   payment_approval_state: string;
   mechanic_set_price_cents: number | null;
   sla_expires_at_ms: number | null;
@@ -108,14 +109,27 @@ export function useApprovalWorkflow({
     [approvalState?.sla_expires_at_ms, now],
   );
 
+  const bookingStatus = approvalState?.booking_status ?? null;
+  // At the at-shop check-in the car is physically here, so customer approval
+  // clears the way to begin work immediately (vehicle_at_shop -> in_progress).
+  // When the estimate was adjusted from the incoming queue the car hasn't
+  // arrived yet — pending/pending_shop_acceptance can't legally jump to
+  // in_progress (that throws "Invalid transition"), so approval simply
+  // confirms the booking and the normal check-in flow starts work later.
+  const startWorkBeginsJob = bookingStatus === "vehicle_at_shop";
+
   const onStartWork = useCallback(async () => {
     if (!bookingId) return;
+    const newStatus =
+      bookingStatus === "vehicle_at_shop" || bookingStatus === "in_progress"
+        ? "in_progress"
+        : "confirmed";
     await updateStatus({
       bookingId: bookingId as Id<"bookings">,
-      newStatus: "in_progress",
+      newStatus,
       reason: "approval_confirmed",
     });
-  }, [bookingId, updateStatus]);
+  }, [bookingId, bookingStatus, updateStatus]);
 
   const onRelease = useCallback(async () => {
     if (!bookingId) return;
@@ -147,6 +161,8 @@ export function useApprovalWorkflow({
     slaExpiresAtMs: approvalState?.sla_expires_at_ms ?? null,
     relativeSentLabel,
     slaCountdownLabel,
+    bookingStatus,
+    startWorkBeginsJob,
     onStartWork,
     onRelease,
     onWithdraw,

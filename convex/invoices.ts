@@ -60,15 +60,24 @@ export type AssembledInvoiceData = {
   invoiceGeneratedAtMs: number | null;
   invoiceEmailedAtMs: number | null;
 
-  customer: { name: string; email: string };
+  customer: { name: string; email: string; phone: string | null };
   vehicle: {
     year: number | null;
     make: string | null;
     model: string | null;
     trim: string | null;
     vin: string | null;
+    licensePlate: string | null;
+    mileage: number | null;
   };
-  shop: { name: string; address: string | null; phone: string | null };
+  shop: {
+    name: string;
+    address: string | null;
+    phone: string | null;
+    email: string | null;
+    website: string | null;
+    logoUrl: string | null;
+  };
   mechanicName: string | null;
 
   services: string[];
@@ -78,8 +87,10 @@ export type AssembledInvoiceData = {
   laborCents: number;
   partsTotalCents: number;
   subtotalCents: number;
-  taxCents: number;
-  platformFeeCents: number;
+  // null on a cash walk-in invoice — the template omits the line entirely
+  // (shop bill = parts + labor, no sales tax / Otopair platform fee).
+  taxCents: number | null;
+  platformFeeCents: number | null;
   totalCents: number;
   refundedCents: number;
   refundedAtMs: number | null;
@@ -157,7 +168,7 @@ async function assembleInvoiceData(
       (s: any) => !s.superseded_by_id && !s.not_used,
     );
 
-    const parts: AssembledInvoicePart[] = liveSnaps.map((s: any) => {
+    let parts: AssembledInvoicePart[] = liveSnaps.map((s: any) => {
       const qty = Number(s.quantity ?? 0);
       const unit = Number(s.unit_cost ?? 0);
       const line = Number(s.total_cost ?? qty * unit);
@@ -170,6 +181,25 @@ async function assembleInvoiceData(
         lineCents: Math.round(line * 100),
       };
     });
+
+    // Walk-in fallback: walk-ins record parts on job_actuals.parts_used (the
+    // mechanic's bill), not part_snapshots. Use them when no live snapshot exists.
+    if (parts.length === 0 && Array.isArray(ja?.parts_used)) {
+      parts = (ja!.parts_used as any[])
+        .filter((p) => !p?.not_used)
+        .map((p) => {
+          const qty = Number(p.quantity ?? 1);
+          const unit = Number(p.cost ?? 0);
+          return {
+            name: p.part_name,
+            oemNumber: p.oem_number ?? null,
+            brand: p.brand ?? null,
+            qty,
+            unitCents: Math.round(unit * 100),
+            lineCents: Math.round(unit * qty * 100),
+          };
+        });
+    }
 
     const partsTotalCents = parts.reduce((sum, p) => sum + p.lineCents, 0);
 
@@ -209,17 +239,30 @@ async function assembleInvoiceData(
     const laborCents = Math.round((laborMinutes / 60) * laborRate * 100);
 
     const capturedCents = Number(payment.captured_amount_cents ?? 0);
-    const totalCents =
-      capturedCents > 0
-        ? capturedCents
-        : Math.round(Number(payment.amount ?? 0) * 100);
-
     const subtotalCents = partsTotalCents + laborCents;
-    const platformFeeCents = Math.max(
-      0,
-      Math.round((totalCents * PLATFORM_FEE_BPS) / 10000),
-    );
-    const taxCents = Math.max(0, totalCents - subtotalCents - platformFeeCents);
+
+    // Cash walk-in invoice: it's the shop's own bill (parts + labor), with no
+    // sales tax line and no Otopair platform fee. Total = captured amount when
+    // recorded (the mechanic's override), else the computed subtotal.
+    const isCash = payment.payment_method === "cash";
+    let totalCents: number;
+    let platformFeeCents: number | null;
+    let taxCents: number | null;
+    if (isCash) {
+      totalCents = capturedCents > 0 ? capturedCents : subtotalCents;
+      platformFeeCents = null;
+      taxCents = null;
+    } else {
+      totalCents =
+        capturedCents > 0
+          ? capturedCents
+          : Math.round(Number(payment.amount ?? 0) * 100);
+      platformFeeCents = Math.max(
+        0,
+        Math.round((totalCents * PLATFORM_FEE_BPS) / 10000),
+      );
+      taxCents = Math.max(0, totalCents - subtotalCents - platformFeeCents);
+    }
 
     // Pricing v2 sanity check: compare captured subtotal against engine band
     // (−5% under low / +8% over high). Soft flag only; persisted to
@@ -278,6 +321,9 @@ async function assembleInvoiceData(
           .join(", ")
       : null;
 
+    const shopLogoUrl =
+      shop?.logo != null ? await ctx.storage.getUrl(shop.logo) : null;
+
     const status: "paid" | "refunded" =
       payment.status === "refunded" ? "refunded" : "paid";
 
@@ -294,18 +340,27 @@ async function assembleInvoiceData(
       invoiceGeneratedAtMs: payment.invoice_generated_at_ms ?? null,
       invoiceEmailedAtMs: payment.invoice_emailed_at_ms ?? null,
 
-      customer: { name: customerName, email: customerEmail },
+      customer: {
+        name: customerName,
+        email: customerEmail,
+        phone: user?.phone ?? null,
+      },
       vehicle: {
         year: vehicleRow?.year ?? null,
         make: titleFromMeta.make,
         model: titleFromMeta.model,
         trim: titleFromMeta.trim,
         vin: booking.vin ?? null,
+        licensePlate: vehicleRow?.license_plate ?? null,
+        mileage: ja?.completion_mileage ?? null,
       },
       shop: {
         name: shop?.name ?? "Repair shop",
         address: shopAddress,
         phone: shop?.phone ?? null,
+        email: shop?.email ?? null,
+        website: shop?.website ?? null,
+        logoUrl: shopLogoUrl,
       },
       mechanicName,
       services: services
@@ -429,6 +484,7 @@ export const getReceiptStatusForShop = query({
       invoiceEmailedAtMs: payment.invoice_emailed_at_ms ?? null,
       customerEmail: customer?.email ?? null,
       paymentStatus: payment.status,
+      paymentMethod: payment.payment_method ?? null,
     };
   },
 });

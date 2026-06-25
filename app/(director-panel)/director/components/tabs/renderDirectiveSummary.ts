@@ -11,11 +11,34 @@
 // rows the sim renders as small cards under the assistant bubble, so a
 // director can SEE that Oto actually fired render_book_service /
 // render_record_confirmation / render_vehicle_update / render_link_button /
-// render_booking_card / render_bookings_list. quickReplies are intentionally
-// excluded — the sim already renders those as tappable chips.
+// render_booking_card / render_bookings_list / render_reasoning / render_sources.
+// quickReplies are intentionally excluded — the sim already renders those as
+// tappable chips.
+//
+// A CATCH-ALL surfaces any OTHER render directive the result carries (e.g. a
+// render tool added after this file was written) instead of silently dropping
+// it — the exact failure mode showVehicleUpdate had before it was pulled
+// through. So every render component Oto can emit is always visible in the sim.
 //
 // Field names mirror the chat.ts SendMessageResult contract.
 // =============================================================================
+
+// Result keys that are NOT render directives (don't surface them as cards).
+// quickReplies is rendered separately as tappable chips.
+const NON_RENDER_KEYS = new Set(["text", "error_kind", "trace", "quickReplies"]);
+
+// Render-directive keys handled explicitly above the catch-all (so the loop
+// doesn't double-render them).
+const EXPLICIT_RENDER_KEYS = new Set([
+  "bookService",
+  "showRecordConfirmation",
+  "showVehicleUpdate",
+  "linkButton",
+  "bookingCard",
+  "bookingsList",
+  "reasoning",
+  "sources",
+]);
 
 export type RenderDirectiveRow = {
   /** Stable directive key (matches the result field name). */
@@ -113,6 +136,22 @@ export function summarizeRenderDirectives(
   if (r.sources !== undefined) {
     const n = arr(r.sources).length;
     rows.push({ key: "sources", label: "Sources", detail: n ? `${n} source${n === 1 ? "" : "s"}` : "attached", payload: r.sources });
+  }
+
+  // Catch-all: any other present render directive (a render tool added later)
+  // still shows up — never silently dropped.
+  for (const key of Object.keys(r)) {
+    if (NON_RENDER_KEYS.has(key) || EXPLICIT_RENDER_KEYS.has(key)) continue;
+    const val = r[key];
+    if (val === undefined || val === null) continue;
+    let detail: string;
+    try {
+      detail = typeof val === "object" ? JSON.stringify(val) : String(val);
+    } catch {
+      detail = "(unserializable)";
+    }
+    if (detail.length > 140) detail = detail.slice(0, 140) + "…";
+    rows.push({ key, label: `Render: ${key}`, detail, payload: val });
   }
 
   return rows;

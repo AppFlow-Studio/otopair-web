@@ -66,6 +66,44 @@ describe("summarizeRenderDirectives", () => {
     ).toContain("3");
   });
 
+  it("summarizes reasoning + sources", () => {
+    expect(summarizeRenderDirectives({ reasoning: ["a", "b"] })[0].key).toBe("reasoning");
+    expect(summarizeRenderDirectives({ sources: [{ url: "x" }, { url: "y" }] })[0].detail).toContain("2");
+  });
+
+  it("covers every render directive the result contract carries", () => {
+    const full = {
+      text: "hi",
+      bookService: { service_slugs: ["oil_change"] },
+      showRecordConfirmation: { vehicle_id: "v", maintenance_type: "oil" },
+      showVehicleUpdate: { mileage: 1 },
+      linkButton: { destination: "settings" },
+      bookingCard: { booking_id: "b1" },
+      bookingsList: { booking_ids: ["b1"] },
+      reasoning: ["step"],
+      sources: [{ url: "u" }],
+    };
+    const keys = summarizeRenderDirectives(full).map((r) => r.key).sort();
+    expect(keys).toEqual([
+      "bookService", "bookingCard", "bookingsList", "linkButton",
+      "reasoning", "showRecordConfirmation", "showVehicleUpdate", "sources",
+    ]);
+  });
+
+  it("catch-all surfaces an unknown/future render directive instead of dropping it", () => {
+    const rows = summarizeRenderDirectives({ text: "hi", someFutureCard: { foo: 1 } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].key).toBe("someFutureCard");
+    expect(rows[0].label).toBe("Render: someFutureCard");
+    expect(rows[0].payload).toEqual({ foo: 1 });
+  });
+
+  it("never surfaces non-render result fields (text / error_kind / trace / quickReplies)", () => {
+    expect(
+      summarizeRenderDirectives({ text: "hi", error_kind: "overloaded", trace: {}, quickReplies: [{ text: "Yes" }] }),
+    ).toEqual([]);
+  });
+
   it("summarizes multiple directives present on one turn", () => {
     const rows = summarizeRenderDirectives({
       text: "ok",

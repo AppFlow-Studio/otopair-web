@@ -24,10 +24,8 @@ import { v } from "convex/values";
 import { action, internalAction, internalMutation } from "./_generated/server";
 import { internal, api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { normalizeOemNumber } from "./vehicleEnrichment/priceParser";
-import { fetchUrlWithHtml } from "./vehicleEnrichment/firecrawl";
-import { reextractPartPrice, structuredPriceFor } from "./vehicleEnrichment/priceReextract";
-import { median } from "./lib/robustStats";
+import { extractPriceFirecrawl } from "./vehicleEnrichment/firecrawl";
+import { priceAllSources } from "./vehicleEnrichment/priceReextract";
 import { UNVERIFIED_PRICE_TYPE } from "./lib/priceTypes";
 
 // ---------------------------------------------------------------------------
@@ -338,82 +336,49 @@ export const _repriceConfigPartsRun = internalAction({
       let markedUnverified = 0;
       let fetchFailed = 0;
       for (const part of existingParts) {
-        const normOem = part.oem_part_number
-          ? normalizeOemNumber(part.oem_part_number)
-          : null;
         const prices = await ctx.runQuery(
           internal.vehicleEnrichment.v3queries.getPricesForPart,
           { partId: part.part_id },
         );
-        const rows = (prices as any[]).filter(
-          (r) => r.source_url && r.source_domain,
+        const urls = (prices as any[])
+          .filter((r) => r.source_url && r.source_domain)
+          .map((r) => r.source_url as string);
+        if (urls.length === 0) continue;
+
+        const rows = await priceAllSources(
+          urls,
+          { oem: part.oem_part_number, partName: part.part_name },
+          extractPriceFirecrawl,
         );
-        if (rows.length === 0) continue;
-
-        // Pass 1 — fetch once per row; Tier-1 structured prices → cross-source median.
-        const fetched = new Map<string, { markdown: string | null; html: string | null }>();
-        const structured: number[] = [];
-        for (const row of rows) {
-          let page: { markdown: string | null; html: string | null } | null = null;
-          try {
-            page = await fetchUrlWithHtml(row.source_url);
-          } catch {
-            page = null;
-          }
-          fetched.set(row.source_url, page ?? { markdown: null, html: null });
-          const sp = structuredPriceFor(page?.html ?? null, row.source_url, normOem);
-          if (sp != null) structured.push(sp);
-        }
-        const crossMedian = structured.length > 0 ? median(structured) : null;
-
-        // Pass 2 — two-tier re-extraction per row, reusing the fetched page.
         for (const row of rows) {
           totalPrices++;
-          const outcome = await reextractPartPrice({
-            oem: part.oem_part_number,
-            partName: part.part_name,
-            source_url: row.source_url,
-            crossSourceMedian: crossMedian,
-            prefetched: fetched.get(row.source_url) ?? null,
-          });
-          // Infra failure (page came back empty / fetch threw): we learned
-          // nothing about the page, so leave the existing row UNTOUCHED — a
-          // transient Firecrawl hiccup must never demote a verified 'sale'
-          // row to 'unverified' (Jun-9 review, item 7).
-          if (!outcome || outcome.status === "fetch_failed") {
-            fetchFailed++;
-            continue;
-          }
-
-          if (outcome.status === "sale") {
-            await ctx.runMutation(
-              internal.vehicleEnrichment.v3mutations.upsertPartPrice,
-              {
-                part_id: part.part_id,
-                price: outcome.price,
-                price_type: "sale",
-                source_domain: row.source_domain, // patches THIS row in place
-                source_url: row.source_url,
-              },
-            );
+          const o = row.outcome;
+          if (o.status === "fetch_failed") { fetchFailed++; continue; }
+          // Patch the EXISTING row in place: upsertPartPrice keys on
+          // (part_id, source_domain), so we must reuse the DB's stored
+          // source_domain — domainOf(url) can differ (www-stripping) and would
+          // otherwise insert a duplicate row instead of updating.
+          const existingRow = (prices as any[]).find((r) => r.source_url === row.source_url);
+          const source_domain = (existingRow?.source_domain as string) ?? row.source_domain;
+          if (o.status === "sale") {
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+              part_id: part.part_id,
+              price: o.price,
+              price_type: "sale",
+              source_domain,
+              source_url: row.source_url,
+              msrp: o.msrp ?? undefined,
+              discount: o.discount ?? undefined,
+            });
             fixed++;
           } else {
-            // Tier-3: neither tier could verify → mark the row unverified, keeping
-            // its existing price value for audit but dropping it from the median.
-            const existingPrice =
-              typeof row.price === "number" && Number.isFinite(row.price)
-                ? row.price
-                : 0;
-            await ctx.runMutation(
-              internal.vehicleEnrichment.v3mutations.upsertPartPrice,
-              {
-                part_id: part.part_id,
-                price: existingPrice,
-                price_type: UNVERIFIED_PRICE_TYPE,
-                source_domain: row.source_domain,
-                source_url: row.source_url,
-              },
-            );
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+              part_id: part.part_id,
+              price: typeof existingRow?.price === "number" ? existingRow.price : 0,
+              price_type: UNVERIFIED_PRICE_TYPE,
+              source_domain,
+              source_url: row.source_url,
+            });
             markedUnverified++;
           }
         }

@@ -116,6 +116,7 @@ const TOOL_NAMES_V1 = [
   // Render tools — general-purpose chat UI affordances.
   "render_quick_replies",
   "render_record_confirmation",
+  "render_vehicle_update",
   // Booking flow — Sprint 4 Day 1 Pass B consolidation. Single terminal
   // render replacing the prior 6-tool chain (render_service_picker /
   // render_diagnostic_form / render_shop_carousel / render_time_selector /
@@ -311,6 +312,11 @@ export const sendMessage = action({
     // evolve with the render-tool inventory.
     quickReplies: v.optional(v.array(v.any())),
     showRecordConfirmation: v.optional(v.any()),
+    // render_vehicle_update (vehicle-truth capture) — dispatcher produces
+    // renderD("showVehicleUpdate", { mileage?, service_claims?, fault_lights? }).
+    // Pulled through below so the mobile confirm card (and the director sim)
+    // actually receive it; without this the directive dies after the merge.
+    showVehicleUpdate: v.optional(v.any()),
     // Sprint 4 Day 1 Pass B — single terminal booking render. Replaces the
     // legacy 7 booking-flow fields (showServicePicker / pickerServices /
     // pickerPreSelectedId / showDiagnosticForm / shopCarousel / timeSelector /
@@ -351,6 +357,13 @@ type SendMessageResult = {
   text: string;
   quickReplies?: unknown[];
   showRecordConfirmation?: { vehicle_id: string; maintenance_type: string };
+  // render_vehicle_update — vehicle-truth confirm card (mileage / service
+  // claims / fault lights the user stated this turn). All three optional.
+  showVehicleUpdate?: {
+    mileage?: number;
+    service_claims?: Array<{ service_slug: string; kind: "due" | "light_on" }>;
+    fault_lights?: string[];
+  };
   bookService?: {
     service_slugs: string[];
     diagnostic_system?:
@@ -1421,6 +1434,7 @@ export async function sendMessageHandlerCore(
   const hasAnyRender =
     !!quickReplies ||
     !!showRecordConfirmation ||
+    renderEnvelope.showVehicleUpdate !== undefined ||
     renderEnvelope.bookService !== undefined ||
     renderEnvelope.linkButton !== undefined ||
     renderEnvelope.bookingCard !== undefined ||
@@ -1822,11 +1836,20 @@ export async function sendMessageHandlerCore(
       : undefined;
   const reasoning = renderEnvelope.reasoning;
   const sources = renderEnvelope.sources;
+  // render_vehicle_update — pull the merged directive through to the result so
+  // the mobile confirm card and the director sim receive it (the dispatcher
+  // produces it, mergeRenderDirectives carries it, but it was never forwarded
+  // here — so the tool fired and silently rendered nothing).
+  const showVehicleUpdate =
+    renderEnvelope.showVehicleUpdate !== undefined
+      ? (renderEnvelope.showVehicleUpdate as SendMessageResult["showVehicleUpdate"])
+      : undefined;
 
   return {
     text: finalText,
     ...(quickReplies ? { quickReplies } : {}),
     ...(showRecordConfirmation ? { showRecordConfirmation } : {}),
+    ...(showVehicleUpdate !== undefined ? { showVehicleUpdate } : {}),
     ...(bookService !== undefined ? { bookService } : {}),
     ...(linkButton !== undefined ? { linkButton } : {}),
     ...(bookingCard !== undefined ? { bookingCard } : {}),
@@ -2900,6 +2923,19 @@ function buildCallables(
           }
           for (const factText of newEntries) {
             try {
+              // CROSS-CONVERSATION-INELIGIBLE by contract. These mirrored
+              // established_facts are conversation-scoped session observations
+              // (a symptom, a warning light, "checking health score"); they are
+              // retained here as forensic/replay substrate but MUST NOT surface
+              // in a FUTURE conversation's <recent_context> — the model
+              // mis-attributes them to the user ("you mentioned…") and lets a
+              // stale "now completed" observation override the live
+              // get_vehicle_health record. The read side enforces this in
+              // memoryEditing.getCrossConversationMemory (Pool A loop) by
+              // skipping exactly the (fact_type:"observation",
+              // written_by:"chat_agent") tuple written below. If you change
+              // either value here, update that read-side guard in lock-step or
+              // the pollution re-leaks silently.
               await ctx.runMutation(
                 internal.oto.memoryEditing.recordConversationFact,
                 {

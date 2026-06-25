@@ -556,6 +556,8 @@ export const upsertPartPrice = internalMutation({
     price_type: v.string(),
     source_url: v.optional(v.string()),
     source_domain: v.string(),
+    msrp: v.optional(v.float64()),
+    discount: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -572,6 +574,8 @@ export const upsertPartPrice = internalMutation({
         price: args.price,
         price_type: args.price_type,
         source_url: args.source_url,
+        msrp: args.msrp,
+        discount: args.discount,
         refreshed_at: now,
       });
       return existing._id;
@@ -583,6 +587,8 @@ export const upsertPartPrice = internalMutation({
       price_type: args.price_type,
       source_url: args.source_url,
       source_domain: args.source_domain,
+      msrp: args.msrp,
+      discount: args.discount,
       refreshed_at: now,
       created_at: now,
     });

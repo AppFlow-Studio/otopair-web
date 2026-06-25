@@ -692,6 +692,8 @@ export const partFitmentDetail = query({
           sourceUrl:     (p as any).source_url ?? null,
           sourceDomain:  (p as any).source_domain ?? null,
           refreshedAt:   (p as any).refreshed_at ?? null,
+          msrp:          (p as any).msrp ?? null,
+          discount:      (p as any).discount ?? null,
         }))
         .sort((a, b) => a.price - b.price),
       evidence: evidence
@@ -765,6 +767,30 @@ export const vehicleConfigDetail = query({
         display:     row.display_string,
       })),
     );
+
+    // Labor times — per-service rollup (book hours + source + confidence), so a
+    // director can audit which services have real (OLP-backed) labor vs the
+    // tier-estimate fallback. Read-only.
+    const laborRows = await ctx.db
+      .query("labor_times")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", id))
+      .collect();
+    const laborTimes = (
+      await Promise.all(
+        laborRows.map(async (row) => {
+          const svc = await ctx.db.get(row.service_id);
+          if (!svc) return null;
+          return {
+            serviceName: (svc as any).name ?? "—",
+            hours: row.book_hours ?? row.empirical_hours ?? null,
+            source: row.source ?? null,
+            confidence: row.confidence ?? null,
+          };
+        }),
+      )
+    )
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+      .sort((a, b) => a.serviceName.localeCompare(b.serviceName));
 
     // Part fitments — show how many parts are mapped for this config.
     const fitments = await ctx.db
@@ -942,6 +968,7 @@ export const vehicleConfigDetail = query({
 
       packages: cfg.packages_available ?? [],
       serviceIntervals,
+      laborTimes,
       fitmentSummary,
       fitmentTotal: fitments.length,
 

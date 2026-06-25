@@ -21,6 +21,7 @@ import { TabAudit }     from './components/tabs/TabAudit'
 import { TabSettings }       from './components/tabs/TabSettings'
 import { TabMechanicEdits } from './components/tabs/TabMechanicEdits'
 import { TabServiceParts } from './components/tabs/TabServiceParts'
+import { TabRepairPalLabor } from './components/tabs/TabRepairPalLabor'
 import { TabOtoSim }    from './components/tabs/TabOtoSim'
 import { TabOtoConversations } from './components/tabs/TabOtoConversations'
 
@@ -35,6 +36,7 @@ const TABS: Record<string, React.ComponentType> = {
   configs:     TabVehicleConfigs,
   pricing:     TabPricing,
   serviceParts: TabServiceParts,
+  repairpalLabor: TabRepairPalLabor,
   bugs:        TabBugs,
   feedback:    TabFeedback,
   otoFeedback: TabOtoFeedback,

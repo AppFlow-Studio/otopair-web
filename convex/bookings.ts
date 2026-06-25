@@ -55,6 +55,8 @@ import {
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
+import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
+import { symptomForRecordType } from "./lib/serviceSymptoms";
 import { logPrejobMechanicVerification } from "./lib/mechanic_verification_logging";
 import {
   EARLY_PUSH_THRESHOLD_MS,
@@ -7117,7 +7119,9 @@ export const backfillQuotedSetPrice = internalMutation({
   },
 });
 
-async function runCompletionSideEffects(ctx: any, booking: any) {
+// Exported for the #90 integration test (tests/bookingCompletionHealth.test.ts) —
+// drives the completion write-back + knownIssue clear without a full booking flow.
+export async function runCompletionSideEffects(ctx: any, booking: any) {
   await maybePersistEarlyCompletionDuration(ctx, booking);
 
   if (booking.vin) {
@@ -7128,38 +7132,18 @@ async function runCompletionSideEffects(ctx: any, booking: any) {
       )
       .first();
     if (vehicleOwner?.preOnboardingComplete) {
-      const SLUG_TO_TYPE: Record<string, string> = {
-        "oil-change": "oil",
-        "brake-pads": "brakes",
-        "brake-rotors": "brakes",
-        "tire-replacement": "tires",
-        "tire-rotation": "tires",
-        "tire-balance": "tires",
-        "wheel-alignment": "tires",
-        "battery-replacement": "battery",
-        "battery-test": "battery",
-        "brake-fluid-flush": "fluids",
-        "coolant-flush": "fluids",
-        "transmission-fluid": "fluids",
-        "power-steering-flush": "fluids",
-        "engine-air-filter": "filters",
-        "cabin-air-filter": "filters",
-        "wiper-blades": "wipers",
-        "spark-plugs": "engine_parts",
-        "serpentine-belt": "engine_parts",
-        "check-engine-diagnostic": "diagnostics",
-        "general-diagnostic": "diagnostics",
-        "state-inspection": "inspection",
-        "emissions-test": "inspection",
-      };
-
       const serviceIds = booking.service_ids as string[] | undefined;
       if (serviceIds?.length) {
         const typesUpdated = new Set<string>();
+        // Warning-light codes to clear from knownIssues once the service is done
+        // (mirrors maintenance.upsertRecord / vehicleTruth's add). Patched once
+        // after the loop so a multi-service booking clears all of them together.
+        const clearedCodes = new Set<string>();
         for (const serviceId of serviceIds) {
           const service = await ctx.db.get(serviceId as any);
           if (!service) continue;
-          const recordType = SLUG_TO_TYPE[(service as any).slug];
+          // #90: services.slug is snake_case — resolve via the canonical map.
+          const recordType = recordTypeForServiceSlug((service as any).slug);
           if (!recordType || typesUpdated.has(recordType)) continue;
           typesUpdated.add(recordType);
 
@@ -7188,6 +7172,20 @@ async function runCompletionSideEffects(ctx: any, booking: any) {
               ...data,
               createdAt: now,
             });
+          }
+
+          const code = symptomForRecordType(recordType);
+          if (code) clearedCodes.add(code);
+        }
+
+        // Service done → clear its warning-light code(s) so the pipeline stops
+        // flagging it. Single patch; only writes when something actually clears.
+        if (clearedCodes.size > 0 && Array.isArray(vehicleOwner.knownIssues)) {
+          const next = (vehicleOwner.knownIssues as string[]).filter(
+            (x) => !clearedCodes.has(x)
+          );
+          if (next.length !== vehicleOwner.knownIssues.length) {
+            await ctx.db.patch(vehicleOwner._id, { knownIssues: next } as any);
           }
         }
       }

@@ -42,6 +42,7 @@ import {
   type ServiceAnchor,
   type QuickReadFlags,
 } from "./lib/intervals";
+import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
 
 // ============================================================================
 // INTERNAL QUERIES
@@ -344,7 +345,9 @@ export const runPipeline = internalAction({
       return;
     }
 
-    // Determine scope: "full" for onboarding/checkin, "intervals_only" for mileage/quick_read/booking
+    // Determine scope: "full" for onboarding/checkin, "intervals_only" for
+    // mileage/quick_read/booking/oto_chat (Oto vehicle-truth re-runs intervals
+    // after writing knownIssues — it must NOT re-onboard).
     const isFullPipeline = args.triggeredBy === "onboarding" || args.triggeredBy === "checkin";
 
     let raw: RawModifiers;
@@ -527,34 +530,20 @@ export const runPipeline = internalAction({
       });
     }
 
-    // Map maintenance_record types → service slugs
-    const TYPE_TO_SLUGS: Record<string, string[]> = {
-      oil: ["oil-change"],
-      brakes: ["brake-pads", "brake-rotors"],
-      tires: ["tire-replacement", "tire-rotation", "tire-balance", "wheel-alignment"],
-      battery: ["battery-replacement", "battery-test"],
-      fluids: ["brake-fluid-flush", "coolant-flush", "transmission-fluid", "power-steering-flush"],
-      filters: ["engine-air-filter", "cabin-air-filter"],
-      wipers: ["wiper-blades"],
-      engine_parts: ["spark-plugs", "serpentine-belt"],
-      diagnostics: ["check-engine-diagnostic", "general-diagnostic"],
-      inspection: ["state-inspection", "emissions-test"],
-    };
-
-    // Invert to slug → type for fast lookup
-    const SLUG_TO_TYPE: Record<string, string> = {};
-    for (const [type, slugs] of Object.entries(TYPE_TO_SLUGS)) {
-      for (const slug of slugs) SLUG_TO_TYPE[slug] = type;
-    }
-
-    // Resolve all services once, then build service_id → anchor mapping
+    // Resolve each spec's service → its maintenance record type and attach the
+    // matching last-service anchor. Uses the canonical snake_case resolver:
+    // the prior inline TYPE_TO_SLUGS map keyed on KEBAB slugs ("oil-change")
+    // while services.slug is snake_case ("oil_change"), so the lookup was always
+    // undefined → anchors never matched → the pipeline ignored service history
+    // (same kebab-vs-snake bug class as #90). Shared with the completion
+    // write-back so both halves of the loop agree on slug → type.
     const anchorsByServiceId = new Map<string, ServiceAnchor>();
     for (const spec of specs) {
       const service = await ctx.runQuery(internal.maintenance_pipeline.getServiceById, {
         serviceId: spec.service_id,
       });
       if (!service) continue;
-      const recordType = SLUG_TO_TYPE[service.slug];
+      const recordType = recordTypeForServiceSlug(service.slug);
       if (recordType && anchorsByType.has(recordType)) {
         anchorsByServiceId.set(spec.service_id.toString(), anchorsByType.get(recordType)!);
       }

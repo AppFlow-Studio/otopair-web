@@ -28,8 +28,6 @@ import { submitBatch, getBatchStatus, getBatchResults } from "./utils/batchClien
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
-import { repairpalUrlCandidates, repairpalModelCandidates } from "./repairpalLabor";
-import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { deriveEngineFamily } from "./laborSibling";
 import { runSanityChecks } from "./validation/sanityChecks";
 import { validateAllOemParts } from "./validation/oemValidation";
@@ -37,7 +35,8 @@ import { BLOCKED_DOMAINS } from "./sourceRegistry";
 import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts } from "./applicabilityRules";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
-import { reextractPartPrice, isAffirmativeRejection } from "./priceReextract";
+import { reextractPartPrice, isAffirmativeRejection, priceAllSources } from "./priceReextract";
+import { extractPriceFirecrawl } from "./firecrawl";
 import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
 import {
@@ -53,6 +52,8 @@ import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
+import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
+import { laborFlagsFromEnv } from "./laborResearch";
 import type { Id } from "../_generated/dataModel";
 
 // ─── Constants ─────────────────────────────────────────────────────
@@ -1865,7 +1866,7 @@ async function runPollBatch1Body(
           if (!svc) continue;
           // VDB labor is verified-bad (too generic per car) — kept at near-zero
           // weight as a last-resort tiebreaker only. The weighted median now
-          // honors weights (labor_aggregation.ts), so RepairPal/LLM dominate.
+          // honors weights (labor_aggregation.ts), so OLP/LLM dominate.
           // book_only skips the empirical job_actuals scan.
           await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
             vehicle_config_id: args.vehicleConfigId,
@@ -2296,46 +2297,36 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         console.log(`[v8] ${deterministicPrices.size} deterministic JSON-LD prices for ${args.make} ${args.model}`);
       }
 
-      // ── RepairPal labor setup (ONCE per car). Resolve the car's own nameplate
-      //    via an oil-change probe; cache per-determinant siblings so we don't
-      //    re-probe dead nameplates for every service. Dark behind the flag.
-      const rpEnabled = process.env.LABOR_SOURCE_REPAIRPAL === "on";
-      let rpOwnNameplate: string | null = null;
-      let rpEngineDoc: any = null;
-      let rpEngineFamily: string | undefined;
-      let rpChassisCode: string | undefined;
-      const rpSibling = new Map<string, { nameplate: string; match_key: string } | null>();
-      if (rpEnabled) {
-        rpEngineDoc = await ctx.runQuery(
-          internal.vehicleEnrichment.v3queries.getEngine,
-          { engineId: args.engineId },
-        );
-        // Engine family for sibling matching. The engine ROW can be a placeholder
-        // ("4.4l_8cyl") on a desynced config, so fall back to args.engineCode —
-        // the run's real input code ("N63B44O2") — which still derives the family.
-        rpEngineFamily =
-          rpEngineDoc?.engine_family ??
-          deriveEngineFamily(rpEngineDoc?.engine_code) ??
-          deriveEngineFamily(args.engineCode);
-        // runQuery serializes an undefined return to null — normalize, or the
-        // sibling resolver's v.optional(v.string()) validator throws for any
-        // car without a chassis code (latent stuck-config route, found via
-        // the Atlas relabor Jun-10).
-        rpChassisCode = (await ctx.runQuery(
-          internal.vehicleEnrichment.laborSibling.getConfigChassisCode,
-          { vehicleConfigId: args.vehicleConfigId },
-        )) ?? undefined;
-        for (const cand of repairpalModelCandidates(args.model, args.trim ?? "")) {
-          const probe = await ctx.runAction(
-            internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-            { urls: repairpalUrlCandidates(args.make, cand, "oil-change", args.year) },
-          );
-          if (probe) { rpOwnNameplate = cand; break; }
-        }
-        console.log(
-          `[v8/labor] RepairPal nameplate for ${args.make} ${args.model} ${args.trim ?? ""}: ${rpOwnNameplate ?? "(none → siblings)"}`,
-        );
-      }
+      // ── Multi-source labor (ONCE per car). The `laborAllSources` orchestrator
+      //    fans out to OLP + RepairPal + open-web (each flag-gated), merges the
+      //    per-source hours into weighted `labor_observations`, and recomputes the
+      //    weighted-median labor_times row — all internally. It REPLACES the old
+      //    OLP-only resolution + write loop. The LLM book-time loop below (llm_web
+      //    / llm_training) is a SEPARATE source the orchestrator does NOT handle,
+      //    so it stays. Flags: OLP on-by-default; RepairPal/web opt-in (read from
+      //    env in ONE place via laborFlagsFromEnv so this path and the laborRelabor
+      //    backfill can never drift).
+      const laborFlags = laborFlagsFromEnv();
+
+      // Engine descriptors fetched ONCE for the orchestrator inputs (named
+      // distinctly from the LLM loop's per-service `engineDoc` to avoid clashing).
+      const laborEngineDoc: any = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getEngine,
+        { engineId: args.engineId },
+      );
+      const laborEngineFamily =
+        laborEngineDoc?.engine_family ??
+        deriveEngineFamily(laborEngineDoc?.engine_code) ??
+        deriveEngineFamily(args.engineCode);
+      const laborRawDisp = laborEngineDoc?.displacement_l ?? laborEngineDoc?.displacement_liters ?? null;
+      const laborDisplacementL = laborRawDisp == null ? null : Number(laborRawDisp) || null;
+      const laborCylinders = laborEngineDoc?.cylinders ?? null;
+      const laborTurbo =
+        laborEngineDoc?.aspiration != null ? /turbo|supercharg/i.test(laborEngineDoc.aspiration) : null;
+      const laborVc: any = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getVehicleConfigById,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
 
       // Write labor times from Batch 2 pricing
       for (const svc of services) {
@@ -2374,74 +2365,73 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           service_id: serviceId,
           book_only: true,
         });
+      }
 
-        // RepairPal (MOTOR) labor: own nameplate first, else a verified sibling
-        // (resolved ONCE per determinant, cached in rpSibling). Dark behind the
-        // flag. All scrapes safe-fail to null → service falls back to the LLM obs.
-        const laborCfg = LABOR_SERVICE_CONFIG[slug];
-        if (rpEnabled && laborCfg?.repairpal_slug) {
-          let rpHours: number | null = null;
-          let rpMatchKey = "exact";
-          let rpSiblingSlug: string | undefined;
+      // Multi-source labor — written independently of the LLM loop so that every
+      // APPLICABLE MAPPED service gets resolved (OLP + RepairPal + web) regardless
+      // of whether the LLM provided labor_hours (Phase-2 parity with the backfill
+      // in laborRelabor.ts). The orchestrator does the observation writes + recompute
+      // internally; olp_labor lands at weight 0.7 here (the multi-source SOURCE_WEIGHTS
+      // recalibration), NOT the single-source 0.8 of olpRelabor.ts. Replaces the old
+      // OLP-only resolution + write loop.
+      const laborServices: Array<{
+        slug: string;
+        serviceId: Id<"services">;
+        name: string;
+        repairpal_slug: string | null;
+      }> = [];
+      // resolveServiceId is serviceCache-memoized, so re-iterating `services` here
+      // (after the LLM book-time loop above already resolved these slugs) reads from
+      // the cache and does NOT double-query the DB.
+      for (const svc of services) {
+        if (!svc.is_applicable) continue;
+        const slug = SERVICE_NAME_TO_SLUG[svc.service_name];
+        if (!slug) continue;
+        const serviceId = await resolveServiceId(ctx, slug, serviceCache);
+        if (!serviceId) continue;
+        laborServices.push({
+          slug,
+          serviceId,
+          name: svc.service_name,
+          repairpal_slug: LABOR_SERVICE_CONFIG[slug]?.repairpal_slug ?? null,
+        });
+      }
 
-          if (rpOwnNameplate) {
-            const rp = await ctx.runAction(
-              internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-              { urls: repairpalUrlCandidates(args.make, rpOwnNameplate, laborCfg.repairpal_slug, args.year) },
-            );
-            if (rp) { rpHours = rp.hours; rpSiblingSlug = rpOwnNameplate; }
-          }
+      // Resolve the OLP Next.js buildId only when OLP is enabled (it's the one
+      // shared input across all OLP service pages); undefined if OLP off/unresolved.
+      let laborBuildId: string | undefined = undefined;
+      if (laborFlags.olp) {
+        const bid = await ctx.runAction(internal.vehicleEnrichment.olpLaborScrape.resolveBuildId, {});
+        laborBuildId = bid.buildId ?? undefined;
+      }
 
-          if (rpHours == null) {
-            const det = laborCfg.determinant;
-            if (!rpSibling.has(det)) {
-              rpSibling.set(
-                det,
-                await ctx.runAction(
-                  internal.vehicleEnrichment.laborSibling.resolveLaborSibling,
-                  {
-                    make: args.make,
-                    model: args.model,
-                    trim: args.trim,
-                    year: args.year,
-                    chassis_code: rpChassisCode,
-                    engine_family: rpEngineFamily,
-                    determinant: det,
-                  },
-                ),
-              );
-            }
-            const sib = rpSibling.get(det);
-            if (sib) {
-              // The sibling is a different nameplate; OUR year still selects
-              // its same-generation page (e.g. 2021 M550i → 750i/2021).
-              const rp = await ctx.runAction(
-                internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-                { urls: repairpalUrlCandidates(args.make, sib.nameplate, laborCfg.repairpal_slug, args.year) },
-              );
-              if (rp) { rpHours = rp.hours; rpMatchKey = sib.match_key; rpSiblingSlug = sib.nameplate; }
-            }
-          }
+      console.log(
+        `[v8/labor] laborAllSources for ${args.make} ${args.model} ${args.trim ?? ""}: ` +
+        `flags={olp:${laborFlags.olp},web:${laborFlags.web}}, ` +
+        `${laborServices.length} services, buildId=${laborBuildId ? "resolved" : "none"}`,
+      );
 
-          if (rpHours != null) {
-            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
-              vehicle_config_id: args.vehicleConfigId,
-              service_id: serviceId,
-              hours: rpHours,
-              source: "repairpal_motor",
-              weight: 0.8,
-              tier: "catalog",
-              engine_family: rpEngineFamily,
-              match_key: rpMatchKey,
-              sibling_slug: rpSiblingSlug,
-            });
-            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
-              vehicle_config_id: args.vehicleConfigId,
-              service_id: serviceId,
-              book_only: true,
-            });
-          }
-        }
+      // Wrapped in try/catch so a total orchestrator failure NEVER aborts the
+      // downstream part-price writes (graceful degradation, like the old OLP block).
+      try {
+        await ctx.runAction(internal.vehicleEnrichment.laborResearch.laborAllSources, {
+          vehicleConfigId: args.vehicleConfigId,
+          make: args.make,
+          model: args.model,
+          trim: args.trim ?? "",
+          year: args.year,
+          engine: laborEngineDoc?.engine_code ?? null,
+          engine_family: laborEngineFamily,
+          displacementL: laborDisplacementL,
+          cylinders: laborCylinders,
+          drivetrain: laborVc?.drivetrain ?? null,
+          turbo: laborTurbo,
+          buildId: laborBuildId,
+          services: laborServices,
+          flags: laborFlags,
+        });
+      } catch (e) {
+        console.warn("[v3pipeline] laborAllSources failed (non-fatal):", e);
       }
 
       // Write part prices from Batch 2 pricing.
@@ -2471,128 +2461,196 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         );
         if (fitments.length === 0) continue;
 
-        // Authoritative: deterministic JSON-LD prices. Write the real per-SKU
-        // price for any fitment whose OEM number was parsed from the registry
-        // HTML, and mark it so the LLM breakdown below can't overwrite it.
-        for (const f of fitments) {
-          const num = (f as any).oem_part_number as string | null;
-          if (!num) continue;
-          const dp = deterministicPrices.get(normalizeOemNumber(num));
-          if (!dp) continue;
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
-            part_id:       f.part_id,
-            price:         dp.price,
-            price_type:    "sale",
-            source_url:    dp.source_url,
-            source_domain: dp.source_domain,
-          });
-          deterministicallyPriced.add(f.part_id);
-        }
+        if (process.env.PARTS_FIRECRAWL_PRICING === "off") {
+          // ===== LEGACY PATH (flag-off fallback) =====
 
-        // Preferred: itemized parts_breakdown — write each part's own price.
-        if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
-          // Build a quick oem_number → part_id lookup. Same OEM may have
-          // multiple fitments under one service (base + package variant) —
-          // every match gets the same per-unit price. Keys are NORMALIZED
-          // (mirrors the deterministic path above): the LLM frequently
-          // reformats numbers ("5Q0 698 451 A" vs stored "5Q0698451A"), and a
-          // raw-string match silently dropped those prices (Jun-9 review).
-          const numberToPartIds = new Map<string, Id<"oem_parts">[]>();
+          // Authoritative: deterministic JSON-LD prices. Write the real per-SKU
+          // price for any fitment whose OEM number was parsed from the registry
+          // HTML, and mark it so the LLM breakdown below can't overwrite it.
           for (const f of fitments) {
-            const num = (f as any).oem_part_number;
+            const num = (f as any).oem_part_number as string | null;
             if (!num) continue;
-            const key = normalizeOemNumber(num);
-            const arr = numberToPartIds.get(key) ?? [];
-            arr.push(f.part_id);
-            numberToPartIds.set(key, arr);
+            const dp = deterministicPrices.get(normalizeOemNumber(num));
+            if (!dp) continue;
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+              part_id:       f.part_id,
+              price:         dp.price,
+              price_type:    "sale",
+              source_url:    dp.source_url,
+              source_domain: dp.source_domain,
+            });
+            deterministicallyPriced.add(f.part_id);
           }
 
-          for (const entry of svc.parts_breakdown) {
-            if (entry.price_low == null) continue;
-            if (!entry.oem_part_number) continue;
-            const partIds = numberToPartIds.get(normalizeOemNumber(entry.oem_part_number));
-            if (!partIds || partIds.length === 0) continue;
-            const sourceDomain = entry.source_domain ?? extractDomain(entry.source_url ?? undefined) ?? "enrichment";
+          // Preferred: itemized parts_breakdown — write each part's own price.
+          if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
+            // Build a quick oem_number → part_id lookup. Same OEM may have
+            // multiple fitments under one service (base + package variant) —
+            // every match gets the same per-unit price. Keys are NORMALIZED
+            // (mirrors the deterministic path above): the LLM frequently
+            // reformats numbers ("5Q0 698 451 A" vs stored "5Q0698451A"), and a
+            // raw-string match silently dropped those prices (Jun-9 review).
+            const numberToPartIds = new Map<string, Id<"oem_parts">[]>();
+            for (const f of fitments) {
+              const num = (f as any).oem_part_number;
+              if (!num) continue;
+              const key = normalizeOemNumber(num);
+              const arr = numberToPartIds.get(key) ?? [];
+              arr.push(f.part_id);
+              numberToPartIds.set(key, arr);
+            }
 
-            // FIX AT SOURCE: verify the web-search LLM's price against its own
-            // cited page via the shared two-tier re-extraction (Tier 1 structured
-            // → Tier 2 LLM that excludes MSRP/"was"/"You Save"). When it confirms
-            // a real price we store the verified "sale" value instead of the raw
-            // estimate, so a fresh enrichment never persists a discount/MSRP
-            // figure. Flag-gated because it adds a fetch per itemized part; falls
-            // back to the unverified llm_estimate when off, unreachable, or
-            // neither tier can trust the page.
-            let verified: number | null = null;
-            // Affirmative rejection = the cited page itself testified AGAINST
-            // this number (price>=MSRP / wrong OEM / outside the median band).
-            // Persisting it as trusted 'llm_estimate' would feed a known-bad
-            // value into the customer median (Jun-9 review, item 8) — write it
-            // as UNVERIFIED instead (kept for audit, excluded from the median).
-            // Passive failures (empty page, no text, LLM error) keep the old
-            // fail-open llm_estimate behavior: we learned nothing new.
-            let affirmativeReject = false;
-            if (process.env.PARTS_REEXTRACT_BATCH2 === "on" && entry.source_url) {
-              try {
-                const outcome = await reextractPartPrice({
-                  oem: entry.oem_part_number,
-                  partName: (entry as any).part_name ?? null,
-                  source_url: entry.source_url,
-                  crossSourceMedian: null,
-                });
-                if (outcome.status === "sale") {
-                  verified = outcome.price;
-                } else if (
-                  outcome.status === "unverified" &&
-                  isAffirmativeRejection(outcome.reason)
-                ) {
-                  affirmativeReject = true;
-                  console.warn(
-                    `[v8] Batch-2 price affirmatively rejected (${outcome.reason}) for ` +
-                      `${entry.oem_part_number} @ ${sourceDomain} — storing as unverified`,
-                  );
+            for (const entry of svc.parts_breakdown) {
+              if (entry.price_low == null) continue;
+              if (!entry.oem_part_number) continue;
+              const partIds = numberToPartIds.get(normalizeOemNumber(entry.oem_part_number));
+              if (!partIds || partIds.length === 0) continue;
+              const sourceDomain = entry.source_domain ?? extractDomain(entry.source_url ?? undefined) ?? "enrichment";
+
+              // FIX AT SOURCE: verify the web-search LLM's price against its own
+              // cited page via the shared two-tier re-extraction (Tier 1 structured
+              // → Tier 2 LLM that excludes MSRP/"was"/"You Save"). When it confirms
+              // a real price we store the verified "sale" value instead of the raw
+              // estimate, so a fresh enrichment never persists a discount/MSRP
+              // figure. Flag-gated because it adds a fetch per itemized part; falls
+              // back to the unverified llm_estimate when off, unreachable, or
+              // neither tier can trust the page.
+              let verified: number | null = null;
+              // Affirmative rejection = the cited page itself testified AGAINST
+              // this number (price>=MSRP / wrong OEM / outside the median band).
+              // Persisting it as trusted 'llm_estimate' would feed a known-bad
+              // value into the customer median (Jun-9 review, item 8) — write it
+              // as UNVERIFIED instead (kept for audit, excluded from the median).
+              // Passive failures (empty page, no text, LLM error) keep the old
+              // fail-open llm_estimate behavior: we learned nothing new.
+              let affirmativeReject = false;
+              if (process.env.PARTS_REEXTRACT_BATCH2 === "on" && entry.source_url) {
+                try {
+                  const outcome = await reextractPartPrice({
+                    oem: entry.oem_part_number,
+                    partName: (entry as any).part_name ?? null,
+                    source_url: entry.source_url,
+                    crossSourceMedian: null,
+                  });
+                  if (outcome.status === "sale") {
+                    verified = outcome.price;
+                  } else if (
+                    outcome.status === "unverified" &&
+                    isAffirmativeRejection(outcome.reason)
+                  ) {
+                    affirmativeReject = true;
+                    console.warn(
+                      `[v8] Batch-2 price affirmatively rejected (${outcome.reason}) for ` +
+                        `${entry.oem_part_number} @ ${sourceDomain} — storing as unverified`,
+                    );
+                  }
+                } catch (e) {
+                  console.warn("[v8] Batch-2 Tier-2 reextract failed (non-fatal):", e);
                 }
-              } catch (e) {
-                console.warn("[v8] Batch-2 Tier-2 reextract failed (non-fatal):", e);
+              }
+
+              for (const partId of partIds) {
+                // Deterministic JSON-LD price already owns this part — the LLM
+                // estimate must not overwrite it or pollute the median.
+                if (deterministicallyPriced.has(partId)) continue;
+                await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+                  part_id:       partId,
+                  price:         verified ?? entry.price_low,
+                  price_type:
+                    verified != null
+                      ? "sale"
+                      : affirmativeReject
+                        ? UNVERIFIED_PRICE_TYPE
+                        : "llm_estimate",
+                  source_url:    entry.source_url ?? undefined,
+                  source_domain: sourceDomain,
+                });
+                if (verified != null) deterministicallyPriced.add(partId);
               }
             }
+            continue; // breakdown handled this service — don't fall through
+          }
 
-            for (const partId of partIds) {
-              // Deterministic JSON-LD price already owns this part — the LLM
-              // estimate must not overwrite it or pollute the median.
-              if (deterministicallyPriced.has(partId)) continue;
-              await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
-                part_id:       partId,
-                price:         verified ?? entry.price_low,
-                price_type:
-                  verified != null
-                    ? "sale"
-                    : affirmativeReject
-                      ? UNVERIFIED_PRICE_TYPE
-                      : "llm_estimate",
-                source_url:    entry.source_url ?? undefined,
-                source_domain: sourceDomain,
-              });
-              if (verified != null) deterministicallyPriced.add(partId);
+          // Fallback: legacy service-level price. Store as per-unit on each
+          // fitment in the service (no division — the prompt contracts the
+          // service-level price as per-unit too).
+          const priceVal = asNumber(svc.parts_cost_low?.value);
+          if (priceVal == null) continue;
+          for (const fitment of fitments) {
+            // Skip parts the deterministic JSON-LD parser already priced.
+            if (deterministicallyPriced.has(fitment.part_id)) continue;
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+              part_id:       fitment.part_id,
+              price:         priceVal,
+              price_type:    "llm_estimate",
+              source_domain: extractDomain(svc.parts_cost_low?.source_url) ?? "enrichment",
+              source_url:    svc.parts_cost_low?.source_url ?? undefined,
+            });
+          }
+        } else {
+          // ===== Firecrawl structured pricing (default) =====
+          // Price each fitment across the UNION of its discovered source URLs
+          // (deterministic JSON-LD source + parts_breakdown entries). Every price
+          // is re-verified via Firecrawl json + gauge/guided-retry; only validated
+          // "sale" rows are written (msrp/discount included). Parts with no
+          // discovered product URL get no price here (better than an llm guess).
+          const urlsByPart = new Map<string, { urls: string[]; oem: string | null; name: string | null }>();
+          const addUrl = (partId: any, url: string | undefined | null, oem: string | null, name: string | null) => {
+            if (!url) return;
+            const k = String(partId);
+            const e = urlsByPart.get(k) ?? { urls: [], oem, name };
+            if (!e.urls.includes(url)) e.urls.push(url);
+            if (!e.oem && oem) e.oem = oem;
+            if (!e.name && name) e.name = name;
+            urlsByPart.set(k, e);
+          };
+          for (const f of fitments) {
+            const num = (f as any).oem_part_number as string | null;
+            const dp = num ? deterministicPrices.get(normalizeOemNumber(num)) : null;
+            if (dp?.source_url) addUrl(f.part_id, dp.source_url, num ?? null, (f as any).part_name ?? null);
+          }
+          if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
+            const numToPartIds = new Map<string, any[]>();
+            for (const f of fitments) {
+              const num = (f as any).oem_part_number;
+              if (!num) continue;
+              const key = normalizeOemNumber(num);
+              const arr = numToPartIds.get(key) ?? [];
+              arr.push(f.part_id);
+              numToPartIds.set(key, arr);
+            }
+            for (const entry of svc.parts_breakdown) {
+              if (!entry.oem_part_number || !entry.source_url) continue;
+              for (const pid of numToPartIds.get(normalizeOemNumber(entry.oem_part_number)) ?? []) {
+                addUrl(pid, entry.source_url, entry.oem_part_number, (entry as any).part_name ?? null);
+              }
             }
           }
-          continue; // breakdown handled this service — don't fall through
-        }
-
-        // Fallback: legacy service-level price. Store as per-unit on each
-        // fitment in the service (no division — the prompt contracts the
-        // service-level price as per-unit too).
-        const priceVal = asNumber(svc.parts_cost_low?.value);
-        if (priceVal == null) continue;
-        for (const fitment of fitments) {
-          // Skip parts the deterministic JSON-LD parser already priced.
-          if (deterministicallyPriced.has(fitment.part_id)) continue;
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
-            part_id:       fitment.part_id,
-            price:         priceVal,
-            price_type:    "llm_estimate",
-            source_domain: extractDomain(svc.parts_cost_low?.source_url) ?? "enrichment",
-            source_url:    svc.parts_cost_low?.source_url ?? undefined,
-          });
+          for (const [partIdStr, e] of urlsByPart) {
+            if (e.urls.length === 0) continue;
+            const rows = await priceAllSources(e.urls, { oem: e.oem, partName: e.name }, extractPriceFirecrawl);
+            for (const row of rows) {
+              if (row.outcome.status !== "sale") continue;
+              await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+                part_id: partIdStr as any,
+                price: row.outcome.price,
+                price_type: "sale",
+                source_domain: row.source_domain,
+                source_url: row.source_url,
+                msrp: row.outcome.msrp ?? undefined,
+                discount: row.outcome.discount ?? undefined,
+              });
+            }
+            // Observability: a part where NO source yielded a trusted price gets
+            // no row (better than an llm guess) — but log it so a degraded run
+            // (anti-bot blocks / Firecrawl outage) is diagnosable, not silent.
+            if (!rows.some((r) => r.outcome.status === "sale")) {
+              console.warn(
+                `[v8/price] no trusted price for part ${partIdStr} (oem=${e.oem ?? "?"}) from ${e.urls.length} source(s): ` +
+                  rows.map((r) => `${r.source_domain}:${r.outcome.status}${r.outcome.status === "unverified" ? `(${r.outcome.reason})` : ""}`).join(", "),
+              );
+            }
+          }
         }
       }
     }

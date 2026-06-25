@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Oto · Data Integrity Proof — Old vs New</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#080b11; --panel:#0f141d; --panel2:#131a25; --line:rgba(255,255,255,.06);
+    --ink:#e8eef6; --muted:#8294a9; --faint:#4a586b;
+    --old:#ff5d5d; --old-dim:rgba(255,93,93,.12); --old-line:rgba(255,93,93,.32);
+    --new:#3ddc97; --new-dim:rgba(61,220,151,.10); --new-line:rgba(61,220,151,.30);
+    --amber:#ffb547; --cyan:#36d4ff; --warn:#f5a623;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --disp:'Bricolage Grotesque',system-ui,sans-serif;
+    --serif:'Newsreader',Georgia,serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg); color:var(--ink); font-family:var(--mono);
+    line-height:1.5; -webkit-font-smoothing:antialiased;
+    background-image:
+      radial-gradient(1100px 600px at 78% -8%, rgba(54,212,255,.10), transparent 60%),
+      radial-gradient(900px 560px at 8% 4%, rgba(255,181,71,.07), transparent 55%),
+      linear-gradient(transparent 0 31px, var(--line) 31px 32px),
+      linear-gradient(90deg, transparent 0 31px, var(--line) 31px 32px);
+    background-size:auto,auto,32px 32px,32px 32px;
+  }
+  .wrap{max-width:1160px;margin:0 auto;padding:0 26px}
+  a{color:inherit}
+
+  /* ---------- intro reveal ---------- */
+  .rise{opacity:0;transform:translateY(16px);animation:rise .7s cubic-bezier(.2,.7,.2,1) forwards}
+  @keyframes rise{to{opacity:1;transform:none}}
+  .d1{animation-delay:.05s}.d2{animation-delay:.13s}.d3{animation-delay:.21s}.d4{animation-delay:.30s}
+
+  /* ---------- top bar ---------- */
+  header.bar{position:sticky;top:0;z-index:30;backdrop-filter:blur(10px);
+    background:linear-gradient(180deg,rgba(8,11,17,.92),rgba(8,11,17,.6));
+    border-bottom:1px solid var(--line)}
+  .bar .wrap{display:flex;align-items:center;gap:18px;height:58px}
+  .logo{font-family:var(--disp);font-weight:800;letter-spacing:-.02em;font-size:18px}
+  .logo b{color:var(--amber)}
+  .bar .tag{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.18em}
+  .dep{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .chip{font-size:11px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);
+    color:var(--muted);white-space:nowrap}
+  .chip.old{color:var(--old);border-color:var(--old-line);background:var(--old-dim)}
+  .chip.new{color:var(--new);border-color:var(--new-line);background:var(--new-dim)}
+
+  /* ---------- hero ---------- */
+  .hero{padding:74px 0 30px}
+  .kicker{font-size:12px;letter-spacing:.32em;text-transform:uppercase;color:var(--cyan)}
+  h1{font-family:var(--disp);font-weight:800;letter-spacing:-.025em;line-height:1.02;
+    font-size:clamp(38px,6.4vw,76px);margin:16px 0 14px}
+  h1 .strike{color:var(--old);text-decoration:line-through;text-decoration-thickness:3px;
+    text-decoration-color:rgba(255,93,93,.6)}
+  h1 .win{color:var(--new)}
+  .lede{max-width:720px;color:var(--muted);font-size:16px}
+  .lede b{color:var(--ink);font-weight:500}
+
+  /* ---------- section scaffolding ---------- */
+  section{padding:46px 0;border-top:1px solid var(--line)}
+  .sec-h{display:flex;align-items:baseline;gap:14px;margin-bottom:24px}
+  .sec-n{font-family:var(--mono);color:var(--amber);font-size:13px}
+  .sec-t{font-family:var(--disp);font-weight:700;letter-spacing:-.02em;font-size:clamp(24px,3.4vw,34px)}
+  .sec-sub{color:var(--muted);font-size:14px;max-width:760px;margin-top:-12px;margin-bottom:26px}
+
+  /* ---------- feedback thread ---------- */
+  .thread{display:grid;grid-template-columns:1fr;gap:0;max-width:720px;
+    border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--panel)}
+  .thread .head{display:flex;align-items:center;gap:12px;padding:14px 18px;
+    border-bottom:1px solid var(--line);background:var(--panel2)}
+  .ava{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;
+    background:linear-gradient(140deg,#2a3550,#1a2333);color:var(--cyan);font-weight:600;font-size:13px;
+    border:1px solid var(--line)}
+  .who{font-weight:600;font-size:14px}.role{font-size:11px;color:var(--muted)}
+  .msgs{padding:16px 18px 20px;display:flex;flex-direction:column;gap:10px}
+  .b{font-family:var(--serif);font-size:16.5px;line-height:1.45;color:#dfe7f1;
+    background:#0c1119;border:1px solid var(--line);border-radius:4px 13px 13px 13px;
+    padding:9px 14px;max-width:90%;position:relative}
+  .b .t{font-family:var(--mono);font-size:10px;color:var(--faint);color:#566679;
+    position:absolute;right:10px;bottom:5px}
+  .b.acc{border-color:var(--new-line)} .b.flag{border-color:var(--old-line);background:#170f12}
+  .b .pin{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+    display:block;margin-bottom:5px;font-weight:600}
+  .b.acc .pin{color:var(--new)} .b.flag .pin{color:var(--old)}
+  .b em{color:var(--amber);font-style:italic}
+  .verdict-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;max-width:720px}
+  .vt{flex:1;min-width:200px;border:1px solid var(--line);border-radius:12px;padding:13px 15px;background:var(--panel)}
+  .vt .n{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .vt .s{font-family:var(--disp);font-weight:700;font-size:16px;margin-top:5px}
+  .vt.ok .s{color:var(--new)} .vt.kill .s{color:var(--old)}
+
+  /* ---------- thesis ---------- */
+  .thesis{border:1px solid var(--line);border-radius:16px;background:
+    linear-gradient(180deg,var(--panel2),var(--panel));padding:30px 28px;text-align:center}
+  .eq{font-family:var(--disp);font-weight:700;font-size:clamp(22px,4vw,40px);letter-spacing:-.02em;line-height:1.25}
+  .eq .hrs{color:var(--new);position:relative}
+  .eq .rate{color:var(--old)}
+  .eq .u{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--muted);margin-top:4px;font-weight:400}
+  .thesis p{color:var(--muted);max-width:680px;margin:18px auto 0;font-size:15px}
+  .thesis p b{color:var(--ink);font-weight:500}
+
+  /* ---------- car panels ---------- */
+  .car{border:1px solid var(--line);border-radius:18px;overflow:hidden;background:var(--panel);margin-bottom:26px}
+  .car-h{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:18px 22px;border-bottom:1px solid var(--line);
+    background:linear-gradient(90deg,var(--panel2),transparent)}
+  .car-h .idx{font-family:var(--disp);font-weight:800;font-size:22px;color:var(--amber)}
+  .car-h .nm{font-family:var(--disp);font-weight:700;font-size:21px;letter-spacing:-.01em}
+  .car-h .meta{font-size:11.5px;color:var(--muted)}
+  .car-h .pill{margin-left:auto;font-size:11px;font-weight:600;padding:6px 12px;border-radius:999px;
+    color:var(--new);border:1px solid var(--new-line);background:var(--new-dim);white-space:nowrap}
+  .cols{display:grid;grid-template-columns:1fr 1fr}
+  .col{padding:18px 22px}
+  .col.o{background:linear-gradient(180deg,rgba(255,93,93,.04),transparent)}
+  .col.n{background:linear-gradient(180deg,rgba(61,220,151,.04),transparent);border-left:1px solid var(--line)}
+  .col-h{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:14px}
+  .col.o .col-h{color:var(--old)} .col.n .col-h{color:var(--new)}
+  .dot{width:7px;height:7px;border-radius:50%}
+  .col.o .dot{background:var(--old);box-shadow:0 0 10px var(--old)}
+  .col.n .dot{background:var(--new);box-shadow:0 0 10px var(--new)}
+  .deploy{margin-left:auto;font-size:10px;color:var(--muted);letter-spacing:0;text-transform:none}
+
+  .tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+  .tile{border:1px solid var(--line);border-radius:10px;padding:11px 12px;background:#0b1018}
+  .tile .k{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .tile .v{font-family:var(--disp);font-weight:800;font-size:23px;line-height:1.1;margin-top:3px}
+  .tile.bad .v{color:var(--old)} .tile.good .v{color:var(--new)} .tile.warn .v{color:var(--warn)}
+  .tile .sub{font-size:10.5px;color:var(--muted);margin-top:2px}
+
+  table.lab{width:100%;border-collapse:collapse;font-size:12px;margin-top:4px}
+  table.lab th{text-align:left;font-weight:500;color:var(--muted);font-size:10px;text-transform:uppercase;
+    letter-spacing:.08em;padding:5px 6px;border-bottom:1px solid var(--line)}
+  table.lab td{padding:6px 6px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:top}
+  table.lab td.s{color:var(--ink)}
+  .hrs{font-weight:600}
+  .src{font-size:10px;padding:1px 6px;border-radius:5px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .src.rp{color:var(--new);border-color:var(--new-line);background:var(--new-dim)}
+  .src.td{color:var(--warn);border-color:rgba(245,166,35,.3);background:rgba(245,166,35,.08)}
+  .src.vdb{color:#9aa7ff;border-color:rgba(154,167,255,.3);background:rgba(154,167,255,.08)}
+  .poison{color:var(--old);font-weight:600}
+  .strike2{text-decoration:line-through;text-decoration-color:var(--old-line);color:var(--muted)}
+
+  .call{margin-top:14px;border:1px solid var(--old-line);background:var(--old-dim);border-radius:10px;padding:12px 14px}
+  .call.n{border-color:var(--new-line);background:var(--new-dim)}
+  .call .lab2{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--old);font-weight:600;margin-bottom:5px}
+  .call.n .lab2{color:var(--new)}
+  .call p{font-size:12.5px;color:#cdd7e3}
+  .call code{font-family:var(--mono);color:var(--amber);font-size:11.5px}
+
+  /* ---------- parts-price strip ---------- */
+  .pstrip{border-top:1px solid var(--line);padding:15px 22px;background:linear-gradient(180deg,rgba(255,93,93,.03),transparent)}
+  .pstrip .ph{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--amber);margin-bottom:10px;font-weight:600}
+  table.pp{width:100%;border-collapse:collapse;font-size:12px}
+  table.pp th{text-align:left;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.08em;padding:5px 8px;border-bottom:1px solid var(--line)}
+  table.pp td{padding:8px 8px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:top}
+  table.pp td.pt{color:var(--ink)} table.pp td.pt .oem{display:block;font-size:10px;color:var(--muted)}
+  table.pp td.old{color:#e9c3c3}
+  table.pp td.new{color:var(--new);font-weight:600;white-space:nowrap;text-align:right}
+  table.pp .flag{color:var(--old)} table.pp .okp{color:var(--muted)}
+  .pnote{font-size:11.5px;color:var(--muted);margin-top:14px;border-left:2px solid var(--warn);padding-left:12px;max-width:880px}
+  .pnote b{color:var(--ink);font-weight:500}
+
+  @media(max-width:760px){.cols{grid-template-columns:1fr}.col.n{border-left:none;border-top:1px solid var(--line)}
+    .tiles{grid-template-columns:1fr 1fr}}
+
+  /* ---------- accuracy ---------- */
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media(max-width:820px){.grid3{grid-template-columns:1fr}}
+  .pcard{border:1px solid var(--line);border-radius:14px;padding:20px;background:var(--panel)}
+  .pcard h3{font-family:var(--disp);font-weight:700;font-size:16px;margin-bottom:6px}
+  .pcard p{font-size:13px;color:var(--muted)}
+  .scale{margin-top:14px;display:flex;flex-direction:column;gap:10px}
+  .srow{display:grid;grid-template-columns:88px 1fr 46px;align-items:center;gap:10px;font-size:12px}
+  .srow .car-l{color:var(--muted)}
+  .bar2{height:14px;border-radius:7px;background:#0b1018;border:1px solid var(--line);overflow:hidden}
+  .bar2 i{display:block;height:100%;border-radius:7px;
+    background:linear-gradient(90deg,var(--cyan),var(--new));animation:grow 1.1s cubic-bezier(.2,.7,.2,1) both}
+  @keyframes grow{from{width:0}}
+  .srow .val{text-align:right;font-weight:600;color:var(--new)}
+  table.mini{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}
+  table.mini td{padding:5px 4px;border-bottom:1px solid rgba(255,255,255,.05)}
+  table.mini td:last-child{text-align:right;color:var(--cyan);font-weight:600}
+
+  /* ---------- scoreboard ---------- */
+  table.score{width:100%;border-collapse:collapse;font-size:13.5px;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  table.score th{background:var(--panel2);text-align:left;padding:13px 16px;font-weight:600;font-size:12px;
+    text-transform:uppercase;letter-spacing:.08em}
+  table.score th.o{color:var(--old)} table.score th.n{color:var(--new)}
+  table.score td{padding:13px 16px;border-top:1px solid var(--line);vertical-align:top}
+  table.score td.axis{color:var(--muted);font-size:12px}
+  table.score td.o{color:#e9c3c3} table.score td.n{color:#bdead4}
+  table.score tr:nth-child(even) td{background:rgba(255,255,255,.015)}
+
+  .final{border:1px solid var(--new-line);background:linear-gradient(180deg,var(--new-dim),transparent);
+    border-radius:16px;padding:28px;text-align:center;margin-top:10px}
+  .final .big{font-family:var(--disp);font-weight:800;font-size:clamp(20px,3.4vw,30px);letter-spacing:-.02em}
+  .final .big .g{color:var(--new)}
+  .final p{color:var(--muted);max-width:680px;margin:12px auto 0;font-size:14px}
+
+  footer{padding:40px 0 70px;color:var(--faint);color:#4a586b;font-size:12px}
+  footer .wrap{display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+  footer code{color:var(--muted)}
+  .note{font-size:11px;color:var(--muted);margin-top:8px}
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <span class="logo">Oto<b>·</b>Pair</span>
+    <span class="tag">Data Integrity Proof</span>
+    <div class="dep">
+      <span class="chip old">OLD · ardent-crab</span>
+      <span class="chip new">NEW · flippant-mink</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="kicker rise d1">Response to feedback · 3 vehicles · real data, both deployments</div>
+    <h1 class="rise d2">The labor system<br><span class="strike">won't work.</span> &nbsp;<span class="win">It already does.</span></h1>
+    <p class="lede rise d3">You asked us to populate three cars and compare the new data to the old. We did — on two live deployments. The data shows the inconsistency you were worried about was <b>already in the old data</b>, it came from <b>unvalidated guesses, not shop rates</b>, and the new pipeline removes it. Here's every number.</p>
+  </div>
+
+  <!-- 1. THE FEEDBACK -->
+  <section>
+    <div class="sec-h"><span class="sec-n">01</span><span class="sec-t">The feedback</span></div>
+    <div class="thread rise">
+      <div class="head">
+        <div class="ava">Y</div>
+        <div><div class="who">Yassin Wahman</div><div class="role">Team lead · review of the walkthrough video</div></div>
+      </div>
+      <div class="msgs">
+        <div class="b">Thanks for the video. <span class="t">12:31</span></div>
+        <div class="b acc"><span class="pin">✓ Point 1 · shipped</span>Having the ability to re-enrich in the admin site is great, and will be something that will 100% be useful for us all. <span class="t">12:31</span></div>
+        <div class="b acc"><span class="pin">✓ Point 2 · acknowledged</span>I really like the Oto conversation simulator… I'm assuming there will be a way for a conversation to be flagged? By either a user or by Oto himself if he's asked a question he can't answer? <span class="t">12:32</span></div>
+        <div class="b flag"><span class="pin">✕ Point 3 · the claim we'll disprove</span>Your system for calculating labor time… unfortunately won't work. Because <em>labor price is set by the shop and differs from shop to shop, so there will be massive data inconsistency</em> — unless I understood it incorrectly. <span class="t">12:33</span></div>
+        <div class="b">When you make a 22-minute video, and there's not a single test case, that is a concern. Why are there no examples? Go populate a car, show us the new data, and compare it to the old. <span class="t">12:34</span></div>
+        <div class="b flag"><span class="pin">► the request</span>Please populate <em>3 vehicles</em>, show us the new data with your new filters and math in place. And compare it against the old. Let's try and have that by end of day. <span class="t">12:35</span></div>
+        <div class="b acc">Besides that — great work!! <span class="t">12:35</span></div>
+      </div>
+    </div>
+    <div class="verdict-row rise">
+      <div class="vt ok"><div class="n">Point 1 — Admin re-enrich</div><div class="s">Shipped ✓</div></div>
+      <div class="vt ok"><div class="n">Point 2 — Conversation flagging</div><div class="s">User flag live · Oto-self ½ day</div></div>
+      <div class="vt kill"><div class="n">Point 3 — "Labor won't work"</div><div class="s">Disproved below ↓</div></div>
+    </div>
+  </section>
+
+  <!-- 2. THESIS -->
+  <section>
+    <div class="sec-h"><span class="sec-n">02</span><span class="sec-t">Why "shop rates differ" can't touch our data</span></div>
+    <div class="sec-sub">You're right that price varies shop to shop. That's exactly why we never store price.</div>
+    <div class="thesis rise">
+      <div class="eq">
+        shop labor $ &nbsp;=&nbsp; <span class="hrs">labor_hours<span class="u">we store this — a property of the car</span></span> &nbsp;×&nbsp; <span class="rate">shop_door_rate<span class="u">the shop sets this — we never touch it</span></span>
+      </div>
+      <p><b>Hours are the flat-rate standard</b> every system (MOTOR · Mitchell1 · ALLDATA · RepairPal) publishes before any shop applies its own rate. They depend on the chassis, the engine, and how the part mounts — not on who's quoting. The shop-to-shop variance you describe lives entirely in <b>rate</b>, which is computed at read time and stays the shop's. <b>The inconsistency literally cannot enter our data — by construction.</b></p>
+    </div>
+  </section>
+
+  <!-- 3. LIVE ENRICH -->
+  <section>
+    <div class="sec-h"><span class="sec-n">03</span><span class="sec-t">Populated live today — the exact request</span></div>
+    <div class="sec-sub">Three cars that exist on ardent-crab but were <b>not</b> on flippant-mink, enriched fresh through the new pipeline today (<code style="color:var(--amber)">runPublic:go {vin}</code> → decode · create · RepairPal labor · parts). On these three the decisive axis is <b>labor</b> — the exact system that was called unworkable. Shown straight: where old parts weren't poisoned, we say so.</div>
+
+    <!-- LIVE A: Expedition -->
+    <div class="car rise">
+      <div class="car-h">
+        <span class="idx">1</span>
+        <div><div class="nm">2026 Ford Expedition Tremor</div><div class="meta">3.5L EcoBoost V6 twin-turbo · VIN 1FMJU1RGXTEA03585 · enriched live</div></div>
+        <span class="pill" style="color:var(--amber);border-color:rgba(255,181,71,.4);background:rgba(255,181,71,.1)">⦿ enriched today</span>
+      </div>
+      <div class="cols">
+        <div class="col o">
+          <div class="col-h"><span class="dot"></span>Old data<span class="deploy">ardent-crab</span></div>
+          <div class="tiles">
+            <div class="tile bad"><div class="k">Spark-plug labor</div><div class="v">0.92 h</div><div class="sub">vdb — implausible for a V6TT</div></div>
+            <div class="tile warn"><div class="k">Labor validation</div><div class="v">none</div><div class="sub">every row sample_size 0</div></div>
+          </div>
+          <table class="lab">
+            <tr><th>Service</th><th>Book</th><th>Source / conf</th></tr>
+            <tr><td class="s">Oil change</td><td class="hrs">0.35</td><td><span class="src vdb">vdb 0.9</span> <span style="color:var(--muted);font-size:10px">unvalidated</span></td></tr>
+            <tr><td class="s">Spark plugs</td><td class="hrs poison">0.92</td><td><span class="src vdb">vdb 0.9</span> <span style="color:var(--muted);font-size:10px">unvalidated</span></td></tr>
+            <tr><td class="s">Brake pads</td><td class="hrs">1.5</td><td><span class="src td">training 0.75</span></td></tr>
+            <tr><td class="s">Wheel alignment</td><td class="hrs">1.0</td><td><span class="src td">training 0.75</span></td></tr>
+            <tr><td class="s">Battery</td><td class="hrs">0.5</td><td><span class="src td">training 0.75</span></td></tr>
+          </table>
+          <div class="call">
+            <div class="lab2">The tell</div>
+            <p>Confidence 0.9 on rows with <code>empirical_sample_size: 0</code> — confidence not earned. A twin-turbo V6 (plugs under the intake) can't be a <span class="poison">0.92-hour</span> job; the VDB number is ~3× too low.</p>
+          </div>
+        </div>
+        <div class="col n">
+          <div class="col-h"><span class="dot"></span>New data<span class="deploy">enriched today</span></div>
+          <div class="tiles">
+            <div class="tile good"><div class="k">Spark-plug labor</div><div class="v">2.6 h</div><div class="sub">RepairPal MOTOR</div></div>
+            <div class="tile good"><div class="k">Parts priced</div><div class="v">18/25</div><div class="sub">2-tier verified</div></div>
+          </div>
+          <table class="lab">
+            <tr><th>Service</th><th>Book</th><th>Source / conf</th><th>Gate</th></tr>
+            <tr><td class="s">Oil change</td><td class="hrs">0.5</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+            <tr><td class="s">Spark plugs</td><td class="hrs">2.6</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+            <tr><td class="s">Brake pads</td><td class="hrs">1.1</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+            <tr><td class="s">Wheel alignment</td><td class="hrs">2.0</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+            <tr><td class="s">Battery</td><td class="hrs">0.4</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+          </table>
+          <div class="call n">
+            <div class="lab2">Fixed</div>
+            <p>Spark plugs <span class="poison">0.92h</span> → <b style="color:var(--new)">2.6h</b>, the real MOTOR time. Every graded service anchored to a <code>repairpal_motor</code> observation and gated.</p>
+          </div>
+        </div>
+      </div>
+      <div class="pstrip">
+        <div class="ph">⛔ Parts pricing — old scrape vs new (poison the 2-tier gate rejects)</div>
+        <table class="pp">
+          <tr><th>Part</th><th>Old scraped rows (ardent-crab)</th><th>New</th></tr>
+          <tr><td class="pt">Oil Filter<span class="oem">FL-500-S · 4 sources</span></td><td class="old">$2.30 – $45 · <span class="flag">$45 row is an oil-change <b>kit</b>; $9.31 row is from an <b>air-filter</b> page</span></td><td class="new">$12.71</td></tr>
+          <tr><td class="pt">Engine Air Filter<span class="oem">FA-1883 · 9 sources</span></td><td class="old">$4.90 – $11.27 · <span class="flag">a <b>cabin/pollen</b> filter (FP-79) + a wrong OEM mixed in</span></td><td class="new">$17.97</td></tr>
+          <tr><td class="pt">Spark Plug<span class="oem">SP-594</span></td><td class="old">$96 · <span class="flag">summitracing, wrong SKU</span></td><td class="new">$12.95</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- LIVE B: Rogue -->
+    <div class="car rise">
+      <div class="car-h">
+        <span class="idx">2</span>
+        <div><div class="nm">2023 Nissan Rogue SV</div><div class="meta">1.5L VC-Turbo · VIN JN8BT3BB9PW213363 · enriched live</div></div>
+        <span class="pill" style="color:var(--amber);border-color:rgba(255,181,71,.4);background:rgba(255,181,71,.1)">⦿ enriched today</span>
+      </div>
+      <div class="cols">
+        <div class="col o">
+          <div class="col-h"><span class="dot"></span>Old data<span class="deploy">ardent-crab</span></div>
+          <div class="tiles">
+            <div class="tile bad"><div class="k">Labor rows</div><div class="v">0</div><div class="sub">none produced</div></div>
+            <div class="tile warn"><div class="k">Parts</div><div class="v">13</div><div class="sub">fitments, scraped</div></div>
+          </div>
+          <div class="call">
+            <div class="lab2">No labor at all</div>
+            <p>The old system produced <b>zero</b> <code>labor_times</code> for this car — specs and parts only. There was nothing to quote labor against.</p>
+          </div>
+        </div>
+        <div class="col n">
+          <div class="col-h"><span class="dot"></span>New data<span class="deploy">enriched today</span></div>
+          <div class="tiles">
+            <div class="tile good"><div class="k">Labor</div><div class="v">RepairPal</div><div class="sub">gated, where there was none</div></div>
+            <div class="tile good"><div class="k">Parts priced</div><div class="v">24/25</div><div class="sub">2-tier verified</div></div>
+          </div>
+          <table class="lab">
+            <tr><th>Service</th><th>Book</th><th>Source / conf</th><th>Gate</th></tr>
+            <tr><td class="s">Oil change</td><td class="hrs">0.5</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+            <tr><td class="s">Spark plugs</td><td class="hrs">1.2</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+            <tr><td class="s">Brake pads</td><td class="hrs">1.0</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+            <tr><td class="s">Wheel alignment</td><td class="hrs">1.6</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+          </table>
+          <div class="call n">
+            <div class="lab2">Labor: none → RepairPal</div>
+            <p>Full RepairPal-gated labor where the old system produced none. The oil filter happened to be clean (OLD $6.92 → NEW $6.37) — but other parts weren't, see below.</p>
+          </div>
+        </div>
+      </div>
+      <div class="pstrip">
+        <div class="ph">⛔ Parts pricing — old scrape vs new</div>
+        <table class="pp">
+          <tr><th>Part</th><th>Old scraped rows (ardent-crab)</th><th>New</th></tr>
+          <tr><td class="pt">Oil Filter<span class="oem">15208-65F1E</span></td><td class="old">$6.92 · <span class="okp">clean, single source ✓</span></td><td class="new">$6.37</td></tr>
+          <tr><td class="pt">Spark Plug<span class="oem">22401-6RC1E</span></td><td class="old">$70.89 · <span class="flag">a <b>3-pack total</b> stored as the per-plug price (3×$23.63)</span></td><td class="new">$23.63 ea</td></tr>
+          <tr><td class="pt">Front Brake Pads<span class="oem">D1060-6RR0A</span></td><td class="old">$36.5 – $37.0 · <span class="flag">one row is a <b>rear</b> pad (D4060) priced as front</span></td><td class="new">$84.93</td></tr>
+          <tr><td class="pt">Battery<span class="oem">999M1-NCH6A</span></td><td class="old">$171.56 · <span class="flag">priced as a <b>different variant</b> (NBH6A)</span></td><td class="new">$278.99</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- LIVE C: RAV4 -->
+    <div class="car rise">
+      <div class="car-h">
+        <span class="idx">3</span>
+        <div><div class="nm">2022 Toyota RAV4</div><div class="meta">A25A-FXS hybrid · VIN JTMCB3FV4ND089342 · enriched live</div></div>
+        <span class="pill" style="color:var(--amber);border-color:rgba(255,181,71,.4);background:rgba(255,181,71,.1)">⦿ enriched today</span>
+      </div>
+      <div class="cols">
+        <div class="col o">
+          <div class="col-h"><span class="dot"></span>Old data<span class="deploy">ardent-crab</span></div>
+          <div class="tiles">
+            <div class="tile bad"><div class="k">Labor rows</div><div class="v">0</div><div class="sub">none produced</div></div>
+            <div class="tile warn"><div class="k">Parts</div><div class="v">13</div><div class="sub">fitments, scraped</div></div>
+          </div>
+          <div class="call">
+            <div class="lab2">No labor at all</div>
+            <p>Same as the Rogue — <b>zero</b> labor rows on the old side. (Old trim recorded as "Prime SE"; the VIN decodes to "LE" — same A25A engine and platform.)</p>
+          </div>
+        </div>
+        <div class="col n">
+          <div class="col-h"><span class="dot"></span>New data<span class="deploy">enriched today</span></div>
+          <div class="tiles">
+            <div class="tile good"><div class="k">Labor</div><div class="v">RepairPal</div><div class="sub">gated, where there was none</div></div>
+            <div class="tile good"><div class="k">Parts priced</div><div class="v">24/25</div><div class="sub">2-tier verified</div></div>
+          </div>
+          <table class="lab">
+            <tr><th>Service</th><th>Book</th><th>Source / conf</th><th>Gate</th></tr>
+            <tr><td class="s">Oil change</td><td class="hrs">0.6</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+            <tr><td class="s">Spark plugs</td><td class="hrs">1.2</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+            <tr><td class="s">Brake pads</td><td class="hrs">0.9</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+            <tr><td class="s">Wheel alignment</td><td class="hrs">2.3</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+            <tr><td class="s">Battery</td><td class="hrs">0.6</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+          </table>
+          <div class="call n">
+            <div class="lab2">Sanity</div>
+            <p>Spark-plug hours track the engine: Expedition V6TT <b>2.6h</b> &gt; RAV4 / Rogue 4-cyl <b>1.2h</b>. Time follows the car, not a shop rate.</p>
+          </div>
+        </div>
+      </div>
+      <div class="pstrip">
+        <div class="ph">⛔ Parts pricing — old scrape vs new</div>
+        <table class="pp">
+          <tr><th>Part</th><th>Old scraped rows (ardent-crab)</th><th>New</th></tr>
+          <tr><td class="pt">Spark Plug<span class="oem">90919-01289</span></td><td class="old">$62.24 · <span class="flag">a <b>4-pack total</b> as the per-plug price (4×$15.46)</span></td><td class="new">$15.46 ea</td></tr>
+          <tr><td class="pt">Front Brake Pads<span class="oem">04465-0E060</span></td><td class="old">$27 – $43 · <span class="flag">one row is a <b>different OEM variant</b> (04465-48230)</span></td><td class="new">$74.93</td></tr>
+          <tr><td class="pt">Battery<span class="oem">00544-H5061-540</span></td><td class="old">$180 · <span class="flag">scraped from a <b>forum thread</b> (rav4world.com/threads)</span></td><td class="new">$129.95</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="pnote">
+      <b>Straight talk on these part prices:</b> the new pipeline priced these fresh cars with vetted single-source estimates, so a new number isn't automatically "more correct" — e.g. the Expedition air-filter old median (~$9.6) is fine and the new $17.97 estimate is high. The real point is the <b>old scraped data carries poison sources</b> — a forum thread, an oil-change kit, pack-totals stored as unit price, wrong OEM variants, a cabin filter sold as an engine filter — and the new <b>two-tier classification + poison-exclusion median</b> is exactly what rejects those rows before they reach a quote.
+    </div>
+  </section>
+
+  <!-- 3. PER-CAR -->
+  <section>
+    <div class="sec-h"><span class="sec-n">04</span><span class="sec-t">Three more · already on both deployments</span></div>
+    <div class="sec-sub">Matched by vehicle identity across both deployments. OLD = ardent-crab (378 configs, 2,628 labor rows, read-only). NEW = flippant-mink (the new pipeline). Every value is live.</div>
+
+    <!-- CAR A: CR-V -->
+    <div class="car rise">
+      <div class="car-h">
+        <span class="idx">A</span>
+        <div><div class="nm">2016 Honda CR-V SE</div><div class="meta">K24W9 · 2.4L inline-4 · mainstream / RepairPal-covered</div></div>
+        <span class="pill">137-hour poison → gated out</span>
+      </div>
+      <div class="cols">
+        <div class="col o">
+          <div class="col-h"><span class="dot"></span>Old data<span class="deploy">config w5709tw8…</span></div>
+          <div class="tiles">
+            <div class="tile bad"><div class="k">Worst labor value</div><div class="v">137.9 h</div><div class="sub">diagnostic scan (a 30-min job)</div></div>
+            <div class="tile warn"><div class="k">Labor sources</div><div class="v">2</div><div class="sub">vdb + training_data, no gate</div></div>
+          </div>
+          <table class="lab">
+            <tr><th>Service</th><th>Book</th><th>Source / conf</th><th>Red flag</th></tr>
+            <tr><td class="s">Oil change</td><td class="hrs">0.28</td><td><span class="src vdb">vdb 0.9</span></td><td>—</td></tr>
+            <tr><td class="s">Spark plugs</td><td class="hrs">0.5</td><td><span class="src vdb">vdb 0.9</span></td><td class="poison">empirical 1.5 (3× book)</td></tr>
+            <tr><td class="s">Tire rotation</td><td class="hrs">0.35</td><td><span class="src vdb">vdb 0.9</span></td><td class="poison">empirical 1.15 h @ conf 0.9</td></tr>
+            <tr><td class="s">Brake pads</td><td class="hrs">1.5</td><td><span class="src td">training 0.75</span></td><td>round guess</td></tr>
+            <tr><td class="s">Diagnostic scan</td><td class="hrs">0.5</td><td><span class="src td">training 0.45</span></td><td class="poison">empirical 137.93 h</td></tr>
+          </table>
+          <div class="call">
+            <div class="lab2">Parts poison</div>
+            <p>Drain-plug gasket priced at <span class="poison">$17.50</span> — scraped from an <b>Acura NSX oil-filter page</b> (<code>racinghistorycompany…nsx</code>). Front brake pad carried a <span class="poison">$20.40 rear-pad</span> price (<code>…43022t0ga01</code>).</p>
+          </div>
+        </div>
+        <div class="col n">
+          <div class="col-h"><span class="dot"></span>New data<span class="deploy">config xd7cvqy…</span></div>
+          <div class="tiles">
+            <div class="tile good"><div class="k">Worst labor value</div><div class="v">gated</div><div class="sub">137 h row can't exist</div></div>
+            <div class="tile good"><div class="k">Parts priced</div><div class="v">23/25</div><div class="sub">oil $8.43 · filter $9.79</div></div>
+          </div>
+          <table class="lab">
+            <tr><th>Service</th><th>Book</th><th>Source / conf</th><th>Gate</th></tr>
+            <tr><td class="s">Oil change</td><td class="hrs">0.5</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+            <tr><td class="s">Spark plugs</td><td class="hrs">0.6</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+            <tr><td class="s">Wheel alignment</td><td class="hrs">1.2</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+            <tr><td class="s">Brake pads</td><td class="hrs">1.0</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+            <tr><td class="s">Battery</td><td class="hrs">0.5</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+          </table>
+          <div class="call n">
+            <div class="lab2">Fixed</div>
+            <p>Every graded service is a source-weighted median anchored to a <code>repairpal_motor</code> observation. The gate refuses to grade anything without a RepairPal/empirical anchor — so 137.9 h is impossible. Parts use a <b>poison-exclusion median</b>: the NSX row is dropped, gasket settles at ~$0.52.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CAR B: M550i -->
+    <div class="car rise">
+      <div class="car-h">
+        <span class="idx">B</span>
+        <div><div class="nm">2020 BMW M550i xDrive</div><div class="meta">N63 4.4L V8 twin-turbo · G30 chassis · "the niche car with no data"</div></div>
+        <span class="pill">8 junk configs → 1 clean, sibling-validated</span>
+      </div>
+      <div class="cols">
+        <div class="col o">
+          <div class="col-h"><span class="dot"></span>Old data<span class="deploy">ardent-crab</span></div>
+          <div class="tiles">
+            <div class="tile bad"><div class="k">Duplicate configs</div><div class="v">8×</div><div class="sub">4× o2 + 4× t2, shared engines</div></div>
+            <div class="tile bad"><div class="k">Labor rows</div><div class="v">0</div><div class="sub">none on any config</div></div>
+          </div>
+          <div class="call">
+            <div class="lab2">You were right — about the old system</div>
+            <p>The niche car genuinely had <b>no labor data at all</b>, smeared across <b>eight duplicate configs</b> for one vehicle (the proliferation bug). This is the exact "niche cars have no data" case — and it's the bug we fixed.</p>
+          </div>
+        </div>
+        <div class="col n">
+          <div class="col-h"><span class="dot"></span>New data<span class="deploy">config xd77j84…</span></div>
+          <div class="tiles">
+            <div class="tile good"><div class="k">Configs</div><div class="v">1</div><div class="sub">pinned, no proliferation</div></div>
+            <div class="tile good"><div class="k">Parts priced</div><div class="v">25/25</div><div class="sub">perfect coverage</div></div>
+          </div>
+          <table class="lab">
+            <tr><th>Service</th><th>Book</th><th>Source</th><th>Provenance</th></tr>
+            <tr><td class="s">Brake pads</td><td class="hrs">1.51</td><td><span class="src rp">RepairPal</span></td><td>chassis G30 ← <b>530i</b></td></tr>
+            <tr><td class="s">Wheel alignment</td><td class="hrs">1.85</td><td><span class="src rp">RepairPal</span></td><td>chassis G30 ← <b>530i</b></td></tr>
+            <tr><td class="s">Spark plugs</td><td class="hrs">3.3</td><td><span class="src rp">RepairPal</span></td><td>V8 N63 (buried plugs)</td></tr>
+            <tr><td class="s">Oil change</td><td class="hrs">0.6</td><td><span class="src rp">RepairPal</span></td><td>aggregated</td></tr>
+          </table>
+          <div class="call n">
+            <div class="lab2">Sibling resolution</div>
+            <p>M550i shares the <b>G30 chassis</b> with the 530i, which RepairPal covers. We import the 530i's MOTOR <i>hours</i> and stamp every observation with <code>match_key:chassis_code:G30</code> + <code>sibling_slug:530i</code> — append-only and fully auditable.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CAR C: Atlas -->
+    <div class="car rise">
+      <div class="car-h">
+        <span class="idx">C</span>
+        <div><div class="nm">2022 VW Atlas 2.0T SE</div><div class="meta">3.6L V6 · previously buggy: partial enrichment + proliferation</div></div>
+        <span class="pill">partial 67% → completed</span>
+      </div>
+      <div class="cols">
+        <div class="col o">
+          <div class="col-h"><span class="dot"></span>Old data<span class="deploy">ardent-crab</span></div>
+          <div class="tiles">
+            <div class="tile warn"><div class="k">Enrichment</div><div class="v">67%</div><div class="sub">status: partial</div></div>
+            <div class="tile bad"><div class="k">Duplicate configs</div><div class="v">4×</div><div class="sub">+ trim/engine key mismatch</div></div>
+          </div>
+          <div class="call">
+            <div class="lab2">Data defects</div>
+            <p>Four duplicate configs, enrichment stuck at partial, and the key itself encodes an error — a <code>2.0T</code> trim tagged with a <code>3.6L</code> engine. Labor scattered / absent on the sampled config.</p>
+          </div>
+        </div>
+        <div class="col n">
+          <div class="col-h"><span class="dot"></span>New data<span class="deploy">config xd7dddj…</span></div>
+          <div class="tiles">
+            <div class="tile good"><div class="k">Enrichment</div><div class="v">done</div><div class="sub">labor RepairPal-anchored</div></div>
+            <div class="tile good"><div class="k">Parts priced</div><div class="v">23/25</div><div class="sub">2-tier verified</div></div>
+          </div>
+          <table class="lab">
+            <tr><th>Service</th><th>Book</th><th>Source / conf</th><th>Gate</th></tr>
+            <tr><td class="s">Oil change</td><td class="hrs">0.6</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+            <tr><td class="s">Spark plugs</td><td class="hrs">2.0</td><td><span class="src rp">RepairPal 0.9</span></td><td>✓</td></tr>
+            <tr><td class="s">Wheel alignment</td><td class="hrs">1.5</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+            <tr><td class="s">Battery</td><td class="hrs">0.7</td><td><span class="src rp">RepairPal 0.8</span></td><td>✓</td></tr>
+          </table>
+          <div class="call n">
+            <div class="lab2">Fixed</div>
+            <p>Two-tier extractor flagged a $97.15 "sale" outlier on the oil filter and an inflated drain-gasket row; the poison-exclusion median routes around both. Labor RepairPal-anchored, gated.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. ACCURACY -->
+  <section>
+    <div class="sec-h"><span class="sec-n">05</span><span class="sec-t">"If it's off — how off is it?"</span></div>
+    <div class="grid3">
+      <div class="pcard rise">
+        <h3>Hours track physics, not rates</h3>
+        <p>Spark-plug hours must scale with how hard the plugs are to reach. They do — exactly. A rate-driven number would scatter randomly.</p>
+        <div class="scale">
+          <div class="srow"><span class="car-l">CR-V · I4</span><span class="bar2"><i style="width:18%"></i></span><span class="val">0.6h</span></div>
+          <div class="srow"><span class="car-l">Atlas · V6</span><span class="bar2"><i style="width:61%"></i></span><span class="val">2.0h</span></div>
+          <div class="srow"><span class="car-l">M550i · V8</span><span class="bar2"><i style="width:100%"></i></span><span class="val">3.3h</span></div>
+        </div>
+      </div>
+      <div class="pcard rise">
+        <h3>RepairPal gives time, not price</h3>
+        <p>The high÷low dollar ratio is a constant <b style="color:var(--cyan)">≈1.47</b> across every service &amp; car — only possible if the rate range is fixed and hours is the one variable.</p>
+        <table class="mini">
+          <tr><td>750i · oil</td><td>1.474</td></tr>
+          <tr><td>750i · brakes</td><td>1.471</td></tr>
+          <tr><td>530i · brakes</td><td>1.471</td></tr>
+          <tr><td>550i · oil</td><td>1.469</td></tr>
+          <tr><td>550i · water pump</td><td>1.469</td></tr>
+        </table>
+        <p class="note">hours = (low+high)/2 ÷ $130 → reproduces the published table.</p>
+      </div>
+      <div class="pcard rise">
+        <h3>Same chassis → same hours</h3>
+        <p>The direct disproof of "massive inconsistency." M550i brake pads = <b style="color:var(--new)">1.51 h</b>, taken from its 530i G30 sibling. Rate-driven data scatters across shops; <b>time clusters by chassis.</b></p>
+        <p class="note" style="margin-top:14px">And it self-corrects: once a config logs ≥3 real single-service <code style="color:var(--amber)">job_actuals</code>, the empirical median overrides the book estimate — live.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. SCOREBOARD -->
+  <section>
+    <div class="sec-h"><span class="sec-n">06</span><span class="sec-t">Scoreboard</span></div>
+    <table class="score rise">
+      <tr><th>Axis</th><th class="o">Old · ardent-crab</th><th class="n">New · flippant-mink</th></tr>
+      <tr><td class="axis">Labor source</td><td class="o">training_data (LLM round guesses) + vdb, unreconciled</td><td class="n">repairpal_motor weighted median, gated, provenance-stamped</td></tr>
+      <tr><td class="axis">Worst labor value</td><td class="o">137.93 h for a diagnostic scan</td><td class="n">impossible — fails the gate</td></tr>
+      <tr><td class="axis">Confidence meaning</td><td class="o">0.9 on sample_size:0 rows</td><td class="n">reflects real observation weight</td></tr>
+      <tr><td class="axis">Niche car (M550i)</td><td class="o">8 configs, zero labor</td><td class="n">1 config, 530i-sibling RepairPal hours</td></tr>
+      <tr><td class="axis">Parts poison</td><td class="o">NSX filter price on a CR-V gasket; rear pad price on front</td><td class="n">poison-exclusion median, position-aware, 2-tier verified</td></tr>
+      <tr><td class="axis">Parts coverage</td><td class="o">partial / proliferated</td><td class="n">CR-V 23/25 · Atlas 23/25 · M550i 25/25</td></tr>
+      <tr><td class="axis">Config integrity</td><td class="o">8×/4× duplicates, stuck "enriching", dual Honda makes</td><td class="n">single pinned config per car</td></tr>
+    </table>
+
+    <div class="final rise">
+      <div class="big">The new pipeline doesn't add inconsistency — it <span class="g">removes the inconsistency that was already there</span>, and stores the one quantity that is shop-independent: <span class="g">time.</span></div>
+      <p>The shop's rate stays the shop's to set. Everything above is live data — verify any row with <code>npx convex run devOnly/laborValidation:report</code> on flippant-mink, or read the 137.93 h row directly on ardent-crab.</p>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>OTO·PAIR — data integrity proof</span>
+    <code>proof/SUMMARY.md</code>
+    <code>OLD: ardent-crab (read-only)</code>
+    <code>NEW: flippant-mink-750</code>
+  </div>
+</footer>
+
+</body>
+</html>

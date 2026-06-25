@@ -1488,6 +1488,26 @@ export const getCrossConversationMemory = internalQuery({
           .order("desc")
           .take(args.top_K);
         for (const r of rows) {
+          // Cross-conversation hygiene: established_facts mirror rows are
+          // conversation-scoped SESSION observations (prompt volatile.ts
+          // Example 14 — a symptom, a warning light, "checking health
+          // score"). They are written by the chat.ts update_conversation_state
+          // mirror with the hardcoded tuple (fact_type:"observation",
+          // written_by:"chat_agent"). They must NOT cross conversations: the
+          // model mis-attributes them to the user ("you mentioned…") and lets
+          // a stale "now completed" observation override the live
+          // get_vehicle_health record. Durable recall lives in Pool B
+          // (user_semantic_facts) and in id_reference selection rows
+          // (written_by:"user_selection"), both untouched by this guard.
+          // This filter MUST stay inside the Pool A (source=="conversation")
+          // loop — Pool B user_semantic_facts ALSO carry written_by=="chat_agent"
+          // (chat.ts record_semantic_fact path), so lifting it to the merged
+          // candidate list would wrongly drop legitimate durable facts. The
+          // conversation_facts row itself is still written + retained (forensic /
+          // Wave-5 replay substrate); only its cross-conversation SURFACING stops.
+          if (r.fact_type === "observation" && r.written_by === "chat_agent") {
+            continue;
+          }
           candidates.push({
             source: "conversation",
             conversation_id: r.conversation_id,

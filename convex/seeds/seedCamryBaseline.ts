@@ -129,7 +129,7 @@ const BASELINE: ReadonlyArray<BaselineSpec> = [
 
 // ─── Camry labor hours (Part 2 — midpoint when given a range) ──────────────
 
-const CAMRY_LABOR_HOURS: ReadonlyArray<{ service_slug: string; book_hours: number }> = [
+export const CAMRY_LABOR_HOURS: ReadonlyArray<{ service_slug: string; book_hours: number }> = [
   { service_slug: "oil_change",            book_hours: 0.5 },
   { service_slug: "filter_replacement",    book_hours: 0.3 },
   { service_slug: "spark_plugs",           book_hours: 1.15 },  // 0.9-1.4 midpoint (used in Ex C)
@@ -144,6 +144,13 @@ const CAMRY_LABOR_HOURS: ReadonlyArray<{ service_slug: string; book_hours: numbe
   { service_slug: "tire_rotation",         book_hours: 0.4 },
   { service_slug: "tire_balance",          book_hours: 0.6 },
   { service_slug: "wheel_alignment",       book_hours: 1.0 },
+  // Anchors added 2026-06-13 so the tier fallback/guardrail exists for these.
+  // rotor_replacement: ROTORS-ONLY R&R (our scope is rotors-only — olpLabor.ts
+  // :165-166) ≈ pad-removal labor + hub clean/measure; NOT pads+rotors (that
+  // would double-count vs brake_pad_replacement's 1.4h). power_steering_flush:
+  // routine fluid exchange. timing_belt is intentionally omitted — see header.
+  { service_slug: "rotor_replacement",      book_hours: 1.8 },
+  { service_slug: "power_steering_flush",   book_hours: 0.6 },
   // Front pads canonical (rear is 1.5 — see service_options for split).
   { service_slug: "brake_pad_replacement", book_hours: 1.4 },   // front 1.1-1.7 midpoint
   { service_slug: "battery_test",          book_hours: 0.2 },
@@ -176,13 +183,21 @@ export const run = internalMutation({
     // 2) Find Camry model under Toyota (models table has no compound index;
     //    collect-and-filter is fine — models is a small reference table.)
     const allModels = await ctx.db.query("models").collect();
-    const camryModelDoc = allModels.find(
+    let camryModelDoc = allModels.find(
       (m: any) => m.name === CAMRY_MODEL_NAME && m.make_id === toyota._id,
     );
     if (!camryModelDoc) {
-      throw new Error(
-        `seedCamryBaseline: models table has no 'Camry' under Toyota. Seed models first.`,
-      );
+      // Defensive find-or-create (mirrors the engine + config handling below).
+      // The Camry model is the anchor's parent row; creating it here keeps the
+      // seed self-sufficient instead of hard-failing when the catalog lacks it
+      // (the failure that silently left the fallback anchor unseeded).
+      const camryModelId = await ctx.db.insert("models", {
+        make_id: toyota._id,
+        name: CAMRY_MODEL_NAME,
+        slug: "camry",
+        created_at: now,
+      });
+      camryModelDoc = (await ctx.db.get(camryModelId))!;
     }
 
     // 3) Find or create the A25A-FKS engine (shared between FWD + AWD trims)

@@ -10,6 +10,7 @@ import {
   selectPart,
   enrichCandidate,
   normalizeDataQuality,
+  partFitsConfigMake,
   type CandidateInput,
   QUALITY_RANK,
 } from "../convex/partSelector";
@@ -309,5 +310,165 @@ describe("Empty pool", () => {
     const result = selectPart([], GATE);
     expect(result.winner).toBeNull();
     expect(result.trace).toHaveLength(0);
+  });
+});
+
+// ── I1 make guard ──────────────────────────────────────────────────────────
+// Cross-make contaminants (a Ford/Audi brake pad cloned onto an Alfa config)
+// must be dropped at hydration time BEFORE the 7-layer selector runs, while
+// universal consumables (make_id == null) must survive. Mirrors the real
+// serviceParts.ts flow: filter candidates by partFitsConfigMake, then selectPart.
+describe("I1 make guard — partFitsConfigMake", () => {
+  const mid = (s: string) => s as Id<"makes">;
+  const ALFA = mid("m_alfa");
+  const FORD = mid("m_ford");
+  const AUDI = mid("m_audi");
+
+  it("keeps same-make + null-make parts, drops set-make mismatches", () => {
+    expect(partFitsConfigMake(ALFA, ALFA)).toBe(true); // matching make
+    expect(partFitsConfigMake(FORD, ALFA)).toBe(false); // cross-make contaminant
+    expect(partFitsConfigMake(AUDI, ALFA)).toBe(false);
+    expect(partFitsConfigMake(null, ALFA)).toBe(true); // universal consumable
+    expect(partFitsConfigMake(undefined, ALFA)).toBe(true);
+    expect(partFitsConfigMake(FORD, null)).toBe(true); // config make unknown → no filter
+  });
+
+  // Real candidate shape from the live 2024 Alfa Romeo Stelvio Ti config
+  // w578qc0czknp00j29h1f1v0axh8728k5 (front_brake_pad role group).
+  type Hydrated = {
+    part_id: Id<"oem_parts">;
+    make_id: Id<"makes"> | null;
+    confidence: number;
+    data_quality: CandidateInput["data_quality"];
+    prices: CandidateInput["prices"];
+  };
+  const toInputs = (
+    cands: Hydrated[],
+    configMake: Id<"makes"> | null,
+  ): CandidateInput[] =>
+    cands
+      .filter((c) => partFitsConfigMake(c.make_id, configMake))
+      .map((c) => ({
+        part_id: c.part_id,
+        confidence: c.confidence,
+        mechanic_verified: false,
+        data_quality: c.data_quality,
+        prices: c.prices,
+      }));
+
+  it("front_brake_pad on the Alfa Stelvio: Alfa part wins, Ford & Audi excluded by the guard", () => {
+    const candidates: Hydrated[] = [
+      {
+        part_id: id("alfa_68400577AA"),
+        make_id: ALFA,
+        confidence: 0.95,
+        data_quality: "oem",
+        prices: [
+          { price: 85, refreshed_days_ago: 5 },
+          { price: 88, refreshed_days_ago: 7 },
+        ],
+      },
+      {
+        // Ford KB3Z-2001-A — cloned onto the Alfa config, 9 cheap price sources.
+        part_id: id("ford_KB3Z-2001-A"),
+        make_id: FORD,
+        confidence: 0.87,
+        data_quality: "oem",
+        prices: Array.from({ length: 9 }, (_, i) => ({
+          price: 11 + i * 0.1,
+          refreshed_days_ago: 3,
+        })),
+      },
+      {
+        part_id: id("audi_8R0698151L"),
+        make_id: AUDI,
+        confidence: 0.87,
+        data_quality: "oem",
+        prices: [
+          { price: 70, refreshed_days_ago: 4 },
+          { price: 72, refreshed_days_ago: 6 },
+        ],
+      },
+    ];
+
+    const survivors = candidates.filter((c) =>
+      partFitsConfigMake(c.make_id, ALFA),
+    );
+    expect(survivors.map((c) => String(c.part_id))).toEqual([
+      "alfa_68400577AA",
+    ]);
+    expect(survivors.some((c) => c.part_id === id("ford_KB3Z-2001-A"))).toBe(
+      false,
+    );
+    expect(survivors.some((c) => c.part_id === id("audi_8R0698151L"))).toBe(
+      false,
+    );
+
+    const result = selectPart(toInputs(candidates, ALFA), GATE);
+    expect(result.winner?.part_id).toBe("alfa_68400577AA");
+  });
+
+  it("guard is decisive: without it the wrong-make part would win, with it the Alfa part wins", () => {
+    // Adversarial: the Ford pad has HIGHER confidence (0.95) and many price
+    // sources, so WITHOUT the guard it wins Layer 1; WITH the guard it never
+    // enters the pool. This proves the guard changes the outcome (not just that
+    // the Alfa part happened to have the highest confidence today).
+    const candidates: Hydrated[] = [
+      {
+        part_id: id("ford_hi_conf"),
+        make_id: FORD,
+        confidence: 0.95,
+        data_quality: "oem",
+        prices: Array.from({ length: 9 }, () => ({
+          price: 11,
+          refreshed_days_ago: 2,
+        })),
+      },
+      {
+        part_id: id("alfa_lo_conf"),
+        make_id: ALFA,
+        confidence: 0.85,
+        data_quality: "oem",
+        prices: [{ price: 85, refreshed_days_ago: 9 }],
+      },
+    ];
+
+    // Sanity: without the guard, the Ford part wins outright at Layer 1.
+    const noGuard = selectPart(
+      candidates.map((c) => ({
+        part_id: c.part_id,
+        confidence: c.confidence,
+        mechanic_verified: false,
+        data_quality: c.data_quality,
+        prices: c.prices,
+      })),
+      GATE,
+    );
+    expect(noGuard.winner?.part_id).toBe("ford_hi_conf");
+
+    // With the guard, the Ford part is excluded and the Alfa part wins.
+    const guarded = selectPart(toInputs(candidates, ALFA), GATE);
+    expect(guarded.winner?.part_id).toBe("alfa_lo_conf");
+  });
+
+  it("universal consumable (make_id null) survives the guard and can still win", () => {
+    const candidates: Hydrated[] = [
+      {
+        part_id: id("generic_oil_filter"),
+        make_id: null, // universal consumable — no make
+        confidence: 0.9,
+        data_quality: "generic",
+        prices: [{ price: 8, refreshed_days_ago: 3 }],
+      },
+    ];
+    const survivors = candidates.filter((c) =>
+      partFitsConfigMake(c.make_id, ALFA),
+    );
+    expect(survivors.map((c) => String(c.part_id))).toEqual([
+      "generic_oil_filter",
+    ]);
+
+    const result = selectPart(toInputs(candidates, ALFA), GATE);
+    expect(result.winner?.part_id).toBe("generic_oil_filter");
   });
 });

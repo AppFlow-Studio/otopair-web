@@ -15,6 +15,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
 import {
   selectPart,
+  partFitsConfigMake,
   normalizeDataQuality,
   type CandidateInput,
   type TraceEntry,
@@ -230,6 +231,9 @@ export const getPartsForService = query({
     for (const f of applicable) {
       const part = await ctx.db.get(f.part_id);
       if (!part) continue;
+      // I1 make guard — never quote a part whose make disagrees with this
+      // config's make (universal consumables with no make_id pass through).
+      if (!partFitsConfigMake(part.make_id, config.make_id)) continue;
       if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
       resolved.push({
         fitment_id: f._id,
@@ -336,6 +340,9 @@ export const getOemPartsForBooking = query({
     if (!vehicle?.vehicle_config_id) return [];
 
     const configId = vehicle.vehicle_config_id;
+    // I1 make guard needs this config's make to reject cross-make contaminants.
+    const legacyConfig = await ctx.db.get(configId);
+    const configMakeId = legacyConfig?.make_id ?? null;
     const out: OemPartsForService[] = [];
 
     // Customer's axle choice per service (brake pads front/rear/both). Drives
@@ -373,6 +380,8 @@ export const getOemPartsForBooking = query({
       for (const f of base) {
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
+        // I1 make guard — drop cross-make parts (null-make consumables pass).
+        if (!partFitsConfigMake(part.make_id, configMakeId)) continue;
         if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
         // Scope to the booked axle. Position-neutral parts (hardware kits,
         // grease) survive a single-axle filter; "both"/unspecified keeps all.
@@ -778,10 +787,21 @@ export async function resolveWinningPartForService(
   // Billing-subcategory gate: drop fitments whose subcategory isn't on the
   // service's billable allowlist per service_parts_rules. Pipeline still
   // stores these for the vehicle profile; we just don't price them.
+  // I1 make guard — load this config's make so the hydration loop can reject
+  // cross-make contaminants (e.g. a Ford brake pad cloned onto this Alfa config
+  // by the chassis/engine sibling-clone path). Filtering here also protects the
+  // director-pin and VIN-sticky overrides below: both select only from the
+  // already-hydrated candidate pool, so a dropped wrong-make part can never win
+  // outright through those paths either.
+  const configForMake = await ctx.db.get(args.vehicleConfigId);
+  const configMakeId =
+    (configForMake as Doc<"vehicle_configs"> | null)?.make_id ?? null;
+
   const hydratedAll: WinnerCandidate[] = [];
   for (const f of packageGated) {
     const part = await ctx.db.get(f.part_id);
     if (!part) continue;
+    if (!partFitsConfigMake(part.make_id, configMakeId)) continue; // I1 make guard
     if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
     const priceSummary = await summarizePartPrices(ctx, f.part_id);
     hydratedAll.push({ fitment: f, part, priceSummary });

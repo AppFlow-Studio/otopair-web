@@ -10,8 +10,9 @@
  * Auth/owner resolve mirrors recordConfirmation.ts:54-79.
  * Pipeline trigger mirrors maintenance.ts:107-114 (preOnboardingComplete gate).
  */
-import { mutation } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { action, internalMutation, mutation } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
+import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { computeMaxDelta, validateMileageUpdate } from "./oto/vehicleTruthGuard";
@@ -19,23 +20,109 @@ import { symptomForServiceSlug } from "./lib/serviceSymptoms";
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
+// Shared arg validators — one definition reused by the public mutation, the
+// internal director writer, and the director action.
+const serviceClaimsValidator = v.optional(
+  v.array(
+    v.object({
+      service_slug: v.string(),
+      kind: v.union(v.literal("due"), v.literal("light_on")),
+    }),
+  ),
+);
+const faultLightsValidator = v.optional(v.array(v.string()));
+
+type VehicleTruthInputs = {
+  mileage?: number;
+  service_claims?: Array<{ service_slug: string; kind: "due" | "light_on" }>;
+  fault_lights?: string[];
+};
+
+/**
+ * Core write-back, shared by the auth-gated public mutation and the
+ * director-session-gated internal writer. Takes the ALREADY-RESOLVED user +
+ * vehicle so the two callers can resolve identity differently (Clerk auth vs
+ * a director-validated userId) without duplicating the mileage guard, the
+ * knownIssues mapping, or the pipeline trigger. The owner row is resolved here
+ * from (vehicle.vin, user._id) — identical to the original inline resolve.
+ */
+async function applyVehicleTruthImpl(
+  ctx: MutationCtx,
+  user: Doc<"users">,
+  vehicle: Doc<"vehicles">,
+  args: VehicleTruthInputs,
+): Promise<any> {
+  const now = Date.now();
+
+  const owner: Doc<"vehicle_owners"> | null = await ctx.db
+    .query("vehicle_owners")
+    .withIndex("by_vin_user", (q: any) =>
+      q.eq("vin", vehicle.vin).eq("user_id", user._id),
+    )
+    .unique();
+  if (!owner) throw new Error(`vehicle_owner not found for vehicle ${vehicle._id}`);
+
+  // ── Mileage (guarded; violation returns needsReconfirm without writing) ──
+  let mileageUpdated = false;
+  if (args.mileage != null) {
+    // annual_mileage_rate is the real field name on vehicle_owners (schema.ts:1126).
+    // null is a safe fallback → computeMaxDelta uses the 25k floor.
+    const annualRate: number | null = (owner as any).annual_mileage_rate ?? null;
+    const yearsElapsed: number | null = owner.mileage_updated_at
+      ? (now - owner.mileage_updated_at) / YEAR_MS
+      : null;
+    const maxDelta = computeMaxDelta(annualRate, yearsElapsed);
+    const verdict = validateMileageUpdate(owner.mileage ?? null, args.mileage, maxDelta);
+    if (!verdict.ok) {
+      return { ok: false, needsReconfirm: true, reason: verdict.reason };
+    }
+    await ctx.db.patch(owner._id, {
+      mileage: args.mileage,
+      mileage_source: "chat_self_reported",
+      mileage_updated_at: now,
+    } as any);
+    mileageUpdated = true;
+  }
+
+  // Collect knownIssues additions: maintenance-reminder claims map to the
+  // pipeline's warning-light code (it derives quick-read overrides from
+  // knownIssues), and fault lights are codes already. A direct quick_read_flag
+  // write would be clobbered by the runPipeline this mutation triggers.
+  const servicesFlagged: string[] = [];
+  const codesToAdd: string[] = [];
+  for (const claim of args.service_claims ?? []) {
+    const code = symptomForServiceSlug(claim.service_slug);
+    if (code) { codesToAdd.push(code); servicesFlagged.push(claim.service_slug); }
+  }
+  const faultLights = args.fault_lights ?? [];
+  let faultLightsAdded: string[] = [];
+  if (codesToAdd.length || faultLights.length) {
+    const current: string[] = Array.isArray(owner.knownIssues) ? owner.knownIssues : [];
+    const incoming = [...codesToAdd, ...faultLights];
+    faultLightsAdded = faultLights.filter((f) => !current.includes(f));
+    const merged = Array.from(new Set([...current, ...incoming]));
+    await ctx.db.patch(owner._id, { knownIssues: merged } as any);
+  }
+
+  // ── Re-run the maintenance pipeline (mirrors maintenance.ts:107-114) ──
+  if (owner.preOnboardingComplete) {
+    await ctx.scheduler.runAfter(0, internal.maintenance_pipeline.runPipeline, {
+      vehicleOwnerId: owner._id,
+      triggeredBy: "oto_chat",
+    });
+  }
+
+  return { ok: true, mileageUpdated, servicesFlagged, faultLightsAdded };
+}
+
 export const applyVehicleTruth = mutation({
   args: {
     vehicle_id: v.string(),
     mileage: v.optional(v.number()),
-    service_claims: v.optional(
-      v.array(
-        v.object({
-          service_slug: v.string(),
-          kind: v.union(v.literal("due"), v.literal("light_on")),
-        }),
-      ),
-    ),
-    fault_lights: v.optional(v.array(v.string())),
+    service_claims: serviceClaimsValidator,
+    fault_lights: faultLightsValidator,
   },
   handler: async (ctx, args): Promise<any> => {
-    const now = Date.now();
-
     // ── Auth + ownership resolve (mirrors recordConfirmation.ts:54-79) ──
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("unauthenticated");
@@ -51,64 +138,69 @@ export const applyVehicleTruth = mutation({
     );
     if (!vehicle) throw new Error(`vehicle not found: ${args.vehicle_id}`);
 
-    const owner: Doc<"vehicle_owners"> | null = await ctx.db
-      .query("vehicle_owners")
-      .withIndex("by_vin_user", (q: any) =>
-        q.eq("vin", vehicle.vin).eq("user_id", user._id),
-      )
-      .unique();
-    if (!owner) throw new Error(`vehicle_owner not found for vehicle ${args.vehicle_id}`);
+    return applyVehicleTruthImpl(ctx, user, vehicle, args);
+  },
+});
 
-    // ── Mileage (guarded; violation returns needsReconfirm without writing) ──
-    let mileageUpdated = false;
-    if (args.mileage != null) {
-      // annual_mileage_rate is the real field name on vehicle_owners (schema.ts:1126).
-      // null is a safe fallback → computeMaxDelta uses the 25k floor.
-      const annualRate: number | null = (owner as any).annual_mileage_rate ?? null;
-      const yearsElapsed: number | null = owner.mileage_updated_at
-        ? (now - owner.mileage_updated_at) / YEAR_MS
-        : null;
-      const maxDelta = computeMaxDelta(annualRate, yearsElapsed);
-      const verdict = validateMileageUpdate(owner.mileage ?? null, args.mileage, maxDelta);
-      if (!verdict.ok) {
-        return { ok: false, needsReconfirm: true, reason: verdict.reason };
-      }
-      await ctx.db.patch(owner._id, {
-        mileage: args.mileage,
-        mileage_source: "chat_self_reported",
-        mileage_updated_at: now,
-      } as any);
-      mileageUpdated = true;
-    }
+// =============================================================================
+// Director-sim path — interact with the render_vehicle_update card from the
+// director panel's Oto Sim (which has no end-user Clerk identity, same gap the
+// sim's simulateOtoForDirector closes). The internal writer resolves the user
+// by id and the vehicle by vin (no auth); the public action gates on a live
+// director session. Both reuse applyVehicleTruthImpl, so the write-back logic
+// (mileage guard, knownIssues mapping, pipeline trigger) is identical to the
+// production card-confirm.
+// =============================================================================
 
-    // Collect knownIssues additions: maintenance-reminder claims map to the
-    // pipeline's warning-light code (it derives quick-read overrides from
-    // knownIssues), and fault lights are codes already. A direct quick_read_flag
-    // write would be clobbered by the runPipeline this mutation triggers.
-    const servicesFlagged: string[] = [];
-    const codesToAdd: string[] = [];
-    for (const claim of args.service_claims ?? []) {
-      const code = symptomForServiceSlug(claim.service_slug);
-      if (code) { codesToAdd.push(code); servicesFlagged.push(claim.service_slug); }
-    }
-    const faultLights = args.fault_lights ?? [];
-    let faultLightsAdded: string[] = [];
-    if (codesToAdd.length || faultLights.length) {
-      const current: string[] = Array.isArray(owner.knownIssues) ? owner.knownIssues : [];
-      const incoming = [...codesToAdd, ...faultLights];
-      faultLightsAdded = faultLights.filter((f) => !current.includes(f));
-      const merged = Array.from(new Set([...current, ...incoming]));
-      await ctx.db.patch(owner._id, { knownIssues: merged } as any);
-    }
+export const applyVehicleTruthForDirectorMutation = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    vehicle_vin: v.string(),
+    mileage: v.optional(v.number()),
+    service_claims: serviceClaimsValidator,
+    fault_lights: faultLightsValidator,
+  },
+  handler: async (ctx, args): Promise<any> => {
+    const user: Doc<"users"> | null = await ctx.db.get(args.user_id);
+    if (!user) throw new Error(`user not found: ${args.user_id}`);
+    const vehicle: Doc<"vehicles"> | null = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q: any) => q.eq("vin", args.vehicle_vin))
+      .first();
+    if (!vehicle) throw new Error(`vehicle not found for vin ${args.vehicle_vin}`);
+    return applyVehicleTruthImpl(ctx, user, vehicle, {
+      mileage: args.mileage,
+      service_claims: args.service_claims,
+      fault_lights: args.fault_lights,
+    });
+  },
+});
 
-    // ── Re-run the maintenance pipeline (mirrors maintenance.ts:107-114) ──
-    if (owner.preOnboardingComplete) {
-      await ctx.scheduler.runAfter(0, internal.maintenance_pipeline.runPipeline, {
-        vehicleOwnerId: owner._id,
-        triggeredBy: "oto_chat",
-      });
+export const applyVehicleTruthForDirector = action({
+  args: {
+    token: v.string(),
+    userId: v.id("users"),
+    vehicleVin: v.string(),
+    mileage: v.optional(v.number()),
+    service_claims: serviceClaimsValidator,
+    fault_lights: faultLightsValidator,
+  },
+  handler: async (ctx, args): Promise<any> => {
+    const session = await ctx.runQuery(api.director_auth.validateSession, {
+      token: args.token,
+    });
+    if (!session) {
+      throw new Error("unauthorized: invalid or expired director session");
     }
-
-    return { ok: true, mileageUpdated, servicesFlagged, faultLightsAdded };
+    return ctx.runMutation(
+      internal.vehicleTruth.applyVehicleTruthForDirectorMutation,
+      {
+        user_id: args.userId,
+        vehicle_vin: args.vehicleVin,
+        ...(args.mileage !== undefined ? { mileage: args.mileage } : {}),
+        ...(args.service_claims !== undefined ? { service_claims: args.service_claims } : {}),
+        ...(args.fault_lights !== undefined ? { fault_lights: args.fault_lights } : {}),
+      },
+    );
   },
 });

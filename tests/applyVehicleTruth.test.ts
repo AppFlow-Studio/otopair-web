@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { makeT } from "./helpers";
-import { api } from "../convex/_generated/api";
+import { api, internal } from "../convex/_generated/api";
 
 describe("applyVehicleTruth", () => {
   async function seed(t: any) {
@@ -20,7 +20,7 @@ describe("applyVehicleTruth", () => {
     const t = makeT(); const s = await seed(t);
     const res = await t.withIdentity(ident).mutation(api.vehicleTruth.applyVehicleTruth, { vehicle_id: s.vehicleId, mileage: 46796 });
     expect(res.needsReconfirm).toBeFalsy();
-    const owner = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+    const owner: any = await t.run((ctx: any) => ctx.db.get(s.ownerId));
     expect(owner.mileage).toBe(46796);
     expect(owner.mileage_source).toBe("chat_self_reported");
     expect(typeof owner.mileage_updated_at).toBe("number");
@@ -30,7 +30,7 @@ describe("applyVehicleTruth", () => {
     const res = await t.withIdentity(ident).mutation(api.vehicleTruth.applyVehicleTruth, { vehicle_id: s.vehicleId, mileage: 30000 });
     expect(res.needsReconfirm).toBe(true);
     expect(res.reason).toBe("backward");
-    const owner = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+    const owner: any = await t.run((ctx: any) => ctx.db.get(s.ownerId));
     expect(owner.mileage).toBe(40000);
   });
   it("adds the service warning-light code to knownIssues from a maintenance-reminder claim", async () => {
@@ -38,13 +38,54 @@ describe("applyVehicleTruth", () => {
     await t.withIdentity(ident).mutation(api.vehicleTruth.applyVehicleTruth, {
       vehicle_id: s.vehicleId, service_claims: [{ service_slug: "oil_change", kind: "light_on" }],
     });
-    const owner = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+    const owner: any = await t.run((ctx: any) => ctx.db.get(s.ownerId));
     expect((owner.knownIssues ?? []).includes("oil_pressure")).toBe(true);
   });
   it("appends a fault light to knownIssues", async () => {
     const t = makeT(); const s = await seed(t);
     await t.withIdentity(ident).mutation(api.vehicleTruth.applyVehicleTruth, { vehicle_id: s.vehicleId, fault_lights: ["check_engine"] });
-    const owner = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+    const owner: any = await t.run((ctx: any) => ctx.db.get(s.ownerId));
     expect((owner.knownIssues ?? []).includes("check_engine")).toBe(true);
+  });
+
+  // Director-path: the no-auth internal writer the Oto-Sim card-confirm goes
+  // through (resolves user by id + vehicle by vin instead of Clerk identity).
+  describe("applyVehicleTruthForDirectorMutation (sim card-confirm path)", () => {
+    it("writes a plausible mileage for the resolved user + vin", async () => {
+      const t = makeT(); const s = await seed(t);
+      const res = await t.mutation(internal.vehicleTruth.applyVehicleTruthForDirectorMutation, {
+        user_id: s.userId, vehicle_vin: "VTVIN0000000000001", mileage: 46796,
+      });
+      expect(res.ok).toBe(true);
+      const owner: any = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+      expect(owner.mileage).toBe(46796);
+      expect(owner.mileage_source).toBe("chat_self_reported");
+    });
+    it("refuses a backward odometer (needsReconfirm), no write", async () => {
+      const t = makeT(); const s = await seed(t);
+      const res = await t.mutation(internal.vehicleTruth.applyVehicleTruthForDirectorMutation, {
+        user_id: s.userId, vehicle_vin: "VTVIN0000000000001", mileage: 30000,
+      });
+      expect(res.needsReconfirm).toBe(true);
+      const owner: any = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+      expect(owner.mileage).toBe(40000);
+    });
+    it("flags a service claim into knownIssues", async () => {
+      const t = makeT(); const s = await seed(t);
+      await t.mutation(internal.vehicleTruth.applyVehicleTruthForDirectorMutation, {
+        user_id: s.userId, vehicle_vin: "VTVIN0000000000001",
+        service_claims: [{ service_slug: "oil_change", kind: "light_on" }],
+      });
+      const owner: any = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+      expect((owner.knownIssues ?? []).includes("oil_pressure")).toBe(true);
+    });
+    it("throws on an unknown vin", async () => {
+      const t = makeT(); const s = await seed(t);
+      await expect(
+        t.mutation(internal.vehicleTruth.applyVehicleTruthForDirectorMutation, {
+          user_id: s.userId, vehicle_vin: "NOSUCHVIN000000000", mileage: 46796,
+        }),
+      ).rejects.toThrow();
+    });
   });
 });

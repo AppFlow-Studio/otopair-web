@@ -23,6 +23,9 @@ export const TabOtoSim = () => {
   const session = useContext(DirectorSessionCtx)
   const token = session?.token ?? ''
   const sim = useAction(api.oto.simulate.simulateOtoForDirector)
+  const applyTruth = useAction(api.vehicleTruth.applyVehicleTruthForDirector)
+  // Per-card interaction state, keyed `${messageIndex}:${directiveKey}`.
+  const [cardState, setCardState] = useState<Record<string, { busy?: boolean; result?: string; ok?: boolean }>>({})
 
   // ── user picker (reuses the Users-tab list + the same client filter) ──────
   const users = useQuery(api.director.usersList)
@@ -55,7 +58,31 @@ export const TabOtoSim = () => {
   const scrollRef = useRef<HTMLDivElement>(null)
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }) }, [messages, busy])
 
-  const resetConversation = () => { setConvoId(null); setMessages([]); setError(null); setConvoState(null) }
+  const resetConversation = () => { setConvoId(null); setMessages([]); setError(null); setConvoState(null); setCardState({}) }
+
+  // Interact with a render_vehicle_update card the same way the mobile confirm
+  // tap does — apply the exact captured payload for the simulated user via the
+  // director-gated wrapper, then surface the write-back result on the card.
+  const confirmVehicleUpdate = async (cardId: string, payload: any) => {
+    if (!selected || !car || cardState[cardId]?.busy) return
+    setCardState(s => ({ ...s, [cardId]: { busy: true } }))
+    try {
+      const res = await applyTruth({
+        token,
+        userId: selected.id as Id<'users'>,
+        vehicleVin: car.vin,
+        ...(payload?.mileage !== undefined ? { mileage: payload.mileage } : {}),
+        ...(payload?.service_claims !== undefined ? { service_claims: payload.service_claims } : {}),
+        ...(payload?.fault_lights !== undefined ? { fault_lights: payload.fault_lights } : {}),
+      }) as { ok?: boolean; needsReconfirm?: boolean; reason?: string; mileageUpdated?: boolean; servicesFlagged?: string[]; faultLightsAdded?: string[] }
+      const msg = res?.ok
+        ? `✓ Applied${res.mileageUpdated ? ' · mileage' : ''}${res.servicesFlagged?.length ? ` · flagged ${res.servicesFlagged.join(', ')}` : ''}${res.faultLightsAdded?.length ? ` · lights ${res.faultLightsAdded.join(', ')}` : ''}`
+        : `Needs reconfirm: ${res?.reason ?? 'rejected'}`
+      setCardState(s => ({ ...s, [cardId]: { result: msg, ok: !!res?.ok } }))
+    } catch (e) {
+      setCardState(s => ({ ...s, [cardId]: { result: (e as Error).message, ok: false } }))
+    }
+  }
   const pickUser = (u: { id: string; name: string; email: string }) => { setSelected(u); setQ(''); setCar(null); resetConversation() }
   const pickCar = (c: UserCar) => { setCar(c); resetConversation() }
   const changeUser = () => { setSelected(null); setCar(null); resetConversation() }
@@ -206,16 +233,29 @@ export const TabOtoSim = () => {
                     card/button the mobile app would draw, instead of just Oto's text. */}
                 {m.role === 'assistant' && (m.render?.length ?? 0) > 0 && (
                   <div style={{ display:'flex', flexDirection:'column', gap:6, width:'100%' }}>
-                    {m.render!.map(d => (
-                      <div key={d.key} style={{ display:'flex', alignItems:'center', gap:9, padding:'8px 11px',
-                        border:'1px solid var(--blue-200, #BFDBFE)', background:'var(--blue-50)', borderRadius:10 }}>
-                        <Badge tone="blue" dot>render</Badge>
-                        <div style={{ display:'flex', flexDirection:'column', minWidth:0 }}>
-                          <span style={{ fontSize:12, fontWeight:600, color:'var(--slate-800)' }}>{d.label}</span>
-                          <span style={{ fontSize:11, color:'var(--slate-500)', whiteSpace:'pre-wrap' }}>{d.detail}</span>
+                    {m.render!.map(d => {
+                      const cardId = `${i}:${d.key}`
+                      const st = cardState[cardId]
+                      const interactive = d.key === 'showVehicleUpdate'
+                      return (
+                        <div key={d.key} style={{ display:'flex', alignItems:'center', gap:9, padding:'8px 11px',
+                          border:'1px solid var(--blue-200, #BFDBFE)', background:'var(--blue-50)', borderRadius:10 }}>
+                          <Badge tone="blue" dot>render</Badge>
+                          <div style={{ display:'flex', flexDirection:'column', minWidth:0, flex:1 }}>
+                            <span style={{ fontSize:12, fontWeight:600, color:'var(--slate-800)' }}>{d.label}</span>
+                            <span style={{ fontSize:11, color:'var(--slate-500)', whiteSpace:'pre-wrap' }}>{d.detail}</span>
+                          </div>
+                          {interactive && (st?.result
+                            ? <span style={{ fontSize:11, fontWeight:600, flexShrink:0,
+                                color: st.ok ? 'var(--green-700)' : 'var(--orange-700, #c2410c)' }}>{st.result}</span>
+                            : <Button size="sm" variant="primary" disabled={!!st?.busy || !canChat}
+                                onClick={() => confirmVehicleUpdate(cardId, d.payload)}>
+                                {st?.busy ? 'Applying…' : 'Confirm update'}
+                              </Button>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
               </div>

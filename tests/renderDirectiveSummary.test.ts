@@ -31,6 +31,8 @@ describe("summarizeRenderDirectives", () => {
     expect(rows[0].label).toBe("Vehicle update card");
     expect(rows[0].detail).toContain("mileage 52000");
     expect(rows[0].detail).toContain("check_engine");
+    // Raw payload is carried so the interactive card can apply it verbatim.
+    expect(rows[0].payload).toEqual({ mileage: 52000, fault_lights: ["check_engine"] });
   });
 
   it("summarizes a record-confirmation card", () => {

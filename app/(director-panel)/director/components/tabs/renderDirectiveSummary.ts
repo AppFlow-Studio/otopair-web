@@ -24,6 +24,9 @@ export type RenderDirectiveRow = {
   label: string;
   /** One-line summary of the directive's payload. */
   detail: string;
+  /** Raw directive value — so an interactive card (e.g. the vehicle-update
+   *  confirm) can act on the exact payload the mobile app would. */
+  payload: unknown;
 };
 
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
@@ -40,7 +43,7 @@ export function summarizeRenderDirectives(
     const slugs = arr(b.service_slugs).join(", ") || "—";
     const diag = b.diagnostic_system ? ` · diagnostic: ${b.diagnostic_system}` : "";
     const notes = b.customer_notes ? " · has notes" : "";
-    rows.push({ key: "bookService", label: "Booking flow", detail: `${slugs}${diag}${notes}` });
+    rows.push({ key: "bookService", label: "Booking flow", detail: `${slugs}${diag}${notes}`, payload: b });
   }
 
   if (r.showRecordConfirmation) {
@@ -49,6 +52,7 @@ export function summarizeRenderDirectives(
       key: "showRecordConfirmation",
       label: "Record confirmation card",
       detail: c.maintenance_type ? String(c.maintenance_type) : "—",
+      payload: c,
     });
   }
 
@@ -70,6 +74,7 @@ export function summarizeRenderDirectives(
       key: "showVehicleUpdate",
       label: "Vehicle update card",
       detail: parts.join(" · ") || "—",
+      payload: u,
     });
   }
 
@@ -79,6 +84,7 @@ export function summarizeRenderDirectives(
       key: "linkButton",
       label: "Link button",
       detail: l.label ? `${l.destination} (“${l.label}”)` : String(l.destination ?? "—"),
+      payload: l,
     });
   }
 
@@ -87,6 +93,7 @@ export function summarizeRenderDirectives(
       key: "bookingCard",
       label: "Booking card",
       detail: String(r.bookingCard.booking_id ?? "—"),
+      payload: r.bookingCard,
     });
   }
 
@@ -96,15 +103,16 @@ export function summarizeRenderDirectives(
       key: "bookingsList",
       label: "Bookings list",
       detail: `${ids.length} booking${ids.length === 1 ? "" : "s"}`,
+      payload: r.bookingsList,
     });
   }
 
   if (r.reasoning !== undefined) {
-    rows.push({ key: "reasoning", label: "Reasoning", detail: "attached" });
+    rows.push({ key: "reasoning", label: "Reasoning", detail: "attached", payload: r.reasoning });
   }
   if (r.sources !== undefined) {
     const n = arr(r.sources).length;
-    rows.push({ key: "sources", label: "Sources", detail: n ? `${n} source${n === 1 ? "" : "s"}` : "attached" });
+    rows.push({ key: "sources", label: "Sources", detail: n ? `${n} source${n === 1 ? "" : "s"}` : "attached", payload: r.sources });
   }
 
   return rows;

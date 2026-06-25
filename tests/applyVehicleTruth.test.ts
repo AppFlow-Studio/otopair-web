@@ -88,4 +88,50 @@ describe("applyVehicleTruth", () => {
       ).rejects.toThrow();
     });
   });
+
+  // Reconfirm path — an absurd_forward jump (seed 40000 + 25k floor = 65000
+  // ceiling) is reconfirmable; backward / implausible are hard-invalid.
+  describe("reconfirm override", () => {
+    it("an absurd_forward rejection is flagged reconfirmable + carries current/maxAllowed", async () => {
+      const t = makeT(); const s = await seed(t);
+      const res = await t.withIdentity(ident).mutation(api.vehicleTruth.applyVehicleTruth, {
+        vehicle_id: s.vehicleId, mileage: 90000,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.needsReconfirm).toBe(true);
+      expect(res.reason).toBe("absurd_forward");
+      expect(res.reconfirmable).toBe(true);
+      expect(res.current).toBe(40000);
+      expect(res.maxAllowed).toBe(65000);
+    });
+    it("reconfirmed:true applies the absurd_forward mileage", async () => {
+      const t = makeT(); const s = await seed(t);
+      const res = await t.withIdentity(ident).mutation(api.vehicleTruth.applyVehicleTruth, {
+        vehicle_id: s.vehicleId, mileage: 90000, reconfirmed: true,
+      });
+      expect(res.ok).toBe(true);
+      const owner: any = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+      expect(owner.mileage).toBe(90000);
+    });
+    it("reconfirmed:true does NOT override a backward odometer", async () => {
+      const t = makeT(); const s = await seed(t);
+      const res = await t.withIdentity(ident).mutation(api.vehicleTruth.applyVehicleTruth, {
+        vehicle_id: s.vehicleId, mileage: 30000, reconfirmed: true,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("backward");
+      expect(res.reconfirmable).toBe(false);
+      const owner: any = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+      expect(owner.mileage).toBe(40000);
+    });
+    it("reconfirmed flows through the director path too", async () => {
+      const t = makeT(); const s = await seed(t);
+      const res = await t.mutation(internal.vehicleTruth.applyVehicleTruthForDirectorMutation, {
+        user_id: s.userId, vehicle_vin: "VTVIN0000000000001", mileage: 90000, reconfirmed: true,
+      });
+      expect(res.ok).toBe(true);
+      const owner: any = await t.run((ctx: any) => ctx.db.get(s.ownerId));
+      expect(owner.mileage).toBe(90000);
+    });
+  });
 });

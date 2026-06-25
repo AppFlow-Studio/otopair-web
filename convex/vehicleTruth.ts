@@ -36,6 +36,10 @@ type VehicleTruthInputs = {
   mileage?: number;
   service_claims?: Array<{ service_slug: string; kind: "due" | "light_on" }>;
   fault_lights?: string[];
+  // Set true ONLY after the user explicitly reconfirms a large-but-real forward
+  // mileage jump (reason "absurd_forward"). Never overrides "backward" or
+  // "implausible" — those are hard-invalid, not a judgment call.
+  reconfirmed?: boolean;
 };
 
 /**
@@ -73,8 +77,22 @@ async function applyVehicleTruthImpl(
       : null;
     const maxDelta = computeMaxDelta(annualRate, yearsElapsed);
     const verdict = validateMileageUpdate(owner.mileage ?? null, args.mileage, maxDelta);
-    if (!verdict.ok) {
-      return { ok: false, needsReconfirm: true, reason: verdict.reason };
+    // "absurd_forward" is a big-but-possibly-real jump the user can explicitly
+    // reconfirm to accept. "backward" / "implausible" are hard-invalid and can
+    // NEVER be reconfirmed (an odometer can't run backward; a non-positive or
+    // >1M reading isn't a real value). The rejection payload carries the stored
+    // value + the one-step ceiling so the UI can explain WHY and offer reconfirm.
+    const reconfirmable = verdict.ok === false && verdict.reason === "absurd_forward";
+    if (!verdict.ok && !(reconfirmable && args.reconfirmed)) {
+      return {
+        ok: false,
+        needsReconfirm: true,
+        reason: verdict.reason,
+        reconfirmable,
+        current: owner.mileage ?? null,
+        proposed: args.mileage,
+        maxAllowed: (owner.mileage ?? 0) + maxDelta,
+      };
     }
     await ctx.db.patch(owner._id, {
       mileage: args.mileage,
@@ -121,6 +139,7 @@ export const applyVehicleTruth = mutation({
     mileage: v.optional(v.number()),
     service_claims: serviceClaimsValidator,
     fault_lights: faultLightsValidator,
+    reconfirmed: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<any> => {
     // ── Auth + ownership resolve (mirrors recordConfirmation.ts:54-79) ──
@@ -159,6 +178,7 @@ export const applyVehicleTruthForDirectorMutation = internalMutation({
     mileage: v.optional(v.number()),
     service_claims: serviceClaimsValidator,
     fault_lights: faultLightsValidator,
+    reconfirmed: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<any> => {
     const user: Doc<"users"> | null = await ctx.db.get(args.user_id);
@@ -172,6 +192,7 @@ export const applyVehicleTruthForDirectorMutation = internalMutation({
       mileage: args.mileage,
       service_claims: args.service_claims,
       fault_lights: args.fault_lights,
+      reconfirmed: args.reconfirmed,
     });
   },
 });
@@ -184,6 +205,7 @@ export const applyVehicleTruthForDirector = action({
     mileage: v.optional(v.number()),
     service_claims: serviceClaimsValidator,
     fault_lights: faultLightsValidator,
+    reconfirmed: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<any> => {
     const session = await ctx.runQuery(api.director_auth.validateSession, {
@@ -200,6 +222,7 @@ export const applyVehicleTruthForDirector = action({
         ...(args.mileage !== undefined ? { mileage: args.mileage } : {}),
         ...(args.service_claims !== undefined ? { service_claims: args.service_claims } : {}),
         ...(args.fault_lights !== undefined ? { fault_lights: args.fault_lights } : {}),
+        ...(args.reconfirmed !== undefined ? { reconfirmed: args.reconfirmed } : {}),
       },
     );
   },

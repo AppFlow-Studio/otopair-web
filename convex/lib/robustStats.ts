@@ -28,9 +28,9 @@ export function median(values: number[]): number {
  * single absurd reading can't win on weight alone. Drops non-finite/<=0 values
  * and <=0 weights. Returns 0 for empty input.
  *
- * NOTE: a high-weight source DOMINATES by design (e.g. repairpal_motor @0.8
- * beats two llm @0.3). A wrong high-weight value is guarded at WRITE time by the
- * sibling validation gate (laborSibling.ts), not here.
+ * NOTE: a high-weight source DOMINATES by design (e.g. olp_labor @0.8 beats two
+ * llm @0.3). A wrong high-weight value is guarded at WRITE time by the scrape's
+ * sanity gate, not here.
  */
 export function weightedMedian(values: number[], weights?: number[]): number {
   const pairs = values

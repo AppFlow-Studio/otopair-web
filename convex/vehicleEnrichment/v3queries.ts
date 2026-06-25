@@ -9,7 +9,8 @@
 
 import { v } from "convex/values";
 import { internalQuery, internalMutation } from "../_generated/server";
-import { isPoisonPriceType } from "../lib/priceTypes";
+import { isPoisonPriceType, isNonPooledPriceType } from "../lib/priceTypes";
+import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "../lib/labor_aggregation";
 
 export const getVehicleConfigByKey = internalQuery({
   args: { configKey: v.string() },
@@ -344,10 +345,9 @@ export const getQuotableLaborTime = internalQuery({
 
     if (!labor) return null;
 
-    const MIN_SAMPLES = 3;
     const useEmpirical =
       labor.empirical_hours != null &&
-      (labor.empirical_sample_size ?? 0) >= MIN_SAMPLES;
+      (labor.empirical_sample_size ?? 0) >= LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES;
 
     return {
       hours: useEmpirical ? labor.empirical_hours! : labor.book_hours,
@@ -374,11 +374,21 @@ export const getPricedPartCount = internalQuery({
       // poison rows (online_discount / you_save / unverified) are excluded
       // from the customer median, so counting them here inflated fill_rate
       // and made backfills skip exactly the broken parts (Jun-9 review).
+      // Non-pooled fallback rows (repairpal_endpoint) are ALSO excluded — an
+      // endpoint-only part has no real SKU price yet, so counting it would
+      // make the pipeline skip fetching one (same fill_rate inflation bug).
       const rows = await ctx.db
         .query("part_prices")
         .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
         .collect();
-      if (rows.some((r) => !isPoisonPriceType((r as any).price_type))) priced++;
+      if (
+        rows.some(
+          (r) =>
+            !isPoisonPriceType((r as any).price_type) &&
+            !isNonPooledPriceType((r as any).price_type),
+        )
+      )
+        priced++;
     }
     return priced;
   },
@@ -700,11 +710,20 @@ export const diagnoseFillGaps = internalQuery({
     const partIds = fitments.map((f) => f.part_id);
     let pricedCount = 0;
     for (const pid of partIds) {
-      const price = await ctx.db
+      // Exclude poison + non-pooled (repairpal_endpoint) rows: an endpoint-only
+      // part has no real SKU price, so it must count as missing here too.
+      const rows = await ctx.db
         .query("part_prices")
         .withIndex("by_part", (q) => q.eq("part_id", pid))
-        .first();
-      if (price) pricedCount++;
+        .collect();
+      if (
+        rows.some(
+          (r) =>
+            !isPoisonPriceType((r as any).price_type) &&
+            !isNonPooledPriceType((r as any).price_type),
+        )
+      )
+        pricedCount++;
     }
     const missingPrices = fitments.length - pricedCount;
 

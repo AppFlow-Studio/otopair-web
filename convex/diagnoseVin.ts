@@ -30,7 +30,7 @@ import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { reextractPartPrice, isAffirmativeRejection } from "./vehicleEnrichment/priceReextract";
-import { UNVERIFIED_PRICE_TYPE } from "./lib/priceTypes";
+import { UNVERIFIED_PRICE_TYPE, isNonPooledPriceType } from "./lib/priceTypes";
 
 /**
  * Write an LLM web-search price through the SAME two-tier verification
@@ -1132,7 +1132,9 @@ export const _listPartsMissingPrices = internalQuery({
         .query("part_prices")
         .withIndex("by_part", q => q.eq("part_id", p._id))
         .collect();
-      const hasPrice = prices.length > 0;
+      // A non-pooled fallback row (repairpal_endpoint) is NOT a real SKU price,
+      // so it must not make skipExisting skip real LLM pricing for the part.
+      const hasPrice = prices.some((r) => !isNonPooledPriceType((r as any).price_type));
       if (skipExisting && hasPrice) continue;
 
       // Sample vehicle from the most recent fitment for Claude context.

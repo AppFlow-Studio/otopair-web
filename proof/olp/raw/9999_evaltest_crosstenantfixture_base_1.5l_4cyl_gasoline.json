@@ -1,0 +1,9 @@
+{
+  "config_key": "9999_evaltest_crosstenantfixture_base_1.5l_4cyl_gasoline",
+  "error": "model not found on OLP",
+  "make": "EvalTest",
+  "model": "CrossTenantFixture",
+  "resolved": false,
+  "trim": "Base",
+  "year": 9999
+}

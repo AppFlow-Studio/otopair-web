@@ -27,3 +27,19 @@ export const UNVERIFIED_PRICE_TYPE = "unverified";
 export function isPoisonPriceType(priceType: string | null | undefined): boolean {
   return priceType != null && POISON_PRICE_TYPES.has(priceType);
 }
+
+/** Valid market signals that are RESERVED as per-part fallbacks (not poison),
+ *  excluded from the pooled SKU aggregate. The RepairPal endpoint averaged
+ *  per-unit point is the first member — only resolvePartsCost's gated real-band
+ *  block reads it; summarizePriceRows (booking_quotes/serviceParts/job_actuals)
+ *  must not. */
+export const REPAIRPAL_ENDPOINT_PRICE_TYPE = "repairpal_endpoint";
+
+/** price_type values that are valid but reserved as per-part fallbacks —
+ *  excluded from the pooled SKU aggregate (mirrors POISON_PRICE_TYPES' shape). */
+export const NON_POOLED_PRICE_TYPES = new Set<string>([REPAIRPAL_ENDPOINT_PRICE_TYPE]);
+
+/** True when a row is valid but must NOT enter the pooled per-part aggregate. */
+export function isNonPooledPriceType(priceType: string | null | undefined): boolean {
+  return priceType != null && NON_POOLED_PRICE_TYPES.has(priceType);
+}

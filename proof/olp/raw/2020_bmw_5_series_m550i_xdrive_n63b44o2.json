@@ -1,0 +1,322 @@
+{
+  "config_key": "2020_bmw_5_series_m550i_xdrive_n63b44o2",
+  "make": "BMW",
+  "model": "5 Series",
+  "olp_labor_count": 566,
+  "olp_url": "https://openlaborproject.com/portal/bmw/m550i/2020/4.4l-v8-twin-turbo-n63/",
+  "olp_vehicle": {
+    "displayYear": "2020",
+    "engine": "4.4L V8 Twin-Turbo N63",
+    "engineSlug": "4.4l-v8-twin-turbo-n63",
+    "forcedInduction": "turbo",
+    "fuelType": "gas",
+    "jobCount": 566,
+    "timingType": "chain",
+    "vehicleId": "105e2235-90f4-45f1-a079-d91715e5437b",
+    "yearRange": "2020"
+  },
+  "resolved": true,
+  "services": [
+    {
+      "delta_pct": -17,
+      "olp_hours": 0.5,
+      "olp_jobs": [
+        {
+          "hours": 0.5,
+          "name": "Oil Change - Synthetic",
+          "sane": true,
+          "slug": "oil-change-synthetic"
+        },
+        {
+          "hours": 0.6,
+          "name": "Oil Change",
+          "sane": true,
+          "slug": "oil-change"
+        },
+        {
+          "hours": 1.1,
+          "name": "Oil Change - Diesel",
+          "sane": true,
+          "slug": "oil-change-diesel"
+        }
+      ],
+      "our_confidence": 0.9,
+      "our_hours": 0.6,
+      "our_source": "aggregated",
+      "repairpal_hours": 0.58,
+      "slug": "oil_change",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -40,
+      "olp_hours": 0.3,
+      "olp_jobs": [
+        {
+          "hours": 0.3,
+          "name": "Air Filter",
+          "sane": true,
+          "slug": "air-filter"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 0.5,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "filter_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 36,
+      "olp_hours": 4.5,
+      "olp_jobs": [
+        {
+          "hours": 4.5,
+          "name": "Spark Plugs",
+          "sane": true,
+          "slug": "spark-plugs"
+        },
+        {
+          "hours": 2.7,
+          "name": "Spark Plugs - V6",
+          "sane": true,
+          "slug": "spark-plugs-v6"
+        },
+        {
+          "hours": 2.7,
+          "name": "Spark Plugs - V8",
+          "sane": true,
+          "slug": "spark-plugs-v8"
+        }
+      ],
+      "our_confidence": 0.9,
+      "our_hours": 3.3,
+      "our_source": "aggregated",
+      "repairpal_hours": 3.25,
+      "slug": "spark_plugs",
+      "status": "matched"
+    },
+    {
+      "delta_pct": null,
+      "olp_hours": null,
+      "olp_jobs": [],
+      "our_confidence": null,
+      "our_hours": null,
+      "our_source": null,
+      "repairpal_hours": null,
+      "slug": "timing_belt",
+      "status": "both_missing"
+    },
+    {
+      "delta_pct": -33,
+      "olp_hours": 1,
+      "olp_jobs": [
+        {
+          "hours": 1,
+          "name": "Coolant Flush",
+          "sane": true,
+          "slug": "coolant-flush"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 1.5,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "coolant_flush",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 80,
+      "olp_hours": 2.7,
+      "olp_jobs": [
+        {
+          "hours": 2.7,
+          "name": "Transmission Service",
+          "sane": true,
+          "slug": "transmission-service"
+        },
+        {
+          "hours": 2.7,
+          "name": "Transmission Filter and Fluid",
+          "sane": true,
+          "slug": "trans-filter-fluid"
+        },
+        {
+          "hours": 2.7,
+          "name": "Automatic Transmission Fluid and Filter Change",
+          "sane": true,
+          "slug": "automatic-transmission-fluid-filter-change"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 1.5,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "transmission_service",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -47,
+      "olp_hours": 1,
+      "olp_jobs": [
+        {
+          "hours": 1,
+          "name": "Wheel Alignment",
+          "sane": true,
+          "slug": "wheel-alignment"
+        }
+      ],
+      "our_confidence": 0.8,
+      "our_hours": 1.9,
+      "our_source": "aggregated",
+      "repairpal_hours": 1.85,
+      "slug": "wheel_alignment",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -20,
+      "olp_hours": 1.2,
+      "olp_jobs": [
+        {
+          "hours": 1.2,
+          "name": "Brake Pads - Front",
+          "sane": true,
+          "slug": "brake-pads-front"
+        },
+        {
+          "hours": 1.2,
+          "name": "Brake Pads - Rear",
+          "sane": true,
+          "slug": "brake-pads-rear"
+        }
+      ],
+      "our_confidence": 0.9,
+      "our_hours": 1.5,
+      "our_source": "aggregated",
+      "repairpal_hours": 1.51,
+      "slug": "brake_pad_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 20,
+      "olp_hours": 1.8,
+      "olp_jobs": [
+        {
+          "hours": 1.8,
+          "name": "Brake Rotors - Front Pair",
+          "sane": true,
+          "slug": "brake-rotors-front-pair"
+        },
+        {
+          "hours": 1.8,
+          "name": "Brake Rotors - Rear Pair",
+          "sane": true,
+          "slug": "brake-rotors-rear-pair"
+        },
+        {
+          "hours": 2.5,
+          "name": "Brake Pads and Rotors - Front",
+          "sane": true,
+          "slug": "brake-pads-rotors-front"
+        },
+        {
+          "hours": 2.5,
+          "name": "Brake Pads and Rotors - Rear",
+          "sane": true,
+          "slug": "brake-pads-rotors-rear"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 1.5,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "rotor_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -20,
+      "olp_hours": 0.8,
+      "olp_jobs": [
+        {
+          "hours": 0.8,
+          "name": "Brake Fluid Flush",
+          "sane": true,
+          "slug": "brake-fluid-flush"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 1,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "brake_fluid_flush",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -54,
+      "olp_hours": 0.6,
+      "olp_jobs": [
+        {
+          "hours": 0.6,
+          "name": "Battery",
+          "sane": true,
+          "slug": "battery"
+        }
+      ],
+      "our_confidence": 0.8,
+      "our_hours": 1.3,
+      "our_source": "aggregated",
+      "repairpal_hours": 1.27,
+      "slug": "battery_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 20,
+      "olp_hours": 0.9,
+      "olp_jobs": [
+        {
+          "hours": 0.9,
+          "name": "Power Steering Fluid Flush",
+          "sane": true,
+          "slug": "power-steering-fluid-flush"
+        },
+        {
+          "hours": 0.9,
+          "name": "Power Steering Service",
+          "sane": true,
+          "slug": "power-steering-service"
+        }
+      ],
+      "our_confidence": 0.45,
+      "our_hours": 0.75,
+      "our_source": "training_data",
+      "repairpal_hours": null,
+      "slug": "power_steering_flush",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 80,
+      "olp_hours": 1.8,
+      "olp_jobs": [
+        {
+          "hours": 1.8,
+          "name": "Differential Service",
+          "sane": true,
+          "slug": "differential-service"
+        },
+        {
+          "hours": 0.8,
+          "name": "Differential Fluid Change",
+          "sane": true,
+          "slug": "differential-fluid-change"
+        }
+      ],
+      "our_confidence": 0.45,
+      "our_hours": 1,
+      "our_source": "training_data",
+      "repairpal_hours": null,
+      "slug": "differential_service",
+      "status": "matched"
+    }
+  ],
+  "trim": "M550i xDrive",
+  "year": 2020
+}

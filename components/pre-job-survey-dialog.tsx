@@ -36,12 +36,16 @@ import EnrichmentStatusBanner from "@/components/enrichment-status-banner";
 import {
   hasText,
   isTireCondition,
+  MOD_LOCATIONS,
+  modLocationLabel,
   passportSourceLabel,
   tireConditionLabel,
+  type ModLocation,
   type PassportSource,
   type RotorCondition,
   type PreJobSurveyPayload,
   type TireCondition,
+  type VehicleModificationEntry,
   type VehiclePassportData,
 } from "@/lib/vehicle-passport";
 import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
@@ -385,12 +389,6 @@ function rotorConditionLabel(value: string) {
   return "Select...";
 }
 
-function modificationStatusLabel(value: string) {
-  if (value === "none_observed") return "None observed";
-  if (value === "aftermarket_observed") return "Yes - see notes";
-  return "Select...";
-}
-
 function getInitials(label: string): string {
   const raw = label.trim();
   if (!raw) return "VH";
@@ -659,15 +657,10 @@ function PreJobSurveyDialogBody({
   const [inspectionExpiresAt, setInspectionExpiresAt] = useState(
     prefillData?.inspection?.expires_at ?? passportData?.passport.inspection.expires_at ?? ""
   );
-  const [modificationsStatus, setModificationsStatus] = useState<
-    "" | "none_observed" | "aftermarket_observed"
-  >(
-    prefillData?.modifications?.status ??
-      passportData?.passport.modifications.status ??
-      ""
-  );
-  const [modificationNotes, setModificationNotes] = useState(
-    prefillData?.modifications?.notes ?? passportData?.passport.modifications.notes ?? ""
+  const [modEntries, setModEntries] = useState<VehicleModificationEntry[]>(
+    prefillData?.modifications?.entries ??
+      passportData?.passport.modifications.entries ??
+      []
   );
   const [flaggedVehicleSpecs, setFlaggedVehicleSpecs] = useState(
     prefillData?.flagged_vehicle_specs ?? false
@@ -771,14 +764,10 @@ function PreJobSurveyDialogBody({
           prefillData?.inspection?.expires_at ??
           passportData?.passport.inspection.expires_at ??
           "",
-        modificationsStatus:
-          prefillData?.modifications?.status ??
-          passportData?.passport.modifications.status ??
-          "",
-        modificationNotes:
-          prefillData?.modifications?.notes ??
-          passportData?.passport.modifications.notes ??
-          "",
+        modEntries:
+          prefillData?.modifications?.entries ??
+          passportData?.passport.modifications.entries ??
+          [],
         flaggedVehicleSpecs: prefillData?.flagged_vehicle_specs ?? false,
         nextMechanicTip: prefillData?.next_mechanic_tip ?? "",
       }),
@@ -814,8 +803,7 @@ function PreJobSurveyDialogBody({
     transmissionFluidType,
     inspectionLooksCurrent,
     inspectionExpiresAt,
-    modificationsStatus,
-    modificationNotes,
+    modEntries,
     flaggedVehicleSpecs,
     nextMechanicTip,
   });
@@ -874,8 +862,15 @@ function PreJobSurveyDialogBody({
               : "not_visible",
       },
       modifications: {
-        status: modificationsStatus === "" ? null : modificationsStatus,
-        notes: modificationNotes.trim() || null,
+        entries: modEntries
+          .filter((e) => e.location)
+          .map((e) => ({
+            location: e.location,
+            description:
+              typeof e.description === "string" && e.description.trim()
+                ? e.description.trim()
+                : null,
+          })),
       },
       flagged_vehicle_specs: flaggedVehicleSpecs,
       next_mechanic_tip: nextMechanicTip.trim() || null,
@@ -1896,54 +1891,88 @@ function PreJobSurveyDialogBody({
               badge="Optional"
               accent="muted"
             >
-              <FieldRow label="Any aftermarket parts?">
-                <Select
-                  selectedKey={modificationsStatus || "none"}
-                  onSelectionChange={(key) =>
-                    setModificationsStatus(
-                      key === "none"
-                        ? ""
-                        : (String(key) as "" | "none_observed" | "aftermarket_observed")
-                    )
-                  }
-                >
-                  <SelectTrigger className={cn(selectTriggerClassName, "w-[160px] justify-end")}>
-                    <SelectValue>{modificationStatusLabel(modificationsStatus)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectPopover className={selectPopoverClassName}>
-                    <SelectListBox shouldFocusWrap className={selectListBoxClassName}>
-                      <SelectItem id="none" textValue="Select..." className={selectItemClassName}>
-                        Select...
-                      </SelectItem>
-                      <SelectItem
-                        id="none_observed"
-                        textValue="None observed"
-                        className={selectItemClassName}
-                      >
-                        None observed
-                      </SelectItem>
-                      <SelectItem
-                        id="aftermarket_observed"
-                        textValue="Yes - see notes"
-                        className={selectItemClassName}
-                      >
-                        Yes - see notes
-                      </SelectItem>
-                    </SelectListBox>
-                  </SelectPopover>
-                </Select>
-              </FieldRow>
-              {modificationsStatus === "aftermarket_observed" ? (
-                <textarea
-                  value={modificationNotes}
-                  onChange={(event) => setModificationNotes(event.target.value)}
-                  placeholder="Describe what you observed."
-                  className={cn(
-                    baseField(),
-                    "mt-3 min-h-[80px] w-full resize-y py-2 text-left"
-                  )}
-                />
-              ) : null}
+              {modEntries.length === 0 ? (
+                <p className="text-[12px] text-muted-foreground">
+                  No modifications recorded.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {modEntries.map((entry, index) => (
+                    <div
+                      key={index}
+                      className="rounded-lg border border-border p-3 space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <Select
+                          selectedKey={entry.location}
+                          onSelectionChange={(key) =>
+                            setModEntries((rows) =>
+                              rows.map((r, i) =>
+                                i === index
+                                  ? { ...r, location: String(key) as ModLocation }
+                                  : r
+                              )
+                            )
+                          }
+                        >
+                          <SelectTrigger
+                            className={cn(selectTriggerClassName, "w-[180px] justify-between")}
+                          >
+                            <SelectValue>{modLocationLabel(entry.location)}</SelectValue>
+                          </SelectTrigger>
+                          <SelectPopover className={selectPopoverClassName}>
+                            <SelectListBox shouldFocusWrap className={selectListBoxClassName}>
+                              {MOD_LOCATIONS.map((loc) => (
+                                <SelectItem
+                                  key={loc.value}
+                                  id={loc.value}
+                                  textValue={loc.label}
+                                  className={selectItemClassName}
+                                >
+                                  {loc.label}
+                                </SelectItem>
+                              ))}
+                            </SelectListBox>
+                          </SelectPopover>
+                        </Select>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setModEntries((rows) => rows.filter((_, i) => i !== index))
+                          }
+                          className="text-[12px] font-medium text-muted-foreground hover:text-destructive"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <textarea
+                        value={entry.description ?? ""}
+                        onChange={(event) =>
+                          setModEntries((rows) =>
+                            rows.map((r, i) =>
+                              i === index ? { ...r, description: event.target.value } : r
+                            )
+                          )
+                        }
+                        placeholder="Describe the mod (e.g. cold air intake, lowered 2in)."
+                        className={cn(
+                          baseField(),
+                          "min-h-[60px] w-full resize-y py-2 text-left"
+                        )}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  setModEntries((rows) => [...rows, { location: "engine", description: "" }])
+                }
+                className="mt-3 inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline"
+              >
+                + Add modification
+              </button>
             </SectionBlock>
 
             <SectionBlock

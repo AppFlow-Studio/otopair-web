@@ -1,12 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { describe, expect, it } from "vitest";
 import {
   getMissingRequiredPassportFields,
   getVehiclePassportCompletionPercent,
   getVehicleUpdatePrompts,
   serviceLikelyUsesParts,
   type VehiclePassportData,
+  MOD_LOCATIONS,
+  modLocationLabel,
+  legacyModificationsToEntries,
 } from "./vehicle-passport.ts";
 
 const basePassport: VehiclePassportData = {
@@ -133,4 +137,38 @@ test("tire services prompt for tire-specific passport fields", () => {
 
   assert.ok(prompts.some((prompt) => prompt.key === "tire_brand"));
   assert.ok(prompts.some((prompt) => prompt.key === "run_flat"));
+});
+
+describe("modLocationLabel", () => {
+  it("returns the label for a known location", () => {
+    expect(modLocationLabel("wheels_tires")).toBe("Wheels & Tires");
+    expect(modLocationLabel("engine")).toBe("Engine");
+  });
+  it("has 10 locations", () => {
+    expect(MOD_LOCATIONS).toHaveLength(10);
+  });
+});
+
+describe("legacyModificationsToEntries", () => {
+  it("returns [] for none_observed and no notes", () => {
+    expect(legacyModificationsToEntries({ status: "none_observed", notes: null })).toEqual([]);
+  });
+  it("returns [] for empty/undefined", () => {
+    expect(legacyModificationsToEntries(undefined)).toEqual([]);
+    expect(legacyModificationsToEntries({})).toEqual([]);
+  });
+  it("converts aftermarket_observed into one 'other' entry carrying the notes", () => {
+    expect(
+      legacyModificationsToEntries({ status: "aftermarket_observed", notes: "Lowered springs" })
+    ).toEqual([{ location: "other", description: "Lowered springs" }]);
+  });
+  it("converts notes-only into one 'other' entry", () => {
+    expect(legacyModificationsToEntries({ notes: "Cold air intake" })).toEqual([
+      { location: "other", description: "Cold air intake" },
+    ]);
+  });
+  it("passes through already-migrated entries unchanged", () => {
+    const entries = [{ location: "suspension", description: "coilovers" }];
+    expect(legacyModificationsToEntries({ entries })).toEqual(entries);
+  });
 });

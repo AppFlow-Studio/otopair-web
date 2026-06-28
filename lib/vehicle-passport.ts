@@ -21,6 +21,52 @@ export const MODIFICATION_STATUSES = [
 ] as const;
 export type ModificationStatus = (typeof MODIFICATION_STATUSES)[number];
 
+// Broad physical areas of the car where a mod resides. The specific component
+// (turbo, coilovers, cat-back, etc.) goes in the per-entry description.
+export const MOD_LOCATIONS = [
+  { value: "engine", label: "Engine" },
+  { value: "exhaust", label: "Exhaust" },
+  { value: "drivetrain", label: "Drivetrain" },
+  { value: "suspension", label: "Suspension" },
+  { value: "brakes", label: "Brakes" },
+  { value: "wheels_tires", label: "Wheels & Tires" },
+  { value: "exterior_body", label: "Exterior / Body" },
+  { value: "interior", label: "Interior" },
+  { value: "electrical", label: "Electrical" },
+  { value: "other", label: "Other" },
+] as const;
+export type ModLocation = (typeof MOD_LOCATIONS)[number]["value"];
+
+export function modLocationLabel(value: ModLocation): string {
+  return MOD_LOCATIONS.find((m) => m.value === value)?.label ?? "Other";
+}
+
+export type VehicleModificationEntry = {
+  location: ModLocation;
+  description?: string | null;
+};
+
+// Convert the legacy { status, notes } modifications shape into the new
+// entries list. Used by the one-time backfill (convex/migrations.ts).
+export function legacyModificationsToEntries(
+  mods:
+    | {
+        entries?: VehicleModificationEntry[];
+        status?: ModificationStatus | null;
+        notes?: string | null;
+      }
+    | null
+    | undefined
+): VehicleModificationEntry[] {
+  if (!mods) return [];
+  if (Array.isArray(mods.entries)) return mods.entries;
+  const hasNotes = typeof mods.notes === "string" && mods.notes.trim().length > 0;
+  if (mods.status === "aftermarket_observed" || hasNotes) {
+    return [{ location: "other", description: mods.notes ?? null }];
+  }
+  return [];
+}
+
 export const PARTS_ACCURACY_STATUSES = [
   "correct",
   "different_parts",
@@ -80,6 +126,8 @@ export type VehiclePassportInspection = {
 };
 
 export type VehiclePassportModifications = {
+  entries?: VehicleModificationEntry[];
+  // legacy — removed in the contract step once all reads/writes use `entries`
   status?: ModificationStatus | null;
   notes?: string | null;
 };

@@ -4380,8 +4380,7 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       status: passportRecord?.inspection?.status ?? null,
     },
     modifications: {
-      status: passportRecord?.modifications?.status ?? null,
-      notes: firstDefinedString(passportRecord?.modifications?.notes),
+      entries: passportRecord?.modifications?.entries ?? [],
     },
   };
 

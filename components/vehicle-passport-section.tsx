@@ -7,7 +7,7 @@ import {
   formatDateLabel,
   formatMileage,
   formatMonthMileage,
-  modificationStatusLabel,
+  modLocationLabel,
   passportSourceLabel,
   rotorConditionLabel,
   shouldShowPassportSourceBadge,
@@ -269,9 +269,12 @@ function VehiclePassportSectionBody({
     { label: "Ownership", value: data.usage.ownership ?? "Unknown" },
     {
       label: "Modifications",
-      value: data.passport.modifications.status
-        ? modificationStatusLabel(data.passport.modifications.status)
-        : "Unknown",
+      value:
+        (data.passport.modifications.entries?.length ?? 0) > 0
+          ? data.passport.modifications.entries!
+              .map((entry) => modLocationLabel(entry.location))
+              .join(", ")
+          : "None recorded",
     },
   ]);
 

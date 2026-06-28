@@ -51,6 +51,11 @@ import {
 import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
 import { cn } from "@/lib/utils";
 
+// UI-only row type: a modification entry plus a stable client id used for React
+// keys so caret/focus stays put when a middle row is removed. `_id` is stripped
+// before persistence (buildPayload) and excluded from the dirty-check snapshot.
+type ModRow = VehicleModificationEntry & { _id: string };
+
 const conditionPalette: Record<
   TireCondition,
   { label: string; activeClassName: string }
@@ -657,10 +662,10 @@ function PreJobSurveyDialogBody({
   const [inspectionExpiresAt, setInspectionExpiresAt] = useState(
     prefillData?.inspection?.expires_at ?? passportData?.passport.inspection.expires_at ?? ""
   );
-  const [modEntries, setModEntries] = useState<VehicleModificationEntry[]>(
-    prefillData?.modifications?.entries ??
+  const [modEntries, setModEntries] = useState<ModRow[]>(
+    (prefillData?.modifications?.entries ??
       passportData?.passport.modifications.entries ??
-      []
+      []).map((e) => ({ ...e, _id: crypto.randomUUID() }))
   );
   const [flaggedVehicleSpecs, setFlaggedVehicleSpecs] = useState(
     prefillData?.flagged_vehicle_specs ?? false
@@ -803,7 +808,7 @@ function PreJobSurveyDialogBody({
     transmissionFluidType,
     inspectionLooksCurrent,
     inspectionExpiresAt,
-    modEntries,
+    modEntries: modEntries.map((e) => ({ location: e.location, description: e.description })),
     flaggedVehicleSpecs,
     nextMechanicTip,
   });
@@ -1899,7 +1904,7 @@ function PreJobSurveyDialogBody({
                 <div className="space-y-3">
                   {modEntries.map((entry, index) => (
                     <div
-                      key={index}
+                      key={entry._id}
                       className="rounded-lg border border-border p-3 space-y-2"
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -1967,7 +1972,10 @@ function PreJobSurveyDialogBody({
               <button
                 type="button"
                 onClick={() =>
-                  setModEntries((rows) => [...rows, { location: "engine", description: "" }])
+                  setModEntries((rows) => [
+                    ...rows,
+                    { _id: crypto.randomUUID(), location: "engine", description: "" },
+                  ])
                 }
                 className="mt-3 inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline"
               >

@@ -34,7 +34,7 @@ describe("legacyModificationsToEntries", () => {
     ]);
   });
   it("passes through already-migrated entries unchanged", () => {
-    const entries = [{ location: "suspension", description: "coilovers" }];
+    const entries = [{ location: "suspension" as const, description: "coilovers" }];
     expect(legacyModificationsToEntries({ entries })).toEqual(entries);
   });
   it("converts aftermarket_observed with null notes into an 'other' entry with null description", () => {

@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import VehiclePassportSection from "@/components/vehicle-passport-section";
 import {
   formatMileage,
+  modLocationLabel,
   type VehiclePassportData,
 } from "@/lib/vehicle-passport";
 import { StatusPill } from "@/components/status-pill";
@@ -609,9 +610,9 @@ function NotesSection({
   job: VehiclePassportCardJob;
   passport: VehiclePassportData | null | undefined;
 }) {
-  const mods = passport?.passport.modifications;
+  const modEntries = passport?.passport.modifications?.entries ?? [];
   const customerNotes = job.customerNotes?.trim();
-  const hasMods = mods?.status === "aftermarket_observed" || mods?.notes;
+  const hasMods = modEntries.length > 0;
   if (!customerNotes && !hasMods) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -636,14 +637,16 @@ function NotesSection({
           <p className="text-[10px] font-bold tracking-widest text-muted-foreground">
             MODIFICATIONS
           </p>
-          <p className="mt-1 text-foreground">
-            {mods?.status === "aftermarket_observed"
-              ? "Aftermarket observed"
-              : "None observed"}
-          </p>
-          {mods?.notes && (
-            <p className="mt-1 text-xs text-muted-foreground">{mods.notes}</p>
-          )}
+          <ul className="mt-1 space-y-1">
+            {modEntries.map((entry, index) => (
+              <li key={index} className="text-foreground">
+                <span className="font-medium">{modLocationLabel(entry.location)}</span>
+                {entry.description ? (
+                  <span className="text-muted-foreground"> — {entry.description}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>
@@ -733,8 +736,7 @@ export function VehiclePassportCard({
     ).length ?? 0;
   const hasNotes = Boolean(
     job.customerNotes?.trim() ||
-      passport?.passport.modifications?.status === "aftermarket_observed" ||
-      passport?.passport.modifications?.notes,
+      (passport?.passport.modifications?.entries?.length ?? 0) > 0,
   );
 
   return (

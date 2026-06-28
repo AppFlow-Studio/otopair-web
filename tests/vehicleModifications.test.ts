@@ -37,4 +37,12 @@ describe("legacyModificationsToEntries", () => {
     const entries = [{ location: "suspension", description: "coilovers" }];
     expect(legacyModificationsToEntries({ entries })).toEqual(entries);
   });
+  it("converts aftermarket_observed with null notes into an 'other' entry with null description", () => {
+    expect(legacyModificationsToEntries({ status: "aftermarket_observed", notes: null })).toEqual([
+      { location: "other", description: null },
+    ]);
+  });
+  it("treats an empty entries array as already-migrated (returns [])", () => {
+    expect(legacyModificationsToEntries({ entries: [] })).toEqual([]);
+  });
 });

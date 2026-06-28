@@ -41,6 +41,24 @@ export const nullableStringValidator = v.union(v.string(), v.null());
 export const nullableNumberValidator = v.union(v.float64(), v.null());
 export const nullableBooleanValidator = v.union(v.boolean(), v.null());
 
+export const modLocationValidator = v.union(
+  v.literal("engine"),
+  v.literal("exhaust"),
+  v.literal("drivetrain"),
+  v.literal("suspension"),
+  v.literal("brakes"),
+  v.literal("wheels_tires"),
+  v.literal("exterior_body"),
+  v.literal("interior"),
+  v.literal("electrical"),
+  v.literal("other")
+);
+
+export const vehicleModificationEntryValidator = v.object({
+  location: modLocationValidator,
+  description: v.optional(nullableStringValidator),
+});
+
 export const vehiclePassportTiresValidator = v.object({
   brand: v.optional(nullableStringValidator),
   model: v.optional(nullableStringValidator),
@@ -77,6 +95,8 @@ export const vehiclePassportInspectionValidator = v.object({
 });
 
 export const vehiclePassportModificationsValidator = v.object({
+  entries: v.optional(v.array(vehicleModificationEntryValidator)),
+  // legacy — removed in the contract step (Task 8)
   status: v.optional(v.union(modificationStatusValidator, v.null())),
   notes: v.optional(nullableStringValidator),
 });

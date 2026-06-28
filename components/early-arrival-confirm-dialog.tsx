@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -177,6 +177,7 @@ export default function EarlyArrivalConfirmDialog({
   const pushEarlier = useMutation(api.bookings.pushBookingEarlierAndArrive);
   const [actioning, setActioning] = useState(false);
   const [error, setError] = useState("");
+  const [showShopHoursOverride, setShowShopHoursOverride] = useState(false);
 
   const durationMinutes = estimatedLaborMinutes ?? 60;
 
@@ -185,15 +186,21 @@ export default function EarlyArrivalConfirmDialog({
     preview?.proposedEndTime ??
     (proposedTime ? addMinutesToHHMM(proposedTime, durationMinutes) : null);
   const conflict = preview?.conflict ?? null;
+  const isOutsideShopHours = conflict === "outside_shop_hours";
   const conflictText = useMemo(() => conflictMessage(conflict), [conflict]);
 
-  async function handlePush() {
-    if (!preview || !preview.eligible || conflict) return;
+  useEffect(() => {
+    if (!open) setShowShopHoursOverride(false);
+  }, [open]);
+
+  async function pushAndArrive(overrideShopHours = false) {
+    if (!preview || !preview.eligible) return;
     setError("");
     setActioning(true);
     try {
-      await pushEarlier({ bookingId });
+      await pushEarlier({ bookingId, overrideShopHours });
       onPushed?.();
+      setShowShopHoursOverride(false);
       onClose();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not push the booking earlier.");
@@ -202,8 +209,19 @@ export default function EarlyArrivalConfirmDialog({
     }
   }
 
+  async function handlePush() {
+    if (!preview || !preview.eligible) return;
+    if (isOutsideShopHours) {
+      setShowShopHoursOverride(true);
+      return;
+    }
+    if (conflict) return;
+    await pushAndArrive(false);
+  }
+
   function handleKeepOriginal() {
     setError("");
+    setShowShopHoursOverride(false);
     onKept?.();
     onClose();
   }
@@ -211,11 +229,12 @@ export default function EarlyArrivalConfirmDialog({
   const canPush =
     !!preview &&
     preview.eligible &&
-    !conflict &&
+    (!conflict || isOutsideShopHours) &&
     !!proposedTime &&
     !actioning;
 
   return (
+    <>
     <ConfirmationDialog
       open={open}
       onClose={onClose}
@@ -275,7 +294,9 @@ export default function EarlyArrivalConfirmDialog({
                 />
                 {conflictText ? (
                   <div className="rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">
-                    {conflictText} Choose &ldquo;Keep original time&rdquo; or resolve the conflict first.
+                    {isOutsideShopHours
+                      ? conflictText
+                      : `${conflictText} Choose "Keep original time" or resolve the conflict first.`}
                   </div>
                 ) : null}
               </>
@@ -299,5 +320,26 @@ export default function EarlyArrivalConfirmDialog({
         ) : null}
       </div>
     </ConfirmationDialog>
+    <ConfirmationDialog
+      open={showShopHoursOverride}
+      onClose={() => setShowShopHoursOverride(false)}
+      title="Push outside shop hours?"
+      description="The proposed start is outside the shop's hours. Are you sure you want to push earlier and check in anyway?"
+      maxWidthClassName="max-w-md"
+      primaryAction={{
+        label: actioning ? "Workingâ€¦" : "Push earlier & check in anyway",
+        onAction: () => pushAndArrive(true),
+        disabled: actioning,
+        variant: "primary",
+        leading: actioning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null,
+      }}
+      secondaryAction={{
+        label: "Cancel",
+        onAction: () => setShowShopHoursOverride(false),
+        disabled: actioning,
+        variant: "outline",
+      }}
+    />
+    </>
   );
 }

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { api } from "../convex/_generated/api";
 import { identityFor, makeT, seedConfirmedBooking } from "./helpers";
 
@@ -7,6 +7,10 @@ import { identityFor, makeT, seedConfirmedBooking } from "./helpers";
  * to vehicle_at_shop, stamps vehicle_arrived_at_ms, and logs status history.
  */
 describe("CHECKIN-* early check-in flow", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   test("CHECKIN-01: owner marks vehicle here → status flips + arrival stamped", async () => {
     const t = makeT();
     const seed = await seedConfirmedBooking(t);
@@ -100,5 +104,80 @@ describe("CHECKIN-* early check-in flow", () => {
           bookingId: seed.bookingId,
         }),
     ).rejects.toThrow(/Only confirmed/);
+  });
+
+  test("CHECKIN-04: outside-hours early push requires explicit override", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T07:30:00-04:00"));
+
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, {
+      scheduledDate: "2026-05-17",
+      scheduledTime: "09:00",
+      estimatedLaborMinutes: 30,
+      seedWideOpenHours: true,
+    });
+
+    const preview: any = await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .query(api.bookings.getEarlyPushPreview, {
+        bookingId: seed.bookingId,
+      });
+
+    expect(preview.conflict).toBe("outside_shop_hours");
+    expect(preview.proposedScheduledTime).toBe("07:30");
+
+    await expect(
+      t
+        .withIdentity(identityFor(seed.ownerClerkId))
+        .mutation(api.bookings.pushBookingEarlierAndArrive, {
+          bookingId: seed.bookingId,
+        }),
+    ).rejects.toThrow(/outside the shop/i);
+
+    await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .mutation(api.bookings.pushBookingEarlierAndArrive, {
+        bookingId: seed.bookingId,
+        overrideShopHours: true,
+      });
+
+    const booking: any = await t.run((ctx) => ctx.db.get(seed.bookingId));
+    expect(booking?.status).toBe("vehicle_at_shop");
+    expect(booking?.scheduled_time).toBe("07:30");
+    expect(booking?.vehicle_arrived_at_ms).toBeTypeOf("number");
+  });
+
+  test("CHECKIN-05: early push from a future booking uses today's date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-28T18:00:00-04:00"));
+
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, {
+      scheduledDate: "2026-06-29",
+      scheduledTime: "19:00",
+      estimatedLaborMinutes: 30,
+      seedWideOpenHours: true,
+    });
+
+    const preview: any = await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .query(api.bookings.getEarlyPushPreview, {
+        bookingId: seed.bookingId,
+      });
+
+    expect(preview.proposedScheduledDate).toBe("2026-06-28");
+    expect(preview.proposedScheduledTime).toBe("18:00");
+
+    await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .mutation(api.bookings.pushBookingEarlierAndArrive, {
+        bookingId: seed.bookingId,
+      });
+
+    const booking: any = await t.run((ctx) => ctx.db.get(seed.bookingId));
+    expect(booking?.status).toBe("vehicle_at_shop");
+    expect(booking?.scheduled_date).toBe("2026-06-28");
+    expect(booking?.scheduled_time).toBe("18:00");
   });
 });

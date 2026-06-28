@@ -101,6 +101,7 @@ import {
   getMissingRequiredPassportFields,
   getPassportCompletionPercent,
   hasText,
+  inspectionInputValidator,
   isTireCondition,
   mergePassportSection,
   postjobPhotoValidator,
@@ -4607,18 +4608,69 @@ function validatePrejobReport(
   }
 }
 
+// Upsert the gamified multi-point inspection record for a booking. Additive —
+// the derived prejob still drives prejob_report + passport above; this stores
+// the full zone-by-zone state for resume + the downloadable PDF sheet.
+async function upsertInspectionRecord(
+  ctx: any,
+  {
+    booking,
+    jobActualId,
+    inspection,
+    now,
+  }: {
+    booking: any;
+    jobActualId?: any;
+    inspection: any;
+    now: number;
+  }
+) {
+  if (!inspection) return;
+
+  const zones = Array.isArray(inspection.zones) ? inspection.zones : [];
+  const patch: Record<string, any> = {
+    job_actual_id: jobActualId ?? undefined,
+    template_version: inspection.template_version ?? "mpi-v1",
+    zones,
+    findings_attention: inspection.findings_attention ?? [],
+    findings_monitor: inspection.findings_monitor ?? [],
+    updated_at: now,
+  };
+
+  const existing = await ctx.db
+    .query("vehicle_inspections")
+    .withIndex("by_booking", (q: any) => q.eq("booking_id", booking._id))
+    .first();
+
+  if (existing) {
+    await ctx.db.patch(existing._id, patch);
+    return existing._id;
+  }
+
+  return await ctx.db.insert("vehicle_inspections", {
+    booking_id: booking._id,
+    vin: booking.vin,
+    shop_id: booking.shop_id ?? undefined,
+    mechanic_id: booking.mechanic_id ?? undefined,
+    created_at: now,
+    ...patch,
+  });
+}
+
 async function persistPrejobSurvey(
   ctx: any,
   {
     booking,
     passportView,
     prejob,
+    inspection,
     now,
     startedAtMs,
   }: {
     booking: any;
     passportView: any;
     prejob: any;
+    inspection?: any;
     now: number;
     startedAtMs?: number;
   }
@@ -4640,6 +4692,13 @@ async function persistPrejobSurvey(
 
   await ctx.db.patch(jobActual._id, jobActualPatch);
 
+  await upsertInspectionRecord(ctx, {
+    booking,
+    jobActualId: jobActual._id,
+    inspection,
+    now,
+  });
+
   await upsertVehiclePassportRecord(ctx, {
     vin: booking.vin,
     patch: buildPassportPatchFromPrejob(prejob, passportView.passport),
@@ -4656,6 +4715,22 @@ async function persistPrejobSurvey(
     jobActualId: jobActual._id,
     now,
   });
+
+  // Recompute the Vehicle Health Score so the just-measured condition (brake
+  // pad mm, tire condition now on the passport) feeds the maintenance pipeline's
+  // urgency override. Best-effort + scheduled so it never blocks the save.
+  const vehicleOwner = await ctx.db
+    .query("vehicle_owners")
+    .withIndex("by_vin_user", (q: any) =>
+      q.eq("vin", booking.vin).eq("user_id", booking.user_id),
+    )
+    .first();
+  if (vehicleOwner) {
+    await ctx.scheduler.runAfter(0, internal.maintenance_pipeline.runPipeline, {
+      vehicleOwnerId: vehicleOwner._id,
+      triggeredBy: "inspection",
+    });
+  }
 }
 
 function validatePostjobReport(postjob: any, baselineMileage: number | null, requiresParts: boolean) {
@@ -8755,6 +8830,7 @@ export const startWithPrejob = mutation({
   args: {
     bookingId: v.id("bookings"),
     prejob: prejobReportValidator,
+    inspection: v.optional(inspectionInputValidator),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -8806,6 +8882,7 @@ export const startWithPrejob = mutation({
       booking,
       passportView,
       prejob: args.prejob,
+      inspection: args.inspection,
       now,
       startedAtMs: now,
     });
@@ -8860,6 +8937,7 @@ export const commitInspectionAndAwaitEstimate = mutation({
   args: {
     bookingId: v.id("bookings"),
     prejob: prejobReportValidator,
+    inspection: v.optional(inspectionInputValidator),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -8906,6 +8984,7 @@ export const commitInspectionAndAwaitEstimate = mutation({
       booking,
       passportView,
       prejob: args.prejob,
+      inspection: args.inspection,
       now,
       startedAtMs: now,
     });
@@ -8949,6 +9028,7 @@ export const savePrejob = mutation({
   args: {
     bookingId: v.id("bookings"),
     prejob: prejobReportValidator,
+    inspection: v.optional(inspectionInputValidator),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -8967,6 +9047,7 @@ export const savePrejob = mutation({
       booking,
       passportView,
       prejob: args.prejob,
+      inspection: args.inspection,
       now,
     });
 

@@ -11,18 +11,22 @@ const TIRE_AND_WHEEL_SERVICES = new Set([
   "tpms sensor calibration",
 ]);
 
+// Live catalog brake services (normalized names). "Rotor Replacement" has no
+// "brake" token, so it's covered explicitly + via the includes("rotor") check.
 const BRAKE_SERVICES = new Set([
   "brake pad replacement",
-  "brake rotor replacement",
+  "rotor replacement",
   "brake fluid flush",
-  "brake system inspection",
 ]);
 
+// Live catalog fluid services (normalized names).
 const FLUID_SERVICES = new Set([
   "oil change",
   "coolant flush",
-  "transmission fluid service",
+  "transmission service",
   "brake fluid flush",
+  "power steering flush",
+  "differential service",
 ]);
 
 function tokenizeServiceName(value: string) {
@@ -58,7 +62,11 @@ export function isTireService(value: string) {
 
 export function isBrakeService(value: string) {
   const normalized = normalizeServiceName(value);
-  return BRAKE_SERVICES.has(normalized) || normalized.includes("brake");
+  return (
+    BRAKE_SERVICES.has(normalized) ||
+    normalized.includes("brake") ||
+    normalized.includes("rotor")
+  );
 }
 
 export function isFluidService(value: string) {
@@ -66,7 +74,8 @@ export function isFluidService(value: string) {
   return (
     FLUID_SERVICES.has(normalized) ||
     normalized.includes("coolant") ||
-    normalized.includes("fluid")
+    normalized.includes("fluid") ||
+    normalized.includes("flush")
   );
 }
 

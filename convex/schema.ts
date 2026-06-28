@@ -1300,6 +1300,46 @@ export default defineSchema({
     .index("by_vin", ["vin"])
     .index("by_updated_at", ["updated_at"]),
 
+  // Gamified multi-point inspection record — the new pre-job flow. One row per
+  // booking (upserted as the mechanic fills zones). Stores the full zone-by-zone
+  // state so the inspection can be resumed and rendered to a downloadable PDF.
+  // The derived PreJobSurveyPayload still drives prejob_report + passport, so
+  // this table is additive and never the source of truth for pricing.
+  vehicle_inspections: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.optional(v.id("job_actuals")),
+    vin: v.string(),
+    shop_id: v.optional(v.id("shops")),
+    mechanic_id: v.optional(v.id("mechanics")),
+    template_version: v.string(),
+    zones: v.array(
+      v.object({
+        zone_id: v.string(),
+        done: v.boolean(),
+        // Free-form per-field maps keyed by the template field keys. `v.any()`
+        // because the template owns the shape and it evolves with the template
+        // version (recorded above) rather than the schema.
+        measures: v.optional(v.any()),
+        tri: v.optional(v.any()),
+        descriptors: v.optional(v.any()),
+        text: v.optional(v.any()),
+        select: v.optional(v.any()),
+        photo_ids: v.optional(v.array(v.id("_storage"))),
+      }),
+    ),
+    findings_attention: v.array(
+      v.object({ label: v.string(), zone: v.string() }),
+    ),
+    findings_monitor: v.array(
+      v.object({ label: v.string(), zone: v.string() }),
+    ),
+    pdf_storage_id: v.optional(v.id("_storage")),
+    created_at: v.float64(),
+    updated_at: v.float64(),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_vin", ["vin"]),
+
   // [I] Daniel/Waleed
   vehicle_tiers: defineTable({
     vin: v.string(),
@@ -3313,6 +3353,14 @@ export default defineSchema({
     ),
     // Backlink to the scheduled reminder we created for this rec.
     followup_id: v.optional(v.id("follow_ups")),
+    // Where this recommendation originated: "post_job" (default/legacy, mechanic
+    // entered it in the post-job survey), "inspection" (auto-derived from a
+    // multi-point inspection's measurements), or "diagnostic".
+    source: v.optional(v.string()),
+    // Denormalized attribution shown to the driver, e.g.
+    // "Based on last inspection @ Temur Auto & Motor". Set at creation so every
+    // consumer can render it without re-joining shop/source.
+    author_label: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.optional(v.number()),
   })

@@ -1032,7 +1032,11 @@ export async function resolveWinningPartForService(
         const pinnedPartId = rule.pinnedPartIdsBySubcategory.get(sub);
         return pinnedPartId != null && pinnedPartId === c.part._id;
       });
-      if (pinned) {
+      // I1 defense-in-depth: g.candidates is already make-filtered at hydration
+      // (:804), so `pinned` is make-correct today. Re-assert here so a future
+      // refactor that resolves the pin's part_id independently can't reintroduce
+      // a cross-make win — a wrong-make pin falls through to normal selection.
+      if (pinned && partFitsConfigMake(pinned.part.make_id, configMakeId)) {
         const q = resolveRoleQuantity(g.role, bundle, pinned.fitment.quantity_needed);
         roleWinners.push({
           roleKey: g.roleKey,
@@ -1052,7 +1056,11 @@ export async function resolveWinningPartForService(
     // VIN-sticky wins its group outright, skipping the scorer.
     if (stickyDefault) {
       const sticky = g.candidates.find((c) => c.part._id === stickyDefault.part_id);
-      if (sticky) {
+      // I1 defense-in-depth: g.candidates is already make-filtered at hydration
+      // (:804), so a wrong-make sticky part_id isn't found here today. Re-assert
+      // so a future refactor that resolves the sticky part_id independently
+      // can't serve a cross-make part — a wrong-make sticky falls through.
+      if (sticky && partFitsConfigMake(sticky.part.make_id, configMakeId)) {
         const q = resolveRoleQuantity(g.role, bundle, sticky.fitment.quantity_needed);
         roleWinners.push({
           roleKey: g.roleKey,

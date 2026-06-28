@@ -180,4 +180,27 @@ describe("CHECKIN-* early check-in flow", () => {
     expect(booking?.scheduled_date).toBe("2026-06-28");
     expect(booking?.scheduled_time).toBe("18:00");
   });
+
+  test("CHECKIN-06: start inside hours but end after close gets end-after-close conflict", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T19:50:00-04:00"));
+
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, {
+      scheduledDate: "2026-05-17",
+      scheduledTime: "20:30",
+      estimatedLaborMinutes: 30,
+      seedWideOpenHours: true,
+    });
+
+    const preview: any = await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .query(api.bookings.getEarlyPushPreview, {
+        bookingId: seed.bookingId,
+      });
+
+    expect(preview.proposedScheduledTime).toBe("19:50");
+    expect(preview.proposedEndTime).toBe("20:20");
+    expect(preview.conflict).toBe("ends_outside_shop_hours");
+  });
 });

@@ -37,11 +37,12 @@ function hhmmToMinutes(hhmm: string): number {
 }
 
 function conflictMessage(
-  conflict: "booking" | "blocked" | "outside_shop_hours" | null,
+  conflict: "booking" | "blocked" | "outside_shop_hours" | "ends_outside_shop_hours" | null,
 ): string | null {
   if (conflict === "booking") return "Another booking blocks this slot on the mechanic's lane.";
   if (conflict === "blocked") return "A blocked slot covers this window for the mechanic.";
   if (conflict === "outside_shop_hours") return "The proposed start is outside the shop's hours.";
+  if (conflict === "ends_outside_shop_hours") return "The job will end outside the shop's hours.";
   return null;
 }
 
@@ -186,7 +187,8 @@ export default function EarlyArrivalConfirmDialog({
     preview?.proposedEndTime ??
     (proposedTime ? addMinutesToHHMM(proposedTime, durationMinutes) : null);
   const conflict = preview?.conflict ?? null;
-  const isOutsideShopHours = conflict === "outside_shop_hours";
+  const isShopHoursConflict =
+    conflict === "outside_shop_hours" || conflict === "ends_outside_shop_hours";
   const conflictText = useMemo(() => conflictMessage(conflict), [conflict]);
 
   useEffect(() => {
@@ -211,7 +213,7 @@ export default function EarlyArrivalConfirmDialog({
 
   async function handlePush() {
     if (!preview || !preview.eligible) return;
-    if (isOutsideShopHours) {
+    if (isShopHoursConflict) {
       setShowShopHoursOverride(true);
       return;
     }
@@ -229,7 +231,7 @@ export default function EarlyArrivalConfirmDialog({
   const canPush =
     !!preview &&
     preview.eligible &&
-    (!conflict || isOutsideShopHours) &&
+    (!conflict || isShopHoursConflict) &&
     !!proposedTime &&
     !actioning;
 
@@ -294,7 +296,7 @@ export default function EarlyArrivalConfirmDialog({
                 />
                 {conflictText ? (
                   <div className="rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">
-                    {isOutsideShopHours
+                    {isShopHoursConflict
                       ? conflictText
                       : `${conflictText} Choose "Keep original time" or resolve the conflict first.`}
                   </div>
@@ -324,7 +326,7 @@ export default function EarlyArrivalConfirmDialog({
       open={showShopHoursOverride}
       onClose={() => setShowShopHoursOverride(false)}
       title="Push outside shop hours?"
-      description="The proposed start is outside the shop's hours. Are you sure you want to push earlier and check in anyway?"
+      description={`${conflictText ?? "The proposed job is outside the shop's hours."} Are you sure you want to push earlier and check in anyway?`}
       maxWidthClassName="max-w-md"
       primaryAction={{
         label: actioning ? "Workingâ€¦" : "Push earlier & check in anyway",

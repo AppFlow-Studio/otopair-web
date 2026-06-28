@@ -224,15 +224,6 @@ async function assertOnboardingCanBeCompleted(ctx: any, shopId: any) {
   if (hours.length < 7) {
     throw new Error("Complete your operating hours before finishing setup.");
   }
-
-  const mechanics = await ctx.db
-    .query("mechanics")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .filter((q: any) => q.eq(q.field("is_active"), true))
-    .collect();
-  if (mechanics.length === 0) {
-    throw new Error("Add at least one mechanic before finishing setup.");
-  }
 }
 
 async function finalizeOnboarding(ctx: any, args: { shopId: any; userId: any }) {

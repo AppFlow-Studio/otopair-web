@@ -27,11 +27,6 @@ export const inspectionStatusValidator = v.union(
   v.literal("not_visible")
 );
 
-export const modificationStatusValidator = v.union(
-  v.literal("none_observed"),
-  v.literal("aftermarket_observed")
-);
-
 export const partsAccuracyStatusValidator = v.union(
   v.literal("correct"),
   v.literal("different_parts")
@@ -95,10 +90,7 @@ export const vehiclePassportInspectionValidator = v.object({
 });
 
 export const vehiclePassportModificationsValidator = v.object({
-  entries: v.optional(v.array(vehicleModificationEntryValidator)),
-  // legacy — removed in the contract step (Task 8)
-  status: v.optional(v.union(modificationStatusValidator, v.null())),
-  notes: v.optional(nullableStringValidator),
+  entries: v.array(vehicleModificationEntryValidator),
 });
 
 export const vehiclePassportUpdateValidator = v.object({

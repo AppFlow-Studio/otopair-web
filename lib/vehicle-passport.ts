@@ -15,12 +15,6 @@ export const INSPECTION_STATUSES = [
 ] as const;
 export type InspectionStatus = (typeof INSPECTION_STATUSES)[number];
 
-export const MODIFICATION_STATUSES = [
-  "none_observed",
-  "aftermarket_observed",
-] as const;
-export type ModificationStatus = (typeof MODIFICATION_STATUSES)[number];
-
 // Broad physical areas of the car where a mod resides. The specific component
 // (turbo, coilovers, cat-back, etc.) goes in the per-entry description.
 export const MOD_LOCATIONS = [
@@ -52,7 +46,7 @@ export function legacyModificationsToEntries(
   mods:
     | {
         entries?: VehicleModificationEntry[];
-        status?: ModificationStatus | null;
+        status?: "none_observed" | "aftermarket_observed" | null;
         notes?: string | null;
       }
     | null
@@ -126,10 +120,7 @@ export type VehiclePassportInspection = {
 };
 
 export type VehiclePassportModifications = {
-  entries?: VehicleModificationEntry[];
-  // legacy — removed in the contract step once all reads/writes use `entries`
-  status?: ModificationStatus | null;
-  notes?: string | null;
+  entries: VehicleModificationEntry[];
 };
 
 export type VehiclePassportUpdatePayload = {
@@ -390,12 +381,6 @@ export function inspectionStatusLabel(value?: InspectionStatus | null) {
   if (value === "current") return "Current";
   if (value === "not_current") return "Not current";
   if (value === "not_visible") return "Not visible";
-  return "Unknown";
-}
-
-export function modificationStatusLabel(value?: ModificationStatus | null) {
-  if (value === "aftermarket_observed") return "Aftermarket observed";
-  if (value === "none_observed") return "None observed";
   return "Unknown";
 }
 

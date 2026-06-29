@@ -36,25 +36,21 @@ import EnrichmentStatusBanner from "@/components/enrichment-status-banner";
 import {
   hasText,
   isTireCondition,
-  MOD_LOCATIONS,
-  modLocationLabel,
   passportSourceLabel,
   tireConditionLabel,
-  type ModLocation,
   type PassportSource,
   type RotorCondition,
   type PreJobSurveyPayload,
   type TireCondition,
-  type VehicleModificationEntry,
   type VehiclePassportData,
 } from "@/lib/vehicle-passport";
+import {
+  AFFECTED_SYSTEMS,
+  servicesForSystems,
+  type AffectedSystem,
+} from "@/lib/vehicle-mod-systems";
 import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
 import { cn } from "@/lib/utils";
-
-// UI-only row type: a modification entry plus a stable client id used for React
-// keys so caret/focus stays put when a middle row is removed. `_id` is stripped
-// before persistence (buildPayload) and excluded from the dirty-check snapshot.
-type ModRow = VehicleModificationEntry & { _id: string };
 
 const conditionPalette: Record<
   TireCondition,
@@ -662,10 +658,20 @@ function PreJobSurveyDialogBody({
   const [inspectionExpiresAt, setInspectionExpiresAt] = useState(
     prefillData?.inspection?.expires_at ?? passportData?.passport.inspection.expires_at ?? ""
   );
-  const [modEntries, setModEntries] = useState<ModRow[]>(
-    (prefillData?.modifications?.entries ??
-      passportData?.passport.modifications.entries ??
-      []).map((e) => ({ ...e, _id: crypto.randomUUID() }))
+  const [hasMods, setHasMods] = useState<boolean>(
+    prefillData?.modifications?.has_mods ??
+      passportData?.passport.modifications.has_mods ??
+      false
+  );
+  const [modNotes, setModNotes] = useState<string>(
+    prefillData?.modifications?.notes ??
+      passportData?.passport.modifications.notes ??
+      ""
+  );
+  const [affectedSystems, setAffectedSystems] = useState<AffectedSystem[]>(
+    prefillData?.modifications?.affected_systems ??
+      passportData?.passport.modifications.affected_systems ??
+      []
   );
   const [flaggedVehicleSpecs, setFlaggedVehicleSpecs] = useState(
     prefillData?.flagged_vehicle_specs ?? false
@@ -769,9 +775,17 @@ function PreJobSurveyDialogBody({
           prefillData?.inspection?.expires_at ??
           passportData?.passport.inspection.expires_at ??
           "",
-        modEntries:
-          prefillData?.modifications?.entries ??
-          passportData?.passport.modifications.entries ??
+        hasMods:
+          prefillData?.modifications?.has_mods ??
+          passportData?.passport.modifications.has_mods ??
+          false,
+        modNotes:
+          prefillData?.modifications?.notes ??
+          passportData?.passport.modifications.notes ??
+          "",
+        affectedSystems:
+          prefillData?.modifications?.affected_systems ??
+          passportData?.passport.modifications.affected_systems ??
           [],
         flaggedVehicleSpecs: prefillData?.flagged_vehicle_specs ?? false,
         nextMechanicTip: prefillData?.next_mechanic_tip ?? "",
@@ -808,7 +822,9 @@ function PreJobSurveyDialogBody({
     transmissionFluidType,
     inspectionLooksCurrent,
     inspectionExpiresAt,
-    modEntries: modEntries.map((e) => ({ location: e.location, description: e.description })),
+    hasMods,
+    modNotes,
+    affectedSystems,
     flaggedVehicleSpecs,
     nextMechanicTip,
   });
@@ -867,15 +883,11 @@ function PreJobSurveyDialogBody({
               : "not_visible",
       },
       modifications: {
-        entries: modEntries
-          .filter((e) => e.location)
-          .map((e) => ({
-            location: e.location,
-            description:
-              typeof e.description === "string" && e.description.trim()
-                ? e.description.trim()
-                : null,
-          })),
+        has_mods: hasMods,
+        notes: hasMods ? (modNotes.trim() || null) : null,
+        affected_systems: hasMods
+          ? affectedSystems.filter((s) => s !== "cosmetic_only" || affectedSystems.length === 1)
+          : [],
       },
       flagged_vehicle_specs: flaggedVehicleSpecs,
       next_mechanic_tip: nextMechanicTip.trim() || null,
@@ -1896,91 +1908,124 @@ function PreJobSurveyDialogBody({
               badge="Optional"
               accent="muted"
             >
-              {modEntries.length === 0 ? (
-                <p className="text-[12px] text-muted-foreground">
-                  No modifications recorded.
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  {modEntries.map((entry, index) => (
-                    <div
-                      key={entry._id}
-                      className="rounded-lg border border-border p-3 space-y-2"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <Select
-                          selectedKey={entry.location}
-                          onSelectionChange={(key) =>
-                            setModEntries((rows) =>
-                              rows.map((r, i) =>
-                                i === index
-                                  ? { ...r, location: String(key) as ModLocation }
-                                  : r
-                              )
-                            )
-                          }
-                        >
-                          <SelectTrigger
-                            className={cn(selectTriggerClassName, "w-[180px] justify-between")}
-                          >
-                            <SelectValue>{modLocationLabel(entry.location)}</SelectValue>
-                          </SelectTrigger>
-                          <SelectPopover className={selectPopoverClassName}>
-                            <SelectListBox shouldFocusWrap className={selectListBoxClassName}>
-                              {MOD_LOCATIONS.map((loc) => (
-                                <SelectItem
-                                  key={loc.value}
-                                  id={loc.value}
-                                  textValue={loc.label}
-                                  className={selectItemClassName}
-                                >
-                                  {loc.label}
-                                </SelectItem>
-                              ))}
-                            </SelectListBox>
-                          </SelectPopover>
-                        </Select>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setModEntries((rows) => rows.filter((_, i) => i !== index))
-                          }
-                          className="text-[12px] font-medium text-muted-foreground hover:text-destructive"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                      <textarea
-                        value={entry.description ?? ""}
-                        onChange={(event) =>
-                          setModEntries((rows) =>
-                            rows.map((r, i) =>
-                              i === index ? { ...r, description: event.target.value } : r
-                            )
-                          )
-                        }
-                        placeholder="Describe the mod (e.g. cold air intake, lowered 2in)."
-                        className={cn(
-                          baseField(),
-                          "min-h-[60px] w-full resize-y py-2 text-left"
-                        )}
-                      />
+              <div className="flex items-center" style={{ marginBottom: 12 }}>
+                <span className="text-sm font-medium text-gray-700">Any aftermarket parts?</span>
+                <span className="ml-auto inline-flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setHasMods(true)}
+                    className={cn(
+                      "rounded-lg border px-4 py-1.5 text-sm font-semibold transition-colors",
+                      hasMods
+                        ? "border-green-300 bg-green-50 text-green-700"
+                        : "border-border bg-card text-muted-foreground hover:bg-muted"
+                    )}
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHasMods(false);
+                      setAffectedSystems([]);
+                    }}
+                    className={cn(
+                      "rounded-lg border px-4 py-1.5 text-sm font-semibold transition-colors",
+                      !hasMods
+                        ? "border-foreground bg-card text-foreground"
+                        : "border-border bg-card text-muted-foreground hover:bg-muted"
+                    )}
+                  >
+                    No
+                  </button>
+                </span>
+              </div>
+
+              {hasMods ? (
+                <>
+                  <div className="mb-1.5 text-sm font-medium text-gray-700">Notes</div>
+                  <textarea
+                    value={modNotes}
+                    onChange={(e) => setModNotes(e.target.value)}
+                    placeholder="e.g. H&R springs ~1.5in drop, 25mm wheel spacers, cat-back exhaust."
+                    className={cn(baseField(), "min-h-[72px] w-full resize-y py-2 text-left")}
+                  />
+
+                  <div className="mt-4 rounded-xl border border-border bg-muted/40 p-4">
+                    <div className="text-sm font-semibold text-foreground">
+                      Which systems do these affect?
                     </div>
-                  ))}
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() =>
-                  setModEntries((rows) => [
-                    ...rows,
-                    { _id: crypto.randomUUID(), location: "engine", description: "" },
-                  ])
-                }
-                className="mt-3 inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline"
-              >
-                + Add modification
-              </button>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Tap every system these mods touch. Otopair flags them to future shops on the
+                      right services — automatically.
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {AFFECTED_SYSTEMS.map((sys) => {
+                        const selected = affectedSystems.includes(sys.value);
+                        return (
+                          <button
+                            key={sys.value}
+                            type="button"
+                            onClick={() =>
+                              setAffectedSystems((prev) => {
+                                if (sys.value === "cosmetic_only") {
+                                  return prev.includes("cosmetic_only") ? [] : ["cosmetic_only"];
+                                }
+                                const withoutCosmetic = prev.filter((s) => s !== "cosmetic_only");
+                                return withoutCosmetic.includes(sys.value)
+                                  ? withoutCosmetic.filter((s) => s !== sys.value)
+                                  : [...withoutCosmetic, sys.value];
+                              })
+                            }
+                            className={cn(
+                              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                              selected
+                                ? "border-blue-300 bg-blue-50 text-blue-700"
+                                : "border-border bg-card text-muted-foreground hover:bg-muted"
+                            )}
+                          >
+                            {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                            {sys.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {(() => {
+                      const onlyCosmetic =
+                        affectedSystems.length === 1 && affectedSystems[0] === "cosmetic_only";
+                      const services = servicesForSystems(affectedSystems);
+                      if (onlyCosmetic) {
+                        return (
+                          <div className="mt-3 rounded-lg border border-border bg-card px-3.5 py-3 text-xs text-muted-foreground">
+                            Cosmetic only — recorded, but won&apos;t flag any future service.
+                          </div>
+                        );
+                      }
+                      if (services.length === 0) {
+                        return (
+                          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3.5 py-3 text-xs text-blue-700">
+                            No systems selected yet — tap the systems above and Otopair flags the
+                            right future services automatically.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3.5 py-3">
+                          <div className="text-xs font-semibold text-blue-700">
+                            Future shops will be alerted on {services.length} service
+                            {services.length === 1 ? "" : "s"}
+                          </div>
+                          <div className="mt-1 text-xs text-blue-700/90">
+                            {services.map((s) => s.name).join(" · ")}.{" "}
+                            <span className="font-semibold">Hidden on everything else.</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </>
+              ) : null}
             </SectionBlock>
 
             <SectionBlock

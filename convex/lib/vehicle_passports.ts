@@ -36,19 +36,7 @@ export const nullableStringValidator = v.union(v.string(), v.null());
 export const nullableNumberValidator = v.union(v.float64(), v.null());
 export const nullableBooleanValidator = v.union(v.boolean(), v.null());
 
-export const modLocationValidator = v.union(
-  v.literal("engine"),
-  v.literal("exhaust"),
-  v.literal("drivetrain"),
-  v.literal("suspension"),
-  v.literal("brakes"),
-  v.literal("wheels_tires"),
-  v.literal("exterior_body"),
-  v.literal("interior"),
-  v.literal("electrical"),
-  v.literal("other")
-);
-
+// Keep in sync with AFFECTED_SYSTEMS in lib/vehicle-mod-systems.ts (Convex validators can't derive from a TS union).
 export const affectedSystemValidator = v.union(
   v.literal("suspension_ride_height"),
   v.literal("wheels_tires"),
@@ -58,11 +46,6 @@ export const affectedSystemValidator = v.union(
   v.literal("electrical_lighting"),
   v.literal("cosmetic_only")
 );
-
-export const vehicleModificationEntryValidator = v.object({
-  location: modLocationValidator,
-  description: v.optional(nullableStringValidator),
-});
 
 export const vehiclePassportTiresValidator = v.object({
   brand: v.optional(nullableStringValidator),
@@ -100,11 +83,9 @@ export const vehiclePassportInspectionValidator = v.object({
 });
 
 export const vehiclePassportModificationsValidator = v.object({
-  has_mods: v.optional(v.boolean()),
+  has_mods: v.boolean(),
   notes: v.optional(nullableStringValidator),
-  affected_systems: v.optional(v.array(affectedSystemValidator)),
-  // legacy — removed in the contract step (Task 7)
-  entries: v.optional(v.array(vehicleModificationEntryValidator)),
+  affected_systems: v.array(affectedSystemValidator),
 });
 
 export const vehiclePassportUpdateValidator = v.object({

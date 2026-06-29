@@ -30,6 +30,8 @@ import RecommendServiceDrawer from "@/components/recommend-service-drawer";
 import EarlyArrivalConfirmDialog from "@/components/early-arrival-confirm-dialog";
 import EndCurrentJobConfirmDialog from "@/components/end-current-job-confirm-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
+import { NotificationCard, type NotificationItem } from "@/components/notifications/notification-card";
+import { servicesForSystems } from "@/lib/vehicle-mod-systems";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   getMechanicAssignmentConflict,
@@ -661,6 +663,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
     const [declineOtherText, setDeclineOtherText] = useState("");
     const [showPrejobDialog, setShowPrejobDialog] = useState(false);
+    const [showModNotifPreview, setShowModNotifPreview] = useState(false);
     const [showPostjobDialog, setShowPostjobDialog] = useState(false);
     const [showPrejobEstimateDialog, setShowPrejobEstimateDialog] = useState(false);
     const [showMidJobDialog, setShowMidJobDialog] = useState(false);
@@ -2094,6 +2097,66 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   compact={isStepIndicatorCompact}
                   className="border-0 bg-transparent px-0 py-0"
                 />
+                {/* TEMP: dev shortcut to open the Pre-Job vehicle check (incl.
+                    Modifications tab) without walking the booking through
+                    vehicle_at_shop. Remove before shipping. */}
+                <button
+                  type="button"
+                  onClick={() => setShowPrejobDialog(true)}
+                  className="w-full rounded-lg border border-dashed border-amber-400 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100"
+                >
+                  🧪 Open Pre-Job form (temp)
+                </button>
+                {/* TEMP: simulate the new-booking notification (with mod flag)
+                    for this vehicle. Client-side preview only — no DB write.
+                    Remove before shipping. */}
+                <button
+                  type="button"
+                  onClick={() => setShowModNotifPreview((v) => !v)}
+                  className="w-full rounded-lg border border-dashed border-amber-400 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100"
+                >
+                  🔔 Simulate new-booking notification (temp)
+                </button>
+                {showModNotifPreview && job && (() => {
+                  const mods = vehiclePassport?.passport.modifications;
+                  const affectedServices = servicesForSystems(
+                    mods?.affected_systems ?? [],
+                  );
+                  const flagOn = mods?.has_mods === true && affectedServices.length > 0;
+                  const mockItem: NotificationItem = {
+                    kind: "booking",
+                    bookingId: job._id,
+                    createdAt: Date.now(),
+                    isUnread: true,
+                    customer: { full: job.customerName, short: job.customerName },
+                    vehicle: { full: job.vehicle, short: job.vehicle },
+                    services: flagOn ? [affectedServices[0].name] : job.serviceNames,
+                    scheduledDate: job.scheduledDate ?? null,
+                    scheduledTime: job.scheduledTime ?? null,
+                    scheduledLabel: formatBookingDate(job.scheduledDate, job.scheduledTime),
+                    price: job.totalCost ?? null,
+                    note: null,
+                    urgency: null,
+                    tireSpecs: null,
+                    rotorSpecs: null,
+                    modFlag: flagOn ? { affected: true, notes: mods?.notes ?? null } : null,
+                  };
+                  return (
+                    <div className="rounded-lg border border-border bg-card p-2">
+                      <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Simulated bell notification
+                      </p>
+                      <ul className="rounded-md border border-border">
+                        <NotificationCard item={mockItem} onSkip={() => {}} preview />
+                      </ul>
+                      {!flagOn && (
+                        <p className="mt-1 px-1 text-[11px] text-muted-foreground">
+                          No modifications affect this service.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
                 {actionBar}
               </div>
             ) : null}

@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import { NotificationPopover } from "./notifications/notification-popover";
 import { useLiveAlerts } from "./notifications/use-live-alerts";
 import DynamicAlertIsland from "./dynamic-alert-island";
+import type { NotificationItem } from "./notifications/notification-card";
 
 export default function NotificationBell() {
   const [open, setOpen] = useState(false);
@@ -17,6 +18,27 @@ export default function NotificationBell() {
 
   const feed = useQuery(api.mechanicNotifications.getFeed);
   const { alerts: liveAlerts } = useLiveAlerts();
+
+  // TEMP: simulated bell notifications injected by the dev "Simulate
+  // new-booking" button (window event). No DB write. Remove before shipping.
+  const [simItems, setSimItems] = useState<NotificationItem[]>([]);
+  useEffect(() => {
+    function onSim(e: Event) {
+      const detail = (e as CustomEvent).detail as NotificationItem | undefined;
+      if (detail) setSimItems([{ ...detail, simulated: true }]);
+    }
+    window.addEventListener("otopair:sim-notification", onSim as EventListener);
+    return () =>
+      window.removeEventListener("otopair:sim-notification", onSim as EventListener);
+  }, []);
+
+  const mergedFeed = simItems.length
+    ? {
+        unreadCount: (feed?.unreadCount ?? 0) + simItems.length,
+        counts: feed?.counts ?? { confirm: 0, tireQuote: 0, rotorQuote: 0 },
+        items: [...simItems, ...(feed?.items ?? [])],
+      }
+    : feed;
 
   useEffect(() => {
     if (!open) return;
@@ -47,7 +69,7 @@ export default function NotificationBell() {
     setRequestedTab(undefined);
   }
 
-  const unread = feed?.unreadCount ?? 0;
+  const unread = mergedFeed?.unreadCount ?? 0;
   const count = unread + liveAlerts.length;
 
   return (
@@ -68,7 +90,7 @@ export default function NotificationBell() {
 
       {open && (
         <NotificationPopover
-          feed={feed}
+          feed={mergedFeed}
           liveAlerts={liveAlerts}
           initialTab={requestedTab}
           onClose={handleClose}

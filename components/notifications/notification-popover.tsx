@@ -237,6 +237,7 @@ export function NotificationPopover({
                     item={item}
                     onSkip={handleSkip}
                     onAfterAction={onClose}
+                    preview={!!item.simulated}
                   />
                 ))}
               </ul>

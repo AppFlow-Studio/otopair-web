@@ -28,6 +28,7 @@ type NotificationItem = {
   } | null;
   urgency?: "urgent" | null;
   modFlag?: { affected: boolean; notes?: string | null } | null;
+  simulated?: boolean;
 };
 
 function formatBrakeSystemLabel(t: NonNullable<NotificationItem["rotorSpecs"]>["brake_system_type"]): string {

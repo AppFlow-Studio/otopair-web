@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AFFECTED_SYSTEMS,
   affectedSystemLabel,
+  anyServiceAffected,
   servicesForSystems,
 } from "../lib/vehicle-mod-systems";
 
@@ -41,5 +42,24 @@ describe("servicesForSystems", () => {
   });
   it("ignores cosmetic_only when mixed with real systems", () => {
     expect(servicesForSystems(["cosmetic_only", "brakes"]).length).toBe(3);
+  });
+});
+
+describe("anyServiceAffected", () => {
+  it("true when a booking slug is in the union", () => {
+    expect(anyServiceAffected(["wheel-alignment"], ["suspension_ride_height"])).toBe(true);
+  });
+  it("true on overlap among multiple booking slugs", () => {
+    expect(anyServiceAffected(["oil-change", "rotor-replacement"], ["brakes"])).toBe(true);
+  });
+  it("false when none overlap", () => {
+    expect(anyServiceAffected(["oil-change"], ["suspension_ride_height"])).toBe(false);
+  });
+  it("false for cosmetic_only", () => {
+    expect(anyServiceAffected(["wheel-alignment"], ["cosmetic_only"])).toBe(false);
+  });
+  it("false for empty systems or empty slugs", () => {
+    expect(anyServiceAffected(["wheel-alignment"], [])).toBe(false);
+    expect(anyServiceAffected([], ["suspension_ride_height"])).toBe(false);
   });
 });

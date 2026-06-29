@@ -83,3 +83,17 @@ export function servicesForSystems(systems: AffectedSystem[]): ModServiceRef[] {
   }
   return out;
 }
+
+// Slugs of every service the selected systems flag (deduped union).
+export function affectedServiceSlugs(systems: AffectedSystem[]): Set<string> {
+  return new Set(servicesForSystems(systems).map((s) => s.slug));
+}
+
+// True if any of the booking's service slugs is flagged by the systems.
+export function anyServiceAffected(
+  serviceSlugs: string[],
+  systems: AffectedSystem[]
+): boolean {
+  const affected = affectedServiceSlugs(systems);
+  return serviceSlugs.some((slug) => affected.has(slug));
+}

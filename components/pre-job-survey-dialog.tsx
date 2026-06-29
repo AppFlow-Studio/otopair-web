@@ -1908,11 +1908,12 @@ function PreJobSurveyDialogBody({
               badge="Optional"
               accent="muted"
             >
-              <div className="flex items-center" style={{ marginBottom: 12 }}>
-                <span className="text-sm font-medium text-gray-700">Any aftermarket parts?</span>
+              <div className="flex items-center mb-3">
+                <span className="text-sm font-medium text-foreground">Any aftermarket parts?</span>
                 <span className="ml-auto inline-flex gap-2">
                   <button
                     type="button"
+                    aria-pressed={hasMods}
                     onClick={() => setHasMods(true)}
                     className={cn(
                       "rounded-lg border px-4 py-1.5 text-sm font-semibold transition-colors",
@@ -1925,6 +1926,7 @@ function PreJobSurveyDialogBody({
                   </button>
                   <button
                     type="button"
+                    aria-pressed={!hasMods}
                     onClick={() => {
                       setHasMods(false);
                       setAffectedSystems([]);
@@ -1943,7 +1945,7 @@ function PreJobSurveyDialogBody({
 
               {hasMods ? (
                 <>
-                  <div className="mb-1.5 text-sm font-medium text-gray-700">Notes</div>
+                  <div className="mb-1.5 text-sm font-medium text-foreground">Notes</div>
                   <textarea
                     value={modNotes}
                     onChange={(e) => setModNotes(e.target.value)}
@@ -1966,6 +1968,7 @@ function PreJobSurveyDialogBody({
                           <button
                             key={sys.value}
                             type="button"
+                            aria-pressed={selected}
                             onClick={() =>
                               setAffectedSystems((prev) => {
                                 if (sys.value === "cosmetic_only") {

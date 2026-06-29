@@ -280,7 +280,7 @@ export function NotificationCard({
         </div>
       )}
 
-      {error && (
+      {!preview && error && (
         <p className="mt-2 text-xs text-red-600">{error}</p>
       )}
 

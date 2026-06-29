@@ -25,9 +25,9 @@ describe("servicesForSystems", () => {
   });
   it("maps a single system", () => {
     expect(servicesForSystems(["brakes"]).map((s) => s.slug)).toEqual([
-      "brake-pad-replacement",
-      "rotor-replacement",
-      "brake-fluid-flush",
+      "brake_pad_replacement",
+      "rotor_replacement",
+      "brake_fluid_flush",
     ]);
   });
   it("dedupes the union of suspension + wheels_tires to exactly 6 services in order", () => {
@@ -61,5 +61,10 @@ describe("anyServiceAffected", () => {
   it("false for empty systems or empty slugs", () => {
     expect(anyServiceAffected(["wheel-alignment"], [])).toBe(false);
     expect(anyServiceAffected([], ["suspension_ride_height"])).toBe(false);
+  });
+  it("matches slugs separator-insensitively (hyphen vs underscore)", () => {
+    expect(anyServiceAffected(["oil-change"], ["engine_drivetrain"])).toBe(true);
+    expect(anyServiceAffected(["brake-pad-replacement"], ["brakes"])).toBe(true);
+    expect(anyServiceAffected(["wheel_alignment"], ["suspension_ride_height"])).toBe(true);
   });
 });

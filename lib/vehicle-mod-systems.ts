@@ -25,45 +25,45 @@ export type ModServiceRef = { slug: string; name: string };
 // service slugs against the union.
 export const SYSTEM_SERVICE_MAP: Record<AffectedSystem, ModServiceRef[]> = {
   suspension_ride_height: [
-    { slug: "wheel-alignment", name: "Wheel Alignment" },
-    { slug: "tire-balance", name: "Tire Balance" },
-    { slug: "tire-rotation", name: "Tire Rotation" },
-    { slug: "tire-replacement", name: "Tire Replacement" },
+    { slug: "wheel_alignment", name: "Wheel Alignment" },
+    { slug: "tire_balance", name: "Tire Balance" },
+    { slug: "tire_rotation", name: "Tire Rotation" },
+    { slug: "tire_replacement", name: "Tire Replacement" },
   ],
   wheels_tires: [
-    { slug: "tire-balance", name: "Tire Balance" },
-    { slug: "wheel-alignment", name: "Wheel Alignment" },
-    { slug: "tire-rotation", name: "Tire Rotation" },
-    { slug: "tire-replacement", name: "Tire Replacement" },
-    { slug: "brake-pad-replacement", name: "Brake Pad Replacement" },
-    { slug: "rotor-replacement", name: "Rotor Replacement" },
+    { slug: "tire_balance", name: "Tire Balance" },
+    { slug: "wheel_alignment", name: "Wheel Alignment" },
+    { slug: "tire_rotation", name: "Tire Rotation" },
+    { slug: "tire_replacement", name: "Tire Replacement" },
+    { slug: "brake_pad_replacement", name: "Brake Pad Replacement" },
+    { slug: "rotor_replacement", name: "Rotor Replacement" },
   ],
   brakes: [
-    { slug: "brake-pad-replacement", name: "Brake Pad Replacement" },
-    { slug: "rotor-replacement", name: "Rotor Replacement" },
-    { slug: "brake-fluid-flush", name: "Brake Fluid Flush" },
+    { slug: "brake_pad_replacement", name: "Brake Pad Replacement" },
+    { slug: "rotor_replacement", name: "Rotor Replacement" },
+    { slug: "brake_fluid_flush", name: "Brake Fluid Flush" },
   ],
   exhaust_emissions: [
-    { slug: "emissions-test", name: "Emissions Test" },
-    { slug: "state-inspection-nys", name: "NYS Inspection" },
-    { slug: "check-engine-light-diagnosis", name: "Check Engine Light Diagnosis" },
-    { slug: "diagnostic-scan", name: "Diagnostic Scan" },
+    { slug: "emissions_test", name: "Emissions Test" },
+    { slug: "state_inspection", name: "State Inspection" },
+    { slug: "check_engine_light", name: "Check Engine Light Diagnosis" },
+    { slug: "diagnostic_scan", name: "Diagnostic Scan" },
   ],
   engine_drivetrain: [
-    { slug: "oil-change", name: "Oil Change" },
-    { slug: "spark-plugs", name: "Spark Plugs" },
-    { slug: "fuel-system-induction-service", name: "Fuel System / Induction Service" },
-    { slug: "filter-replacement", name: "Filter Replacement" },
-    { slug: "check-engine-light-diagnosis", name: "Check Engine Light Diagnosis" },
-    { slug: "diagnostic-scan", name: "Diagnostic Scan" },
-    { slug: "emissions-test", name: "Emissions Test" },
-    { slug: "transmission-service", name: "Transmission Service" },
-    { slug: "differential-service", name: "Differential Service" },
+    { slug: "oil_change", name: "Oil Change" },
+    { slug: "spark_plugs", name: "Spark Plugs" },
+    { slug: "fuel_system_cleaning", name: "Fuel System Cleaning" },
+    { slug: "filter_replacement", name: "Filter Replacement" },
+    { slug: "check_engine_light", name: "Check Engine Light Diagnosis" },
+    { slug: "diagnostic_scan", name: "Diagnostic Scan" },
+    { slug: "emissions_test", name: "Emissions Test" },
+    { slug: "transmission_service", name: "Transmission Service" },
+    { slug: "differential_service", name: "Differential Service" },
   ],
   electrical_lighting: [
-    { slug: "battery-test", name: "Battery Test" },
-    { slug: "battery-replacement", name: "Battery Replacement" },
-    { slug: "check-engine-light-diagnosis", name: "Check Engine Light Diagnosis" },
+    { slug: "battery_test", name: "Battery Test" },
+    { slug: "battery_replacement", name: "Battery Replacement" },
+    { slug: "check_engine_light", name: "Check Engine Light Diagnosis" },
   ],
   cosmetic_only: [],
 };
@@ -84,9 +84,15 @@ export function servicesForSystems(systems: AffectedSystem[]): ModServiceRef[] {
   return out;
 }
 
+// Normalize a service slug so hyphen/underscore variants match (the deployment
+// has both "oil-change" and "oil_change"). Lowercase, collapse separators to "-".
+export function normalizeSlug(slug: string): string {
+  return slug.toLowerCase().replace(/[\s_-]+/g, "-");
+}
+
 // Slugs of every service the selected systems flag (deduped union).
 export function affectedServiceSlugs(systems: AffectedSystem[]): Set<string> {
-  return new Set(servicesForSystems(systems).map((s) => s.slug));
+  return new Set(servicesForSystems(systems).map((s) => normalizeSlug(s.slug)));
 }
 
 // True if any of the booking's service slugs is flagged by the systems.
@@ -95,5 +101,5 @@ export function anyServiceAffected(
   systems: AffectedSystem[]
 ): boolean {
   const affected = affectedServiceSlugs(systems);
-  return serviceSlugs.some((slug) => affected.has(slug));
+  return serviceSlugs.some((slug) => affected.has(normalizeSlug(slug)));
 }

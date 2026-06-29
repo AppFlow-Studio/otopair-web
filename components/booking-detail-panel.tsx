@@ -30,8 +30,6 @@ import RecommendServiceDrawer from "@/components/recommend-service-drawer";
 import EarlyArrivalConfirmDialog from "@/components/early-arrival-confirm-dialog";
 import EndCurrentJobConfirmDialog from "@/components/end-current-job-confirm-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
-import { type NotificationItem } from "@/components/notifications/notification-card";
-import { servicesForSystems } from "@/lib/vehicle-mod-systems";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   getMechanicAssignmentConflict,
@@ -754,6 +752,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
     const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
     const reopenActuals = useMutation(api.job_actuals.reopenByBooking);
+    const simulateNewBookingFromBooking = useMutation(api.bookings.simulateNewBookingFromBooking);
     const actualsPrefill = useQuery(
       api.job_actuals.getPrefillData,
       job ? { bookingId: job._id } : "skip"
@@ -2106,50 +2105,22 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 >
                   🧪 Open Pre-Job form (temp)
                 </button>
-                {/* TEMP: simulate a new-booking notification arriving (with the
-                    mod flag) by injecting it into the real notification bell.
-                    Client-side only — no DB write. Remove before shipping. */}
+                {/* TEMP: spawn a REAL pending booking on this vehicle with a
+                    mod-affected service, so a flagged "New booking" appears in
+                    the bell via the real getFeed path. Remove before shipping. */}
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     if (!job) return;
-                    const mods = vehiclePassport?.passport.modifications;
-                    const affectedServices = servicesForSystems(
-                      mods?.affected_systems ?? [],
-                    );
-                    const flagOn =
-                      mods?.has_mods === true && affectedServices.length > 0;
-                    const item: NotificationItem = {
-                      kind: "booking",
-                      bookingId: job._id,
-                      createdAt: Date.now(),
-                      isUnread: true,
-                      customer: { full: job.customerName, short: job.customerName },
-                      vehicle: { full: job.vehicle, short: job.vehicle },
-                      services: flagOn ? [affectedServices[0].name] : job.serviceNames,
-                      scheduledDate: job.scheduledDate ?? null,
-                      scheduledTime: job.scheduledTime ?? null,
-                      scheduledLabel: formatBookingDate(
-                        job.scheduledDate,
-                        job.scheduledTime,
-                      ),
-                      price: job.totalCost ?? null,
-                      note: null,
-                      urgency: null,
-                      tireSpecs: null,
-                      rotorSpecs: null,
-                      modFlag: flagOn
-                        ? { affected: true, notes: mods?.notes ?? null }
-                        : null,
-                      simulated: true,
-                    };
-                    window.dispatchEvent(
-                      new CustomEvent("otopair:sim-notification", { detail: item }),
-                    );
+                    try {
+                      await simulateNewBookingFromBooking({ sourceBookingId: job._id });
+                    } catch {
+                      // best-effort dev tool
+                    }
                   }}
                   className="w-full rounded-lg border border-dashed border-amber-400 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100"
                 >
-                  🔔 Simulate new-booking notification (temp)
+                  🔔 Spawn flagged booking in bell (temp)
                 </button>
                 {actionBar}
               </div>

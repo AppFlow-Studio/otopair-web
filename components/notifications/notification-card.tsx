@@ -81,8 +81,10 @@ export function NotificationCard({
   const [confirmingDecline, setConfirmingDecline] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
   const [modExpanded, setModExpanded] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
 
   const isBooking = item.kind === "booking";
+  const hasModFlag = isBooking && item.modFlag?.affected === true;
   const isRotorQuote = item.kind === "rotor_quote";
   const isTireQuote = item.kind === "tire_quote";
   const headerLabel = isBooking
@@ -98,6 +100,7 @@ export function NotificationCard({
 
   async function handleAccept() {
     if (pending) return;
+    if (preview) return;
     setPending(true);
     setError(null);
     try {
@@ -111,6 +114,7 @@ export function NotificationCard({
 
   async function handleDeclineConfirm() {
     if (pending) return;
+    if (preview) return;
     setPending(true);
     setError(null);
     try {
@@ -126,6 +130,7 @@ export function NotificationCard({
   }
 
   function handleDetails() {
+    if (preview) return;
     onAfterAction?.();
     const params = new URLSearchParams();
     params.set("action", "focus-booking");
@@ -242,7 +247,7 @@ export function NotificationCard({
         </p>
       )}
 
-      {isBooking && item.modFlag?.affected && (
+      {hasModFlag && !acknowledged && (
         <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
           <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800">
             <span aria-hidden>&#9888;</span> This vehicle is modified
@@ -278,6 +283,28 @@ export function NotificationCard({
               </>
             );
           })()}
+          <button
+            type="button"
+            onClick={() => setAcknowledged(true)}
+            className="mt-2 w-full rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+          >
+            Tap to acknowledge
+          </button>
+        </div>
+      )}
+
+      {hasModFlag && acknowledged && (
+        <div className="mt-2 flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+            <span aria-hidden>&#9888;</span> Vehicle modified
+          </span>
+          <button
+            type="button"
+            onClick={() => setAcknowledged(false)}
+            className="ml-auto text-[10px] font-medium text-amber-700 hover:text-amber-900"
+          >
+            View
+          </button>
         </div>
       )}
 
@@ -286,7 +313,7 @@ export function NotificationCard({
       )}
 
       {/* Actions */}
-      {!confirmingDecline && !preview && (
+      {!confirmingDecline && (!hasModFlag || acknowledged) && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {isBooking ? (
             <>

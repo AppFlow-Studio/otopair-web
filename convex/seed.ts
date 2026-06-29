@@ -4216,13 +4216,10 @@ export const seedDashboardBookings = mutation({
           ),
         },
         modifications: {
-          entries: hasMods
-            ? [
-                {
-                  location: "wheels_tires" as const,
-                  description: "Aftermarket wheels noted during prior visit.",
-                },
-              ]
+          has_mods: hasMods,
+          notes: hasMods ? "Aftermarket wheels and lowering springs noted during prior visit." : null,
+          affected_systems: hasMods
+            ? ["wheels_tires" as const, "suspension_ride_height" as const]
             : [],
         },
         created_at: reportedAt - 35 * 24 * 60 * 60 * 1000,

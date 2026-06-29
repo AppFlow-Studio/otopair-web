@@ -1856,6 +1856,7 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
       conflictingBookingId: null,
       alternateMechanicId: null,
       alternateMechanicName: null,
+      backfillConflict: null,
     };
   }
 
@@ -1953,6 +1954,54 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
     }
   }
 
+  // Backfilled jobs are logged as `completed` (the work already happened), so
+  // they never show up as a real scheduling conflict above. But landing a new
+  // "any mechanic" booking on top of one still looks wrong on the schedule —
+  // offer a different mechanic instead of silently overlapping them. Only for
+  // "any": a customer-specified mechanic keeps today's behavior (silent
+  // overlap is fine — the backfill already finished).
+  let backfillConflict: { alternateMechanicId: any; alternateMechanicName: string | null } | null = null;
+  if (!conflict && booking.assignment_preference !== "specific_mechanic") {
+    const sameDayBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_date", (q: any) =>
+        q.eq("shop_id", booking.shop_id).eq("scheduled_date", proposedScheduledDate),
+      )
+      .collect();
+    const backfillHit = sameDayBookings.find((other: any) => {
+      if (String(other._id) === String(booking._id)) return false;
+      if (other.backfilled_at_ms == null) return false;
+      if (!other.mechanic_id || String(other.mechanic_id) !== String(booking.mechanic_id)) return false;
+      const otherStart = hhmmToMinutes(other.scheduled_time);
+      const otherEnd = otherStart + (other.estimated_labor_minutes ?? 60);
+      const newStart = hhmmToMinutes(proposedScheduledTime);
+      const newEnd = hhmmToMinutes(proposedEndTime);
+      return otherStart < newEnd && otherEnd > newStart;
+    });
+    if (backfillHit) {
+      try {
+        const altId = await resolveMechanicForWindow(ctx, {
+          shopId: booking.shop_id,
+          date: proposedScheduledDate,
+          startTime: proposedScheduledTime,
+          durationMinutes,
+          excludeMechanicId: booking.mechanic_id,
+          excludeBookingId: String(booking._id),
+        });
+        const altMechanic: any = await ctx.db.get(altId);
+        backfillConflict = {
+          alternateMechanicId: altId,
+          alternateMechanicName: altMechanic
+            ? `${altMechanic.first_name ?? ""} ${altMechanic.last_name ?? ""}`.trim() ||
+              "Mechanic"
+            : null,
+        };
+      } catch {
+        // No alternate free either — proceed exactly as before (no warning).
+      }
+    }
+  }
+
   return {
     eligible: true as const,
     minutesEarly,
@@ -1964,6 +2013,7 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
     conflictingBookingId,
     alternateMechanicId,
     alternateMechanicName,
+    backfillConflict,
   };
 }
 
@@ -2176,6 +2226,9 @@ export const pushBookingEarlierAndArrive = mutation({
   args: {
     bookingId: v.id("bookings"),
     overrideShopHours: v.optional(v.boolean()),
+    // Front desk's explicit choice from the backfill-conflict dialog: keep
+    // the originally-assigned mechanic, or swap to the offered alternate.
+    mechanicId: v.optional(v.id("mechanics")),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -2218,8 +2271,10 @@ export const pushBookingEarlierAndArrive = mutation({
     const durationMinutes = booking.estimated_labor_minutes ?? 60;
     // An "any mechanic" booking that couldn't push earlier on its assigned
     // mechanic was already resolved to a free alternate in the preview —
-    // move it there instead of throwing.
-    const targetMechanicId = preview.alternateMechanicId ?? booking.mechanic_id;
+    // move it there instead of throwing. An explicit `args.mechanicId` (the
+    // front desk's pick from the backfill-conflict dialog) wins over both.
+    const targetMechanicId =
+      args.mechanicId ?? preview.alternateMechanicId ?? booking.mechanic_id;
     // Defense-in-depth: re-validate via the canonical helper so we get the
     // same errors any other reschedule path would surface.
     await resolveMechanicForWindow(ctx, {
@@ -5003,6 +5058,7 @@ async function resolveMechanicForWindow(
     startTime,
     durationMinutes,
     preferredMechanicId,
+    excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
     allowAfterClose,
@@ -5013,6 +5069,7 @@ async function resolveMechanicForWindow(
     startTime: string;
     durationMinutes: number;
     preferredMechanicId?: any;
+    excludeMechanicId?: any;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
     allowAfterClose?: boolean;
@@ -5025,6 +5082,7 @@ async function resolveMechanicForWindow(
     startTime,
     durationMinutes,
     preferredMechanicId,
+    excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
     allowAfterClose,

@@ -439,6 +439,7 @@ export async function resolveAvailableMechanicForWindow(
     startTime,
     durationMinutes,
     preferredMechanicId,
+    excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
     allowAfterClose,
@@ -449,6 +450,10 @@ export async function resolveAvailableMechanicForWindow(
     startTime: string;
     durationMinutes: number;
     preferredMechanicId?: any;
+    /** Skip this mechanic in the "any mechanic" candidate pool — e.g. when
+     *  looking for a genuinely different mechanic than the one already on
+     *  the booking. */
+    excludeMechanicId?: any;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
     allowAfterClose?: boolean;
@@ -482,6 +487,9 @@ export async function resolveAvailableMechanicForWindow(
 
   const candidates: Array<{ mechanicId: any; count: number; minutes: number }> = [];
   for (const mechanic of context.activeMechanics) {
+    if (excludeMechanicId && String(mechanic._id) === String(excludeMechanicId)) {
+      continue;
+    }
     try {
       assertMechanicWindowFreeInContext(context, {
         mechanicId: mechanic._id,

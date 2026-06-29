@@ -376,4 +376,162 @@ describe("CHECKIN-* early check-in flow", () => {
     expect(preview.conflict).toBe("booking");
     expect(preview.alternateMechanicId).toBeNull();
   });
+
+  test("CHECKIN-10: a backfilled (completed) booking on the mechanic warns an any-mechanic push instead of blocking it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T08:00:00-04:00"));
+
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, {
+      scheduledDate: "2026-05-17",
+      scheduledTime: "09:00",
+      estimatedLaborMinutes: 30,
+      seedWideOpenHours: true,
+    });
+
+    const bobId = await t.run((ctx) =>
+      ctx.db.insert("mechanics", {
+        shop_id: seed.shopId,
+        first_name: "Bob",
+        last_name: "Mechanic",
+        is_active: true,
+      } as any),
+    );
+    // Backfilled (already-completed) job logged over Alice's 08:00-08:30 —
+    // doesn't count as a real conflict, but overlaps the proposed push.
+    await t.run((ctx) =>
+      ctx.db.insert("bookings", {
+        user_id: seed.customerId,
+        shop_id: seed.shopId,
+        mechanic_id: seed.mechanicId,
+        vin: "1HGCM82633A007777",
+        service_ids: [],
+        scheduled_date: "2026-05-17",
+        scheduled_time: "08:00",
+        status: "completed",
+        estimated_labor_minutes: 30,
+        backfilled_at_ms: Date.now(),
+        source: "mechanic_backfill",
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any),
+    );
+
+    const preview: any = await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .query(api.bookings.getEarlyPushPreview, { bookingId: seed.bookingId });
+
+    expect(preview.conflict).toBeNull();
+    expect(String(preview.backfillConflict?.alternateMechanicId)).toBe(String(bobId));
+    expect(preview.backfillConflict?.alternateMechanicName).toMatch(/Bob/);
+
+    // Default push (front desk dismisses/ignores the warning) keeps the
+    // original mechanic — the backfill never hard-blocks.
+    await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .mutation(api.bookings.pushBookingEarlierAndArrive, {
+        bookingId: seed.bookingId,
+      });
+    const kept: any = await t.run((ctx) => ctx.db.get(seed.bookingId));
+    expect(String(kept?.mechanic_id)).toBe(String(seed.mechanicId));
+  });
+
+  test("CHECKIN-11: explicitly choosing the alternate from the backfill dialog moves the booking there", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T08:00:00-04:00"));
+
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, {
+      scheduledDate: "2026-05-17",
+      scheduledTime: "09:00",
+      estimatedLaborMinutes: 30,
+      seedWideOpenHours: true,
+    });
+    const bobId = await t.run((ctx) =>
+      ctx.db.insert("mechanics", {
+        shop_id: seed.shopId,
+        first_name: "Bob",
+        last_name: "Mechanic",
+        is_active: true,
+      } as any),
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("bookings", {
+        user_id: seed.customerId,
+        shop_id: seed.shopId,
+        mechanic_id: seed.mechanicId,
+        vin: "1HGCM82633A007777",
+        service_ids: [],
+        scheduled_date: "2026-05-17",
+        scheduled_time: "08:00",
+        status: "completed",
+        estimated_labor_minutes: 30,
+        backfilled_at_ms: Date.now(),
+        source: "mechanic_backfill",
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any),
+    );
+
+    await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .mutation(api.bookings.pushBookingEarlierAndArrive, {
+        bookingId: seed.bookingId,
+        mechanicId: bobId,
+      });
+
+    const booking: any = await t.run((ctx) => ctx.db.get(seed.bookingId));
+    expect(booking?.status).toBe("vehicle_at_shop");
+    expect(String(booking?.mechanic_id)).toBe(String(bobId));
+  });
+
+  test("CHECKIN-12: a specific-mechanic booking never gets the backfill warning", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T08:00:00-04:00"));
+
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, {
+      scheduledDate: "2026-05-17",
+      scheduledTime: "09:00",
+      estimatedLaborMinutes: 30,
+      seedWideOpenHours: true,
+    });
+    await t.run((ctx) =>
+      ctx.db.patch(seed.bookingId, {
+        assignment_preference: "specific_mechanic",
+      } as any),
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("mechanics", {
+        shop_id: seed.shopId,
+        first_name: "Bob",
+        last_name: "Mechanic",
+        is_active: true,
+      } as any),
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("bookings", {
+        user_id: seed.customerId,
+        shop_id: seed.shopId,
+        mechanic_id: seed.mechanicId,
+        vin: "1HGCM82633A007777",
+        service_ids: [],
+        scheduled_date: "2026-05-17",
+        scheduled_time: "08:00",
+        status: "completed",
+        estimated_labor_minutes: 30,
+        backfilled_at_ms: Date.now(),
+        source: "mechanic_backfill",
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any),
+    );
+
+    const preview: any = await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .query(api.bookings.getEarlyPushPreview, { bookingId: seed.bookingId });
+
+    expect(preview.conflict).toBeNull();
+    expect(preview.backfillConflict).toBeNull();
+  });
 });

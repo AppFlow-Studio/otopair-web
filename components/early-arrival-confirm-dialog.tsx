@@ -179,6 +179,7 @@ export default function EarlyArrivalConfirmDialog({
   const [actioning, setActioning] = useState(false);
   const [error, setError] = useState("");
   const [showShopHoursOverride, setShowShopHoursOverride] = useState(false);
+  const [showBackfillChoice, setShowBackfillChoice] = useState(false);
 
   const durationMinutes = estimatedLaborMinutes ?? 60;
 
@@ -192,17 +193,25 @@ export default function EarlyArrivalConfirmDialog({
   const conflictText = useMemo(() => conflictMessage(conflict), [conflict]);
 
   useEffect(() => {
-    if (!open) setShowShopHoursOverride(false);
+    if (!open) {
+      setShowShopHoursOverride(false);
+      setShowBackfillChoice(false);
+    }
   }, [open]);
 
-  async function pushAndArrive(overrideShopHours = false) {
+  async function pushAndArrive(overrideShopHours = false, mechanicIdOverride?: string) {
     if (!preview || !preview.eligible) return;
     setError("");
     setActioning(true);
     try {
-      await pushEarlier({ bookingId, overrideShopHours });
+      await pushEarlier({
+        bookingId,
+        overrideShopHours,
+        mechanicId: mechanicIdOverride ? (mechanicIdOverride as Id<"mechanics">) : undefined,
+      });
       onPushed?.();
       setShowShopHoursOverride(false);
+      setShowBackfillChoice(false);
       onClose();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not push the booking earlier.");
@@ -218,7 +227,20 @@ export default function EarlyArrivalConfirmDialog({
       return;
     }
     if (conflict) return;
+    if (preview.backfillConflict) {
+      setShowBackfillChoice(true);
+      return;
+    }
     await pushAndArrive(false);
+  }
+
+  function keepOriginalMechanic() {
+    void pushAndArrive(false, mechanicId ? String(mechanicId) : undefined);
+  }
+
+  function swapToAlternateMechanic() {
+    if (!preview?.backfillConflict) return;
+    void pushAndArrive(false, String(preview.backfillConflict.alternateMechanicId));
   }
 
   function handleKeepOriginal() {
@@ -346,6 +368,28 @@ export default function EarlyArrivalConfirmDialog({
       secondaryAction={{
         label: "Cancel",
         onAction: () => setShowShopHoursOverride(false),
+        disabled: actioning,
+        variant: "outline",
+      }}
+    />
+    <ConfirmationDialog
+      open={showBackfillChoice}
+      onClose={() => setShowBackfillChoice(false)}
+      title="Backfilled booking during this time"
+      description={`There's a backfilled booking on ${mechanicName ?? "this mechanic"}'s schedule during this window. Do you want to schedule with a different mechanic instead?`}
+      maxWidthClassName="max-w-md"
+      primaryAction={{
+        label: actioning
+          ? "Working…"
+          : `Yes, assign to ${preview?.backfillConflict?.alternateMechanicName ?? "another mechanic"}`,
+        onAction: swapToAlternateMechanic,
+        disabled: actioning,
+        variant: "primary",
+        leading: actioning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null,
+      }}
+      secondaryAction={{
+        label: `No, keep assigned to ${mechanicName ?? "this mechanic"}`,
+        onAction: keepOriginalMechanic,
         disabled: actioning,
         variant: "outline",
       }}

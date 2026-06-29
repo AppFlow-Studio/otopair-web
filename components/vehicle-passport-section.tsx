@@ -7,7 +7,6 @@ import {
   formatDateLabel,
   formatMileage,
   formatMonthMileage,
-  modLocationLabel,
   passportSourceLabel,
   rotorConditionLabel,
   shouldShowPassportSourceBadge,
@@ -15,6 +14,7 @@ import {
   type PassportSource,
   type VehiclePassportData,
 } from "@/lib/vehicle-passport";
+import { affectedSystemLabel } from "@/lib/vehicle-mod-systems";
 import {
   getBookingServiceFlags,
   serviceListsOverlap,
@@ -270,10 +270,12 @@ function VehiclePassportSectionBody({
     {
       label: "Modifications",
       value:
-        (data.passport.modifications.entries?.length ?? 0) > 0
-          ? data.passport.modifications.entries!
-              .map((entry) => modLocationLabel(entry.location))
-              .join(", ")
+        data.passport.modifications.has_mods
+          ? (data.passport.modifications.affected_systems?.length ?? 0) > 0
+            ? data.passport.modifications.affected_systems!
+                .map((s) => affectedSystemLabel(s))
+                .join(", ")
+            : "Yes"
           : "None recorded",
     },
   ]);

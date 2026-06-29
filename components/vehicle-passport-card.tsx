@@ -23,9 +23,9 @@ import { cn } from "@/lib/utils";
 import VehiclePassportSection from "@/components/vehicle-passport-section";
 import {
   formatMileage,
-  modLocationLabel,
   type VehiclePassportData,
 } from "@/lib/vehicle-passport";
+import { affectedSystemLabel } from "@/lib/vehicle-mod-systems";
 import { StatusPill } from "@/components/status-pill";
 
 interface VinHistoryPart {
@@ -610,9 +610,10 @@ function NotesSection({
   job: VehiclePassportCardJob;
   passport: VehiclePassportData | null | undefined;
 }) {
-  const modEntries = passport?.passport.modifications?.entries ?? [];
+  const mods = passport?.passport.modifications;
   const customerNotes = job.customerNotes?.trim();
-  const hasMods = modEntries.length > 0;
+  const hasMods = mods?.has_mods === true;
+  const affectedSystems = mods?.affected_systems ?? [];
   if (!customerNotes && !hasMods) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -637,16 +638,16 @@ function NotesSection({
           <p className="text-[10px] font-bold tracking-widest text-muted-foreground">
             MODIFICATIONS
           </p>
-          <ul className="mt-1 space-y-1">
-            {modEntries.map((entry, index) => (
-              <li key={index} className="text-foreground">
-                <span className="font-medium">{modLocationLabel(entry.location)}</span>
-                {entry.description ? (
-                  <span className="text-muted-foreground"> — {entry.description}</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          {mods?.notes ? (
+            <p className="mt-1 whitespace-pre-wrap text-foreground">{mods.notes}</p>
+          ) : (
+            <p className="mt-1 text-foreground">Aftermarket parts present.</p>
+          )}
+          {affectedSystems.length > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Affects: {affectedSystems.map((s) => affectedSystemLabel(s)).join(", ")}
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -736,7 +737,7 @@ export function VehiclePassportCard({
     ).length ?? 0;
   const hasNotes = Boolean(
     job.customerNotes?.trim() ||
-      (passport?.passport.modifications?.entries?.length ?? 0) > 0,
+      passport?.passport.modifications?.has_mods === true,
   );
 
   return (

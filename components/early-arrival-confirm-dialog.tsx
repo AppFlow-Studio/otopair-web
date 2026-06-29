@@ -279,7 +279,15 @@ export default function EarlyArrivalConfirmDialog({
                     <span className="font-semibold">{formatTimeLabel(proposedTime)}</span>{" "}
                     (ends {formatTimeLabel(proposedEnd)}, {durationMinutes} min).
                   </p>
-                  {mechanicId ? (
+                  {preview.alternateMechanicId ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Mechanic changes to{" "}
+                      <span className="font-medium text-foreground">
+                        {preview.alternateMechanicName ?? "another mechanic"}
+                      </span>{" "}
+                      — {mechanicName ?? "the original mechanic"} isn&apos;t free then.
+                    </p>
+                  ) : mechanicId ? (
                     <p className="mt-1 text-xs text-muted-foreground">
                       Mechanic stays the same.
                     </p>

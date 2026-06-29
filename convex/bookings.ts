@@ -1854,6 +1854,8 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
       proposedEndTime: getBookingEndTime(booking.scheduled_time, durationMinutes),
       conflict: null,
       conflictingBookingId: null,
+      alternateMechanicId: null,
+      alternateMechanicName: null,
     };
   }
 
@@ -1921,6 +1923,36 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
     }
   }
 
+  // The mechanic was never specified by the customer ("any") — rather than
+  // surface the conflict, see if a different mechanic is free for this
+  // window, same as any other "any mechanic" assignment in this codebase.
+  let alternateMechanicId: any = null;
+  let alternateMechanicName: string | null = null;
+  if (
+    (conflict === "booking" || conflict === "blocked") &&
+    booking.assignment_preference !== "specific_mechanic"
+  ) {
+    try {
+      alternateMechanicId = await resolveMechanicForWindow(ctx, {
+        shopId: booking.shop_id,
+        date: proposedScheduledDate,
+        startTime: proposedScheduledTime,
+        durationMinutes,
+        excludeBookingId: String(booking._id),
+      });
+      conflict = null;
+      conflictingBookingId = null;
+      const altMechanic: any = await ctx.db.get(alternateMechanicId);
+      alternateMechanicName = altMechanic
+        ? `${altMechanic.first_name ?? ""} ${altMechanic.last_name ?? ""}`.trim() ||
+          "Mechanic"
+        : null;
+    } catch {
+      // No other mechanic free either — fall through with the original
+      // conflict so the dialog shows "keep original time".
+    }
+  }
+
   return {
     eligible: true as const,
     minutesEarly,
@@ -1930,6 +1962,8 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
     proposedEndTime,
     conflict,
     conflictingBookingId,
+    alternateMechanicId,
+    alternateMechanicName,
   };
 }
 
@@ -2182,6 +2216,10 @@ export const pushBookingEarlierAndArrive = mutation({
     }
 
     const durationMinutes = booking.estimated_labor_minutes ?? 60;
+    // An "any mechanic" booking that couldn't push earlier on its assigned
+    // mechanic was already resolved to a free alternate in the preview —
+    // move it there instead of throwing.
+    const targetMechanicId = preview.alternateMechanicId ?? booking.mechanic_id;
     // Defense-in-depth: re-validate via the canonical helper so we get the
     // same errors any other reschedule path would surface.
     await resolveMechanicForWindow(ctx, {
@@ -2189,7 +2227,7 @@ export const pushBookingEarlierAndArrive = mutation({
       date: preview.proposedScheduledDate,
       startTime: preview.proposedScheduledTime,
       durationMinutes,
-      preferredMechanicId: booking.mechanic_id,
+      preferredMechanicId: targetMechanicId,
       excludeBookingId: String(booking._id),
       allowAfterClose: false,
       allowOutsideShopHours: args.overrideShopHours === true,
@@ -2202,6 +2240,7 @@ export const pushBookingEarlierAndArrive = mutation({
     await ctx.db.patch(booking._id, {
       scheduled_date: preview.proposedScheduledDate,
       scheduled_time: preview.proposedScheduledTime,
+      mechanic_id: targetMechanicId,
       time_slot_id: undefined,
       vehicle_arrived_at_ms: now,
       vehicle_arrived_by_user_id: user._id,
@@ -2216,6 +2255,7 @@ export const pushBookingEarlierAndArrive = mutation({
       ...booking,
       scheduled_date: preview.proposedScheduledDate,
       scheduled_time: preview.proposedScheduledTime,
+      mechanic_id: targetMechanicId,
       time_slot_id: undefined,
       vehicle_arrived_at_ms: now,
       vehicle_arrived_by_user_id: user._id,
@@ -2236,7 +2276,7 @@ export const pushBookingEarlierAndArrive = mutation({
       },
       {
         shopId: booking.shop_id,
-        mechanicId: booking.mechanic_id,
+        mechanicId: targetMechanicId,
         date: preview.proposedScheduledDate,
       },
     ]);

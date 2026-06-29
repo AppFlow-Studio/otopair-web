@@ -203,4 +203,177 @@ describe("CHECKIN-* early check-in flow", () => {
     expect(preview.proposedEndTime).toBe("20:20");
     expect(preview.conflict).toBe("ends_outside_shop_hours");
   });
+
+  test("CHECKIN-07: any-mechanic booking blocked on its mechanic pushes earlier onto a free alternate", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T08:00:00-04:00"));
+
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, {
+      scheduledDate: "2026-05-17",
+      scheduledTime: "09:00",
+      estimatedLaborMinutes: 30,
+      seedWideOpenHours: true,
+    });
+
+    const bobId = await t.run((ctx) =>
+      ctx.db.insert("mechanics", {
+        shop_id: seed.shopId,
+        first_name: "Bob",
+        last_name: "Mechanic",
+        is_active: true,
+      } as any),
+    );
+    // Blocks Alice (the assigned mechanic) over the proposed 08:00-08:30 push window.
+    await t.run((ctx) =>
+      ctx.db.insert("bookings", {
+        user_id: seed.customerId,
+        shop_id: seed.shopId,
+        mechanic_id: seed.mechanicId,
+        vin: "1HGCM82633A009999",
+        service_ids: [],
+        scheduled_date: "2026-05-17",
+        scheduled_time: "07:45",
+        status: "confirmed",
+        estimated_labor_minutes: 60,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any),
+    );
+
+    const preview: any = await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .query(api.bookings.getEarlyPushPreview, { bookingId: seed.bookingId });
+
+    expect(preview.conflict).toBeNull();
+    expect(String(preview.alternateMechanicId)).toBe(String(bobId));
+    expect(preview.alternateMechanicName).toMatch(/Bob/);
+
+    await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .mutation(api.bookings.pushBookingEarlierAndArrive, {
+        bookingId: seed.bookingId,
+      });
+
+    const booking: any = await t.run((ctx) => ctx.db.get(seed.bookingId));
+    expect(booking?.status).toBe("vehicle_at_shop");
+    expect(booking?.scheduled_time).toBe("08:00");
+    expect(String(booking?.mechanic_id)).toBe(String(bobId));
+  });
+
+  test("CHECKIN-08: with no alternate mechanic free, the original conflict is kept (push rejected)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T08:00:00-04:00"));
+
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, {
+      scheduledDate: "2026-05-17",
+      scheduledTime: "09:00",
+      estimatedLaborMinutes: 30,
+      seedWideOpenHours: true,
+    });
+
+    const bobId = await t.run((ctx) =>
+      ctx.db.insert("mechanics", {
+        shop_id: seed.shopId,
+        first_name: "Bob",
+        last_name: "Mechanic",
+        is_active: true,
+      } as any),
+    );
+    // Both mechanics are busy over the proposed 08:00-08:30 push window.
+    await t.run((ctx) =>
+      ctx.db.insert("bookings", {
+        user_id: seed.customerId,
+        shop_id: seed.shopId,
+        mechanic_id: seed.mechanicId,
+        vin: "1HGCM82633A009999",
+        service_ids: [],
+        scheduled_date: "2026-05-17",
+        scheduled_time: "07:45",
+        status: "confirmed",
+        estimated_labor_minutes: 60,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any),
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("bookings", {
+        user_id: seed.customerId,
+        shop_id: seed.shopId,
+        mechanic_id: bobId,
+        vin: "1HGCM82633A008888",
+        service_ids: [],
+        scheduled_date: "2026-05-17",
+        scheduled_time: "07:45",
+        status: "confirmed",
+        estimated_labor_minutes: 60,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any),
+    );
+
+    const preview: any = await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .query(api.bookings.getEarlyPushPreview, { bookingId: seed.bookingId });
+
+    expect(preview.conflict).toBe("booking");
+    expect(preview.alternateMechanicId).toBeNull();
+
+    await expect(
+      t
+        .withIdentity(identityFor(seed.ownerClerkId))
+        .mutation(api.bookings.pushBookingEarlierAndArrive, {
+          bookingId: seed.bookingId,
+        }),
+    ).rejects.toThrow(/another booking/i);
+  });
+
+  test("CHECKIN-09: a specific-mechanic booking never swaps mechanics, even if an alternate is free", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-17T08:00:00-04:00"));
+
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, {
+      scheduledDate: "2026-05-17",
+      scheduledTime: "09:00",
+      estimatedLaborMinutes: 30,
+      seedWideOpenHours: true,
+    });
+    await t.run((ctx) =>
+      ctx.db.patch(seed.bookingId, {
+        assignment_preference: "specific_mechanic",
+      } as any),
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("mechanics", {
+        shop_id: seed.shopId,
+        first_name: "Bob",
+        last_name: "Mechanic",
+        is_active: true,
+      } as any),
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("bookings", {
+        user_id: seed.customerId,
+        shop_id: seed.shopId,
+        mechanic_id: seed.mechanicId,
+        vin: "1HGCM82633A009999",
+        service_ids: [],
+        scheduled_date: "2026-05-17",
+        scheduled_time: "07:45",
+        status: "confirmed",
+        estimated_labor_minutes: 60,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any),
+    );
+
+    const preview: any = await t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .query(api.bookings.getEarlyPushPreview, { bookingId: seed.bookingId });
+
+    expect(preview.conflict).toBe("booking");
+    expect(preview.alternateMechanicId).toBeNull();
+  });
 });

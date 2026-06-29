@@ -1868,59 +1868,50 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
   let conflict: "booking" | "blocked" | "outside_shop_hours" | "ends_outside_shop_hours" | null = null;
   let conflictingBookingId: string | null = null;
 
-  try {
-    await assertBookingWithinShopHours(ctx, {
-      shopId: booking.shop_id,
-      date: proposedScheduledDate,
-      startTime: proposedScheduledTime,
-      durationMinutes,
-    });
-  } catch (err: unknown) {
-    conflict =
-      err instanceof Error && err.message.includes("end after")
-        ? "ends_outside_shop_hours"
-        : "outside_shop_hours";
-  }
-
-  if (!conflict) {
-    const dayBookings = await getBlockingBookingsForShopDate(
+  // Mechanic-level overlap (an existing booking or a manual block) is
+  // checked first and unconditionally — it can't be overridden from the
+  // dialog at all, so it must never be hidden behind the shop-hours check.
+  // Checking shop hours first would short-circuit this and let a real
+  // double-booking through once the user clicks "push anyway" on the hours
+  // prompt (the mutation's resolveMechanicForWindow call would then throw a
+  // raw, uncaught error instead of the friendly one below).
+  const dayBookings = await getBlockingBookingsForShopDate(
+    ctx,
+    booking.shop_id,
+    proposedScheduledDate,
+  );
+  const conflictBooking = dayBookings.find((other: any) => {
+    if (String(other._id) === String(booking._id)) return false;
+    if (!other.mechanic_id) return false;
+    if (String(other.mechanic_id) !== String(booking.mechanic_id)) return false;
+    if (["cancelled", "declined", "no_show"].includes(other.status)) return false;
+    const otherStart = hhmmToMinutes(other.scheduled_time);
+    const otherEnd = otherStart + (other.estimated_labor_minutes ?? 60);
+    const newStart = hhmmToMinutes(proposedScheduledTime);
+    const newEnd = hhmmToMinutes(proposedEndTime);
+    return otherStart < newEnd && otherEnd > newStart;
+  });
+  if (conflictBooking) {
+    conflict = "booking";
+    conflictingBookingId = String(conflictBooking._id);
+  } else {
+    const blocked = await getManualBlockedSlotsForShop(
       ctx,
       booking.shop_id,
       proposedScheduledDate,
     );
-    const conflictBooking = dayBookings.find((other: any) => {
-      if (String(other._id) === String(booking._id)) return false;
-      if (!other.mechanic_id) return false;
-      if (String(other.mechanic_id) !== String(booking.mechanic_id)) return false;
-      if (["cancelled", "declined", "no_show"].includes(other.status)) return false;
-      const otherStart = hhmmToMinutes(other.scheduled_time);
-      const otherEnd = otherStart + (other.estimated_labor_minutes ?? 60);
+    const blockedConflict = blocked.find((slot: any) => {
+      if (slot.mechanic_id && String(slot.mechanic_id) !== String(booking.mechanic_id)) {
+        return false;
+      }
+      const sStart = hhmmToMinutes(slot.start_time);
+      const sEnd = hhmmToMinutes(slot.end_time);
       const newStart = hhmmToMinutes(proposedScheduledTime);
       const newEnd = hhmmToMinutes(proposedEndTime);
-      return otherStart < newEnd && otherEnd > newStart;
+      return sStart < newEnd && sEnd > newStart;
     });
-    if (conflictBooking) {
-      conflict = "booking";
-      conflictingBookingId = String(conflictBooking._id);
-    } else {
-      const blocked = await getManualBlockedSlotsForShop(
-        ctx,
-        booking.shop_id,
-        proposedScheduledDate,
-      );
-      const blockedConflict = blocked.find((slot: any) => {
-        if (slot.mechanic_id && String(slot.mechanic_id) !== String(booking.mechanic_id)) {
-          return false;
-        }
-        const sStart = hhmmToMinutes(slot.start_time);
-        const sEnd = hhmmToMinutes(slot.end_time);
-        const newStart = hhmmToMinutes(proposedScheduledTime);
-        const newEnd = hhmmToMinutes(proposedEndTime);
-        return sStart < newEnd && sEnd > newStart;
-      });
-      if (blockedConflict) {
-        conflict = "blocked";
-      }
+    if (blockedConflict) {
+      conflict = "blocked";
     }
   }
 
@@ -1954,6 +1945,25 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
     }
   }
 
+  // Shop hours only matter for display/override purposes once we know the
+  // mechanic side is actually clear — a real booking/blocked conflict (with
+  // no alternate) already blocks the push outright, regardless of hours.
+  if (!conflict) {
+    try {
+      await assertBookingWithinShopHours(ctx, {
+        shopId: booking.shop_id,
+        date: proposedScheduledDate,
+        startTime: proposedScheduledTime,
+        durationMinutes,
+      });
+    } catch (err: unknown) {
+      conflict =
+        err instanceof Error && err.message.includes("end after")
+          ? "ends_outside_shop_hours"
+          : "outside_shop_hours";
+    }
+  }
+
   // Backfilled jobs are logged as `completed` (the work already happened), so
   // they never show up as a real scheduling conflict above. But landing a new
   // "any mechanic" booking on top of one still looks wrong on the schedule —
@@ -1979,8 +1989,13 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
       return otherStart < newEnd && otherEnd > newStart;
     });
     if (backfillHit) {
+      // Always surface the warning when a backfill genuinely overlaps —
+      // whether or not a swap is offered depends on whether anyone else is
+      // free; the front desk still gets to choose "push anyway" either way.
+      let altId: any = null;
+      let altName: string | null = null;
       try {
-        const altId = await resolveMechanicForWindow(ctx, {
+        altId = await resolveMechanicForWindow(ctx, {
           shopId: booking.shop_id,
           date: proposedScheduledDate,
           startTime: proposedScheduledTime,
@@ -1989,16 +2004,14 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
           excludeBookingId: String(booking._id),
         });
         const altMechanic: any = await ctx.db.get(altId);
-        backfillConflict = {
-          alternateMechanicId: altId,
-          alternateMechanicName: altMechanic
-            ? `${altMechanic.first_name ?? ""} ${altMechanic.last_name ?? ""}`.trim() ||
-              "Mechanic"
-            : null,
-        };
+        altName = altMechanic
+          ? `${altMechanic.first_name ?? ""} ${altMechanic.last_name ?? ""}`.trim() ||
+            "Mechanic"
+          : null;
       } catch {
-        // No alternate free either — proceed exactly as before (no warning).
+        // No alternate free — still warn, just without a swap option.
       }
+      backfillConflict = { alternateMechanicId: altId, alternateMechanicName: altName };
     }
   }
 

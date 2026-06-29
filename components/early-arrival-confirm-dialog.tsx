@@ -376,23 +376,46 @@ export default function EarlyArrivalConfirmDialog({
       open={showBackfillChoice}
       onClose={() => setShowBackfillChoice(false)}
       title="Backfilled booking during this time"
-      description={`There's a backfilled booking on ${mechanicName ?? "this mechanic"}'s schedule during this window. Do you want to schedule with a different mechanic instead?`}
+      description={
+        preview?.backfillConflict?.alternateMechanicId
+          ? `There's a backfilled booking on ${mechanicName ?? "this mechanic"}'s schedule during this window. Do you want to schedule with a different mechanic instead?`
+          : `There's a backfilled booking on ${mechanicName ?? "this mechanic"}'s schedule during this window. No other mechanic is free to move it to — you can push earlier anyway and the two will overlap on paper.`
+      }
       maxWidthClassName="max-w-md"
-      primaryAction={{
-        label: actioning
-          ? "Working…"
-          : `Yes, assign to ${preview?.backfillConflict?.alternateMechanicName ?? "another mechanic"}`,
-        onAction: swapToAlternateMechanic,
-        disabled: actioning,
-        variant: "primary",
-        leading: actioning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null,
-      }}
-      secondaryAction={{
-        label: `No, keep assigned to ${mechanicName ?? "this mechanic"}`,
-        onAction: keepOriginalMechanic,
-        disabled: actioning,
-        variant: "outline",
-      }}
+      primaryAction={
+        preview?.backfillConflict?.alternateMechanicId
+          ? {
+              label: actioning
+                ? "Working…"
+                : `Yes, assign to ${preview.backfillConflict.alternateMechanicName ?? "another mechanic"}`,
+              onAction: swapToAlternateMechanic,
+              disabled: actioning,
+              variant: "primary",
+              leading: actioning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null,
+            }
+          : {
+              label: actioning ? "Working…" : "Push earlier anyway",
+              onAction: keepOriginalMechanic,
+              disabled: actioning,
+              variant: "primary",
+              leading: actioning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null,
+            }
+      }
+      secondaryAction={
+        preview?.backfillConflict?.alternateMechanicId
+          ? {
+              label: `No, keep assigned to ${mechanicName ?? "this mechanic"}`,
+              onAction: keepOriginalMechanic,
+              disabled: actioning,
+              variant: "outline",
+            }
+          : {
+              label: "Cancel",
+              onAction: () => setShowBackfillChoice(false),
+              disabled: actioning,
+              variant: "outline",
+            }
+      }
     />
     </>
   );

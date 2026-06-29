@@ -27,6 +27,7 @@ type NotificationItem = {
     pad_type?: "ceramic" | "semi_metallic" | "oem_recommended";
   } | null;
   urgency?: "urgent" | null;
+  modFlag?: { affected: boolean; notes?: string | null } | null;
 };
 
 function formatBrakeSystemLabel(t: NonNullable<NotificationItem["rotorSpecs"]>["brake_system_type"]): string {
@@ -61,12 +62,14 @@ interface NotificationCardProps {
   item: NotificationItem;
   onSkip: (bookingId: string) => void;
   onAfterAction?: () => void;
+  preview?: boolean;
 }
 
 export function NotificationCard({
   item,
   onSkip,
   onAfterAction,
+  preview = false,
 }: NotificationCardProps) {
   const router = useRouter();
   const acceptBooking = useMutation(api.bookings.accept);
@@ -76,6 +79,7 @@ export function NotificationCard({
   const [error, setError] = useState<string | null>(null);
   const [confirmingDecline, setConfirmingDecline] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
+  const [modExpanded, setModExpanded] = useState(false);
 
   const isBooking = item.kind === "booking";
   const isRotorQuote = item.kind === "rotor_quote";
@@ -169,7 +173,7 @@ export function NotificationCard({
         {item.vehicle.full}
         {isBooking && item.services && item.services.length > 0 && (
           <>
-            <span className="mx-1">·</span>
+            <span className="mx-1">&#183;</span>
             {item.services.slice(0, 2).join(", ")}
             {item.services.length > 2 ? ` +${item.services.length - 2}` : ""}
           </>
@@ -181,7 +185,7 @@ export function NotificationCard({
           {item.scheduledLabel}
           {item.price != null && (
             <>
-              <span className="mx-1">·</span>
+              <span className="mx-1">&#183;</span>
               <span className="font-medium text-gray-900">
                 ${item.price.toFixed(2)}
               </span>
@@ -195,11 +199,11 @@ export function NotificationCard({
           <span className="font-medium text-gray-900">
             {item.tireSpecs.size}
           </span>
-          <span className="mx-1">·</span>
+          <span className="mx-1">&#183;</span>
           {item.tireSpecs.type}
-          <span className="mx-1">·</span>
+          <span className="mx-1">&#183;</span>
           {item.tireSpecs.tier}
-          <span className="mx-1">·</span>
+          <span className="mx-1">&#183;</span>
           {item.tireSpecs.quantity} tires
         </p>
       )}
@@ -213,13 +217,13 @@ export function NotificationCard({
                 ? "Rear pair"
                 : "All four"}
           </span>
-          <span className="mx-1">·</span>
+          <span className="mx-1">&#183;</span>
           {formatBrakeSystemLabel(item.rotorSpecs.brake_system_type)}
-          <span className="mx-1">·</span>
+          <span className="mx-1">&#183;</span>
           {rotorQtyForAxle(item.rotorSpecs.axle)} rotors
           {item.rotorSpecs.include_pads && (
             <>
-              <span className="mx-1">·</span>
+              <span className="mx-1">&#183;</span>
               <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
                 + Pads
                 {item.rotorSpecs.pad_type
@@ -233,8 +237,47 @@ export function NotificationCard({
 
       {item.note && (
         <p className="mt-1 text-xs italic text-gray-500 line-clamp-2">
-          “{item.note}”
+          &ldquo;{item.note}&rdquo;
         </p>
+      )}
+
+      {isBooking && item.modFlag?.affected && (
+        <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+            <span aria-hidden>&#9888;</span> This vehicle is modified
+          </p>
+          {(() => {
+            const notes = item.modFlag!.notes?.trim();
+            if (!notes) {
+              return (
+                <p className="mt-1 text-xs text-amber-900/90">
+                  Aftermarket modifications affect this service.
+                </p>
+              );
+            }
+            const long = notes.length > 80;
+            return (
+              <>
+                <p
+                  className={`mt-1 text-xs text-amber-900/90 ${
+                    long && !modExpanded ? "line-clamp-2" : ""
+                  }`}
+                >
+                  {notes}
+                </p>
+                {long && (
+                  <button
+                    type="button"
+                    onClick={() => setModExpanded((v) => !v)}
+                    className="mt-0.5 text-[11px] font-semibold text-amber-800 hover:text-amber-900"
+                  >
+                    {modExpanded ? "Less" : "More"}
+                  </button>
+                )}
+              </>
+            );
+          })()}
+        </div>
       )}
 
       {error && (
@@ -242,7 +285,7 @@ export function NotificationCard({
       )}
 
       {/* Actions */}
-      {!confirmingDecline && (
+      {!confirmingDecline && !preview && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {isBooking ? (
             <>

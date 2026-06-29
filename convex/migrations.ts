@@ -1,7 +1,6 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { legacyModificationsToEntries } from "../lib/vehicle-passport";
 // One-shot backfill: any job_actuals row that already has a postjob_report
 // submitted but never got finalized_at_ms stamped (because completeWithPostjob
 // used to skip the finalize step) gets retroactively closed. Clears the
@@ -506,29 +505,17 @@ export const dedupeVehiclesByVin = mutation({
   },
 });
 
-export const backfillModificationEntries = mutation({
+export const clearAllModifications = mutation({
   args: {},
   handler: async (ctx) => {
     const passports = await ctx.db.query("vehicle_passports").collect();
-    let converted = 0;
-    let alreadyNew = 0;
-    let empty = 0;
+    let cleared = 0;
     for (const p of passports) {
-      const mods = p.modifications as
-        | { entries?: unknown; status?: unknown; notes?: unknown }
-        | undefined;
-      if (!mods) {
-        empty++;
-        continue;
+      if (p.modifications !== undefined) {
+        await ctx.db.patch(p._id, { modifications: undefined });
+        cleared++;
       }
-      if (Array.isArray(mods.entries)) {
-        alreadyNew++;
-        continue;
-      }
-      const entries = legacyModificationsToEntries(mods as any);
-      await ctx.db.patch(p._id, { modifications: { entries } });
-      converted++;
     }
-    return { total: passports.length, converted, alreadyNew, empty };
+    return { total: passports.length, cleared };
   },
 });

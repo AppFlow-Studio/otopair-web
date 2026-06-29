@@ -1,3 +1,5 @@
+import type { AffectedSystem } from "./vehicle-mod-systems";
+
 export const TIRE_CONDITIONS = ["good", "fair", "replace_soon"] as const;
 export type TireCondition = (typeof TIRE_CONDITIONS)[number];
 
@@ -120,7 +122,11 @@ export type VehiclePassportInspection = {
 };
 
 export type VehiclePassportModifications = {
-  entries: VehicleModificationEntry[];
+  has_mods?: boolean;
+  notes?: string | null;
+  affected_systems?: AffectedSystem[];
+  // legacy — removed in the contract step (Task 7)
+  entries?: VehicleModificationEntry[];
 };
 
 export type VehiclePassportUpdatePayload = {

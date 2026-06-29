@@ -49,6 +49,16 @@ export const modLocationValidator = v.union(
   v.literal("other")
 );
 
+export const affectedSystemValidator = v.union(
+  v.literal("suspension_ride_height"),
+  v.literal("wheels_tires"),
+  v.literal("brakes"),
+  v.literal("exhaust_emissions"),
+  v.literal("engine_drivetrain"),
+  v.literal("electrical_lighting"),
+  v.literal("cosmetic_only")
+);
+
 export const vehicleModificationEntryValidator = v.object({
   location: modLocationValidator,
   description: v.optional(nullableStringValidator),
@@ -90,7 +100,11 @@ export const vehiclePassportInspectionValidator = v.object({
 });
 
 export const vehiclePassportModificationsValidator = v.object({
-  entries: v.array(vehicleModificationEntryValidator),
+  has_mods: v.optional(v.boolean()),
+  notes: v.optional(nullableStringValidator),
+  affected_systems: v.optional(v.array(affectedSystemValidator)),
+  // legacy — removed in the contract step (Task 7)
+  entries: v.optional(v.array(vehicleModificationEntryValidator)),
 });
 
 export const vehiclePassportUpdateValidator = v.object({

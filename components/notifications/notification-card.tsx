@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@/convex/_generated/api";
@@ -57,6 +57,55 @@ function relativeTime(ts: number): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
+}
+
+// Mod-flag description with a "More"/"Less" toggle that only appears when the
+// text actually overflows the 2-line clamp (measured), not on a char heuristic.
+function ModNotes({
+  notes,
+  expanded,
+  onToggle,
+}: {
+  notes: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      // Only meaningful while clamped; when expanded the clamp is removed.
+      if (expanded) return;
+      setOverflowing(el.scrollHeight > el.clientHeight + 1);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [notes, expanded]);
+
+  return (
+    <>
+      <p
+        ref={ref}
+        className={`mt-1 text-xs text-amber-900/90 ${expanded ? "" : "line-clamp-2"}`}
+      >
+        {notes}
+      </p>
+      {(overflowing || expanded) && (
+        <button
+          type="button"
+          onClick={onToggle}
+          className="mt-0.5 text-[11px] font-semibold text-amber-800 hover:text-amber-900"
+        >
+          {expanded ? "Less" : "More"}
+        </button>
+      )}
+    </>
+  );
 }
 
 interface NotificationCardProps {
@@ -261,26 +310,12 @@ export function NotificationCard({
                 </p>
               );
             }
-            const long = notes.length > 80;
             return (
-              <>
-                <p
-                  className={`mt-1 text-xs text-amber-900/90 ${
-                    long && !modExpanded ? "line-clamp-2" : ""
-                  }`}
-                >
-                  {notes}
-                </p>
-                {long && (
-                  <button
-                    type="button"
-                    onClick={() => setModExpanded((v) => !v)}
-                    className="mt-0.5 text-[11px] font-semibold text-amber-800 hover:text-amber-900"
-                  >
-                    {modExpanded ? "Less" : "More"}
-                  </button>
-                )}
-              </>
+              <ModNotes
+                notes={notes}
+                expanded={modExpanded}
+                onToggle={() => setModExpanded((v) => !v)}
+              />
             );
           })()}
           <button

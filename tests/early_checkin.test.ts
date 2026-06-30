@@ -426,6 +426,9 @@ describe("CHECKIN-* early check-in flow", () => {
 
     expect(preview.conflict).toBe("booking");
     expect(preview.alternateMechanicId).toBeNull();
+    // Bob is free — dialog should tell the front desk an alternate exists
+    // but the customer locked in this mechanic specifically.
+    expect(preview.specificConflictAlternateName).toMatch(/Bob/);
   });
 
   test("CHECKIN-10: a backfilled (completed) booking on the mechanic warns an any-mechanic push instead of blocking it", async () => {

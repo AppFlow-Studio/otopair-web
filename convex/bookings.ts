@@ -1856,6 +1856,7 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
       conflictingBookingId: null,
       alternateMechanicId: null,
       alternateMechanicName: null,
+      specificConflictAlternateName: null,
       backfillConflict: null,
     };
   }
@@ -1964,6 +1965,32 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
     }
   }
 
+  // For specific_mechanic bookings with a conflict: check whether a
+  // different mechanic is free, so the dialog can tell the front desk
+  // "this would have pushed if the customer had chosen Any."
+  let specificConflictAlternateName: string | null = null;
+  if (
+    (conflict === "booking" || conflict === "blocked") &&
+    booking.assignment_preference === "specific_mechanic"
+  ) {
+    try {
+      const altId = await resolveMechanicForWindow(ctx, {
+        shopId: booking.shop_id,
+        date: proposedScheduledDate,
+        startTime: proposedScheduledTime,
+        durationMinutes,
+        excludeBookingId: String(booking._id),
+      });
+      const altMechanic: any = await ctx.db.get(altId);
+      specificConflictAlternateName = altMechanic
+        ? `${altMechanic.first_name ?? ""} ${altMechanic.last_name ?? ""}`.trim() ||
+          "another mechanic"
+        : "another mechanic";
+    } catch {
+      // No alternate free either — message stays generic.
+    }
+  }
+
   // Backfilled jobs are logged as `completed` (the work already happened), so
   // they never show up as a real scheduling conflict above. But landing a new
   // "any mechanic" booking on top of one still looks wrong on the schedule —
@@ -2026,6 +2053,7 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
     conflictingBookingId,
     alternateMechanicId,
     alternateMechanicName,
+    specificConflictAlternateName,
     backfillConflict,
   };
 }

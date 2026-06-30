@@ -328,7 +328,9 @@ export default function EarlyArrivalConfirmDialog({
                   <div className="rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">
                     {isShopHoursConflict
                       ? conflictText
-                      : `${conflictText} Choose "Keep original time" or resolve the conflict first.`}
+                      : preview.specificConflictAlternateName
+                        ? `Another booking blocks this slot on the mechanic's lane, and the customer specified this mechanic. Choose "Keep original time" or resolve the conflict first.`
+                        : `${conflictText} Choose "Keep original time" or resolve the conflict first.`}
                   </div>
                 ) : null}
               </>

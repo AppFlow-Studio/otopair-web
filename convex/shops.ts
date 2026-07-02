@@ -14,6 +14,7 @@ import {
   validateOverrunTimingMinutes,
 } from "../lib/scheduling-overhaul";
 import { detectTimezoneFromState } from "../lib/shopTimezone";
+import { getBookableShopIds } from "../lib/bookableShop";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
@@ -240,7 +241,9 @@ async function finalizeOnboarding(ctx: any, args: { shopId: any; userId: any }) 
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db.query("shops").collect();
+    const shops = await ctx.db.query("shops").collect();
+    const bookableShopIds = await getBookableShopIds(ctx, shops);
+    return shops.filter((shop) => bookableShopIds.has(shop._id));
   },
 });
 

@@ -28,7 +28,6 @@ type NotificationItem = {
   } | null;
   urgency?: "urgent" | null;
   modFlag?: { affected: boolean; notes?: string | null } | null;
-  simulated?: boolean;
 };
 
 function formatBrakeSystemLabel(t: NonNullable<NotificationItem["rotorSpecs"]>["brake_system_type"]): string {
@@ -88,23 +87,37 @@ function ModNotes({
   }, [notes, expanded]);
 
   return (
-    <>
+    <div className="relative mt-1">
       <p
         ref={ref}
-        className={`mt-1 text-xs text-amber-900/90 ${expanded ? "" : "line-clamp-2"}`}
+        className={`text-xs text-amber-900/90 ${expanded ? "" : "line-clamp-2"}`}
       >
         {notes}
+        {expanded && (
+          <>
+            {" "}
+            <button
+              type="button"
+              onClick={onToggle}
+              className="text-xs font-semibold text-amber-800 hover:text-amber-900"
+            >
+              Less
+            </button>
+          </>
+        )}
       </p>
-      {(overflowing || expanded) && (
+      {/* Overlaid on the end of the clamped second line so the toggle
+          doesn't spend a whole row; the gradient fades the covered text. */}
+      {!expanded && overflowing && (
         <button
           type="button"
           onClick={onToggle}
-          className="mt-0.5 text-[11px] font-semibold text-amber-800 hover:text-amber-900"
+          className="absolute bottom-0 right-0 bg-gradient-to-l from-amber-50 from-60% to-transparent pl-8 text-xs font-semibold text-amber-800 hover:text-amber-900"
         >
-          {expanded ? "Less" : "More"}
+          More
         </button>
       )}
-    </>
+    </div>
   );
 }
 
@@ -112,14 +125,12 @@ interface NotificationCardProps {
   item: NotificationItem;
   onSkip: (bookingId: string) => void;
   onAfterAction?: () => void;
-  preview?: boolean;
 }
 
 export function NotificationCard({
   item,
   onSkip,
   onAfterAction,
-  preview = false,
 }: NotificationCardProps) {
   const router = useRouter();
   const acceptBooking = useMutation(api.bookings.accept);
@@ -149,7 +160,6 @@ export function NotificationCard({
 
   async function handleAccept() {
     if (pending) return;
-    if (preview) return;
     setPending(true);
     setError(null);
     try {
@@ -163,7 +173,6 @@ export function NotificationCard({
 
   async function handleDeclineConfirm() {
     if (pending) return;
-    if (preview) return;
     setPending(true);
     setError(null);
     try {
@@ -179,7 +188,6 @@ export function NotificationCard({
   }
 
   function handleDetails() {
-    if (preview) return;
     onAfterAction?.();
     const params = new URLSearchParams();
     params.set("action", "focus-booking");
@@ -343,7 +351,7 @@ export function NotificationCard({
         </div>
       )}
 
-      {!preview && error && (
+      {error && (
         <p className="mt-2 text-xs text-red-600">{error}</p>
       )}
 

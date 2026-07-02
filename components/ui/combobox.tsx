@@ -1,8 +1,22 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+const MENU_MAX_HEIGHT = 256; // matches max-h-64
+const MENU_GAP = 4;
+
+type MenuPosition = {
+  left: number;
+  width: number;
+  /** Set when the menu opens downward (anchored to input bottom). */
+  top?: number;
+  /** Set when the menu opens upward (anchored to input top). */
+  bottom?: number;
+  maxHeight: number;
+};
 
 export interface ComboboxOption {
   value: string;
@@ -37,18 +51,63 @@ export function Combobox({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState(value);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [menuPos, setMenuPos] = useState<MenuPosition | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
   const listboxId = useId();
 
   useEffect(() => {
     setQuery(value);
   }, [value]);
 
+  // The menu renders in a portal on document.body to escape ancestor
+  // `overflow` clipping (collapsible section cards, scrollable drawer body).
+  // Position it with fixed coords derived from the input, flipping above when
+  // there isn't room below.
+  const updateMenuPosition = useCallback(() => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    const openUp = spaceBelow < MENU_MAX_HEIGHT && spaceAbove > spaceBelow;
+    setMenuPos({
+      left: rect.left,
+      width: rect.width,
+      ...(openUp
+        ? {
+            bottom: window.innerHeight - rect.top + MENU_GAP,
+            maxHeight: Math.min(MENU_MAX_HEIGHT, spaceAbove - MENU_GAP * 2),
+          }
+        : {
+            top: rect.bottom + MENU_GAP,
+            maxHeight: Math.min(MENU_MAX_HEIGHT, spaceBelow - MENU_GAP * 2),
+          }),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updateMenuPosition();
+    // Keep the menu glued to the input while any ancestor scrolls/resizes
+    // (capture=true catches scrolls on the inner drawer body, not just window).
+    const onReposition = () => updateMenuPosition();
+    window.addEventListener("scroll", onReposition, true);
+    window.addEventListener("resize", onReposition);
+    return () => {
+      window.removeEventListener("scroll", onReposition, true);
+      window.removeEventListener("resize", onReposition);
+    };
+  }, [open, updateMenuPosition]);
+
   useEffect(() => {
     if (!open) return;
     function onClickAway(e: MouseEvent) {
-      if (!containerRef.current?.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        !containerRef.current?.contains(target) &&
+        !listRef.current?.contains(target)
+      ) {
         setOpen(false);
         if (allowCustomValue && query !== value) {
           onChange(query);
@@ -132,11 +191,21 @@ export function Combobox({
         </div>
       </div>
 
-      {open && !disabled && (
+      {open && !disabled && menuPos && typeof document !== "undefined" &&
+        createPortal(
         <ul
+          ref={listRef}
           id={listboxId}
           role="listbox"
-          className="absolute z-50 mt-1 w-full max-h-64 overflow-auto rounded-md border border-border bg-popover shadow-lg p-1 text-sm"
+          style={{
+            position: "fixed",
+            left: menuPos.left,
+            width: menuPos.width,
+            top: menuPos.top,
+            bottom: menuPos.bottom,
+            maxHeight: menuPos.maxHeight,
+          }}
+          className="z-50 overflow-auto rounded-md border border-border bg-popover shadow-lg p-1 text-sm"
         >
           {filtered.length === 0 ? (
             <li className="px-3 py-2 text-muted-foreground">
@@ -167,7 +236,8 @@ export function Combobox({
               );
             })
           )}
-        </ul>
+        </ul>,
+        document.body
       )}
     </div>
   );

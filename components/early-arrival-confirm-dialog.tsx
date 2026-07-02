@@ -381,7 +381,7 @@ export default function EarlyArrivalConfirmDialog({
       description={
         preview?.backfillConflict?.alternateMechanicId
           ? `There's a backfilled booking on ${mechanicName ?? "this mechanic"}'s schedule during this window. Do you want to schedule with a different mechanic instead?`
-          : `There's a backfilled booking on ${mechanicName ?? "this mechanic"}'s schedule during this window. No other mechanic is free to move it to — you can push earlier anyway and the two will overlap on paper.`
+          : `There's a backfilled booking on ${mechanicName ?? "this mechanic"}'s schedule during this window. No other mechanic is free to move it to. Do you still want to push earlier anyway and keep this booking assigned to ${mechanicName ?? "this mechanic"}?`
       }
       maxWidthClassName="max-w-md"
       primaryAction={

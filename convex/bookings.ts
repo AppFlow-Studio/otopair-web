@@ -2208,12 +2208,10 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
 
   // Backfilled jobs are logged as `completed` (the work already happened), so
   // they never show up as a real scheduling conflict above. But landing a new
-  // "any mechanic" booking on top of one still looks wrong on the schedule —
-  // offer a different mechanic instead of silently overlapping them. Only for
-  // "any": a customer-specified mechanic keeps today's behavior (silent
-  // overlap is fine — the backfill already finished).
+  // booking on top of one still looks wrong on the schedule — warn and offer
+  // a swap (or "push anyway") regardless of assignment_preference.
   let backfillConflict: { alternateMechanicId: any; alternateMechanicName: string | null } | null = null;
-  if (!conflict && booking.assignment_preference !== "specific_mechanic") {
+  if (!conflict) {
     const sameDayBookings = await ctx.db
       .query("bookings")
       .withIndex("by_shop_and_date", (q: any) =>

@@ -539,7 +539,7 @@ describe("CHECKIN-* early check-in flow", () => {
     expect(String(booking?.mechanic_id)).toBe(String(bobId));
   });
 
-  test("CHECKIN-12: a specific-mechanic booking never gets the backfill warning", async () => {
+  test("CHECKIN-12: a specific-mechanic booking still gets the backfill warning when the mechanic has a backfilled overlap", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-17T08:00:00-04:00"));
 
@@ -586,7 +586,9 @@ describe("CHECKIN-* early check-in flow", () => {
       .query(api.bookings.getEarlyPushPreview, { bookingId: seed.bookingId });
 
     expect(preview.conflict).toBeNull();
-    expect(preview.backfillConflict).toBeNull();
+    expect(preview.backfillConflict).not.toBeNull();
+    // Bob is free, so the dialog should offer a swap
+    expect(preview.backfillConflict.alternateMechanicId).not.toBeNull();
   });
 
   test("CHECKIN-13: with no alternate mechanic free, the backfill warning still appears (without a swap option), and push-anyway leaves the backfill untouched", async () => {

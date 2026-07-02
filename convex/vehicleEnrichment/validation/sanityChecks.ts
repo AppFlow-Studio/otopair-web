@@ -122,6 +122,27 @@ function getEngineSpecificRules(cylinders: number): SanityRule[] {
 }
 
 /**
+ * Extract the canonical SAE multigrade from a noisy oil-viscosity string.
+ * "0W-30 Full Synthetic" → "0W-30", "5W30" → "5W-30", "SAE 5W-30" → "5W-30".
+ * Returns null when no grade is present (leaves the format rule to flag it).
+ */
+export function normalizeOilViscosity(raw: unknown): string | null {
+  if (raw == null) return null;
+  const m = String(raw).match(/(\d{1,2})\s*[Ww]\s*-?\s*(\d{1,2})/);
+  return m ? `${m[1]}W-${m[2]}` : null;
+}
+
+// Case-canonical map for enum fields whose values arrive in mixed case (e.g.
+// NHTSA "Automatic" vs our lowercase "automatic"). Lower-cased value → token.
+const TRANSMISSION_CASE_CANON: Record<string, string> = {
+  automatic: "automatic",
+  manual: "manual",
+  cvt: "CVT",
+  dct: "DCT",
+  amt: "AMT",
+};
+
+/**
  * Run sanity checks on a flat field map.
  * Returns list of flags. Fields with severity "reject" are nulled in place.
  */
@@ -131,6 +152,23 @@ export function runSanityChecks(
 ): SanityFlag[] {
   const allRules = [...SANITY_RULES, ...getEngineSpecificRules(cylinders)];
   const flags: SanityFlag[] = [];
+
+  // Pre-normalize noisy-but-valid values BEFORE the rules run. The caller writes
+  // from this same `fields` map (v3pipeline: writeNormalizedData reads it right
+  // after this call), so canonicalizing here both prevents a false flag/reject
+  // AND ensures the stored value is the clean form — e.g. "0W-30 Full Synthetic"
+  // → "0W-30", NHTSA "Automatic" → "automatic". Genuinely bad values (no SAE
+  // grade, "unknown" transmission) are left untouched for the rules to catch.
+  const visc = fields["oil_viscosity"];
+  if (visc && visc.value != null) {
+    const norm = normalizeOilViscosity(visc.value);
+    if (norm && norm !== visc.value) fields["oil_viscosity"] = { ...visc, value: norm };
+  }
+  const trans = fields["transmission_type"];
+  if (trans && typeof trans.value === "string") {
+    const canon = TRANSMISSION_CASE_CANON[trans.value.trim().toLowerCase()];
+    if (canon && canon !== trans.value) fields["transmission_type"] = { ...trans, value: canon };
+  }
 
   for (const rule of allRules) {
     const field = fields[rule.field];

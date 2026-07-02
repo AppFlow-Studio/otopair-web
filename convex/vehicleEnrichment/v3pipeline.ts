@@ -29,7 +29,7 @@ import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
 import { deriveEngineFamily } from "./laborSibling";
-import { runSanityChecks } from "./validation/sanityChecks";
+import { runSanityChecks, normalizeOilViscosity } from "./validation/sanityChecks";
 import { validateAllOemParts } from "./validation/oemValidation";
 import { BLOCKED_DOMAINS } from "./sourceRegistry";
 import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts } from "./applicabilityRules";
@@ -718,7 +718,11 @@ async function writeNormalizedData(
 
   await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEngineSpecs, {
     engine_id: engineId,
-    oil_viscosity: asString(fields.oil_viscosity?.value),
+    // Only ever store a clean SAE grade. runSanityChecks already normalized the
+    // common case in `fields`; re-assert here so an unparseable value (no grade)
+    // becomes undefined → the mutation skips it → a previously-stored good
+    // viscosity is kept rather than clobbered by garbage on re-enrich.
+    oil_viscosity: normalizeOilViscosity(fields.oil_viscosity?.value) ?? undefined,
     oil_capacity_qts: asNumber(fields.oil_capacity_qts?.value),
     coolant_type: asString(fields.coolant_type?.value),
     coolant_capacity_qts: asNumber(fields.coolant_capacity_qts?.value),
@@ -1319,12 +1323,52 @@ export const enrichVehicleBatchV3 = internalAction({
       );
     }
 
-    // STEP 3a: Ensure transmission record exists for ICE vehicles
+    // STEP 3a: Ensure a REAL transmission record is linked for ICE vehicles.
+    //
+    // upsertTransmission keys by (trim_id, type), so requesting "unknown" never
+    // matches a prior "automatic" row — it inserts a SECOND row and relinks the
+    // vehicle to it, orphaning the good value. That's how a re-enrich regressed
+    // the 2024 Alfa Stelvio from "Automatic" (conf 0.7) to "unknown" (conf 0.1),
+    // Jul 2026. So we (a) never create an "unknown" placeholder when a real row
+    // already exists for the trim, and (b) actively HEAL a link that already
+    // points at an "unknown"/placeholder row when a better real row exists — so
+    // a re-enrich REPAIRS previously-poisoned configs instead of pinning them.
     let transmissionId = vehicleDoc.transmission_id ?? null;
-    if (!transmissionId) {
-      console.log("[v8] No transmission_id on vehicle — creating placeholder");
-      const trimId = vehicleDoc.trim_id;
-      if (trimId) {
+    const trimId = vehicleDoc.trim_id;
+    if (trimId) {
+      const isReal = (t: string | undefined | null): t is string =>
+        !!t && t.trim().toLowerCase() !== "unknown";
+      const trimTransmissions = await ctx.runQuery(
+        api.transmissions.listByTrimId,
+        { trim_id: trimId },
+      );
+      const linked = transmissionId
+        ? (trimTransmissions ?? []).find(
+            (t: any) => String(t._id) === String(transmissionId),
+          )
+        : null;
+      const bestExisting = (trimTransmissions ?? [])
+        .filter((t: any) => isReal(t.transmission_type))
+        .sort(
+          (a: any, b: any) =>
+            (b.confidence_score ?? 0) - (a.confidence_score ?? 0),
+        )[0];
+      const linkIsMissingOrPlaceholder =
+        !transmissionId || !linked || !isReal((linked as any).transmission_type);
+
+      if (linkIsMissingOrPlaceholder && bestExisting?._id) {
+        // Link (or heal) to the best real row; abandon the placeholder link.
+        transmissionId = bestExisting._id;
+        await ctx.runMutation(api.vehicles.upsertVehicle, {
+          vin: vehicleDoc.vin,
+          transmission_id: transmissionId,
+        });
+        console.log(
+          `[v8] Linked transmission ${transmissionId} (${bestExisting.transmission_type}) for trim — skipped/healed "unknown" placeholder`,
+        );
+      } else if (!transmissionId && !bestExisting?._id) {
+        // No link AND no real row anywhere — only now create the placeholder.
+        console.log("[v8] No transmission for trim — creating placeholder");
         const transDoc = await ctx.runMutation(api.transmissions.upsertTransmission, {
           trim_id: trimId,
           transmission_type: "unknown",
@@ -1332,7 +1376,6 @@ export const enrichVehicleBatchV3 = internalAction({
         });
         if (transDoc?._id) {
           transmissionId = transDoc._id;
-          // Link to vehicle
           await ctx.runMutation(api.vehicles.upsertVehicle, {
             vin: vehicleDoc.vin,
             transmission_id: transmissionId,
@@ -1340,6 +1383,7 @@ export const enrichVehicleBatchV3 = internalAction({
           console.log(`[v8] Placeholder transmission created: ${transmissionId}`);
         }
       }
+      // else: link already points at a real row — leave it untouched.
     }
 
     // STEP 3b: Fuzzy dedup — if a config with the same engine+year+make exists
@@ -1381,6 +1425,7 @@ export const enrichVehicleBatchV3 = internalAction({
           config_key: configKey,
           drivetrain: drivetrainVal,
           nhtsa_vin_key: args.nhtsaVinKey,
+          transmission_id: transmissionId ?? undefined,
         },
       );
       vehicleConfigId = args.targetConfigId;

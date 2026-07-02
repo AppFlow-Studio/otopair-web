@@ -846,6 +846,11 @@ export const reconcileConfigForReenrich = internalMutation({
     config_key: v.string(),
     drivetrain: v.optional(v.string()),
     nhtsa_vin_key: v.optional(v.string()),
+    // Healed transmission link from STEP 3a. On a PIN re-enrich we must push the
+    // repaired transmission_id onto the config too, else a config poisoned with
+    // an "unknown" placeholder link stays poisoned even after the vehicle row is
+    // healed (director re-enrich uses this reconcile path, not the full upsert).
+    transmission_id: v.optional(v.id("transmissions")),
   },
   handler: async (ctx, args) => {
     const patch: any = {
@@ -854,6 +859,7 @@ export const reconcileConfigForReenrich = internalMutation({
     };
     if (args.drivetrain && args.drivetrain !== "unknown") patch.drivetrain = args.drivetrain;
     if (args.nhtsa_vin_key) patch.nhtsa_vin_key = args.nhtsa_vin_key;
+    if (args.transmission_id) patch.transmission_id = args.transmission_id;
     await ctx.db.patch(args.config_id, patch);
     return args.config_id;
   },

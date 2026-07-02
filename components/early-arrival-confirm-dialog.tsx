@@ -23,6 +23,15 @@ type EarlyArrivalConfirmDialogProps = {
   onKept?: () => void;
 };
 
+function formatDateLabel(yyyymmdd: string): string {
+  const [y, m, d] = yyyymmdd.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 function formatTimeLabel(hhmm: string): string {
   if (!hhmm) return "";
   const [h, m] = hhmm.split(":").map(Number);
@@ -65,6 +74,8 @@ function MiniLane({
   bookings: ScheduleBooking[];
   selfBookingId: string;
 }) {
+  const crossDay = originalScheduledDate !== scheduledDate;
+
   const sameDay = bookings.filter(
     (b) =>
       b.scheduledDate === scheduledDate &&
@@ -76,46 +87,125 @@ function MiniLane({
 
   const proposedStartMin = hhmmToMinutes(proposedStart);
   const proposedEndMin = hhmmToMinutes(proposedEnd);
-  // If the original booking is on a later calendar day, offset its minutes
-  // so it renders to the right of the proposed slot on the same axis.
-  const dayDeltaMin =
-    originalScheduledDate > scheduledDate ? 24 * 60
-    : originalScheduledDate < scheduledDate ? -24 * 60
-    : 0;
-  const originalStartMin = hhmmToMinutes(originalStart) + dayDeltaMin;
-  const originalEndMin = originalStartMin + durationMinutes;
+  const origStartMin = hhmmToMinutes(originalStart);
+  const origEndMin = origStartMin + durationMinutes;
 
   const sameDayBounds = sameDay.map((b) => ({
     start: hhmmToMinutes(b.scheduledTime),
     end: hhmmToMinutes(b.scheduledTime) + (b.estimatedMinutes ?? 60),
   }));
 
+  // ── Proposed-date box coords ──────────────────────────────────────────────
+  const propMin = Math.max(
+    0,
+    Math.min(proposedStartMin, ...sameDayBounds.map((b) => b.start)) - 30,
+  );
+  const propMax = Math.min(
+    24 * 60,
+    Math.max(proposedEndMin, ...sameDayBounds.map((b) => b.end)) + 30,
+  );
+  const propSpan = Math.max(60, propMax - propMin);
+  const propPct = (m: number) =>
+    `${Math.max(0, Math.min(100, ((m - propMin) / propSpan) * 100))}%`;
+  const propWidth = (s: number, e: number) =>
+    `${Math.max(0, ((e - s) / propSpan) * 100)}%`;
+
+  // ── Original-date box coords (only used when cross-day) ───────────────────
+  const origMin = Math.max(0, origStartMin - 30);
+  const origMax = Math.min(24 * 60, origEndMin + 30);
+  const origSpan = Math.max(60, origMax - origMin);
+  const origPct = (m: number) =>
+    `${Math.max(0, Math.min(100, ((m - origMin) / origSpan) * 100))}%`;
+  const origWidth = (s: number, e: number) =>
+    `${Math.max(0, ((e - s) / origSpan) * 100)}%`;
+
+  const minLabel = (m: number) =>
+    formatTimeLabel(
+      `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
+    );
+
+  if (crossDay) {
+    return (
+      <div className="flex gap-2">
+        {/* Proposed date — main box */}
+        <div className="min-w-0 flex-1 rounded-lg border border-border bg-muted/20 p-3">
+          <div className="mb-2 flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>{minLabel(propMin)}</span>
+            <span className="font-medium text-foreground">{formatDateLabel(scheduledDate)}</span>
+            <span>{minLabel(propMax)}</span>
+          </div>
+          <div className="relative h-10 rounded-md bg-card">
+            {sameDayBounds.map((b, i) => (
+              <div
+                key={i}
+                className="absolute top-1 bottom-1 rounded-sm bg-slate-300/70 dark:bg-slate-600/60"
+                style={{ left: propPct(b.start), width: propWidth(b.start, b.end) }}
+                title="Existing booking"
+              />
+            ))}
+            <div
+              className="absolute top-1 bottom-1 rounded-sm border border-emerald-500 bg-emerald-300/40"
+              style={{ left: propPct(proposedStartMin), width: propWidth(proposedStartMin, proposedEndMin) }}
+              title={`Proposed: ${formatTimeLabel(proposedStart)}`}
+            />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block h-2 w-3 rounded-sm border border-emerald-500 bg-emerald-300/40" />
+              Proposed {formatTimeLabel(proposedStart)}–{formatTimeLabel(proposedEnd)}
+            </span>
+            {sameDayBounds.length > 0 && (
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block h-2 w-3 rounded-sm bg-slate-300/70 dark:bg-slate-600/60" />
+                Other bookings ({sameDayBounds.length})
+              </span>
+            )}
+          </div>
+        </div>
+        {/* Original date — narrow snippet */}
+        <div className="w-28 shrink-0 rounded-lg border border-border bg-muted/20 p-3">
+          <div className="mb-2 text-center text-[11px] font-medium text-foreground">
+            {formatDateLabel(originalScheduledDate)}
+          </div>
+          <div className="relative h-10 rounded-md bg-card">
+            <div
+              className="absolute top-1 bottom-1 rounded-sm border border-dashed border-amber-500/70 bg-amber-200/30"
+              style={{ left: origPct(origStartMin), width: origWidth(origStartMin, origEndMin) }}
+              title={`Original: ${formatTimeLabel(originalStart)}`}
+            />
+          </div>
+          <div className="mt-2 text-center text-[11px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block h-2 w-3 rounded-sm border border-dashed border-amber-500/70 bg-amber-200/30" />
+              {formatTimeLabel(originalStart)}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Same-day: single box ──────────────────────────────────────────────────
   const minMinute = Math.max(
     0,
-    Math.min(
-      proposedStartMin,
-      originalStartMin,
-      ...sameDayBounds.map((b) => b.start),
-    ) - 30,
+    Math.min(proposedStartMin, origStartMin, ...sameDayBounds.map((b) => b.start)) - 30,
   );
-  const maxMinute = Math.max(
-    proposedEndMin,
-    originalEndMin,
-    ...sameDayBounds.map((b) => b.end),
-  ) + 30;
+  const maxMinute = Math.min(
+    24 * 60,
+    Math.max(proposedEndMin, origEndMin, ...sameDayBounds.map((b) => b.end)) + 30,
+  );
   const span = Math.max(60, maxMinute - minMinute);
-
-  const pct = (minute: number) =>
-    `${Math.max(0, Math.min(100, ((minute - minMinute) / span) * 100))}%`;
-  const widthPct = (start: number, end: number) =>
-    `${Math.max(0, ((end - start) / span) * 100)}%`;
+  const pct = (m: number) =>
+    `${Math.max(0, Math.min(100, ((m - minMinute) / span) * 100))}%`;
+  const widthPct = (s: number, e: number) =>
+    `${Math.max(0, ((e - s) / span) * 100)}%`;
 
   return (
     <div className="rounded-lg border border-border bg-muted/20 p-3">
       <div className="mb-2 flex items-center justify-between text-[11px] text-muted-foreground">
-        <span>{formatTimeLabel(`${String(Math.floor(minMinute / 60)).padStart(2, "0")}:${String(minMinute % 60).padStart(2, "0")}`)}</span>
-        <span className="font-medium text-foreground">Mechanic&apos;s lane · {scheduledDate}</span>
-        <span>{formatTimeLabel(`${String(Math.floor((maxMinute % (24 * 60)) / 60)).padStart(2, "0")}:${String(maxMinute % 60).padStart(2, "0")}`)}</span>
+        <span>{minLabel(minMinute)}</span>
+        <span className="font-medium text-foreground">Mechanic&apos;s lane · {formatDateLabel(scheduledDate)}</span>
+        <span>{minLabel(maxMinute)}</span>
       </div>
       <div className="relative h-10 rounded-md bg-card">
         {sameDayBounds.map((b, i) => (
@@ -128,18 +218,12 @@ function MiniLane({
         ))}
         <div
           className="absolute top-1 bottom-1 rounded-sm border border-dashed border-amber-500/70 bg-amber-200/30"
-          style={{
-            left: pct(originalStartMin),
-            width: widthPct(originalStartMin, originalEndMin),
-          }}
+          style={{ left: pct(origStartMin), width: widthPct(origStartMin, origEndMin) }}
           title={`Original: ${formatTimeLabel(originalStart)}`}
         />
         <div
           className="absolute top-1 bottom-1 rounded-sm border border-emerald-500 bg-emerald-300/40"
-          style={{
-            left: pct(proposedStartMin),
-            width: widthPct(proposedStartMin, proposedEndMin),
-          }}
+          style={{ left: pct(proposedStartMin), width: widthPct(proposedStartMin, proposedEndMin) }}
           title={`Proposed: ${formatTimeLabel(proposedStart)}`}
         />
       </div>
@@ -352,12 +436,6 @@ export default function EarlyArrivalConfirmDialog({
             ) : null}
           </>
         )}
-        {preview && preview.proposedScheduledDate !== scheduledDate ? (
-          <p className="text-xs text-muted-foreground">
-            Scheduled date stays {scheduledDate} so customer-facing references
-            don&apos;t shift days.
-          </p>
-        ) : null}
       </div>
     </ConfirmationDialog>
     <ConfirmationDialog

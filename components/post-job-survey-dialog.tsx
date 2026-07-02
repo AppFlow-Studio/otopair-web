@@ -67,6 +67,8 @@ import {
 } from "@/lib/vehicle-passport";
 import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
+import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
+import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
 
 /** Best-effort axle from a part name ("Front Brake Pads" → "front"). Mirrors
  *  convex/lib/brakeScope.partNameAxle; kept inline so the client bundle
@@ -752,7 +754,7 @@ function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
       part_name: part.part_name,
       brand: part.brand ?? "",
       oem_number: part.oem_number,
-      cost: Number.isFinite(part.cost) ? String(part.cost) : "",
+      cost: Number.isFinite(part.cost) ? formatFixedCentCurrency(part.cost) : "0.00",
       quantity:
         typeof part.quantity === "number" && Number.isFinite(part.quantity)
           ? Math.max(1, Math.round(part.quantity))
@@ -1326,7 +1328,7 @@ function PostJobSurveyDialogBody({
       }
     } else if (requiresParts && normalizedParts.length === 0) {
       setError(
-        "This service requires parts — please add at least one part used before submitting."
+        "This service requires parts — please add at least one part to be installed before submitting."
       );
       const partsIdx = visibleSteps.indexOf("parts");
       if (partsIdx >= 0) setStepIndex(partsIdx);
@@ -2612,7 +2614,7 @@ function PartsStep({
         part_name: part.part_name,
         brand: part.brand ?? "",
         oem_number: part.oem_part_number,
-        cost: unit > 0 ? String(unit) : "",
+        cost: unit > 0 ? formatFixedCentCurrency(unit) : "0.00",
         quantity:
           part.quantity_needed && part.quantity_needed > 0
             ? part.quantity_needed
@@ -2644,15 +2646,15 @@ function PartsStep({
   const hasFilledPart = parts.some((p) => p.part_name.trim() !== "");
   const prefilled = suggestedParts.length > 0;
   // Step copy adapts: when the cascade pre-loaded suggestions, the step is
-  // "confirm what we already think you used" — otherwise it's "tell us what
-  // you used."
+  // "confirm what we expect you to use" — otherwise it's "tell us what
+  // you're using."
   const eyebrow = prefilled ? "Confirm" : requiresParts ? "Required" : "Optional";
-  const question = prefilled ? "Confirm parts used" : "What parts did you use?";
+  const question = prefilled ? "Confirm parts to use" : "What parts are you using?";
   const hint = prefilled
-    ? "Verify the inventory used during this service task."
+    ? "Verify the inventory planned for this service task."
     : requiresParts
-      ? "This service requires parts — please add at least one part used before continuing."
-      : "Add each part you installed. Skip if none.";
+      ? "This service requires parts — please add at least one part to be installed before continuing."
+      : "Add each part to be installed. Skip if none.";
 
   const [swapIndex, setSwapIndex] = useState<number | null>(null);
   const closeSwap = () => setSwapIndex(null);
@@ -2714,7 +2716,7 @@ function PartsStep({
     return (
       <QuestionScreen
         eyebrow="Confirm"
-        question="Confirm parts used"
+        question="Confirm parts to use"
         hint="Billing is locked to the customer-approved quote — review only."
       >
         <div className="space-y-3">
@@ -3011,26 +3013,13 @@ function PartsStep({
                       ) : (
                         <div className="flex items-center gap-1">
                           <span className="text-muted-foreground">$</span>
-                          <input
+                          <FixedCentCurrencyInput
                             value={part.cost}
-                            onChange={(event) => {
-                              const raw = event.target.value;
-                              // Allow empty, digits, optional single dot, max 2 decimals.
-                              if (raw === "" || /^\d*\.?\d{0,2}$/.test(raw)) {
-                                updatePart(index, { cost: raw });
-                              }
-                            }}
-                            onBlur={(event) => {
-                              const raw = event.target.value.trim();
-                              if (raw === "" || raw === ".") return;
-                              const n = Number(raw);
-                              if (Number.isFinite(n)) {
-                                updatePart(index, {
-                                  cost: (Math.round(n * 100) / 100).toFixed(2),
-                                });
-                              }
-                            }}
-                            inputMode="decimal"
+                            onValueChange={(value) =>
+                              updatePart(index, {
+                                cost: value,
+                              })
+                            }
                             placeholder={
                               medianPrice > 0
                                 ? medianPrice.toFixed(2)
@@ -3100,7 +3089,7 @@ function PartsStep({
                             justification_text: event.target.value,
                           })
                         }
-                        placeholder="Explain why this part was needed (vehicle condition, OEM unavailable, customer request, etc.)"
+                        placeholder="Explain why this part is needed (vehicle condition, OEM unavailable, customer request, etc.)"
                         rows={2}
                         className="mt-1 w-full resize-y rounded-md border border-primary/10 bg-background px-2 py-1.5 text-[12px] leading-snug text-foreground outline-none placeholder:text-muted-foreground focus:border-primary/30"
                       />
@@ -3268,7 +3257,7 @@ function PartsStep({
                       part_name: "",
                       brand: "",
                       oem_number: "",
-                      cost: "",
+                      cost: "0.00",
                       quantity: 1,
                       supplied_by: "shop",
                       part_tier: "oem",
@@ -3294,7 +3283,7 @@ function PartsStep({
                   part_name: "",
                   brand: "",
                   oem_number: "",
-                  cost: "",
+                  cost: "0.00",
                   quantity: 1,
                   supplied_by: "shop",
                   part_tier: "oem",
@@ -3319,7 +3308,7 @@ function PartsStep({
               {" "}
               OEM-recommended part{totalRecommended === 1 ? "" : "s"} confirmed
               {confirmedRecommended < totalRecommended
-                ? " — swap any rows that aren't what you installed."
+                ? " — swap any rows that aren't what you're using."
                 : "."}
             </span>
           </div>

@@ -30,7 +30,13 @@ export const findPhoneNumberByNormalizedValue = (
 export const isIdentifierAlreadyTakenError = (err: unknown) => {
   const code = (err as any)?.errors?.[0]?.code ?? (err as any)?.code;
   const message = err instanceof Error ? err.message : String((err as any)?.message ?? "");
-  return code === "form_identifier_exists" || message.toLowerCase().includes("phone number is taken");
+  const lowerMessage = message.toLowerCase();
+  return (
+    code === "form_identifier_exists" ||
+    lowerMessage.includes("phone number is taken") ||
+    lowerMessage.includes("email address is taken") ||
+    lowerMessage.includes("identifier already exists")
+  );
 };
 
 export const cleanupStaleUnverifiedPhoneNumbers = async (

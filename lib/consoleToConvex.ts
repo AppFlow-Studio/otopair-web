@@ -14,6 +14,7 @@ type LogToConvexFn = (args: {
 
 let sessionId: string | undefined;
 let isSending = false;
+let activeCleanup: (() => void) | null = null;
 
 function safeStringify(value: unknown): unknown {
   if (value === undefined || value === null) return value;
@@ -49,21 +50,23 @@ function extractMetadata(args: unknown[]): unknown {
   return safeStringify(rest.length > 1 ? rest.slice(1) : rest[0]);
 }
 
-export function setupConsoleToConvex(logToConvex: LogToConvexFn) {
+export function setupConsoleToConvex(logToConvex: LogToConvexFn): () => void {
+  activeCleanup?.();
+
   if (!sessionId) {
     sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   }
 
-  const originalError = console.error.bind(console);
-  const originalWarn = console.warn.bind(console);
-  const originalLog = console.log.bind(console);
-  const originalInfo = console.info.bind(console);
-  const originalDebug = console.debug.bind(console);
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  const originalLog = console.log;
+  const originalInfo = console.info;
+  const originalDebug = console.debug;
 
   const intercept =
     (level: LogLevel, original: (...args: unknown[]) => void) =>
     (...args: unknown[]) => {
-      original(...args);
+      original.apply(console, args);
 
       if (isSending) return;
       isSending = true;
@@ -87,9 +90,28 @@ export function setupConsoleToConvex(logToConvex: LogToConvexFn) {
         });
     };
 
-  console.error = intercept("error", originalError);
-  console.warn = intercept("warn", originalWarn);
-  console.log = intercept("log", originalLog);
-  console.info = intercept("info", originalInfo);
-  console.debug = intercept("debug", originalDebug);
+  const nextError = intercept("error", originalError);
+  const nextWarn = intercept("warn", originalWarn);
+  const nextLog = intercept("log", originalLog);
+  const nextInfo = intercept("info", originalInfo);
+  const nextDebug = intercept("debug", originalDebug);
+
+  console.error = nextError;
+  console.warn = nextWarn;
+  console.log = nextLog;
+  console.info = nextInfo;
+  console.debug = nextDebug;
+
+  activeCleanup = () => {
+    if (console.error === nextError) console.error = originalError;
+    if (console.warn === nextWarn) console.warn = originalWarn;
+    if (console.log === nextLog) console.log = originalLog;
+    if (console.info === nextInfo) console.info = originalInfo;
+    if (console.debug === nextDebug) console.debug = originalDebug;
+    activeCleanup = null;
+  };
+
+  return () => {
+    activeCleanup?.();
+  };
 }

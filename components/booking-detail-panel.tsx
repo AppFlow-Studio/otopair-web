@@ -1748,8 +1748,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     (s === "pending" ||
                       s === "pending_shop_acceptance" ||
                       s === "confirmed" ||
-                      s === "vehicle_at_shop" ||
-                      s === "in_progress");
+                      s === "vehicle_at_shop");
                   const canAdjustMidJob =
                     s === "in_progress" &&
                     (job as any).hasDisclosedRange &&

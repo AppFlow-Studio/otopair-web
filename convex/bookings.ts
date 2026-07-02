@@ -31,10 +31,12 @@
  * OWNER: Booking Team
  */
 
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, action } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
+import { getStripe } from "../lib/stripe";
 import { isTerminal, validateTransition } from "./booking_status_history";
 import { mintClaimToken } from "./walkin_claims";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
@@ -47,7 +49,11 @@ import {
   reconcileDisclosedCeilingWithQuote,
   type PricedPartSnapshotRow,
 } from "./booking_quotes";
-import { deriveServiceVariantsFromOptions } from "./lib/brakeScope";
+import {
+  deriveServiceVariantsFromOptions,
+  resolveBrakeScopeForBooking,
+  type BrakeScope,
+} from "./lib/brakeScope";
 import {
   detectTier,
   resolveLaborHours,
@@ -111,6 +117,7 @@ import {
   vehiclePassportUpdateValidator,
 } from "./lib/vehicle_passports";
 import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
+import { validateInspectionMeasurements } from "../lib/inspection-measurements";
 import { insertSnapshotImpl } from "./part_snapshots";
 import {
   closeRecForCompletedBooking,
@@ -569,6 +576,70 @@ export const cancelBooking = mutation({
         shopId: existing.shop_id,
         mechanicId: existing.mechanic_id ?? undefined,
         date: existing.scheduled_date,
+      },
+    ]);
+  },
+});
+
+export const rollbackFailedBookingCreation = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return;
+    if (booking.user_id !== user._id) {
+      throw new Error("Not your booking.");
+    }
+    if (booking.status !== "pending") {
+      throw new Error("Only pending bookings can be rolled back.");
+    }
+
+    const payments = await ctx.db
+      .query("payments")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    for (const payment of payments) {
+      const paymentHistory = await ctx.db
+        .query("payment_status_history")
+        .withIndex("by_payment_id", (q) => q.eq("payment_id", payment._id))
+        .collect();
+      for (const row of paymentHistory) await ctx.db.delete(row._id);
+      await ctx.db.delete(payment._id);
+    }
+
+    const bookingHistory = await ctx.db
+      .query("booking_status_history")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    for (const row of bookingHistory) await ctx.db.delete(row._id);
+
+    const outboxRows = await ctx.db
+      .query("notification_outbox")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    for (const row of outboxRows) await ctx.db.delete(row._id);
+
+    const funnels = await ctx.db
+      .query("conversion_funnels")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    for (const funnel of funnels) {
+      await ctx.db.patch(funnel._id, {
+        completed: false,
+        stage: "booking_failed",
+        drop_off_reason: args.reason ?? "booking_creation_rolled_back",
+      });
+    }
+
+    await ctx.db.delete(args.bookingId);
+    await syncBookingAssignments(ctx, [
+      {
+        shopId: booking.shop_id,
+        mechanicId: booking.mechanic_id ?? undefined,
+        date: booking.scheduled_date,
       },
     ]);
   },
@@ -1230,6 +1301,46 @@ function logLaborMinutesDivergence(args: {
   );
 }
 
+type CreateBatchArgs = {
+  user_id: Id<"users">;
+  vin: string;
+  shop_id: Id<"shops">;
+  mechanic_id?: Id<"mechanics">;
+  time_slot_id?: Id<"time_slots">;
+  scheduled_date: string;
+  scheduled_time: string;
+  services: {
+    service_id: Id<"services">;
+    labor_cost: number;
+    parts_cost: number;
+    labor_hours?: number;
+  }[];
+  taxes_and_fees?: number;
+  platform_fee?: number;
+  displayed_labor_minutes?: number;
+  session_id?: string;
+  funnel_id?: Id<"conversion_funnels">;
+  source_recommendation_id?: Id<"job_recommendations">;
+  customer_notes?: string;
+  diagnostic_system?: DiagnosticSystem;
+  selected_service_options?: {
+    service_id: Id<"services">;
+    option_id: Id<"service_options">;
+    option_label: string;
+    option_type?: string;
+  }[];
+  service_variants?: {
+    service_id: Id<"services">;
+    position: string;
+  }[];
+  preauthorized_payment?: {
+    stripe_payment_intent_id: string;
+    idempotency_key: string;
+    hold_amount_cents: number;
+    payment_origin?: "card" | "apple_pay" | "google_pay";
+  };
+};
+
 /**
  * MUTATION: createBatch
  * Create one booking for an appointment (one time slot) with multiple services.
@@ -1244,8 +1355,7 @@ function logLaborMinutesDivergence(args: {
  *
  * RETURNS: Single-element array [bookingId]
  */
-export const createBatch = mutation({
-  args: {
+const createBatchArgs = {
     user_id: v.id("users"),
     vin: v.string(),
     shop_id: v.id("shops"),
@@ -1305,8 +1415,23 @@ export const createBatch = mutation({
         })
       )
     ),
-  },
-  handler: async (ctx, args) => {
+    preauthorized_payment: v.optional(
+      v.object({
+        stripe_payment_intent_id: v.string(),
+        idempotency_key: v.string(),
+        hold_amount_cents: v.number(),
+        payment_origin: v.optional(
+          v.union(
+            v.literal("card"),
+            v.literal("apple_pay"),
+            v.literal("google_pay"),
+          ),
+        ),
+      }),
+    ),
+};
+
+async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise<string[]> {
     if (args.services.length === 0) {
       throw new Error("At least one service is required");
     }
@@ -1675,6 +1800,29 @@ export const createBatch = mutation({
           : undefined,
     });
 
+    if (args.preauthorized_payment) {
+      const paymentId = await ctx.db.insert("payments", {
+        booking_id: bookingId,
+        user_id: args.user_id,
+        shop_id: args.shop_id,
+        amount: total_cost,
+        payment_method: "card",
+        status: "processing",
+        stripe_payment_intent_id:
+          args.preauthorized_payment.stripe_payment_intent_id,
+        idempotency_key: args.preauthorized_payment.idempotency_key,
+        hold_amount_cents: args.preauthorized_payment.hold_amount_cents,
+        payment_origin: args.preauthorized_payment.payment_origin,
+        created_at: now,
+        updated_at: now,
+      });
+      await ctx.scheduler.runAfter(0, internal.payment_status_history.log, {
+        payment_id: paymentId,
+        old_status: undefined,
+        new_status: "processing",
+      });
+    }
+
     await logBookingStatusChange(
       ctx,
       bookingId,
@@ -1720,6 +1868,78 @@ export const createBatch = mutation({
     });
 
     return [bookingId];
+}
+
+async function assertCreateBatchUser(ctx: MutationCtx, userId: Id<"users">) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Not authenticated");
+  const currentUser = await ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+    .unique();
+  if (!currentUser) throw new Error("User record not found.");
+  if (userId !== currentUser._id) {
+    throw new Error("Cannot create another user's booking.");
+  }
+}
+
+export const createBatch = mutation({
+  args: createBatchArgs,
+  handler: async (ctx, args) => {
+    await assertCreateBatchUser(ctx, args.user_id);
+    return await createBatchImpl(ctx, args);
+  },
+});
+
+export const _createBatchAfterAuthorization = internalMutation({
+  args: createBatchArgs,
+  handler: createBatchImpl,
+});
+
+export const confirmPreauthorizedBatch = action({
+  args: createBatchArgs,
+  handler: async (ctx, args): Promise<string[]> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const user = await ctx.runQuery(
+      internal.payments_stripe._getMeByClerkSubject,
+      { clerkUserId: identity.subject },
+    );
+    if (!user) throw new Error("User record not found.");
+    if (args.user_id !== user._id) throw new Error("Cannot create another user's booking.");
+
+    const paymentIntentId = args.preauthorized_payment?.stripe_payment_intent_id;
+    if (!paymentIntentId) throw new Error("Payment authorization is required.");
+
+    const stripe = getStripe();
+    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+    if (pi.metadata?.userId !== String(user._id)) {
+      throw new Error("Not your payment authorization.");
+    }
+    if (pi.metadata?.shopId !== String(args.shop_id)) {
+      throw new Error("Payment authorization is for a different shop.");
+    }
+    if (
+      pi.status !== "requires_capture" &&
+      pi.status !== "succeeded" &&
+      pi.status !== "processing"
+    ) {
+      throw new Error(`Card authorization failed (status: ${pi.status}).`);
+    }
+
+    try {
+      return await ctx.runMutation(internal.bookings._createBatchAfterAuthorization, args);
+    } catch (err) {
+      try {
+        await ctx.runAction(api.payments_stripe.cancelPreauthorizedPaymentIntent, {
+          paymentIntentId,
+        });
+      } catch {
+        // Best effort: Stripe will expire an uncaptured hold if cancel fails.
+      }
+      throw err;
+    }
   },
 });
 
@@ -1852,71 +2072,190 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
       proposedEndTime: getBookingEndTime(booking.scheduled_time, durationMinutes),
       conflict: null,
       conflictingBookingId: null,
+      alternateMechanicId: null,
+      alternateMechanicName: null,
+      specificConflictAlternateName: null,
+      backfillConflict: null,
+      proposedDateBookings: [],
     };
   }
 
   const nowParts = getShopLocalDateTimeParts(timezone, new Date(now));
   const proposedScheduledTime = roundDownToFiveMinutes(nowParts.time);
-  // If "now" rolled into a different calendar day than the original booking
-  // (rare — customer "early" across midnight), fall back to scheduled_date
-  // so the booking doesn't jump days. Same-day is the expected case.
-  const proposedScheduledDate =
-    nowParts.date === booking.scheduled_date ? nowParts.date : booking.scheduled_date;
+  const proposedScheduledDate = nowParts.date;
   const proposedEndTime = getBookingEndTime(proposedScheduledTime, durationMinutes);
 
-  let conflict: "booking" | "blocked" | "outside_shop_hours" | null = null;
+  let conflict: "booking" | "blocked" | "outside_shop_hours" | "ends_outside_shop_hours" | null = null;
   let conflictingBookingId: string | null = null;
 
-  try {
-    await assertBookingWithinShopHours(ctx, {
-      shopId: booking.shop_id,
-      date: proposedScheduledDate,
-      startTime: proposedScheduledTime,
-      durationMinutes,
-    });
-  } catch {
-    conflict = "outside_shop_hours";
-  }
-
-  if (!conflict) {
-    const dayBookings = await getBlockingBookingsForShopDate(
+  // Mechanic-level overlap (an existing booking or a manual block) is
+  // checked first and unconditionally — it can't be overridden from the
+  // dialog at all, so it must never be hidden behind the shop-hours check.
+  // Checking shop hours first would short-circuit this and let a real
+  // double-booking through once the user clicks "push anyway" on the hours
+  // prompt (the mutation's resolveMechanicForWindow call would then throw a
+  // raw, uncaught error instead of the friendly one below).
+  const dayBookings = await getBlockingBookingsForShopDate(
+    ctx,
+    booking.shop_id,
+    proposedScheduledDate,
+  );
+  const conflictBooking = dayBookings.find((other: any) => {
+    if (String(other._id) === String(booking._id)) return false;
+    if (!other.mechanic_id) return false;
+    if (String(other.mechanic_id) !== String(booking.mechanic_id)) return false;
+    if (["cancelled", "declined", "no_show"].includes(other.status)) return false;
+    const otherStart = hhmmToMinutes(other.scheduled_time);
+    const otherEnd = otherStart + (other.estimated_labor_minutes ?? 60);
+    const newStart = hhmmToMinutes(proposedScheduledTime);
+    const newEnd = hhmmToMinutes(proposedEndTime);
+    return otherStart < newEnd && otherEnd > newStart;
+  });
+  if (conflictBooking) {
+    conflict = "booking";
+    conflictingBookingId = String(conflictBooking._id);
+  } else {
+    const blocked = await getManualBlockedSlotsForShop(
       ctx,
       booking.shop_id,
       proposedScheduledDate,
     );
-    const conflictBooking = dayBookings.find((other: any) => {
+    const blockedConflict = blocked.find((slot: any) => {
+      if (slot.mechanic_id && String(slot.mechanic_id) !== String(booking.mechanic_id)) {
+        return false;
+      }
+      const sStart = hhmmToMinutes(slot.start_time);
+      const sEnd = hhmmToMinutes(slot.end_time);
+      const newStart = hhmmToMinutes(proposedScheduledTime);
+      const newEnd = hhmmToMinutes(proposedEndTime);
+      return sStart < newEnd && sEnd > newStart;
+    });
+    if (blockedConflict) {
+      conflict = "blocked";
+    }
+  }
+
+  // The mechanic was never specified by the customer ("any") — rather than
+  // surface the conflict, see if a different mechanic is free for this
+  // window, same as any other "any mechanic" assignment in this codebase.
+  let alternateMechanicId: any = null;
+  let alternateMechanicName: string | null = null;
+  if (
+    (conflict === "booking" || conflict === "blocked") &&
+    booking.assignment_preference !== "specific_mechanic"
+  ) {
+    try {
+      alternateMechanicId = await resolveMechanicForWindow(ctx, {
+        shopId: booking.shop_id,
+        date: proposedScheduledDate,
+        startTime: proposedScheduledTime,
+        durationMinutes,
+        excludeBookingId: String(booking._id),
+      });
+      conflict = null;
+      conflictingBookingId = null;
+      const altMechanic: any = await ctx.db.get(alternateMechanicId);
+      alternateMechanicName = altMechanic
+        ? `${altMechanic.first_name ?? ""} ${altMechanic.last_name ?? ""}`.trim() ||
+          "Mechanic"
+        : null;
+    } catch {
+      // No other mechanic free either — fall through with the original
+      // conflict so the dialog shows "keep original time".
+    }
+  }
+
+  // Shop hours only matter for display/override purposes once we know the
+  // mechanic side is actually clear — a real booking/blocked conflict (with
+  // no alternate) already blocks the push outright, regardless of hours.
+  if (!conflict) {
+    try {
+      await assertBookingWithinShopHours(ctx, {
+        shopId: booking.shop_id,
+        date: proposedScheduledDate,
+        startTime: proposedScheduledTime,
+        durationMinutes,
+      });
+    } catch (err: unknown) {
+      conflict =
+        err instanceof Error && err.message.includes("end after")
+          ? "ends_outside_shop_hours"
+          : "outside_shop_hours";
+    }
+  }
+
+  // For specific_mechanic bookings with a conflict: check whether a
+  // different mechanic is free, so the dialog can tell the front desk
+  // "this would have pushed if the customer had chosen Any."
+  let specificConflictAlternateName: string | null = null;
+  if (
+    (conflict === "booking" || conflict === "blocked") &&
+    booking.assignment_preference === "specific_mechanic"
+  ) {
+    try {
+      const altId = await resolveMechanicForWindow(ctx, {
+        shopId: booking.shop_id,
+        date: proposedScheduledDate,
+        startTime: proposedScheduledTime,
+        durationMinutes,
+        excludeBookingId: String(booking._id),
+      });
+      const altMechanic: any = await ctx.db.get(altId);
+      specificConflictAlternateName = altMechanic
+        ? `${altMechanic.first_name ?? ""} ${altMechanic.last_name ?? ""}`.trim() ||
+          "another mechanic"
+        : "another mechanic";
+    } catch {
+      // No alternate free either; message stays generic.
+    }
+  }
+
+  // Backfilled jobs are logged as `completed` (the work already happened), so
+  // they never show up as a real scheduling conflict above. But landing a new
+  // booking on top of one still looks wrong on the schedule — warn and offer
+  // a swap (or "push anyway") regardless of assignment_preference.
+  let backfillConflict: { alternateMechanicId: any; alternateMechanicName: string | null } | null = null;
+  if (!conflict) {
+    const sameDayBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_date", (q: any) =>
+        q.eq("shop_id", booking.shop_id).eq("scheduled_date", proposedScheduledDate),
+      )
+      .collect();
+    const backfillHit = sameDayBookings.find((other: any) => {
       if (String(other._id) === String(booking._id)) return false;
-      if (!other.mechanic_id) return false;
-      if (String(other.mechanic_id) !== String(booking.mechanic_id)) return false;
-      if (["cancelled", "declined", "no_show"].includes(other.status)) return false;
+      if (other.backfilled_at_ms == null) return false;
+      if (!other.mechanic_id || String(other.mechanic_id) !== String(booking.mechanic_id)) return false;
       const otherStart = hhmmToMinutes(other.scheduled_time);
       const otherEnd = otherStart + (other.estimated_labor_minutes ?? 60);
       const newStart = hhmmToMinutes(proposedScheduledTime);
       const newEnd = hhmmToMinutes(proposedEndTime);
       return otherStart < newEnd && otherEnd > newStart;
     });
-    if (conflictBooking) {
-      conflict = "booking";
-      conflictingBookingId = String(conflictBooking._id);
-    } else {
-      const blocked = await getManualBlockedSlotsForShop(
-        ctx,
-        booking.shop_id,
-        proposedScheduledDate,
-      );
-      const blockedConflict = blocked.find((slot: any) => {
-        if (slot.mechanic_id && String(slot.mechanic_id) !== String(booking.mechanic_id)) {
-          return false;
-        }
-        const sStart = hhmmToMinutes(slot.start_time);
-        const sEnd = hhmmToMinutes(slot.end_time);
-        const newStart = hhmmToMinutes(proposedScheduledTime);
-        const newEnd = hhmmToMinutes(proposedEndTime);
-        return sStart < newEnd && sEnd > newStart;
-      });
-      if (blockedConflict) {
-        conflict = "blocked";
+    if (backfillHit) {
+      // Always surface the warning when a backfill genuinely overlaps —
+      // whether or not a swap is offered depends on whether anyone else is
+      // free; the front desk still gets to choose "push anyway" either way.
+      let altId: any = null;
+      let altName: string | null = null;
+      try {
+        altId = await resolveMechanicForWindow(ctx, {
+          shopId: booking.shop_id,
+          date: proposedScheduledDate,
+          startTime: proposedScheduledTime,
+          durationMinutes,
+          excludeMechanicId: booking.mechanic_id,
+          excludeBookingId: String(booking._id),
+        });
+        const altMechanic: any = await ctx.db.get(altId);
+        altName = altMechanic
+          ? `${altMechanic.first_name ?? ""} ${altMechanic.last_name ?? ""}`.trim() ||
+            "Mechanic"
+          : null;
+      } catch {
+        // No alternate free — still warn, just without a swap option.
       }
+      backfillConflict = { alternateMechanicId: altId, alternateMechanicName: altName };
     }
   }
 
@@ -1929,6 +2268,18 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
     proposedEndTime,
     conflict,
     conflictingBookingId,
+    alternateMechanicId,
+    alternateMechanicName,
+    specificConflictAlternateName,
+    backfillConflict,
+    proposedDateBookings: dayBookings.map((b: any) => ({
+      _id: String(b._id),
+      scheduledDate: b.scheduled_date,
+      scheduledTime: b.scheduled_time,
+      estimatedMinutes: b.estimated_labor_minutes ?? null,
+      status: b.status,
+      mechanicId: b.mechanic_id ? String(b.mechanic_id) : null,
+    })),
   };
 }
 
@@ -2138,7 +2489,13 @@ export const getEarlyPushPreview = query({
 });
 
 export const pushBookingEarlierAndArrive = mutation({
-  args: { bookingId: v.id("bookings") },
+  args: {
+    bookingId: v.id("bookings"),
+    overrideShopHours: v.optional(v.boolean()),
+    // Front desk's explicit choice from the backfill-conflict dialog: keep
+    // the originally-assigned mechanic, or swap to the offered alternate.
+    mechanicId: v.optional(v.id("mechanics")),
+  },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
@@ -2159,8 +2516,16 @@ export const pushBookingEarlierAndArrive = mutation({
         "Customer isn't early enough to push the booking — must be at least 10 minutes before scheduled start.",
       );
     }
-    if (preview.conflict === "outside_shop_hours") {
-      throw new Error("The proposed earlier start is outside the shop's operating hours.");
+    if (
+      (preview.conflict === "outside_shop_hours" ||
+        preview.conflict === "ends_outside_shop_hours") &&
+      args.overrideShopHours !== true
+    ) {
+      throw new Error(
+        preview.conflict === "ends_outside_shop_hours"
+          ? "The proposed job would end outside the shop's operating hours."
+          : "The proposed earlier start is outside the shop's operating hours.",
+      );
     }
     if (preview.conflict === "booking") {
       throw new Error("Cannot push earlier — the mechanic has another booking in that window.");
@@ -2170,6 +2535,12 @@ export const pushBookingEarlierAndArrive = mutation({
     }
 
     const durationMinutes = booking.estimated_labor_minutes ?? 60;
+    // An "any mechanic" booking that couldn't push earlier on its assigned
+    // mechanic was already resolved to a free alternate in the preview —
+    // move it there instead of throwing. An explicit `args.mechanicId` (the
+    // front desk's pick from the backfill-conflict dialog) wins over both.
+    const targetMechanicId =
+      args.mechanicId ?? preview.alternateMechanicId ?? booking.mechanic_id;
     // Defense-in-depth: re-validate via the canonical helper so we get the
     // same errors any other reschedule path would surface.
     await resolveMechanicForWindow(ctx, {
@@ -2177,9 +2548,10 @@ export const pushBookingEarlierAndArrive = mutation({
       date: preview.proposedScheduledDate,
       startTime: preview.proposedScheduledTime,
       durationMinutes,
-      preferredMechanicId: booking.mechanic_id,
+      preferredMechanicId: targetMechanicId,
       excludeBookingId: String(booking._id),
       allowAfterClose: false,
+      allowOutsideShopHours: args.overrideShopHours === true,
     });
 
     const oldSlotId = booking.time_slot_id;
@@ -2189,6 +2561,7 @@ export const pushBookingEarlierAndArrive = mutation({
     await ctx.db.patch(booking._id, {
       scheduled_date: preview.proposedScheduledDate,
       scheduled_time: preview.proposedScheduledTime,
+      mechanic_id: targetMechanicId,
       time_slot_id: undefined,
       vehicle_arrived_at_ms: now,
       vehicle_arrived_by_user_id: user._id,
@@ -2203,6 +2576,7 @@ export const pushBookingEarlierAndArrive = mutation({
       ...booking,
       scheduled_date: preview.proposedScheduledDate,
       scheduled_time: preview.proposedScheduledTime,
+      mechanic_id: targetMechanicId,
       time_slot_id: undefined,
       vehicle_arrived_at_ms: now,
       vehicle_arrived_by_user_id: user._id,
@@ -2223,7 +2597,7 @@ export const pushBookingEarlierAndArrive = mutation({
       },
       {
         shopId: booking.shop_id,
-        mechanicId: booking.mechanic_id,
+        mechanicId: targetMechanicId,
         date: preview.proposedScheduledDate,
       },
     ]);
@@ -4084,6 +4458,7 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
       brand: prejob.tire_brand ?? undefined,
       size_front: prejob.tire_size_front ?? undefined,
       size_rear: prejob.tire_size_rear ?? undefined,
+      tread_depths: prejob.tire_tread ?? undefined,
       front_condition: frontCondition,
       rear_condition: rearCondition,
       overall_condition:
@@ -4337,6 +4712,7 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       overall_condition: passportRecord?.tires?.overall_condition ?? null,
       front_condition: passportRecord?.tires?.front_condition ?? null,
       rear_condition: passportRecord?.tires?.rear_condition ?? null,
+      tread_depths: passportRecord?.tires?.tread_depths ?? null,
       last_verified_at: firstDefinedNumber(
         passportRecord?.tires?.last_verified_at,
         passportRecord?.last_shop_confirmed_at
@@ -4374,6 +4750,7 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       front_pad_mm: coerceNumberOrNull(passportRecord?.brakes?.front_pad_mm),
       rear_pad_mm: coerceNumberOrNull(passportRecord?.brakes?.rear_pad_mm),
       rotor_condition: passportRecord?.brakes?.rotor_condition ?? null,
+      rotor_thickness: passportRecord?.brakes?.rotor_thickness ?? null,
     },
     inspection: {
       looks_current: firstDefinedBoolean(passportRecord?.inspection?.looks_current),
@@ -4553,7 +4930,8 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
 function validatePrejobReport(
   prejob: any,
   baselineMileage: number | null,
-  serviceFlags: ReturnType<typeof getBookingServiceFlags>
+  serviceFlags: ReturnType<typeof getBookingServiceFlags>,
+  brakeScope: BrakeScope,
 ) {
   if (typeof prejob.mileage !== "number" || !Number.isFinite(prejob.mileage)) {
     throw new Error("Mileage is required before starting this booking.");
@@ -4583,20 +4961,30 @@ function validatePrejobReport(
   }
   if (serviceFlags.hasBrakeWork) {
     if (
-      typeof prejob.brakes?.front_pad_mm !== "number" ||
-      !Number.isFinite(prejob.brakes.front_pad_mm)
+      brakeScope.front &&
+      (typeof prejob.brakes?.front_pad_mm !== "number" ||
+        !Number.isFinite(prejob.brakes.front_pad_mm))
     ) {
       throw new Error("Front pad thickness is required for brake-related work.");
     }
     if (
-      typeof prejob.brakes?.rear_pad_mm !== "number" ||
-      !Number.isFinite(prejob.brakes.rear_pad_mm)
+      brakeScope.rear &&
+      (typeof prejob.brakes?.rear_pad_mm !== "number" ||
+        !Number.isFinite(prejob.brakes.rear_pad_mm))
     ) {
       throw new Error("Rear pad thickness is required for brake-related work.");
     }
     if (!hasText(prejob.brakes?.rotor_condition)) {
       throw new Error("Rotor condition is required for brake-related work.");
     }
+  }
+  const measurementResult = validateInspectionMeasurements({
+    tire_tread: prejob.tire_tread,
+    brakes: prejob.brakes,
+    brake_scope: brakeScope,
+  });
+  if (!measurementResult.valid) {
+    throw new Error(measurementResult.error);
   }
   if (serviceFlags.hasOilChange) {
     if (!hasText(prejob.fluid_overrides?.oil_viscosity)) {
@@ -5010,18 +5398,22 @@ async function resolveMechanicForWindow(
     startTime,
     durationMinutes,
     preferredMechanicId,
+    excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
     allowAfterClose,
+    allowOutsideShopHours,
   }: {
     shopId: any;
     date: string;
     startTime: string;
     durationMinutes: number;
     preferredMechanicId?: any;
+    excludeMechanicId?: any;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
     allowAfterClose?: boolean;
+    allowOutsideShopHours?: boolean;
   }
 ) {
   return await resolveAvailableMechanicForWindow(ctx, {
@@ -5030,9 +5422,11 @@ async function resolveMechanicForWindow(
     startTime,
     durationMinutes,
     preferredMechanicId,
+    excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
     allowAfterClose,
+    allowOutsideShopHours,
   });
 }
 
@@ -8874,7 +9268,8 @@ export const startWithPrejob = mutation({
     validatePrejobReport(
       args.prejob,
       passportView.passport.mileage ?? null,
-      serviceFlags
+      serviceFlags,
+      await resolveBrakeScopeForBooking(ctx, booking),
     );
 
     const now = Date.now();
@@ -8977,6 +9372,7 @@ export const commitInspectionAndAwaitEstimate = mutation({
       args.prejob,
       passportView.passport.mileage ?? null,
       serviceFlags,
+      await resolveBrakeScopeForBooking(ctx, booking),
     );
 
     const now = Date.now();

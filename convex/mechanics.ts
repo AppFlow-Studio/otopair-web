@@ -31,6 +31,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { syncMechanicAvailabilityWindow } from "./lib/timeSlotAvailability";
+import { getBookableShopIds } from "../lib/bookableShop";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
@@ -195,9 +196,14 @@ async function buildManagedMechanicRows(ctx: any, shopId: any) {
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    const mechanics = await ctx.db.query("mechanics").collect();
-    return await Promise.all(
+    const shops = await ctx.db.query("shops").collect();
+    const bookableShopIds = await getBookableShopIds(ctx, shops);
+    const mechanics = (await ctx.db.query("mechanics").collect()).filter(
+      (mechanic) => mechanic.is_active !== false,
+    );
+    const rows = await Promise.all(
       mechanics.map(async (mechanic) => {
+        if (!bookableShopIds.has(mechanic.shop_id)) return null;
         const shop = await ctx.db.get(mechanic.shop_id);
         const photoUrl = await resolveMechanicPhotoUrl(ctx, mechanic.photo);
         // Surface the parent shop's aggregate rating/review-count on
@@ -214,6 +220,7 @@ export const list = query({
         };
       }),
     );
+    return rows.filter((row) => row != null);
   },
 });
 

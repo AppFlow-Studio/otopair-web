@@ -226,7 +226,12 @@ function assertWindowInsideShopHours(
   startTime: string,
   durationMinutes: number,
   allowAfterClose?: boolean,
+  allowOutsideShopHours?: boolean,
 ) {
+  if (allowOutsideShopHours) {
+    return getBookingEndTime(startTime, durationMinutes);
+  }
+
   const hours = context.hours;
   if (!hours || hours.is_closed || !hours.open_time || !hours.close_time) {
     throw new Error("The shop is closed on the requested day.");
@@ -369,6 +374,7 @@ export async function assertMechanicAvailableForWindow(
     excludeBookingId,
     excludeTireQuoteResponseId,
     allowAfterClose,
+    allowOutsideShopHours,
   }: {
     shopId: any;
     mechanicId: any;
@@ -378,6 +384,7 @@ export async function assertMechanicAvailableForWindow(
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
     allowAfterClose?: boolean;
+    allowOutsideShopHours?: boolean;
   },
 ) {
   const context = await getAvailabilityContext(ctx, {
@@ -391,6 +398,7 @@ export async function assertMechanicAvailableForWindow(
     startTime,
     durationMinutes,
     allowAfterClose,
+    allowOutsideShopHours,
   );
   assertMechanicWindowFreeInContext(context, {
     mechanicId,
@@ -412,6 +420,7 @@ export async function isMechanicAvailableForWindow(
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
     allowAfterClose?: boolean;
+    allowOutsideShopHours?: boolean;
   },
 ) {
   try {
@@ -430,18 +439,25 @@ export async function resolveAvailableMechanicForWindow(
     startTime,
     durationMinutes,
     preferredMechanicId,
+    excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
     allowAfterClose,
+    allowOutsideShopHours,
   }: {
     shopId: any;
     date: string;
     startTime: string;
     durationMinutes: number;
     preferredMechanicId?: any;
+    /** Skip this mechanic in the "any mechanic" candidate pool — e.g. when
+     *  looking for a genuinely different mechanic than the one already on
+     *  the booking. */
+    excludeMechanicId?: any;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
     allowAfterClose?: boolean;
+    allowOutsideShopHours?: boolean;
   },
 ) {
   const context = await getAvailabilityContext(ctx, {
@@ -454,6 +470,7 @@ export async function resolveAvailableMechanicForWindow(
     startTime,
     durationMinutes,
     allowAfterClose,
+    allowOutsideShopHours,
   );
 
   if (preferredMechanicId) {
@@ -470,6 +487,9 @@ export async function resolveAvailableMechanicForWindow(
 
   const candidates: Array<{ mechanicId: any; count: number; minutes: number }> = [];
   for (const mechanic of context.activeMechanics) {
+    if (excludeMechanicId && String(mechanic._id) === String(excludeMechanicId)) {
+      continue;
+    }
     try {
       assertMechanicWindowFreeInContext(context, {
         mechanicId: mechanic._id,

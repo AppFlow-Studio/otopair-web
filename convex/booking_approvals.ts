@@ -35,6 +35,10 @@ import { postjobPartValidator } from "./lib/vehicle_passports";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
+import {
+  buildCustomerInspectionSnapshot,
+  type CustomerInspectionSnapshot,
+} from "../lib/inspection-measurements";
 
 const SLA_MS = 24 * 60 * 60 * 1000;
 const MIN_MANUAL_JUSTIFICATION_LEN = 12;
@@ -228,6 +232,21 @@ type SubmitArgs = {
   submittedByUserId?: Id<"users">;
 };
 
+async function getInspectionSnapshotForBooking(
+  ctx: any,
+  bookingId: Id<"bookings">,
+): Promise<CustomerInspectionSnapshot | null> {
+  const actual = await ctx.db
+    .query("job_actuals")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
+    .order("desc")
+    .first();
+  return buildCustomerInspectionSnapshot({
+    tire_tread: actual?.prejob_report?.tire_tread,
+    brakes: actual?.prejob_report?.brakes,
+  });
+}
+
 async function performSubmission(
   ctx: any,
   args: SubmitArgs,
@@ -248,6 +267,10 @@ async function performSubmission(
     laborHours: args.laborHours,
     laborRateCents: args.laborRateCents,
   });
+  const inspectionSnapshot = await getInspectionSnapshotForBooking(
+    ctx,
+    args.bookingId,
+  );
 
   // Fixed-price bookings: parts/labor updates are audit-only. Customer
   // agreed to a flat price (shop_service_fixed_prices); mechanic edits get
@@ -265,6 +288,7 @@ async function performSubmission(
       notes: args.notes,
       submittedByUserId: args.submittedByUserId,
       priced,
+      inspectionSnapshot,
     });
   }
 
@@ -323,6 +347,7 @@ async function performSubmission(
     labor_hours: args.laborHours,
     labor_rate_cents: args.laborRateCents,
     notes: args.notes,
+    inspection_snapshot: inspectionSnapshot ?? undefined,
     prior_ceiling_cents: ceiling,
     ceiling_after_decision_cents: inRange ? priced.total_cents : undefined,
     sla_expires_at_ms: inRange ? undefined : now + SLA_MS,
@@ -419,6 +444,7 @@ async function performFixedPriceInformationalSubmission(
     notes: string | undefined;
     submittedByUserId: Id<"users"> | undefined;
     priced: SetPriceComputed;
+    inspectionSnapshot: CustomerInspectionSnapshot | null;
   },
 ): Promise<{
   approvalId: Id<"booking_approvals">;
@@ -445,6 +471,7 @@ async function performFixedPriceInformationalSubmission(
     labor_hours: args.laborHours,
     labor_rate_cents: args.laborRateCents,
     notes: args.notes,
+    inspection_snapshot: args.inspectionSnapshot ?? undefined,
     prior_ceiling_cents: lockedCents,
     ceiling_after_decision_cents: lockedCents,
     submitted_at_ms: now,
@@ -719,6 +746,7 @@ export const getOpenApprovalForBooking = query({
       labor_hours: open.labor_hours,
       labor_rate_cents: open.labor_rate_cents,
       notes: open.notes,
+      inspection_snapshot: open.inspection_snapshot,
       submitted_at_ms: open.submitted_at_ms,
       sla_expires_at_ms: open.sla_expires_at_ms,
       disclosed_range_low_cents: (booking as any).disclosed_range_low_cents,

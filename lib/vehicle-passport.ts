@@ -21,6 +21,14 @@ export const MODIFICATION_STATUSES = [
 ] as const;
 export type ModificationStatus = (typeof MODIFICATION_STATUSES)[number];
 
+export const FILTER_STATUSES = [
+  "not_checked",
+  "looks_clean",
+  "fair",
+  "recommend_replace",
+] as const;
+export type FilterStatus = (typeof FILTER_STATUSES)[number];
+
 export const PARTS_ACCURACY_STATUSES = [
   "correct",
   "different_parts",
@@ -53,6 +61,7 @@ export type VehiclePassportTires = {
   overall_condition?: TireCondition | null;
   front_condition?: TireCondition | null;
   rear_condition?: TireCondition | null;
+  tread_depths?: TireTreadMeasurements | null;
   last_verified_at?: number | null;
 };
 
@@ -71,6 +80,7 @@ export type VehiclePassportBrakes = {
   front_pad_mm?: number | null;
   rear_pad_mm?: number | null;
   rotor_condition?: RotorCondition | null;
+  rotor_thickness?: RotorThicknessMeasurements | null;
 };
 
 export type VehiclePassportInspection = {
@@ -82,6 +92,11 @@ export type VehiclePassportInspection = {
 export type VehiclePassportModifications = {
   status?: ModificationStatus | null;
   notes?: string | null;
+};
+
+export type PreJobFilterChecks = {
+  engine_air_filter?: FilterStatus | null;
+  cabin_air_filter?: FilterStatus | null;
 };
 
 export type VehiclePassportUpdatePayload = {
@@ -180,9 +195,11 @@ export type PreJobSurveyPayload = {
   tire_size_rear?: string | null;
   front_tire_condition: TireCondition | null;
   rear_tire_condition: TireCondition | null;
+  tire_tread?: TireTreadMeasurements | null;
   brakes?: VehiclePassportBrakes | null;
   fluids_match_oem?: boolean;
   fluid_overrides?: VehiclePassportFluids | null;
+  filters?: PreJobFilterChecks | null;
   inspection?: VehiclePassportInspection | null;
   modifications?: VehiclePassportModifications | null;
   flagged_vehicle_specs?: boolean;
@@ -292,6 +309,21 @@ export function isTireCondition(value: unknown): value is TireCondition {
     typeof value === "string" &&
     (TIRE_CONDITIONS as readonly string[]).includes(value)
   );
+}
+
+export function isFilterStatus(value: unknown): value is FilterStatus {
+  return (
+    typeof value === "string" &&
+    (FILTER_STATUSES as readonly string[]).includes(value)
+  );
+}
+
+export function filterStatusLabel(value?: string | null) {
+  if (value === "not_checked") return "Not checked";
+  if (value === "looks_clean") return "Looks clean";
+  if (value === "fair") return "Fair";
+  if (value === "recommend_replace") return "Recommend replacement";
+  return "Select...";
 }
 
 export function formatMileage(value?: number | null) {
@@ -521,3 +553,7 @@ export function sumJobActualParts(parts: JobActualPartPayload[]) {
     return sum + cost * qty;
   }, 0);
 }
+import type {
+  RotorThicknessMeasurements,
+  TireTreadMeasurements,
+} from "./inspection-measurements";

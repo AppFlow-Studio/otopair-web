@@ -374,6 +374,10 @@ export default defineSchema({
   // compatibility but new rows should default to "oem".
   oem_parts: defineTable({
     oem_part_number: v.string(),
+    // normalizeOemNumber(oem_part_number) — uppercase, alphanumeric only.
+    // Canonical identity for upserts so "5Q0 698 451 A" and "5Q0698451A"
+    // resolve to one row. Legacy rows lack it; upsert lazily backfills.
+    oem_part_number_normalized: v.optional(v.string()),
     name: v.string(),
     brand: v.optional(v.string()),
     // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
@@ -394,6 +398,7 @@ export default defineSchema({
     data_quality: v.optional(v.string()),
   })
     .index("by_part_number", ["oem_part_number"])
+    .index("by_part_number_normalized", ["oem_part_number_normalized"])
     .index("by_category", ["category"])
     .index("by_subcategory", ["subcategory"])
     .index("by_make_category", ["make_id", "category"])
@@ -418,6 +423,10 @@ export default defineSchema({
     service_role: v.optional(v.string()),
     confidence: v.optional(v.number()),
     source_count: v.optional(v.number()),
+    // Distinct domains that independently attested this fitment (corroboration
+    // signal — ≥2 distinct domains means cross-source agreement, not re-runs
+    // of the same page). Appended on each upsert re-confirmation.
+    source_domains: v.optional(v.array(v.string())),
     first_confirmed_at: v.optional(v.number()),
     last_confirmed_at: v.optional(v.number()),
     mechanic_verified: v.optional(v.boolean()),
@@ -815,6 +824,9 @@ export default defineSchema({
     // scrape action to the price-write step. `format_version` lets the price
     // path treat older markdown-only rows as a miss so they re-fetch HTML.
     part_prices_json: v.optional(v.string()),
+    // Part replacement chains parsed from the same raw HTML ("replaced by",
+    // "supersedes"), serialized as ParsedSupersession[].
+    supersessions_json: v.optional(v.string()),
     format_version: v.optional(v.number()),
   })
     .index("by_cache_key", ["cache_key"])

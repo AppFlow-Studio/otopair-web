@@ -1624,6 +1624,19 @@ export const enrichVehicleBatchV3 = internalAction({
     // STEP 7: FireCrawl scrape — parts catalog + owner's manual
     const sources = await scrapeVehicleSources(ctx, vehicle);
 
+    // STEP 7b: Record deterministic supersession chains parsed from the same
+    // registry HTML (marks known-superseded oem_parts rows so fitment writes
+    // redirect to the successor and superseded numbers stop being priced).
+    if (sources.supersessions.length > 0) {
+      try {
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recordSupersessions, {
+          supersessions: sources.supersessions,
+        });
+      } catch (e) {
+        console.warn("[v8] recordSupersessions failed (non-fatal):", e);
+      }
+    }
+
     // STEP 8: Submit Batch [1A, 1B]
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
       run_id: runId,
@@ -2639,20 +2652,25 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           // is re-verified via Firecrawl json + gauge/guided-retry; only validated
           // "sale" rows are written (msrp/discount included). Parts with no
           // discovered product URL get no price here (better than an llm guess).
-          const urlsByPart = new Map<string, { urls: string[]; oem: string | null; name: string | null }>();
-          const addUrl = (partId: any, url: string | undefined | null, oem: string | null, name: string | null) => {
+          const urlsByPart = new Map<string, { urls: string[]; oem: string | null; name: string | null; subcategory: string | null }>();
+          const addUrl = (partId: any, url: string | undefined | null, oem: string | null, name: string | null, subcategory: string | null = null) => {
             if (!url) return;
             const k = String(partId);
-            const e = urlsByPart.get(k) ?? { urls: [], oem, name };
+            const e = urlsByPart.get(k) ?? { urls: [], oem, name, subcategory };
             if (!e.urls.includes(url)) e.urls.push(url);
             if (!e.oem && oem) e.oem = oem;
             if (!e.name && name) e.name = name;
+            if (!e.subcategory && subcategory) e.subcategory = subcategory;
             urlsByPart.set(k, e);
           };
+          const subcatByPartId = new Map<string, string | null>();
+          for (const f of fitments) {
+            subcatByPartId.set(String(f.part_id), ((f as any).part_subcategory as string | null) ?? null);
+          }
           for (const f of fitments) {
             const num = (f as any).oem_part_number as string | null;
             const dp = num ? deterministicPrices.get(normalizeOemNumber(num)) : null;
-            if (dp?.source_url) addUrl(f.part_id, dp.source_url, num ?? null, (f as any).part_name ?? null);
+            if (dp?.source_url) addUrl(f.part_id, dp.source_url, num ?? null, (f as any).part_name ?? null, (f as any).part_subcategory ?? null);
           }
           if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
             const numToPartIds = new Map<string, any[]>();
@@ -2667,13 +2685,13 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             for (const entry of svc.parts_breakdown) {
               if (!entry.oem_part_number || !entry.source_url) continue;
               for (const pid of numToPartIds.get(normalizeOemNumber(entry.oem_part_number)) ?? []) {
-                addUrl(pid, entry.source_url, entry.oem_part_number, (entry as any).part_name ?? null);
+                addUrl(pid, entry.source_url, entry.oem_part_number, (entry as any).part_name ?? null, subcatByPartId.get(String(pid)) ?? null);
               }
             }
           }
           for (const [partIdStr, e] of urlsByPart) {
             if (e.urls.length === 0) continue;
-            const rows = await priceAllSources(e.urls, { oem: e.oem, partName: e.name }, extractPriceFirecrawl);
+            const rows = await priceAllSources(e.urls, { oem: e.oem, partName: e.name, subcategory: e.subcategory }, extractPriceFirecrawl);
             for (const row of rows) {
               if (row.outcome.status !== "sale") continue;
               await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
@@ -2698,6 +2716,19 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           }
         }
       }
+    }
+
+    // Reverse fitment corroboration (flag-gated, PARTS_REVERSE_FITMENT=on):
+    // now that part_prices carry product-page URLs, verify each part's own
+    // fitment table lists this vehicle. Scheduled so it never eats this
+    // action's remaining budget; the action itself no-ops when the flag is off.
+    if (process.env.PARTS_REVERSE_FITMENT === "on") {
+      await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.reverseFitment.verifyConfigFitments, {
+        vehicleConfigId: args.vehicleConfigId,
+        year: args.year,
+        make: args.make,
+        model: args.model,
+      });
     }
 
     // Finalize

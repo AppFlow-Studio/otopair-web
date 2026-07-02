@@ -42,6 +42,7 @@ import {
   validateLlmPrice,
 } from "./priceParser";
 import { median } from "../lib/robustStats";
+import { priceBandFor } from "../lib/priceBands";
 
 export type ReextractOutcome =
   | { status: "sale"; price: number; tier: "structured" | "llm" | "firecrawl"; msrp?: number | null; discount?: number | null }
@@ -194,6 +195,24 @@ export function gaugePrice(
   const sp = x.sale_price;
   if (sp == null || !(sp > 0)) return { pass: false, reason: "no_price", correction: `Return the numeric dollar sale price for OEM ${ctx.oem ?? "this part"}, or null if not sold here.` };
   if (x.sells_this_part === false) return { pass: false, reason: "not_this_part", correction: `Confirm the page sells OEM ${ctx.oem ?? "the target part"}; if it does not, return sale_price null.` };
+  // POSITIVE confirmation required (Jul 2026): a page must affirmatively tie
+  // its price to the target part — either sells_this_part:true or an echoed
+  // OEM number that matches. Previously both-null passed every gauge, so a
+  // category/wrong-part page where the extraction omitted the echo still
+  // yielded a top-trust "sale" row.
+  const oemConfirmed =
+    ctx.oem != null &&
+    x.oem_seen != null &&
+    normalizeOemNumber(x.oem_seen) === normalizeOemNumber(ctx.oem);
+  if (x.sells_this_part !== true && !oemConfirmed) {
+    return { pass: false, reason: "no_positive_confirmation", correction: `Read the page's own part number and confirm it is OEM ${ctx.oem ?? "the target part"} — set sells_this_part true/false accordingly and echo the part number you see into oem_part_number.` };
+  }
+  // Pack-size gauge: a 2-pack price stored as a unit price poisons quotes at
+  // the top trust tier. The listing must either be a single unit or state the
+  // price per unit.
+  if (x.pack_quantity != null && x.pack_quantity > 1 && x.price_is_per_unit !== true) {
+    return { pass: false, reason: "pack_not_per_unit", correction: `The listing is a ${x.pack_quantity}-pack and sale_price appears to be the pack price. Return the price for ONE unit if the page states it (price_is_per_unit true), otherwise keep the pack price and set price_is_per_unit false.` };
+  }
   if (x.price_label && BAD_LABEL_RE.test(x.price_label)) {
     return { pass: false, reason: "label_not_sale", correction: `Your price_label was "${x.price_label}", which is a discount/MSRP/SKU — not the sale price. Return the current dollar amount the customer pays for OEM ${ctx.oem ?? "this part"}.` };
   }
@@ -219,14 +238,23 @@ export type PriceExtractor = (
 ) => Promise<ExtractedPrice | null>;
 
 /** Extract → gauge → ONE guided retry → hard-wall backstop. The extractor is
- *  injectable so tests can stub it; production passes extractPriceFirecrawl. */
+ *  injectable so tests can stub it; production passes extractPriceFirecrawl.
+ *  `initial` reuses an extraction the caller already ran (priceAllSources
+ *  pass 1) so a gauges-clean page costs ONE Firecrawl call, not two. */
 export async function resolveVerifiedPrice(
-  args: { url: string; oem: string | null; partName?: string | null; crossSourceMedian: number | null },
+  args: {
+    url: string;
+    oem: string | null;
+    partName?: string | null;
+    subcategory?: string | null;
+    crossSourceMedian: number | null;
+    initial?: ExtractedPrice | null;
+  },
   extract: PriceExtractor,
 ): Promise<ReextractOutcome> {
-  const { url, oem, partName, crossSourceMedian } = args;
+  const { url, oem, partName, subcategory, crossSourceMedian } = args;
 
-  let x = await extract(url, oem, partName, null);
+  let x = args.initial ?? (await extract(url, oem, partName, null));
   if (!x) return { status: "fetch_failed", reason: "no_extract" };
 
   let g = gaugePrice(x, { oem, crossSourceMedian });
@@ -245,16 +273,29 @@ export async function resolveVerifiedPrice(
   // against (the median gauge would be self-satisfying).
   const overCeiling = (x.sale_price ?? 0) > 5000 && crossSourceMedian == null;
 
-  if (g.pass && !overCeiling) {
+  // Per-subcategory absolute sanity band — hard wall like the ceiling. With
+  // 1-2 sources the MAD outlier rejection downstream is inert, so this is the
+  // only thing standing between a $400 "cabin filter" and the quote.
+  const band = priceBandFor(subcategory);
+  const bandViolated =
+    band != null && x.sale_price != null && (x.sale_price < band[0] || x.sale_price > band[1]);
+
+  if (g.pass && !overCeiling && !bandViolated) {
     return { status: "sale", price: x.sale_price as number, tier: "firecrawl", msrp: x.msrp, discount: x.discount };
   }
 
   // Hard-wall backstop: validateLlmPrice + the $5k single-source ceiling.
+  // Positive part confirmation is still required here — validateLlmPrice only
+  // compares the OEM when one was echoed, so without this the backstop would
+  // resurrect exactly the both-null case the gauge above rejects.
+  const positivelyConfirmed =
+    x.sells_this_part === true ||
+    (oem != null && x.oem_seen != null && normalizeOemNumber(x.oem_seen) === normalizeOemNumber(oem));
   const vp = validateLlmPrice({ price: x.sale_price, msrp: x.msrp, oemSeen: x.oem_seen, oem: oem ?? "", crossSourceMedian });
-  if (vp.ok && !overCeiling && oem) {
+  if (vp.ok && !overCeiling && !bandViolated && positivelyConfirmed && oem) {
     return { status: "sale", price: x.sale_price as number, tier: "firecrawl", msrp: x.msrp, discount: x.discount };
   }
-  const reason = overCeiling ? "over_ceiling" : g.reason;
+  const reason = overCeiling ? "over_ceiling" : bandViolated ? "band_violation" : g.reason;
   return { status: "unverified", reason: `${reason}${retried ? "_after_retry" : ""}` };
 }
 
@@ -270,10 +311,14 @@ function domainOf(url: string): string {
 
 /** Price a part across its candidate source URLs: extract all (for a cross-source
  *  median), then resolveVerifiedPrice each against that median. Deduped by URL,
- *  capped at 3. Pure orchestration — caller does the DB writes. */
+ *  capped at 3. Pure orchestration — caller does the DB writes.
+ *
+ *  Pass 1's extraction is REUSED in pass 2 (resolveVerifiedPrice `initial`),
+ *  so a page whose gauges pass costs one Firecrawl call instead of two; only
+ *  gauge failures pay for the guided retry. */
 export async function priceAllSources(
   urls: string[],
-  args: { oem: string | null; partName?: string | null },
+  args: { oem: string | null; partName?: string | null; subcategory?: string | null },
   extract: PriceExtractor,
 ): Promise<SourcePriceRow[]> {
   const seen = new Set<string>();
@@ -286,9 +331,11 @@ export async function priceAllSources(
   }
 
   // Pass 1: raw extracts → cross-source median of the sale prices.
+  const firstExtracts = new Map<string, ExtractedPrice | null>();
   const sales: number[] = [];
   for (const u of list) {
     const x = await extract(u, args.oem, args.partName, null);
+    firstExtracts.set(u, x);
     if (x?.sale_price != null && x.sale_price > 0) sales.push(x.sale_price);
   }
   // Median only counts as corroboration with >= 2 distinct sources. A lone
@@ -296,11 +343,18 @@ export async function priceAllSources(
   // gauge and disable the single-source $5k ceiling in resolveVerifiedPrice).
   const crossSourceMedian = sales.length >= 2 ? median(sales) : null;
 
-  // Pass 2: gauge + guided retry each, against the median.
+  // Pass 2: gauge + guided retry each, against the median, reusing pass 1.
   const out: SourcePriceRow[] = [];
   for (const u of list) {
     const outcome = await resolveVerifiedPrice(
-      { url: u, oem: args.oem, partName: args.partName, crossSourceMedian },
+      {
+        url: u,
+        oem: args.oem,
+        partName: args.partName,
+        subcategory: args.subcategory,
+        crossSourceMedian,
+        initial: firstExtracts.get(u) ?? null,
+      },
       extract,
     );
     out.push({ source_url: u, source_domain: domainOf(u), outcome });

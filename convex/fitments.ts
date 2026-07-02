@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { partFitsConfigMake } from "./partSelector";
 
 /**
  * fitments.ts - Unified part fitment access layer
@@ -53,6 +54,10 @@ const attachPart = async (ctx: { db: any }, fitment: any) => {
   const part = await ctx.db.get(fitment.part_id);
   return { ...fitment, part };
 };
+
+// I1 make guard: drop cross-make contaminant parts
+const dropCrossMake = (expanded: any[], config: { make_id?: any } | null) =>
+  expanded.filter((f) => !f.part || partFitsConfigMake(f.part.make_id, config?.make_id));
 
 // -----------------------------------------------------------------------------
 // Upsert fitment (unified)
@@ -158,7 +163,9 @@ export const listFitmentsExpanded = query({
       .query("part_fitments")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicle_config_id))
       .collect();
-    return await Promise.all(fitments.map((f) => attachPart(ctx, f)));
+    const config = await ctx.db.get(args.vehicle_config_id);
+    const expanded = await Promise.all(fitments.map((f) => attachPart(ctx, f)));
+    return dropCrossMake(expanded, config);
   },
 });
 
@@ -250,7 +257,8 @@ export const listEngineFitmentsExpanded = query({
       .query("part_fitments")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", config._id))
       .collect();
-    return await Promise.all(fitments.map((f) => attachPart(ctx, f)));
+    const expanded = await Promise.all(fitments.map((f) => attachPart(ctx, f)));
+    return dropCrossMake(expanded, config);
   },
 });
 
@@ -329,7 +337,8 @@ export const listTransmissionFitmentsExpanded = query({
       .query("part_fitments")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", config._id))
       .collect();
-    return await Promise.all(fitments.map((f) => attachPart(ctx, f)));
+    const expanded = await Promise.all(fitments.map((f) => attachPart(ctx, f)));
+    return dropCrossMake(expanded, config);
   },
 });
 
@@ -419,6 +428,7 @@ export const listTrimFitmentsExpanded = query({
       .query("part_fitments")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", config._id))
       .collect();
-    return await Promise.all(fitments.map((f) => attachPart(ctx, f)));
+    const expanded = await Promise.all(fitments.map((f) => attachPart(ctx, f)));
+    return dropCrossMake(expanded, config);
   },
 });

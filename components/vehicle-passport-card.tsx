@@ -25,7 +25,10 @@ import {
   formatMileage,
   type VehiclePassportData,
 } from "@/lib/vehicle-passport";
-import { affectedSystemLabel } from "@/lib/vehicle-mod-systems";
+import {
+  affectedSystemLabel,
+  servicesForSystems,
+} from "@/lib/vehicle-mod-systems";
 import { StatusPill } from "@/components/status-pill";
 
 interface VinHistoryPart {
@@ -631,6 +634,7 @@ function VehicleModsSection({
       </p>
     );
   }
+  const flaggedServices = servicesForSystems(affectedSystems);
   return (
     <div className="space-y-2 text-sm">
       {mods.notes ? (
@@ -653,6 +657,16 @@ function VehicleModsSection({
               </span>
             ))}
           </div>
+        </div>
+      )}
+      {flaggedServices.length > 0 && (
+        <div>
+          <p className="text-[10px] font-bold tracking-widest text-muted-foreground">
+            FLAGGED SERVICES
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            {flaggedServices.map((s) => s.name).join(" · ")}
+          </p>
         </div>
       )}
     </div>

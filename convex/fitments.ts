@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { partFitsConfigMake } from "./partSelector";
+import { makesSameFamily } from "./vehicleEnrichment/contentSanitization";
 
 /**
  * fitments.ts - Unified part fitment access layer
@@ -59,6 +60,32 @@ const attachPart = async (ctx: { db: any }, fitment: any) => {
 const dropCrossMake = (expanded: any[], config: { make_id?: any } | null) =>
   expanded.filter((f) => !f.part || partFitsConfigMake(f.part.make_id, config?.make_id));
 
+/**
+ * Family-aware WRITE guard — mirror of vehicleEnrichment/v3mutations
+ * `partMakeCompatibleForWrite`. Refuses to write a fitment for a part whose make
+ * FAMILY differs from the config's (e.g. a Ford Motorcraft battery on an Alfa
+ * config). Universal parts (null make_id) and corporate siblings (VAG, Mopar,
+ * Honda/Acura) pass — those catalogs genuinely share numbers. The read-time
+ * dropCrossMake + serviceParts guard are the backstop; this stops the
+ * contamination from being stored at all through these (legacy/manual) writers.
+ */
+async function assertMakeCompatibleForWrite(
+  ctx: { db: any },
+  part: { make_id?: any } | null,
+  config: { make_id?: any } | null,
+) {
+  if (!part || partFitsConfigMake(part.make_id, config?.make_id)) return;
+  const [partMake, configMake] = await Promise.all([
+    part.make_id ? ctx.db.get(part.make_id) : null,
+    config?.make_id ? ctx.db.get(config.make_id) : null,
+  ]);
+  if (makesSameFamily((partMake as any)?.name, (configMake as any)?.name)) return;
+  throw new Error(
+    `Refusing cross-make fitment: part make "${(partMake as any)?.name ?? part.make_id}" ` +
+      `is not compatible with config make "${(configMake as any)?.name ?? config?.make_id}".`,
+  );
+}
+
 // -----------------------------------------------------------------------------
 // Upsert fitment (unified)
 // -----------------------------------------------------------------------------
@@ -112,6 +139,9 @@ export const upsertPartFitment = mutation({
 
     const part = await ctx.db.get(args.part_id);
     if (!part) throw new Error("The OEM part you referenced couldn't be found.");
+
+    const config = await ctx.db.get(args.vehicle_config_id);
+    await assertMakeCompatibleForWrite(ctx, part, config);
 
     const existing = await ctx.db
       .query("part_fitments")
@@ -200,6 +230,7 @@ export const upsertEnginePartFitment = mutation({
     if (!config) {
       throw new Error("We couldn't find a matching engine configuration for this vehicle.");
     }
+    await assertMakeCompatibleForWrite(ctx, part, config);
 
     const existing = await ctx.db
       .query("part_fitments")
@@ -285,6 +316,7 @@ export const upsertTransmissionPartFitment = mutation({
     if (!config) {
       throw new Error("We couldn't find a matching transmission configuration for this vehicle.");
     }
+    await assertMakeCompatibleForWrite(ctx, part, config);
 
     const existing = await ctx.db
       .query("part_fitments")
@@ -369,6 +401,7 @@ export const upsertTrimPartFitment = mutation({
     if (!config) {
       throw new Error("We couldn't find a matching trim configuration for this vehicle.");
     }
+    await assertMakeCompatibleForWrite(ctx, part, config);
 
     const existing = await ctx.db
       .query("part_fitments")

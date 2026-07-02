@@ -752,7 +752,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
     const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
     const reopenActuals = useMutation(api.job_actuals.reopenByBooking);
-    const simulateNewBookingFromBooking = useMutation(api.bookings.simulateNewBookingFromBooking);
     const actualsPrefill = useQuery(
       api.job_actuals.getPrefillData,
       job ? { bookingId: job._id } : "skip"
@@ -2095,33 +2094,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   compact={isStepIndicatorCompact}
                   className="border-0 bg-transparent px-0 py-0"
                 />
-                {/* TEMP: dev shortcut to open the Pre-Job vehicle check (incl.
-                    Modifications tab) without walking the booking through
-                    vehicle_at_shop. Remove before shipping. */}
-                <button
-                  type="button"
-                  onClick={() => setShowPrejobDialog(true)}
-                  className="w-full rounded-lg border border-dashed border-amber-400 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100"
-                >
-                  🧪 Open Pre-Job form (temp)
-                </button>
-                {/* TEMP: spawn a REAL pending booking on this vehicle with a
-                    mod-affected service, so a flagged "New booking" appears in
-                    the bell via the real getFeed path. Remove before shipping. */}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (!job) return;
-                    try {
-                      await simulateNewBookingFromBooking({ sourceBookingId: job._id });
-                    } catch {
-                      // best-effort dev tool
-                    }
-                  }}
-                  className="w-full rounded-lg border border-dashed border-amber-400 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100"
-                >
-                  🔔 Spawn flagged booking in bell (temp)
-                </button>
                 {actionBar}
               </div>
             ) : null}

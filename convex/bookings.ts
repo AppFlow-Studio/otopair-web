@@ -31,10 +31,12 @@
  * OWNER: Booking Team
  */
 
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, action } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
+import { getStripe } from "../lib/stripe";
 import { isTerminal, validateTransition } from "./booking_status_history";
 import { mintClaimToken } from "./walkin_claims";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
@@ -571,6 +573,70 @@ export const cancelBooking = mutation({
         shopId: existing.shop_id,
         mechanicId: existing.mechanic_id ?? undefined,
         date: existing.scheduled_date,
+      },
+    ]);
+  },
+});
+
+export const rollbackFailedBookingCreation = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return;
+    if (booking.user_id !== user._id) {
+      throw new Error("Not your booking.");
+    }
+    if (booking.status !== "pending") {
+      throw new Error("Only pending bookings can be rolled back.");
+    }
+
+    const payments = await ctx.db
+      .query("payments")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    for (const payment of payments) {
+      const paymentHistory = await ctx.db
+        .query("payment_status_history")
+        .withIndex("by_payment_id", (q) => q.eq("payment_id", payment._id))
+        .collect();
+      for (const row of paymentHistory) await ctx.db.delete(row._id);
+      await ctx.db.delete(payment._id);
+    }
+
+    const bookingHistory = await ctx.db
+      .query("booking_status_history")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    for (const row of bookingHistory) await ctx.db.delete(row._id);
+
+    const outboxRows = await ctx.db
+      .query("notification_outbox")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    for (const row of outboxRows) await ctx.db.delete(row._id);
+
+    const funnels = await ctx.db
+      .query("conversion_funnels")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    for (const funnel of funnels) {
+      await ctx.db.patch(funnel._id, {
+        completed: false,
+        stage: "booking_failed",
+        drop_off_reason: args.reason ?? "booking_creation_rolled_back",
+      });
+    }
+
+    await ctx.db.delete(args.bookingId);
+    await syncBookingAssignments(ctx, [
+      {
+        shopId: booking.shop_id,
+        mechanicId: booking.mechanic_id ?? undefined,
+        date: booking.scheduled_date,
       },
     ]);
   },
@@ -1232,6 +1298,46 @@ function logLaborMinutesDivergence(args: {
   );
 }
 
+type CreateBatchArgs = {
+  user_id: Id<"users">;
+  vin: string;
+  shop_id: Id<"shops">;
+  mechanic_id?: Id<"mechanics">;
+  time_slot_id?: Id<"time_slots">;
+  scheduled_date: string;
+  scheduled_time: string;
+  services: {
+    service_id: Id<"services">;
+    labor_cost: number;
+    parts_cost: number;
+    labor_hours?: number;
+  }[];
+  taxes_and_fees?: number;
+  platform_fee?: number;
+  displayed_labor_minutes?: number;
+  session_id?: string;
+  funnel_id?: Id<"conversion_funnels">;
+  source_recommendation_id?: Id<"job_recommendations">;
+  customer_notes?: string;
+  diagnostic_system?: DiagnosticSystem;
+  selected_service_options?: {
+    service_id: Id<"services">;
+    option_id: Id<"service_options">;
+    option_label: string;
+    option_type?: string;
+  }[];
+  service_variants?: {
+    service_id: Id<"services">;
+    position: string;
+  }[];
+  preauthorized_payment?: {
+    stripe_payment_intent_id: string;
+    idempotency_key: string;
+    hold_amount_cents: number;
+    payment_origin?: "card" | "apple_pay" | "google_pay";
+  };
+};
+
 /**
  * MUTATION: createBatch
  * Create one booking for an appointment (one time slot) with multiple services.
@@ -1246,8 +1352,7 @@ function logLaborMinutesDivergence(args: {
  *
  * RETURNS: Single-element array [bookingId]
  */
-export const createBatch = mutation({
-  args: {
+const createBatchArgs = {
     user_id: v.id("users"),
     vin: v.string(),
     shop_id: v.id("shops"),
@@ -1307,8 +1412,23 @@ export const createBatch = mutation({
         })
       )
     ),
-  },
-  handler: async (ctx, args) => {
+    preauthorized_payment: v.optional(
+      v.object({
+        stripe_payment_intent_id: v.string(),
+        idempotency_key: v.string(),
+        hold_amount_cents: v.number(),
+        payment_origin: v.optional(
+          v.union(
+            v.literal("card"),
+            v.literal("apple_pay"),
+            v.literal("google_pay"),
+          ),
+        ),
+      }),
+    ),
+};
+
+async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise<string[]> {
     if (args.services.length === 0) {
       throw new Error("At least one service is required");
     }
@@ -1677,6 +1797,29 @@ export const createBatch = mutation({
           : undefined,
     });
 
+    if (args.preauthorized_payment) {
+      const paymentId = await ctx.db.insert("payments", {
+        booking_id: bookingId,
+        user_id: args.user_id,
+        shop_id: args.shop_id,
+        amount: total_cost,
+        payment_method: "card",
+        status: "processing",
+        stripe_payment_intent_id:
+          args.preauthorized_payment.stripe_payment_intent_id,
+        idempotency_key: args.preauthorized_payment.idempotency_key,
+        hold_amount_cents: args.preauthorized_payment.hold_amount_cents,
+        payment_origin: args.preauthorized_payment.payment_origin,
+        created_at: now,
+        updated_at: now,
+      });
+      await ctx.scheduler.runAfter(0, internal.payment_status_history.log, {
+        payment_id: paymentId,
+        old_status: undefined,
+        new_status: "processing",
+      });
+    }
+
     await logBookingStatusChange(
       ctx,
       bookingId,
@@ -1722,6 +1865,78 @@ export const createBatch = mutation({
     });
 
     return [bookingId];
+}
+
+async function assertCreateBatchUser(ctx: MutationCtx, userId: Id<"users">) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Not authenticated");
+  const currentUser = await ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+    .unique();
+  if (!currentUser) throw new Error("User record not found.");
+  if (userId !== currentUser._id) {
+    throw new Error("Cannot create another user's booking.");
+  }
+}
+
+export const createBatch = mutation({
+  args: createBatchArgs,
+  handler: async (ctx, args) => {
+    await assertCreateBatchUser(ctx, args.user_id);
+    return await createBatchImpl(ctx, args);
+  },
+});
+
+export const _createBatchAfterAuthorization = internalMutation({
+  args: createBatchArgs,
+  handler: createBatchImpl,
+});
+
+export const confirmPreauthorizedBatch = action({
+  args: createBatchArgs,
+  handler: async (ctx, args): Promise<string[]> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const user = await ctx.runQuery(
+      internal.payments_stripe._getMeByClerkSubject,
+      { clerkUserId: identity.subject },
+    );
+    if (!user) throw new Error("User record not found.");
+    if (args.user_id !== user._id) throw new Error("Cannot create another user's booking.");
+
+    const paymentIntentId = args.preauthorized_payment?.stripe_payment_intent_id;
+    if (!paymentIntentId) throw new Error("Payment authorization is required.");
+
+    const stripe = getStripe();
+    const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+    if (pi.metadata?.userId !== String(user._id)) {
+      throw new Error("Not your payment authorization.");
+    }
+    if (pi.metadata?.shopId !== String(args.shop_id)) {
+      throw new Error("Payment authorization is for a different shop.");
+    }
+    if (
+      pi.status !== "requires_capture" &&
+      pi.status !== "succeeded" &&
+      pi.status !== "processing"
+    ) {
+      throw new Error(`Card authorization failed (status: ${pi.status}).`);
+    }
+
+    try {
+      return await ctx.runMutation(internal.bookings._createBatchAfterAuthorization, args);
+    } catch (err) {
+      try {
+        await ctx.runAction(api.payments_stripe.cancelPreauthorizedPaymentIntent, {
+          paymentIntentId,
+        });
+      } catch {
+        // Best effort: Stripe will expire an uncaptured hold if cancel fails.
+      }
+      throw err;
+    }
   },
 });
 
@@ -1987,7 +2202,7 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
           "another mechanic"
         : "another mechanic";
     } catch {
-      // No alternate free either — message stays generic.
+      // No alternate free either; message stays generic.
     }
   }
 

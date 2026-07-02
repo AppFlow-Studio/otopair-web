@@ -48,6 +48,7 @@ function conflictMessage(
 
 function MiniLane({
   scheduledDate,
+  originalScheduledDate,
   durationMinutes,
   originalStart,
   proposedStart,
@@ -56,6 +57,7 @@ function MiniLane({
   selfBookingId,
 }: {
   scheduledDate: string;
+  originalScheduledDate: string;
   durationMinutes: number;
   originalStart: string;
   proposedStart: string;
@@ -74,7 +76,13 @@ function MiniLane({
 
   const proposedStartMin = hhmmToMinutes(proposedStart);
   const proposedEndMin = hhmmToMinutes(proposedEnd);
-  const originalStartMin = hhmmToMinutes(originalStart);
+  // If the original booking is on a later calendar day, offset its minutes
+  // so it renders to the right of the proposed slot on the same axis.
+  const dayDeltaMin =
+    originalScheduledDate > scheduledDate ? 24 * 60
+    : originalScheduledDate < scheduledDate ? -24 * 60
+    : 0;
+  const originalStartMin = hhmmToMinutes(originalStart) + dayDeltaMin;
   const originalEndMin = originalStartMin + durationMinutes;
 
   const sameDayBounds = sameDay.map((b) => ({
@@ -90,14 +98,11 @@ function MiniLane({
       ...sameDayBounds.map((b) => b.start),
     ) - 30,
   );
-  const maxMinute = Math.min(
-    24 * 60,
-    Math.max(
-      proposedEndMin,
-      originalEndMin,
-      ...sameDayBounds.map((b) => b.end),
-    ) + 30,
-  );
+  const maxMinute = Math.max(
+    proposedEndMin,
+    originalEndMin,
+    ...sameDayBounds.map((b) => b.end),
+  ) + 30;
   const span = Math.max(60, maxMinute - minMinute);
 
   const pct = (minute: number) =>
@@ -110,7 +115,7 @@ function MiniLane({
       <div className="mb-2 flex items-center justify-between text-[11px] text-muted-foreground">
         <span>{formatTimeLabel(`${String(Math.floor(minMinute / 60)).padStart(2, "0")}:${String(minMinute % 60).padStart(2, "0")}`)}</span>
         <span className="font-medium text-foreground">Mechanic&apos;s lane · {scheduledDate}</span>
-        <span>{formatTimeLabel(`${String(Math.floor(maxMinute / 60)).padStart(2, "0")}:${String(maxMinute % 60).padStart(2, "0")}`)}</span>
+        <span>{formatTimeLabel(`${String(Math.floor((maxMinute % (24 * 60)) / 60)).padStart(2, "0")}:${String(maxMinute % 60).padStart(2, "0")}`)}</span>
       </div>
       <div className="relative h-10 rounded-md bg-card">
         {sameDayBounds.map((b, i) => (
@@ -317,11 +322,12 @@ export default function EarlyArrivalConfirmDialog({
                 </div>
                 <MiniLane
                   scheduledDate={preview.proposedScheduledDate}
+                  originalScheduledDate={scheduledDate}
                   durationMinutes={durationMinutes}
                   originalStart={scheduledTime}
                   proposedStart={proposedTime}
                   proposedEnd={proposedEnd}
-                  bookings={dayBookings}
+                  bookings={preview.proposedDateBookings}
                   selfBookingId={String(bookingId)}
                 />
                 {conflictText ? (

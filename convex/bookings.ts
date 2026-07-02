@@ -2073,6 +2073,7 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
       alternateMechanicName: null,
       specificConflictAlternateName: null,
       backfillConflict: null,
+      proposedDateBookings: [],
     };
   }
 
@@ -2268,6 +2269,14 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
     alternateMechanicName,
     specificConflictAlternateName,
     backfillConflict,
+    proposedDateBookings: dayBookings.map((b: any) => ({
+      _id: String(b._id),
+      scheduledDate: b.scheduled_date,
+      scheduledTime: b.scheduled_time,
+      estimatedMinutes: b.estimated_labor_minutes ?? null,
+      status: b.status,
+      mechanicId: b.mechanic_id ? String(b.mechanic_id) : null,
+    })),
   };
 }
 

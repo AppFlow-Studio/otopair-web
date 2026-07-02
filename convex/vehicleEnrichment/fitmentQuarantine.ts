@@ -51,7 +51,7 @@ import {
 import { internal } from "../_generated/api";
 import { Doc, Id } from "../_generated/dataModel";
 import { partFitsConfigMake } from "../partSelector";
-import { matchesForeignBrandSignature } from "./contentSanitization";
+import { matchesForeignBrandSignature, makesSameFamily } from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
 
 /** data_quality value stamped on quarantined fitments — the read-time make
@@ -83,6 +83,7 @@ type ScanPageSummary = {
   contaminatedB: number;
   quarantined: number;
   verified_skipped: number;
+  family_shared_skipped: number;
   byMakePair: Record<string, number>;
   examples: ScanExample[];
   continueCursor: string;
@@ -121,6 +122,7 @@ export const scanCrossMakeFitments = internalMutation({
     let contaminatedB = 0;
     let quarantined = 0;
     let verified_skipped = 0;
+    let family_shared_skipped = 0;
     const byMakePair: Record<string, number> = {};
     const examples: ScanExample[] = [];
 
@@ -137,8 +139,19 @@ export const scanCrossMakeFitments = internalMutation({
       let detector: "A" | "B" | null = null;
       let pairKey: string | null = null;
       if (!partFitsConfigMake(part.make_id, config.make_id)) {
+        const partMake = await makeName(part.make_id);
+        // Corporate siblings (audi↔vw, jeep↔alfa romeo) genuinely share OEM
+        // catalogs — the make_id stamp just records which vehicle was
+        // enriched first. NOT contamination; never quarantine (Jul 2026
+        // dry-run: 87 audi→vw shared-platform rows vs 27 true ford→alfa).
+        if (makesSameFamily(partMake, configMake)) {
+          family_shared_skipped++;
+          byMakePair[`family:${partMake}->${configMake}`] =
+            (byMakePair[`family:${partMake}->${configMake}`] ?? 0) + 1;
+          continue;
+        }
         detector = "A";
-        pairKey = `${await makeName(part.make_id)}->${configMake}`;
+        pairKey = `${partMake}->${configMake}`;
       } else {
         const sig = matchesForeignBrandSignature(part.oem_part_number, configMake);
         if (sig !== null) {
@@ -182,6 +195,7 @@ export const scanCrossMakeFitments = internalMutation({
       contaminatedB,
       quarantined,
       verified_skipped,
+      family_shared_skipped,
       byMakePair,
       examples,
       continueCursor: res.continueCursor,
@@ -394,6 +408,7 @@ type QuarantineReport = {
     contaminatedB: number;
     quarantined: number;
     verified_skipped: number;
+    family_shared_skipped: number;
     byMakePair: Record<string, number>;
     examples: ScanExample[];
   };
@@ -429,6 +444,7 @@ export const runQuarantineScan = internalAction({
       contaminatedB: 0,
       quarantined: 0,
       verified_skipped: 0,
+      family_shared_skipped: 0,
       byMakePair: {},
       examples: [],
     };
@@ -444,6 +460,7 @@ export const runQuarantineScan = internalAction({
       scan.contaminatedB += page.contaminatedB;
       scan.quarantined += page.quarantined;
       scan.verified_skipped += page.verified_skipped;
+      scan.family_shared_skipped += page.family_shared_skipped;
       for (const [pair, n] of Object.entries(page.byMakePair)) {
         scan.byMakePair[pair] = (scan.byMakePair[pair] ?? 0) + n;
       }

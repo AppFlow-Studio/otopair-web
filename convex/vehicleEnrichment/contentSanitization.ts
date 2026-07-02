@@ -208,14 +208,56 @@ const FORD_FAMILY = new Set(["ford", "lincoln", "mercury", "motorcraft"]);
 const MOPAR_FAMILY = new Set(["chrysler", "dodge", "jeep", "ram", "fiat", "alfaromeo", "mopar"]);
 const VAG_FAMILY = new Set(["volkswagen", "audi", "porsche", "vw", "seat", "skoda", "bentley", "lamborghini"]);
 const BMW_FAMILY = new Set(["bmw", "mini", "rollsroyce"]);
+// Makes whose numbering can produce XXXXX-XXXX(X) — includes Honda/Acura,
+// whose fluid/chemical SKUs (08200-9008, 08798-9080) share the shape even
+// though their hard-part format is 5-3-3. Without them here, a genuine Honda
+// fluid reads as a foreign signature on a Honda config (observed in the
+// Jul 2026 quarantine dry-run: 2 false positives on Acura).
 const ASIAN_5_5_FAMILY = new Set([
   "toyota", "lexus", "scion",
   "hyundai", "kia", "genesis",
   "nissan", "infiniti",
   "mitsubishi", "suzuki",
+  "honda", "acura",
 ]);
 const HONDA_FAMILY = new Set(["honda", "acura"]);
 const MERCEDES_FAMILY = new Set(["mercedes", "mercedesbenz", "maybach", "smart"]);
+
+// Corporate part-sharing families: brands whose OEM catalogs genuinely share
+// part numbers across marques (a 5Q0-prefix MQB part fits VW Golf and Audi A3
+// alike; Mopar numbers span Jeep/Alfa/Fiat). A part stamped with a sibling
+// brand's make_id is NOT cross-make contamination — the stamp merely records
+// which vehicle was enriched first. Write-time guards and the quarantine
+// backfill treat same-family as compatible; the strict read-time I1 guard is
+// intentionally left as-is (product decision).
+const CORPORATE_FAMILIES: Array<Set<string>> = [
+  FORD_FAMILY,
+  MOPAR_FAMILY,
+  VAG_FAMILY,
+  BMW_FAMILY,
+  HONDA_FAMILY,
+  MERCEDES_FAMILY,
+  new Set(["toyota", "lexus", "scion"]),
+  new Set(["nissan", "infiniti"]),
+  new Set(["hyundai", "kia", "genesis"]),
+  new Set(["chevrolet", "gmc", "cadillac", "buick", "pontiac", "saturn", "hummer"]),
+  new Set(["jaguar", "landrover", "rangerover"]),
+];
+
+const makeKeyOf = (name: string) => name.toLowerCase().replace(/[-\s]/g, "");
+
+/** True when two make NAMES belong to the same corporate part-sharing family
+ *  (or are the same make). */
+export function makesSameFamily(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  if (!a || !b) return false;
+  const ka = makeKeyOf(a);
+  const kb = makeKeyOf(b);
+  if (ka === kb) return true;
+  return CORPORATE_FAMILIES.some((fam) => fam.has(ka) && fam.has(kb));
+}
 
 type BrandSignature = { label: string; pattern: RegExp; makes: Set<string> };
 

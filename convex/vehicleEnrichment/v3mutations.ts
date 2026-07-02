@@ -5,7 +5,29 @@ import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
 import { isLaborOnlyService } from "../lib/servicePartsReference";
 import { partFitsConfigMake } from "../partSelector";
+import { makesSameFamily } from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
+
+/**
+ * Family-aware make compatibility for WRITE paths. The strict id-equality
+ * guard (partFitsConfigMake) treats Audi ≠ VW, but VAG/Mopar/etc. genuinely
+ * share part numbers across marques — a 5Q0 MQB part stamped `audi` (because
+ * an Audi was enriched first) is a legitimate fitment for a VW config, not
+ * contamination. Observed in the Jul 2026 quarantine dry-run: 87 audi→vw
+ * rows that are shared-platform parts, vs 27 ford→alfa true contaminants.
+ */
+async function partMakeCompatibleForWrite(
+  ctx: any,
+  partMakeId: any,
+  configMakeId: any,
+): Promise<boolean> {
+  if (partFitsConfigMake(partMakeId, configMakeId)) return true;
+  const [partMake, configMake] = await Promise.all([
+    ctx.db.get(partMakeId),
+    ctx.db.get(configMakeId),
+  ]);
+  return makesSameFamily(partMake?.name, configMake?.name);
+}
 
 /**
  * Confidence for chassis/engine-cloned rows: a small haircut off the source
@@ -586,10 +608,12 @@ export const upsertPartAndFitment = internalMutation({
     }
 
     // I1 write-time make guard: a part already known to belong to a different
-    // make must never gain a fitment on this config (the read-time guard in
-    // serviceParts.ts is the backstop; this stops the contamination from being
-    // stored at all). Universal consumables (make_id null) pass.
-    if (part && !partFitsConfigMake(part.make_id, config?.make_id)) {
+    // make FAMILY must never gain a fitment on this config (the read-time
+    // guard in serviceParts.ts is the backstop; this stops the contamination
+    // from being stored at all). Universal consumables (make_id null) pass;
+    // corporate siblings (Audi part on a VW config) pass — those catalogs
+    // genuinely share numbers.
+    if (part && !(await partMakeCompatibleForWrite(ctx, part.make_id, config?.make_id))) {
       console.log(
         `[v8-parts] REJECTED cross-make fitment: part ${args.oem_part_number} has make_id=${part.make_id}, config ${args.vehicle_config_id} has make_id=${config?.make_id}`,
       );
@@ -1333,7 +1357,7 @@ export const cloneFromChassisMatch = internalMutation({
 
     for (const pf of sourceFitments) {
       const part = await ctx.db.get(pf.part_id);
-      if (part && !partFitsConfigMake(part.make_id, targetConfig?.make_id)) {
+      if (part && !(await partMakeCompatibleForWrite(ctx, part.make_id, targetConfig?.make_id))) {
         console.log(`[chassis-clone] skipping cross-make part ${part.oem_part_number} → ${args.target_config_id}`);
         continue;
       }
@@ -1542,7 +1566,7 @@ export const backfillChassisSiblings = internalMutation({
       const siblingConfig = await ctx.db.get(siblingId);
       for (const pf of sourceFitments) {
         const part = await ctx.db.get(pf.part_id);
-        if (part && !partFitsConfigMake(part.make_id, siblingConfig?.make_id)) {
+        if (part && !(await partMakeCompatibleForWrite(ctx, part.make_id, siblingConfig?.make_id))) {
           console.log(`[chassis-backfill] skipping cross-make part ${part.oem_part_number} → sibling ${siblingId}`);
           continue;
         }
@@ -2037,7 +2061,7 @@ export const cloneFromEngineSibling = internalMutation({
     for (const pf of sourceFitments) {
       if (!pf.service_type || !ENGINE_PART_SERVICE_TYPES.has(pf.service_type)) continue;
       const part = await ctx.db.get(pf.part_id);
-      if (part && !partFitsConfigMake(part.make_id, targetConfig?.make_id)) {
+      if (part && !(await partMakeCompatibleForWrite(ctx, part.make_id, targetConfig?.make_id))) {
         console.log(`[engine-clone] skipping cross-make part ${part.oem_part_number} → ${args.target_config_id}`);
         continue;
       }
@@ -2174,7 +2198,7 @@ export const backfillEngineSiblings = internalMutation({
       for (const pf of sourceFitments) {
         if (!pf.service_type || !ENGINE_PART_SERVICE_TYPES.has(pf.service_type)) continue;
         const part = await ctx.db.get(pf.part_id);
-        if (part && !partFitsConfigMake(part.make_id, siblingConfig?.make_id)) {
+        if (part && !(await partMakeCompatibleForWrite(ctx, part.make_id, siblingConfig?.make_id))) {
           console.log(`[engine-backfill] skipping cross-make part ${part.oem_part_number} → sibling ${siblingId}`);
           continue;
         }

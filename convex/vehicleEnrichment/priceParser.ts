@@ -227,8 +227,18 @@ export type ParsedSupersession = {
   source_url: string;
 };
 
-/** Lazy part-number capture: alphanumeric with internal spaces/dashes/dots. */
-const NUM_CAP = "([A-Z0-9][A-Z0-9\\-\\. ]{2,18}?[A-Z0-9])";
+/** Greedy part-number capture: alphanumeric with internal spaces/dashes/dots.
+ *  With the `i` flag this also matches prose words — stripAlphaWords() trims
+ *  letter-only tokens off both ends before the digit-required plausibility
+ *  check, so "Part 11427953129 has been" reduces to the number itself. */
+const NUM_CAP = "([A-Z0-9][A-Z0-9\\-\\. ]{2,24}[A-Z0-9])";
+
+function stripAlphaWords(s: string): string {
+  const toks = s.trim().split(/\s+/);
+  while (toks.length && /^[A-Za-z]+$/.test(toks[0])) toks.shift();
+  while (toks.length && /^[A-Za-z]+$/.test(toks[toks.length - 1])) toks.pop();
+  return toks.join(" ");
+}
 
 /** Primary MPN of a single-product page (microdata / JSON-LD). */
 function pagePrimaryMpn(html: string): string | null {
@@ -244,19 +254,22 @@ export function parseSupersessions(html: string, sourceUrl: string): ParsedSuper
   const domain = hostOf(sourceUrl);
   const out = new Map<string, ParsedSupersession>();
 
-  const push = (oldRaw: string | null | undefined, newRaw: string | null | undefined) => {
-    if (!oldRaw || !newRaw) return;
-    const oldN = normalizeOemNumber(oldRaw);
-    const newN = normalizeOemNumber(newRaw);
-    // Both sides must look like part numbers (has a digit, sane length) and
-    // differ — this filters prose the capture regex can latch onto ("part",
-    // "been", section headings).
-    const plausible = (s: string) => s.length >= 5 && s.length <= 15 && /\d/.test(s);
-    if (!plausible(oldN) || !plausible(newN) || oldN === newN) return;
+  // Both sides must look like part numbers (has a digit, sane length) and
+  // differ — this filters prose the capture regex can latch onto ("part",
+  // "been", section headings).
+  const plausible = (s: string) => s.length >= 5 && s.length <= 15 && /\d/.test(s);
+
+  /** Returns true when the pair was accepted. */
+  const push = (oldRaw: string | null | undefined, newRaw: string | null | undefined): boolean => {
+    if (!oldRaw || !newRaw) return false;
+    const oldN = normalizeOemNumber(stripAlphaWords(oldRaw));
+    const newN = normalizeOemNumber(stripAlphaWords(newRaw));
+    if (!plausible(oldN) || !plausible(newN) || oldN === newN) return false;
     const key = `${oldN}->${newN}`;
     if (!out.has(key)) {
       out.set(key, { old_number: oldN, new_number: newN, source_domain: domain, source_url: sourceUrl });
     }
+    return true;
   };
 
   // Work on tag-stripped text so markup can't split a phrase.
@@ -275,8 +288,11 @@ export function parseSupersessions(html: string, sourceUrl: string): ParsedSuper
   let m: RegExpExecArray | null;
   const successorsFromPairs = new Set<string>();
   while ((m = pairRe.exec(text)) !== null) {
-    push(m[1], m[2]);
-    successorsFromPairs.add(normalizeOemNumber(m[2]));
+    // Only a pair whose OLD side is a real part number claims the successor —
+    // a prose left side ("This part has been…") must not block pattern B.
+    if (push(m[1], m[2])) {
+      successorsFromPairs.add(normalizeOemNumber(stripAlphaWords(m[2])));
+    }
   }
 
   // Patterns B/C are page-scoped: they pair with the page's own part number,
@@ -288,7 +304,7 @@ export function parseSupersessions(html: string, sourceUrl: string): ParsedSuper
     // would otherwise falsely supersede the page's own part).
     const byRe = new RegExp(`(?:replaced|superseded)\\s+by[:#\\s]*${NUM_CAP}`, "gi");
     while ((m = byRe.exec(text)) !== null) {
-      if (successorsFromPairs.has(normalizeOemNumber(m[1]))) continue;
+      if (successorsFromPairs.has(normalizeOemNumber(stripAlphaWords(m[1])))) continue;
       push(mpn, m[1]);
     }
 

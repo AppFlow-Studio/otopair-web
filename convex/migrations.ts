@@ -504,18 +504,3 @@ export const dedupeVehiclesByVin = mutation({
     };
   },
 });
-
-export const clearAllModifications = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const passports = await ctx.db.query("vehicle_passports").collect();
-    let cleared = 0;
-    for (const p of passports) {
-      if (p.modifications !== undefined) {
-        await ctx.db.patch(p._id, { modifications: undefined });
-        cleared++;
-      }
-    }
-    return { total: passports.length, cleared };
-  },
-});

@@ -48,7 +48,6 @@ import {
   type PricedPartSnapshotRow,
 } from "./booking_quotes";
 import { deriveServiceVariantsFromOptions } from "./lib/brakeScope";
-import { affectedServiceSlugs, normalizeSlug } from "../lib/vehicle-mod-systems";
 import {
   detectTier,
   resolveLaborHours,
@@ -14151,55 +14150,5 @@ export const getTopBookedServicesByUser = query({
       }),
     );
     return results.filter((r): r is NonNullable<typeof r> => r !== null);
-  },
-});
-
-// TEMP dev tool: clone a booking into a fresh "pending_shop_acceptance" booking
-// on the same vehicle, swapping in a service that the vehicle's recorded mods
-// affect — so a real, flagged "New booking" surfaces in the bell. Remove with
-// the temp UI buttons before shipping.
-export const simulateNewBookingFromBooking = mutation({
-  args: { sourceBookingId: v.id("bookings") },
-  handler: async (ctx, args) => {
-    const src: any = await ctx.db.get(args.sourceBookingId);
-    if (!src) throw new Error("Source booking not found.");
-
-    // Pick a service the vehicle's mods affect (separator-insensitive slug match).
-    let serviceId: any = src.service_ids?.[0] ?? null;
-    const passport: any = await ctx.db
-      .query("vehicle_passports")
-      .withIndex("by_vin", (q: any) => q.eq("vin", src.vin))
-      .first();
-    const mods = passport?.modifications;
-    if (mods?.has_mods === true) {
-      const affected = affectedServiceSlugs(mods.affected_systems ?? []);
-      if (affected.size > 0) {
-        const services: any[] = await ctx.db.query("services").collect();
-        const match = services.find(
-          (s) => s.slug && affected.has(normalizeSlug(s.slug)),
-        );
-        if (match) serviceId = match._id;
-      }
-    }
-
-    const now = Date.now();
-    const bookingId = await ctx.db.insert("bookings", {
-      user_id: src.user_id,
-      vin: src.vin,
-      vehicle_id: src.vehicle_id,
-      shop_id: src.shop_id,
-      mechanic_id: src.mechanic_id,
-      service_ids: serviceId ? [serviceId] : (src.service_ids ?? []),
-      scheduled_date: src.scheduled_date,
-      scheduled_time: src.scheduled_time,
-      labor_cost: src.labor_cost ?? 0,
-      parts_cost: src.parts_cost ?? 0,
-      total_cost: src.total_cost ?? null,
-      status: "pending_shop_acceptance",
-      created_at: now,
-      updated_at: now,
-    } as any);
-
-    return { bookingId };
   },
 });

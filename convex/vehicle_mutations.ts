@@ -7,6 +7,8 @@
 
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
+import { sanitizePartNumber } from "./vehicleEnrichment/contentSanitization";
+import { normalizeOemNumber } from "./vehicleEnrichment/priceParser";
 
 // ============================================
 // INTERNAL QUERIES
@@ -404,6 +406,10 @@ export const storeVehicleSpecs = internalMutation({
     engineId: v.id("engines"),
     specs: v.any(),
     confidenceScore: v.float64(),
+    // Make name for part-number sanitization (cross-make signature + per-make
+    // format). Optional for older callers; without it only the generic
+    // plausibility check runs.
+    make: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const s = args.specs;
@@ -421,8 +427,18 @@ export const storeVehicleSpecs = internalMutation({
     ];
 
     for (const entry of partEntries) {
-      const pn = entry.partNumber?.trim();
-      if (!pn || pn === "N/A") continue;
+      const raw = entry.partNumber?.trim();
+      if (!raw || raw === "N/A") continue;
+
+      // Same write-time validation as the enrichment choke point: rejects
+      // cross-make brand signatures and per-make format misses (a Motorcraft
+      // number can't enter the catalog stamped as an Alfa spec, no matter
+      // which fetch path produced it).
+      const pn = sanitizePartNumber(raw, args.make);
+      if (!pn) {
+        console.warn(`[storeVehicleSpecs] REJECTED part number "${raw}" (${entry.category}) for make=${args.make ?? "?"}`);
+        continue;
+      }
 
       // Upsert into oem_parts
       const existing = await ctx.db
@@ -434,6 +450,7 @@ export const storeVehicleSpecs = internalMutation({
         // TODO(ts-fix): schema lacks `confidence` field; required `name` not provided; cast to preserve runtime behavior
         await ctx.db.insert("oem_parts", {
           oem_part_number: pn.toUpperCase(),
+          oem_part_number_normalized: normalizeOemNumber(pn),
           category: entry.category,
           confidence: args.confidenceScore,
           created_at: Date.now(),

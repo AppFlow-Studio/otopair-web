@@ -5,7 +5,7 @@ import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
 import { isLaborOnlyService } from "../lib/servicePartsReference";
 import { partFitsConfigMake } from "../partSelector";
-import { makesSameFamily } from "./contentSanitization";
+import { makesSameFamily, sanitizePartNumber } from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
 
 /**
@@ -567,10 +567,25 @@ export const upsertPartAndFitment = internalMutation({
 
     const config = await ctx.db.get(args.vehicle_config_id);
 
+    // CHOKE-POINT sanitization: every part write funnels through this mutation
+    // (batch1/batch2 pipeline, diagnoseVin backfills, future admin tools), so
+    // the cross-make + per-make-format validation runs here regardless of
+    // which fetch path sourced the number. The pipeline call sites also
+    // sanitize at extraction (better logging/context there) — this is the
+    // guarantee that no NEW path can ever skip it.
+    const configMakeDoc = config?.make_id ? await ctx.db.get(config.make_id) : null;
+    const cleanNumber = sanitizePartNumber(args.oem_part_number, configMakeDoc?.name);
+    if (!cleanNumber) {
+      console.log(
+        `[v8-parts] REJECTED part number at write: "${args.oem_part_number}" (${args.subcategory}) failed sanitization for make=${configMakeDoc?.name ?? "?"}`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "invalid_number" as const };
+    }
+
     // Upsert OEM part — identity is the NORMALIZED number so formatting
     // variants ("5Q0 698 451 A" vs "5Q0698451A") resolve to one row instead of
     // splitting fitments and price history across duplicates.
-    const normalized = normalizeOemNumber(args.oem_part_number);
+    const normalized = normalizeOemNumber(cleanNumber);
     let part = await ctx.db
       .query("oem_parts")
       .withIndex("by_part_number_normalized", (q) =>
@@ -583,7 +598,7 @@ export const upsertPartAndFitment = internalMutation({
       part = await ctx.db
         .query("oem_parts")
         .withIndex("by_part_number", (q) =>
-          q.eq("oem_part_number", args.oem_part_number)
+          q.eq("oem_part_number", cleanNumber)
         )
         .first();
     }
@@ -639,7 +654,7 @@ export const upsertPartAndFitment = internalMutation({
       });
     } else {
       partId = await ctx.db.insert("oem_parts", {
-        oem_part_number: args.oem_part_number,
+        oem_part_number: cleanNumber,
         oem_part_number_normalized: normalized,
         name: args.name,
         category: args.category,

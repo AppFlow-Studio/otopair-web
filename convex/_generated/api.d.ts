@@ -244,6 +244,7 @@ import type * as seeds_wireUpChelala from "../seeds/wireUpChelala.js";
 import type * as serviceParts from "../serviceParts.js";
 import type * as service_categories from "../service_categories.js";
 import type * as service_insights from "../service_insights.js";
+import type * as service_intervals_queries from "../service_intervals_queries.js";
 import type * as service_options from "../service_options.js";
 import type * as service_vehicle_specs from "../service_vehicle_specs.js";
 import type * as services from "../services.js";
@@ -605,6 +606,7 @@ declare const fullApi: ApiFromModules<{
   serviceParts: typeof serviceParts;
   service_categories: typeof service_categories;
   service_insights: typeof service_insights;
+  service_intervals_queries: typeof service_intervals_queries;
   service_options: typeof service_options;
   service_vehicle_specs: typeof service_vehicle_specs;
   services: typeof services;

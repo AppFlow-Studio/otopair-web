@@ -28,6 +28,7 @@ import { aggregatePartsBand, type PartsRoleInput } from "./partsBand";
 import { resolveRoleQuantity, type VehicleSpecBundle } from "./partRoleQuantity";
 import { roleForSubcategory } from "./servicePartsReference";
 import { isNonPooledPriceType, isPoisonPriceType, REPAIRPAL_ENDPOINT_PRICE_TYPE } from "./priceTypes";
+import { partFitsConfigMake } from "../partSelector";
 
 /** PARTS_SOURCE_REAL_PRIMARY gates the real per-config parts band in
  *  resolvePartsCost. Default OFF — when unset, resolvePartsCost output is
@@ -464,6 +465,8 @@ export async function resolvePartsCost(
       const roles: PartsRoleInput[] = [];
       for (const f of fitments) {
         const part = await ctx.db.get(f.part_id);
+        // I1 make guard: drop cross-make contaminant parts
+        if (part && !partFitsConfigMake((part as any).make_id, cfg.make_id)) continue;
         const sub = (part as any)?.subcategory ?? null;
         const roleSpec = roleForSubcategory(slug, sub, (part as any)?.category);
         const serviceRole = f.service_role ?? roleSpec?.serviceRole;

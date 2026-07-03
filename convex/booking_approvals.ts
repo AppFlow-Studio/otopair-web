@@ -35,6 +35,10 @@ import { postjobPartValidator } from "./lib/vehicle_passports";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
+import {
+  buildCustomerInspectionSnapshot,
+  type CustomerInspectionSnapshot,
+} from "../lib/inspection-measurements";
 
 const SLA_MS = 24 * 60 * 60 * 1000;
 const MIN_MANUAL_JUSTIFICATION_LEN = 12;
@@ -228,6 +232,21 @@ type SubmitArgs = {
   submittedByUserId?: Id<"users">;
 };
 
+async function getInspectionSnapshotForBooking(
+  ctx: any,
+  bookingId: Id<"bookings">,
+): Promise<CustomerInspectionSnapshot | null> {
+  const actual = await ctx.db
+    .query("job_actuals")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
+    .order("desc")
+    .first();
+  return buildCustomerInspectionSnapshot({
+    tire_tread: actual?.prejob_report?.tire_tread,
+    brakes: actual?.prejob_report?.brakes,
+  });
+}
+
 async function performSubmission(
   ctx: any,
   args: SubmitArgs,
@@ -248,6 +267,10 @@ async function performSubmission(
     laborHours: args.laborHours,
     laborRateCents: args.laborRateCents,
   });
+  const inspectionSnapshot = await getInspectionSnapshotForBooking(
+    ctx,
+    args.bookingId,
+  );
 
   // Fixed-price bookings: parts/labor updates are audit-only. Customer
   // agreed to a flat price (shop_service_fixed_prices); mechanic edits get
@@ -265,6 +288,7 @@ async function performSubmission(
       notes: args.notes,
       submittedByUserId: args.submittedByUserId,
       priced,
+      inspectionSnapshot,
     });
   }
 
@@ -323,6 +347,7 @@ async function performSubmission(
     labor_hours: args.laborHours,
     labor_rate_cents: args.laborRateCents,
     notes: args.notes,
+    inspection_snapshot: inspectionSnapshot ?? undefined,
     prior_ceiling_cents: ceiling,
     ceiling_after_decision_cents: inRange ? priced.total_cents : undefined,
     sla_expires_at_ms: inRange ? undefined : now + SLA_MS,
@@ -419,6 +444,7 @@ async function performFixedPriceInformationalSubmission(
     notes: string | undefined;
     submittedByUserId: Id<"users"> | undefined;
     priced: SetPriceComputed;
+    inspectionSnapshot: CustomerInspectionSnapshot | null;
   },
 ): Promise<{
   approvalId: Id<"booking_approvals">;
@@ -445,6 +471,7 @@ async function performFixedPriceInformationalSubmission(
     labor_hours: args.laborHours,
     labor_rate_cents: args.laborRateCents,
     notes: args.notes,
+    inspection_snapshot: args.inspectionSnapshot ?? undefined,
     prior_ceiling_cents: lockedCents,
     ceiling_after_decision_cents: lockedCents,
     submitted_at_ms: now,
@@ -719,6 +746,7 @@ export const getOpenApprovalForBooking = query({
       labor_hours: open.labor_hours,
       labor_rate_cents: open.labor_rate_cents,
       notes: open.notes,
+      inspection_snapshot: open.inspection_snapshot,
       submitted_at_ms: open.submitted_at_ms,
       sla_expires_at_ms: open.sla_expires_at_ms,
       disclosed_range_low_cents: (booking as any).disclosed_range_low_cents,
@@ -785,6 +813,143 @@ export const getEffectiveQuoteForBooking = query({
       taxCents,
       feeCents,
       partsSnapshot: eff.parts_snapshot ?? [],
+    };
+  },
+});
+
+/**
+ * Customer-facing twin of `getEffectiveQuoteForBooking`. Drives the itemized
+ * breakdown on the card-hold re-authorization screen (`ReauthView`) so the
+ * customer sees what parts/labor make up the hold they're confirming.
+ *
+ * Source priority, both normalized into ONE cents-based shape so the client
+ * has a single render path:
+ *   1. The latest APPROVED approval row (the estimate that set the running
+ *      ceiling). `parts_snapshot` is the post-job validator shape where `cost`
+ *      is in DOLLARS — converted to cents here.
+ *   2. Fallback: the booking's original frozen quote (`quoted_breakdown` +
+ *      `priced_parts_snapshot`, already cents-based) when no adjustment was
+ *      ever approved — the in-range reauth case.
+ * Returns null only when neither source has usable data; the client then
+ * keeps its total-only layout.
+ */
+export const getReauthBreakdownForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  returns: v.union(
+    v.null(),
+    v.object({
+      source: v.union(v.literal("approved"), v.literal("quote")),
+      cycle: v.union(v.string(), v.null()),
+      totalCents: v.number(),
+      partsCents: v.number(),
+      laborCents: v.number(),
+      taxCents: v.number(),
+      feeCents: v.number(),
+      laborHours: v.union(v.number(), v.null()),
+      notes: v.union(v.string(), v.null()),
+      parts: v.array(
+        v.object({
+          part_name: v.string(),
+          oem_number: v.optional(v.string()),
+          brand: v.optional(v.string()),
+          quantity: v.number(),
+          unit_price_cents: v.number(),
+          line_total_cents: v.number(),
+          justification_text: v.optional(v.string()),
+        }),
+      ),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    if (String((booking as any).user_id) !== String(user._id)) return null;
+
+    // ── Primary: latest approved approval row ────────────────────────────
+    const rows = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+    const APPROVED = new Set(["approved", "auto_approved_within_range"]);
+    const eff = rows.find(
+      (r: any) =>
+        APPROVED.has(r.decision ?? "") &&
+        r.parts_subtotal_cents != null &&
+        r.labor_cents != null,
+    );
+
+    if (eff) {
+      const parts = ((eff.parts_snapshot ?? []) as any[])
+        .filter((p) => !p?.not_used && p?.supplied_by !== "customer")
+        .map((p) => {
+          const quantity = Math.max(0, p?.quantity ?? 1);
+          const unitPriceCents = Math.round((p?.cost ?? 0) * 100);
+          return {
+            part_name: (p?.part_name ?? "Part") as string,
+            ...(p?.oem_number ? { oem_number: p.oem_number as string } : {}),
+            ...(p?.brand ? { brand: p.brand as string } : {}),
+            quantity,
+            unit_price_cents: unitPriceCents,
+            line_total_cents: Math.round((p?.cost ?? 0) * quantity * 100),
+            ...(p?.justification_text
+              ? { justification_text: p.justification_text as string }
+              : {}),
+          };
+        });
+      return {
+        source: "approved" as const,
+        cycle: (eff.cycle ?? null) as string | null,
+        totalCents: eff.mechanic_set_price_cents as number,
+        partsCents: (eff.parts_subtotal_cents ?? 0) as number,
+        laborCents: (eff.labor_cents ?? 0) as number,
+        taxCents: (eff.tax_cents ?? 0) as number,
+        feeCents: (eff.service_fee_cents ?? 0) as number,
+        laborHours: (eff.labor_hours ?? null) as number | null,
+        notes: (eff.notes ?? null) as string | null,
+        parts,
+      };
+    }
+
+    // ── Fallback: booking's original frozen quote ────────────────────────
+    const qb = (booking as any).quoted_breakdown as
+      | {
+          parts_cents: number;
+          labor_cents: number;
+          tax_cents: number;
+          service_fee_cents: number;
+        }
+      | undefined;
+    const snapshot = ((booking as any).priced_parts_snapshot ?? []) as any[];
+    if (!qb && snapshot.length === 0) return null;
+
+    const partsCents = qb?.parts_cents ?? 0;
+    const laborCents = qb?.labor_cents ?? 0;
+    const taxCents = qb?.tax_cents ?? 0;
+    const feeCents = qb?.service_fee_cents ?? 0;
+    const parts = snapshot.map((p) => ({
+      part_name: (p?.part_name ?? "Part") as string,
+      ...(p?.oem_number ? { oem_number: p.oem_number as string } : {}),
+      ...(p?.brand ? { brand: p.brand as string } : {}),
+      quantity: Math.max(0, p?.quantity ?? 1),
+      unit_price_cents: (p?.unit_price_cents ?? 0) as number,
+      line_total_cents: (p?.line_total_cents ?? 0) as number,
+    }));
+    return {
+      source: "quote" as const,
+      cycle: null,
+      totalCents: partsCents + laborCents + taxCents + feeCents,
+      partsCents,
+      laborCents,
+      taxCents,
+      feeCents,
+      laborHours: null,
+      notes: null,
+      parts,
     };
   },
 });

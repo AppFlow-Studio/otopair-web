@@ -18,7 +18,9 @@ import {
 } from "lucide-react";
 import { StatusPill } from "@/components/status-pill";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
-import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
+import MultiPointInspectionDialog, {
+  type InspectionInputPayload,
+} from "@/components/multi-point-inspection-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import ConfirmationDialog from "@/components/confirmation-dialog";
@@ -250,6 +252,7 @@ export default function MechanicDashboard() {
 
   async function handleStartAction(
     payload: PreJobSurveyPayload,
+    inspection: InspectionInputPayload,
     action: "close" | "start"
   ) {
     if (!workflowBookingId) return;
@@ -266,13 +269,15 @@ export default function MechanicDashboard() {
         await savePrejob({
           bookingId: workflowBookingId,
           prejob: payload,
+          inspection,
         });
-        setToast("Pre-job vehicle check saved");
+        setToast("Pre-job inspection saved");
         closeWorkflowDialog();
       } else if (isNewCycle) {
         await commitInspectionAndAwaitEstimate({
           bookingId: workflowBookingId,
           prejob: payload,
+          inspection,
         });
         // Swap dialog body to the estimate form — same workflow booking id,
         // new mode. Do NOT close.
@@ -281,6 +286,7 @@ export default function MechanicDashboard() {
         await startWithPrejob({
           bookingId: workflowBookingId,
           prejob: payload,
+          inspection,
         });
         setToast("Booking started");
         closeWorkflowDialog();
@@ -796,7 +802,7 @@ export default function MechanicDashboard() {
         ) : null}
       </ConfirmationDialog>
 
-      <PreJobSurveyDialog
+      <MultiPointInspectionDialog
         open={workflowBookingId !== null && workflowMode === "prejob"}
         bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
@@ -816,6 +822,14 @@ export default function MechanicDashboard() {
         }
         onClose={closeWorkflowDialog}
         onSubmit={handleStartAction}
+        onSaveDraft={async (payload, inspection) => {
+          if (!workflowBookingId) return;
+          await savePrejob({
+            bookingId: workflowBookingId,
+            prejob: payload,
+            inspection,
+          });
+        }}
       />
 
       <DiagnosticChecklistDialog

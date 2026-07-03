@@ -653,11 +653,26 @@ const RENDER_TOOLS: OtoToolSchema[] = [
                 description:
                   "\"due\" = the user says this service is past-due; \"light_on\" = a dashboard light flagged it; \"completed\" = the user says they ALREADY HAD this service done (e.g. \"I did my brakes\", \"just changed the oil\", \"replaced the battery last week\"). \"completed\" clears the flag and records the service done — NEVER use \"due\" for a service the user reports as finished.",
               },
+              service_mileage: {
+                type: "number",
+                description:
+                  "Optional, kind:\"completed\" only. The odometer at which THIS service was performed when the user states a PAST mileage (e.g. \"oil change at 89,000\" while currently at 90,000). This is the service's OWN mileage — do NOT put it in the top-level current-odometer `mileage` field. Omit if the user gave no service mileage.",
+              },
+              service_age_days: {
+                type: "number",
+                description:
+                  "Optional, kind:\"completed\" only. How many days ago the service was done, for relative phrasing — \"a week ago\" → 7, \"2 weeks ago\" → 14, \"last month\" → 30, \"yesterday\" → 1. The server resolves it to (now − days). Use this for relative time; omit if the user gave no time.",
+              },
+              service_date: {
+                type: "number",
+                description:
+                  "Optional, kind:\"completed\" only. Absolute Unix ms timestamp the service was performed — use ONLY when the user names a concrete date. Prefer service_age_days for relative phrases. Wins over service_age_days if both are set.",
+              },
             },
             required: ["service_slug", "kind"],
           },
           description:
-            "Optional. Array of service claims the user stated. Each entry has a service_slug + a kind: \"due\"/\"light_on\" FLAG a service that needs attention; \"completed\" RECORDS a service the user says they already had done (clears the flag, improves health). e.g. overdue oil change → due; \"I did my brakes 2 weeks ago\" → {brake_pad_replacement, completed}.",
+            "Optional. Array of service claims the user stated. Each entry has a service_slug + a kind: \"due\"/\"light_on\" FLAG a service that needs attention; \"completed\" RECORDS a service the user says they already had done (clears the flag, improves health). For a \"completed\" service done in the PAST, attach service_mileage (\"at 89,000\") and/or service_age_days (\"a week ago\" → 7) so the maintenance schedule re-anchors to WHEN it was actually done, not to today. e.g. overdue oil change → {oil_change, due}; \"I did my brakes 2 weeks ago\" → {brake_pad_replacement, completed, service_age_days: 14}; \"changed the oil at 89k, I'm at 90k now\" → mileage:90000 + {oil_change, completed, service_mileage: 89000}.",
         },
         fault_lights: {
           type: "array",

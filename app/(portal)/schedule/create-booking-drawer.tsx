@@ -29,6 +29,8 @@ import TireSpecPicker, { type TireSpecs } from "@/components/booking/tire-spec-p
 import DatePicker from "@/components/ui/date-picker";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 import VehicleYMMTPicker from "./vehicle-ymmt-picker";
+import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
+import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -621,8 +623,8 @@ export default function CreateBookingDrawer({
               brand: r.brand ?? "",
               quantity: String(r.quantity),
               unit_price: r.price_unknown
-                ? ""
-                : String(r.unit_price_cents / 100),
+                ? "0.00"
+                : formatFixedCentCurrency(r.unit_price_cents / 100),
               catalog_origin: true,
               price_unknown: r.price_unknown === true,
               part_id: r.part_id ?? undefined,
@@ -675,7 +677,7 @@ export default function CreateBookingDrawer({
             oem_number: "",
             brand: "",
             quantity: "1",
-            unit_price: "",
+            unit_price: "0.00",
             catalog_origin: false,
             price_unknown: false,
           },
@@ -2168,14 +2170,16 @@ export default function CreateBookingDrawer({
                               </div>
                               <div>
                                 <DrawerFieldLabel>Unit price ($)</DrawerFieldLabel>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  step={0.01}
-                                  placeholder={p.price_unknown ? "price?" : "0.00"}
+                                <FixedCentCurrencyInput
+                                  placeholder="0.00"
                                   value={p.unit_price}
-                                  onChange={(e) =>
-                                    setCatalogPartField(sid, idx, "unit_price", e.target.value)
+                                  onValueChange={(value) =>
+                                    setCatalogPartField(
+                                      sid,
+                                      idx,
+                                      "unit_price",
+                                      value,
+                                    )
                                   }
                                   className={drawerInputClassName}
                                 />

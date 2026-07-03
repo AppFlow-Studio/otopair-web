@@ -161,6 +161,16 @@ crons.interval(
   (internal as any).lib.push_dispatcher.dispatchPendingPush,
 );
 
+// Part prices: nightly re-verification of parts whose newest price row is
+// stale (default > 30 days). Spends Firecrawl credits, so the action no-ops
+// unless PARTS_PRICE_REFRESH_BUDGET (parts per night) is set > 0 in env.
+crons.daily(
+  "refresh-stale-part-prices",
+  { hourUTC: 9, minuteUTC: 0 },
+  internal.vehicleEnrichment.priceRefresh.refreshStalePrices,
+  {},
+);
+
 // Labor times: fold freshly-recorded shop data into the labor median every 6h.
 // Job finalize already recomputes inline; this catches (config, service) pairs
 // touched by labor_quote_snapshots so empirical accrues continuously without a

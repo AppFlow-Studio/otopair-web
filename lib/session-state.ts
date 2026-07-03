@@ -3,6 +3,7 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { useBookingStore } from "@/stores/useBookingStore";
 import { useOnboardingStore } from "@/stores/useOnboardingStore";
 import { usePaymentStore } from "@/stores/usePaymentStore";
+import { useSettingsOverlayStore } from "@/stores/useSettingsOverlayStore";
 import { useVehicleStore } from "@/stores/useVehicleStore";
 
 export function clearUserScopedStores() {
@@ -10,6 +11,7 @@ export function clearUserScopedStores() {
   useBookingStore.getState().clearBookingState();
   useVehicleStore.getState().clearVehicles();
   usePaymentStore.getState().clearPaymentMethods();
+  useSettingsOverlayStore.getState().reset();
   useOnboardingStore.getState().reset();
   useAuthStore.getState().reset();
 }

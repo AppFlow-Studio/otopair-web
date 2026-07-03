@@ -79,6 +79,8 @@ export const log = internalMutation({
     error_message: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const payment = await ctx.db.get(args.payment_id);
+    if (!payment) return;
     return await ctx.db.insert("payment_status_history", {
       payment_id: args.payment_id,
       old_status: args.old_status,

@@ -20,6 +20,63 @@ import { symptomForServiceSlug } from "./lib/serviceSymptoms";
 import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Sanity ceiling for a user-stated past service mileage (matches useUpdateMileage).
+const MILEAGE_CEILING = 1_500_000;
+
+/**
+ * Resolve the odometer to anchor a COMPLETED service to. Prefers the user-stated
+ * past at-mileage ("oil change at 89,000") when it's a sane value at/below the
+ * current odometer; otherwise returns undefined so the caller falls back to the
+ * current odometer. Deliberately does NOT use the monotonic backward guard — a
+ * past service mileage is legitimately BELOW the current reading, and routing it
+ * through validateMileageUpdate would reject it as "backward".
+ */
+function resolveServiceMileage(
+  serviceMileage: number | undefined,
+  currentOdometer: number | null,
+): number | undefined {
+  if (
+    serviceMileage != null &&
+    Number.isFinite(serviceMileage) &&
+    serviceMileage > 0 &&
+    serviceMileage <= MILEAGE_CEILING &&
+    (currentOdometer == null || serviceMileage <= currentOdometer)
+  ) {
+    return serviceMileage;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve WHEN a COMPLETED service happened. Precedence: an absolute service_date
+ * (ms, sane past timestamp) wins; else service_age_days ("a week ago" → 7)
+ * resolved server-side as now − days; else undefined so the caller falls back to
+ * now. Future or implausible values are ignored.
+ */
+function resolveServiceDate(
+  serviceDate: number | undefined,
+  serviceAgeDays: number | undefined,
+  now: number,
+): number | undefined {
+  if (
+    serviceDate != null &&
+    Number.isFinite(serviceDate) &&
+    serviceDate > 0 &&
+    serviceDate <= now
+  ) {
+    return serviceDate;
+  }
+  if (
+    serviceAgeDays != null &&
+    Number.isFinite(serviceAgeDays) &&
+    serviceAgeDays > 0 &&
+    serviceAgeDays <= 36500
+  ) {
+    return now - serviceAgeDays * DAY_MS;
+  }
+  return undefined;
+}
 
 // Shared arg validators — one definition reused by the public mutation, the
 // internal director writer, and the director action.
@@ -30,6 +87,17 @@ const serviceClaimsValidator = v.optional(
       // "due" / "light_on" FLAG the service (it needs attention); "completed"
       // RECORDS it done (clears the flag + resets the due clock).
       kind: v.union(v.literal("due"), v.literal("light_on"), v.literal("completed")),
+      // Past-service anchor — kind:"completed" only. When the user reports a
+      // service done in the PAST, these say WHEN / at what mileage so the
+      // pipeline re-anchors the due clock to THEN, not to now/current.
+      //   service_mileage  — odometer at which THIS service was done ("at 89,000"),
+      //                      distinct from the top-level current odometer.
+      //   service_age_days — how many days ago ("a week ago" → 7); resolved
+      //                      server-side to now − days.
+      //   service_date     — absolute ms-epoch it was done; wins over age_days.
+      service_mileage: v.optional(v.number()),
+      service_age_days: v.optional(v.number()),
+      service_date: v.optional(v.number()),
     }),
   ),
 );
@@ -37,7 +105,13 @@ const faultLightsValidator = v.optional(v.array(v.string()));
 
 type VehicleTruthInputs = {
   mileage?: number;
-  service_claims?: Array<{ service_slug: string; kind: "due" | "light_on" | "completed" }>;
+  service_claims?: Array<{
+    service_slug: string;
+    kind: "due" | "light_on" | "completed";
+    service_mileage?: number;
+    service_age_days?: number;
+    service_date?: number;
+  }>;
   fault_lights?: string[];
   // Set true ONLY after the user explicitly reconfirms a large-but-real forward
   // mileage jump (reason "absurd_forward"). Never overrides "backward" or
@@ -116,13 +190,23 @@ async function applyVehicleTruthImpl(
   const servicesCompleted: string[] = [];
   const codesToAdd: string[] = [];
   const codesToClear: string[] = [];
-  const completedRecordTypes = new Set<string>();
+  // recordType → the past anchor (mileage/date) the user reported for it. A
+  // completed claim with no past values resolves to undefined → today/current.
+  const completedRecordAnchors = new Map<
+    string,
+    { mileage?: number; date?: number }
+  >();
   for (const claim of args.service_claims ?? []) {
     if (claim.kind === "completed") {
       const code = symptomForServiceSlug(claim.service_slug);
       if (code) codesToClear.push(code);
       const recordType = recordTypeForServiceSlug(claim.service_slug);
-      if (recordType) completedRecordTypes.add(recordType);
+      if (recordType) {
+        completedRecordAnchors.set(recordType, {
+          mileage: resolveServiceMileage(claim.service_mileage, owner.mileage ?? null),
+          date: resolveServiceDate(claim.service_date, claim.service_age_days, now),
+        });
+      }
       servicesCompleted.push(claim.service_slug);
     } else {
       const code = symptomForServiceSlug(claim.service_slug);
@@ -143,8 +227,14 @@ async function applyVehicleTruthImpl(
   // last-service date + the stated/current mileage, and clear stale symptom
   // inputs (e.g. brakeFeel="soft_slow") so the health layer stops surfacing the
   // old problem. The runPipeline below then recomputes the status as on-time.
-  const serviceMileage: number | undefined = args.mileage ?? owner.mileage ?? undefined;
-  for (const recordType of completedRecordTypes) {
+  // Current odometer / now are the FALLBACK anchor when the user didn't state a
+  // past at-mileage or time. Per-claim service_mileage / service_date (resolved
+  // above) override them so a service reported done in the past re-anchors the
+  // due clock to THEN — the maintenance pipeline projects forward from this.
+  const currentOdometerFallback: number | undefined = args.mileage ?? owner.mileage ?? undefined;
+  for (const [recordType, anchor] of completedRecordAnchors) {
+    const recordMileage = anchor.mileage ?? currentOdometerFallback;
+    const recordDate = anchor.date ?? now;
     const existing = await ctx.db
       .query("maintenance_records")
       .withIndex("by_vehicle_and_type", (q: any) =>
@@ -152,8 +242,8 @@ async function applyVehicleTruthImpl(
       .unique();
     if (existing) {
       await ctx.db.patch(existing._id, {
-        lastServiceDate: now,
-        lastServiceMileage: serviceMileage,
+        lastServiceDate: recordDate,
+        lastServiceMileage: recordMileage,
         customInputs: undefined,
         updatedAt: now,
       } as any);
@@ -161,8 +251,8 @@ async function applyVehicleTruthImpl(
       await ctx.db.insert("maintenance_records", {
         vehicleOwnerId: owner._id,
         type: recordType,
-        lastServiceDate: now,
-        lastServiceMileage: serviceMileage,
+        lastServiceDate: recordDate,
+        lastServiceMileage: recordMileage,
         createdAt: now,
         updatedAt: now,
       } as any);

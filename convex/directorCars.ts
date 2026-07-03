@@ -12,6 +12,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
+import { partFitsConfigMake } from "./partSelector";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -593,6 +594,9 @@ export const vehicleConfigFitments = query({
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", vehicle_config_id))
       .collect();
 
+    // I1 make guard: annotate cross-make contaminant parts (directors see them, never dropped)
+    const cfg = await ctx.db.get(vehicle_config_id);
+
     const rows = await Promise.all(
       fitments.map(async (f) => {
         const part = (await ctx.db.get(f.part_id)) as any | null;
@@ -616,6 +620,7 @@ export const vehicleConfigFitments = query({
           subcategory:      part?.subcategory ?? null,
           partTier:         part?.part_tier ?? null,
           priceCount:       prices.length,
+          cross_make:       part ? !partFitsConfigMake(part.make_id, cfg?.make_id) : false,
         };
       }),
     );
@@ -797,10 +802,18 @@ export const vehicleConfigDetail = query({
       .query("part_fitments")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", id))
       .collect();
+    // I1 make guard: annotate cross-make contaminant parts (directors see them, never dropped)
+    const fitmentParts = await Promise.all(fitments.map((f) => ctx.db.get(f.part_id)));
     const fitmentSummary = (() => {
-      const byService: Record<string, number> = {};
-      for (const f of fitments) byService[(f as any).service_type ?? "unknown"] = (byService[(f as any).service_type ?? "unknown"] ?? 0) + 1;
-      return Object.entries(byService).map(([service, count]) => ({ service, count }));
+      const byService: Record<string, { count: number; cross_make_count: number }> = {};
+      fitments.forEach((f, i) => {
+        const key = (f as any).service_type ?? "unknown";
+        const part = fitmentParts[i] as any | null;
+        const entry = (byService[key] ??= { count: 0, cross_make_count: 0 });
+        entry.count += 1;
+        if (part && !partFitsConfigMake(part.make_id, cfg.make_id)) entry.cross_make_count += 1;
+      });
+      return Object.entries(byService).map(([service, counts]) => ({ service, ...counts }));
     })();
 
     // Enrichment runs (full history)

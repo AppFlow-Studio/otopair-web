@@ -25,6 +25,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
+  customerInspectionSnapshotValidator,
   postjobPartValidator,
   postjobPhotoValidator,
   postjobReportValidator,
@@ -374,6 +375,10 @@ export default defineSchema({
   // compatibility but new rows should default to "oem".
   oem_parts: defineTable({
     oem_part_number: v.string(),
+    // normalizeOemNumber(oem_part_number) — uppercase, alphanumeric only.
+    // Canonical identity for upserts so "5Q0 698 451 A" and "5Q0698451A"
+    // resolve to one row. Legacy rows lack it; upsert lazily backfills.
+    oem_part_number_normalized: v.optional(v.string()),
     name: v.string(),
     brand: v.optional(v.string()),
     // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
@@ -394,6 +399,7 @@ export default defineSchema({
     data_quality: v.optional(v.string()),
   })
     .index("by_part_number", ["oem_part_number"])
+    .index("by_part_number_normalized", ["oem_part_number_normalized"])
     .index("by_category", ["category"])
     .index("by_subcategory", ["subcategory"])
     .index("by_make_category", ["make_id", "category"])
@@ -418,6 +424,10 @@ export default defineSchema({
     service_role: v.optional(v.string()),
     confidence: v.optional(v.number()),
     source_count: v.optional(v.number()),
+    // Distinct domains that independently attested this fitment (corroboration
+    // signal — ≥2 distinct domains means cross-source agreement, not re-runs
+    // of the same page). Appended on each upsert re-confirmation.
+    source_domains: v.optional(v.array(v.string())),
     first_confirmed_at: v.optional(v.number()),
     last_confirmed_at: v.optional(v.number()),
     mechanic_verified: v.optional(v.boolean()),
@@ -815,6 +825,9 @@ export default defineSchema({
     // scrape action to the price-write step. `format_version` lets the price
     // path treat older markdown-only rows as a miss so they re-fetch HTML.
     part_prices_json: v.optional(v.string()),
+    // Part replacement chains parsed from the same raw HTML ("replaced by",
+    // "supersedes"), serialized as ParsedSupersession[].
+    supersessions_json: v.optional(v.string()),
     format_version: v.optional(v.number()),
   })
     .index("by_cache_key", ["cache_key"])
@@ -1299,6 +1312,46 @@ export default defineSchema({
   })
     .index("by_vin", ["vin"])
     .index("by_updated_at", ["updated_at"]),
+
+  // Gamified multi-point inspection record — the new pre-job flow. One row per
+  // booking (upserted as the mechanic fills zones). Stores the full zone-by-zone
+  // state so the inspection can be resumed and rendered to a downloadable PDF.
+  // The derived PreJobSurveyPayload still drives prejob_report + passport, so
+  // this table is additive and never the source of truth for pricing.
+  vehicle_inspections: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.optional(v.id("job_actuals")),
+    vin: v.string(),
+    shop_id: v.optional(v.id("shops")),
+    mechanic_id: v.optional(v.id("mechanics")),
+    template_version: v.string(),
+    zones: v.array(
+      v.object({
+        zone_id: v.string(),
+        done: v.boolean(),
+        // Free-form per-field maps keyed by the template field keys. `v.any()`
+        // because the template owns the shape and it evolves with the template
+        // version (recorded above) rather than the schema.
+        measures: v.optional(v.any()),
+        tri: v.optional(v.any()),
+        descriptors: v.optional(v.any()),
+        text: v.optional(v.any()),
+        select: v.optional(v.any()),
+        photo_ids: v.optional(v.array(v.id("_storage"))),
+      }),
+    ),
+    findings_attention: v.array(
+      v.object({ label: v.string(), zone: v.string() }),
+    ),
+    findings_monitor: v.array(
+      v.object({ label: v.string(), zone: v.string() }),
+    ),
+    pdf_storage_id: v.optional(v.id("_storage")),
+    created_at: v.float64(),
+    updated_at: v.float64(),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_vin", ["vin"]),
 
   // [I] Daniel/Waleed
   vehicle_tiers: defineTable({
@@ -3313,6 +3366,14 @@ export default defineSchema({
     ),
     // Backlink to the scheduled reminder we created for this rec.
     followup_id: v.optional(v.id("follow_ups")),
+    // Where this recommendation originated: "post_job" (default/legacy, mechanic
+    // entered it in the post-job survey), "inspection" (auto-derived from a
+    // multi-point inspection's measurements), or "diagnostic".
+    source: v.optional(v.string()),
+    // Denormalized attribution shown to the driver, e.g.
+    // "Based on last inspection @ Temur Auto & Motor". Set at creation so every
+    // consumer can render it without re-joining shop/source.
+    author_label: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.optional(v.number()),
   })
@@ -4373,6 +4434,7 @@ export default defineSchema({
     labor_hours: v.optional(v.number()),
     labor_rate_cents: v.optional(v.number()),
     notes: v.optional(v.string()),
+    inspection_snapshot: v.optional(customerInspectionSnapshotValidator),
 
     // Gating context: the ceiling the submission was evaluated against.
     // For pre_job this is disclosed_range_high_cents; for mid/post it's

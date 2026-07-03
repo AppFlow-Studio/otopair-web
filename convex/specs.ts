@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { partFitsConfigMake } from "./partSelector";
 
 /**
  * specs.ts - Subsystem specification & intelligence access layer
@@ -246,6 +247,7 @@ export const getFullVehicleSpecPack = query({
       : null;
 
     // Fitments from unified part_fitments table (keyed by vehicle_config_id)
+    const config = vehicle.vehicle_config_id ? await ctx.db.get(vehicle.vehicle_config_id) : null;
     const fitments = vehicle.vehicle_config_id
       ? await ctx.db
           .query("part_fitments")
@@ -253,11 +255,15 @@ export const getFullVehicleSpecPack = query({
           .collect()
       : [];
 
-    const expandedFitments = await Promise.all(
+    const hydratedFitments = await Promise.all(
       fitments.map(async (f) => {
         const part = await ctx.db.get(f.part_id);
         return { ...f, part };
       }),
+    );
+    // I1 make guard: drop cross-make contaminant parts
+    const expandedFitments = hydratedFitments.filter(
+      (f) => !f.part || partFitsConfigMake(f.part.make_id, config?.make_id),
     );
 
     const confidenceEntries: ConfidenceEntry[] = [];

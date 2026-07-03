@@ -72,6 +72,31 @@ test("shouldRedirectCompletedOnboardingToHome redirects essential-complete onboa
       isSignedIn: true,
       onboardingCompleted: false,
       essentialOnboardingCompleted: true,
+      isAutoResume: true,
+    }),
+    true,
+  );
+});
+
+test("shouldRedirectCompletedOnboardingToHome keeps active signup onboarding after essential completion", () => {
+  assert.equal(
+    shouldRedirectCompletedOnboardingToHome({
+      isSignedIn: true,
+      onboardingCompleted: false,
+      essentialOnboardingCompleted: true,
+      isAutoResume: false,
+    }),
+    false,
+  );
+});
+
+test("shouldRedirectCompletedOnboardingToHome still redirects fully completed active onboarding", () => {
+  assert.equal(
+    shouldRedirectCompletedOnboardingToHome({
+      isSignedIn: true,
+      onboardingCompleted: true,
+      essentialOnboardingCompleted: true,
+      isAutoResume: false,
     }),
     true,
   );

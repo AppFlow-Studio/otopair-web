@@ -12,7 +12,14 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { median, nonOutlierIndices } from "./lib/robustStats";
-import { isPoisonPriceType } from "./lib/priceTypes";
+import { isPoisonPriceType, isNonPooledPriceType } from "./lib/priceTypes";
+import { isWithinPriceBand } from "./lib/priceBands";
+
+/** Rows older than this are ignored WHEN fresher rows exist for the part —
+ *  a 2-year-old scrape must not count equally with last week's in the median.
+ *  With no fresh rows at all, stale rows still aggregate (a stale price beats
+ *  no price; the selector's recency layer already down-weights it). */
+export const PRICE_STALENESS_MS = 120 * 24 * 60 * 60 * 1000; // 120 days
 
 export type PriceSummary = {
   part_id: Id<"oem_parts">;
@@ -66,6 +73,12 @@ export type PriceRowLike = {
 export function summarizePriceRows(
   partId: Id<"oem_parts">,
   rows: PriceRowLike[],
+  opts?: {
+    /** Part subcategory — enables the absolute sanity band (lib/priceBands). */
+    subcategory?: string | null;
+    /** Injectable clock for tests; defaults to Date.now(). */
+    now?: number;
+  },
 ): PriceSummary {
   const empty: PriceSummary = {
     part_id: partId,
@@ -87,14 +100,29 @@ export function summarizePriceRows(
   // Keep only trustworthy, positive-priced rows. `validRows` and `prices` are
   // built from the SAME filtered list in the same order, so keepIdx (computed
   // over `prices`) indexes straight back into `validRows` for source metadata.
-  const validRows = rows.filter(
+  // Defensive sanity band: extraction-time gauges should already have routed
+  // out-of-band prices to `unverified`, but pre-band legacy rows are still in
+  // the table — never let them into customer-facing math.
+  let validRows = rows.filter(
     (r) =>
       !isPoisonPriceType(r.price_type) &&
+      !isNonPooledPriceType(r.price_type) &&
       typeof r.price === "number" &&
       Number.isFinite(r.price) &&
-      (r.price as number) > 0,
+      (r.price as number) > 0 &&
+      isWithinPriceBand(opts?.subcategory, r.price as number),
   );
   if (validRows.length === 0) return empty;
+
+  // Staleness cutoff: when at least one FRESH row exists, drop rows older than
+  // PRICE_STALENESS_MS (rows with no refreshed_at count as stale — they predate
+  // timestamping). All-stale parts keep their rows: old price > no price.
+  const now = opts?.now ?? Date.now();
+  const isFresh = (r: PriceRowLike) =>
+    typeof r.refreshed_at === "number" && now - (r.refreshed_at as number) <= PRICE_STALENESS_MS;
+  if (validRows.some(isFresh)) {
+    validRows = validRows.filter(isFresh);
+  }
   const prices = validRows.map((r) => r.price as number);
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -156,7 +184,10 @@ export async function summarizePartPrices(
     .query("part_prices")
     .withIndex("by_part", (q: any) => q.eq("part_id", partId))
     .collect();
-  return summarizePriceRows(partId, rows as PriceRowLike[]);
+  const part = await ctx.db.get(partId);
+  return summarizePriceRows(partId, rows as PriceRowLike[], {
+    subcategory: (part as any)?.subcategory ?? null,
+  });
 }
 
 /**

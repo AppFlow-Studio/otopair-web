@@ -9,7 +9,8 @@
 
 import { v } from "convex/values";
 import { internalQuery, internalMutation } from "../_generated/server";
-import { isPoisonPriceType } from "../lib/priceTypes";
+import { isPoisonPriceType, isNonPooledPriceType } from "../lib/priceTypes";
+import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "../lib/labor_aggregation";
 
 export const getVehicleConfigByKey = internalQuery({
   args: { configKey: v.string() },
@@ -344,10 +345,9 @@ export const getQuotableLaborTime = internalQuery({
 
     if (!labor) return null;
 
-    const MIN_SAMPLES = 3;
     const useEmpirical =
       labor.empirical_hours != null &&
-      (labor.empirical_sample_size ?? 0) >= MIN_SAMPLES;
+      (labor.empirical_sample_size ?? 0) >= LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES;
 
     return {
       hours: useEmpirical ? labor.empirical_hours! : labor.book_hours,
@@ -374,11 +374,21 @@ export const getPricedPartCount = internalQuery({
       // poison rows (online_discount / you_save / unverified) are excluded
       // from the customer median, so counting them here inflated fill_rate
       // and made backfills skip exactly the broken parts (Jun-9 review).
+      // Non-pooled fallback rows (repairpal_endpoint) are ALSO excluded — an
+      // endpoint-only part has no real SKU price yet, so counting it would
+      // make the pipeline skip fetching one (same fill_rate inflation bug).
       const rows = await ctx.db
         .query("part_prices")
         .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
         .collect();
-      if (rows.some((r) => !isPoisonPriceType((r as any).price_type))) priced++;
+      if (
+        rows.some(
+          (r) =>
+            !isPoisonPriceType((r as any).price_type) &&
+            !isNonPooledPriceType((r as any).price_type),
+        )
+      )
+        priced++;
     }
     return priced;
   },
@@ -584,6 +594,8 @@ export const findBestChassisMatch = internalQuery({
     target_config_id: v.id("vehicle_configs"),
   },
   handler: async (ctx, args) => {
+    const target = await ctx.db.get(args.target_config_id);
+
     // Get all configs with this chassis code (any status)
     const all = await ctx.db
       .query("vehicle_configs")
@@ -592,9 +604,17 @@ export const findBestChassisMatch = internalQuery({
       )
       .collect();
 
-    // Exclude ourselves, sort by fill_rate descending
+    // Exclude ourselves AND cross-make configs — chassis codes are
+    // make-scoped concepts, but the stored codes are LLM-generated strings
+    // ("E12", "MK7") that collide across makes; without this filter a BMW
+    // config's parts can be cloned onto a whole different marque.
+    // Sort by fill_rate descending.
     const candidates = all
-      .filter((c) => c._id !== args.target_config_id)
+      .filter(
+        (c) =>
+          c._id !== args.target_config_id &&
+          (!target?.make_id || c.make_id === target.make_id),
+      )
       .sort((a, b) => (b.fill_rate ?? 0) - (a.fill_rate ?? 0));
 
     return candidates[0] ?? null;
@@ -610,6 +630,8 @@ export const findChassisGroupSiblings = internalQuery({
     exclude_config_id: v.id("vehicle_configs"),
   },
   handler: async (ctx, args) => {
+    const source = await ctx.db.get(args.exclude_config_id);
+
     const all = await ctx.db
       .query("vehicle_configs")
       .withIndex("by_chassis_code", (q) =>
@@ -617,7 +639,13 @@ export const findChassisGroupSiblings = internalQuery({
       )
       .collect();
 
-    return all.filter((c) => c._id !== args.exclude_config_id);
+    // Same-make only — LLM-generated chassis codes collide across makes
+    // (see findBestChassisMatch above).
+    return all.filter(
+      (c) =>
+        c._id !== args.exclude_config_id &&
+        (!source?.make_id || c.make_id === source.make_id),
+    );
   },
 });
 
@@ -700,11 +728,20 @@ export const diagnoseFillGaps = internalQuery({
     const partIds = fitments.map((f) => f.part_id);
     let pricedCount = 0;
     for (const pid of partIds) {
-      const price = await ctx.db
+      // Exclude poison + non-pooled (repairpal_endpoint) rows: an endpoint-only
+      // part has no real SKU price, so it must count as missing here too.
+      const rows = await ctx.db
         .query("part_prices")
         .withIndex("by_part", (q) => q.eq("part_id", pid))
-        .first();
-      if (price) pricedCount++;
+        .collect();
+      if (
+        rows.some(
+          (r) =>
+            !isPoisonPriceType((r as any).price_type) &&
+            !isNonPooledPriceType((r as any).price_type),
+        )
+      )
+        pricedCount++;
     }
     const missingPrices = fitments.length - pricedCount;
 
@@ -745,13 +782,21 @@ export const findBestEngineSibling = internalQuery({
     exclude_config_id: v.id("vehicle_configs"),
   },
   handler: async (ctx, args) => {
+    const source = await ctx.db.get(args.exclude_config_id);
+
     const all = await ctx.db
       .query("vehicle_configs")
       .withIndex("by_engine", (q) => q.eq("engine_id", args.engine_id))
       .collect();
 
+    // Same-make only — defense in depth against engine_id reuse across
+    // marques (badge-engineered platforms share engines but not OEM parts).
     const candidates = all
-      .filter((c) => c._id !== args.exclude_config_id)
+      .filter(
+        (c) =>
+          c._id !== args.exclude_config_id &&
+          (!source?.make_id || c.make_id === source.make_id),
+      )
       .sort((a, b) => (b.fill_rate ?? 0) - (a.fill_rate ?? 0));
 
     return candidates[0] ?? null;
@@ -765,11 +810,18 @@ export const findEngineSiblings = internalQuery({
     exclude_config_id: v.id("vehicle_configs"),
   },
   handler: async (ctx, args) => {
+    const source = await ctx.db.get(args.exclude_config_id);
+
     const all = await ctx.db
       .query("vehicle_configs")
       .withIndex("by_engine", (q) => q.eq("engine_id", args.engine_id))
       .collect();
 
-    return all.filter((c) => c._id !== args.exclude_config_id);
+    // Same-make only (see findBestEngineSibling above).
+    return all.filter(
+      (c) =>
+        c._id !== args.exclude_config_id &&
+        (!source?.make_id || c.make_id === source.make_id),
+    );
   },
 });

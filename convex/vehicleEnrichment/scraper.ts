@@ -29,7 +29,7 @@ import {
   getManualSearchQueries,
   BLOCKED_DOMAINS,
 } from "./sourceRegistry";
-import { parsePartPrices, type ParsedPartPrice } from "./priceParser";
+import { parsePartPrices, parseSupersessions, type ParsedPartPrice, type ParsedSupersession } from "./priceParser";
 import { CACHE_FORMAT_VERSION } from "./scraperQueries";
 import type { VehicleInput } from "./types";
 import { scrapeWheelSizeOptions, type WheelSizeResult } from "./utils/wheelSizeScraper";
@@ -51,9 +51,16 @@ export interface ScrapedSources {
   /** Deterministic prices parsed from registry HTML (JSON-LD). Empty for the
    *  open-web search path (markdown only — the LLM prices those). */
   partPrices: ParsedPartPrice[];
+  /** Part replacement chains parsed from the same HTML ("replaced by …"). */
+  supersessions: ParsedSupersession[];
 }
 
-type PartsScrapeResult = { markdown: string; urls: string[]; partPrices: ParsedPartPrice[] };
+type PartsScrapeResult = {
+  markdown: string;
+  urls: string[];
+  partPrices: ParsedPartPrice[];
+  supersessions: ParsedSupersession[];
+};
 
 // ─── Parts + Manual ──────────────────────────────────────────────
 
@@ -105,7 +112,7 @@ export async function scrapeVehicleSources(
     scrapeManual(ctx, vehicle, manualQueries),
   ]);
 
-  const parts = partsResult.status === "fulfilled" ? partsResult.value : { markdown: "", urls: [], partPrices: [] };
+  const parts = partsResult.status === "fulfilled" ? partsResult.value : { markdown: "", urls: [], partPrices: [], supersessions: [] };
   const manual = manualResult.status === "fulfilled" ? manualResult.value : { markdown: "", urls: [] };
   const wheel = wheelResult;
 
@@ -124,6 +131,7 @@ export async function scrapeVehicleSources(
     manualSourceUrls: manual.urls,
     wheelSizeResult:  wheel,
     partPrices:       parts.partPrices ?? [],
+    supersessions:    parts.supersessions ?? [],
   };
 }
 
@@ -152,10 +160,12 @@ async function searchPartsPages(
   if (cached && cached.format_version === CACHE_FORMAT_VERSION) {
     console.log(`[scraper] Cache hit: parts_catalog (search) for ${vehicle.year} ${vehicle.make}`);
     let cachedPrices: ParsedPartPrice[] = [];
+    let cachedSupersessions: ParsedSupersession[] = [];
     try {
       cachedPrices = cached.part_prices_json ? JSON.parse(cached.part_prices_json) : [];
+      cachedSupersessions = cached.supersessions_json ? JSON.parse(cached.supersessions_json) : [];
     } catch { /* ignore corrupt cache json */ }
-    return { markdown: cached.markdown ?? "", urls: cached.url ? [cached.url] : [], partPrices: cachedPrices };
+    return { markdown: cached.markdown ?? "", urls: cached.url ? [cached.url] : [], partPrices: cachedPrices, supersessions: cachedSupersessions };
   }
 
   const v = `${vehicle.year} ${vehicle.make} ${vehicle.trim || vehicle.model}`;
@@ -172,7 +182,9 @@ async function searchPartsPages(
   let totalChars = 0;
 
   const allPartPrices: ParsedPartPrice[] = [];
+  const allSupersessions: ParsedSupersession[] = [];
   const seenNumbers = new Set<string>();
+  const seenSupersessions = new Set<string>();
 
   for (const query of partsQueries) {
     if (totalChars >= MAX_MARKDOWN_CHARS) break;
@@ -197,6 +209,13 @@ async function searchPartsPages(
               if (!seenNumbers.has(key)) {
                 seenNumbers.add(key);
                 allPartPrices.push(p);
+              }
+            }
+            for (const s of parseSupersessions(r.html, r.url)) {
+              const sKey = `${s.old_number}->${s.new_number}`;
+              if (!seenSupersessions.has(sKey)) {
+                seenSupersessions.add(sKey);
+                allSupersessions.push(s);
               }
             }
           } catch (e) {
@@ -232,11 +251,12 @@ async function searchPartsPages(
       sourceType: "parts_catalog",
       expiresAt: now + TTL_PARTS_MS,
       partPricesJson: JSON.stringify(allPartPrices),
+      supersessionsJson: JSON.stringify(allSupersessions),
     });
   }
 
-  console.log(`[scraper] Parts search: ${allPartPrices.length} deterministic prices across ${new Set(allPartPrices.map((p) => p.source_domain)).size} domains`);
-  return { markdown, urls: sourceUrls, partPrices: allPartPrices };
+  console.log(`[scraper] Parts search: ${allPartPrices.length} deterministic prices across ${new Set(allPartPrices.map((p) => p.source_domain)).size} domains, ${allSupersessions.length} supersessions`);
+  return { markdown, urls: sourceUrls, partPrices: allPartPrices, supersessions: allSupersessions };
 }
 
 // ─── Parts: direct URL fetch with generic fallback ────────────────
@@ -256,11 +276,13 @@ async function scrapePartsPages(
   );
   if (cached && cached.format_version === CACHE_FORMAT_VERSION) {
     let cachedPrices: ParsedPartPrice[] = [];
+    let cachedSupersessions: ParsedSupersession[] = [];
     try {
       cachedPrices = cached.part_prices_json ? JSON.parse(cached.part_prices_json) : [];
+      cachedSupersessions = cached.supersessions_json ? JSON.parse(cached.supersessions_json) : [];
     } catch { /* corrupt cache json — treat as no prices */ }
     console.log(`[scraper] Cache hit: parts_catalog for ${vehicle.year} ${vehicle.make} ${vehicle.model} (${cachedPrices.length} prices)`);
-    return { markdown: cached.markdown ?? "", urls: cached.url ? [cached.url] : [], partPrices: cachedPrices };
+    return { markdown: cached.markdown ?? "", urls: cached.url ? [cached.url] : [], partPrices: cachedPrices, supersessions: cachedSupersessions };
   }
 
   const hostname = yearSpecificUrls[0] ? new URL(yearSpecificUrls[0]).hostname : vehicle.make;
@@ -269,7 +291,9 @@ async function scrapePartsPages(
   const markdownParts: string[] = [];
   const sourceUrls: string[] = [];
   const allPartPrices: ParsedPartPrice[] = [];
+  const allSupersessions: ParsedSupersession[] = [];
   const seenNumbers = new Set<string>();
+  const seenSupersessions = new Set<string>();
   let totalChars = 0;
 
   // Hard time budget for the registry fetch loop. The whole pre-batch phase
@@ -316,6 +340,13 @@ async function scrapePartsPages(
             allPartPrices.push(p);
           }
         }
+        for (const s of parseSupersessions(fetched.html, usedUrl)) {
+          const sKey = `${s.old_number}->${s.new_number}`;
+          if (!seenSupersessions.has(sKey)) {
+            seenSupersessions.add(sKey);
+            allSupersessions.push(s);
+          }
+        }
       } catch (e) {
         console.warn(`[scraper] price parse failed for ${usedUrl}:`, e);
       }
@@ -352,10 +383,11 @@ async function scrapePartsPages(
       sourceType: "parts_catalog",
       expiresAt: now + TTL_PARTS_MS,
       partPricesJson: JSON.stringify(allPartPrices),
+      supersessionsJson: JSON.stringify(allSupersessions),
     });
   }
 
-  return { markdown, urls: sourceUrls, partPrices: allPartPrices };
+  return { markdown, urls: sourceUrls, partPrices: allPartPrices, supersessions: allSupersessions };
 }
 
 // ─── Manual: search-based ─────────────────────────────────────────

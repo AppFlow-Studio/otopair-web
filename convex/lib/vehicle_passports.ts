@@ -181,6 +181,32 @@ export const prejobReportValidator = v.object({
   next_mechanic_tip: v.optional(nullableStringValidator),
 });
 
+// Full multi-point inspection payload sent by the inspection dialog alongside
+// the derived prejob report. Persisted to the `vehicle_inspections` table. The
+// per-field maps use v.any() because their shape is owned by the client-side
+// inspection template (lib/inspection-template.ts), versioned by template_version.
+export const inspectionZoneStateValidator = v.object({
+  zone_id: v.string(),
+  done: v.boolean(),
+  measures: v.optional(v.any()),
+  tri: v.optional(v.any()),
+  descriptors: v.optional(v.any()),
+  text: v.optional(v.any()),
+  select: v.optional(v.any()),
+  photo_ids: v.optional(v.array(v.id("_storage"))),
+});
+
+export const inspectionInputValidator = v.object({
+  template_version: v.string(),
+  zones: v.array(inspectionZoneStateValidator),
+  findings_attention: v.optional(
+    v.array(v.object({ label: v.string(), zone: v.string() })),
+  ),
+  findings_monitor: v.optional(
+    v.array(v.object({ label: v.string(), zone: v.string() })),
+  ),
+});
+
 export const vehicleUpdateValuesValidator = v.object({
   oil_viscosity: v.optional(nullableStringValidator),
   oil_capacity_qts: v.optional(nullableNumberValidator),

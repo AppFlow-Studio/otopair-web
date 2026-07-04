@@ -23,7 +23,9 @@ import SendReceiptCard from "@/components/booking/send-receipt-card";
 import type { JobActualsPayload } from "@/lib/job-actuals";
 import VehiclePassportCard from "@/components/vehicle-passport-card";
 import JobStepIndicator from "@/components/job-step-indicator";
-import PreJobSurveyDialog from "@/components/pre-job-survey-dialog";
+import MultiPointInspectionDialog, {
+  type InspectionInputPayload,
+} from "@/components/multi-point-inspection-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import RecommendServiceDrawer from "@/components/recommend-service-drawer";
@@ -1359,6 +1361,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     async function handleStartWithPrejob(
       payload: PreJobSurveyPayload,
+      inspection: InspectionInputPayload,
       action: "close" | "start"
     ) {
       if (!job?._id) return;
@@ -1373,13 +1376,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           await savePrejob({
             bookingId: job._id,
             prejob: payload,
+            inspection,
           });
           setShowPrejobDialog(false);
-          onSuccess?.("Pre-job vehicle check saved");
+          onSuccess?.("Pre-job inspection saved");
         } else if (isNewCycle) {
           await commitInspectionAndAwaitEstimate({
             bookingId: job._id,
             prejob: payload,
+            inspection,
           });
           setShowPrejobDialog(false);
           setShowPrejobEstimateDialog(true);
@@ -1387,6 +1392,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           await startWithPrejob({
             bookingId: job._id,
             prejob: payload,
+            inspection,
           });
           setShowPrejobDialog(false);
           onSuccess?.("Booking started");
@@ -1415,6 +1421,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       } finally {
         setIsSubmittingPrejob(false);
       }
+    }
+
+    // Persist the inspection without closing the dialog — used by the
+    // "Download inspection sheet" flow, which must save before the PDF action
+    // can read the vehicle_inspections row.
+    async function handleSaveInspectionDraft(
+      payload: PreJobSurveyPayload,
+      inspection: InspectionInputPayload
+    ) {
+      if (!job?._id) return;
+      await savePrejob({ bookingId: job._id, prejob: payload, inspection });
     }
 
     function openActualsEditor() {
@@ -2505,7 +2522,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           }
         />
 
-        <PreJobSurveyDialog
+        <MultiPointInspectionDialog
           open={showPrejobDialog}
           bookingId={job?._id ?? null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
@@ -2520,11 +2537,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingServices={job?.serviceNames ?? []}
           passportData={vehiclePassport ?? null}
           prefillData={job?.jobActuals?.prejobReport ?? null}
-          oemPartsByService={oemPartsByService ?? null}
-          lockedQuote={lockedQuote}
           isSubmitting={isSubmittingPrejob}
           onClose={() => setShowPrejobDialog(false)}
           onSubmit={handleStartWithPrejob}
+          onSaveDraft={handleSaveInspectionDraft}
         />
 
         <DiagnosticChecklistDialog

@@ -10,6 +10,15 @@ import { FirecrawlResult } from "./helpers";
 
 const FIRECRAWL_BASE = "https://api.firecrawl.dev/v2";
 
+/**
+ * Firecrawl-side cache tolerance (v2 `maxAge`, ms). A page scraped within this
+ * window is served from Firecrawl's cache — near-instant and ~free. Retail
+ * part prices don't move intraday, and the biggest win is priceAllSources'
+ * second pass re-reading the SAME urls it just scraped: with maxAge those are
+ * cache hits instead of fresh renders, roughly halving price-path spend.
+ */
+const FIRECRAWL_MAX_AGE_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
+
 function getApiKey(): string {
   const key = process.env.FIRECRAWL_API_KEY;
   if (!key) throw new Error("FIRECRAWL_API_KEY not set");
@@ -135,7 +144,7 @@ export async function fetchUrlWithHtml(
     }
   }
 
-  try {
+  const attempt = async (stealth: boolean) => {
     const response = await fetch(`${FIRECRAWL_BASE}/scrape`, {
       method: "POST",
       headers: {
@@ -145,16 +154,20 @@ export async function fetchUrlWithHtml(
       body: JSON.stringify({
         url,
         formats: ["markdown", "rawHtml"],
+        maxAge: FIRECRAWL_MAX_AGE_MS,
         // Firecrawl-side page-load cap, slightly under our abort so Firecrawl
         // returns a clean error instead of us severing the connection.
         timeout: Math.max(5_000, timeoutMs - 5_000),
+        // Stealth proxy only on the retry — it costs extra credits, so the
+        // cheap default attempt runs first.
+        ...(stealth ? { proxy: "stealth" } : {}),
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
 
     if (!response.ok) {
       console.error(
-        `Firecrawl scrape(html) failed for ${url}: ${response.status} ${response.statusText}`,
+        `Firecrawl scrape(html${stealth ? ",stealth" : ""}) failed for ${url}: ${response.status} ${response.statusText}`,
       );
       return { markdown: null, html: null };
     }
@@ -164,8 +177,17 @@ export async function fetchUrlWithHtml(
     return {
       markdown: d?.markdown ?? null,
       // Firecrawl v2 raw-HTML key is `rawHtml`; fall back to `html` (cleaned).
-      html: d?.rawHtml ?? d?.html ?? null,
+      html: (d?.rawHtml ?? d?.html ?? null) as string | null,
     };
+  };
+
+  try {
+    const first = await attempt(false);
+    if (first.html || first.markdown) return first;
+    // Empty/blocked on the standard proxy — one stealth retry for anti-bot
+    // walls before giving up on the page.
+    console.warn(`[firecrawl] empty scrape for ${url} — retrying with stealth proxy`);
+    return await attempt(true);
   } catch (error) {
     console.error(`Firecrawl scrape(html) error for ${url}:`, error);
     return { markdown: null, html: null };
@@ -187,6 +209,7 @@ export async function fetchUrl(url: string): Promise<string | null> {
       body: JSON.stringify({
         url,
         formats: ["markdown"],
+        maxAge: FIRECRAWL_MAX_AGE_MS,
       }),
     });
 
@@ -201,6 +224,138 @@ export async function fetchUrl(url: string): Promise<string | null> {
     return data.data?.markdown ?? null;
   } catch (error) {
     console.error(`Firecrawl scrape error for ${url}:`, error);
+    return null;
+  }
+}
+
+/** Structured price extraction via Firecrawl's `json` format. Returns the
+ *  evidence fields the gauges read (price_label / product_title / sells_this_part)
+ *  alongside the numbers. `correction` is appended to the prompt on a guided retry.
+ *  Network-only; null on any failure. */
+export type ExtractedPrice = {
+  sale_price: number | null;
+  msrp: number | null;
+  discount: number | null;
+  in_stock: boolean | null;
+  oem_seen: string | null;
+  price_label: string | null;
+  product_title: string | null;
+  sells_this_part: boolean | null;
+  confidence: number | null;
+  /** Units in the listing (2-pack, 4 plugs, case of 6). null when unstated (assume 1). */
+  pack_quantity: number | null;
+  /** Whether sale_price is already per single unit. */
+  price_is_per_unit: boolean | null;
+};
+
+const PRICE_JSON_SCHEMA = {
+  type: "object",
+  required: ["sale_price"],
+  properties: {
+    sale_price: { type: ["number", "null"], description: "the dollar amount the customer pays NOW for this exact part" },
+    msrp: { type: ["number", "null"], description: "list/MSRP price before discount" },
+    discount_amount: { type: ["number", "null"], description: "amount saved off MSRP" },
+    in_stock: { type: ["boolean", "null"] },
+    oem_part_number: { type: ["string", "null"], description: "the OEM/part number this price is for, as shown" },
+    price_label: { type: ["string", "null"], description: "the EXACT label text the price was read from, e.g. 'Sale $37.19' or 'You Save $13'" },
+    product_title: { type: ["string", "null"] },
+    sells_this_part: { type: ["boolean", "null"], description: "true only if this page actually sells the target OEM part" },
+    confidence: { type: ["number", "null"], description: "0..1 self-rating of the extraction" },
+    pack_quantity: { type: ["number", "null"], description: "how many units the listed price buys (a 2-pack = 2, a case of 6 = 6); null if the listing is a single unit or does not say" },
+    price_is_per_unit: { type: ["boolean", "null"], description: "true if sale_price is the price for ONE unit; false if it is the price for the whole pack" },
+  },
+};
+
+export async function extractPriceFirecrawl(
+  url: string,
+  oem: string | null,
+  partName?: string | null,
+  correction?: string | null,
+): Promise<ExtractedPrice | null> {
+  const basePrompt =
+    `Extract the price for the auto part${oem ? ` with OEM/part number "${oem}"` : ""}${partName ? ` (${partName})` : ""}. ` +
+    `Return ONLY the dollar amount the customer pays right now for THIS exact part — the final current sale price after any automatic discount. ` +
+    `IGNORE: SKUs, part numbers, phone numbers, quantities, shipping, tax, core charges, "You Save"/savings figures, struck-through/"was"/list/MSRP prices, and prices for a different part. ` +
+    `Copy the exact text you read the price from into price_label. If the page does not sell this exact part, set sells_this_part false and sale_price null. Never guess. ` +
+    `If the listing sells a multi-unit pack (2-pack, set of 4, case of 6), report pack_quantity and whether sale_price is per single unit (price_is_per_unit) — do NOT convert the price yourself.` +
+    (correction ? ` IMPORTANT CORRECTION: ${correction}` : "");
+  try {
+    const resp = await fetch(`${FIRECRAWL_BASE}/scrape`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${getApiKey()}` },
+      body: JSON.stringify({
+        url,
+        formats: [{ type: "json", prompt: basePrompt, schema: PRICE_JSON_SCHEMA }],
+        maxAge: FIRECRAWL_MAX_AGE_MS,
+        timeout: 45000,
+      }),
+      signal: AbortSignal.timeout(50000),
+    });
+    if (!resp.ok) {
+      console.error(`Firecrawl json price failed for ${url}: ${resp.status}`);
+      return null;
+    }
+    const data = await resp.json();
+    const d = data.data ?? data;
+    const j = d.json ?? d.extract ?? null;
+    if (!j || typeof j !== "object") return null;
+    const num = (x: any) => (typeof x === "number" && Number.isFinite(x) ? x : null);
+    return {
+      sale_price: num(j.sale_price),
+      msrp: num(j.msrp),
+      discount: num(j.discount_amount),
+      in_stock: typeof j.in_stock === "boolean" ? j.in_stock : null,
+      oem_seen: typeof j.oem_part_number === "string" ? j.oem_part_number : null,
+      price_label: typeof j.price_label === "string" ? j.price_label : null,
+      product_title: typeof j.product_title === "string" ? j.product_title : null,
+      sells_this_part: typeof j.sells_this_part === "boolean" ? j.sells_this_part : null,
+      confidence: num(j.confidence),
+      pack_quantity: num(j.pack_quantity),
+      price_is_per_unit: typeof j.price_is_per_unit === "boolean" ? j.price_is_per_unit : null,
+    };
+  } catch (e) {
+    console.error(`Firecrawl json price error for ${url}:`, e);
+    return null;
+  }
+}
+
+/** Generic Firecrawl `json`-format structured extraction. POSTs {url, formats:[{type:"json",prompt,schema}]}
+ *  and returns the parsed json object (the `data.data.json ?? .json ?? .extract`), or null on any failure.
+ *  Missing FIRECRAWL_API_KEY → warn + null (callers that are corroborators must safe-skip, not throw).
+ *  Network-only; callers do their own field coercion + domain logic. */
+export async function firecrawlJsonExtract(
+  url: string,
+  prompt: string,
+  schema: Record<string, unknown>,
+  timeoutMs: number = 50_000,
+): Promise<Record<string, any> | null> {
+  const key = process.env.FIRECRAWL_API_KEY;
+  if (!key) {
+    console.warn("firecrawlJsonExtract: FIRECRAWL_API_KEY not set; skipping");
+    return null;
+  }
+  try {
+    const resp = await fetch(`${FIRECRAWL_BASE}/scrape`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        url,
+        formats: [{ type: "json", prompt, schema }],
+        maxAge: FIRECRAWL_MAX_AGE_MS,
+        timeout: Math.max(5_000, timeoutMs - 5_000),
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!resp.ok) {
+      console.error(`firecrawlJsonExtract failed for ${url}: ${resp.status}`);
+      return null;
+    }
+    const data = await resp.json();
+    const d = data.data ?? data;
+    const j = d.json ?? d.extract ?? null;
+    return j && typeof j === "object" ? j : null;
+  } catch (e) {
+    console.error(`firecrawlJsonExtract error for ${url}:`, e);
     return null;
   }
 }

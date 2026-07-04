@@ -7,14 +7,13 @@
  * internal/empirical data preferred as it accrues.
  *
  * recomputeLaborForConfigService recomputes ONE (vehicle_config, service):
- *   - book_hours      = robust (UNWEIGHTED) median of CATALOG observations (VDB,
- *                       LLM book times, …), clamped to sane bounds, rounded 0.1h.
- *                       VDB is de-throned by being ONE of N median inputs (no
- *                       longer the highest-confidence winner), NOT by the per-
- *                       source `weight` — weights are currently informational
- *                       (reserved for future source-scoring) and do not bias the
- *                       median. With a lone VDB source, book_hours is VDB's value
- *                       (clamped); it's diluted as soon as a second source exists.
+ *   - book_hours      = robust WEIGHTED median of CATALOG observations (OLP,
+ *                       LLM book times, VDB, …), clamped to sane bounds, rounded
+ *                       0.1h. Each source's `weight` biases the result
+ *                       (weightedMedian walks the cumulative-weight frontier), so
+ *                       the high-trust anchor olp_labor (0.8) dominates LLM
+ *                       (0.3-0.5) and VDB (0.05). With a lone source, book_hours
+ *                       is that source's value (clamped).
  *   - empirical_hours = robust median of POST-JOB actual durations from
  *                       SINGLE-service bookings, but only once there are
  *                       >= LABOR_EMPIRICAL_MIN_SAMPLES of them (else cleared).
@@ -24,10 +23,16 @@
  * jobs complete — "our internal data is better" without re-enriching.
  */
 
-import { summarizeObservations, weightedMedian } from "./robustStats";
+import { summarizeObservations, weightedMedian, nonOutlierIndices } from "./robustStats";
+import { STRONG_LABOR_SOURCES, withinGuardrail, withinAgreementBand } from "./laborBands";
+import { computeLaborTierFloorHours } from "./laborFallback";
+import { detectTier } from "./quoteEngine";
 
-/** Post-job actuals must reach this count before empirical overrides book time. */
-export const LABOR_EMPIRICAL_MIN_SAMPLES = 3;
+// Empirical sample-size gates live in a leaf module (laborConstants, no imports)
+// so importing them here can't form a cycle with quoteEngine (which imports
+// detectTier from this file). Re-exported for the existing importers of these names.
+import { LABOR_EMPIRICAL_MIN_SAMPLES, LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./laborConstants";
+export { LABOR_EMPIRICAL_MIN_SAMPLES, LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES };
 
 // Generic sanity bounds — reject absurd labor values regardless of service.
 const LABOR_MIN_HOURS = 0.1;
@@ -36,6 +41,28 @@ const LABOR_MAX_HOURS = 8.0;
 function clampRound(hours: number): number {
   const c = Math.min(LABOR_MAX_HOURS, Math.max(LABOR_MIN_HOURS, hours));
   return Math.round(c * 10) / 10;
+}
+
+/**
+ * Book-hours precedence. The RepairPal estimate endpoint is exact MOTOR/Chilton
+ * flat-rate time — the most authoritative labor source we have — so when an
+ * `repairpal_endpoint` observation exists it IS the book value (the face value),
+ * never averaged down by lower-weight sources (a real disagreement is surfaced
+ * by the confidence/`labor_sources_disagree` flag, not resolved away). When no
+ * endpoint observation exists, book_hours is the robust WEIGHTED median of the
+ * remaining catalog sources (OLP/web/LLM/…) — the agreement model. Clamped.
+ */
+export function resolveBookHours(
+  catalog: { hours: number; weight?: number; source: string }[],
+): number {
+  const endpoint = catalog.find((o) => o.source === "repairpal_endpoint" && o.hours > 0);
+  if (endpoint) return clampRound(endpoint.hours);
+  return clampRound(
+    weightedMedian(
+      catalog.map((o) => o.hours),
+      catalog.map((o) => o.weight ?? 1),
+    ),
+  );
 }
 
 /**
@@ -108,19 +135,14 @@ export async function recomputeLaborForConfigService(
 
   let bookHours: number | undefined;
   let engineFamily: string | undefined;
-  let hasRepairpal = false;
   if (catalog.length > 0) {
-    // Weighted robust median: repairpal_motor (0.8) dominates LLM (0.3-0.5) and
-    // VDB (0.05). A wrong high-weight value is guarded at WRITE time by the
-    // sibling validation gate, not here.
-    bookHours = clampRound(
-      weightedMedian(
-        catalog.map((o: any) => o.hours as number),
-        catalog.map((o: any) => (o.weight ?? 1) as number),
-      ),
-    );
+    // Weighted robust median over the catalog sources, each carrying its own
+    // weight: repairpal_endpoint (0.9) wins outright when present; otherwise
+    // olp_labor (0.7) anchors with web_labor (0.6) as additional corroboration,
+    // ahead of LLM (0.3-0.5) and VDB (0.05). A wrong high-weight value is
+    // guarded at WRITE time by the scrape's sanity gate, not here.
+    bookHours = resolveBookHours(catalog as { hours: number; weight?: number; source: string }[]);
     engineFamily = catalog.find((o: any) => o.engine_family)?.engine_family;
-    hasRepairpal = catalog.some((o: any) => o.source === "repairpal_motor");
   }
 
   // ── Empirical tier: post-job actuals, gated at the min sample size ──
@@ -138,27 +160,72 @@ export async function recomputeLaborForConfigService(
     }
   }
 
-  // Data-good signal (spec §3.7). RepairPal (MOTOR) is the high-trust anchor;
-  // corroboration by a second non-VDB source within 20% bumps it to 0.9.
-  //
-  // DECISION (Jun 9 2026 review): without a repairpal_motor observation the
-  // ceiling is 0.6, which is BELOW the quote gate's MIN_VDB_CONFIDENCE (0.75)
-  // — i.e. LLM-only consensus intentionally does NOT quote; the quote falls to
-  // the transparent tier_estimate layer instead. That also means recompute can
-  // downgrade an old VDB row (0.9) below the gate — accepted, that's the VDB
-  // de-throning. Rollout consequence: flip LABOR_SOURCE_REPAIRPAL=on BEFORE
-  // any catalog-wide re-enrich/relabor, or Layer-1 labor goes dark.
-  const nonVdb = catalog.filter((o: any) => o.source !== "vdb_repair_estimates");
-  const agree = (a: number, b: number) => Math.abs(a - b) / Math.max(a, b) <= 0.2;
+  // ── Agreement + fallback-guardrail confidence (spec 2026-06-13) ──
+  // Confidence comes from source AGREEMENT, not source identity, and every
+  // value is weighed against the Pricing-v2 tier fallback within a 15-min
+  // guardrail. The fallback FLAGS a suspicious single source; it never inflates.
   let confidence: number | undefined;
+  let outsideFallbackBand = false;
+  let sourcesDisagree = false;
+  let fallbackGapMinutes: number | undefined;
+
   if (bookHours !== undefined) {
-    if (hasRepairpal) {
-      const corroborated = nonVdb.some(
-        (o: any) => o.source !== "repairpal_motor" && agree(o.hours, bookHours!),
-      );
-      confidence = corroborated ? 0.9 : 0.8;
+    // `kept` mirrors the observations weightedMedian actually used (its internal
+    // MAD drops wide outliers at n>=4), so confidence reflects what DROVE
+    // book_hours — a strong source dropped as an outlier must not lend its trust
+    // to a value the weaker sources produced. Disagreement, by contrast, uses the
+    // PRE-MAD strong set so a contested pair is still flagged after MAD removes one.
+    const keepIdx = new Set(nonOutlierIndices(catalog.map((o: any) => o.hours as number)));
+    const kept = catalog.filter((_: any, i: number) => keepIdx.has(i));
+    const strongRaw = catalog.filter((o: any) => STRONG_LABOR_SOURCES.has(o.source));
+    const strong = kept.filter((o: any) => STRONG_LABOR_SOURCES.has(o.source));
+    const nonVdb = kept.filter((o: any) => o.source !== "vdb_repair_estimates");
+
+    // Tier fallback for the guardrail. detectTier resolves the tier via the rule
+    // engine when pricing_tier hasn't been persisted yet (fresh enrichments set it
+    // lazily at first quote), so the guardrail isn't silently skipped for new cars.
+    const cfg = await ctx.db.get(vehicleConfigId);
+    const tier = cfg ? await detectTier(ctx, cfg) : null;
+    let fallbackHours: number | null = null;
+    if (tier) {
+      fallbackHours = await computeLaborTierFloorHours(ctx, {
+        serviceId,
+        vehicleTier: tier,
+      });
+    }
+    let fallbackOutOfBand = false;
+    if (fallbackHours != null) {
+      // Round the fallback to book_hours' 0.1h precision so the 15-min band
+      // isn't tripped by a rounding asymmetry at the boundary.
+      const fb = Math.round(fallbackHours * 10) / 10;
+      fallbackGapMinutes = Math.round(Math.abs(bookHours - fb) * 60);
+      fallbackOutOfBand = !withinGuardrail(bookHours, fb);
+    }
+
+    if (strongRaw.length >= 2) {
+      const hrs = strongRaw.map((o: any) => o.hours as number);
+      sourcesDisagree = !withinAgreementBand(Math.min(...hrs), Math.max(...hrs));
+    }
+
+    if (strong.length >= 2 && !sourcesDisagree) {
+      confidence = 0.9; // ≥2 strong sources agree
+    } else if (sourcesDisagree) {
+      // Contested but real — quotable (clears the 0.75 gate) and flagged for
+      // director review, rather than punting to a worse tier estimate.
+      confidence = 0.75;
+    } else if (strong.length >= 1 && strong.some((o: any) => withinAgreementBand(o.hours as number, bookHours))) {
+      // 1 strong source that actually DROVE book_hours (its value is within the
+      // agreement band of the weighted-median result). A strong source that
+      // SURVIVED MAD but was OUTVOTED on the frontier must not lend its 0.8 to a
+      // value the weaker sources produced — same invariant as the MAD-drop guard.
+      if (fallbackOutOfBand) {
+        confidence = 0.6;
+        outsideFallbackBand = true;
+      } else {
+        confidence = 0.8; // within guardrail, or no fallback to corroborate
+      }
     } else if (nonVdb.length >= 2) {
-      confidence = 0.6;
+      confidence = 0.6; // LLM-only consensus — below the 0.75 quote gate
     } else {
       confidence = 0.4;
     }
@@ -195,9 +262,12 @@ export async function recomputeLaborForConfigService(
       patch.source = "aggregated";
       // Explicitly clear any stale clone/training stamp: the quote gate
       // disqualifies on data_quality, and a leftover 'chassis_clone' would
-      // silently veto a freshly aggregated RepairPal/MOTOR value.
+      // silently veto a freshly aggregated OLP value.
       patch.data_quality = "aggregated";
       if (engineFamily) patch.engine_family = engineFamily;
+      patch.labor_outside_fallback_band = outsideFallbackBand;
+      patch.labor_sources_disagree = sourcesDisagree;
+      patch.fallback_gap_minutes = fallbackGapMinutes;
     }
     if (Object.keys(patch).length > 0) await ctx.db.patch(existing._id, patch);
     return;
@@ -213,6 +283,9 @@ export async function recomputeLaborForConfigService(
     source: bookHours !== undefined ? "aggregated" : undefined,
     data_quality: bookHours !== undefined ? "aggregated" : undefined,
     confidence,
+    labor_outside_fallback_band: outsideFallbackBand,
+    labor_sources_disagree: sourcesDisagree,
+    fallback_gap_minutes: fallbackGapMinutes,
     empirical_hours: empirical ? empirical.hours : 0,
     empirical_sample_size: empirical ? empirical.n : empiricalCount,
     empirical_p25: empirical ? empirical.p25 : 0,

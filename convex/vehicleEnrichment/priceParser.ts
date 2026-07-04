@@ -209,6 +209,114 @@ export function parsePartPrices(html: string, sourceUrl: string): ParsedPartPric
 }
 
 // ===========================================================================
+// Supersession parsing — deterministic, zero extra fetches.
+//
+// Registry product pages (RevolutionParts family and most OEM storefronts)
+// state part replacement chains in prose: "This part has been replaced by
+// 11428583898", "Replaces: 11427953129", or an explicit "OLD superseded by
+// NEW" pair. We parse them from the SAME raw HTML the price parser already
+// receives, so supersession capture costs nothing.
+// ===========================================================================
+
+export type ParsedSupersession = {
+  /** Normalized (normalizeOemNumber) number that was replaced. */
+  old_number: string;
+  /** Normalized number that replaces it. */
+  new_number: string;
+  source_domain: string;
+  source_url: string;
+};
+
+/** Greedy part-number capture: alphanumeric with internal spaces/dashes/dots.
+ *  With the `i` flag this also matches prose words — stripAlphaWords() trims
+ *  letter-only tokens off both ends before the digit-required plausibility
+ *  check, so "Part 11427953129 has been" reduces to the number itself. */
+const NUM_CAP = "([A-Z0-9][A-Z0-9\\-\\. ]{2,24}[A-Z0-9])";
+
+function stripAlphaWords(s: string): string {
+  const toks = s.trim().split(/\s+/);
+  while (toks.length && /^[A-Za-z]+$/.test(toks[0])) toks.shift();
+  while (toks.length && /^[A-Za-z]+$/.test(toks[toks.length - 1])) toks.pop();
+  return toks.join(" ");
+}
+
+/** Primary MPN of a single-product page (microdata / JSON-LD). */
+function pagePrimaryMpn(html: string): string | null {
+  const m =
+    /<meta[^>]+itemprop=["']mpn["'][^>]+content=["']([^"']+)["']/i.exec(html) ??
+    /itemprop=["']mpn["'][^>]*>([^<]+)</i.exec(html) ??
+    /"mpn"\s*:\s*"([^"]{4,25})"/.exec(html);
+  return m?.[1]?.trim() || null;
+}
+
+export function parseSupersessions(html: string, sourceUrl: string): ParsedSupersession[] {
+  if (!html) return [];
+  const domain = hostOf(sourceUrl);
+  const out = new Map<string, ParsedSupersession>();
+
+  // Both sides must look like part numbers (has a digit, sane length) and
+  // differ — this filters prose the capture regex can latch onto ("part",
+  // "been", section headings).
+  const plausible = (s: string) => s.length >= 5 && s.length <= 15 && /\d/.test(s);
+
+  /** Returns true when the pair was accepted. */
+  const push = (oldRaw: string | null | undefined, newRaw: string | null | undefined): boolean => {
+    if (!oldRaw || !newRaw) return false;
+    const oldN = normalizeOemNumber(stripAlphaWords(oldRaw));
+    const newN = normalizeOemNumber(stripAlphaWords(newRaw));
+    if (!plausible(oldN) || !plausible(newN) || oldN === newN) return false;
+    const key = `${oldN}->${newN}`;
+    if (!out.has(key)) {
+      out.set(key, { old_number: oldN, new_number: newN, source_domain: domain, source_url: sourceUrl });
+    }
+    return true;
+  };
+
+  // Work on tag-stripped text so markup can't split a phrase.
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ");
+
+  // Pattern A: explicit pair — "OLD (has been) replaced/superseded by NEW".
+  const pairRe = new RegExp(
+    `${NUM_CAP}(?:\\s+(?:has\\s+been|was|is))?\\s+(?:replaced|superseded)\\s+by[:#\\s]*${NUM_CAP}`,
+    "gi",
+  );
+  let m: RegExpExecArray | null;
+  const successorsFromPairs = new Set<string>();
+  while ((m = pairRe.exec(text)) !== null) {
+    // Only a pair whose OLD side is a real part number claims the successor —
+    // a prose left side ("This part has been…") must not block pattern B.
+    if (push(m[1], m[2])) {
+      successorsFromPairs.add(normalizeOemNumber(stripAlphaWords(m[2])));
+    }
+  }
+
+  // Patterns B/C are page-scoped: they pair with the page's own part number,
+  // so they only apply to single-product pages with a recoverable MPN.
+  const mpn = pagePrimaryMpn(html);
+  if (mpn) {
+    // Pattern B: "replaced/superseded by NEW" → page part is the OLD one.
+    // Skip successors already claimed by an explicit pair (related-part tiles
+    // would otherwise falsely supersede the page's own part).
+    const byRe = new RegExp(`(?:replaced|superseded)\\s+by[:#\\s]*${NUM_CAP}`, "gi");
+    while ((m = byRe.exec(text)) !== null) {
+      if (successorsFromPairs.has(normalizeOemNumber(stripAlphaWords(m[1])))) continue;
+      push(mpn, m[1]);
+    }
+
+    // Pattern C: "replaces/supersedes OLD" → page part is the NEW one.
+    const fwdRe = new RegExp(`(?:replaces|supersedes)[:#\\s]+${NUM_CAP}`, "gi");
+    while ((m = fwdRe.exec(text)) !== null) push(m[1], mpn);
+  }
+
+  return [...out.values()];
+}
+
+// ===========================================================================
 // Tier-2 LLM fallback — PURE pieces (domain-agnostic, no network).
 //
 // When a page emits NO structured data (so parsePartPrices above returns

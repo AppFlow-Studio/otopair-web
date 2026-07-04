@@ -12,6 +12,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
+import { partFitsConfigMake } from "./partSelector";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -593,6 +594,9 @@ export const vehicleConfigFitments = query({
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", vehicle_config_id))
       .collect();
 
+    // I1 make guard: annotate cross-make contaminant parts (directors see them, never dropped)
+    const cfg = await ctx.db.get(vehicle_config_id);
+
     const rows = await Promise.all(
       fitments.map(async (f) => {
         const part = (await ctx.db.get(f.part_id)) as any | null;
@@ -616,6 +620,7 @@ export const vehicleConfigFitments = query({
           subcategory:      part?.subcategory ?? null,
           partTier:         part?.part_tier ?? null,
           priceCount:       prices.length,
+          cross_make:       part ? !partFitsConfigMake(part.make_id, cfg?.make_id) : false,
         };
       }),
     );
@@ -692,6 +697,8 @@ export const partFitmentDetail = query({
           sourceUrl:     (p as any).source_url ?? null,
           sourceDomain:  (p as any).source_domain ?? null,
           refreshedAt:   (p as any).refreshed_at ?? null,
+          msrp:          (p as any).msrp ?? null,
+          discount:      (p as any).discount ?? null,
         }))
         .sort((a, b) => a.price - b.price),
       evidence: evidence
@@ -766,15 +773,47 @@ export const vehicleConfigDetail = query({
       })),
     );
 
+    // Labor times — per-service rollup (book hours + source + confidence), so a
+    // director can audit which services have real (OLP-backed) labor vs the
+    // tier-estimate fallback. Read-only.
+    const laborRows = await ctx.db
+      .query("labor_times")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", id))
+      .collect();
+    const laborTimes = (
+      await Promise.all(
+        laborRows.map(async (row) => {
+          const svc = await ctx.db.get(row.service_id);
+          if (!svc) return null;
+          return {
+            serviceName: (svc as any).name ?? "—",
+            hours: row.book_hours ?? row.empirical_hours ?? null,
+            source: row.source ?? null,
+            confidence: row.confidence ?? null,
+          };
+        }),
+      )
+    )
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+      .sort((a, b) => a.serviceName.localeCompare(b.serviceName));
+
     // Part fitments — show how many parts are mapped for this config.
     const fitments = await ctx.db
       .query("part_fitments")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", id))
       .collect();
+    // I1 make guard: annotate cross-make contaminant parts (directors see them, never dropped)
+    const fitmentParts = await Promise.all(fitments.map((f) => ctx.db.get(f.part_id)));
     const fitmentSummary = (() => {
-      const byService: Record<string, number> = {};
-      for (const f of fitments) byService[(f as any).service_type ?? "unknown"] = (byService[(f as any).service_type ?? "unknown"] ?? 0) + 1;
-      return Object.entries(byService).map(([service, count]) => ({ service, count }));
+      const byService: Record<string, { count: number; cross_make_count: number }> = {};
+      fitments.forEach((f, i) => {
+        const key = (f as any).service_type ?? "unknown";
+        const part = fitmentParts[i] as any | null;
+        const entry = (byService[key] ??= { count: 0, cross_make_count: 0 });
+        entry.count += 1;
+        if (part && !partFitsConfigMake(part.make_id, cfg.make_id)) entry.cross_make_count += 1;
+      });
+      return Object.entries(byService).map(([service, counts]) => ({ service, ...counts }));
     })();
 
     // Enrichment runs (full history)
@@ -942,6 +981,7 @@ export const vehicleConfigDetail = query({
 
       packages: cfg.packages_available ?? [],
       serviceIntervals,
+      laborTimes,
       fitmentSummary,
       fitmentTotal: fitments.length,
 

@@ -2,14 +2,13 @@
  * devOnly/laborValidation — READ-ONLY labor "data-good" grading
  * (Notion: Labor-time validation + data-good signal, freeze Jun 10).
  *
- * Grades every RepairPal-MAPPED service (LABOR_SERVICE_CONFIG) on every
- * non-fixture vehicle_config with the SAME gate the quote engine uses
- * (isHighQualityVdb, lib/quoteEngine.ts) so this report and real quotes can
- * never disagree. A config is `labor_data_good` only when EVERY mapped
- * service has a quote-grade labor_times row backed by >= 1 repairpal_motor
- * observation (multi-source provenance, not an LLM echo).
+ * Grades every OLP-MAPPED service (OLP_JOB_MAP) on every non-fixture
+ * vehicle_config with the SAME gate the quote engine uses (isHighQualityVdb,
+ * lib/quoteEngine.ts) so this report and real quotes can never disagree.
+ * A config is `labor_data_good` only when EVERY mapped service has a
+ * quote-grade labor_times row.
  *
- * Services without a RepairPal mapping fall to tier_estimate at quote time by
+ * Services without an OLP mapping fall to tier_estimate at quote time by
  * design (flag-off-style 0.6 confidence) and are reported but never counted
  * against the rollup.
  *
@@ -18,6 +17,7 @@
 import { internalQuery } from "../_generated/server";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { isHighQualityVdb } from "../lib/quoteEngine";
+import { OLP_JOB_MAP } from "../vehicleEnrichment/olpLabor";
 
 export const report = internalQuery({
   args: {},
@@ -33,7 +33,7 @@ export const report = internalQuery({
       if (String(cfg.config_key ?? "").includes("evaltest")) continue;
 
       // Applicability basis: timing_belt on a chain engine is NOT a labor gap
-      // (RepairPal correctly has no page) — mirror the coverage inspector.
+      // (OLP correctly has no job) — mirror the coverage inspector.
       const engine = cfg.engine_id ? ((await ctx.db.get(cfg.engine_id)) as any) : null;
       const timingSystem = engine?.timing_system ?? null;
 
@@ -46,12 +46,12 @@ export const report = internalQuery({
         if (slug === "timing_belt" && timingSystem != null && timingSystem !== "belt") {
           rows.push({
             slug,
-            mapped: !!sc.repairpal_slug,
+            mapped: slug in OLP_JOB_MAP,
             hours: null,
             source: null,
             confidence: null,
             observations: 0,
-            repairpal_observations: 0,
+            olp_observations: 0,
             quote_grade: false,
             reason: `not applicable (timing_system=${timingSystem})`,
           });
@@ -69,17 +69,17 @@ export const report = internalQuery({
             q.eq("vehicle_config_id", cfg._id).eq("service_id", svc._id),
           )
           .collect();
-        const rpObs = obs.filter((o: any) => o.source === "repairpal_motor").length;
+        const olpObs = obs.filter((o: any) => o.source === "olp_labor").length;
 
         const gateOk = lt ? isHighQualityVdb(lt as any) : false;
-        const mapped = !!sc.repairpal_slug;
-        const quoteGrade = gateOk && (!mapped || rpObs > 0);
+        const mapped = slug in OLP_JOB_MAP;
+        const quoteGrade = gateOk && (!mapped || olpObs > 0);
         const reason = !lt
           ? "no labor_times row"
           : !gateOk
             ? `gate refused (source=${(lt as any).source ?? "?"}, data_quality=${(lt as any).data_quality ?? "?"}, conf=${(lt as any).confidence ?? "?"})`
-            : mapped && rpObs === 0
-              ? "no repairpal_motor observation backing the aggregate"
+            : mapped && olpObs === 0
+              ? "no olp observation backing the aggregate"
               : "ok";
 
         if (mapped) {
@@ -93,7 +93,7 @@ export const report = internalQuery({
           source: (lt as any)?.source ?? null,
           confidence: (lt as any)?.confidence ?? null,
           observations: obs.length,
-          repairpal_observations: rpObs,
+          olp_observations: olpObs,
           quote_grade: quoteGrade,
           reason,
         });

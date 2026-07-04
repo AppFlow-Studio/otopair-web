@@ -61,6 +61,8 @@ import {
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
+import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
+import { symptomForRecordType } from "./lib/serviceSymptoms";
 import { logPrejobMechanicVerification } from "./lib/mechanic_verification_logging";
 import {
   EARLY_PUSH_THRESHOLD_MS,
@@ -105,6 +107,7 @@ import {
   getMissingRequiredPassportFields,
   getPassportCompletionPercent,
   hasText,
+  inspectionInputValidator,
   isTireCondition,
   mergePassportSection,
   postjobPhotoValidator,
@@ -4993,18 +4996,69 @@ function validatePrejobReport(
   }
 }
 
+// Upsert the gamified multi-point inspection record for a booking. Additive —
+// the derived prejob still drives prejob_report + passport above; this stores
+// the full zone-by-zone state for resume + the downloadable PDF sheet.
+async function upsertInspectionRecord(
+  ctx: any,
+  {
+    booking,
+    jobActualId,
+    inspection,
+    now,
+  }: {
+    booking: any;
+    jobActualId?: any;
+    inspection: any;
+    now: number;
+  }
+) {
+  if (!inspection) return;
+
+  const zones = Array.isArray(inspection.zones) ? inspection.zones : [];
+  const patch: Record<string, any> = {
+    job_actual_id: jobActualId ?? undefined,
+    template_version: inspection.template_version ?? "mpi-v1",
+    zones,
+    findings_attention: inspection.findings_attention ?? [],
+    findings_monitor: inspection.findings_monitor ?? [],
+    updated_at: now,
+  };
+
+  const existing = await ctx.db
+    .query("vehicle_inspections")
+    .withIndex("by_booking", (q: any) => q.eq("booking_id", booking._id))
+    .first();
+
+  if (existing) {
+    await ctx.db.patch(existing._id, patch);
+    return existing._id;
+  }
+
+  return await ctx.db.insert("vehicle_inspections", {
+    booking_id: booking._id,
+    vin: booking.vin,
+    shop_id: booking.shop_id ?? undefined,
+    mechanic_id: booking.mechanic_id ?? undefined,
+    created_at: now,
+    ...patch,
+  });
+}
+
 async function persistPrejobSurvey(
   ctx: any,
   {
     booking,
     passportView,
     prejob,
+    inspection,
     now,
     startedAtMs,
   }: {
     booking: any;
     passportView: any;
     prejob: any;
+    inspection?: any;
     now: number;
     startedAtMs?: number;
   }
@@ -5026,6 +5080,13 @@ async function persistPrejobSurvey(
 
   await ctx.db.patch(jobActual._id, jobActualPatch);
 
+  await upsertInspectionRecord(ctx, {
+    booking,
+    jobActualId: jobActual._id,
+    inspection,
+    now,
+  });
+
   await upsertVehiclePassportRecord(ctx, {
     vin: booking.vin,
     patch: buildPassportPatchFromPrejob(prejob, passportView.passport),
@@ -5042,6 +5103,22 @@ async function persistPrejobSurvey(
     jobActualId: jobActual._id,
     now,
   });
+
+  // Recompute the Vehicle Health Score so the just-measured condition (brake
+  // pad mm, tire condition now on the passport) feeds the maintenance pipeline's
+  // urgency override. Best-effort + scheduled so it never blocks the save.
+  const vehicleOwner = await ctx.db
+    .query("vehicle_owners")
+    .withIndex("by_vin_user", (q: any) =>
+      q.eq("vin", booking.vin).eq("user_id", booking.user_id),
+    )
+    .first();
+  if (vehicleOwner) {
+    await ctx.scheduler.runAfter(0, internal.maintenance_pipeline.runPipeline, {
+      vehicleOwnerId: vehicleOwner._id,
+      triggeredBy: "inspection",
+    });
+  }
 }
 
 function validatePostjobReport(postjob: any, baselineMileage: number | null, requiresParts: boolean) {
@@ -7511,7 +7588,9 @@ export const backfillQuotedSetPrice = internalMutation({
   },
 });
 
-async function runCompletionSideEffects(ctx: any, booking: any) {
+// Exported for the #90 integration test (tests/bookingCompletionHealth.test.ts) —
+// drives the completion write-back + knownIssue clear without a full booking flow.
+export async function runCompletionSideEffects(ctx: any, booking: any) {
   await maybePersistEarlyCompletionDuration(ctx, booking);
 
   if (booking.vin) {
@@ -7522,38 +7601,18 @@ async function runCompletionSideEffects(ctx: any, booking: any) {
       )
       .first();
     if (vehicleOwner?.preOnboardingComplete) {
-      const SLUG_TO_TYPE: Record<string, string> = {
-        "oil-change": "oil",
-        "brake-pads": "brakes",
-        "brake-rotors": "brakes",
-        "tire-replacement": "tires",
-        "tire-rotation": "tires",
-        "tire-balance": "tires",
-        "wheel-alignment": "tires",
-        "battery-replacement": "battery",
-        "battery-test": "battery",
-        "brake-fluid-flush": "fluids",
-        "coolant-flush": "fluids",
-        "transmission-fluid": "fluids",
-        "power-steering-flush": "fluids",
-        "engine-air-filter": "filters",
-        "cabin-air-filter": "filters",
-        "wiper-blades": "wipers",
-        "spark-plugs": "engine_parts",
-        "serpentine-belt": "engine_parts",
-        "check-engine-diagnostic": "diagnostics",
-        "general-diagnostic": "diagnostics",
-        "state-inspection": "inspection",
-        "emissions-test": "inspection",
-      };
-
       const serviceIds = booking.service_ids as string[] | undefined;
       if (serviceIds?.length) {
         const typesUpdated = new Set<string>();
+        // Warning-light codes to clear from knownIssues once the service is done
+        // (mirrors maintenance.upsertRecord / vehicleTruth's add). Patched once
+        // after the loop so a multi-service booking clears all of them together.
+        const clearedCodes = new Set<string>();
         for (const serviceId of serviceIds) {
           const service = await ctx.db.get(serviceId as any);
           if (!service) continue;
-          const recordType = SLUG_TO_TYPE[(service as any).slug];
+          // #90: services.slug is snake_case — resolve via the canonical map.
+          const recordType = recordTypeForServiceSlug((service as any).slug);
           if (!recordType || typesUpdated.has(recordType)) continue;
           typesUpdated.add(recordType);
 
@@ -7582,6 +7641,20 @@ async function runCompletionSideEffects(ctx: any, booking: any) {
               ...data,
               createdAt: now,
             });
+          }
+
+          const code = symptomForRecordType(recordType);
+          if (code) clearedCodes.add(code);
+        }
+
+        // Service done → clear its warning-light code(s) so the pipeline stops
+        // flagging it. Single patch; only writes when something actually clears.
+        if (clearedCodes.size > 0 && Array.isArray(vehicleOwner.knownIssues)) {
+          const next = (vehicleOwner.knownIssues as string[]).filter(
+            (x) => !clearedCodes.has(x)
+          );
+          if (next.length !== vehicleOwner.knownIssues.length) {
+            await ctx.db.patch(vehicleOwner._id, { knownIssues: next } as any);
           }
         }
       }
@@ -9151,6 +9224,7 @@ export const startWithPrejob = mutation({
   args: {
     bookingId: v.id("bookings"),
     prejob: prejobReportValidator,
+    inspection: v.optional(inspectionInputValidator),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -9203,6 +9277,7 @@ export const startWithPrejob = mutation({
       booking,
       passportView,
       prejob: args.prejob,
+      inspection: args.inspection,
       now,
       startedAtMs: now,
     });
@@ -9257,6 +9332,7 @@ export const commitInspectionAndAwaitEstimate = mutation({
   args: {
     bookingId: v.id("bookings"),
     prejob: prejobReportValidator,
+    inspection: v.optional(inspectionInputValidator),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -9304,6 +9380,7 @@ export const commitInspectionAndAwaitEstimate = mutation({
       booking,
       passportView,
       prejob: args.prejob,
+      inspection: args.inspection,
       now,
       startedAtMs: now,
     });
@@ -9347,6 +9424,7 @@ export const savePrejob = mutation({
   args: {
     bookingId: v.id("bookings"),
     prejob: prejobReportValidator,
+    inspection: v.optional(inspectionInputValidator),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -9365,6 +9443,7 @@ export const savePrejob = mutation({
       booking,
       passportView,
       prejob: args.prejob,
+      inspection: args.inspection,
       now,
     });
 

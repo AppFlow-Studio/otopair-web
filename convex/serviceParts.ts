@@ -15,6 +15,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
 import {
   selectPart,
+  partFitsConfigMake,
   normalizeDataQuality,
   type CandidateInput,
   type TraceEntry,
@@ -40,6 +41,7 @@ import {
   resolveBrakeScopeForBooking,
   type BrakeScope,
 } from "./lib/brakeScope";
+import { matchesForeignBrandSignature } from "./vehicleEnrichment/contentSanitization";
 
 /** Confidence floor for the selector's confidence gate. Below this a fitment
  *  can still win, but only after the gate has eliminated everyone and the
@@ -227,10 +229,18 @@ export const getPartsForService = query({
 
     // 3. Hydrate the part info for each fitment. Drop subcategories that
     //    aren't billable for this service per service_parts_rules.
+    const makeDocForGuard = config.make_id ? await ctx.db.get(config.make_id) : null;
     const resolved: ResolvedFitment[] = [];
     for (const f of applicable) {
       const part = await ctx.db.get(f.part_id);
       if (!part) continue;
+      // I1 make guard — never quote a part whose make disagrees with this
+      // config's make (universal consumables with no make_id pass through).
+      if (!partFitsConfigMake(part.make_id, config.make_id)) continue;
+      // Brand-signature backstop: contaminants stamped with THIS config's
+      // make_id at write time (e.g. Motorcraft batteries on an Alfa) pass the
+      // make guard but betray themselves by their number format.
+      if (matchesForeignBrandSignature(part.oem_part_number, makeDocForGuard?.name)) continue;
       if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
       resolved.push({
         fitment_id: f._id,
@@ -337,6 +347,10 @@ export const getOemPartsForBooking = query({
     if (!vehicle?.vehicle_config_id) return [];
 
     const configId = vehicle.vehicle_config_id;
+    // I1 make guard needs this config's make to reject cross-make contaminants.
+    const legacyConfig = await ctx.db.get(configId);
+    const configMakeId = legacyConfig?.make_id ?? null;
+    const makeDocForGuard = configMakeId ? await ctx.db.get(configMakeId) : null;
     const out: OemPartsForService[] = [];
 
     // Customer's axle choice per service (brake pads front/rear/both). Drives
@@ -374,6 +388,10 @@ export const getOemPartsForBooking = query({
       for (const f of base) {
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
+        // I1 make guard — drop cross-make parts (null-make consumables pass).
+        if (!partFitsConfigMake(part.make_id, configMakeId)) continue;
+        // Brand-signature backstop (see resolveWinningPartForService).
+        if (matchesForeignBrandSignature(part.oem_part_number, makeDocForGuard?.name)) continue;
         if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
         // Scope to the booked axle. Position-neutral parts (hardware kits,
         // grease) survive a single-axle filter; "both"/unspecified keeps all.
@@ -753,10 +771,26 @@ export async function resolveWinningPartForService(
   // Billing-subcategory gate: drop fitments whose subcategory isn't on the
   // service's billable allowlist per service_parts_rules. Pipeline still
   // stores these for the vehicle profile; we just don't price them.
+  // I1 make guard — load this config's make so the hydration loop can reject
+  // cross-make contaminants (e.g. a Ford brake pad cloned onto this Alfa config
+  // by the chassis/engine sibling-clone path). Filtering here also protects the
+  // director-pin and VIN-sticky overrides below: both select only from the
+  // already-hydrated candidate pool, so a dropped wrong-make part can never win
+  // outright through those paths either.
+  const configForMake = await ctx.db.get(args.vehicleConfigId);
+  const configMakeId =
+    (configForMake as Doc<"vehicle_configs"> | null)?.make_id ?? null;
+  const makeDocForGuard = configMakeId ? await ctx.db.get(configMakeId) : null;
+
   const hydratedAll: WinnerCandidate[] = [];
   for (const f of packageGated) {
     const part = await ctx.db.get(f.part_id);
     if (!part) continue;
+    if (!partFitsConfigMake(part.make_id, configMakeId)) continue; // I1 make guard
+    // Brand-signature backstop — contamination stamped with this config's own
+    // make_id (write-time provenance bug) passes the id guard but carries a
+    // foreign brand's number format (Motorcraft BXT-… on an Alfa Romeo).
+    if (matchesForeignBrandSignature(part.oem_part_number, makeDocForGuard?.name)) continue;
     if (!isBillableSubcategoryViaRule(rule, part.subcategory)) continue;
     const priceSummary = await summarizePartPrices(ctx, f.part_id);
     hydratedAll.push({ fitment: f, part, priceSummary });
@@ -987,7 +1021,11 @@ export async function resolveWinningPartForService(
         const pinnedPartId = rule.pinnedPartIdsBySubcategory.get(sub);
         return pinnedPartId != null && pinnedPartId === c.part._id;
       });
-      if (pinned) {
+      // I1 defense-in-depth: g.candidates is already make-filtered at hydration
+      // (:804), so `pinned` is make-correct today. Re-assert here so a future
+      // refactor that resolves the pin's part_id independently can't reintroduce
+      // a cross-make win — a wrong-make pin falls through to normal selection.
+      if (pinned && partFitsConfigMake(pinned.part.make_id, configMakeId)) {
         const q = resolveRoleQuantity(g.role, bundle, pinned.fitment.quantity_needed);
         roleWinners.push({
           roleKey: g.roleKey,
@@ -1007,7 +1045,11 @@ export async function resolveWinningPartForService(
     // VIN-sticky wins its group outright, skipping the scorer.
     if (stickyDefault) {
       const sticky = g.candidates.find((c) => c.part._id === stickyDefault.part_id);
-      if (sticky) {
+      // I1 defense-in-depth: g.candidates is already make-filtered at hydration
+      // (:804), so a wrong-make sticky part_id isn't found here today. Re-assert
+      // so a future refactor that resolves the sticky part_id independently
+      // can't serve a cross-make part — a wrong-make sticky falls through.
+      if (sticky && partFitsConfigMake(sticky.part.make_id, configMakeId)) {
         const q = resolveRoleQuantity(g.role, bundle, sticky.fitment.quantity_needed);
         roleWinners.push({
           roleKey: g.roleKey,
@@ -1047,6 +1089,19 @@ export async function resolveWinningPartForService(
     if (!result.winner) continue;
     const winner = g.candidates.find((c) => c.part._id === result.winner!.part_id)!;
     const q = resolveRoleQuantity(g.role, bundle, winner.fitment.quantity_needed);
+    // Corroboration rule (PARTS_REQUIRE_CORROBORATION=on): a scored winner
+    // attested by fewer than 2 distinct source domains — and neither
+    // mechanic-verified nor reverse-fitment confirmed — is still quoted, but
+    // flagged low-confidence (surfaces in bookings.low_confidence_parts for
+    // post-job review). Ships OFF: source_domains only started accruing in
+    // Jul 2026, so flipping this on immediately would flag nearly every
+    // booking; enable once re-runs / the reverse-fitment check have populated
+    // second attestations.
+    const corroborated =
+      process.env.PARTS_REQUIRE_CORROBORATION !== "on" ||
+      winner.fitment.mechanic_verified === true ||
+      (winner.fitment.source_domains?.length ?? 0) >= 2 ||
+      winner.fitment.data_quality === "reverse_fitment_confirmed";
     roleWinners.push({
       roleKey: g.roleKey,
       serviceRole: effRole,
@@ -1055,7 +1110,7 @@ export async function resolveWinningPartForService(
       source: "scored",
       trace: result.trace,
       eliminatedByGatePartIds: result.eliminatedByGate.map((e) => e.part_id),
-      lowConfidence: result.low_confidence,
+      lowConfidence: result.low_confidence || !corroborated,
       quantity: q.quantity,
       quantityBasis: q.basis,
       includeInLockedQuote,

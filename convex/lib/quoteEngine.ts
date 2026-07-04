@@ -18,8 +18,24 @@ import { resolveLaborRate, VehicleTier } from "./vehicleTiers";
 import { ASSIGNMENT_RULES, matchRule } from "../seeds/seedPricing";
 import { resolveServiceUnitCount, unitScale } from "./serviceUnits";
 
-// Anchor — the 2020 Camry LE FWD vehicle_config (seeded by seedCamryBaseline).
-export const CAMRY_FWD_CONFIG_KEY = "2020_toyota_camry_le_fwd_a25a-fks";
+// Anchor config key + Camry lookup live in laborFallback (shared with the
+// labor aggregator so both compute the same tier floor).
+export { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig } from "./laborFallback";
+import { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig, computeLaborTierFloorHours } from "./laborFallback";
+import { withinGuardrail } from "./laborBands";
+import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./laborConstants";
+import { aggregatePartsBand, type PartsRoleInput } from "./partsBand";
+import { resolveRoleQuantity, type VehicleSpecBundle } from "./partRoleQuantity";
+import { roleForSubcategory } from "./servicePartsReference";
+import { isNonPooledPriceType, isPoisonPriceType, REPAIRPAL_ENDPOINT_PRICE_TYPE } from "./priceTypes";
+import { partFitsConfigMake } from "../partSelector";
+
+/** PARTS_SOURCE_REAL_PRIMARY gates the real per-config parts band in
+ *  resolvePartsCost. Default OFF — when unset, resolvePartsCost output is
+ *  byte-identical to the locked Pricing-Spec-v2 multiplier path. */
+export function partsRealPrimaryEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.PARTS_SOURCE_REAL_PRIMARY === "on";
+}
 
 // ─── vdb quality gate ───────────────────────────────────────────────────────
 // Lived experience: vdb-seeded labor_times "wrong often" — chassis/engine
@@ -44,7 +60,6 @@ const DISQUALIFIED_SOURCE: ReadonlySet<string> = new Set([
   "default_fallback",
 ]);
 const MIN_VDB_CONFIDENCE = 0.75;
-const MIN_EMPIRICAL_SAMPLES = 5;
 
 /**
  * Drivetrains with a separately serviceable differential: AWD/4WD (front +
@@ -125,6 +140,25 @@ async function resolveRawLaborLayers(
     )
     .collect();
 
+  // Empirical-first (≥LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES completed jobs) — real-world
+  // actuals override book data (spec §5 + the UI resolver laborTimes.ts).
+  // so real-world job data overrides book-rate data, matching the UI resolver
+  // (laborTimes.ts) and spec §5. Book (Layer 1b) is the fallback for this row.
+  for (const row of direct) {
+    if (
+      row.empirical_hours != null &&
+      row.empirical_hours > 0 &&
+      (row.empirical_sample_size ?? 0) >= LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES
+    ) {
+      return {
+        hours: row.empirical_hours,
+        source: "empirical",
+        confidence: row.confidence ?? 0.85,
+      };
+    }
+  }
+
+  // Layer 1b: direct VDB / aggregated book_hours (quality-gated)
   for (const row of direct) {
     if (row.source === "vdb_camry_baseline" && row.book_hours != null && row.book_hours > 0) {
       return {
@@ -152,21 +186,6 @@ async function resolveRawLaborLayers(
           `vehicle_config=${args.vehicle_config_id} service=${args.service_id} ` +
           `data_quality=${row.data_quality ?? "?"} confidence=${row.confidence ?? "?"}`,
       );
-    }
-  }
-
-  // Layer 2: empirical (≥MIN_EMPIRICAL_SAMPLES completed jobs)
-  for (const row of direct) {
-    if (
-      row.empirical_hours != null &&
-      row.empirical_hours > 0 &&
-      (row.empirical_sample_size ?? 0) >= MIN_EMPIRICAL_SAMPLES
-    ) {
-      return {
-        hours: row.empirical_hours,
-        source: "empirical",
-        confidence: row.confidence ?? 0.85,
-      };
     }
   }
 
@@ -225,32 +244,13 @@ async function resolveRawLaborLayers(
  *  row for the tier, no Camry seed, or no Camry hours for this service. */
 async function computeTierFloor(
   ctx: QueryCtx,
-  args: {
-    service_id: Id<"services">;
-    vehicle_tier: VehicleTier;
-  },
+  args: { service_id: Id<"services">; vehicle_tier: VehicleTier },
 ): Promise<{ hours: number } | null> {
-  const service = await ctx.db.get(args.service_id);
-  if (!service?.labor_multiplier_category_id) return null;
-  const laborMultRow = await ctx.db
-    .query("pricing_labor_multipliers")
-    .withIndex("by_category_tier", (q) =>
-      q
-        .eq("labor_category_id", service.labor_multiplier_category_id!)
-        .eq("tier", args.vehicle_tier),
-    )
-    .first();
-  if (!laborMultRow) return null;
-  const camry = await getCamryFwdConfig(ctx);
-  if (!camry) return null;
-  const camryHours = await ctx.db
-    .query("labor_times")
-    .withIndex("by_vehicle_config_and_service", (q) =>
-      q.eq("vehicle_config_id", camry._id).eq("service_id", args.service_id),
-    )
-    .first();
-  if (!camryHours?.book_hours) return null;
-  return { hours: camryHours.book_hours * laborMultRow.multiplier };
+  const hours = await computeLaborTierFloorHours(ctx, {
+    serviceId: args.service_id,
+    vehicleTier: args.vehicle_tier as unknown as string,
+  });
+  return hours == null ? null : { hours };
 }
 
 export async function resolveLaborHours(
@@ -317,10 +317,35 @@ export async function resolveLaborHours(
     };
   }
 
-  // Both raw and floor present — reconcile per Round 6 policy.
+  // Both raw and floor present — reconcile per Round 6 policy (guardrail-aware).
   const r = raw!;
   const f = floor!;
+  // Empirical (real post-job actuals, ≥ the quote sample gate) is the highest-
+  // trust source — it bypasses the floor entirely; a Camry estimate must never
+  // override measured times. (Decision Jun-13: the floor applies to book/aggregated
+  // data, not empirical.)
+  if (r.source === "empirical") {
+    return {
+      ok: true,
+      hours: r.hours,
+      source: r.source,
+      confidence: r.confidence,
+      raw_hours: r.hours,
+    };
+  }
   if (r.hours < f.hours) {
+    if (withinGuardrail(r.hours, f.hours)) {
+      // Raw is within 15 min of the floor — real value is credible; don't inflate.
+      return {
+        ok: true,
+        hours: r.hours,
+        source: r.source,
+        confidence: r.confidence,
+        raw_hours: r.hours,
+        tier_floor_applied: false,
+      };
+    }
+    // Raw is more than 15 min below the floor — substitute floor value.
     return {
       ok: true,
       hours: f.hours,
@@ -353,7 +378,9 @@ export async function resolvePartsCost(
     service_id: Id<"services">;
     vehicle_tier: VehicleTier;
   },
+  opts?: { forceRealPrimary?: boolean },
 ): Promise<PartsCostResult> {
+  const realPrimary = opts?.forceRealPrimary ?? partsRealPrimaryEnabled();
   const cfg = await ctx.db.get(args.vehicle_config_id);
   if (!cfg) return { ok: false, reason: "vehicle config not found" };
 
@@ -400,6 +427,85 @@ export async function resolvePartsCost(
         source: "ccb_absolute",
         flags: ["ccb_absolute_pricing"],
       };
+    }
+  }
+
+  // ── Real per-config parts band (gated; default OFF) ─────────────────────
+  // Per role: pool the gathered SKU per-unit prices WITH the RepairPal endpoint
+  // per-unit point (peers), × the config's resolved quantity. Reliable iff every
+  // core role has at least one real price; else fall through to the multiplier.
+  // Skip brake/per_axle services in v1 (front-only endpoint + booking-position
+  // scaling don't compose with the per-config-total / bypass-scale model).
+  const isPerAxle = service.parts_kind === "per_axle";
+  if (realPrimary && !isBrakeService && !isPerAxle) {
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_config_service", (q) =>
+        q.eq("vehicle_config_id", args.vehicle_config_id).eq("service_type", slug))
+      .collect();
+
+    if (fitments.length > 0) {
+      const engine = cfg.engine_id ? await ctx.db.get(cfg.engine_id) : null;
+      const bundle: VehicleSpecBundle = {
+        config: {
+          brake_fluid_capacity_oz: (cfg as any).brake_fluid_capacity_oz ?? null,
+          ps_fluid_capacity_oz: (cfg as any).ps_fluid_capacity_oz ?? null,
+          has_brake_pad_sensor: (cfg as any).has_brake_pad_sensor ?? null,
+        },
+        engine: engine
+          ? {
+              oil_capacity_qts: (engine as any).oil_capacity_qts ?? null,
+              coolant_capacity_qts: (engine as any).coolant_capacity_qts ?? null,
+              spark_plug_quantity: (engine as any).spark_plug_quantity ?? null,
+              cylinders: (engine as any).cylinders ?? null,
+            }
+          : null,
+      };
+
+      const roles: PartsRoleInput[] = [];
+      for (const f of fitments) {
+        const part = await ctx.db.get(f.part_id);
+        // I1 make guard: drop cross-make contaminant parts
+        if (part && !partFitsConfigMake((part as any).make_id, cfg.make_id)) continue;
+        const sub = (part as any)?.subcategory ?? null;
+        const roleSpec = roleForSubcategory(slug, sub, (part as any)?.category);
+        const serviceRole = f.service_role ?? roleSpec?.serviceRole;
+        // Positively non-core roles (as_needed/kit) are discovery/variant items —
+        // they don't bind the band, so skip them. A CORE or UNCLASSIFIABLE fitment
+        // (an orphaned/legacy row we cannot confirm as non-core) MUST be priced:
+        // if its catalog part is gone or it has no real price, the whole service
+        // falls back to the multiplier rather than silently dropping a possibly-
+        // core part and under-pricing the quote.
+        if (serviceRole === "as_needed" || serviceRole === "kit") continue;
+
+        const prices = part
+          ? await ctx.db
+              .query("part_prices")
+              .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
+              .collect()
+          : [];
+        const skuPrices = prices
+          .filter((p) => !isPoisonPriceType(p.price_type) && !isNonPooledPriceType(p.price_type))
+          .map((p) => p.price)
+          .filter((n): n is number => typeof n === "number" && n > 0);
+        const endpointRow = prices.find(
+          (p) => p.price_type === REPAIRPAL_ENDPOINT_PRICE_TYPE && typeof p.price === "number" && p.price > 0,
+        );
+        const { quantity } = resolveRoleQuantity(roleSpec, bundle, f.quantity_needed);
+        roles.push({
+          role: sub ?? `unknown_sub:${f.part_id}`,
+          quantity,
+          skuPrices,
+          endpointUnitPrice: endpointRow?.price ?? null,
+        });
+      }
+
+      if (roles.length > 0) {
+        const band = aggregatePartsBand(roles);
+        if (band.reliable) {
+          return { ok: true, low: band.low, high: band.high, source: "real_parts", flags: ["real_parts_band"] };
+        }
+      }
     }
   }
 
@@ -475,6 +581,8 @@ export async function resolvePartsCost(
       reason: `differential service not applicable to drivetrain=${cfg.drivetrain ?? "unknown"}`,
     };
   }
+
+  if (realPrimary) flags.push("parts_fallback_multiplier");
 
   return {
     ok: true,
@@ -697,10 +805,11 @@ export async function buildQuote(
         is_estimate: true,
       };
 
-  // CCB absolute pricing is a flat per-axle price already, so don't scale
-  // it again — treat as unit_count=1 baseline=1.
-  const isCcbAbsolute = partsRes.source === "ccb_absolute";
-  const scale = isCcbAbsolute ? 1 : unitScale(unitRes);
+  // ccb_absolute and real_parts bands are already per-config totals — don't re-scale.
+  // ccb_absolute: flat per-axle price. real_parts: Σ per-role pooled-per-unit × resolved qty.
+  const bypassUnitScale =
+    partsRes.source === "ccb_absolute" || partsRes.source === "real_parts";
+  const scale = bypassUnitScale ? 1 : unitScale(unitRes);
   const scaledPartsLow = partsRes.low * scale;
   const scaledPartsHigh = partsRes.high * scale;
 
@@ -717,7 +826,7 @@ export async function buildQuote(
   }
   if (hoursRes.tier_floor_applied) flags.push("labor_below_tier_floor");
   if (hoursRes.above_tier_floor) flags.push("labor_above_tier_expected");
-  if (unitRes.is_estimate && !isCcbAbsolute) {
+  if (unitRes.is_estimate && !bypassUnitScale) {
     flags.push("unit_count_estimated");
   }
   if (spreadPct > 10) flags.push("spread_exceeded");
@@ -745,10 +854,17 @@ export async function buildQuote(
       source: partsRes.source,
       per_unit_low: round2(partsRes.low),
       per_unit_high: round2(partsRes.high),
-      unit_count: isCcbAbsolute ? 1 : unitRes.count,
-      baseline_count: isCcbAbsolute ? 1 : unitRes.baseline,
-      unit_label: isCcbAbsolute ? "axle" : unitRes.label,
-      unit_count_estimated: isCcbAbsolute ? false : unitRes.is_estimate,
+      unit_count: bypassUnitScale ? 1 : unitRes.count,
+      baseline_count: bypassUnitScale ? 1 : unitRes.baseline,
+      // ccb_absolute is a flat per-axle price → "axle". A real_parts band is
+      // pre-totaled over the config's own units, so there's no single per-unit
+      // label to show → null (UI renders it as a per-service total, not "1 axle").
+      unit_label: bypassUnitScale
+        ? partsRes.source === "ccb_absolute"
+          ? "axle"
+          : null
+        : unitRes.label,
+      unit_count_estimated: bypassUnitScale ? false : unitRes.is_estimate,
     },
     flags,
     display_label,
@@ -768,17 +884,6 @@ function refuse(reason: string): Quote {
     reason,
     route_to: "booking_approvals",
   };
-}
-
-async function getCamryFwdConfig(
-  ctx: QueryCtx,
-): Promise<Doc<"vehicle_configs"> | null> {
-  return await ctx.db
-    .query("vehicle_configs")
-    .withIndex("by_config_key", (q) =>
-      q.eq("config_key", CAMRY_FWD_CONFIG_KEY),
-    )
-    .first();
 }
 
 // ─── detectTier — read-only ASSIGNMENT_RULES walk ───────────────────────────

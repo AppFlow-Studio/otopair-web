@@ -40,6 +40,7 @@ import { query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { isServiceApplicable } from "./services/applicability";
+import { partFitsConfigMake } from "./partSelector";
 
 /**
  * QUERY: list
@@ -455,13 +456,22 @@ export const listBookableForVehicle = query({
       // hyphenated PART_FIELD_MAP.serviceSlug values (see v3pipeline.ts).
       // Until those are standardized to match, parts-required services that
       // depend on pipeline-written fitments will appear as missing_data.
-      const fitment = await ctx.db
+      const fitmentRows = await ctx.db
         .query("part_fitments")
         .withIndex("by_config_service", (q) =>
           q.eq("vehicle_config_id", config._id).eq("service_type", slug),
         )
-        .first();
-      if (!fitment) {
+        .collect();
+      // I1 make guard: drop cross-make contaminant parts — a contaminated
+      // fitment must not count toward coverage. Orphaned rows (part deleted)
+      // still count, matching the previous existence-only check.
+      const fitmentParts = await Promise.all(
+        fitmentRows.map((f) => ctx.db.get(f.part_id)),
+      );
+      const hasFitment = fitmentParts.some(
+        (part) => !part || partFitsConfigMake(part.make_id, config.make_id),
+      );
+      if (!hasFitment) {
         out.push({ service_id: service._id, slug, state: "missing_data" });
         continue;
       }

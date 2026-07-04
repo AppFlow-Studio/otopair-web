@@ -1,5 +1,6 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./lib/labor_aggregation";
 
 export const list = query({
   args: {},
@@ -58,11 +59,10 @@ export const getByEngineAndService = query({
       .first();
     if (!labor) return null;
 
-    // Prefer empirical data when we have enough samples (≥3)
-    const MIN_SAMPLES = 3;
+    // Prefer empirical data when we have enough samples (≥LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES)
     const useEmpirical =
       labor.empirical_hours != null &&
-      (labor.empirical_sample_size ?? 0) >= MIN_SAMPLES;
+      (labor.empirical_sample_size ?? 0) >= LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES;
     const hours = useEmpirical ? labor.empirical_hours! : labor.book_hours;
 
     return {
@@ -138,10 +138,9 @@ export const getSpecsForEngineAndServices = query({
         )
         .first();
       if (labor) {
-        const MIN_SAMPLES = 3;
         const useEmpirical =
           labor.empirical_hours != null &&
-          (labor.empirical_sample_size ?? 0) >= MIN_SAMPLES;
+          (labor.empirical_sample_size ?? 0) >= LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES;
         specs[serviceId] = {
           labor_hours: useEmpirical ? labor.empirical_hours! : (labor.book_hours ?? 0),
           parts_cost_avg: 0, // parts come from part_fitments/part_prices, not labor_times

@@ -627,6 +627,65 @@ const RENDER_TOOLS: OtoToolSchema[] = [
   },
 
   {
+    name: "render_vehicle_update",
+    description:
+      "Surface a one-tap confirm card that lets the user approve pending vehicle-truth updates (odometer reading, service claims, and/or warning lights Oto captured during the conversation). Call this when you have gathered one or more of: a user-stated mileage, service-due claims, or active fault lights — and you want the user to confirm before writing them to the vehicle record. On confirm the mobile component calls vehicleTruth.applyVehicleTruth with the supplied inputs. Terminal render tool — calling it ends your turn.",
+    input_schema: {
+      type: "object",
+      properties: {
+        mileage: {
+          type: "number",
+          description:
+            "Optional. User-stated odometer reading in miles. Set only when the user explicitly mentioned their current mileage.",
+        },
+        service_claims: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              service_slug: {
+                type: "string",
+                description: "Canonical snake_case service slug from OTOPAIR_SERVICE_SLUGS.",
+              },
+              kind: {
+                type: "string",
+                enum: ["due", "light_on", "completed"],
+                description:
+                  "\"due\" = the user says this service is past-due; \"light_on\" = a dashboard light flagged it; \"completed\" = the user says they ALREADY HAD this service done (e.g. \"I did my brakes\", \"just changed the oil\", \"replaced the battery last week\"). \"completed\" clears the flag and records the service done — NEVER use \"due\" for a service the user reports as finished.",
+              },
+              service_mileage: {
+                type: "number",
+                description:
+                  "Optional, kind:\"completed\" only. The odometer at which THIS service was performed when the user states a PAST mileage (e.g. \"oil change at 89,000\" while currently at 90,000). This is the service's OWN mileage — do NOT put it in the top-level current-odometer `mileage` field. Omit if the user gave no service mileage.",
+              },
+              service_age_days: {
+                type: "number",
+                description:
+                  "Optional, kind:\"completed\" only. How many days ago the service was done, for relative phrasing — \"a week ago\" → 7, \"2 weeks ago\" → 14, \"last month\" → 30, \"yesterday\" → 1. The server resolves it to (now − days). Use this for relative time; omit if the user gave no time.",
+              },
+              service_date: {
+                type: "number",
+                description:
+                  "Optional, kind:\"completed\" only. Absolute Unix ms timestamp the service was performed — use ONLY when the user names a concrete date. Prefer service_age_days for relative phrases. Wins over service_age_days if both are set.",
+              },
+            },
+            required: ["service_slug", "kind"],
+          },
+          description:
+            "Optional. Array of service claims the user stated. Each entry has a service_slug + a kind: \"due\"/\"light_on\" FLAG a service that needs attention; \"completed\" RECORDS a service the user says they already had done (clears the flag, improves health). For a \"completed\" service done in the PAST, attach service_mileage (\"at 89,000\") and/or service_age_days (\"a week ago\" → 7) so the maintenance schedule re-anchors to WHEN it was actually done, not to today. e.g. overdue oil change → {oil_change, due}; \"I did my brakes 2 weeks ago\" → {brake_pad_replacement, completed, service_age_days: 14}; \"changed the oil at 89k, I'm at 90k now\" → mileage:90000 + {oil_change, completed, service_mileage: 89000}.",
+        },
+        fault_lights: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Optional. Array of warning-light id strings the user reported (e.g. [\"check_engine\", \"tire_pressure\"]).",
+        },
+      },
+      required: [],
+    },
+  },
+
+  {
     name: "render_link_button",
     description:
       "Render a tap-to-redirect button that opens a specific in-app screen. Use when the user asks to go to (or perform an action that lives on) one of the 9 supported destinations — DO NOT recompose screen content in chat. TERMINAL render — calling this ENDS YOUR TURN; do not call other tools after it. Pair with a short framing sentence in your prose (e.g. 'Settings is in your account area — tap to open.'). Destinations and when to fire each: " +
@@ -867,6 +926,7 @@ export const OTO_TOOL_CATEGORY: Record<string, OtoToolCategory> = {
   // handles every sub-stage internally including pay-screen redirect.
   render_book_service: "render",
   render_record_confirmation: "render",
+  render_vehicle_update: "render",
   render_link_button: "render",
   // Booking Status — Sprint 3 Day 5 §14.3 (single + list booking surfaces)
   render_booking_card: "render",

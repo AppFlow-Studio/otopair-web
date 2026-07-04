@@ -30,7 +30,7 @@ import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { reextractPartPrice, isAffirmativeRejection } from "./vehicleEnrichment/priceReextract";
-import { UNVERIFIED_PRICE_TYPE } from "./lib/priceTypes";
+import { UNVERIFIED_PRICE_TYPE, isNonPooledPriceType } from "./lib/priceTypes";
 
 /**
  * Write an LLM web-search price through the SAME two-tier verification
@@ -592,7 +592,7 @@ Return JSON in this exact shape:
 export const backfillEngineOilForVin = internalAction({
   args: { vin: v.string(), force: v.optional(v.boolean()) },
   handler: async (ctx, { vin, force }): Promise<{
-    status: "ok" | "already_present" | "no_vehicle" | "no_config" | "missing_labels" | "no_anthropic_key" | "claude_failed" | "claude_unknown_sku";
+    status: "ok" | "already_present" | "no_vehicle" | "no_config" | "missing_labels" | "no_anthropic_key" | "claude_failed" | "claude_unknown_sku" | "rejected_cross_make";
     vin: string;
     vehicle?: string;
     oem_part_number?: string;
@@ -734,6 +734,15 @@ Return JSON:
         source_domain:     sourceDomain,
       },
     );
+
+    if (!partId) {
+      return {
+        status: "rejected_cross_make" as const,
+        vin: normalized,
+        vehicle: vehicleLabel,
+        oem_part_number: oemPartNumber,
+      };
+    }
 
     if (Number.isFinite(pricePerQt) && pricePerQt > 0) {
       await writeVerifiedLlmPrice(ctx, {
@@ -1045,6 +1054,15 @@ RULES:
             source_domain:     sourceDomain,
           },
         );
+        if (!partId) {
+          results.push({
+            ...baseResult,
+            status: "rejected_cross_make" as const,
+            oem_part_number: resolved.oem_part_number,
+            cache_hit: wasCached,
+          });
+          continue;
+        }
         if (resolved.price_per_qt != null) {
           await writeVerifiedLlmPrice(ctx, {
             part_id:       partId,
@@ -1132,7 +1150,9 @@ export const _listPartsMissingPrices = internalQuery({
         .query("part_prices")
         .withIndex("by_part", q => q.eq("part_id", p._id))
         .collect();
-      const hasPrice = prices.length > 0;
+      // A non-pooled fallback row (repairpal_endpoint) is NOT a real SKU price,
+      // so it must not make skipExisting skip real LLM pricing for the part.
+      const hasPrice = prices.some((r) => !isNonPooledPriceType((r as any).price_type));
       if (skipExisting && hasPrice) continue;
 
       // Sample vehicle from the most recent fitment for Claude context.

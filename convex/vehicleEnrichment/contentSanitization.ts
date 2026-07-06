@@ -487,6 +487,58 @@ export function sanitizeNumber(val: unknown): number | undefined {
   return n;
 }
 
+// ─── Capacity Sanitization (unit-aware) ──────────────────────────
+
+const QUARTS_PER_LITER = 1.05669;
+const QUARTS_PER_GALLON = 4;
+
+/**
+ * Sanitize a fluid-capacity value that MUST end up in US quarts.
+ *
+ * Unlike sanitizeNumber (which strips the unit token WITHOUT converting — so
+ * "13.1 L" would become 13.1 and be stored as if it were quarts), this inspects
+ * the trailing unit and CONVERTS liters/ml/gallons to quarts. This closes a
+ * latent liters-as-quarts bug on every `_qts` capacity field.
+ *
+ * When the value is already numeric (unit context lost upstream) or carries a
+ * quart unit / no unit, it is returned as-is in quarts.
+ */
+export function sanitizeCapacityQuarts(val: unknown): number | undefined {
+  if (val === null || val === undefined) return undefined;
+  if (typeof val === "number") {
+    if (val === 0 || !isFinite(val)) return undefined;
+    return val;
+  }
+  if (typeof val !== "string") return undefined;
+
+  let s = stripHtml(val);
+  s = stripMarkdown(s);
+  s = unwrapValue(s);
+  s = normalizeWhitespace(s).trim();
+  if (s.length === 0) return undefined;
+
+  // Leading numeric token + optional immediately-following unit word.
+  const m = s.match(/(-?\d+(?:\.\d+)?)\s*([a-zA-Z]+)?/);
+  if (!m) return undefined;
+  const n = parseFloat(m[1]);
+  if (isNaN(n) || n === 0 || !isFinite(n)) return undefined;
+
+  const unit = (m[2] ?? "").toLowerCase();
+  const round2 = (x: number) => Math.round(x * 100) / 100;
+
+  if (unit === "l" || unit === "liter" || unit === "liters" || unit === "litre" || unit === "litres") {
+    return round2(n * QUARTS_PER_LITER);
+  }
+  if (unit === "ml") {
+    return round2((n / 1000) * QUARTS_PER_LITER);
+  }
+  if (unit === "gal" || unit === "gallon" || unit === "gallons") {
+    return round2(n * QUARTS_PER_GALLON);
+  }
+  // "qt" / "quart(s)" / no unit → already US quarts.
+  return n;
+}
+
 /**
  * Sanitize a source URL. Strips markdown link syntax, validates URL format.
  */

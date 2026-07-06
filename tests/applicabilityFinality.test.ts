@@ -41,6 +41,66 @@ describe("chain-engine rule covers the whole timing-belt kit", () => {
   });
 });
 
+describe("drivetrain rules cover fluid capacities", () => {
+  it("FWD nulls diff + transfer-case capacities as not_applicable", () => {
+    const fields = allFields();
+    fields.drivetrain = { ...emptyField(), value: "FWD" };
+    applyApplicabilityRules(fields, null);
+    for (const k of ["diff_fluid_capacity_qts", "transfer_case_fluid_capacity_qts"]) {
+      expect(fields[k].value, k).toBeNull();
+      expect(fields[k].flag_reason, k).toBe("not_applicable");
+    }
+    // ...and they're excluded from Batch-2 gap fill
+    const nulls = getNullFields(fields);
+    expect(nulls).not.toContain("diff_fluid_capacity_qts");
+    expect(nulls).not.toContain("transfer_case_fluid_capacity_qts");
+  });
+
+  it("RWD nulls only the transfer-case capacity", () => {
+    const fields = allFields();
+    fields.drivetrain = { ...emptyField(), value: "RWD" };
+    applyApplicabilityRules(fields, null);
+    expect(fields.transfer_case_fluid_capacity_qts.flag_reason).toBe("not_applicable");
+    expect(fields.diff_fluid_capacity_qts.flag_reason).not.toBe("not_applicable");
+  });
+
+  it("electric power steering nulls ps_fluid_capacity_oz", () => {
+    const fields = allFields();
+    fields.power_steering_type = { ...emptyField(), value: "electric" };
+    applyApplicabilityRules(fields, null);
+    expect(fields.ps_fluid_capacity_oz.flag_reason).toBe("not_applicable");
+  });
+});
+
+describe("non-CVT rule nulls the CVT filters", () => {
+  it("conventional automatic → both CVT filter fields not_applicable + gap-fill excluded", () => {
+    const fields = allFields();
+    fields.transmission_type = { ...emptyField(), value: "automatic" };
+    applyApplicabilityRules(fields, null);
+    for (const k of ["cvt_internal_filter_oem", "cvt_external_filter_oem"]) {
+      expect(fields[k].value, k).toBeNull();
+      expect(fields[k].flag_reason, k).toBe("not_applicable");
+    }
+    const nulls = getNullFields(fields);
+    expect(nulls).not.toContain("cvt_internal_filter_oem");
+    expect(nulls).not.toContain("cvt_external_filter_oem");
+  });
+
+  it("CVT keeps the filter fields searchable", () => {
+    const fields = allFields();
+    fields.transmission_type = { ...emptyField(), value: "CVT" };
+    applyApplicabilityRules(fields, null);
+    expect(fields.cvt_internal_filter_oem.flag_reason).not.toBe("not_applicable");
+    expect(fields.cvt_external_filter_oem.flag_reason).not.toBe("not_applicable");
+  });
+
+  it("unknown transmission type stays searchable (never null on ignorance)", () => {
+    const fields = allFields();
+    applyApplicabilityRules(fields, null);
+    expect(fields.cvt_internal_filter_oem.flag_reason).not.toBe("not_applicable");
+  });
+});
+
 describe("getNullFields — not_applicable nulls are FINAL", () => {
   it("excludes fields the applicability rules nulled, keeps genuine gaps", () => {
     const fields = allFields();

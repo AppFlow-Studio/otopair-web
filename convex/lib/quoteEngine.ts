@@ -28,6 +28,7 @@ import { aggregatePartsBand, type PartsRoleInput } from "./partsBand";
 import { resolveRoleQuantity, type VehicleSpecBundle } from "./partRoleQuantity";
 import { roleForSubcategory } from "./servicePartsReference";
 import { isNonPooledPriceType, isPoisonPriceType, REPAIRPAL_ENDPOINT_PRICE_TYPE } from "./priceTypes";
+import { isPriceDataStale } from "../part_prices";
 import { partFitsConfigMake } from "../partSelector";
 
 /** PARTS_SOURCE_REAL_PRIMARY gates the real per-config parts band in
@@ -463,6 +464,10 @@ export async function resolvePartsCost(
       };
 
       const roles: PartsRoleInput[] = [];
+      // Freshest refreshed_at across ALL kept SKU rows — when even the newest
+      // is older than PARTS_PRICE_MAX_AGE_DAYS, the whole band is aged and the
+      // quote flags `parts_price_stale` (Estimate-pill channel).
+      let newestKeptRefreshedAt: number | null = null;
       for (const f of fitments) {
         const part = await ctx.db.get(f.part_id);
         // I1 make guard: drop cross-make contaminant parts
@@ -484,8 +489,15 @@ export async function resolvePartsCost(
               .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
               .collect()
           : [];
-        const skuPrices = prices
-          .filter((p) => !isPoisonPriceType(p.price_type) && !isNonPooledPriceType(p.price_type))
+        const keptRows = prices.filter(
+          (p) => !isPoisonPriceType(p.price_type) && !isNonPooledPriceType(p.price_type),
+        );
+        for (const p of keptRows) {
+          if (typeof p.refreshed_at === "number") {
+            newestKeptRefreshedAt = Math.max(newestKeptRefreshedAt ?? 0, p.refreshed_at);
+          }
+        }
+        const skuPrices = keptRows
           .map((p) => p.price)
           .filter((n): n is number => typeof n === "number" && n > 0);
         const endpointRow = prices.find(
@@ -503,7 +515,9 @@ export async function resolvePartsCost(
       if (roles.length > 0) {
         const band = aggregatePartsBand(roles);
         if (band.reliable) {
-          return { ok: true, low: band.low, high: band.high, source: "real_parts", flags: ["real_parts_band"] };
+          const flags = ["real_parts_band"];
+          if (isPriceDataStale(newestKeptRefreshedAt)) flags.push("parts_price_stale");
+          return { ok: true, low: band.low, high: band.high, source: "real_parts", flags };
         }
       }
     }
@@ -768,6 +782,24 @@ export async function buildQuote(
   if (cfg.engine_id) {
     engineRow = (await ctx.db.get(cfg.engine_id)) ?? null;
   }
+  // drivetrain_configs carries diff/TC fluid capacities (drivetrain-specific —
+  // the same engine serves FWD and AWD siblings) and transmissions carries the
+  // ATF drain-and-fill capacity. Only per_unit_spec services can consume
+  // either, so skip the fetches otherwise.
+  let drivetrainRow: Doc<"drivetrain_configs"> | null = null;
+  let transmissionRow: Doc<"transmissions"> | null = null;
+  if (service?.parts_kind === "per_unit_spec") {
+    drivetrainRow =
+      (await ctx.db
+        .query("drivetrain_configs")
+        .withIndex("by_vehicle_config", (q) =>
+          q.eq("vehicle_config_id", args.vehicle_config_id),
+        )
+        .first()) ?? null;
+    if (cfg.transmission_id) {
+      transmissionRow = (await ctx.db.get(cfg.transmission_id)) ?? null;
+    }
+  }
 
   // Director-editable rule lookup: when qty_override is set, it wins over
   // the per-vehicle resolver (intended for services that don't fit any of
@@ -795,6 +827,8 @@ export async function buildQuote(
       : resolveServiceUnitCount({
           service,
           engine: engineRow,
+          drivetrain: drivetrainRow,
+          transmission: transmissionRow,
           bookingPosition: args.booking_position ?? null,
           baselineFromSpec,
         })

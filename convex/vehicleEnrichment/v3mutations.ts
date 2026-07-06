@@ -228,7 +228,9 @@ export const upsertChassisSpecs = internalMutation({
     make_id: v.optional(v.id("makes")),
     // Physical specs
     brake_fluid_type: v.optional(v.string()),
+    brake_fluid_capacity_oz: v.optional(v.float64()),
     ps_fluid_type: v.optional(v.string()),
+    ps_fluid_capacity_oz: v.optional(v.float64()),
     lug_nut_torque_ft_lbs: v.optional(v.float64()),
     wiper_blade_driver_size_in: v.optional(v.float64()),
     wiper_blade_passenger_size_in: v.optional(v.float64()),
@@ -255,7 +257,8 @@ export const upsertChassisSpecs = internalMutation({
     // Existing values are kept unless the new value is explicitly provided.
     const patch: Record<string, any> = { last_enriched_at: Date.now() };
     const fields = [
-      "make_id", "brake_fluid_type", "ps_fluid_type", "lug_nut_torque_ft_lbs",
+      "make_id", "brake_fluid_type", "brake_fluid_capacity_oz",
+      "ps_fluid_type", "ps_fluid_capacity_oz", "lug_nut_torque_ft_lbs",
       "wiper_blade_driver_size_in", "wiper_blade_passenger_size_in", "wiper_blade_rear_size_in",
       "battery_group", "battery_location", "battery_type", "has_brake_pad_sensor",
       "steering_type", "parking_brake_type", "has_rear_wiper", "cabin_filter_access",
@@ -299,6 +302,7 @@ export const upsertTrimSpecs = internalMutation({
     battery_cca: v.optional(v.float64()),
     battery_type: v.optional(v.string()),
     battery_location: v.optional(v.string()),
+    confidence_score: v.optional(v.float64()),
     data_quality: v.optional(v.string()),
     tire_options: v.optional(v.array(v.object({
       oem_name: v.optional(v.string()),
@@ -362,6 +366,7 @@ export const upsertTrimSpecs = internalMutation({
     if (args.battery_cca !== undefined) patch.battery_cca = args.battery_cca;
     if (args.battery_type !== undefined) patch.battery_type = args.battery_type;
     if (args.battery_location !== undefined) patch.battery_location = args.battery_location;
+    if (args.confidence_score !== undefined) patch.confidence_score = args.confidence_score;
     if (args.data_quality !== undefined) patch.data_quality = args.data_quality;
     if (args.tire_options !== undefined) patch.tire_options = args.tire_options;
     if (args.tire_options_source !== undefined) patch.tire_options_source = args.tire_options_source;
@@ -403,9 +408,16 @@ export const updateEngineSpecs = internalMutation({
     engine_family: v.optional(v.string()),
     displacement_l: v.optional(v.float64()),
     data_quality: v.optional(v.string()),
+    // Field names to actively ERASE (patch to undefined → Convex deletes the
+    // column). A value that sanity-checks REJECTED as wrong must not linger:
+    // the pipeline skips `undefined` writes to avoid clobbering good data, so
+    // without an explicit clear a stale poison value (e.g. coolant 16.9 qt from
+    // a forum) survives every re-enrich. Distinct from a genuinely-absent field,
+    // which stays out of this list and is preserved.
+    clear_fields: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const { engine_id, ...fields } = args;
+    const { engine_id, clear_fields, ...fields } = args;
     // Human-corrected fields are authoritative — the pipeline must not write
     // over them (the Jetta's chain→belt fix was clobbered by a re-enrich,
     // Jun 10 2026). See engines.verified_fields in schema.ts.
@@ -415,6 +427,13 @@ export const updateEngineSpecs = internalMutation({
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined && !verified.has(key)) {
         patch[key] = value;
+      }
+    }
+    // Erase rejected fields — `undefined` in a Convex patch deletes the column.
+    // Still guarded by verified_fields so a human-corrected value is never wiped.
+    for (const key of clear_fields ?? []) {
+      if (!verified.has(key) && !(key in patch)) {
+        patch[key] = undefined;
       }
     }
     if (Object.keys(patch).length > 0) {
@@ -1140,6 +1159,16 @@ export const updateEnrichmentRun = internalMutation({
     fill_rate: v.optional(v.float64()),
     fields_changed: v.optional(v.array(v.string())),
     errors: v.optional(v.array(v.string())),
+    sanity_flags: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          severity: v.string(),
+          reason: v.string(),
+          value: v.optional(v.string()),
+        }),
+      ),
+    ),
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
   },

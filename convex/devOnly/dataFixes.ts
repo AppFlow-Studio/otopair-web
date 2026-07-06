@@ -100,3 +100,36 @@ export const fixEngineFields = internalMutation({
     return { ok: true as const, changes: changes.length };
   },
 });
+
+/**
+ * Set services.requires_parts by slug — CLI-only flag fix with an audit row.
+ *
+ *   npx convex run devOnly/dataFixes:setServiceRequiresParts \
+ *     '{"slug":"transmission_service","value":false,"reason":"..."}'
+ */
+export const setServiceRequiresParts = internalMutation({
+  args: {
+    slug: v.string(),
+    value: v.boolean(),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const svc = await ctx.db
+      .query("services")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+    if (!svc) return { ok: false as const, reason: "service_not_found" };
+    const before = (svc as any).requires_parts;
+    if (before === args.value) return { ok: true as const, changes: 0 };
+    await ctx.db.patch(svc._id, { requires_parts: args.value });
+    await ctx.db.insert("audit_log", {
+      entity_type: "service",
+      entity_id: String(svc._id),
+      action: "data_fix",
+      actor: "CLI data fix",
+      detail: `services.requires_parts (${args.slug}): ${before ?? "—"} → ${args.value} · reason: ${args.reason}`,
+      created_at: Date.now(),
+    });
+    return { ok: true as const, changes: 1 };
+  },
+});

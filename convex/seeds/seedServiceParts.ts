@@ -59,6 +59,12 @@ const SPECS: ServiceSpec[] = [
   // fixed_kit instead — one filter, one price, no spec scaling.
   { slug: "coolant_flush",           parts_kind: "per_unit_spec",  parts_unit_label: "qt", parts_unit_spec_source: "coolant_capacity_qts" },
   { slug: "transmission_service",    parts_kind: "per_unit_spec",  parts_unit_label: "qt", parts_unit_spec_source: "transmission_fluid_capacity_qts" },
+  // differential_service converted from fixed_kit (2026-07): gear-oil volume
+  // varies ~0.5-4 qt across vehicles. Capacity resolves from enriched
+  // drivetrain_configs.diff_fluid_capacity_qts first, then the engines column
+  // (director edits). Camry baseline_unit_count MUST be re-stamped to 2 (its
+  // $42-48 band represents 2 qt) — see seedCamryBaseline.
+  { slug: "differential_service",    parts_kind: "per_unit_spec",  parts_unit_label: "qt", parts_unit_spec_source: "differential_fluid_capacity_qts" },
 
   // ── Per-wheel — fixed 4 ──────────────────────────────────────────────
   { slug: "tire_balance",            parts_kind: "per_wheel",      parts_unit_label: "wheel" },
@@ -72,7 +78,6 @@ const SPECS: ServiceSpec[] = [
   { slug: "battery_replacement",     parts_kind: "fixed_kit",      parts_unit_label: "kit" },
   { slug: "brake_fluid_flush",       parts_kind: "fixed_kit",      parts_unit_label: "kit" },
   { slug: "power_steering_flush",    parts_kind: "fixed_kit",      parts_unit_label: "kit" },
-  { slug: "differential_service",    parts_kind: "fixed_kit",      parts_unit_label: "kit" },
   { slug: "fuel_system_cleaning",    parts_kind: "fixed_kit",      parts_unit_label: "kit" },
 ];
 

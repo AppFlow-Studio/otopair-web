@@ -89,6 +89,17 @@ ${JSON.stringify(
     ? `=== OWNER'S MANUAL / MAINTENANCE SCHEDULE (scraped) ===\n${manualMarkdown.slice(0, 20_000)}`
     : "=== OWNER'S MANUAL ===\n(no scraped data available — leave interval fields null)";
 
+  // CVT filter conditioning: when NHTSA already tells us the transmission is
+  // NOT a CVT, hard-null the CVT filter fields in the instructions instead of
+  // trusting the model to return null — LLMs happily "find" a CVT filter for
+  // a conventional automatic. Unknown/CVT transmissions keep them searchable.
+  const transType = vPicData?.transmission_type?.toLowerCase() ?? null;
+  const knownNonCvt = transType != null && transType.length > 0 && !transType.includes("cvt")
+    && !transType.includes("continuously variable");
+  const cvtReminder = knownNonCvt
+    ? `cvt_internal_filter_oem / cvt_external_filter_oem: this vehicle's transmission is "${vPicData!.transmission_type}" (NOT a CVT) — set BOTH to null.`
+    : `cvt_internal_filter_oem / cvt_external_filter_oem: CVT transmissions only — the internal mesh-screen filter (pan service) and the external cooler-line spin-on filter. Null on conventional automatics, DCTs and manuals.`;
+
   const packagesSection = packages.length > 0
     ? `=== PACKAGES AVAILABLE FOR THIS TRIM ===
 This trim ships with optional packages that change which OEM parts are correct for some services.
@@ -135,7 +146,10 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
     "coolant_type": { "value": "BMW HT-12", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
     "coolant_capacity_qts": { "value": 9.25, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 },
     "brake_fluid_type": { "value": "DOT 4", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
-    "power_steering_type": { "value": "electric", "source_url": null, "source_type": "training_data", "confidence": 0.75 }
+    "brake_fluid_capacity_oz": { "value": 32, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 },
+    "power_steering_type": { "value": "electric", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
+    "ps_fluid_capacity_oz": { "value": null, "source_url": null, "source_type": null, "confidence": null },
+    "transmission_fluid_capacity_qts": { "value": 4.5, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 }
   },
   "intervals": {
     "oil_change": {
@@ -151,7 +165,9 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
     "cabin_filter": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
     "brake_fluid_flush": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
     "serpentine_belt": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "timing_belt_or_chain_service": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." }
+    "timing_belt_or_chain_service": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
+    "brake_pads": { "miles": { ... }, "months": { ... }, "status": "inspect_only", "display_string": "..." },
+    "tire_rotation": { "miles": { ... }, "months": { ... }, "status": "scheduled", "display_string": "..." }
   },
   "attributes": {
     "timing_system": { "value": "chain", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
@@ -192,7 +208,11 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
     "brake_hardware_kit_front_oem": { "value": "...", ... },
     "brake_hardware_kit_rear_oem": { "value": "...", ... },
     "brake_wear_sensor_front_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "brake_wear_sensor_rear_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null }
+    "brake_wear_sensor_rear_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
+    "thermostat_oem": { "value": "...", ... },
+    "thermostat_gasket_oem": { "value": "...", ... },
+    "cvt_internal_filter_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
+    "cvt_external_filter_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null }
   },
   "battery": {
     "battery_group": { "value": "H8/Group 49", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
@@ -217,6 +237,10 @@ REMINDERS:
 - spark_plug quantity = cylinder count from NHTSA if available (use source_type: "nhtsa").
 - If status is "not_applicable" (e.g., timing belt on a chain engine), set miles/months values to null.
 - For rotor_front_oem and rotor_rear_oem: both may appear on the same "brake_disc" page. Extract front and rear part numbers separately if they differ by axle position.
+- oil_capacity_qts / coolant_capacity_qts must be in US quarts for THIS exact engine. If the source lists the capacity in liters, convert (qts = L × 1.057); never copy a liter figure as a quart figure. Do not use a capacity for a different engine option.
+- coolant_capacity_qts is the TOTAL cooling-system capacity (initial fill). Owner's manuals usually print both "total fill" and "drain and refill" — use total fill (a coolant flush exchanges the full system), never the smaller drain-and-refill figure.
+- brake_fluid_capacity_oz: full-flush brake system capacity in US fluid OUNCES (typical 16-48 oz; 1 L = 33.8 oz). ps_fluid_capacity_oz: power-steering system capacity in US fluid OUNCES — null when power_steering_type is electric.
+- transmission_fluid_capacity_qts: the DRAIN-AND-FILL (pan drop) capacity in US quarts, NOT the total/dry-fill figure — a fluid service exchanges the pan, not the torque converter. Lifetime-fill units still have a published drain-and-fill capacity; return it.
 - coolant_oem is the OEM coolant/antifreeze part number (e.g., BMW HT-12 coolant product number), not the coolant type string.
 - engine_oil_oem is the OEM engine oil part number / SKU (e.g., BMW TwinPower Turbo 5W-30 SKU 83215A2AF99, Toyota 0W-20 SKU 00279-0WQTE, Mercedes 229.5 SKU A0009898301), NOT the viscosity string. Prefer the make's 1-quart / 1-liter bottle SKU when both bottle and bulk-jug SKUs exist — quoting multiplies by oil_capacity_qts at quote time.
 - FLUID SKUs (atf_fluid_oem, brake_fluid_oem, ps_fluid_oem, gear_oil_oem, friction_modifier_oem): return the OEM FLUID BOTTLE part number, NEVER the spec string (e.g. NOT "DOT 4", "SP-IV", "ATF WS", "GL-5 75W-90", "Type 3 PSF"). Prefer the make's 1-quart / 1-liter bottle SKU when both bottle and bulk-jug SKUs exist — quoting multiplies by the vehicle's fluid capacity at quote time. Each fluid SKU is conditional: set it to null when the vehicle doesn't use it — atf_fluid_oem null on a manual transmission, ps_fluid_oem null on electric power steering, gear_oil_oem null when there is no serviceable differential, friction_modifier_oem null on a non-LSD (open) differential.
@@ -225,6 +249,9 @@ REMINDERS:
 - trans_filter_oem / trans_pan_gasket_oem: the pan-service filter and pan gasket (or RTV) SKUs; null when the transmission has no serviceable filter / sealed unit.
 - brake_wear_sensor_front_oem / brake_wear_sensor_rear_oem: the pad-wear sensor part number per axle (standard on most BMW / Euro); null on cars without electronic pad-wear sensors.
 - brake_hardware_kit_front_oem / brake_hardware_kit_rear_oem: the caliper hardware (clips / shims / abutment) kit SKU per axle.
+- thermostat_oem / thermostat_gasket_oem: replaced only if found bad during a coolant flush — still extract the SKUs when the catalog lists them.
+- ${cvtReminder}
+- brake_pads interval: the manufacturer's INSPECTION / typical pad-life guidance (wear-based, not a hard schedule) — use status "inspect_only" unless the schedule explicitly mandates replacement. tire_rotation: the rotation schedule (typically 5,000-8,000 miles).
 - Conditional existence IS the data: returning null for any of the above means the vehicle does not use that part — do not guess a substitute.
 - Return null for any field not found in sources and not in the 4 allowed training data fields.`;
 }

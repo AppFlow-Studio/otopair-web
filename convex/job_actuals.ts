@@ -432,6 +432,9 @@ export const getPrefillData = query({
       n.trim().toUpperCase().replace(/\s+/g, "");
     if (snapshot && snapshot.length > 0) {
       for (const row of snapshot) {
+        // Rows the snapshotRevalidation sweep stamped as cross-make
+        // contaminated must not pre-fill the mechanic's billing dialog.
+        if (row.integrity_flag != null) continue;
         suggestedParts.push({
           part_name: row.part_name,
           oem_number: row.oem_number,

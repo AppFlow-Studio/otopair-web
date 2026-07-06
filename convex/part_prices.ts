@@ -21,6 +21,30 @@ import { isWithinPriceBand } from "./lib/priceBands";
  *  no price; the selector's recency layer already down-weights it). */
 export const PRICE_STALENESS_MS = 120 * 24 * 60 * 60 * 1000; // 120 days
 
+/** Read-time staleness flag threshold (days). Softer than PRICE_STALENESS_MS
+ *  (which hard-excludes from aggregation): a price older than this is still
+ *  USED — better than the multiplier fallback — but the quote line is marked
+ *  `price_stale` so it renders as an estimate. Keep this ABOVE
+ *  PARTS_PRICE_REFRESH_AGE_DAYS (default 30) so a part only flags after the
+ *  nightly refresh has failed to re-verify it for a while. */
+const DEFAULT_PRICE_MAX_AGE_DAYS = 45;
+
+export function priceMaxAgeDays(): number {
+  const raw = Number(process.env.PARTS_PRICE_MAX_AGE_DAYS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PRICE_MAX_AGE_DAYS;
+}
+
+/** True when a part's freshest price row is older than the read-time
+ *  threshold (or carries no timestamp at all — rows predate timestamps).
+ *  Pure + injectable clock so it unit-tests without Convex. */
+export function isPriceDataStale(
+  mostRecentRefreshedAt: number | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (mostRecentRefreshedAt == null) return true;
+  return now - mostRecentRefreshedAt > priceMaxAgeDays() * 24 * 60 * 60 * 1000;
+}
+
 export type PriceSummary = {
   part_id: Id<"oem_parts">;
   sample_size: number;

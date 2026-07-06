@@ -166,10 +166,14 @@ const SPECS: ServiceRuleSpec[] = [
     as_needed: ["ps_reservoir_filter", "reservoir_cap_oring"],
   },
 
-  // 22 · Differential Service
+  // 22 · Differential Service — per_unit_spec on differential_fluid_capacity_qts
+  // (2026-07 conversion from fixed_kit; capacity resolves drivetrain_configs
+  // first, engines column as director-edit fallback. Keep in sync with
+  // seedServiceParts + seedCamryBaseline baseline_unit_count = 2.)
   {
     slug: "differential_service",
-    parts_kind: "fixed_kit", parts_unit_label: "kit",
+    parts_kind: "per_unit_spec", parts_unit_label: "qt",
+    parts_unit_spec_source: "differential_fluid_capacity_qts",
     core: ["gear_oil", "drain_plug_gasket"],
     as_needed: ["friction_modifier", "diff_cover_gasket"],
   },

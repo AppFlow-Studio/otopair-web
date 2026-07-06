@@ -28,6 +28,9 @@ type StalePart = {
   name: string | null;
   subcategory: string | null;
   urls: string[];
+  /** max(refreshed_at) across the part's rows — drives oldest-first ordering
+   *  so the budget goes to the most-aged prices, not pagination order. */
+  newest_refreshed_at: number;
 };
 
 /**
@@ -78,6 +81,7 @@ export const stalePricePartsPage = internalQuery({
         name: part.name ?? null,
         subcategory: part.subcategory ?? null,
         urls,
+        newest_refreshed_at: newest,
       });
     }
 
@@ -101,11 +105,13 @@ export const refreshStalePrices = internalAction({
     const ageDays = args.ageDays ?? Number(process.env.PARTS_PRICE_REFRESH_AGE_DAYS ?? String(DEFAULT_AGE_DAYS));
     const cutoff = Date.now() - ageDays * 24 * 60 * 60 * 1000;
 
-    // Gather up to `budget` stale parts.
+    // Gather stale parts, then spend the budget oldest-first. Scanning a few
+    // pages beyond the budget costs only index reads and lets the sort see a
+    // wider pool than raw pagination order.
     const stale: StalePart[] = [];
     let cursor: string | null = null;
     // Page cap guards against a pagination bug looping forever.
-    for (let i = 0; i < 200 && stale.length < budget; i++) {
+    for (let i = 0; i < 200 && stale.length < budget * 4; i++) {
       const page: { stale: StalePart[]; continueCursor: string; isDone: boolean } =
         await ctx.runQuery(internal.vehicleEnrichment.priceRefresh.stalePricePartsPage, {
           cutoff,
@@ -115,7 +121,9 @@ export const refreshStalePrices = internalAction({
       cursor = page.continueCursor;
       if (page.isDone) break;
     }
-    const targets = stale.slice(0, budget);
+    const targets = stale
+      .sort((a, b) => (a.newest_refreshed_at ?? 0) - (b.newest_refreshed_at ?? 0))
+      .slice(0, budget);
     console.log(`[price-refresh] ${targets.length} stale parts selected (budget ${budget}, age > ${ageDays}d)`);
 
     let rowsWritten = 0;

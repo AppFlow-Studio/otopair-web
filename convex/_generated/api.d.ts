@@ -317,6 +317,7 @@ import type * as vehicleEnrichment_olpRelabor from "../vehicleEnrichment/olpRela
 import type * as vehicleEnrichment_partialEnrichment from "../vehicleEnrichment/partialEnrichment.js";
 import type * as vehicleEnrichment_pipelineBatch from "../vehicleEnrichment/pipelineBatch.js";
 import type * as vehicleEnrichment_pipelineTest from "../vehicleEnrichment/pipelineTest.js";
+import type * as vehicleEnrichment_priceDiscovery from "../vehicleEnrichment/priceDiscovery.js";
 import type * as vehicleEnrichment_priceParser from "../vehicleEnrichment/priceParser.js";
 import type * as vehicleEnrichment_pricePilot from "../vehicleEnrichment/pricePilot.js";
 import type * as vehicleEnrichment_priceReextract from "../vehicleEnrichment/priceReextract.js";
@@ -324,6 +325,7 @@ import type * as vehicleEnrichment_priceRefresh from "../vehicleEnrichment/price
 import type * as vehicleEnrichment_prompts_batch1Prompt from "../vehicleEnrichment/prompts/batch1Prompt.js";
 import type * as vehicleEnrichment_prompts_batch1bPrompt from "../vehicleEnrichment/prompts/batch1bPrompt.js";
 import type * as vehicleEnrichment_prompts_batch2Prompt from "../vehicleEnrichment/prompts/batch2Prompt.js";
+import type * as vehicleEnrichment_prompts_gapFillPrompt from "../vehicleEnrichment/prompts/gapFillPrompt.js";
 import type * as vehicleEnrichment_queries from "../vehicleEnrichment/queries.js";
 import type * as vehicleEnrichment_repairpalEndpoint from "../vehicleEnrichment/repairpalEndpoint.js";
 import type * as vehicleEnrichment_repairpalEndpointMatch from "../vehicleEnrichment/repairpalEndpointMatch.js";
@@ -682,6 +684,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/partialEnrichment": typeof vehicleEnrichment_partialEnrichment;
   "vehicleEnrichment/pipelineBatch": typeof vehicleEnrichment_pipelineBatch;
   "vehicleEnrichment/pipelineTest": typeof vehicleEnrichment_pipelineTest;
+  "vehicleEnrichment/priceDiscovery": typeof vehicleEnrichment_priceDiscovery;
   "vehicleEnrichment/priceParser": typeof vehicleEnrichment_priceParser;
   "vehicleEnrichment/pricePilot": typeof vehicleEnrichment_pricePilot;
   "vehicleEnrichment/priceReextract": typeof vehicleEnrichment_priceReextract;
@@ -689,6 +692,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/prompts/batch1Prompt": typeof vehicleEnrichment_prompts_batch1Prompt;
   "vehicleEnrichment/prompts/batch1bPrompt": typeof vehicleEnrichment_prompts_batch1bPrompt;
   "vehicleEnrichment/prompts/batch2Prompt": typeof vehicleEnrichment_prompts_batch2Prompt;
+  "vehicleEnrichment/prompts/gapFillPrompt": typeof vehicleEnrichment_prompts_gapFillPrompt;
   "vehicleEnrichment/queries": typeof vehicleEnrichment_queries;
   "vehicleEnrichment/repairpalEndpoint": typeof vehicleEnrichment_repairpalEndpoint;
   "vehicleEnrichment/repairpalEndpointMatch": typeof vehicleEnrichment_repairpalEndpointMatch;

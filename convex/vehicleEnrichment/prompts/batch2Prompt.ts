@@ -37,8 +37,9 @@ RULES:
 6. If you cannot find a price for a specific OEM part after 1-2 targeted searches, OMIT that part from parts_breakdown[]. Do not include it with a null or 0 price. Do not guess.
 7. Return VALID JSON only. No markdown fences, no explanation, no preamble.`;
 
-/** Field descriptions used in the gap fill user prompt. */
-const FIELD_DESCRIPTIONS: Record<string, string> = {
+/** Field descriptions used in the gap fill user prompt. Shared with the
+ *  Batch-3 gap-fill re-ask pass (gapFillPrompt.ts). */
+export const FIELD_DESCRIPTIONS: Record<string, string> = {
   oil_viscosity: "Engine oil viscosity specification (e.g., 0W-30, 5W-20)",
   oil_capacity_qts: "Engine oil capacity in US quarts (including filter). If a source gives liters, convert (qts = L × 1.057).",
   coolant_type: "Coolant specification (e.g., BMW HT-12, Toyota SLLC)",

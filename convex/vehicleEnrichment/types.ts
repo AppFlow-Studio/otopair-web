@@ -410,3 +410,21 @@ export const SERVICE_LIST = [
   "AC Recharge / Service",
   "Multi-Point Inspection / Diagnostic",
 ] as const;
+
+/**
+ * Services (by `services.slug`) with no mileage/months schedule by nature —
+ * inspections, diagnostics, and condition-driven work. Their interval rows
+ * are stamped status="on_demand" at finalize so they count as complete in
+ * the fill rate instead of reading as permanently-missing data (Jul 2026:
+ * these 8 were the Sierra's entire "missing intervals" gap).
+ */
+export const ON_DEMAND_SERVICE_SLUGS = [
+  "battery_test",
+  "wheel_alignment",
+  "tire_balance",
+  "emissions_test",
+  "state_inspection",
+  "check_engine_light",
+  "pre_purchase_inspection",
+  "diagnostic_scan",
+] as const;

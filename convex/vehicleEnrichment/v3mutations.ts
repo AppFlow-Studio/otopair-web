@@ -7,6 +7,7 @@ import { isLaborOnlyService } from "../lib/servicePartsReference";
 import { partFitsConfigMake } from "../partSelector";
 import { makesSameFamily, sanitizePartNumber } from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
+import { isMarketplaceDomain, isMarketplaceUrl } from "./sourceRegistry";
 
 /**
  * Family-aware make compatibility for WRITE paths. The strict id-equality
@@ -760,6 +761,16 @@ export const upsertPartPrice = internalMutation({
     discount: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
+    // Write-boundary marketplace guard: every price writer funnels through
+    // here (Batch-2 finalize, reprice, refresh, diagnoseVin, backfills), so
+    // this is the one place a marketplace row can be stopped for all of them.
+    if (isMarketplaceDomain(args.source_domain) || isMarketplaceUrl(args.source_url)) {
+      console.warn(
+        `[upsertPartPrice] rejected marketplace source ${args.source_domain} for part ${args.part_id}`,
+      );
+      return null;
+    }
+
     const now = Date.now();
 
     const existing = await ctx.db
@@ -798,6 +809,61 @@ export const upsertPartPrice = internalMutation({
 // ============================================================================
 // 8. upsertServiceInterval
 // ============================================================================
+
+/**
+ * Stamp on-demand services (inspections, diagnostics, alignment…) whose
+ * interval row has no mileage/months as status="on_demand". These services
+ * genuinely have no schedule — without the stamp they read as "missing
+ * interval" and permanently drag the fill rate (Jul 2026: 8 of the Sierra's
+ * 22 services). Never touches a row that has real interval data or a
+ * non-empty status set by another writer.
+ */
+export const markOnDemandIntervals = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_slugs: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    let stamped = 0;
+    for (const slug of args.service_slugs) {
+      const svc = await ctx.db
+        .query("services")
+        .withIndex("by_slug", (q) => q.eq("slug", slug))
+        .first();
+      if (!svc) continue;
+
+      const existing = await ctx.db
+        .query("service_intervals")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", args.vehicle_config_id).eq("service_id", svc._id)
+        )
+        .first();
+
+      if (existing) {
+        if (
+          existing.interval_miles == null &&
+          existing.interval_months == null &&
+          (existing.status == null || existing.status === "") &&
+          existing.mechanic_verified !== true
+        ) {
+          await ctx.db.patch(existing._id, { status: "on_demand", data_quality: "deterministic" });
+          stamped++;
+        }
+      } else {
+        await ctx.db.insert("service_intervals", {
+          vehicle_config_id: args.vehicle_config_id,
+          service_id: svc._id,
+          status: "on_demand",
+          confidence: 1,
+          data_quality: "deterministic",
+          created_at: Date.now(),
+        });
+        stamped++;
+      }
+    }
+    return { stamped };
+  },
+});
 
 export const upsertServiceInterval = internalMutation({
   args: {
@@ -1166,6 +1232,14 @@ export const updateEnrichmentRun = internalMutation({
           severity: v.string(),
           reason: v.string(),
           value: v.optional(v.string()),
+        }),
+      ),
+    ),
+    field_gaps: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          reason: v.string(),
         }),
       ),
     ),

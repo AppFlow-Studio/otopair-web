@@ -779,6 +779,19 @@ export default defineSchema({
         }),
       ),
     ),
+    // Per-field ledger of WHY each V4 field ended the run empty — the
+    // completion counterpart to sanity_flags (which only covers fields that
+    // HAD a value). Reasons: never_asked | llm_null | not_applicable |
+    // validation_dropped:<flag_reason>. Feeds the gap-fill pass and the
+    // director run detail.
+    field_gaps: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          reason: v.string(),
+        }),
+      ),
+    ),
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
     created_at: v.optional(v.number()),

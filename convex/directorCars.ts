@@ -999,6 +999,7 @@ export const vehicleConfigDetail = query({
         createdAt:         r.created_at,
         scrapeCacheHit:    r.scrape_cache_hit,
         errors:            r.errors,
+        fieldGaps:         r.field_gaps,
         totalTokensIn:     r.total_tokens_in,
         totalTokensOut:    r.total_tokens_out,
         estimatedCostUsd:  r.estimated_cost_usd,

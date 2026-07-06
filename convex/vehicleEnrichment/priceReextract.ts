@@ -43,6 +43,7 @@ import {
 } from "./priceParser";
 import { median } from "../lib/robustStats";
 import { priceBandFor } from "../lib/priceBands";
+import { isMarketplaceUrl } from "./sourceRegistry";
 
 export type ReextractOutcome =
   | { status: "sale"; price: number; tier: "structured" | "llm" | "firecrawl"; msrp?: number | null; discount?: number | null }
@@ -109,6 +110,13 @@ export async function reextractPartPrice(args: {
   prefetched?: FetchedPage | null;
 }): Promise<ReextractOutcome> {
   const { oem, partName, source_url, crossSourceMedian } = args;
+
+  // Marketplaces can never yield a trusted price — multi-seller listings and
+  // no reliable OEM echo. Reject before spending a fetch.
+  if (isMarketplaceUrl(source_url)) {
+    return { status: "unverified", reason: "marketplace_source" };
+  }
+
   const normOem = oem ? normalizeOemNumber(oem) : null;
 
   let page: FetchedPage | null = args.prefetched ?? null;
@@ -233,6 +241,35 @@ export function gaugePrice(
   return { pass: true, reason: "ok", correction: null };
 }
 
+/**
+ * Hard identity confirmation for a price extraction: the page text contains
+ * the target OEM number, or the product URL itself does. Model self-reports
+ * are NOT confirmation — sells_this_part passed wrong-product pages, and
+ * oem_seen proved forgeable too (the extractor knows the target from the
+ * prompt and echoed it on a page that never shows it — an air-filter page
+ * "selling" engine-oil 19432331). Precedence:
+ *   oem_in_page true  → confirmed (deterministic page-text match)
+ *   oem_in_page false → URL echo only; a model oem_seen claim is overruled
+ *   oem_in_page absent (legacy extractor/stub) → oem_seen match or URL echo
+ * Pure.
+ */
+export function oemEchoConfirmed(
+  x: Pick<ExtractedPrice, "oem_seen" | "oem_in_page">,
+  url: string,
+  oem: string | null,
+): boolean {
+  if (!oem) return false;
+  const norm = normalizeOemNumber(oem);
+  if (norm.length === 0) return false;
+  if (x.oem_in_page === true) return true;
+  const modelEchoTrusted = x.oem_in_page == null; // undefined/null → no page text to check against
+  if (modelEchoTrusted && x.oem_seen != null && normalizeOemNumber(x.oem_seen) === norm) return true;
+  // URL echo: "…/gm-oil-19432331" → strip separators and compare. Require a
+  // minimum length so a short number can't match URL noise by accident.
+  const urlNorm = url.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return norm.length >= 5 && urlNorm.includes(norm);
+}
+
 export type PriceExtractor = (
   url: string, oem: string | null, partName?: string | null, correction?: string | null,
 ) => Promise<ExtractedPrice | null>;
@@ -249,6 +286,12 @@ export async function resolveVerifiedPrice(
     subcategory?: string | null;
     crossSourceMedian: number | null;
     initial?: ExtractedPrice | null;
+    /** Require the page/URL OEM echo even with a cross-source median. Set for
+     *  search-DISCOVERED urls (backfill, finalize discovery): search results
+     *  are unvetted, and pass-1 raw prices from other wrong pages can form a
+     *  median that would otherwise waive the echo (observed live: an air
+     *  filter page priced "engine oil" 19432331 at $30.08). */
+    requireOemEcho?: boolean;
   },
   extract: PriceExtractor,
 ): Promise<ReextractOutcome> {
@@ -280,7 +323,15 @@ export async function resolveVerifiedPrice(
   const bandViolated =
     band != null && x.sale_price != null && (x.sale_price < band[0] || x.sale_price > band[1]);
 
-  if (g.pass && !overCeiling && !bandViolated) {
+  // OEM-echo hard wall (Jul 2026): sells_this_part is the extractor's own
+  // claim — a wrong-product page self-passes. Require the page/URL itself to
+  // echo the OEM number when (a) the source is alone (no median to
+  // corroborate) or (b) the caller flagged the URLs as search-discovered.
+  const singleSourceUnconfirmed =
+    (crossSourceMedian == null || args.requireOemEcho === true) &&
+    !oemEchoConfirmed(x, url, oem);
+
+  if (g.pass && !overCeiling && !bandViolated && !singleSourceUnconfirmed) {
     return { status: "sale", price: x.sale_price as number, tier: "firecrawl", msrp: x.msrp, discount: x.discount };
   }
 
@@ -292,10 +343,16 @@ export async function resolveVerifiedPrice(
     x.sells_this_part === true ||
     (oem != null && x.oem_seen != null && normalizeOemNumber(x.oem_seen) === normalizeOemNumber(oem));
   const vp = validateLlmPrice({ price: x.sale_price, msrp: x.msrp, oemSeen: x.oem_seen, oem: oem ?? "", crossSourceMedian });
-  if (vp.ok && !overCeiling && !bandViolated && positivelyConfirmed && oem) {
+  if (vp.ok && !overCeiling && !bandViolated && !singleSourceUnconfirmed && positivelyConfirmed && oem) {
     return { status: "sale", price: x.sale_price as number, tier: "firecrawl", msrp: x.msrp, discount: x.discount };
   }
-  const reason = overCeiling ? "over_ceiling" : bandViolated ? "band_violation" : g.reason;
+  const reason = overCeiling
+    ? "over_ceiling"
+    : bandViolated
+      ? "band_violation"
+      : g.pass && singleSourceUnconfirmed
+        ? "no_oem_echo_single_source"
+        : g.reason;
   return { status: "unverified", reason: `${reason}${retried ? "_after_retry" : ""}` };
 }
 
@@ -318,7 +375,13 @@ function domainOf(url: string): string {
  *  gauge failures pay for the guided retry. */
 export async function priceAllSources(
   urls: string[],
-  args: { oem: string | null; partName?: string | null; subcategory?: string | null },
+  args: {
+    oem: string | null;
+    partName?: string | null;
+    subcategory?: string | null;
+    /** See resolveVerifiedPrice — set when the urls came from web search. */
+    requireOemEcho?: boolean;
+  },
   extract: PriceExtractor,
 ): Promise<SourcePriceRow[]> {
   const seen = new Set<string>();
@@ -326,6 +389,7 @@ export async function priceAllSources(
   for (const u of urls) {
     if (!u || seen.has(u)) continue;
     seen.add(u);
+    if (isMarketplaceUrl(u)) continue; // never spend a Firecrawl call on a marketplace
     list.push(u);
     if (list.length >= 3) break;
   }
@@ -354,6 +418,7 @@ export async function priceAllSources(
         subcategory: args.subcategory,
         crossSourceMedian,
         initial: firstExtracts.get(u) ?? null,
+        requireOemEcho: args.requireOemEcho,
       },
       extract,
     );

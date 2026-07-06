@@ -23,21 +23,24 @@ import type {
   CallLogEntry,
   VehicleIdentity,
 } from "./types";
-import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS } from "./types";
+import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS, ON_DEMAND_SERVICE_SLUGS } from "./types";
 import { submitBatch, getBatchStatus, getBatchResults } from "./utils/batchClient";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
+import { GAP_FILL_SYSTEM, buildGapFillPrompt } from "./prompts/gapFillPrompt";
+import { callClaudeWithWebSearch } from "./utils/claudeClient";
 import { deriveEngineFamily } from "./laborSibling";
 import { runSanityChecks, normalizeOilViscosity, aggregateFieldConfidence } from "./validation/sanityChecks";
 import { resolveCapacities } from "./capacityResolver";
 import { validateAllOemParts } from "./validation/oemValidation";
-import { BLOCKED_DOMAINS } from "./sourceRegistry";
+import { BLOCKED_DOMAINS, isMarketplaceUrl } from "./sourceRegistry";
 import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts } from "./applicabilityRules";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
 import { reextractPartPrice, isAffirmativeRejection, priceAllSources } from "./priceReextract";
 import { extractPriceFirecrawl } from "./firecrawl";
+import { discoverPriceUrls } from "./priceDiscovery";
 import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
 import {
@@ -310,6 +313,53 @@ function calculateFlatFillRate(fields: Record<string, FieldResult>): number {
   return Math.round((filled / total) * 100);
 }
 
+/**
+ * Per-field empty-reason ledger, persisted to enrichment_runs.field_gaps.
+ * sanity_flags only explains fields that HAD a value and failed a rule; this
+ * covers the other side — every V4 field that ended the run null, and why —
+ * so completion work can be targeted instead of guessed at. Exported for
+ * tests. Pure.
+ *
+ * Reasons:
+ *   never_asked          — field key absent from the merged field map
+ *   not_applicable       — deliberately nulled by applicability rules (final)
+ *   validation_dropped:X — extracted, then nulled by sanity/authority/sanitize
+ *   llm_null             — asked in every batch, no source produced a value
+ */
+export function classifyFieldGaps(
+  fields: Record<string, FieldResult>,
+  sanityFlags: Array<{ field: string; severity: string; reason: string }>,
+): Array<{ field: string; reason: string }> {
+  const rejectedBySanity = new Map<string, string>();
+  for (const f of sanityFlags) {
+    if (f.severity === "reject") rejectedBySanity.set(f.field, f.reason);
+  }
+  const gaps: Array<{ field: string; reason: string }> = [];
+  for (const k of V4_FIELD_KEYS) {
+    const f = fields[k];
+    if (f?.value != null) continue;
+    if (f == null) {
+      gaps.push({ field: k, reason: "never_asked" });
+      continue;
+    }
+    if (f.flag_reason === "not_applicable") {
+      gaps.push({ field: k, reason: "not_applicable" });
+      continue;
+    }
+    const sanityReason = rejectedBySanity.get(k);
+    if (sanityReason) {
+      gaps.push({ field: k, reason: `validation_dropped:${sanityReason}` });
+      continue;
+    }
+    if (f.flagged && f.flag_reason) {
+      gaps.push({ field: k, reason: `validation_dropped:${f.flag_reason}` });
+      continue;
+    }
+    gaps.push({ field: k, reason: "llm_null" });
+  }
+  return gaps;
+}
+
 /** V3 fill rate — counts actual data coverage across normalized tables. */
 async function calculateV3FillRate(
   ctx: any,
@@ -398,6 +448,7 @@ async function calculateV3FillRate(
   const intervalsFilled = intervals.filter(
     (si: any) => si.interval_miles != null || si.interval_months != null
       || si.status === "cbs_driven" || si.status === "not_applicable"
+      || si.status === "on_demand"
   ).length;
   total += expectedIntervals;
   filled += Math.min(intervalsFilled, expectedIntervals);
@@ -446,6 +497,13 @@ function isBlockedDomain(url: string | null | undefined): boolean {
   } catch { return false; }
 }
 
+/** Batch-2 URL rejection: spec-quality blocklist + marketplaces. A marketplace
+ *  entry keeps its price_low but loses the URL, so the part flows into the
+ *  discovery fallback instead of being scraped from an untrustable listing. */
+function isRejectedPriceUrl(url: string | null | undefined): boolean {
+  return isBlockedDomain(url) || isMarketplaceUrl(url);
+}
+
 function parseBatch2(
   data: Record<string, any>,
   nullFields: string[],
@@ -459,7 +517,7 @@ function parseBatch2(
   const gapData = data.gap_fields ?? {};
   for (const k of nullFields) {
     const raw = gapData[k];
-    if (raw && !isBlockedDomain(raw.source_url)) {
+    if (raw && !isRejectedPriceUrl(raw.source_url)) {
       const f = parseField(raw);
       if (f.value != null) {
         f.source_type = f.source_url ? "web_search" : "gap_fill";
@@ -478,7 +536,7 @@ function parseBatch2(
     const partsBreakdown = rawBreakdown
       .map((entry) => {
         const sanitizedSourceUrl = sanitizeUrl(entry?.source_url);
-        const blocked = isBlockedDomain(sanitizedSourceUrl);
+        const blocked = isRejectedPriceUrl(sanitizedSourceUrl);
         const priceLow  = sanitizeNumber(entry?.price_low);
         const priceHigh = sanitizeNumber(entry?.price_high);
         const oemNumber = sanitizeString(entry?.oem_part_number)?.trim();
@@ -1077,6 +1135,14 @@ async function writeNormalizedData(
       data_quality: "enriched",
     });
   }
+
+  // G2. On-demand services (inspections, diagnostics, alignment…) have no
+  // mileage schedule by nature — stamp them so they read as complete instead
+  // of permanently missing (they are inherently un-fillable by extraction).
+  await ctx.runMutation(internal.vehicleEnrichment.v3mutations.markOnDemandIntervals, {
+    vehicle_config_id: vehicleConfigId,
+    service_slugs: [...ON_DEMAND_SERVICE_SLUGS],
+  });
 
   // H. Evidence batch
   const evidenceRows: Array<{
@@ -2382,6 +2448,51 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         }
       }
 
+      // Batch 3 (gap-fill re-ask): ONE bounded targeted pass over fields
+      // STILL null after Batch 2 (getNullFields excludes not_applicable —
+      // re-asking N/A fields resurrected impossible data, see comment above
+      // getNullFields). One synchronous web-search call, capped field count,
+      // values flow through the same parseBatch2 → sanity → sanitize gates as
+      // Batch-2 gap fills. No loop — a field that survives this stays in the
+      // run's field_gaps ledger instead.
+      if (process.env.PARTS_GAPFILL !== "off") {
+        const gapFillMax = Number(process.env.PARTS_GAPFILL_MAX_FIELDS ?? "15");
+        const stillNull = getNullFields(allFields).slice(0, gapFillMax);
+        if (stillNull.length > 0) {
+          try {
+            const gfVehicle: VehicleInput = {
+              vehicleId: args.vehicleId,
+              year: args.year, make: args.make, model: args.model,
+              trim: args.trim, engineCode: args.engineCode, displacement: args.displacement,
+            };
+            const gfRes = await callClaudeWithWebSearch({
+              system: GAP_FILL_SYSTEM,
+              userPrompt: buildGapFillPrompt(gfVehicle, stillNull),
+              maxSearchUses: Math.min(stillNull.length * 2, 12),
+              maxTokens: 4000,
+              temperature: 0,
+            });
+            callLog.push({
+              call: "gapfill",
+              tokensIn: gfRes.usage.tokensIn,
+              tokensOut: gfRes.usage.tokensOut,
+              webSearches: gfRes.usage.webSearches,
+              durationMs: 0,
+            });
+            const gfParsed = parseBatch2(gfRes.data, stillNull);
+            let gfFilled = 0;
+            for (const [k, fv] of Object.entries(gfParsed.gapFields)) {
+              if (allFields[k]?.value == null) {
+                allFields[k] = fv;
+                gfFilled++;
+              }
+            }
+            console.log(`[v8/gapfill] re-asked ${stillNull.length} fields, filled ${gfFilled}`);
+          } catch (e) {
+            console.warn("[v8/gapfill] re-ask pass failed (non-fatal):", e);
+          }
+        }
+      }
     }
 
     // Validation — MUST run BEFORE writeNormalizedData so bad values get nulled first
@@ -2488,6 +2599,14 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       if (deterministicPrices.size > 0) {
         console.log(`[v8] ${deterministicPrices.size} deterministic JSON-LD prices for ${args.make} ${args.model}`);
       }
+
+      // Fallback price-URL discovery for parts Batch-2 left without a source
+      // URL (the prompt tells the model to OMIT unpriced parts, so omission is
+      // routine — without this, those parts get zero fetch attempts). One
+      // Firecrawl search per part, capped per run to bound credit spend.
+      const priceDiscoveryEnabled = process.env.PARTS_PRICE_URL_DISCOVERY !== "off";
+      const priceDiscoveryMax = Number(process.env.PARTS_PRICE_DISCOVERY_MAX ?? "10");
+      let priceDiscoveryUsed = 0;
 
       // ── Multi-source labor (ONCE per car). The `laborAllSources` orchestrator
       //    fans out to OLP + RepairPal + open-web (each flag-gated), merges the
@@ -2801,6 +2920,20 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           for (const f of fitments) {
             subcatByPartId.set(String(f.part_id), ((f as any).part_subcategory as string | null) ?? null);
           }
+          // Seed EVERY fitment part into the map (empty urls) so a part the
+          // LLM omitted from parts_breakdown still reaches the discovery
+          // fallback below — addUrl alone only enters parts that have a URL.
+          for (const f of fitments) {
+            const k = String(f.part_id);
+            if (!urlsByPart.has(k)) {
+              urlsByPart.set(k, {
+                urls: [],
+                oem: ((f as any).oem_part_number as string | null) ?? null,
+                name: ((f as any).part_name as string | null) ?? null,
+                subcategory: ((f as any).part_subcategory as string | null) ?? null,
+              });
+            }
+          }
           for (const f of fitments) {
             const num = (f as any).oem_part_number as string | null;
             const dp = num ? deterministicPrices.get(normalizeOemNumber(num)) : null;
@@ -2824,8 +2957,32 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             }
           }
           for (const [partIdStr, e] of urlsByPart) {
-            if (e.urls.length === 0) continue;
-            const rows = await priceAllSources(e.urls, { oem: e.oem, partName: e.name, subcategory: e.subcategory }, extractPriceFirecrawl);
+            let urlsDiscovered = false;
+            if (e.urls.length === 0) {
+              // Discovery fallback: search for a product page instead of
+              // giving up. Skipped for parts the JSON-LD path already priced,
+              // parts with no OEM anchor, or once the per-run cap is hit.
+              if (
+                !priceDiscoveryEnabled ||
+                !e.oem ||
+                deterministicallyPriced.has(partIdStr as any) ||
+                priceDiscoveryUsed >= priceDiscoveryMax
+              ) {
+                continue;
+              }
+              priceDiscoveryUsed++;
+              e.urls = await discoverPriceUrls({ oem: e.oem, make: args.make, name: e.name });
+              urlsDiscovered = true;
+              if (e.urls.length === 0) {
+                console.warn(`[v8/price] discovery found no usable source for part ${partIdStr} (oem=${e.oem})`);
+                continue;
+              }
+            }
+            const rows = await priceAllSources(
+              e.urls,
+              { oem: e.oem, partName: e.name, subcategory: e.subcategory, requireOemEcho: urlsDiscovered },
+              extractPriceFirecrawl,
+            );
             for (const row of rows) {
               if (row.outcome.status !== "sale") continue;
               await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
@@ -2953,6 +3110,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           value: f.value != null ? String(f.value) : undefined,
         })),
       ],
+      field_gaps: classifyFieldGaps(allFields, sanityFlags),
     });
 
     // Read current vehicle_config to get resolved drivetrain

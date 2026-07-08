@@ -8,6 +8,8 @@
  */
 
 import type { FieldResult } from "../types";
+import { sanitizeCapacityQuarts } from "../contentSanitization";
+import { isLowAuthorityDomain } from "./sourceAuthority";
 
 interface SanityRule {
   field: string;
@@ -35,6 +37,30 @@ const SANITY_RULES: SanityRule[] = [
     reason: "Oil capacity outside valid range — likely incorrect" },
   { field: "coolant_capacity_qts", type: "range", min: 4, max: 20, severity: "flag",
     reason: "Coolant capacity outside typical range (4-20 qts)" },
+  { field: "coolant_capacity_qts", type: "range", min: 3, max: 24, severity: "reject",
+    reason: "Coolant capacity outside valid range (3-24 qts) — likely wrong unit or wrong engine" },
+  { field: "diff_fluid_capacity_qts", type: "range", min: 0.5, max: 4, severity: "flag",
+    reason: "Differential fluid capacity outside typical range (0.5-4 qts)" },
+  { field: "diff_fluid_capacity_qts", type: "range", min: 0.25, max: 8, severity: "reject",
+    reason: "Differential fluid capacity outside valid range (0.25-8 qts) — likely wrong unit" },
+  { field: "transfer_case_fluid_capacity_qts", type: "range", min: 0.5, max: 3, severity: "flag",
+    reason: "Transfer case fluid capacity outside typical range (0.5-3 qts)" },
+  { field: "transfer_case_fluid_capacity_qts", type: "range", min: 0.25, max: 6, severity: "reject",
+    reason: "Transfer case fluid capacity outside valid range (0.25-6 qts) — likely wrong unit" },
+  { field: "brake_fluid_capacity_oz", type: "range", min: 16, max: 48, severity: "flag",
+    reason: "Brake fluid capacity outside typical range (16-48 oz)" },
+  { field: "brake_fluid_capacity_oz", type: "range", min: 8, max: 96, severity: "reject",
+    reason: "Brake fluid capacity outside valid range (8-96 oz) — likely liters/mL misread as oz" },
+  { field: "ps_fluid_capacity_oz", type: "range", min: 16, max: 64, severity: "flag",
+    reason: "PS fluid capacity outside typical range (16-64 oz)" },
+  { field: "ps_fluid_capacity_oz", type: "range", min: 8, max: 128, severity: "reject",
+    reason: "PS fluid capacity outside valid range (8-128 oz) — likely liters/mL misread as oz" },
+  // Drain-and-fill (pan drop), NOT total/dry fill — a total-fill figure
+  // (10-14 qt with torque converter) lands in the flag band for review.
+  { field: "transmission_fluid_capacity_qts", type: "range", min: 2, max: 8, severity: "flag",
+    reason: "Transmission drain-and-fill capacity outside typical range (2-8 qts) — total-fill figure suspected" },
+  { field: "transmission_fluid_capacity_qts", type: "range", min: 1, max: 16, severity: "reject",
+    reason: "Transmission fluid capacity outside valid range (1-16 qts) — likely wrong unit" },
   { field: "oil_viscosity", type: "format", pattern: /^\d+[Ww]-\d+$/, severity: "flag",
     reason: "Oil viscosity should match format like 0W-30, 5W-20" },
 
@@ -59,6 +85,10 @@ const SANITY_RULES: SanityRule[] = [
     reason: "Air filter interval outside typical range" },
   { field: "cabin_filter_miles", type: "range", min: 10000, max: 60000, severity: "flag",
     reason: "Cabin filter interval outside typical range" },
+  { field: "brake_pads_miles", type: "range", min: 15000, max: 80000, severity: "flag",
+    reason: "Brake pad guidance outside typical range (15K-80K miles)" },
+  { field: "tire_rotation_miles", type: "range", min: 3000, max: 10000, severity: "flag",
+    reason: "Tire rotation interval outside typical range (3K-10K miles)" },
 
   // ── Intervals (months) ──
   { field: "oil_change_months", type: "range", min: 3, max: 24, severity: "flag",
@@ -93,21 +123,70 @@ const SANITY_RULES: SanityRule[] = [
     reason: "Invalid battery type" },
 ];
 
-/** Engine-size-specific validation rules. */
+// ─── Capacity bands (single source of truth) ─────────────────────
+//
+// Shared by runSanityChecks (flag/reject rules) AND the capacity resolver
+// (capacityResolver.ts accept gate) so the two never drift. `reject*` is the
+// hard valid range — a value outside it is definitely wrong (wrong unit / wrong
+// engine); the resolver only accepts within it, so legit HD/diesel (~20 qt)
+// survives. `typical*` is the engine-size expectation — a flag/scoring signal,
+// not a hard gate.
+
+export type CapacityField = "oil_capacity_qts" | "coolant_capacity_qts";
+export interface CapacityBand {
+  rejectMin: number;
+  rejectMax: number;
+  typicalMin: number;
+  typicalMax: number;
+}
+
+export function getCapacityBand(field: CapacityField, cylinders: number): CapacityBand {
+  if (field === "oil_capacity_qts") {
+    return {
+      rejectMin: 1,
+      rejectMax: 20,
+      typicalMin: cylinders >= 8 ? 7 : 3,
+      typicalMax: cylinders === 4 ? 7 : 16,
+    };
+  }
+  // coolant_capacity_qts
+  return {
+    rejectMin: 3,
+    rejectMax: 24,
+    typicalMin: cylinders >= 8 ? 10 : 4,
+    typicalMax: cylinders === 4 ? 11 : 16,
+  };
+}
+
+/** Engine-size-specific validation rules. Derived from getCapacityBand (no drift). */
 function getEngineSpecificRules(cylinders: number): SanityRule[] {
   const rules: SanityRule[] = [];
+  const oilBand = getCapacityBand("oil_capacity_qts", cylinders);
+  const coolantBand = getCapacityBand("coolant_capacity_qts", cylinders);
 
   if (cylinders >= 8) {
     rules.push({
-      field: "oil_capacity_qts", type: "range", min: 7, max: 16, severity: "flag",
-      reason: `V${cylinders} engine: oil capacity below 7 qts is unusual — verify against OEM source`,
+      field: "oil_capacity_qts", type: "range", min: oilBand.typicalMin, max: oilBand.typicalMax, severity: "flag",
+      reason: `V${cylinders} engine: oil capacity outside typical ${oilBand.typicalMin}-${oilBand.typicalMax} qts — verify against OEM source`,
+    });
+    // A 5.3-6.2L V8 cooling system holds ~10-16 qts; a value above this is usually a
+    // liters-as-quarts mixup or a figure lifted from a different/HD engine (the 16.9
+    // forum value on the Sierra L84 lands here). Flag only — combined with a
+    // low-authority source it is escalated to a drop in runSanityChecks.
+    rules.push({
+      field: "coolant_capacity_qts", type: "range", min: coolantBand.typicalMin, max: coolantBand.typicalMax, severity: "flag",
+      reason: `V${cylinders} engine: coolant capacity outside typical ${coolantBand.typicalMin}-${coolantBand.typicalMax} qts — verify vs OEM (liters often misread as quarts)`,
     });
   }
 
   if (cylinders === 4) {
     rules.push({
-      field: "oil_capacity_qts", type: "range", min: 3, max: 7, severity: "flag",
-      reason: "4-cyl engine: oil capacity above 7 qts is unusual — verify",
+      field: "oil_capacity_qts", type: "range", min: oilBand.typicalMin, max: oilBand.typicalMax, severity: "flag",
+      reason: `4-cyl engine: oil capacity outside typical ${oilBand.typicalMin}-${oilBand.typicalMax} qts — verify`,
+    });
+    rules.push({
+      field: "coolant_capacity_qts", type: "range", min: coolantBand.typicalMin, max: coolantBand.typicalMax, severity: "flag",
+      reason: `4-cyl engine: coolant capacity outside typical ${coolantBand.typicalMin}-${coolantBand.typicalMax} qts — verify`,
     });
   }
 
@@ -119,6 +198,27 @@ function getEngineSpecificRules(cylinders: number): SanityRule[] {
   });
 
   return rules;
+}
+
+/**
+ * Mean confidence across the given field keys that carry a non-null value.
+ * Returns undefined when none were written (never store a fake 0). Mean, not
+ * min: consistent with `confidence_avg` semantics — one weak field shouldn't
+ * tank a row that's 90% solid; the sharp per-field signal is carried by the
+ * persisted sanity_flags, not this score.
+ */
+export function aggregateFieldConfidence(
+  fields: Record<string, FieldResult>,
+  keys: string[],
+): number | undefined {
+  const confs: number[] = [];
+  for (const k of keys) {
+    const f = fields[k];
+    if (!f || f.value == null) continue;
+    if (typeof f.confidence === "number") confs.push(f.confidence);
+  }
+  if (confs.length === 0) return undefined;
+  return confs.reduce((a, b) => a + b, 0) / confs.length;
 }
 
 /**
@@ -170,6 +270,26 @@ export function runSanityChecks(
     if (canon && canon !== trans.value) fields["transmission_type"] = { ...trans, value: canon };
   }
 
+  // Convert fluid-capacity fields to US quarts BEFORE the range rules run. A source
+  // that reports "13.1 L" must become ~13.85 qts, not be range-checked (and stored) as
+  // 13.1. The caller writes from this same `fields` map, so the converted numeric value
+  // is what gets persisted. (The *_oz fields are excluded — they're ounces by
+  // definition; the prompt instructs the conversion and the range rules catch
+  // liters/mL misreads.)
+  for (const capField of [
+    "oil_capacity_qts",
+    "coolant_capacity_qts",
+    "diff_fluid_capacity_qts",
+    "transfer_case_fluid_capacity_qts",
+    "transmission_fluid_capacity_qts",
+  ]) {
+    const cap = fields[capField];
+    if (cap && cap.value != null) {
+      const q = sanitizeCapacityQuarts(cap.value);
+      if (q != null && q !== cap.value) fields[capField] = { ...cap, value: q };
+    }
+  }
+
   for (const rule of allRules) {
     const field = fields[rule.field];
     if (!field || field.value === null || field.value === undefined) continue;
@@ -193,14 +313,63 @@ export function runSanityChecks(
     }
 
     if (failed) {
-      flags.push({ field: rule.field, severity: rule.severity, reason: rule.reason, value: field.value });
-      if (rule.severity === "reject") {
-        fields[rule.field] = { ...field, value: null, flagged: true, flag_reason: rule.reason };
+      // Escalate an out-of-band range FLAG to a hard drop when the value's only source
+      // is a low-authority forum/Q&A domain. A slightly-off value from a reputable or
+      // scraped OEM source is kept & flagged for review; the same value from a forum is
+      // dropped — this is exactly how 16.9 qt coolant (silveradosierra.com) got in.
+      let severity = rule.severity;
+      let reason = rule.reason;
+      if (
+        severity === "flag" &&
+        rule.type === "range" &&
+        isLowAuthorityDomain(field.source_url)
+      ) {
+        severity = "reject";
+        reason = `${rule.reason} — dropped: sole source is a low-authority forum/community page (${field.source_url})`;
+      }
+
+      flags.push({ field: rule.field, severity, reason, value: field.value });
+      if (severity === "reject") {
+        fields[rule.field] = { ...field, value: null, flagged: true, flag_reason: reason };
       } else {
-        fields[rule.field] = { ...field, flagged: true, flag_reason: rule.reason };
+        fields[rule.field] = { ...field, flagged: true, flag_reason: reason };
       }
     }
   }
 
+  // ── In-band forum-corroboration enforcement for numeric capacities ────────
+  // The LLM's own rubric says a lone forum post can't attest a numeric
+  // capacity, but that was prompt-only: an IN-band wrong figure from a single
+  // forum source sailed through (the exact Sierra 16.9 qt failure mode, just
+  // with a smaller error). Enforce it in code: capacity values whose sole
+  // source is a low-authority forum/Q&A domain are flagged and confidence-
+  // capped at 0.5 even when in-band — never dropped (drop stays reserved for
+  // out-of-band values, handled by the escalation above).
+  for (const capField of CAPACITY_FIELDS) {
+    const field = fields[capField];
+    if (!field || field.value == null) continue;
+    if (field.flagged) continue; // already flagged (possibly escalated) above
+    if (!isLowAuthorityDomain(field.source_url)) continue;
+    const reason = `Numeric capacity attested only by a low-authority forum/community page (${field.source_url}) — confidence capped, needs corroboration`;
+    flags.push({ field: capField, severity: "flag", reason, value: field.value });
+    fields[capField] = {
+      ...field,
+      confidence: Math.min(field.confidence ?? 0.5, 0.5),
+      flagged: true,
+      flag_reason: reason,
+    };
+  }
+
   return flags;
 }
+
+/** Numeric fluid-capacity fields subject to the forum-corroboration rule. */
+const CAPACITY_FIELDS = [
+  "oil_capacity_qts",
+  "coolant_capacity_qts",
+  "diff_fluid_capacity_qts",
+  "transfer_case_fluid_capacity_qts",
+  "transmission_fluid_capacity_qts",
+  "brake_fluid_capacity_oz",
+  "ps_fluid_capacity_oz",
+] as const;

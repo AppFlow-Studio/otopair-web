@@ -44,11 +44,13 @@ const PLAUSIBILITY_RANGES: Record<string, { min: number; max: number; unit: stri
   recommended_tire_pressure_rear_psi: { min: 26, max: 50, unit: "psi" },
   lug_nut_torque_ft_lbs: { min: 65, max: 180, unit: "ft-lbs" },
   battery_cca: { min: 300, max: 1200, unit: "CCA" },
-  // Service intervals
+  // Service intervals — keys are matched as `interval_miles_${service.slug}`
+  // (see the range lookup below), so they MUST use the canonical service
+  // slugs. brake_pads/air_filter were dead keys until the 2026-07 rename.
   interval_miles_oil_change: { min: 3000, max: 20000, unit: "miles" },
-  interval_miles_brake_pads: { min: 15000, max: 80000, unit: "miles" },
+  interval_miles_brake_pad_replacement: { min: 15000, max: 80000, unit: "miles" },
   interval_miles_tire_rotation: { min: 3000, max: 10000, unit: "miles" },
-  interval_miles_air_filter: { min: 10000, max: 50000, unit: "miles" },
+  interval_miles_filter_replacement: { min: 10000, max: 50000, unit: "miles" },
 };
 
 /**

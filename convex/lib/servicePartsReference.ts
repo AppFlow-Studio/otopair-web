@@ -357,7 +357,14 @@ export const SERVICE_PARTS_REFERENCE: Record<string, ServicePartsSpec> = {
       },
       {
         roleKey: "thermostat",
-        label: "Thermostat + gasket (only if found bad)",
+        label: "Thermostat (only if found bad)",
+        serviceRole: "as_needed",
+        condition: "if_found_bad",
+        quantity: { kind: "fixed", n: 1 },
+      },
+      {
+        roleKey: "thermostat_gasket",
+        label: "Thermostat gasket / seal (with thermostat)",
         serviceRole: "as_needed",
         condition: "if_found_bad",
         quantity: { kind: "fixed", n: 1 },
@@ -402,8 +409,22 @@ export const SERVICE_PARTS_REFERENCE: Record<string, ServicePartsSpec> = {
         serviceRole: "kit",
         quantity: { kind: "fixed", n: 1 },
       },
+      {
+        roleKey: "cvt_internal_filter",
+        label: "CVT internal filter / mesh screen (CVT pan service)",
+        serviceRole: "as_needed",
+        condition: "where_equipped",
+        quantity: { kind: "fixed", n: 1 },
+      },
+      {
+        roleKey: "cvt_external_filter",
+        label: "CVT external (cooler line) filter",
+        serviceRole: "as_needed",
+        condition: "where_equipped",
+        quantity: { kind: "fixed", n: 1 },
+      },
     ],
-    notes: "Two variants: drain & fill (core) vs full pan service (kit adds filter + gasket). CVT internal mesh screen deferred.",
+    notes: "Two variants: drain & fill (core) vs full pan service (kit adds filter + gasket). CVT filters are where_equipped as_needed roles — enriched only on CVT transmissions.",
   },
 
   tire_balance: {

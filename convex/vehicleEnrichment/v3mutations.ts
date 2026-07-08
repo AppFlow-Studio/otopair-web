@@ -5,8 +5,9 @@ import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
 import { isLaborOnlyService } from "../lib/servicePartsReference";
 import { partFitsConfigMake } from "../partSelector";
-import { makesSameFamily } from "./contentSanitization";
+import { makesSameFamily, sanitizePartNumber } from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
+import { isMarketplaceDomain, isMarketplaceUrl } from "./sourceRegistry";
 
 /**
  * Family-aware make compatibility for WRITE paths. The strict id-equality
@@ -228,7 +229,9 @@ export const upsertChassisSpecs = internalMutation({
     make_id: v.optional(v.id("makes")),
     // Physical specs
     brake_fluid_type: v.optional(v.string()),
+    brake_fluid_capacity_oz: v.optional(v.float64()),
     ps_fluid_type: v.optional(v.string()),
+    ps_fluid_capacity_oz: v.optional(v.float64()),
     lug_nut_torque_ft_lbs: v.optional(v.float64()),
     wiper_blade_driver_size_in: v.optional(v.float64()),
     wiper_blade_passenger_size_in: v.optional(v.float64()),
@@ -255,7 +258,8 @@ export const upsertChassisSpecs = internalMutation({
     // Existing values are kept unless the new value is explicitly provided.
     const patch: Record<string, any> = { last_enriched_at: Date.now() };
     const fields = [
-      "make_id", "brake_fluid_type", "ps_fluid_type", "lug_nut_torque_ft_lbs",
+      "make_id", "brake_fluid_type", "brake_fluid_capacity_oz",
+      "ps_fluid_type", "ps_fluid_capacity_oz", "lug_nut_torque_ft_lbs",
       "wiper_blade_driver_size_in", "wiper_blade_passenger_size_in", "wiper_blade_rear_size_in",
       "battery_group", "battery_location", "battery_type", "has_brake_pad_sensor",
       "steering_type", "parking_brake_type", "has_rear_wiper", "cabin_filter_access",
@@ -299,6 +303,7 @@ export const upsertTrimSpecs = internalMutation({
     battery_cca: v.optional(v.float64()),
     battery_type: v.optional(v.string()),
     battery_location: v.optional(v.string()),
+    confidence_score: v.optional(v.float64()),
     data_quality: v.optional(v.string()),
     tire_options: v.optional(v.array(v.object({
       oem_name: v.optional(v.string()),
@@ -362,6 +367,7 @@ export const upsertTrimSpecs = internalMutation({
     if (args.battery_cca !== undefined) patch.battery_cca = args.battery_cca;
     if (args.battery_type !== undefined) patch.battery_type = args.battery_type;
     if (args.battery_location !== undefined) patch.battery_location = args.battery_location;
+    if (args.confidence_score !== undefined) patch.confidence_score = args.confidence_score;
     if (args.data_quality !== undefined) patch.data_quality = args.data_quality;
     if (args.tire_options !== undefined) patch.tire_options = args.tire_options;
     if (args.tire_options_source !== undefined) patch.tire_options_source = args.tire_options_source;
@@ -403,9 +409,16 @@ export const updateEngineSpecs = internalMutation({
     engine_family: v.optional(v.string()),
     displacement_l: v.optional(v.float64()),
     data_quality: v.optional(v.string()),
+    // Field names to actively ERASE (patch to undefined → Convex deletes the
+    // column). A value that sanity-checks REJECTED as wrong must not linger:
+    // the pipeline skips `undefined` writes to avoid clobbering good data, so
+    // without an explicit clear a stale poison value (e.g. coolant 16.9 qt from
+    // a forum) survives every re-enrich. Distinct from a genuinely-absent field,
+    // which stays out of this list and is preserved.
+    clear_fields: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const { engine_id, ...fields } = args;
+    const { engine_id, clear_fields, ...fields } = args;
     // Human-corrected fields are authoritative — the pipeline must not write
     // over them (the Jetta's chain→belt fix was clobbered by a re-enrich,
     // Jun 10 2026). See engines.verified_fields in schema.ts.
@@ -415,6 +428,13 @@ export const updateEngineSpecs = internalMutation({
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined && !verified.has(key)) {
         patch[key] = value;
+      }
+    }
+    // Erase rejected fields — `undefined` in a Convex patch deletes the column.
+    // Still guarded by verified_fields so a human-corrected value is never wiped.
+    for (const key of clear_fields ?? []) {
+      if (!verified.has(key) && !(key in patch)) {
+        patch[key] = undefined;
       }
     }
     if (Object.keys(patch).length > 0) {
@@ -567,10 +587,25 @@ export const upsertPartAndFitment = internalMutation({
 
     const config = await ctx.db.get(args.vehicle_config_id);
 
+    // CHOKE-POINT sanitization: every part write funnels through this mutation
+    // (batch1/batch2 pipeline, diagnoseVin backfills, future admin tools), so
+    // the cross-make + per-make-format validation runs here regardless of
+    // which fetch path sourced the number. The pipeline call sites also
+    // sanitize at extraction (better logging/context there) — this is the
+    // guarantee that no NEW path can ever skip it.
+    const configMakeDoc = config?.make_id ? await ctx.db.get(config.make_id) : null;
+    const cleanNumber = sanitizePartNumber(args.oem_part_number, configMakeDoc?.name);
+    if (!cleanNumber) {
+      console.log(
+        `[v8-parts] REJECTED part number at write: "${args.oem_part_number}" (${args.subcategory}) failed sanitization for make=${configMakeDoc?.name ?? "?"}`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "invalid_number" as const };
+    }
+
     // Upsert OEM part — identity is the NORMALIZED number so formatting
     // variants ("5Q0 698 451 A" vs "5Q0698451A") resolve to one row instead of
     // splitting fitments and price history across duplicates.
-    const normalized = normalizeOemNumber(args.oem_part_number);
+    const normalized = normalizeOemNumber(cleanNumber);
     let part = await ctx.db
       .query("oem_parts")
       .withIndex("by_part_number_normalized", (q) =>
@@ -583,7 +618,7 @@ export const upsertPartAndFitment = internalMutation({
       part = await ctx.db
         .query("oem_parts")
         .withIndex("by_part_number", (q) =>
-          q.eq("oem_part_number", args.oem_part_number)
+          q.eq("oem_part_number", cleanNumber)
         )
         .first();
     }
@@ -639,7 +674,7 @@ export const upsertPartAndFitment = internalMutation({
       });
     } else {
       partId = await ctx.db.insert("oem_parts", {
-        oem_part_number: args.oem_part_number,
+        oem_part_number: cleanNumber,
         oem_part_number_normalized: normalized,
         name: args.name,
         category: args.category,
@@ -726,6 +761,16 @@ export const upsertPartPrice = internalMutation({
     discount: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
+    // Write-boundary marketplace guard: every price writer funnels through
+    // here (Batch-2 finalize, reprice, refresh, diagnoseVin, backfills), so
+    // this is the one place a marketplace row can be stopped for all of them.
+    if (isMarketplaceDomain(args.source_domain) || isMarketplaceUrl(args.source_url)) {
+      console.warn(
+        `[upsertPartPrice] rejected marketplace source ${args.source_domain} for part ${args.part_id}`,
+      );
+      return null;
+    }
+
     const now = Date.now();
 
     const existing = await ctx.db
@@ -764,6 +809,61 @@ export const upsertPartPrice = internalMutation({
 // ============================================================================
 // 8. upsertServiceInterval
 // ============================================================================
+
+/**
+ * Stamp on-demand services (inspections, diagnostics, alignment…) whose
+ * interval row has no mileage/months as status="on_demand". These services
+ * genuinely have no schedule — without the stamp they read as "missing
+ * interval" and permanently drag the fill rate (Jul 2026: 8 of the Sierra's
+ * 22 services). Never touches a row that has real interval data or a
+ * non-empty status set by another writer.
+ */
+export const markOnDemandIntervals = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_slugs: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    let stamped = 0;
+    for (const slug of args.service_slugs) {
+      const svc = await ctx.db
+        .query("services")
+        .withIndex("by_slug", (q) => q.eq("slug", slug))
+        .first();
+      if (!svc) continue;
+
+      const existing = await ctx.db
+        .query("service_intervals")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", args.vehicle_config_id).eq("service_id", svc._id)
+        )
+        .first();
+
+      if (existing) {
+        if (
+          existing.interval_miles == null &&
+          existing.interval_months == null &&
+          (existing.status == null || existing.status === "") &&
+          existing.mechanic_verified !== true
+        ) {
+          await ctx.db.patch(existing._id, { status: "on_demand", data_quality: "deterministic" });
+          stamped++;
+        }
+      } else {
+        await ctx.db.insert("service_intervals", {
+          vehicle_config_id: args.vehicle_config_id,
+          service_id: svc._id,
+          status: "on_demand",
+          confidence: 1,
+          data_quality: "deterministic",
+          created_at: Date.now(),
+        });
+        stamped++;
+      }
+    }
+    return { stamped };
+  },
+});
 
 export const upsertServiceInterval = internalMutation({
   args: {
@@ -1125,6 +1225,24 @@ export const updateEnrichmentRun = internalMutation({
     fill_rate: v.optional(v.float64()),
     fields_changed: v.optional(v.array(v.string())),
     errors: v.optional(v.array(v.string())),
+    sanity_flags: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          severity: v.string(),
+          reason: v.string(),
+          value: v.optional(v.string()),
+        }),
+      ),
+    ),
+    field_gaps: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          reason: v.string(),
+        }),
+      ),
+    ),
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
   },

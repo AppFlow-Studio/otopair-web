@@ -23,20 +23,24 @@ import type {
   CallLogEntry,
   VehicleIdentity,
 } from "./types";
-import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS } from "./types";
+import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS, ON_DEMAND_SERVICE_SLUGS } from "./types";
 import { submitBatch, getBatchStatus, getBatchResults } from "./utils/batchClient";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
+import { GAP_FILL_SYSTEM, buildGapFillPrompt } from "./prompts/gapFillPrompt";
+import { callClaudeWithWebSearch } from "./utils/claudeClient";
 import { deriveEngineFamily } from "./laborSibling";
-import { runSanityChecks, normalizeOilViscosity } from "./validation/sanityChecks";
+import { runSanityChecks, normalizeOilViscosity, aggregateFieldConfidence } from "./validation/sanityChecks";
+import { resolveCapacities } from "./capacityResolver";
 import { validateAllOemParts } from "./validation/oemValidation";
-import { BLOCKED_DOMAINS } from "./sourceRegistry";
+import { BLOCKED_DOMAINS, isMarketplaceUrl } from "./sourceRegistry";
 import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts } from "./applicabilityRules";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
 import { reextractPartPrice, isAffirmativeRejection, priceAllSources } from "./priceReextract";
 import { extractPriceFirecrawl } from "./firecrawl";
+import { discoverPriceUrls } from "./priceDiscovery";
 import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
 import {
@@ -117,10 +121,13 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
   f.coolant_capacity_qts = parseField(fluids.coolant_capacity_qts);
   f.brake_fluid_type = parseField(fluids.brake_fluid_type);
   f.power_steering_type = parseField(fluids.power_steering_type);
+  f.brake_fluid_capacity_oz = parseField(fluids.brake_fluid_capacity_oz);
+  f.ps_fluid_capacity_oz = parseField(fluids.ps_fluid_capacity_oz);
+  f.transmission_fluid_capacity_qts = parseField(fluids.transmission_fluid_capacity_qts);
 
   // Intervals
   const intervals = data.intervals ?? {};
-  for (const key of ["oil_change", "spark_plug", "transmission_service", "coolant_flush", "air_filter", "cabin_filter", "brake_fluid_flush", "serpentine_belt"]) {
+  for (const key of ["oil_change", "spark_plug", "transmission_service", "coolant_flush", "air_filter", "cabin_filter", "brake_fluid_flush", "serpentine_belt", "brake_pads", "tire_rotation"]) {
     const iv = parseInterval(intervals[key]);
     f[`${key}_miles`] = iv.miles;
     f[`${key}_months`] = iv.months;
@@ -148,7 +155,10 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
     "timing_kit_oem", "water_pump_oem", "atf_fluid_oem", "trans_filter_oem",
     "trans_pan_gasket_oem", "brake_fluid_oem", "ps_fluid_oem", "gear_oil_oem",
     "friction_modifier_oem", "brake_hardware_kit_front_oem", "brake_hardware_kit_rear_oem",
-    "brake_wear_sensor_front_oem", "brake_wear_sensor_rear_oem"]) {
+    "brake_wear_sensor_front_oem", "brake_wear_sensor_rear_oem",
+    // coolant_flush / transmission_service discovery (2026-07)
+    "thermostat_oem", "thermostat_gasket_oem",
+    "cvt_internal_filter_oem", "cvt_external_filter_oem"]) {
     f[k] = parseField(parts[k]);
   }
 
@@ -209,6 +219,9 @@ function parsePackageParts(data: Record<string, any>): Map<string, Record<string
     "trans_pan_gasket_oem", "brake_fluid_oem", "ps_fluid_oem", "gear_oil_oem",
     "friction_modifier_oem", "brake_hardware_kit_front_oem", "brake_hardware_kit_rear_oem",
     "brake_wear_sensor_front_oem", "brake_wear_sensor_rear_oem",
+    // coolant_flush / transmission_service discovery (2026-07)
+    "thermostat_oem", "thermostat_gasket_oem",
+    "cvt_internal_filter_oem", "cvt_external_filter_oem",
   ];
 
   for (const [code, body] of Object.entries(packagesBlock)) {
@@ -233,11 +246,13 @@ function parseBatch1b(data: Record<string, any>): Record<string, FieldResult> {
   const f = parseBatch1a(data);
   if (!data) return f;
 
-  // Additional 1B fields: new fluid types + intervals
+  // Additional 1B fields: new fluid types + capacities + intervals
   const fluids = data.fluids ?? {};
   f.trans_fluid_type = parseField(fluids.trans_fluid_type);
   f.diff_fluid_type = parseField(fluids.diff_fluid_type);
   f.transfer_case_fluid_type = parseField(fluids.transfer_case_fluid_type);
+  f.diff_fluid_capacity_qts = parseField(fluids.diff_fluid_capacity_qts);
+  f.transfer_case_fluid_capacity_qts = parseField(fluids.transfer_case_fluid_capacity_qts);
 
   const intervals = data.intervals ?? {};
   const diff = parseInterval(intervals.diff_fluid);
@@ -296,6 +311,53 @@ function calculateFlatFillRate(fields: Record<string, FieldResult>): number {
   const total = V4_FIELD_KEYS.length;
   const filled = V4_FIELD_KEYS.filter((k) => fields[k]?.value != null).length;
   return Math.round((filled / total) * 100);
+}
+
+/**
+ * Per-field empty-reason ledger, persisted to enrichment_runs.field_gaps.
+ * sanity_flags only explains fields that HAD a value and failed a rule; this
+ * covers the other side — every V4 field that ended the run null, and why —
+ * so completion work can be targeted instead of guessed at. Exported for
+ * tests. Pure.
+ *
+ * Reasons:
+ *   never_asked          — field key absent from the merged field map
+ *   not_applicable       — deliberately nulled by applicability rules (final)
+ *   validation_dropped:X — extracted, then nulled by sanity/authority/sanitize
+ *   llm_null             — asked in every batch, no source produced a value
+ */
+export function classifyFieldGaps(
+  fields: Record<string, FieldResult>,
+  sanityFlags: Array<{ field: string; severity: string; reason: string }>,
+): Array<{ field: string; reason: string }> {
+  const rejectedBySanity = new Map<string, string>();
+  for (const f of sanityFlags) {
+    if (f.severity === "reject") rejectedBySanity.set(f.field, f.reason);
+  }
+  const gaps: Array<{ field: string; reason: string }> = [];
+  for (const k of V4_FIELD_KEYS) {
+    const f = fields[k];
+    if (f?.value != null) continue;
+    if (f == null) {
+      gaps.push({ field: k, reason: "never_asked" });
+      continue;
+    }
+    if (f.flag_reason === "not_applicable") {
+      gaps.push({ field: k, reason: "not_applicable" });
+      continue;
+    }
+    const sanityReason = rejectedBySanity.get(k);
+    if (sanityReason) {
+      gaps.push({ field: k, reason: `validation_dropped:${sanityReason}` });
+      continue;
+    }
+    if (f.flagged && f.flag_reason) {
+      gaps.push({ field: k, reason: `validation_dropped:${f.flag_reason}` });
+      continue;
+    }
+    gaps.push({ field: k, reason: "llm_null" });
+  }
+  return gaps;
 }
 
 /** V3 fill rate — counts actual data coverage across normalized tables. */
@@ -386,6 +448,7 @@ async function calculateV3FillRate(
   const intervalsFilled = intervals.filter(
     (si: any) => si.interval_miles != null || si.interval_months != null
       || si.status === "cbs_driven" || si.status === "not_applicable"
+      || si.status === "on_demand"
   ).length;
   total += expectedIntervals;
   filled += Math.min(intervalsFilled, expectedIntervals);
@@ -434,6 +497,13 @@ function isBlockedDomain(url: string | null | undefined): boolean {
   } catch { return false; }
 }
 
+/** Batch-2 URL rejection: spec-quality blocklist + marketplaces. A marketplace
+ *  entry keeps its price_low but loses the URL, so the part flows into the
+ *  discovery fallback instead of being scraped from an untrustable listing. */
+function isRejectedPriceUrl(url: string | null | undefined): boolean {
+  return isBlockedDomain(url) || isMarketplaceUrl(url);
+}
+
 function parseBatch2(
   data: Record<string, any>,
   nullFields: string[],
@@ -447,7 +517,7 @@ function parseBatch2(
   const gapData = data.gap_fields ?? {};
   for (const k of nullFields) {
     const raw = gapData[k];
-    if (raw && !isBlockedDomain(raw.source_url)) {
+    if (raw && !isRejectedPriceUrl(raw.source_url)) {
       const f = parseField(raw);
       if (f.value != null) {
         f.source_type = f.source_url ? "web_search" : "gap_fill";
@@ -466,7 +536,7 @@ function parseBatch2(
     const partsBreakdown = rawBreakdown
       .map((entry) => {
         const sanitizedSourceUrl = sanitizeUrl(entry?.source_url);
-        const blocked = isBlockedDomain(sanitizedSourceUrl);
+        const blocked = isRejectedPriceUrl(sanitizedSourceUrl);
         const priceLow  = sanitizeNumber(entry?.price_low);
         const priceHigh = sanitizeNumber(entry?.price_high);
         const oemNumber = sanitizeString(entry?.oem_part_number)?.trim();
@@ -536,6 +606,14 @@ const SERVICE_NAME_TO_SLUG: Record<string, string> = {
   "Tire Rotation": "tire_rotation",
   "Wheel Alignment (4-wheel)": "wheel_alignment",
   "Fuel System Cleaning": "fuel_system_cleaning",
+  // Batch-2's prompt SERVICE_LIST asks about this service, but the map had no
+  // entry — so `SERVICE_NAME_TO_SLUG[name]` returned undefined and the pricing
+  // + labor loops silently `continue`d: gear_oil / friction_modifier fitments
+  // were NEVER priced and differential labor estimates were dropped.
+  // ("Transfer Case Fluid Service" stays unmapped on purpose: there is no
+  // separate TC service in the 23 and conflating its labor into
+  // differential_service would skew the anchor.)
+  "Differential Fluid Service": "differential_service",
 };
 
 /**
@@ -550,7 +628,7 @@ const SERVICE_NAME_TO_SLUG: Record<string, string> = {
  * nor VehicleTier (pricing tier). serpentine_belt / wipers have no reference
  * service (not in the 23) — left "core" with their existing slugs.
  */
-const PART_FIELD_MAP: Record<string, {
+export const PART_FIELD_MAP: Record<string, {
   name: string;
   category: string;
   subcategory: string;
@@ -567,6 +645,12 @@ const PART_FIELD_MAP: Record<string, {
   rear_brake_pad_oem: { name: "Rear Brake Pads", category: "brake", subcategory: "rear_brake_pad", serviceSlug: "brake_pad_replacement", serviceRole: "core", position: "rear" },
   rotor_front_oem: { name: "Front Brake Rotor", category: "rotor", subcategory: "front_rotor", serviceSlug: "rotor_replacement", serviceRole: "core", position: "front" },
   rotor_rear_oem: { name: "Rear Brake Rotor", category: "rotor", subcategory: "rear_rotor", serviceSlug: "rotor_replacement", serviceRole: "core", position: "rear" },
+  // serviceSlug INTENTIONALLY null: the fitment lands as service_type
+  // "serpentine_belt" (serviceSlug ?? subcategory) — timing_belt borrows it
+  // via the reference role's fitmentService: "serpentine_belt", and Batch-2
+  // pricing looks it up under SERVICE_NAME_TO_SLUG["Serpentine Belt
+  // Replacement"] = "serpentine_belt". Pointing it at "timing_belt" would
+  // break both lookups.
   serpentine_belt_oem: { name: "Serpentine Belt", category: "belt", subcategory: "serpentine_belt", serviceSlug: null, serviceRole: "core" },
   timing_belt_oem: { name: "Timing Belt", category: "timing", subcategory: "timing_belt", serviceSlug: "timing_belt", serviceRole: "core" },
   // Front wipers ship as a set (driver + passenger as one part). Rear wiper is its own part.
@@ -595,6 +679,14 @@ const PART_FIELD_MAP: Record<string, {
   atf_fluid_oem: { name: "Transmission Fluid (ATF / CVT)", category: "fluid", subcategory: "atf_fluid", serviceSlug: "transmission_service", serviceRole: "core" },
   trans_filter_oem: { name: "Transmission Filter", category: "filter", subcategory: "trans_filter", serviceSlug: "transmission_service", serviceRole: "kit" },
   trans_pan_gasket_oem: { name: "Transmission Pan Gasket", category: "gasket", subcategory: "trans_pan_gasket", serviceSlug: "transmission_service", serviceRole: "kit" },
+  // CVT-only filters — applicabilityRules nulls these on known non-CVT
+  // transmissions; the prompt also hard-nulls them when transmission_type
+  // is known non-CVT.
+  cvt_internal_filter_oem: { name: "CVT Internal Filter", category: "filter", subcategory: "cvt_internal_filter", serviceSlug: "transmission_service", serviceRole: "as_needed" },
+  cvt_external_filter_oem: { name: "CVT External (Cooler Line) Filter", category: "filter", subcategory: "cvt_external_filter", serviceSlug: "transmission_service", serviceRole: "as_needed" },
+  // coolant_flush extras (discovery — if_found_bad)
+  thermostat_oem: { name: "Thermostat", category: "cooling", subcategory: "thermostat", serviceSlug: "coolant_flush", serviceRole: "as_needed" },
+  thermostat_gasket_oem: { name: "Thermostat Gasket", category: "gasket", subcategory: "thermostat_gasket", serviceSlug: "coolant_flush", serviceRole: "as_needed" },
   // brake_fluid_flush
   brake_fluid_oem: { name: "Brake Fluid", category: "fluid", subcategory: "brake_fluid", serviceSlug: "brake_fluid_flush", serviceRole: "core" },
   // power_steering_flush
@@ -621,6 +713,11 @@ const INTERVAL_TO_SERVICE: Record<string, string> = {
   timing_service: "timing_belt",
   diff_fluid: "differential_service",
   transfer_case_fluid: "differential_service",
+  // Wear/rotation guidance (2026-07): brake pads are wear-based — the value
+  // is the manufacturer's INSPECTION/typical-life guidance, not a hard
+  // replacement schedule. adversarialVerification bounds both.
+  brake_pads: "brake_pad_replacement",
+  tire_rotation: "tire_rotation",
 };
 
 function extractDomain(url: string | null | undefined): string | undefined {
@@ -716,8 +813,19 @@ async function writeNormalizedData(
   else if (turboVal === "twin-turbo") aspiration = "twin-turbo";
   else if (turboVal === false || turboVal === "No" || turboVal === "no") aspiration = "natural";
 
+  // Capacity fields that sanity checks / the capacity resolver REJECTED (value
+  // nulled AND flagged) must be actively erased from the engine row, else the
+  // old poison (e.g. coolant 16.9 qt) survives — asNumber(null) is undefined,
+  // and updateEngineSpecs skips undefined to preserve genuinely-absent data.
+  // A field that is merely absent (flagged === false) stays off this list.
+  const ENGINE_CAPACITY_KEYS = ["oil_capacity_qts", "coolant_capacity_qts"] as const;
+  const clear_fields = ENGINE_CAPACITY_KEYS.filter(
+    (k) => fields[k]?.value === null && fields[k]?.flagged === true,
+  );
+
   await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEngineSpecs, {
     engine_id: engineId,
+    clear_fields,
     // Only ever store a clean SAE grade. runSanityChecks already normalized the
     // common case in `fields`; re-assert here so an unparseable value (no grade)
     // becomes undefined → the mutation skips it → a previously-stored good
@@ -755,6 +863,12 @@ async function writeNormalizedData(
       transmission_id: transmissionId,
       type: normalizedType,
       fluid_type: asString(fields.trans_fluid_type?.value),
+      // Drain-and-fill qts — the mutation always accepted this but nothing
+      // passed it, leaving both ATF quantity paths (partRoleQuantity's fluid
+      // role and serviceUnits' per_unit_spec count) with no enrichment feed.
+      fluid_capacity_drain_fill_qts: asNumber(
+        fields.transmission_fluid_capacity_qts?.value,
+      ),
       data_quality: "enriched",
     });
   }
@@ -805,8 +919,17 @@ async function writeNormalizedData(
     drivetrain_type: resolvedDrivetrain,
     has_differential: hasDiff,
     diff_fluid_type: hasDiff ? diffFluid : undefined,
+    // Capacities (drain-and-fill qts) — the mutation always accepted these but
+    // the pipeline never passed them, which made differential_service
+    // structurally unquotable by real fluid volume.
+    diff_fluid_capacity_qts: hasDiff
+      ? asNumber(fields.diff_fluid_capacity_qts?.value)
+      : undefined,
     has_transfer_case: hasTC,
     tc_fluid_type: hasTC ? tcFluid : undefined,
+    tc_fluid_capacity_qts: hasTC
+      ? asNumber(fields.transfer_case_fluid_capacity_qts?.value)
+      : undefined,
   });
 
   // D. Trim specs — typed coercion
@@ -829,6 +952,13 @@ async function writeNormalizedData(
     is_staggered: isStaggered,
     tire_options: wheelSizeOptions ?? undefined,
     tire_options_source: wheelSizeSource ?? undefined,
+    // Mean confidence over the trim fields written here — describes the
+    // latest enrichment (merge-semantics: a re-run overwrites it).
+    confidence_score: aggregateFieldConfidence(fields, [
+      "tire_pressure_front_psi", "tire_pressure_rear_psi",
+      "lug_nut_torque_ft_lbs", "front_wiper_size", "rear_wiper_size",
+      "battery_group", "battery_cca", "battery_type", "battery_location",
+    ]),
   });
 
   // E. Vehicle config fields — typed coercion
@@ -836,8 +966,14 @@ async function writeNormalizedData(
   await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
     vehicle_config_id: vehicleConfigId,
     brake_fluid_type: asString(fields.brake_fluid_type?.value),
+    brake_fluid_capacity_oz: asNumber(fields.brake_fluid_capacity_oz?.value),
     has_brake_pad_sensor: MAKES_WITH_BRAKE_PAD_SENSORS.has(make),
     ps_fluid_type: psType && psType !== "electric" ? psType : undefined,
+    // Electric steering has no fluid — never accrete a capacity for it.
+    ps_fluid_capacity_oz:
+      psType && psType !== "electric"
+        ? asNumber(fields.ps_fluid_capacity_oz?.value)
+        : undefined,
   });
 
   // E2. chassis_specs — dual-write platform-level fields.
@@ -865,9 +1001,18 @@ async function writeNormalizedData(
         ...(asString(fields.battery_type?.value)     ? { battery_type: asString(fields.battery_type?.value)! } : {}),
         ...(asString(fields.battery_location?.value) ? { battery_location: asString(fields.battery_location?.value)! } : {}),
         ...(asString(fields.brake_fluid_type?.value) ? { brake_fluid_type: asString(fields.brake_fluid_type?.value)! } : {}),
+        ...(asNumber(fields.brake_fluid_capacity_oz?.value) !== undefined ? { brake_fluid_capacity_oz: asNumber(fields.brake_fluid_capacity_oz?.value) } : {}),
         ...(psType && psType !== "electric" ? { ps_fluid_type: psType } : {}),
+        ...(psType && psType !== "electric" && asNumber(fields.ps_fluid_capacity_oz?.value) !== undefined ? { ps_fluid_capacity_oz: asNumber(fields.ps_fluid_capacity_oz?.value) } : {}),
         ...(steeringType ? { steering_type: steeringType } : {}),
         ...(parkingBrake ? { parking_brake_type: parkingBrake } : {}),
+        // Mean confidence over the chassis fields written here (arg already
+        // existed on the mutation but was never populated).
+        confidence_score: aggregateFieldConfidence(fields, [
+          "lug_nut_torque_ft_lbs", "front_wiper_size", "rear_wiper_size",
+          "battery_group", "battery_type", "battery_location",
+          "brake_fluid_type", "power_steering_type", "parking_brake_type",
+        ]),
       });
       console.log(`[v8] chassis_specs written for ${chassisCfg.chassis_code}`);
     }
@@ -990,6 +1135,14 @@ async function writeNormalizedData(
       data_quality: "enriched",
     });
   }
+
+  // G2. On-demand services (inspections, diagnostics, alignment…) have no
+  // mileage schedule by nature — stamp them so they read as complete instead
+  // of permanently missing (they are inherently un-fillable by extraction).
+  await ctx.runMutation(internal.vehicleEnrichment.v3mutations.markOnDemandIntervals, {
+    vehicle_config_id: vehicleConfigId,
+    service_slugs: [...ON_DEMAND_SERVICE_SLUGS],
+  });
 
   // H. Evidence batch
   const evidenceRows: Array<{
@@ -2030,6 +2183,20 @@ async function runPollBatch1Body(
     const filledCount = V4_FIELD_KEYS.filter((k) => fields[k]?.value != null).length;
     console.log(`[v8/_pollBatch1] ${filledCount}/${V4_FIELD_KEYS.length} fields after merge+applicability`);
 
+    // Sanity checks BEFORE the first write. Previously only the batch-2
+    // finalize ran these, but this write already persists batch-1 values and
+    // the merge-semantics mutations skip undefined — so a value rejected at
+    // finalize (nulled) could never un-write what batch-1 stored (the 16.9 qt
+    // coolant survival vector). Rejecting here also puts the field back in the
+    // batch-2 gap-fill set, giving the pipeline a second chance at a clean
+    // value. Finalize re-runs the checks over the merged map as before.
+    const batch1SanityFlags = runSanityChecks(fields, vPicData?.cylinders ?? 4);
+    if (batch1SanityFlags.length > 0) {
+      console.log(
+        `[v8/_pollBatch1] Sanity: ${batch1SanityFlags.length} flags applied before batch-1 write (${batch1SanityFlags.map((f) => f.field).join(", ")})`,
+      );
+    }
+
     // Write to normalized tables
     const serviceCache = new Map<string, Id<"services">>();
     await writeNormalizedData(
@@ -2106,6 +2273,14 @@ async function runPollBatch1Body(
       total_web_searches: callLog.reduce((s, c) => s + c.webSearches, 0),
     });
 
+    // Give gap-fill more searches when numeric specs (capacities, CCA, gap) are
+    // missing — with the old flat maxSearchUses:1 a single part-number lookup
+    // consumed the whole budget and specs never got searched. Capped to bound cost.
+    const numericSpecGaps = nullFields.filter((k) =>
+      ["coolant_capacity_qts", "oil_capacity_qts", "battery_cca", "spark_plug_gap"].includes(k),
+    ).length;
+    const batch2SearchUses = Math.min(1 + numericSpecGaps, 5);
+
     let batch2Id: string;
     try {
       batch2Id = await submitBatch([
@@ -2115,7 +2290,7 @@ async function runPollBatch1Body(
           userPrompt: buildBatch2Prompt(vehicle, nullFields, oemParts),
           maxTokens: 16384,
           temperature: 0,
-          maxSearchUses: 1,
+          maxSearchUses: batch2SearchUses,
           blockedDomains: BLOCKED_DOMAINS,
         },
       ]);
@@ -2273,6 +2448,51 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         }
       }
 
+      // Batch 3 (gap-fill re-ask): ONE bounded targeted pass over fields
+      // STILL null after Batch 2 (getNullFields excludes not_applicable —
+      // re-asking N/A fields resurrected impossible data, see comment above
+      // getNullFields). One synchronous web-search call, capped field count,
+      // values flow through the same parseBatch2 → sanity → sanitize gates as
+      // Batch-2 gap fills. No loop — a field that survives this stays in the
+      // run's field_gaps ledger instead.
+      if (process.env.PARTS_GAPFILL !== "off") {
+        const gapFillMax = Number(process.env.PARTS_GAPFILL_MAX_FIELDS ?? "15");
+        const stillNull = getNullFields(allFields).slice(0, gapFillMax);
+        if (stillNull.length > 0) {
+          try {
+            const gfVehicle: VehicleInput = {
+              vehicleId: args.vehicleId,
+              year: args.year, make: args.make, model: args.model,
+              trim: args.trim, engineCode: args.engineCode, displacement: args.displacement,
+            };
+            const gfRes = await callClaudeWithWebSearch({
+              system: GAP_FILL_SYSTEM,
+              userPrompt: buildGapFillPrompt(gfVehicle, stillNull),
+              maxSearchUses: Math.min(stillNull.length * 2, 12),
+              maxTokens: 4000,
+              temperature: 0,
+            });
+            callLog.push({
+              call: "gapfill",
+              tokensIn: gfRes.usage.tokensIn,
+              tokensOut: gfRes.usage.tokensOut,
+              webSearches: gfRes.usage.webSearches,
+              durationMs: 0,
+            });
+            const gfParsed = parseBatch2(gfRes.data, stillNull);
+            let gfFilled = 0;
+            for (const [k, fv] of Object.entries(gfParsed.gapFields)) {
+              if (allFields[k]?.value == null) {
+                allFields[k] = fv;
+                gfFilled++;
+              }
+            }
+            console.log(`[v8/gapfill] re-asked ${stillNull.length} fields, filled ${gfFilled}`);
+          } catch (e) {
+            console.warn("[v8/gapfill] re-ask pass failed (non-fatal):", e);
+          }
+        }
+      }
     }
 
     // Validation — MUST run BEFORE writeNormalizedData so bad values get nulled first
@@ -2300,6 +2520,31 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     const oemFlags = validateAllOemParts(allFields, vehicle.make);
     if (sanityFlags.length > 0) console.log(`[v8] Sanity: ${sanityFlags.length} flags (applied before write)`);
     if (oemFlags.length > 0) console.log(`[v8] OEM: ${oemFlags.length} issues`);
+
+    // Authoritative capacity resolution — actively re-fetch coolant/oil capacity
+    // from OEM/service-manual sources when sanity checks nulled a bad value (e.g.
+    // the 16.9 qt forum coolant) or the batches found none. Mutates allFields in
+    // place; writeNormalizedData below persists accepted values and erases
+    // still-unresolved ones. Non-fatal — a failure never breaks enrichment.
+    if (process.env.SPECS_AUTHORITATIVE_REFETCH !== "off") {
+      try {
+        const engineRow = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getEngine,
+          { engineId: args.engineId },
+        );
+        const decisions = await resolveCapacities(ctx, {
+          vehicle, engineId: args.engineId, cylinders, fields: allFields,
+          runId: args.runId, verifiedFields: ((engineRow as any)?.verified_fields ?? []) as string[],
+        });
+        if (decisions.length > 0) {
+          console.log(
+            `[v8/cap] ${decisions.map((d) => `${d.field}=${d.value_qts ?? "review"}(${d.source_count}src${d.authoritative ? ",auth" : ""},${d.tier})`).join(" ")}`,
+          );
+        }
+      } catch (e) {
+        console.warn("[v8/cap] capacity resolver failed (non-fatal):", e);
+      }
+    }
 
     // Write sanitized data to normalized tables
     if (r2) {
@@ -2354,6 +2599,14 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       if (deterministicPrices.size > 0) {
         console.log(`[v8] ${deterministicPrices.size} deterministic JSON-LD prices for ${args.make} ${args.model}`);
       }
+
+      // Fallback price-URL discovery for parts Batch-2 left without a source
+      // URL (the prompt tells the model to OMIT unpriced parts, so omission is
+      // routine — without this, those parts get zero fetch attempts). One
+      // Firecrawl search per part, capped per run to bound credit spend.
+      const priceDiscoveryEnabled = process.env.PARTS_PRICE_URL_DISCOVERY !== "off";
+      const priceDiscoveryMax = Number(process.env.PARTS_PRICE_DISCOVERY_MAX ?? "10");
+      let priceDiscoveryUsed = 0;
 
       // ── Multi-source labor (ONCE per car). The `laborAllSources` orchestrator
       //    fans out to OLP + RepairPal + open-web (each flag-gated), merges the
@@ -2667,6 +2920,20 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           for (const f of fitments) {
             subcatByPartId.set(String(f.part_id), ((f as any).part_subcategory as string | null) ?? null);
           }
+          // Seed EVERY fitment part into the map (empty urls) so a part the
+          // LLM omitted from parts_breakdown still reaches the discovery
+          // fallback below — addUrl alone only enters parts that have a URL.
+          for (const f of fitments) {
+            const k = String(f.part_id);
+            if (!urlsByPart.has(k)) {
+              urlsByPart.set(k, {
+                urls: [],
+                oem: ((f as any).oem_part_number as string | null) ?? null,
+                name: ((f as any).part_name as string | null) ?? null,
+                subcategory: ((f as any).part_subcategory as string | null) ?? null,
+              });
+            }
+          }
           for (const f of fitments) {
             const num = (f as any).oem_part_number as string | null;
             const dp = num ? deterministicPrices.get(normalizeOemNumber(num)) : null;
@@ -2690,8 +2957,32 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             }
           }
           for (const [partIdStr, e] of urlsByPart) {
-            if (e.urls.length === 0) continue;
-            const rows = await priceAllSources(e.urls, { oem: e.oem, partName: e.name, subcategory: e.subcategory }, extractPriceFirecrawl);
+            let urlsDiscovered = false;
+            if (e.urls.length === 0) {
+              // Discovery fallback: search for a product page instead of
+              // giving up. Skipped for parts the JSON-LD path already priced,
+              // parts with no OEM anchor, or once the per-run cap is hit.
+              if (
+                !priceDiscoveryEnabled ||
+                !e.oem ||
+                deterministicallyPriced.has(partIdStr as any) ||
+                priceDiscoveryUsed >= priceDiscoveryMax
+              ) {
+                continue;
+              }
+              priceDiscoveryUsed++;
+              e.urls = await discoverPriceUrls({ oem: e.oem, make: args.make, name: e.name });
+              urlsDiscovered = true;
+              if (e.urls.length === 0) {
+                console.warn(`[v8/price] discovery found no usable source for part ${partIdStr} (oem=${e.oem})`);
+                continue;
+              }
+            }
+            const rows = await priceAllSources(
+              e.urls,
+              { oem: e.oem, partName: e.name, subcategory: e.subcategory, requireOemEcho: urlsDiscovered },
+              extractPriceFirecrawl,
+            );
             for (const row of rows) {
               if (row.outcome.status !== "sale") continue;
               await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
@@ -2716,6 +3007,19 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           }
         }
       }
+    } else {
+      // Batch-2 timed out/errored → writeNormalizedData is skipped, but the
+      // capacity resolver may have produced a corrected or cleared value. Persist
+      // just the two capacity fields so the fix isn't lost on the degraded path.
+      const clear_fields = (["oil_capacity_qts", "coolant_capacity_qts"] as const).filter(
+        (k) => allFields[k]?.value === null && allFields[k]?.flagged === true,
+      );
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEngineSpecs, {
+        engine_id: args.engineId,
+        oil_capacity_qts: asNumber(allFields.oil_capacity_qts?.value),
+        coolant_capacity_qts: asNumber(allFields.coolant_capacity_qts?.value),
+        clear_fields,
+      });
     }
 
     // Reverse fitment corroboration (flag-gated, PARTS_REVERSE_FITMENT=on):
@@ -2789,6 +3093,24 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         ...sanityFlags.map((f) => `sanity:${f.field}:${f.reason}`),
         ...oemFlags.map((f) => `oem:${f.field}:${f.reason}`),
       ],
+      // Structured mirror of the sanity/OEM strings above — queryable, so
+      // flagged-but-complete runs surface in manual_review_queue.list instead
+      // of dying in a write-only string array.
+      sanity_flags: [
+        ...sanityFlags.map((f) => ({
+          field: f.field,
+          severity: f.severity,
+          reason: f.reason,
+          value: f.value != null ? String(f.value) : undefined,
+        })),
+        ...oemFlags.map((f) => ({
+          field: f.field,
+          severity: "flag",
+          reason: f.reason,
+          value: f.value != null ? String(f.value) : undefined,
+        })),
+      ],
+      field_gaps: classifyFieldGaps(allFields, sanityFlags),
     });
 
     // Read current vehicle_config to get resolved drivetrain

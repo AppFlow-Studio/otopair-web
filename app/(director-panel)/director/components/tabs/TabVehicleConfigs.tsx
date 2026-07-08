@@ -254,6 +254,7 @@ type EnrichmentRunRow = {
   createdAt?: number
   scrapeCacheHit?: boolean
   errors?: string[]
+  fieldGaps?: { field: string; reason: string }[]
   totalTokensIn?: number
   totalTokensOut?: number
   estimatedCostUsd?: number
@@ -895,6 +896,18 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                         </div>
                         {run.errors && run.errors.length > 0 && (
                           <div style={{ fontSize:10, color:'var(--red-700)', marginTop:3 }}>{run.errors.slice(0, 2).join(' · ')}{run.errors.length > 2 ? ` (+${run.errors.length - 2})` : ''}</div>
+                        )}
+                        {run.fieldGaps && run.fieldGaps.filter(g => g.reason !== 'not_applicable').length > 0 && (
+                          <details style={{ marginTop:3 }}>
+                            <summary style={{ fontSize:10, color:'var(--amber-700, #B45309)', cursor:'pointer' }}>
+                              {run.fieldGaps.filter(g => g.reason !== 'not_applicable').length} field gaps
+                            </summary>
+                            <div style={{ fontSize:10, color:'var(--slate-600)', marginTop:2, display:'flex', flexDirection:'column', gap:1 }}>
+                              {run.fieldGaps.filter(g => g.reason !== 'not_applicable').map(g => (
+                                <span key={g.field} className="mono">{g.field} — {g.reason}</span>
+                              ))}
+                            </div>
+                          </details>
                         )}
                       </div>
                     ))}

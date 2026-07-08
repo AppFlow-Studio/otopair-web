@@ -248,6 +248,9 @@ export const previewCatalogPartsByVin = query({
           0,
         ),
         low_confidence: rows.some((r) => r.price_unknown === true),
+        // Any line priced from data older than PARTS_PRICE_MAX_AGE_DAYS —
+        // client renders the per-line/service "estimate" treatment.
+        has_stale_prices: rows.some((r) => r.price_stale === true),
       });
     }
 

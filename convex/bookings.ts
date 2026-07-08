@@ -2095,20 +2095,20 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
   // double-booking through once the user clicks "push anyway" on the hours
   // prompt (the mutation's resolveMechanicForWindow call would then throw a
   // raw, uncaught error instead of the friendly one below).
-  const dayBookings = await getBlockingBookingsForShopDate(
-    ctx,
-    booking.shop_id,
-    proposedScheduledDate,
-  );
+  const [dayBookings, shop] = await Promise.all([
+    getBlockingBookingsForShopDate(ctx, booking.shop_id, proposedScheduledDate),
+    ctx.db.get(booking.shop_id),
+  ]);
+  const bufferMin = normalizeBufferMinutes(shop?.buffer_minutes);
   const conflictBooking = dayBookings.find((other: any) => {
     if (String(other._id) === String(booking._id)) return false;
     if (!other.mechanic_id) return false;
     if (String(other.mechanic_id) !== String(booking.mechanic_id)) return false;
     if (["cancelled", "declined", "no_show"].includes(other.status)) return false;
     const otherStart = hhmmToMinutes(other.scheduled_time);
-    const otherEnd = otherStart + (other.estimated_labor_minutes ?? 60);
+    const otherEnd = otherStart + (other.estimated_labor_minutes ?? 60) + bufferMin;
     const newStart = hhmmToMinutes(proposedScheduledTime);
-    const newEnd = hhmmToMinutes(proposedEndTime);
+    const newEnd = hhmmToMinutes(proposedEndTime) + bufferMin;
     return otherStart < newEnd && otherEnd > newStart;
   });
   if (conflictBooking) {

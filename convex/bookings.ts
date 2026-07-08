@@ -13710,6 +13710,9 @@ export const acceptTireQuote = mutation({
   args: {
     booking_id: v.id("bookings"),
     response_id: v.id("tire_quote_responses"),
+    scheduled_date: v.string(),
+    scheduled_time: v.string(),
+    mechanic_id: v.optional(v.id("mechanics")),
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.booking_id);
@@ -13728,6 +13731,17 @@ export const acceptTireQuote = mutation({
     }
     if (response.superseded_at != null) {
       throw new Error("This quote has already been superseded.");
+    }
+
+    // Trust boundary: the customer picks a slot on-device, but the shop's
+    // quoted `availability` is the real floor — parts/install lead time the
+    // client-side picker can only hide, not enforce.
+    const submittedEarlier =
+      args.scheduled_date < response.availability.date ||
+      (args.scheduled_date === response.availability.date &&
+        hhmmToMinutes(args.scheduled_time) < hhmmToMinutes(response.availability.time));
+    if (submittedEarlier) {
+      throw new Error("Pick a time on or after the shop's earliest availability.");
     }
 
     const now = Date.now();
@@ -13783,25 +13797,24 @@ export const acceptTireQuote = mutation({
     const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
     const acceptedMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: response.shop_id,
-      date: response.availability.date,
-      startTime: response.availability.time,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
       durationMinutes: acceptedDurationMinutes,
-      preferredMechanicId: response.mechanic_id ?? undefined,
+      preferredMechanicId: args.mechanic_id ?? response.mechanic_id ?? undefined,
       excludeTireQuoteResponseId: String(response._id),
     });
 
-    // Fill in the chosen shop + pricing + scheduled slot + service. The
-    // shop's structured `availability` (YYYY-MM-DD + HH:MM) goes straight
-    // onto the booking so it surfaces on /bookings + /schedule on the
-    // web side; service_ids drives the rest of the service-aware UI.
+    // Fill in the chosen shop + pricing + scheduled slot + service. Schedule
+    // comes from the customer's picked slot (already validated above); price
+    // fields always come from `response`, never from client args.
     await ctx.db.patch(args.booking_id, {
       shop_id: response.shop_id,
       mechanic_id: acceptedMechanicId,
       labor_cost: response.labor_cost,
       parts_cost: response.per_tire_price * response.quantity,
       total_cost: response.total,
-      scheduled_date: response.availability.date,
-      scheduled_time: response.availability.time,
+      scheduled_date: args.scheduled_date,
+      scheduled_time: args.scheduled_time,
       estimated_labor_minutes: acceptedDurationMinutes,
       status: "confirmed",
       updated_at: now,
@@ -13995,6 +14008,9 @@ export const acceptRotorQuote = mutation({
   args: {
     booking_id: v.id("bookings"),
     response_id: v.id("rotor_quote_responses"),
+    scheduled_date: v.string(),
+    scheduled_time: v.string(),
+    mechanic_id: v.optional(v.id("mechanics")),
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.booking_id);
@@ -14013,6 +14029,17 @@ export const acceptRotorQuote = mutation({
     }
     if (response.superseded_at != null) {
       throw new Error("This quote has already been superseded.");
+    }
+
+    // Trust boundary: the customer picks a slot on-device, but the shop's
+    // quoted `availability` is the real floor — parts/install lead time the
+    // client-side picker can only hide, not enforce.
+    const submittedEarlier =
+      args.scheduled_date < response.availability.date ||
+      (args.scheduled_date === response.availability.date &&
+        hhmmToMinutes(args.scheduled_time) < hhmmToMinutes(response.availability.time));
+    if (submittedEarlier) {
+      throw new Error("Pick a time on or after the shop's earliest availability.");
     }
 
     const now = Date.now();
@@ -14060,17 +14087,24 @@ export const acceptRotorQuote = mutation({
     const padsSubtotal =
       (response.pad_price ?? 0) * (response.pad_quantity ?? response.quantity);
 
+    const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
+    const acceptedMechanicId = await resolveMechanicForWindow(ctx, {
+      shopId: response.shop_id,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
+      durationMinutes: acceptedDurationMinutes,
+      preferredMechanicId: args.mechanic_id ?? response.mechanic_id ?? undefined,
+    });
+
     await ctx.db.patch(args.booking_id, {
       shop_id: response.shop_id,
-      ...(response.mechanic_id ? { mechanic_id: response.mechanic_id } : {}),
+      mechanic_id: acceptedMechanicId,
       labor_cost: response.labor_cost,
       parts_cost: rotorsSubtotal + padsSubtotal,
       total_cost: response.total,
-      scheduled_date: response.availability.date,
-      scheduled_time: response.availability.time,
-      ...(response.estimated_duration_minutes
-        ? { estimated_labor_minutes: response.estimated_duration_minutes }
-        : {}),
+      scheduled_date: args.scheduled_date,
+      scheduled_time: args.scheduled_time,
+      estimated_labor_minutes: acceptedDurationMinutes,
       status: "confirmed",
       updated_at: now,
       ...(attachServiceId ? { service_ids: [attachServiceId] } : {}),

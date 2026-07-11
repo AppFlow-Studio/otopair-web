@@ -95,3 +95,44 @@ describe("computeQuotability — satisfied-when-absent semantics", () => {
     expect(r.pct).toBe(1);
   });
 });
+
+describe("naRoleKeys — physically-absent core roles (chain-engine timing belt)", () => {
+  it("drops a service whose only binding core role is N/A from the denominator", () => {
+    // Chain car: timing_belt roleKey stamped not_applicable. Without the
+    // exclusion this service was permanently 0/1 and capped quotability.
+    const withNa = computeQuotability(
+      [fit("oil_change", "oil_filter", true), fit("oil_change", "engine_oil", true)],
+      ["oil_change", "timing_belt"],
+      new Set(["timing_belt"]),
+    );
+    expect(withNa.services.find((s) => s.slug === "timing_belt")).toBeUndefined();
+
+    const withoutNa = computeQuotability(
+      [fit("oil_change", "oil_filter", true), fit("oil_change", "engine_oil", true)],
+      ["oil_change", "timing_belt"],
+    );
+    expect(withoutNa.services.find((s) => s.slug === "timing_belt")).toBeDefined();
+    expect(withNa.pct).toBeGreaterThan(withoutNa.pct);
+  });
+
+  it("excludes an N/A role from a partially-present service's totals", () => {
+    // oil_change with drain_plug_gasket N/A (hypothetical gasketless drain):
+    // remaining roles priced → fully quotable.
+    const r = computeQuotability(
+      [
+        fit("oil_change", "oil_filter", true),
+        fit("oil_change", "engine_oil", true),
+      ],
+      ["oil_change"],
+      new Set(["drain_plug_gasket"]),
+    );
+    const oil = r.services.find((s) => s.slug === "oil_change")!;
+    expect(oil.core_with_price).toBe(oil.core_total);
+  });
+
+  it("no naRoleKeys param behaves exactly as before", () => {
+    const a = computeQuotability([fit("oil_change", "oil_filter", true)], ["oil_change"]);
+    const b = computeQuotability([fit("oil_change", "oil_filter", true)], ["oil_change"], new Set());
+    expect(a).toEqual(b);
+  });
+});

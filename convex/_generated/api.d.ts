@@ -34,6 +34,7 @@ import type * as client_logs from "../client_logs.js";
 import type * as conversion_funnels from "../conversion_funnels.js";
 import type * as crons from "../crons.js";
 import type * as devOnly_auditConfigs from "../devOnly/auditConfigs.js";
+import type * as devOnly_auditPartRejections from "../devOnly/auditPartRejections.js";
 import type * as devOnly_backfillBrakeSystem from "../devOnly/backfillBrakeSystem.js";
 import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
 import type * as devOnly_dedupeConfig from "../devOnly/dedupeConfig.js";
@@ -405,6 +406,7 @@ declare const fullApi: ApiFromModules<{
   conversion_funnels: typeof conversion_funnels;
   crons: typeof crons;
   "devOnly/auditConfigs": typeof devOnly_auditConfigs;
+  "devOnly/auditPartRejections": typeof devOnly_auditPartRejections;
   "devOnly/backfillBrakeSystem": typeof devOnly_backfillBrakeSystem;
   "devOnly/dataFixes": typeof devOnly_dataFixes;
   "devOnly/dedupeConfig": typeof devOnly_dedupeConfig;

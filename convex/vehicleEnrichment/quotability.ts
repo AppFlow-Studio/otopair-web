@@ -59,6 +59,13 @@ function satisfiedWhenAbsent(role: PartRoleSpec): boolean {
 export function computeQuotability(
   fitments: readonly QuotabilityFitmentInput[],
   applicableServiceSlugs: readonly string[],
+  /** roleKeys (== oem_parts.subcategory) the applicability rules stamped
+   *  not_applicable for THIS vehicle (chain engine → "timing_belt"). Such
+   *  roles leave the quotability math; a service whose binding core roles are
+   *  ALL absent drops from the denominator entirely — before this, a chain
+   *  car carried a permanently-0/1 timing_belt service that capped
+   *  quotability at ~0.92 (740iA re-run, Jul 11 2026). */
+  naRoleKeys?: ReadonlySet<string>,
 ): QuotabilityResult {
   const services: ServiceQuotability[] = [];
   let fullyQuotable = 0;
@@ -66,7 +73,9 @@ export function computeQuotability(
   for (const slug of [...new Set(applicableServiceSlugs)].sort()) {
     const spec = SERVICE_PARTS_REFERENCE[slug];
     if (!spec || spec.laborOnly || spec.handledByDedicatedFlow) continue;
-    const roles = bindingCoreRoles(spec.roles);
+    const roles = bindingCoreRoles(spec.roles).filter(
+      (r) => !naRoleKeys?.has(r.roleKey),
+    );
     if (roles.length === 0) continue;
 
     let withFitment = 0;

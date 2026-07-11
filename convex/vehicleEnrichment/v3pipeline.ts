@@ -741,6 +741,21 @@ export const PART_FIELD_MAP: Record<string, {
   brake_wear_sensor_rear_oem: { name: "Brake Wear Sensor (Rear)", category: "brake", subcategory: "rear_brake_wear_sensor", serviceSlug: "brake_pad_replacement", serviceRole: "as_needed", position: "rear" },
 };
 
+/** roleKeys whose part field the applicability rules stamped not_applicable —
+ *  feeds computeQuotability so physically-absent roles (chain engine's timing
+ *  belt) leave the quotability denominator. Exported for tests. Pure. */
+export function naRoleKeysFromFields(
+  fields: Record<string, FieldResult>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const [k, meta] of Object.entries(PART_FIELD_MAP)) {
+    if (fields[k]?.value == null && fields[k]?.flag_reason === "not_applicable") {
+      out.add(meta.subcategory);
+    }
+  }
+  return out;
+}
+
 // ─── Batch-3 gap-fill priority ───────────────────────────────────
 // The re-ask pass is capped (PARTS_GAPFILL_MAX_FIELDS, default 15) and used
 // to slice getNullFields() in V4_FIELD_KEYS declaration order — battery_oem
@@ -3346,7 +3361,11 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
           { vehicleConfigId: args.vehicleConfigId },
         );
-        quotability = computeQuotability(qFitments, applicableSlugs);
+        quotability = computeQuotability(
+          qFitments,
+          applicableSlugs,
+          naRoleKeysFromFields(allFields),
+        );
         console.log(
           `[v8/quotability] ${Math.round(quotability.pct * 100)}% — ` +
             quotability.services
@@ -3461,6 +3480,23 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       (fieldsFilledCount / Math.max(1, V4_FIELD_KEYS.length - fieldsNotApplicable)) * 100,
     );
 
+    // Pattern-suspect sentinel: >=2 oem_part_rejected gaps in ONE run means
+    // the make's part pattern is probably wrong, not the data — every pattern
+    // gap found so far (BMW leading zeros, VAG G-numbers, Hyundai fluid SKUs)
+    // rejected multiple parts at once on its first vehicle. We can't predict
+    // what car arrives next, so the run self-reports instead of waiting for a
+    // human to read gap lists.
+    const finalGaps = [...classifyFieldGaps(allFields, sanityFlags, finalIdentity), ...priceGaps];
+    const partRejectCount = finalGaps.filter((g) =>
+      g.reason.startsWith("validation_dropped:oem_part_rejected"),
+    ).length;
+    if (partRejectCount >= 2) {
+      console.warn(
+        `[v8] PATTERN SUSPECT: ${partRejectCount} oem_part_rejected gaps for make=${args.make} — ` +
+          `likely a pattern gap, triage via devOnly/auditPartRejections:audit`,
+      );
+    }
+
     // Update enrichment run. A batch-2 timeout still finalizes (batch-1 data
     // is real and the config gets its normal terminal status below) but the
     // run records 'timeout' — not a fake 'complete' (review item 6).
@@ -3483,6 +3519,9 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         // Weak parts coverage routes into the manual review queue without
         // changing status semantics (a data-complete run stays "complete").
         ...(quotability && quotability.pct < 0.8 ? [`quotability:${quotability.pct}`] : []),
+        // Repeated part rejections on one run = suspect make pattern, not bad
+        // data — routes to review so unknown formats on NEW makes surface.
+        ...(partRejectCount >= 2 ? [`part_pattern_suspect:${args.make}:${partRejectCount}`] : []),
         ...sanityFlags.map((f) => `sanity:${f.field}:${f.reason}`),
         ...oemFlags.map((f) => `oem:${f.field}:${f.reason}`),
       ],
@@ -3503,7 +3542,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           value: f.value != null ? String(f.value) : undefined,
         })),
       ],
-      field_gaps: [...classifyFieldGaps(allFields, sanityFlags, finalIdentity), ...priceGaps],
+      field_gaps: finalGaps,
       quotability,
     });
 

@@ -28,6 +28,7 @@ import { priceAllSources } from "./priceReextract";
 import { discoverPriceUrls } from "./priceDiscovery";
 import { isPoisonPriceType, isNonPooledPriceType } from "../lib/priceTypes";
 import { computeQuotability } from "./quotability";
+import { PART_FIELD_MAP } from "./v3pipeline";
 import { computeEnrichmentStatus } from "./completionGate";
 
 const DEFAULT_AGE_DAYS = 30;
@@ -404,7 +405,15 @@ export const refreshStalePrices = internalAction({
             internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
             { vehicleConfigId: args.vehicleConfigId },
           );
-          const quotability = computeQuotability(qFitments, applicableSlugs);
+          // Same N/A-role exclusion as the finalize compute — recovered from
+          // the run's field_gaps ledger (not_applicable entries) since the
+          // flat field map is long gone by heal time.
+          const naRoleKeys = new Set<string>(
+            (((latestRun as any)?.field_gaps ?? []) as Array<{ field: string; reason: string }>)
+              .filter((g) => g.reason === "not_applicable" && PART_FIELD_MAP[g.field])
+              .map((g) => PART_FIELD_MAP[g.field].subcategory),
+          );
+          const quotability = computeQuotability(qFitments, applicableSlugs, naRoleKeys);
           // Keys a gap suffix can carry: subcategory ?? oem ?? part_id.
           const stillUnpricedKeys = stillUnpriced.flatMap((p) =>
             [p.subcategory, p.oem_part_number, p.part_id].filter((x): x is string => !!x),

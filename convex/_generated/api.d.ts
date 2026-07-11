@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as _diagnostic_i1_i2 from "../_diagnostic_i1_i2.js";
 import type * as adminCleanupMechanics from "../adminCleanupMechanics.js";
 import type * as ai_conversations from "../ai_conversations.js";
 import type * as ai_enrichment_logs from "../ai_enrichment_logs.js";
@@ -77,6 +78,9 @@ import type * as fitments from "../fitments.js";
 import type * as follow_ups from "../follow_ups.js";
 import type * as healthPoints from "../healthPoints.js";
 import type * as http from "../http.js";
+import type * as inspections from "../inspections.js";
+import type * as inspections_template from "../inspections/template.js";
+import type * as inspections_node from "../inspections_node.js";
 import type * as invitations from "../invitations.js";
 import type * as invoices from "../invoices.js";
 import type * as invoices_template from "../invoices/template.js";
@@ -110,6 +114,7 @@ import type * as lib_partRoleQuantity from "../lib/partRoleQuantity.js";
 import type * as lib_partSubcategories from "../lib/partSubcategories.js";
 import type * as lib_partsBand from "../lib/partsBand.js";
 import type * as lib_payment_constants from "../lib/payment_constants.js";
+import type * as lib_priceBands from "../lib/priceBands.js";
 import type * as lib_priceTypes from "../lib/priceTypes.js";
 import type * as lib_push_dispatcher from "../lib/push_dispatcher.js";
 import type * as lib_quoteEngine from "../lib/quoteEngine.js";
@@ -239,6 +244,7 @@ import type * as seeds_wireUpChelala from "../seeds/wireUpChelala.js";
 import type * as serviceParts from "../serviceParts.js";
 import type * as service_categories from "../service_categories.js";
 import type * as service_insights from "../service_insights.js";
+import type * as service_intervals_queries from "../service_intervals_queries.js";
 import type * as service_options from "../service_options.js";
 import type * as service_vehicle_specs from "../service_vehicle_specs.js";
 import type * as services from "../services.js";
@@ -259,6 +265,7 @@ import type * as shops from "../shops.js";
 import type * as shops_hours from "../shops_hours.js";
 import type * as smartcar from "../smartcar.js";
 import type * as sms_dispatcher from "../sms_dispatcher.js";
+import type * as snapshotRevalidation from "../snapshotRevalidation.js";
 import type * as spec_confirmations from "../spec_confirmations.js";
 import type * as spec_variances from "../spec_variances.js";
 import type * as specs from "../specs.js";
@@ -287,12 +294,14 @@ import type * as vehicleEnrichment_backfills from "../vehicleEnrichment/backfill
 import type * as vehicleEnrichment_blockedDomains from "../vehicleEnrichment/blockedDomains.js";
 import type * as vehicleEnrichment_buildSearchQueries from "../vehicleEnrichment/buildSearchQueries.js";
 import type * as vehicleEnrichment_cacheValidation from "../vehicleEnrichment/cacheValidation.js";
+import type * as vehicleEnrichment_capacityResolver from "../vehicleEnrichment/capacityResolver.js";
 import type * as vehicleEnrichment_claudeExtractor from "../vehicleEnrichment/claudeExtractor.js";
 import type * as vehicleEnrichment_contentSanitization from "../vehicleEnrichment/contentSanitization.js";
 import type * as vehicleEnrichment_endpointPartPriceMutations from "../vehicleEnrichment/endpointPartPriceMutations.js";
 import type * as vehicleEnrichment_evidenceConsensus from "../vehicleEnrichment/evidenceConsensus.js";
 import type * as vehicleEnrichment_extractionPrompts from "../vehicleEnrichment/extractionPrompts.js";
 import type * as vehicleEnrichment_firecrawl from "../vehicleEnrichment/firecrawl.js";
+import type * as vehicleEnrichment_fitmentQuarantine from "../vehicleEnrichment/fitmentQuarantine.js";
 import type * as vehicleEnrichment_gapFill from "../vehicleEnrichment/gapFill.js";
 import type * as vehicleEnrichment_helpers from "../vehicleEnrichment/helpers.js";
 import type * as vehicleEnrichment_laborRelabor from "../vehicleEnrichment/laborRelabor.js";
@@ -308,18 +317,22 @@ import type * as vehicleEnrichment_olpRelabor from "../vehicleEnrichment/olpRela
 import type * as vehicleEnrichment_partialEnrichment from "../vehicleEnrichment/partialEnrichment.js";
 import type * as vehicleEnrichment_pipelineBatch from "../vehicleEnrichment/pipelineBatch.js";
 import type * as vehicleEnrichment_pipelineTest from "../vehicleEnrichment/pipelineTest.js";
+import type * as vehicleEnrichment_priceDiscovery from "../vehicleEnrichment/priceDiscovery.js";
 import type * as vehicleEnrichment_priceParser from "../vehicleEnrichment/priceParser.js";
 import type * as vehicleEnrichment_pricePilot from "../vehicleEnrichment/pricePilot.js";
 import type * as vehicleEnrichment_priceReextract from "../vehicleEnrichment/priceReextract.js";
+import type * as vehicleEnrichment_priceRefresh from "../vehicleEnrichment/priceRefresh.js";
 import type * as vehicleEnrichment_prompts_batch1Prompt from "../vehicleEnrichment/prompts/batch1Prompt.js";
 import type * as vehicleEnrichment_prompts_batch1bPrompt from "../vehicleEnrichment/prompts/batch1bPrompt.js";
 import type * as vehicleEnrichment_prompts_batch2Prompt from "../vehicleEnrichment/prompts/batch2Prompt.js";
+import type * as vehicleEnrichment_prompts_gapFillPrompt from "../vehicleEnrichment/prompts/gapFillPrompt.js";
 import type * as vehicleEnrichment_queries from "../vehicleEnrichment/queries.js";
 import type * as vehicleEnrichment_repairpalEndpoint from "../vehicleEnrichment/repairpalEndpoint.js";
 import type * as vehicleEnrichment_repairpalEndpointMatch from "../vehicleEnrichment/repairpalEndpointMatch.js";
 import type * as vehicleEnrichment_repairpalEndpointMutations from "../vehicleEnrichment/repairpalEndpointMutations.js";
 import type * as vehicleEnrichment_repairpalEndpointProbe from "../vehicleEnrichment/repairpalEndpointProbe.js";
 import type * as vehicleEnrichment_repairpalEndpointSibling from "../vehicleEnrichment/repairpalEndpointSibling.js";
+import type * as vehicleEnrichment_reverseFitment from "../vehicleEnrichment/reverseFitment.js";
 import type * as vehicleEnrichment_runHeadless from "../vehicleEnrichment/runHeadless.js";
 import type * as vehicleEnrichment_runPublic from "../vehicleEnrichment/runPublic.js";
 import type * as vehicleEnrichment_runTest from "../vehicleEnrichment/runTest.js";
@@ -343,6 +356,7 @@ import type * as vehicleEnrichment_v3pipeline from "../vehicleEnrichment/v3pipel
 import type * as vehicleEnrichment_v3queries from "../vehicleEnrichment/v3queries.js";
 import type * as vehicleEnrichment_validation_oemValidation from "../vehicleEnrichment/validation/oemValidation.js";
 import type * as vehicleEnrichment_validation_sanityChecks from "../vehicleEnrichment/validation/sanityChecks.js";
+import type * as vehicleEnrichment_validation_sourceAuthority from "../vehicleEnrichment/validation/sourceAuthority.js";
 import type * as vehicleEnrichment_verificationApi from "../vehicleEnrichment/verificationApi.js";
 import type * as vehicleTruth from "../vehicleTruth.js";
 import type * as vehicle_history from "../vehicle_history.js";
@@ -361,6 +375,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  _diagnostic_i1_i2: typeof _diagnostic_i1_i2;
   adminCleanupMechanics: typeof adminCleanupMechanics;
   ai_conversations: typeof ai_conversations;
   ai_enrichment_logs: typeof ai_enrichment_logs;
@@ -430,6 +445,9 @@ declare const fullApi: ApiFromModules<{
   follow_ups: typeof follow_ups;
   healthPoints: typeof healthPoints;
   http: typeof http;
+  inspections: typeof inspections;
+  "inspections/template": typeof inspections_template;
+  inspections_node: typeof inspections_node;
   invitations: typeof invitations;
   invoices: typeof invoices;
   "invoices/template": typeof invoices_template;
@@ -463,6 +481,7 @@ declare const fullApi: ApiFromModules<{
   "lib/partSubcategories": typeof lib_partSubcategories;
   "lib/partsBand": typeof lib_partsBand;
   "lib/payment_constants": typeof lib_payment_constants;
+  "lib/priceBands": typeof lib_priceBands;
   "lib/priceTypes": typeof lib_priceTypes;
   "lib/push_dispatcher": typeof lib_push_dispatcher;
   "lib/quoteEngine": typeof lib_quoteEngine;
@@ -592,6 +611,7 @@ declare const fullApi: ApiFromModules<{
   serviceParts: typeof serviceParts;
   service_categories: typeof service_categories;
   service_insights: typeof service_insights;
+  service_intervals_queries: typeof service_intervals_queries;
   service_options: typeof service_options;
   service_vehicle_specs: typeof service_vehicle_specs;
   services: typeof services;
@@ -612,6 +632,7 @@ declare const fullApi: ApiFromModules<{
   shops_hours: typeof shops_hours;
   smartcar: typeof smartcar;
   sms_dispatcher: typeof sms_dispatcher;
+  snapshotRevalidation: typeof snapshotRevalidation;
   spec_confirmations: typeof spec_confirmations;
   spec_variances: typeof spec_variances;
   specs: typeof specs;
@@ -640,12 +661,14 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/blockedDomains": typeof vehicleEnrichment_blockedDomains;
   "vehicleEnrichment/buildSearchQueries": typeof vehicleEnrichment_buildSearchQueries;
   "vehicleEnrichment/cacheValidation": typeof vehicleEnrichment_cacheValidation;
+  "vehicleEnrichment/capacityResolver": typeof vehicleEnrichment_capacityResolver;
   "vehicleEnrichment/claudeExtractor": typeof vehicleEnrichment_claudeExtractor;
   "vehicleEnrichment/contentSanitization": typeof vehicleEnrichment_contentSanitization;
   "vehicleEnrichment/endpointPartPriceMutations": typeof vehicleEnrichment_endpointPartPriceMutations;
   "vehicleEnrichment/evidenceConsensus": typeof vehicleEnrichment_evidenceConsensus;
   "vehicleEnrichment/extractionPrompts": typeof vehicleEnrichment_extractionPrompts;
   "vehicleEnrichment/firecrawl": typeof vehicleEnrichment_firecrawl;
+  "vehicleEnrichment/fitmentQuarantine": typeof vehicleEnrichment_fitmentQuarantine;
   "vehicleEnrichment/gapFill": typeof vehicleEnrichment_gapFill;
   "vehicleEnrichment/helpers": typeof vehicleEnrichment_helpers;
   "vehicleEnrichment/laborRelabor": typeof vehicleEnrichment_laborRelabor;
@@ -661,18 +684,22 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/partialEnrichment": typeof vehicleEnrichment_partialEnrichment;
   "vehicleEnrichment/pipelineBatch": typeof vehicleEnrichment_pipelineBatch;
   "vehicleEnrichment/pipelineTest": typeof vehicleEnrichment_pipelineTest;
+  "vehicleEnrichment/priceDiscovery": typeof vehicleEnrichment_priceDiscovery;
   "vehicleEnrichment/priceParser": typeof vehicleEnrichment_priceParser;
   "vehicleEnrichment/pricePilot": typeof vehicleEnrichment_pricePilot;
   "vehicleEnrichment/priceReextract": typeof vehicleEnrichment_priceReextract;
+  "vehicleEnrichment/priceRefresh": typeof vehicleEnrichment_priceRefresh;
   "vehicleEnrichment/prompts/batch1Prompt": typeof vehicleEnrichment_prompts_batch1Prompt;
   "vehicleEnrichment/prompts/batch1bPrompt": typeof vehicleEnrichment_prompts_batch1bPrompt;
   "vehicleEnrichment/prompts/batch2Prompt": typeof vehicleEnrichment_prompts_batch2Prompt;
+  "vehicleEnrichment/prompts/gapFillPrompt": typeof vehicleEnrichment_prompts_gapFillPrompt;
   "vehicleEnrichment/queries": typeof vehicleEnrichment_queries;
   "vehicleEnrichment/repairpalEndpoint": typeof vehicleEnrichment_repairpalEndpoint;
   "vehicleEnrichment/repairpalEndpointMatch": typeof vehicleEnrichment_repairpalEndpointMatch;
   "vehicleEnrichment/repairpalEndpointMutations": typeof vehicleEnrichment_repairpalEndpointMutations;
   "vehicleEnrichment/repairpalEndpointProbe": typeof vehicleEnrichment_repairpalEndpointProbe;
   "vehicleEnrichment/repairpalEndpointSibling": typeof vehicleEnrichment_repairpalEndpointSibling;
+  "vehicleEnrichment/reverseFitment": typeof vehicleEnrichment_reverseFitment;
   "vehicleEnrichment/runHeadless": typeof vehicleEnrichment_runHeadless;
   "vehicleEnrichment/runPublic": typeof vehicleEnrichment_runPublic;
   "vehicleEnrichment/runTest": typeof vehicleEnrichment_runTest;
@@ -696,6 +723,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/v3queries": typeof vehicleEnrichment_v3queries;
   "vehicleEnrichment/validation/oemValidation": typeof vehicleEnrichment_validation_oemValidation;
   "vehicleEnrichment/validation/sanityChecks": typeof vehicleEnrichment_validation_sanityChecks;
+  "vehicleEnrichment/validation/sourceAuthority": typeof vehicleEnrichment_validation_sourceAuthority;
   "vehicleEnrichment/verificationApi": typeof vehicleEnrichment_verificationApi;
   vehicleTruth: typeof vehicleTruth;
   vehicle_history: typeof vehicle_history;

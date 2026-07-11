@@ -9,7 +9,7 @@ import {
   type InputHTMLAttributes,
   type ReactNode,
 } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -34,10 +34,14 @@ import {
 } from "@/components/vehicle-passport-section";
 import EnrichmentStatusBanner from "@/components/enrichment-status-banner";
 import {
+  FILTER_STATUSES,
+  filterStatusLabel,
   hasText,
+  isFilterStatus,
   isTireCondition,
   passportSourceLabel,
   tireConditionLabel,
+  type FilterStatus,
   type PassportSource,
   type RotorCondition,
   type PreJobSurveyPayload,
@@ -50,6 +54,18 @@ import {
   type AffectedSystem,
 } from "@/lib/vehicle-mod-systems";
 import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
+import {
+  TIRE_POSITIONS,
+  convertRotorValue,
+  formatRotorValue,
+  getTireTreadMinimum,
+  rotorValueToMicrometers,
+  validateInspectionMeasurementDraft,
+  validateInspectionMeasurements,
+  type RotorUnit,
+  type TirePosition,
+  type TireTreadReading,
+} from "@/lib/inspection-measurements";
 import { cn } from "@/lib/utils";
 
 const conditionPalette: Record<
@@ -58,15 +74,15 @@ const conditionPalette: Record<
 > = {
   good: {
     label: "Good",
-    activeClassName: "border-primary/40 bg-primary/10 text-primary",
+    activeClassName: "border-emerald-300 bg-emerald-50 text-emerald-700",
   },
   fair: {
     label: "Fair",
-    activeClassName: "border-primary/40 bg-primary/10 text-primary",
+    activeClassName: "border-sky-300 bg-sky-50 text-sky-700",
   },
   replace_soon: {
     label: "Replace soon",
-    activeClassName: "border-primary/40 bg-primary/10 text-primary",
+    activeClassName: "border-red-300 bg-red-50 text-red-700",
   },
 };
 
@@ -214,6 +230,7 @@ type SectionTabId =
   | "tire-condition"
   | "brakes"
   | "fluids"
+  | "filters"
   | "inspection"
   | "modifications"
   | "review";
@@ -231,6 +248,10 @@ const SECTION_TABS: Array<{
   },
   { id: "brakes", label: "Brakes", requiredWhen: "brake-work" },
   { id: "fluids", label: "Fluids", requiredWhen: "oil-change" },
+  {
+    id: "filters",
+    label: "Filters",
+  },
   {
     id: "inspection",
     label: "Inspection",
@@ -250,6 +271,120 @@ function keepNumericInput(value: string) {
   const normalized = value.replace(/[^0-9.]+/g, "");
   const [whole, ...rest] = normalized.split(".");
   return rest.length > 0 ? `${whole}.${rest.join("")}` : whole;
+}
+
+type TreadInputState = Record<
+  TirePosition,
+  {
+    minimum: string;
+    detailed: boolean;
+    inner: string;
+    center: string;
+    outer: string;
+  }
+>;
+
+type RotorInputState = Record<TirePosition, string>;
+
+const POSITION_LABELS: Record<TirePosition, string> = {
+  front_left: "Front left",
+  front_right: "Front right",
+  rear_left: "Rear left",
+  rear_right: "Rear right",
+};
+
+function treadReadingToInput(
+  reading: TireTreadReading | null | undefined,
+): TreadInputState[TirePosition] {
+  const detailed =
+    reading?.inner_32nds != null ||
+    reading?.center_32nds != null ||
+    reading?.outer_32nds != null;
+  return {
+    minimum:
+      reading?.reported_min_32nds == null
+        ? ""
+        : String(reading.reported_min_32nds),
+    detailed,
+    inner: reading?.inner_32nds == null ? "" : String(reading.inner_32nds),
+    center:
+      reading?.center_32nds == null ? "" : String(reading.center_32nds),
+    outer: reading?.outer_32nds == null ? "" : String(reading.outer_32nds),
+  };
+}
+
+function buildInitialTreadInputs(
+  readings: PreJobSurveyPayload["tire_tread"],
+): TreadInputState {
+  return Object.fromEntries(
+    TIRE_POSITIONS.map((position) => [
+      position,
+      treadReadingToInput(readings?.[position]),
+    ]),
+  ) as TreadInputState;
+}
+
+function sanitizeTreadInput(value: string) {
+  return keepDigitsOnly(value).slice(0, 2);
+}
+
+function buildTreadReading(
+  input: TreadInputState[TirePosition],
+): TireTreadReading | undefined {
+  const parse = (value: string) => (value === "" ? null : Number(value));
+  const reported = parse(input.minimum);
+  const inner = parse(input.inner);
+  const center = parse(input.center);
+  const outer = parse(input.outer);
+  if (
+    reported == null &&
+    inner == null &&
+    center == null &&
+    outer == null
+  ) {
+    return undefined;
+  }
+  return {
+    reported_min_32nds: reported,
+    ...(input.detailed
+      ? {
+          inner_32nds: inner,
+          center_32nds: center,
+          outer_32nds: outer,
+        }
+      : {}),
+  };
+}
+
+function initialRotorUnit(
+  brakes: PreJobSurveyPayload["brakes"],
+): RotorUnit {
+  for (const position of TIRE_POSITIONS) {
+    const reading = brakes?.rotor_thickness?.[position];
+    if (reading) return reading.entered_unit;
+  }
+  return "in";
+}
+
+function buildInitialRotorInputs(
+  brakes: PreJobSurveyPayload["brakes"],
+  unit: RotorUnit,
+): RotorInputState {
+  return Object.fromEntries(
+    TIRE_POSITIONS.map((position) => {
+      const reading = brakes?.rotor_thickness?.[position];
+      if (!reading) return [position, ""];
+      const value =
+        reading.entered_unit === unit
+          ? reading.entered_value
+          : convertRotorValue(
+              reading.entered_value,
+              reading.entered_unit,
+              unit,
+            );
+      return [position, formatRotorValue(value, unit)];
+    }),
+  ) as RotorInputState;
 }
 
 function normalizeTireSizeValue(value?: string | null) {
@@ -388,6 +523,10 @@ function rotorConditionLabel(value: string) {
   if (value === "scored") return "Scored";
   if (value === "needs_attention") return "Needs attention";
   return "Select...";
+}
+
+function initialFilterStatus(value?: string | null): FilterStatus {
+  return isFilterStatus(value) ? value : "not_checked";
 }
 
 function getInitials(label: string): string {
@@ -560,6 +699,16 @@ function PreJobSurveyDialogBody({
     serviceFlags.hasBrakeWork && brakeScope?.hasBrakeWork
       ? { front: brakeScope.front, rear: brakeScope.rear }
       : { front: true, rear: true };
+  const rotorPositions: TirePosition[] = serviceFlags.hasBrakeWork
+    ? [
+        ...(padScope.front
+          ? (["front_left", "front_right"] as TirePosition[])
+          : []),
+        ...(padScope.rear
+          ? (["rear_left", "rear_right"] as TirePosition[])
+          : []),
+      ]
+    : [...TIRE_POSITIONS];
 
   const initialMileage =
     typeof prefillData?.mileage === "number" && Number.isFinite(prefillData.mileage)
@@ -589,6 +738,12 @@ function PreJobSurveyDialogBody({
       : typeof passportData?.passport.brakes.rear_pad_mm === "number"
         ? String(passportData.passport.brakes.rear_pad_mm)
         : "";
+  const initialTreadInputs = buildInitialTreadInputs(prefillData?.tire_tread);
+  const initialRotorMeasurementUnit = initialRotorUnit(prefillData?.brakes);
+  const initialRotorInputs = buildInitialRotorInputs(
+    prefillData?.brakes,
+    initialRotorMeasurementUnit,
+  );
   const initialOilCapacity =
     typeof prefillData?.fluid_overrides?.oil_capacity_qts === "number"
       ? String(prefillData.fluid_overrides.oil_capacity_qts)
@@ -611,8 +766,15 @@ function PreJobSurveyDialogBody({
   const [rearCondition, setRearCondition] = useState<TireCondition | null>(
     prefillData?.rear_tire_condition ?? passportData?.passport.tires.rear_condition ?? null
   );
+  const [treadInputs, setTreadInputs] =
+    useState<TreadInputState>(initialTreadInputs);
   const [frontPadMm, setFrontPadMm] = useState(initialFrontPad);
   const [rearPadMm, setRearPadMm] = useState(initialRearPad);
+  const [rotorUnit, setRotorUnit] = useState<RotorUnit>(
+    initialRotorMeasurementUnit,
+  );
+  const [rotorInputs, setRotorInputs] =
+    useState<RotorInputState>(initialRotorInputs);
   const [rotorCondition, setRotorCondition] = useState<"" | RotorCondition>(
     prefillData?.brakes?.rotor_condition ??
       passportData?.passport.brakes.rotor_condition ??
@@ -641,6 +803,12 @@ function PreJobSurveyDialogBody({
     prefillData?.fluid_overrides?.transmission_fluid_type ??
       passportData?.passport.fluids.transmission_fluid_type ??
       ""
+  );
+  const [engineAirFilterStatus, setEngineAirFilterStatus] = useState<FilterStatus>(
+    initialFilterStatus(prefillData?.filters?.engine_air_filter)
+  );
+  const [cabinAirFilterStatus, setCabinAirFilterStatus] = useState<FilterStatus>(
+    initialFilterStatus(prefillData?.filters?.cabin_air_filter)
   );
   const [inspectionLooksCurrent, setInspectionLooksCurrent] = useState<
     "" | "yes" | "no"
@@ -694,8 +862,13 @@ function PreJobSurveyDialogBody({
     const hasFront = hasText(t.size_front);
     const hasRear = hasText(t.size_rear) || hasText(t.size_front);
     const hasBrand = hasText(t.brand);
-    return hasFront && hasRear && hasBrand;
-  }, [passportData]);
+    const hasCurrentTread = TIRE_POSITIONS.every(
+      (position) =>
+        typeof prefillData?.tire_tread?.[position]?.reported_min_32nds ===
+        "number",
+    );
+    return hasFront && hasRear && hasBrand && hasCurrentTread;
+  }, [passportData, prefillData]);
   const [tireSectionExpanded, setTireSectionExpanded] = useState(
     !passportTireProfileComplete,
   );
@@ -709,6 +882,7 @@ function PreJobSurveyDialogBody({
     "tire-condition": null,
     brakes: null,
     fluids: null,
+    filters: null,
     inspection: null,
     modifications: null,
     review: null,
@@ -734,8 +908,11 @@ function PreJobSurveyDialogBody({
           prefillData?.rear_tire_condition ??
           passportData?.passport.tires.rear_condition ??
           null,
+        treadInputs: initialTreadInputs,
         frontPadMm: initialFrontPad,
         rearPadMm: initialRearPad,
+        rotorUnit: initialRotorMeasurementUnit,
+        rotorInputs: initialRotorInputs,
         rotorCondition:
           prefillData?.brakes?.rotor_condition ??
           passportData?.passport.brakes.rotor_condition ??
@@ -761,6 +938,12 @@ function PreJobSurveyDialogBody({
           prefillData?.fluid_overrides?.transmission_fluid_type ??
           passportData?.passport.fluids.transmission_fluid_type ??
           "",
+        engineAirFilterStatus: initialFilterStatus(
+          prefillData?.filters?.engine_air_filter
+        ),
+        cabinAirFilterStatus: initialFilterStatus(
+          prefillData?.filters?.cabin_air_filter
+        ),
         inspectionLooksCurrent:
           prefillData?.inspection?.looks_current == null
             ? passportData?.passport.inspection.looks_current == null
@@ -798,6 +981,9 @@ function PreJobSurveyDialogBody({
       initialRearMatchesFront,
       initialRearPad,
       initialRearTireSize,
+      initialRotorInputs,
+      initialRotorMeasurementUnit,
+      initialTreadInputs,
       passportData,
       prefillData,
     ]
@@ -811,8 +997,11 @@ function PreJobSurveyDialogBody({
     rearTireSize,
     frontCondition,
     rearCondition,
+    treadInputs,
     frontPadMm,
     rearPadMm,
+    rotorUnit,
+    rotorInputs,
     rotorCondition,
     oilViscosity,
     oilCapacity,
@@ -820,6 +1009,8 @@ function PreJobSurveyDialogBody({
     coolantType,
     brakeFluidType,
     transmissionFluidType,
+    engineAirFilterStatus,
+    cabinAirFilterStatus,
     inspectionLooksCurrent,
     inspectionExpiresAt,
     hasMods,
@@ -838,6 +1029,33 @@ function PreJobSurveyDialogBody({
       : normalizeTireSizeValue(rearTireSize);
     const parsedOilCapacity =
       oilCapacity.trim() === "" ? null : Number(oilCapacity);
+    const tireTread = Object.fromEntries(
+      TIRE_POSITIONS.flatMap((position) => {
+        const reading = buildTreadReading(treadInputs[position]);
+        return reading ? [[position, reading]] : [];
+      }),
+    );
+    const rotorThickness = Object.fromEntries(
+      TIRE_POSITIONS.flatMap((position) => {
+        const raw = rotorInputs[position].trim();
+        if (!raw) return [];
+        const enteredValue = Number(raw);
+        if (!Number.isFinite(enteredValue)) return [];
+        return [
+          [
+            position,
+            {
+              entered_value: enteredValue,
+              entered_unit: rotorUnit,
+              normalized_um: rotorValueToMicrometers(
+                enteredValue,
+                rotorUnit,
+              ),
+            },
+          ],
+        ];
+      }),
+    );
 
     return {
       mileage:
@@ -849,6 +1067,7 @@ function PreJobSurveyDialogBody({
       tire_size_rear: normalizedRearTireSize || null,
       front_tire_condition: frontCondition,
       rear_tire_condition: rearCondition,
+      tire_tread: tireTread,
       brakes: {
         front_pad_mm: frontPadMm.trim() === "" ? null : Number(frontPadMm),
         rear_pad_mm: rearPadMm.trim() === "" ? null : Number(rearPadMm),
@@ -856,6 +1075,7 @@ function PreJobSurveyDialogBody({
           rotorCondition === ""
             ? null
             : (rotorCondition as "good" | "scored" | "needs_attention"),
+        rotor_thickness: rotorThickness,
       },
       fluids_match_oem: false,
       fluid_overrides: {
@@ -868,6 +1088,10 @@ function PreJobSurveyDialogBody({
         coolant_type: coolantType.trim() || null,
         brake_fluid_type: brakeFluidType.trim() || null,
         transmission_fluid_type: transmissionFluidType.trim() || null,
+      },
+      filters: {
+        engine_air_filter: engineAirFilterStatus,
+        cabin_air_filter: cabinAirFilterStatus,
       },
       inspection: {
         looks_current:
@@ -935,6 +1159,18 @@ function PreJobSurveyDialogBody({
         throw new Error("Rotor condition is required for brake-related work.");
       }
     }
+    const measurementResult = validateInspectionMeasurements({
+      tire_tread: payload.tire_tread,
+      brakes: payload.brakes,
+      brake_scope: {
+        hasBrakeWork: serviceFlags.hasBrakeWork,
+        front: padScope.front,
+        rear: padScope.rear,
+      },
+    });
+    if (!measurementResult.valid) {
+      throw new Error(measurementResult.error);
+    }
     if (serviceFlags.hasOilChange) {
       if (!payload.fluid_overrides?.oil_viscosity?.trim()) {
         throw new Error("Oil viscosity is required for an oil change.");
@@ -951,6 +1187,13 @@ function PreJobSurveyDialogBody({
     }
     if (payload.tire_size_rear && !isValidTireSize(payload.tire_size_rear)) {
       throw new Error("Rear tire size must use the format 275/45R20.");
+    }
+    const measurementResult = validateInspectionMeasurementDraft({
+      tire_tread: payload.tire_tread,
+      brakes: payload.brakes,
+    });
+    if (!measurementResult.valid) {
+      throw new Error(measurementResult.error);
     }
   }
 
@@ -974,6 +1217,69 @@ function PreJobSurveyDialogBody({
     } finally {
       setActiveSubmitAction(null);
     }
+  }
+
+  function updateTreadInput(
+    position: TirePosition,
+    field: "minimum" | "inner" | "center" | "outer",
+    rawValue: string,
+  ) {
+    const value = sanitizeTreadInput(rawValue);
+    setTreadInputs((current) => {
+      const nextPosition = { ...current[position], [field]: value };
+      if (field !== "minimum" && nextPosition.detailed) {
+        const detailedReading: TireTreadReading = {
+          inner_32nds:
+            nextPosition.inner === "" ? null : Number(nextPosition.inner),
+          center_32nds:
+            nextPosition.center === "" ? null : Number(nextPosition.center),
+          outer_32nds:
+            nextPosition.outer === "" ? null : Number(nextPosition.outer),
+        };
+        const minimum = getTireTreadMinimum(detailedReading);
+        if (minimum != null) {
+          nextPosition.minimum = String(minimum);
+        }
+      }
+      return { ...current, [position]: nextPosition };
+    });
+  }
+
+  function toggleDetailedTread(position: TirePosition) {
+    setTreadInputs((current) => {
+      const positionInput = current[position];
+      const detailed = !positionInput.detailed;
+      return {
+        ...current,
+        [position]: {
+          ...positionInput,
+          detailed,
+          ...(detailed ? {} : { inner: "", center: "", outer: "" }),
+        },
+      };
+    });
+  }
+
+  function changeRotorUnit(nextUnit: RotorUnit) {
+    if (nextUnit === rotorUnit) return;
+    setRotorInputs((current) =>
+      Object.fromEntries(
+        TIRE_POSITIONS.map((position) => {
+          const raw = current[position].trim();
+          if (!raw) return [position, ""];
+          const value = Number(raw);
+          if (!Number.isFinite(value)) return [position, raw];
+          return [
+            position,
+            formatRotorValue(
+              convertRotorValue(value, rotorUnit, nextUnit),
+              nextUnit,
+            ),
+          ];
+        }),
+      ) as RotorInputState,
+    );
+    setRotorUnit(nextUnit);
   }
 
   function requestClose() {
@@ -1246,7 +1552,7 @@ function PreJobSurveyDialogBody({
               {isSubmitting && activeSubmitAction === "start" ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : null}
-              Save and start job
+              Save and continue
             </button>
           </div>
         }
@@ -1616,6 +1922,34 @@ function PreJobSurveyDialogBody({
                   value={rearCondition}
                   onChange={setRearCondition}
                 />
+                <div className="pt-2">
+                  <div className="mb-2 flex items-end justify-between gap-3">
+                    <div>
+                      <p className="text-[12px] font-medium text-foreground">
+                        <RequiredLabel text="Tread depth" />
+                      </p>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">
+                        Record the shallowest groove on each tire, in 32nds.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {TIRE_POSITIONS.map((position) => (
+                      <TreadMeasurementCard
+                        key={position}
+                        label={POSITION_LABELS[position]}
+                        value={treadInputs[position]}
+                        onMinimumChange={(value) =>
+                          updateTreadInput(position, "minimum", value)
+                        }
+                        onDetailChange={(field, value) =>
+                          updateTreadInput(position, field, value)
+                        }
+                        onToggleDetails={() => toggleDetailedTread(position)}
+                      />
+                    ))}
+                  </div>
+                </div>
                 <div className="w-full sm:max-w-[260px] sm:self-end">
                   <SelectableFieldCard
                     label={
@@ -1692,6 +2026,73 @@ function PreJobSurveyDialogBody({
                   Scoped to this booking — {padScope.front ? "front" : "rear"} axle only.
                 </p>
               ) : null}
+              <div className="mt-4">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[12px] font-medium text-foreground">
+                      {serviceFlags.hasBrakeWork ? (
+                        <RequiredLabel text="Rotor thickness" />
+                      ) : (
+                        "Rotor thickness"
+                      )}
+                    </p>
+                    <p className="mt-0.5 text-[10px] text-muted-foreground">
+                      Measure each listed rotor with a brake micrometer.
+                    </p>
+                  </div>
+                  <div
+                    className="inline-flex h-8 rounded-md border border-primary/15 bg-background p-0.5"
+                    aria-label="Rotor thickness unit"
+                  >
+                    {(["in", "mm"] as RotorUnit[]).map((unit) => (
+                      <button
+                        key={unit}
+                        type="button"
+                        aria-pressed={rotorUnit === unit}
+                        onClick={() => changeRotorUnit(unit)}
+                        className={cn(
+                          "min-w-12 rounded px-2 text-[11px] font-semibold transition-colors",
+                          rotorUnit === unit
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:text-foreground",
+                        )}
+                      >
+                        {unit === "in" ? "Inches" : "mm"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {rotorPositions.map((position) => (
+                    <label
+                      key={position}
+                      className="rounded-lg border border-primary/10 bg-muted/40 p-3"
+                    >
+                      <span className="text-[11px] font-medium text-muted-foreground">
+                        {POSITION_LABELS[position]}
+                      </span>
+                      <div className="mt-2 flex items-center gap-2">
+                        <input
+                          aria-label={`${POSITION_LABELS[position]} rotor thickness`}
+                          value={rotorInputs[position]}
+                          onChange={(event) =>
+                            setRotorInputs((current) => ({
+                              ...current,
+                              [position]: keepNumericInput(event.target.value),
+                            }))
+                          }
+                          inputMode="decimal"
+                          placeholder={rotorUnit === "in" ? "1.027" : "26.09"}
+                          className={cn(baseField(), "w-full text-right")}
+                        />
+                        <span className="w-5 text-[11px] text-muted-foreground">
+                          {rotorUnit}
+                        </span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
               <FieldRow
                 label={
                   serviceFlags.hasBrakeWork ? (
@@ -1839,6 +2240,31 @@ function PreJobSurveyDialogBody({
                   placeholder="Select ATF spec…"
                   otherPlaceholder="Transmission fluid type"
                 />
+              </div>
+            </SectionBlock>
+
+            <SectionBlock
+              sectionRef={(element) => {
+                sectionRefs.current.filters = element;
+              }}
+              sectionId="prejob-section-filters"
+              eyebrow="Filters"
+              badge="Optional"
+              accent="muted"
+            >
+              <div className="rounded-lg border border-primary/10 bg-muted/30 px-3 py-2">
+                <FieldRow label="Engine air filter">
+                  <FilterStatusSelect
+                    value={engineAirFilterStatus}
+                    onChange={setEngineAirFilterStatus}
+                  />
+                </FieldRow>
+                <FieldRow label="Cabin air filter">
+                  <FilterStatusSelect
+                    value={cabinAirFilterStatus}
+                    onChange={setCabinAirFilterStatus}
+                  />
+                </FieldRow>
               </div>
             </SectionBlock>
 
@@ -2126,6 +2552,12 @@ function VehicleSummaryCard({
 }
 
 type RecOutcome = "completed" | "dismissed";
+type PriorRecommendation = {
+  _id: string;
+  service_name: string;
+  urgency: string;
+  reason?: string | null;
+};
 const URGENCY_LABELS: Record<string, string> = {
   soon: "Soon",
   within_3_months: "Within 3 months",
@@ -2192,14 +2624,14 @@ function PriorRecommendationsCard({
     <section className="rounded-lg border border-primary/15 bg-card p-3.5">
       <div className="mb-2 flex items-baseline justify-between gap-2">
         <h3 className="text-[13px] font-semibold uppercase tracking-wide text-foreground">
-          Last visit's recommendations
+          Last visit&apos;s recommendations
         </h3>
         <span className="text-[11px] text-muted-foreground">
           Confirm or skip
         </span>
       </div>
       <ul className="space-y-2">
-        {recs.map((rec) => {
+        {(recs as PriorRecommendation[]).map((rec) => {
           const outcome = resolved[rec._id];
           const isBusy = busyId === rec._id;
           return (
@@ -2332,6 +2764,118 @@ function FieldRow({
     <div className="flex flex-col gap-1.5 py-1.5 text-[12px] sm:flex-row sm:items-center sm:justify-between sm:gap-3">
       <span className="text-muted-foreground">{label}</span>
       <div className="flex items-center gap-2 sm:justify-end">{children}</div>
+    </div>
+  );
+}
+
+function FilterStatusSelect({
+  value,
+  onChange,
+}: {
+  value: FilterStatus;
+  onChange: (next: FilterStatus) => void;
+}) {
+  return (
+    <Select
+      selectedKey={value}
+      onSelectionChange={(key) => {
+        const next = String(key);
+        if (isFilterStatus(next)) {
+          onChange(next);
+        }
+      }}
+    >
+      <SelectTrigger className={cn(selectTriggerClassName, "w-[180px] justify-end")}>
+        <SelectValue>{filterStatusLabel(value)}</SelectValue>
+      </SelectTrigger>
+      <SelectPopover className={selectPopoverClassName}>
+        <SelectListBox shouldFocusWrap className={selectListBoxClassName}>
+          {FILTER_STATUSES.map((status) => (
+            <SelectItem
+              key={status}
+              id={status}
+              textValue={filterStatusLabel(status)}
+              className={selectItemClassName}
+            >
+              {filterStatusLabel(status)}
+            </SelectItem>
+          ))}
+        </SelectListBox>
+      </SelectPopover>
+    </Select>
+  );
+}
+
+function TreadMeasurementCard({
+  label,
+  value,
+  onMinimumChange,
+  onDetailChange,
+  onToggleDetails,
+}: {
+  label: string;
+  value: TreadInputState[TirePosition];
+  onMinimumChange: (value: string) => void;
+  onDetailChange: (
+    field: "inner" | "center" | "outer",
+    value: string,
+  ) => void;
+  onToggleDetails: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-primary/10 bg-muted/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-foreground">
+          {label}
+        </span>
+        <div className="flex items-center gap-1.5">
+          <input
+            aria-label={`${label} shallowest tread depth`}
+            value={value.minimum}
+            onChange={(event) => onMinimumChange(event.target.value)}
+            inputMode="numeric"
+            readOnly={value.detailed}
+            placeholder="--"
+            className={cn(
+              baseField(),
+              "w-14 text-right font-semibold",
+              value.detailed ? "bg-muted text-muted-foreground" : null,
+            )}
+          />
+          <span className="text-[11px] text-muted-foreground">/32&quot;</span>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onToggleDetails}
+        className="mt-2 inline-flex items-center gap-1 text-[10px] font-medium text-primary hover:text-primary/80"
+      >
+        {value.detailed ? (
+          <ChevronUp className="h-3 w-3" />
+        ) : (
+          <ChevronDown className="h-3 w-3" />
+        )}
+        {value.detailed ? "Use shallowest only" : "Add inner, center, outer"}
+      </button>
+      {value.detailed ? (
+        <div className="mt-2 grid grid-cols-3 gap-2">
+          {(["inner", "center", "outer"] as const).map((field) => (
+            <label key={field} className="space-y-1">
+              <span className="block text-[9px] font-medium capitalize text-muted-foreground">
+                {field}
+              </span>
+              <input
+                aria-label={`${label} ${field} tread depth`}
+                value={value[field]}
+                onChange={(event) => onDetailChange(field, event.target.value)}
+                inputMode="numeric"
+                placeholder="--"
+                className={cn(baseField(), "w-full text-right")}
+              />
+            </label>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

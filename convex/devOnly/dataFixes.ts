@@ -11,6 +11,7 @@
  */
 import { internalMutation, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
+import { isMarketplaceDomain, isMarketplaceUrl } from "../vehicleEnrichment/sourceRegistry";
 
 /**
  * READ-ONLY spot-check sweep: every vehicle_config with its engine's
@@ -98,5 +99,211 @@ export const fixEngineFields = internalMutation({
       created_at: Date.now(),
     });
     return { ok: true as const, changes: changes.length };
+  },
+});
+
+/**
+ * Delete marketplace-sourced part_prices rows (amazon/ebay/walmart/…). These
+ * entered before the price path enforced MARKETPLACE_DOMAINS (Jul 2026: a
+ * rear-brake-pad row held $31.78 from an Amazon FRONT-pad listing). Rows are
+ * DELETED, not quarantined — a leftover row would hide the part from the
+ * zero-price backfill (zeroPricePartsPage), blocking its clean reprice.
+ *
+ *   npx convex run devOnly/dataFixes:deleteMarketplacePrices \
+ *     '{"dry_run":true,"reason":"audit"}'
+ */
+export const deleteMarketplacePrices = internalMutation({
+  args: {
+    dry_run: v.optional(v.boolean()),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const all = await ctx.db.query("part_prices").collect();
+    const matches = all.filter(
+      (row) => isMarketplaceDomain(row.source_domain) || isMarketplaceUrl(row.source_url),
+    );
+
+    const byDomain: Record<string, number> = {};
+    for (const row of matches) {
+      const d = row.source_domain ?? "unknown";
+      byDomain[d] = (byDomain[d] ?? 0) + 1;
+    }
+
+    if (args.dry_run) {
+      return {
+        ok: true as const,
+        dry_run: true,
+        matched: matches.length,
+        by_domain: byDomain,
+        rows: matches.map((r) => ({
+          part_id: String(r.part_id),
+          price: r.price,
+          source_domain: r.source_domain,
+          source_url: r.source_url,
+        })),
+      };
+    }
+
+    for (const row of matches) {
+      await ctx.db.delete(row._id);
+    }
+    if (matches.length > 0) {
+      await ctx.db.insert("audit_log", {
+        entity_type: "part_prices",
+        entity_id: "bulk",
+        action: "data_fix",
+        actor: "CLI data fix",
+        detail:
+          `Deleted ${matches.length} marketplace-sourced part_prices rows · ` +
+          Object.entries(byDomain).map(([d, n]) => `${d}: ${n}`).join(", ") +
+          ` · reason: ${args.reason}`,
+        created_at: Date.now(),
+      });
+    }
+    return { ok: true as const, dry_run: false, deleted: matches.length, by_domain: byDomain };
+  },
+});
+
+/**
+ * Delete recently-written part_prices rows whose source URL does not contain
+ * the part's OEM number. Used once after the Jul 2026 backfill wrote
+ * wrong-product prices from search-discovered pages (an air-filter page
+ * priced "engine oil" 19432331) before requireOemEcho landed. Bounded by
+ * `since_ms` so long-standing LLM-cited rows (legitimately echo-less) are
+ * untouched; deleted parts return to the zero-price pool and get re-priced
+ * under the strict rule.
+ *
+ *   npx convex run devOnly/dataFixes:deletePricesWithoutUrlEcho \
+ *     '{"since_ms":1783300000000,"dry_run":true,"reason":"audit"}'
+ */
+export const deletePricesWithoutUrlEcho = internalMutation({
+  args: {
+    since_ms: v.float64(),
+    dry_run: v.optional(v.boolean()),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const all = await ctx.db.query("part_prices").collect();
+    const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+    const matches: Array<{ row: any; oem: string }> = [];
+    for (const row of all) {
+      if ((row.refreshed_at ?? row.created_at ?? 0) < args.since_ms) continue;
+      if (!row.source_url) continue;
+      const part = await ctx.db.get(row.part_id);
+      if (!part) continue;
+      const oemNorm = norm(part.oem_part_number);
+      if (oemNorm.length < 5) continue; // short numbers can't be URL-matched reliably
+      if (norm(row.source_url).includes(oemNorm)) continue;
+      matches.push({ row, oem: part.oem_part_number });
+    }
+
+    if (args.dry_run) {
+      return {
+        ok: true as const,
+        dry_run: true,
+        matched: matches.length,
+        rows: matches.map((m) => ({
+          oem: m.oem,
+          price: m.row.price,
+          source_domain: m.row.source_domain,
+          source_url: m.row.source_url,
+        })),
+      };
+    }
+
+    for (const m of matches) {
+      await ctx.db.delete(m.row._id);
+    }
+    if (matches.length > 0) {
+      await ctx.db.insert("audit_log", {
+        entity_type: "part_prices",
+        entity_id: "bulk",
+        action: "data_fix",
+        actor: "CLI data fix",
+        detail:
+          `Deleted ${matches.length} part_prices rows without URL OEM echo (since ${new Date(args.since_ms).toISOString()}) · ` +
+          `reason: ${args.reason}`,
+        created_at: Date.now(),
+      });
+    }
+    return { ok: true as const, dry_run: false, deleted: matches.length };
+  },
+});
+
+/**
+ * Surgically delete one part's price row(s) for a given source domain —
+ * for confirmed wrong-product rows (verified by opening the page). The
+ * nightly refresh can't self-heal these: it re-extracts from the same wrong
+ * page and re-confirms it.
+ *
+ *   npx convex run devOnly/dataFixes:deletePartPriceForOem \
+ *     '{"oem_part_number":"19432331","source_domain":"gmpartsgiant.com","reason":"..."}'
+ */
+export const deletePartPriceForOem = internalMutation({
+  args: {
+    oem_part_number: v.string(),
+    source_domain: v.string(),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const part = await ctx.db
+      .query("oem_parts")
+      .withIndex("by_part_number", (q) => q.eq("oem_part_number", args.oem_part_number))
+      .first();
+    if (!part) return { ok: false as const, reason: "part_not_found" };
+
+    const rows = (
+      await ctx.db
+        .query("part_prices")
+        .withIndex("by_part", (q) => q.eq("part_id", part._id))
+        .collect()
+    ).filter((r) => r.source_domain === args.source_domain);
+
+    for (const r of rows) await ctx.db.delete(r._id);
+    if (rows.length > 0) {
+      await ctx.db.insert("audit_log", {
+        entity_type: "part_prices",
+        entity_id: String(part._id),
+        action: "data_fix",
+        actor: "CLI data fix",
+        detail: `Deleted ${rows.length} price row(s) for ${args.oem_part_number} @ ${args.source_domain} · reason: ${args.reason}`,
+        created_at: Date.now(),
+      });
+    }
+    return { ok: true as const, deleted: rows.length };
+  },
+});
+
+/**
+ * Set services.requires_parts by slug — CLI-only flag fix with an audit row.
+ *
+ *   npx convex run devOnly/dataFixes:setServiceRequiresParts \
+ *     '{"slug":"transmission_service","value":false,"reason":"..."}'
+ */
+export const setServiceRequiresParts = internalMutation({
+  args: {
+    slug: v.string(),
+    value: v.boolean(),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const svc = await ctx.db
+      .query("services")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+    if (!svc) return { ok: false as const, reason: "service_not_found" };
+    const before = (svc as any).requires_parts;
+    if (before === args.value) return { ok: true as const, changes: 0 };
+    await ctx.db.patch(svc._id, { requires_parts: args.value });
+    await ctx.db.insert("audit_log", {
+      entity_type: "service",
+      entity_id: String(svc._id),
+      action: "data_fix",
+      actor: "CLI data fix",
+      detail: `services.requires_parts (${args.slug}): ${before ?? "—"} → ${args.value} · reason: ${args.reason}`,
+      created_at: Date.now(),
+    });
+    return { ok: true as const, changes: 1 };
   },
 });

@@ -148,15 +148,40 @@ export function applyApplicabilityRules(
     fields.diff_fluid_type = naField();
     fields.diff_fluid_miles = naField();
     fields.diff_fluid_months = naField();
+    fields.diff_fluid_capacity_qts = naField();
     fields.transfer_case_fluid_type = naField();
     fields.transfer_case_fluid_miles = naField();
     fields.transfer_case_fluid_months = naField();
+    fields.transfer_case_fluid_capacity_qts = naField();
   }
   // ── RWD: has differential but no transfer case ────────────────
   else if (drivetrain === "RWD") {
     fields.transfer_case_fluid_type = naField();
     fields.transfer_case_fluid_miles = naField();
     fields.transfer_case_fluid_months = naField();
+    fields.transfer_case_fluid_capacity_qts = naField();
+  }
+
+  // ── Electric power steering: no PS fluid, no capacity ─────────
+  const psType = (fields.power_steering_type?.value as string | null) ?? null;
+  if (psType === "electric") {
+    fields.ps_fluid_capacity_oz = naField();
+  }
+
+  // ── Known non-CVT transmission: CVT filters are N/A ───────────
+  // Mirrors the Batch-1 prompt hard-null and keeps the fields out of
+  // Batch-2 gap fill (LLMs happily "find" a CVT filter for a conventional
+  // automatic). Unknown transmission type leaves them searchable.
+  const transmissionType =
+    (fields.transmission_type?.value as string | null) ??
+    vPicData?.transmission_type ?? null;
+  if (transmissionType) {
+    const t = transmissionType.toLowerCase();
+    const isCvt = t.includes("cvt") || t.includes("continuously variable");
+    if (!isCvt) {
+      fields.cvt_internal_filter_oem = naField();
+      fields.cvt_external_filter_oem = naField();
+    }
   }
 
   // ── Sedan/Coupe: no rear wiper ────────────────────────────────

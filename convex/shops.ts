@@ -14,6 +14,7 @@ import {
   validateOverrunTimingMinutes,
 } from "../lib/scheduling-overhaul";
 import { detectTimezoneFromState } from "../lib/shopTimezone";
+import { getBookableShopIds } from "../lib/bookableShop";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
@@ -224,15 +225,6 @@ async function assertOnboardingCanBeCompleted(ctx: any, shopId: any) {
   if (hours.length < 7) {
     throw new Error("Complete your operating hours before finishing setup.");
   }
-
-  const mechanics = await ctx.db
-    .query("mechanics")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .filter((q: any) => q.eq(q.field("is_active"), true))
-    .collect();
-  if (mechanics.length === 0) {
-    throw new Error("Add at least one mechanic before finishing setup.");
-  }
 }
 
 async function finalizeOnboarding(ctx: any, args: { shopId: any; userId: any }) {
@@ -249,7 +241,9 @@ async function finalizeOnboarding(ctx: any, args: { shopId: any; userId: any }) 
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db.query("shops").collect();
+    const shops = await ctx.db.query("shops").collect();
+    const bookableShopIds = await getBookableShopIds(ctx, shops);
+    return shops.filter((shop) => bookableShopIds.has(shop._id));
   },
 });
 

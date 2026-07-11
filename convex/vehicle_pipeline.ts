@@ -783,6 +783,7 @@ export const enrichVehicleSpecs = internalAction({
               engineId: args.engineId,
               specs: validatedSpecs,
               confidenceScore: specs.overall_confidence ?? 0.70,
+              make: args.make,
             });
             flatVehicleSpecs = validatedSpecs;
           }

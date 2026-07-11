@@ -21,6 +21,7 @@ import {
   type AxlePosition,
 } from "./lib/brakeScope";
 import { ensureWalkInCashPayment } from "./bookings";
+import { partFitsConfigMake } from "./partSelector";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
@@ -431,6 +432,9 @@ export const getPrefillData = query({
       n.trim().toUpperCase().replace(/\s+/g, "");
     if (snapshot && snapshot.length > 0) {
       for (const row of snapshot) {
+        // Rows the snapshotRevalidation sweep stamped as cross-make
+        // contaminated must not pre-fill the mechanic's billing dialog.
+        if (row.integrity_flag != null) continue;
         suggestedParts.push({
           part_name: row.part_name,
           oem_number: row.oem_number,
@@ -655,6 +659,7 @@ export const getPrefillData = query({
     }> = [];
 
     if (vehicle.vehicle_config_id) {
+      const recConfig = await ctx.db.get(vehicle.vehicle_config_id);
       for (const sid of booking.service_ids ?? []) {
         const svc = await ctx.db.get(sid);
         if (!svc?.slug) continue;
@@ -674,6 +679,8 @@ export const getPrefillData = query({
           if (f.package_code != null) continue;
           const part = await ctx.db.get(f.part_id);
           if (!part) continue;
+          // I1 make guard: drop cross-make contaminant parts
+          if (!partFitsConfigMake(part.make_id, recConfig?.make_id)) continue;
           // Scope to the booked axle — position-neutral parts (hardware,
           // grease) survive a single-axle filter.
           if (!fitmentMatchesPosition(f.position, part.subcategory, recPosition)) {

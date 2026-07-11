@@ -15,8 +15,11 @@ import { internalQuery, internalMutation } from "../_generated/server";
  * $49-washer catalog kept resurrecting from cache). Old keys simply never
  * match again (rows expire on their own TTL); the bump also hard-invalidates
  * any pre-trim row the price path might still reach.
+ * v4 (Jul 2026): `supersessions_json` — deterministic part-replacement chains
+ * parsed from the same registry HTML as prices; older rows re-fetch so
+ * supersession capture runs on them too.
  */
-export const CACHE_FORMAT_VERSION = 3;
+export const CACHE_FORMAT_VERSION = 4;
 
 /** Build a deterministic cache key from vehicle identity + source type.
  *  Exported for unit tests — the key IS the contamination boundary. */
@@ -127,6 +130,8 @@ export const storeScrapeCache = internalMutation({
     // Deterministic JSON-LD prices (ParsedPartPrice[] serialized). Only the
     // registry parts-catalog path supplies this; other callers omit it.
     partPricesJson: v.optional(v.string()),
+    // Part replacement chains (ParsedSupersession[] serialized), same source.
+    supersessionsJson: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const cacheKey = buildCacheKey(args.vehicleMake, args.vehicleModel, args.vehicleYear, args.sourceType, args.vehicleTrim);
@@ -150,6 +155,7 @@ export const storeScrapeCache = internalMutation({
         expires_at: args.expiresAt,
         scrape_success: true,
         part_prices_json: args.partPricesJson,
+        supersessions_json: args.supersessionsJson,
         format_version: CACHE_FORMAT_VERSION,
       });
     } else {
@@ -167,6 +173,7 @@ export const storeScrapeCache = internalMutation({
         scrape_success: true,
         created_at: now,
         part_prices_json: args.partPricesJson,
+        supersessions_json: args.supersessionsJson,
         format_version: CACHE_FORMAT_VERSION,
       });
     }

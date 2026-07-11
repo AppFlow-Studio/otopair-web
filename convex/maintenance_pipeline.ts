@@ -70,6 +70,81 @@ export const getModifierWeights = internalQuery({
   },
 });
 
+// Latest observed vehicle condition (populated by the multi-point inspection /
+// prejob). Feeds an urgency override so VHS reflects what the mechanic actually
+// measured — not just OEM interval math.
+export const getPassportForVin = internalQuery({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("vehicle_passports")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin))
+      .unique()
+      .catch(() => null);
+  },
+});
+
+const URGENCY_RANK: Record<string, number> = {
+  none: 0,
+  low: 1,
+  moderate: 2,
+  high: 3,
+  critical: 4,
+};
+
+function maxUrgency(a: string, b: string): string {
+  return (URGENCY_RANK[a] ?? 0) >= (URGENCY_RANK[b] ?? 0) ? a : b;
+}
+
+/**
+ * Derive an observed urgency per maintenance category from the passport's
+ * measured condition (brake pad mm, rotor condition, tire condition). Only
+ * raises urgency — never lowers it.
+ */
+function observedUrgencyByCategory(
+  passport: any,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!passport) return out;
+
+  // Brakes — pad thickness + rotor condition.
+  const brakes = passport.brakes ?? {};
+  const pads = [brakes.front_pad_mm, brakes.rear_pad_mm].filter(
+    (n: unknown) => typeof n === "number" && Number.isFinite(n),
+  ) as number[];
+  let brakeUrg = "none";
+  if (pads.length) {
+    const min = Math.min(...pads);
+    if (min < 3) brakeUrg = "critical";
+    else if (min < 4) brakeUrg = "high";
+    else if (min <= 6) brakeUrg = "moderate";
+  }
+  if (brakes.rotor_condition === "needs_attention")
+    brakeUrg = maxUrgency(brakeUrg, "high");
+  else if (brakes.rotor_condition === "scored")
+    brakeUrg = maxUrgency(brakeUrg, "moderate");
+  if (brakeUrg !== "none") out.brakes = brakeUrg;
+
+  // Tires — worst of overall/front/rear condition.
+  const tires = passport.tires ?? {};
+  const condToUrg: Record<string, string> = {
+    good: "none",
+    fair: "moderate",
+    replace_soon: "high",
+  };
+  let tireUrg = "none";
+  for (const c of [
+    tires.overall_condition,
+    tires.front_condition,
+    tires.rear_condition,
+  ]) {
+    if (c && condToUrg[c]) tireUrg = maxUrgency(tireUrg, condToUrg[c]);
+  }
+  if (tireUrg !== "none") out.tires = tireUrg;
+
+  return out;
+}
+
 export const getServiceSpecs = internalQuery({
   args: { engineId: v.id("engines") },
   handler: async (ctx, args) => {
@@ -335,6 +410,15 @@ export const runPipeline = internalAction({
       return;
     }
     const { owner, vehicle } = data;
+
+    // Observed condition from the latest inspection/prejob — used below to raise
+    // brake/tire urgency above the interval-derived value when measured wear
+    // demands it.
+    const passport = await ctx.runQuery(
+      internal.maintenance_pipeline.getPassportForVin,
+      { vin: owner.vin },
+    );
+    const observedUrgency = observedUrgencyByCategory(passport);
 
     const weights = await ctx.runQuery(
       internal.maintenance_pipeline.getModifierWeights,
@@ -618,13 +702,24 @@ export const runPipeline = internalAction({
         vehicleAgeYears
       );
 
-      const urgencyResult = classifyUrgency(
+      let urgencyResult = classifyUrgency(
         interval,
         currentMileage,
         velocity.rate,
         qrFlags,
         serviceCategory
       );
+
+      // Observed-condition override — raise urgency to match measured wear from
+      // the latest inspection (brakes/tires). Only ever increases urgency.
+      const observed = observedUrgency[serviceCategory];
+      if (
+        observed &&
+        interval.is_applicable &&
+        (URGENCY_RANK[observed] ?? 0) > (URGENCY_RANK[urgencyResult.urgency] ?? 0)
+      ) {
+        urgencyResult = { urgency: observed as any, source: "inspection_override" };
+      }
 
       serviceStates.push({
         service_id: spec.service_id.toString(),
@@ -730,9 +825,12 @@ export const runPipeline = internalAction({
           lastServiceSource: s.anchor.last_service_source,
           urgency: s.urgencyResult.urgency,
           urgencyScore: s.urgencyResult.urgency_score,
-          quickReadFlag: s.urgencyResult.source === "quick_read_override" || s.urgencyResult.source === "symptom_override"
-            ? s.urgencyResult.source
-            : undefined,
+          quickReadFlag:
+            s.urgencyResult.source === "quick_read_override" ||
+            s.urgencyResult.source === "symptom_override" ||
+            s.urgencyResult.source === "inspection_override"
+              ? s.urgencyResult.source
+              : undefined,
           quickReadUrgency: s.urgencyResult.source?.includes("override")
             ? s.urgencyResult.urgency
             : undefined,

@@ -594,6 +594,8 @@ export const findBestChassisMatch = internalQuery({
     target_config_id: v.id("vehicle_configs"),
   },
   handler: async (ctx, args) => {
+    const target = await ctx.db.get(args.target_config_id);
+
     // Get all configs with this chassis code (any status)
     const all = await ctx.db
       .query("vehicle_configs")
@@ -602,9 +604,17 @@ export const findBestChassisMatch = internalQuery({
       )
       .collect();
 
-    // Exclude ourselves, sort by fill_rate descending
+    // Exclude ourselves AND cross-make configs — chassis codes are
+    // make-scoped concepts, but the stored codes are LLM-generated strings
+    // ("E12", "MK7") that collide across makes; without this filter a BMW
+    // config's parts can be cloned onto a whole different marque.
+    // Sort by fill_rate descending.
     const candidates = all
-      .filter((c) => c._id !== args.target_config_id)
+      .filter(
+        (c) =>
+          c._id !== args.target_config_id &&
+          (!target?.make_id || c.make_id === target.make_id),
+      )
       .sort((a, b) => (b.fill_rate ?? 0) - (a.fill_rate ?? 0));
 
     return candidates[0] ?? null;
@@ -620,6 +630,8 @@ export const findChassisGroupSiblings = internalQuery({
     exclude_config_id: v.id("vehicle_configs"),
   },
   handler: async (ctx, args) => {
+    const source = await ctx.db.get(args.exclude_config_id);
+
     const all = await ctx.db
       .query("vehicle_configs")
       .withIndex("by_chassis_code", (q) =>
@@ -627,7 +639,13 @@ export const findChassisGroupSiblings = internalQuery({
       )
       .collect();
 
-    return all.filter((c) => c._id !== args.exclude_config_id);
+    // Same-make only — LLM-generated chassis codes collide across makes
+    // (see findBestChassisMatch above).
+    return all.filter(
+      (c) =>
+        c._id !== args.exclude_config_id &&
+        (!source?.make_id || c.make_id === source.make_id),
+    );
   },
 });
 
@@ -764,13 +782,21 @@ export const findBestEngineSibling = internalQuery({
     exclude_config_id: v.id("vehicle_configs"),
   },
   handler: async (ctx, args) => {
+    const source = await ctx.db.get(args.exclude_config_id);
+
     const all = await ctx.db
       .query("vehicle_configs")
       .withIndex("by_engine", (q) => q.eq("engine_id", args.engine_id))
       .collect();
 
+    // Same-make only — defense in depth against engine_id reuse across
+    // marques (badge-engineered platforms share engines but not OEM parts).
     const candidates = all
-      .filter((c) => c._id !== args.exclude_config_id)
+      .filter(
+        (c) =>
+          c._id !== args.exclude_config_id &&
+          (!source?.make_id || c.make_id === source.make_id),
+      )
       .sort((a, b) => (b.fill_rate ?? 0) - (a.fill_rate ?? 0));
 
     return candidates[0] ?? null;
@@ -784,11 +810,18 @@ export const findEngineSiblings = internalQuery({
     exclude_config_id: v.id("vehicle_configs"),
   },
   handler: async (ctx, args) => {
+    const source = await ctx.db.get(args.exclude_config_id);
+
     const all = await ctx.db
       .query("vehicle_configs")
       .withIndex("by_engine", (q) => q.eq("engine_id", args.engine_id))
       .collect();
 
-    return all.filter((c) => c._id !== args.exclude_config_id);
+    // Same-make only (see findBestEngineSibling above).
+    return all.filter(
+      (c) =>
+        c._id !== args.exclude_config_id &&
+        (!source?.make_id || c.make_id === source.make_id),
+    );
   },
 });

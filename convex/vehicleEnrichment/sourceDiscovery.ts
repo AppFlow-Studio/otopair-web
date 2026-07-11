@@ -9,7 +9,7 @@ import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { searchAndFetch, fetchUrl } from "./firecrawl";
-import { BLOCKED_DOMAINS } from "./sourceRegistry";
+import { BLOCKED_DOMAINS, isMarketplaceDomain } from "./sourceRegistry";
 
 // ─── OEM Part Patterns by Make ───────────────────────────────────
 
@@ -69,22 +69,6 @@ const TEST_VEHICLES: Record<string, { year: number; model: string; trim: string 
   Jaguar: { year: 2020, model: "F-PACE", trim: "25t" },
 };
 
-// ─── Discovery Blocklist (marketplaces, not OEM data sources) ────
-
-const DISCOVERY_BLOCKLIST = [
-  "ebay.com",
-  "amazon.com",
-  "walmart.com",
-  "alibaba.com",
-  "aliexpress.com",
-  "wish.com",
-  "temu.com",
-  "facebook.com",
-  "craigslist.org",
-  "offerup.com",
-  "mercari.com",
-];
-
 // ─── Helpers ─────────────────────────────────────────────────────
 
 function extractDomain(url: string): string {
@@ -97,10 +81,6 @@ function extractDomain(url: string): string {
 
 function isBlocked(domain: string, blockedDomains: string[]): boolean {
   return blockedDomains.some((d) => domain === d || domain.endsWith("." + d));
-}
-
-function isMarketplace(domain: string): boolean {
-  return DISCOVERY_BLOCKLIST.some((d) => domain === d || domain.endsWith("." + d));
 }
 
 interface DomainScore {
@@ -356,7 +336,7 @@ export const discoverSourcesForMake = internalAction({
           const domain = extractDomain(r.url);
           if (!domain) continue;
           if (isBlocked(domain, allBlocked)) continue;
-          if (isMarketplace(domain)) continue; // ebay, amazon, etc.
+          if (isMarketplaceDomain(domain)) continue; // ebay, amazon, etc.
           if (existingDomains.has(domain)) continue;
           if (domainResults.has(domain)) continue; // already scored
 

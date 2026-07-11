@@ -11,6 +11,7 @@
  */
 
 import { Doc, Id } from "../_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 
 export type AxlePosition = "front" | "rear" | "both";
 
@@ -138,4 +139,35 @@ export function fitmentMatchesPosition(
   if (pos === position) return true;
   if (sub.startsWith(`${position}_`)) return true;
   return pos === "" && !/^(front|rear)_/.test(sub);
+}
+
+export async function resolveBrakeScopeForBooking(
+  ctx: QueryCtx | MutationCtx,
+  booking: Doc<"bookings">,
+): Promise<BrakeScope> {
+  const axleByServiceId = axlePositionByServiceId(booking);
+  let hasBrakeWork = false;
+  let sawAxleSignal = false;
+  let front = false;
+  let rear = false;
+
+  for (const serviceId of booking.service_ids ?? []) {
+    const service = await ctx.db.get(serviceId);
+    if (!service?.slug || !isBrakeSlug(service.slug)) continue;
+    hasBrakeWork = true;
+    const axle = axleForBrakeService(
+      booking,
+      String(serviceId),
+      service.slug,
+      axleByServiceId,
+    );
+    if (!axle) continue;
+    sawAxleSignal = true;
+    if (axle === "front" || axle === "both") front = true;
+    if (axle === "rear" || axle === "both") rear = true;
+  }
+
+  if (!hasBrakeWork) return { hasBrakeWork: false, front: false, rear: false };
+  if (!sawAxleSignal) return { hasBrakeWork: true, front: true, rear: true };
+  return { hasBrakeWork: true, front, rear };
 }

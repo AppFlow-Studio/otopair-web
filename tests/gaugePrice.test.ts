@@ -6,6 +6,7 @@ const base: ExtractedPrice = {
   sale_price: 37.19, msrp: 50.94, discount: 13.75, in_stock: true,
   oem_seen: "13717852380", price_label: "Sale $37.19", product_title: "Air Filter",
   sells_this_part: true, confidence: 0.9,
+  pack_quantity: null, price_is_per_unit: null,
 };
 
 describe("gaugePrice", () => {

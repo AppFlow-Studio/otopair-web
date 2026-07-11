@@ -4,6 +4,41 @@ import { updateSourceScores } from "../services/sourceScoring";
 import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
 import { isLaborOnlyService } from "../lib/servicePartsReference";
+import { partFitsConfigMake } from "../partSelector";
+import { makesSameFamily, sanitizePartNumber } from "./contentSanitization";
+import { normalizeOemNumber } from "./priceParser";
+import { isMarketplaceDomain, isMarketplaceUrl } from "./sourceRegistry";
+
+/**
+ * Family-aware make compatibility for WRITE paths. The strict id-equality
+ * guard (partFitsConfigMake) treats Audi ≠ VW, but VAG/Mopar/etc. genuinely
+ * share part numbers across marques — a 5Q0 MQB part stamped `audi` (because
+ * an Audi was enriched first) is a legitimate fitment for a VW config, not
+ * contamination. Observed in the Jul 2026 quarantine dry-run: 87 audi→vw
+ * rows that are shared-platform parts, vs 27 ford→alfa true contaminants.
+ */
+async function partMakeCompatibleForWrite(
+  ctx: any,
+  partMakeId: any,
+  configMakeId: any,
+): Promise<boolean> {
+  if (partFitsConfigMake(partMakeId, configMakeId)) return true;
+  const [partMake, configMake] = await Promise.all([
+    ctx.db.get(partMakeId),
+    ctx.db.get(configMakeId),
+  ]);
+  return makesSameFamily(partMake?.name, configMake?.name);
+}
+
+/**
+ * Confidence for chassis/engine-cloned rows: a small haircut off the source
+ * row's confidence, and NEVER raised above it. The old floor of 0.70 laundered
+ * low-confidence data upward — a 0.40-confidence fitment became 0.70 on clone
+ * and cleared the selector's confidence gate.
+ */
+function clonedConfidence(source: number | null | undefined): number {
+  return Math.max((source ?? 0) - 0.03, 0);
+}
 
 // ============================================================================
 // 1. upsertVehicleConfig
@@ -194,7 +229,9 @@ export const upsertChassisSpecs = internalMutation({
     make_id: v.optional(v.id("makes")),
     // Physical specs
     brake_fluid_type: v.optional(v.string()),
+    brake_fluid_capacity_oz: v.optional(v.float64()),
     ps_fluid_type: v.optional(v.string()),
+    ps_fluid_capacity_oz: v.optional(v.float64()),
     lug_nut_torque_ft_lbs: v.optional(v.float64()),
     wiper_blade_driver_size_in: v.optional(v.float64()),
     wiper_blade_passenger_size_in: v.optional(v.float64()),
@@ -221,7 +258,8 @@ export const upsertChassisSpecs = internalMutation({
     // Existing values are kept unless the new value is explicitly provided.
     const patch: Record<string, any> = { last_enriched_at: Date.now() };
     const fields = [
-      "make_id", "brake_fluid_type", "ps_fluid_type", "lug_nut_torque_ft_lbs",
+      "make_id", "brake_fluid_type", "brake_fluid_capacity_oz",
+      "ps_fluid_type", "ps_fluid_capacity_oz", "lug_nut_torque_ft_lbs",
       "wiper_blade_driver_size_in", "wiper_blade_passenger_size_in", "wiper_blade_rear_size_in",
       "battery_group", "battery_location", "battery_type", "has_brake_pad_sensor",
       "steering_type", "parking_brake_type", "has_rear_wiper", "cabin_filter_access",
@@ -265,6 +303,7 @@ export const upsertTrimSpecs = internalMutation({
     battery_cca: v.optional(v.float64()),
     battery_type: v.optional(v.string()),
     battery_location: v.optional(v.string()),
+    confidence_score: v.optional(v.float64()),
     data_quality: v.optional(v.string()),
     tire_options: v.optional(v.array(v.object({
       oem_name: v.optional(v.string()),
@@ -328,6 +367,7 @@ export const upsertTrimSpecs = internalMutation({
     if (args.battery_cca !== undefined) patch.battery_cca = args.battery_cca;
     if (args.battery_type !== undefined) patch.battery_type = args.battery_type;
     if (args.battery_location !== undefined) patch.battery_location = args.battery_location;
+    if (args.confidence_score !== undefined) patch.confidence_score = args.confidence_score;
     if (args.data_quality !== undefined) patch.data_quality = args.data_quality;
     if (args.tire_options !== undefined) patch.tire_options = args.tire_options;
     if (args.tire_options_source !== undefined) patch.tire_options_source = args.tire_options_source;
@@ -369,9 +409,16 @@ export const updateEngineSpecs = internalMutation({
     engine_family: v.optional(v.string()),
     displacement_l: v.optional(v.float64()),
     data_quality: v.optional(v.string()),
+    // Field names to actively ERASE (patch to undefined → Convex deletes the
+    // column). A value that sanity-checks REJECTED as wrong must not linger:
+    // the pipeline skips `undefined` writes to avoid clobbering good data, so
+    // without an explicit clear a stale poison value (e.g. coolant 16.9 qt from
+    // a forum) survives every re-enrich. Distinct from a genuinely-absent field,
+    // which stays out of this list and is preserved.
+    clear_fields: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const { engine_id, ...fields } = args;
+    const { engine_id, clear_fields, ...fields } = args;
     // Human-corrected fields are authoritative — the pipeline must not write
     // over them (the Jetta's chain→belt fix was clobbered by a re-enrich,
     // Jun 10 2026). See engines.verified_fields in schema.ts.
@@ -381,6 +428,13 @@ export const updateEngineSpecs = internalMutation({
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined && !verified.has(key)) {
         patch[key] = value;
+      }
+    }
+    // Erase rejected fields — `undefined` in a Convex patch deletes the column.
+    // Still guarded by verified_fields so a human-corrected value is never wiped.
+    for (const key of clear_fields ?? []) {
+      if (!verified.has(key) && !(key in patch)) {
+        patch[key] = undefined;
       }
     }
     if (Object.keys(patch).length > 0) {
@@ -417,6 +471,77 @@ export const updateTransmissionSpecs = internalMutation({
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(transmission_id, patch);
     }
+  },
+});
+
+// ============================================================================
+// 5b. recordSupersessions — deterministic part replacement chains
+// ============================================================================
+
+/** Look up an oem_parts row by normalized number, falling back to the exact
+ *  string for legacy rows that predate the normalized field. */
+async function findPartByNumber(ctx: any, num: string) {
+  const norm = normalizeOemNumber(num);
+  const byNorm = await ctx.db
+    .query("oem_parts")
+    .withIndex("by_part_number_normalized", (q: any) =>
+      q.eq("oem_part_number_normalized", norm)
+    )
+    .first();
+  if (byNorm) return byNorm;
+  return await ctx.db
+    .query("oem_parts")
+    .withIndex("by_part_number", (q: any) => q.eq("oem_part_number", num))
+    .first();
+}
+
+/**
+ * Apply supersession chains parsed from registry HTML ("replaced by …").
+ * Marks the OLD part is_current:false + superseded_by, stamps `supersedes` on
+ * the successor when we have its row. Rows we don't know yet are skipped — the
+ * chain re-applies for free on the next enrichment scrape.
+ */
+export const recordSupersessions = internalMutation({
+  args: {
+    supersessions: v.array(
+      v.object({
+        old_number: v.string(),
+        new_number: v.string(),
+        source_domain: v.string(),
+        source_url: v.string(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    let markedOld = 0;
+    let stampedNew = 0;
+    for (const s of args.supersessions) {
+      const oldPart = await findPartByNumber(ctx, s.old_number);
+      const newPart = await findPartByNumber(ctx, s.new_number);
+
+      // Refuse cycles: if the "new" part already points at the "old" one,
+      // conflicting sources disagree — leave both untouched for review.
+      if (newPart?.superseded_by && normalizeOemNumber(newPart.superseded_by) === normalizeOemNumber(s.old_number)) {
+        console.warn(`[supersession] conflicting chain ${s.old_number} <-> ${s.new_number} (${s.source_domain}) — skipped`);
+        continue;
+      }
+
+      if (oldPart && normalizeOemNumber(oldPart.superseded_by ?? "") !== normalizeOemNumber(s.new_number)) {
+        await ctx.db.patch(oldPart._id, {
+          superseded_by: s.new_number,
+          is_current: false,
+        });
+        markedOld++;
+      }
+      if (newPart && normalizeOemNumber(newPart.supersedes ?? "") !== normalizeOemNumber(s.old_number)) {
+        await ctx.db.patch(newPart._id, { supersedes: s.old_number });
+        stampedNew++;
+      }
+    }
+    if (markedOld + stampedNew > 0) {
+      console.log(`[supersession] applied ${args.supersessions.length} chains: ${markedOld} superseded, ${stampedNew} successors stamped`);
+    }
+    return { markedOld, stampedNew };
   },
 });
 
@@ -460,29 +585,97 @@ export const upsertPartAndFitment = internalMutation({
       );
     }
 
-    // Upsert OEM part
+    const config = await ctx.db.get(args.vehicle_config_id);
+
+    // CHOKE-POINT sanitization: every part write funnels through this mutation
+    // (batch1/batch2 pipeline, diagnoseVin backfills, future admin tools), so
+    // the cross-make + per-make-format validation runs here regardless of
+    // which fetch path sourced the number. The pipeline call sites also
+    // sanitize at extraction (better logging/context there) — this is the
+    // guarantee that no NEW path can ever skip it.
+    const configMakeDoc = config?.make_id ? await ctx.db.get(config.make_id) : null;
+    const cleanNumber = sanitizePartNumber(args.oem_part_number, configMakeDoc?.name);
+    if (!cleanNumber) {
+      console.log(
+        `[v8-parts] REJECTED part number at write: "${args.oem_part_number}" (${args.subcategory}) failed sanitization for make=${configMakeDoc?.name ?? "?"}`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "invalid_number" as const };
+    }
+
+    // Upsert OEM part — identity is the NORMALIZED number so formatting
+    // variants ("5Q0 698 451 A" vs "5Q0698451A") resolve to one row instead of
+    // splitting fitments and price history across duplicates.
+    const normalized = normalizeOemNumber(cleanNumber);
     let part = await ctx.db
       .query("oem_parts")
-      .withIndex("by_part_number", (q) =>
-        q.eq("oem_part_number", args.oem_part_number)
+      .withIndex("by_part_number_normalized", (q) =>
+        q.eq("oem_part_number_normalized", normalized)
       )
       .first();
+    if (!part) {
+      // Legacy rows predate the normalized field — fall back to the exact
+      // string; the patch below lazily backfills their normalized identity.
+      part = await ctx.db
+        .query("oem_parts")
+        .withIndex("by_part_number", (q) =>
+          q.eq("oem_part_number", cleanNumber)
+        )
+        .first();
+    }
+
+    // Supersession redirect: never fit a number the registry says was
+    // replaced. When we know the successor's row, the fitment (and any later
+    // pricing keyed off part_id) lands on the CURRENT part; the superseded row
+    // stays for audit. Unknown successor → keep the old part (still sellable).
+    if (part && part.is_current === false && part.superseded_by) {
+      const successor = await ctx.db
+        .query("oem_parts")
+        .withIndex("by_part_number_normalized", (q) =>
+          q.eq("oem_part_number_normalized", normalizeOemNumber(part!.superseded_by!))
+        )
+        .first();
+      if (successor) {
+        console.log(
+          `[v8-parts] supersession redirect: ${args.oem_part_number} → ${successor.oem_part_number}`,
+        );
+        part = successor;
+      }
+    }
+
+    // I1 write-time make guard: a part already known to belong to a different
+    // make FAMILY must never gain a fitment on this config (the read-time
+    // guard in serviceParts.ts is the backstop; this stops the contamination
+    // from being stored at all). Universal consumables (make_id null) pass;
+    // corporate siblings (Audi part on a VW config) pass — those catalogs
+    // genuinely share numbers.
+    if (part && !(await partMakeCompatibleForWrite(ctx, part.make_id, config?.make_id))) {
+      console.log(
+        `[v8-parts] REJECTED cross-make fitment: part ${args.oem_part_number} has make_id=${part.make_id}, config ${args.vehicle_config_id} has make_id=${config?.make_id}`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "cross_make" as const };
+    }
 
     let partId;
     if (part) {
       partId = part._id;
+      // Deliberately NOT patched on existing parts:
+      // - make_id: stamping the caller's make onto a shared part is exactly how
+      //   cross-make contamination spread (a Ford part re-written as Alfa).
+      // - is_current: forcing true would silently undo supersession marking.
       await ctx.db.patch(partId, {
         name: args.name,
         category: args.category,
         subcategory: args.subcategory,
-        make_id: args.make_id,
+        // Lazy backfill of the row's OWN normalized identity (NOT the incoming
+        // args value — after a supersession redirect they differ).
+        oem_part_number_normalized: normalizeOemNumber(part.oem_part_number),
         last_confirmed_at: now,
-        is_current: true,
         source_count: (part.source_count ?? 0) + 1,
       });
     } else {
       partId = await ctx.db.insert("oem_parts", {
-        oem_part_number: args.oem_part_number,
+        oem_part_number: cleanNumber,
+        oem_part_number_normalized: normalized,
         name: args.name,
         category: args.category,
         subcategory: args.subcategory,
@@ -512,13 +705,20 @@ export const upsertPartAndFitment = internalMutation({
       (f) => (f.package_code ?? null) === (args.package_code ?? null),
     );
 
+    // Corroboration signal: distinct domains that attested this fitment.
+    const domain = args.source_domain?.toLowerCase().replace(/^www\./, "") || null;
+
     let fitmentId;
     if (existingFitment) {
       fitmentId = existingFitment._id;
+      const domains = existingFitment.source_domains ?? [];
       await ctx.db.patch(fitmentId, {
         confidence: args.confidence,
         last_confirmed_at: now,
         source_count: (existingFitment.source_count ?? 0) + 1,
+        ...(domain && !domains.includes(domain)
+          ? { source_domains: [...domains, domain] }
+          : {}),
         // Backfill/refresh the reference role on re-confirm so older rows that
         // predate role stamping pick it up. Only when the caller supplies one.
         ...(args.service_role ? { service_role: args.service_role } : {}),
@@ -534,6 +734,7 @@ export const upsertPartAndFitment = internalMutation({
         service_role: args.service_role,
         confidence: args.confidence,
         source_count: 1,
+        ...(domain ? { source_domains: [domain] } : {}),
         first_confirmed_at: now,
         last_confirmed_at: now,
         mechanic_verified: false,
@@ -560,6 +761,16 @@ export const upsertPartPrice = internalMutation({
     discount: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
+    // Write-boundary marketplace guard: every price writer funnels through
+    // here (Batch-2 finalize, reprice, refresh, diagnoseVin, backfills), so
+    // this is the one place a marketplace row can be stopped for all of them.
+    if (isMarketplaceDomain(args.source_domain) || isMarketplaceUrl(args.source_url)) {
+      console.warn(
+        `[upsertPartPrice] rejected marketplace source ${args.source_domain} for part ${args.part_id}`,
+      );
+      return null;
+    }
+
     const now = Date.now();
 
     const existing = await ctx.db
@@ -598,6 +809,61 @@ export const upsertPartPrice = internalMutation({
 // ============================================================================
 // 8. upsertServiceInterval
 // ============================================================================
+
+/**
+ * Stamp on-demand services (inspections, diagnostics, alignment…) whose
+ * interval row has no mileage/months as status="on_demand". These services
+ * genuinely have no schedule — without the stamp they read as "missing
+ * interval" and permanently drag the fill rate (Jul 2026: 8 of the Sierra's
+ * 22 services). Never touches a row that has real interval data or a
+ * non-empty status set by another writer.
+ */
+export const markOnDemandIntervals = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_slugs: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    let stamped = 0;
+    for (const slug of args.service_slugs) {
+      const svc = await ctx.db
+        .query("services")
+        .withIndex("by_slug", (q) => q.eq("slug", slug))
+        .first();
+      if (!svc) continue;
+
+      const existing = await ctx.db
+        .query("service_intervals")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", args.vehicle_config_id).eq("service_id", svc._id)
+        )
+        .first();
+
+      if (existing) {
+        if (
+          existing.interval_miles == null &&
+          existing.interval_months == null &&
+          (existing.status == null || existing.status === "") &&
+          existing.mechanic_verified !== true
+        ) {
+          await ctx.db.patch(existing._id, { status: "on_demand", data_quality: "deterministic" });
+          stamped++;
+        }
+      } else {
+        await ctx.db.insert("service_intervals", {
+          vehicle_config_id: args.vehicle_config_id,
+          service_id: svc._id,
+          status: "on_demand",
+          confidence: 1,
+          data_quality: "deterministic",
+          created_at: Date.now(),
+        });
+        stamped++;
+      }
+    }
+    return { stamped };
+  },
+});
 
 export const upsertServiceInterval = internalMutation({
   args: {
@@ -846,6 +1112,11 @@ export const reconcileConfigForReenrich = internalMutation({
     config_key: v.string(),
     drivetrain: v.optional(v.string()),
     nhtsa_vin_key: v.optional(v.string()),
+    // Healed transmission link from STEP 3a. On a PIN re-enrich we must push the
+    // repaired transmission_id onto the config too, else a config poisoned with
+    // an "unknown" placeholder link stays poisoned even after the vehicle row is
+    // healed (director re-enrich uses this reconcile path, not the full upsert).
+    transmission_id: v.optional(v.id("transmissions")),
   },
   handler: async (ctx, args) => {
     const patch: any = {
@@ -854,6 +1125,7 @@ export const reconcileConfigForReenrich = internalMutation({
     };
     if (args.drivetrain && args.drivetrain !== "unknown") patch.drivetrain = args.drivetrain;
     if (args.nhtsa_vin_key) patch.nhtsa_vin_key = args.nhtsa_vin_key;
+    if (args.transmission_id) patch.transmission_id = args.transmission_id;
     await ctx.db.patch(args.config_id, patch);
     return args.config_id;
   },
@@ -953,6 +1225,24 @@ export const updateEnrichmentRun = internalMutation({
     fill_rate: v.optional(v.float64()),
     fields_changed: v.optional(v.array(v.string())),
     errors: v.optional(v.array(v.string())),
+    sanity_flags: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          severity: v.string(),
+          reason: v.string(),
+          value: v.optional(v.string()),
+        }),
+      ),
+    ),
+    field_gaps: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          reason: v.string(),
+        }),
+      ),
+    ),
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
   },
@@ -1125,7 +1415,7 @@ export const cloneFromChassisMatch = internalMutation({
           interval_months: si.interval_months,
           status: si.status,
           display_string: si.display_string,
-          confidence: Math.max((si.confidence ?? 0) - 0.03, 0.70), // slight confidence reduction for cloned data
+          confidence: clonedConfidence(si.confidence), // slight confidence reduction for cloned data
           data_quality: "chassis_clone",
           source_count: 1,
           mechanic_verified: false,
@@ -1163,7 +1453,7 @@ export const cloneFromChassisMatch = internalMutation({
           empirical_p75: lt.empirical_p75,
           source: "chassis_clone",
           data_quality: "chassis_clone",
-          confidence: Math.max((lt.confidence ?? 0) - 0.03, 0.70),
+          confidence: clonedConfidence(lt.confidence),
           engine_family: lt.engine_family,
           created_at: now,
         });
@@ -1179,7 +1469,16 @@ export const cloneFromChassisMatch = internalMutation({
       )
       .collect();
 
+    // I1 make guard: the sibling query is make-scoped, but re-assert per part
+    // so a cross-make contaminant already on the source config can't propagate.
+    const targetConfig = await ctx.db.get(args.target_config_id);
+
     for (const pf of sourceFitments) {
+      const part = await ctx.db.get(pf.part_id);
+      if (part && !(await partMakeCompatibleForWrite(ctx, part.make_id, targetConfig?.make_id))) {
+        console.log(`[chassis-clone] skipping cross-make part ${part.oem_part_number} → ${args.target_config_id}`);
+        continue;
+      }
       const existing = await ctx.db
         .query("part_fitments")
         .withIndex("by_config_service", (q) =>
@@ -1196,7 +1495,7 @@ export const cloneFromChassisMatch = internalMutation({
           service_type: pf.service_type,
           quantity_needed: pf.quantity_needed,
           position: pf.position,
-          confidence: Math.max((pf.confidence ?? 0) - 0.03, 0.70),
+          confidence: clonedConfidence(pf.confidence),
           source_count: 1,
           first_confirmed_at: now,
           last_confirmed_at: now,
@@ -1344,7 +1643,7 @@ export const backfillChassisSiblings = internalMutation({
             status: si.status,
             display_string: si.display_string,
             data_quality: "chassis_backfill",
-            confidence: Math.max((si.confidence ?? 0) - 0.03, 0.70),
+            confidence: clonedConfidence(si.confidence),
             source_count: 1,
             mechanic_verified: false,
             created_at: now,
@@ -1372,7 +1671,7 @@ export const backfillChassisSiblings = internalMutation({
             empirical_p75: lt.empirical_p75,
             source: lt.source,
             data_quality: "chassis_backfill",
-            confidence: Math.max((lt.confidence ?? 0) - 0.03, 0.70),
+            confidence: clonedConfidence(lt.confidence),
             engine_family: lt.engine_family,
             created_at: now,
           });
@@ -1381,7 +1680,14 @@ export const backfillChassisSiblings = internalMutation({
       }
 
       // Backfill part_fitments
+      // I1 make guard: re-assert per part (see cloneFromChassisMatch).
+      const siblingConfig = await ctx.db.get(siblingId);
       for (const pf of sourceFitments) {
+        const part = await ctx.db.get(pf.part_id);
+        if (part && !(await partMakeCompatibleForWrite(ctx, part.make_id, siblingConfig?.make_id))) {
+          console.log(`[chassis-backfill] skipping cross-make part ${part.oem_part_number} → sibling ${siblingId}`);
+          continue;
+        }
         const existing = await ctx.db
           .query("part_fitments")
           .withIndex("by_config_service", (q) =>
@@ -1396,7 +1702,7 @@ export const backfillChassisSiblings = internalMutation({
             service_type: pf.service_type,
             quantity_needed: pf.quantity_needed,
             position: pf.position,
-            confidence: Math.max((pf.confidence ?? 0) - 0.03, 0.70),
+            confidence: clonedConfidence(pf.confidence),
             source_count: 1,
             first_confirmed_at: now,
             last_confirmed_at: now,
@@ -1818,7 +2124,7 @@ export const cloneFromEngineSibling = internalMutation({
           interval_months: si.interval_months,
           status: si.status,
           display_string: si.display_string,
-          confidence: Math.max((si.confidence ?? 0) - 0.03, 0.70),
+          confidence: clonedConfidence(si.confidence),
           data_quality: "engine_clone",
           source_count: 1,
           mechanic_verified: false,
@@ -1853,7 +2159,7 @@ export const cloneFromEngineSibling = internalMutation({
           empirical_p75: lt.empirical_p75,
           source: lt.source,
           data_quality: "engine_clone",
-          confidence: Math.max((lt.confidence ?? 0) - 0.03, 0.70),
+          confidence: clonedConfidence(lt.confidence),
           engine_family: lt.engine_family,
           created_at: now,
         });
@@ -1867,8 +2173,16 @@ export const cloneFromEngineSibling = internalMutation({
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.source_config_id))
       .collect();
 
+    // I1 make guard: re-assert per part (see cloneFromChassisMatch).
+    const targetConfig = await ctx.db.get(args.target_config_id);
+
     for (const pf of sourceFitments) {
       if (!pf.service_type || !ENGINE_PART_SERVICE_TYPES.has(pf.service_type)) continue;
+      const part = await ctx.db.get(pf.part_id);
+      if (part && !(await partMakeCompatibleForWrite(ctx, part.make_id, targetConfig?.make_id))) {
+        console.log(`[engine-clone] skipping cross-make part ${part.oem_part_number} → ${args.target_config_id}`);
+        continue;
+      }
       const existing = await ctx.db
         .query("part_fitments")
         .withIndex("by_config_service", (q) =>
@@ -1883,7 +2197,7 @@ export const cloneFromEngineSibling = internalMutation({
           service_type: pf.service_type,
           quantity_needed: pf.quantity_needed,
           position: pf.position,
-          confidence: Math.max((pf.confidence ?? 0) - 0.03, 0.70),
+          confidence: clonedConfidence(pf.confidence),
           source_count: 1,
           first_confirmed_at: now,
           last_confirmed_at: now,
@@ -1961,7 +2275,7 @@ export const backfillEngineSiblings = internalMutation({
             status: si.status,
             display_string: si.display_string,
             data_quality: "engine_backfill",
-            confidence: Math.max((si.confidence ?? 0) - 0.03, 0.70),
+            confidence: clonedConfidence(si.confidence),
             source_count: 1,
             mechanic_verified: false,
             created_at: now,
@@ -1989,7 +2303,7 @@ export const backfillEngineSiblings = internalMutation({
             empirical_p75: lt.empirical_p75,
             source: lt.source,
             data_quality: "engine_backfill",
-            confidence: Math.max((lt.confidence ?? 0) - 0.03, 0.70),
+            confidence: clonedConfidence(lt.confidence),
             engine_family: lt.engine_family,
             created_at: now,
           });
@@ -1997,8 +2311,15 @@ export const backfillEngineSiblings = internalMutation({
         }
       }
 
+      // I1 make guard: re-assert per part (see cloneFromChassisMatch).
+      const siblingConfig = await ctx.db.get(siblingId);
       for (const pf of sourceFitments) {
         if (!pf.service_type || !ENGINE_PART_SERVICE_TYPES.has(pf.service_type)) continue;
+        const part = await ctx.db.get(pf.part_id);
+        if (part && !(await partMakeCompatibleForWrite(ctx, part.make_id, siblingConfig?.make_id))) {
+          console.log(`[engine-backfill] skipping cross-make part ${part.oem_part_number} → sibling ${siblingId}`);
+          continue;
+        }
         const existing = await ctx.db
           .query("part_fitments")
           .withIndex("by_config_service", (q) =>
@@ -2013,7 +2334,7 @@ export const backfillEngineSiblings = internalMutation({
             service_type: pf.service_type,
             quantity_needed: pf.quantity_needed,
             position: pf.position,
-            confidence: Math.max((pf.confidence ?? 0) - 0.03, 0.70),
+            confidence: clonedConfidence(pf.confidence),
             source_count: 1,
             first_confirmed_at: now,
             last_confirmed_at: now,

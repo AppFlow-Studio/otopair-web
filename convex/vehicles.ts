@@ -1818,3 +1818,229 @@ export const getReadiness = query({
     return { status, pendingPackages };
   },
 });
+
+// Enrichment-status sets — duplicated from v3pipeline.ts:1118 so this
+// public query doesn't have to import the pipeline module.
+const ENRICHMENT_IN_PROGRESS_STATUSES = new Set<string>([
+  "enriching",
+  "scraping",
+  "batch1",
+  "batch2",
+  "started",
+]);
+// Terminal states — bookings can proceed once a config lands here.
+// Mirrors convex/vehicles.ts:~1760 (existing booking gate constant).
+const ENRICHMENT_TERMINAL_STATUSES = new Set<string>([
+  "seeded",
+  "partial",
+  "complete",
+  "verified",
+]);
+// Typical end-to-end enrichment runtime from docs/ENRICHMENT_PIPELINE_COMPLETE.md
+// (~7 minutes async, Batch API polled every 1 min). Used as the ETA baseline
+// for the "try again in N minutes" toast on the booking flow.
+const ENRICHMENT_BASELINE_MS = 7 * 60 * 1000;
+
+/**
+ * Public read of a vehicle's enrichment status keyed by VIN. Powers the
+ * booking-flow "your car is still being prepped" toast on Screen 1.
+ *
+ * Returns `null` when the VIN doesn't resolve to a vehicle (or the vehicle
+ * has no `vehicle_config_id` yet — meaning enrichment hasn't even been
+ * scheduled). When found, returns:
+ *   - `isInProgress` — true iff status ∈ in-progress set
+ *   - `etaMinutes`   — best-effort minutes until enrichment finishes, computed
+ *     from the latest `enrichment_runs.started_at` (fallback:
+ *     `vehicle_configs._creationTime`) + the 7-minute baseline. Capped at 1
+ *     minute minimum so we never tell the user "0 minutes". Null when not
+ *     in-progress.
+ *   - `elapsedMs`    — ms since the run started. Null when not in-progress.
+ *
+ * The client decides the copy ("Try again in ~N minutes" vs the soft
+ * "almost there" message once `elapsedMs > baseline`).
+ */
+export const getEnrichmentStatusByVin = query({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    const normalizedVin = args.vin.toUpperCase().trim();
+    if (normalizedVin.length === 0) return null;
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", normalizedVin))
+      .first();
+    if (!vehicle) return null;
+
+    const configId = (vehicle as any).vehicle_config_id;
+    if (!configId) {
+      // No config attached yet. Two cases:
+      //   (1) Early window — the user JUST added this vehicle and
+      //       confirmVehicleForUser has scheduled enrichVehicleBatchV3
+      //       but STAGE 0 hasn't created the vehicle_configs row yet
+      //       (~seconds-to-tens-of-seconds gap on a cold scheduler).
+      //       Until the config exists we have nothing to read a status
+      //       off, so this query was reporting `isInProgress: false`
+      //       and the Screen 1 toast skipped.
+      //   (2) Genuinely stuck — the vehicle row has been around for a
+      //       while with no config (legacy data, never enriched, etc.).
+      //
+      // Treat case (1) as in-progress by using the vehicle row's own
+      // age: if it was created within RECENT_THRESHOLD_MS, the pipeline
+      // is almost certainly running but just hasn't stamped the config
+      // yet. Use `vehicle._creationTime` as the elapsed-time origin.
+      const RECENT_THRESHOLD_MS = 15 * 60 * 1000;
+      const vehicleCreated = (vehicle as any)._creationTime as number | undefined;
+      if (vehicleCreated != null) {
+        const elapsedMs = Math.max(0, Date.now() - vehicleCreated);
+        if (elapsedMs < RECENT_THRESHOLD_MS) {
+          const remainingMs = Math.max(0, ENRICHMENT_BASELINE_MS - elapsedMs);
+          const etaMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+          return {
+            status: null,
+            isInProgress: true,
+            etaMinutes,
+            elapsedMs,
+          };
+        }
+      }
+      return {
+        status: null,
+        isInProgress: false,
+        etaMinutes: null,
+        elapsedMs: null,
+      };
+    }
+
+    const config = await ctx.db.get(configId);
+    if (!config) return null;
+
+    const status = (config as any).enrichment_status ?? null;
+    const isInProgress =
+      typeof status === "string" && ENRICHMENT_IN_PROGRESS_STATUSES.has(status);
+
+    if (!isInProgress) {
+      return { status, isInProgress: false, etaMinutes: null, elapsedMs: null };
+    }
+
+    // Resolve a start timestamp. Prefer the latest enrichment_runs.started_at
+    // — that's the true pipeline launch. Fall back to the config's creation
+    // time if no run row exists yet (rare scheduler race).
+    const latestRun = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", configId))
+      .order("desc")
+      .first();
+    const startedAt =
+      (latestRun as any)?.started_at ?? (config as any)._creationTime ?? null;
+
+    const now = Date.now();
+    const elapsedMs = startedAt != null ? Math.max(0, now - startedAt) : 0;
+    const remainingMs = Math.max(0, ENRICHMENT_BASELINE_MS - elapsedMs);
+    // Round UP so a 30s remainder still reads as "1 minute" instead of "0".
+    const etaMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+
+    return { status, isInProgress: true, etaMinutes, elapsedMs };
+  },
+});
+
+/**
+ * Returns every active-owned vehicle for the current user with its current
+ * enrichment phase. Powers the global completion watcher that fires a
+ * persistent "your car is ready — book now" toast when a vehicle's
+ * enrichment finishes mid-session.
+ *
+ * Phase classification (client-friendly):
+ *   - "in_progress" → status ∈ in-progress set (pipeline running)
+ *   - "ready"       → status ∈ terminal set (bookable)
+ *   - "not_started" → no vehicle_config_id, or status is null
+ *
+ * Returns `null` when not authenticated. Returns `[]` when the user has
+ * no active ownerships.
+ */
+export const getMyVehiclesEnrichmentStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!user) return [];
+
+    const ownerships = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_user_status", (q) =>
+        q.eq("user_id", user._id).eq("status", "active"),
+      )
+      .collect();
+
+    const results = await Promise.all(
+      ownerships.map(async (ownership) => {
+        const vin = ownership.vin;
+        const vehicle = await ctx.db
+          .query("vehicles")
+          .withIndex("by_vin", (q) => q.eq("vin", vin))
+          .unique();
+
+        // Resolve a user-readable label. Same shape the cars page +
+        // the existing "Enriching your <car>" toast use.
+        let label = "your car";
+        if (vehicle) {
+          const trim = vehicle.trim_id ? await ctx.db.get(vehicle.trim_id) : null;
+          let make: string | null = null;
+          let model: string | null = null;
+          if (trim) {
+            const trimRow = trim as { name?: string; model_id?: any };
+            const modelRow = trimRow.model_id ? await ctx.db.get(trimRow.model_id) : null;
+            if (modelRow) {
+              const mRow = modelRow as { name?: string; make_id?: any };
+              model = mRow.name ?? null;
+              const makeRow = mRow.make_id ? await ctx.db.get(mRow.make_id) : null;
+              if (makeRow) make = (makeRow as { name?: string }).name ?? null;
+            }
+          }
+          const parts: string[] = [];
+          if (vehicle.year != null) parts.push(String(vehicle.year));
+          if (make) parts.push(make);
+          if (model) parts.push(model);
+          if (parts.length > 0) label = parts.join(" ");
+        }
+
+        const configId = (vehicle as any)?.vehicle_config_id ?? null;
+        let phase: "in_progress" | "ready" | "not_started" = "not_started";
+        let status: string | null = null;
+        if (configId) {
+          const config = await ctx.db.get(configId);
+          status = (config as any)?.enrichment_status ?? null;
+          if (typeof status === "string") {
+            if (ENRICHMENT_IN_PROGRESS_STATUSES.has(status)) phase = "in_progress";
+            else if (ENRICHMENT_TERMINAL_STATUSES.has(status)) phase = "ready";
+          }
+        } else if (vehicle) {
+          // Early-window race: vehicle row exists but vehicle_config_id
+          // isn't stamped yet (see getEnrichmentStatusByVin for the long
+          // comment). Treat as in-progress when the vehicle row is very
+          // recent so the global completion watcher also picks up the
+          // transition later (in_progress → ready) for newly-added cars.
+          const RECENT_THRESHOLD_MS = 15 * 60 * 1000;
+          const vehicleCreated = (vehicle as any)._creationTime as number | undefined;
+          if (vehicleCreated != null && Date.now() - vehicleCreated < RECENT_THRESHOLD_MS) {
+            phase = "in_progress";
+          }
+        }
+
+        return {
+          vin,
+          label,
+          ownershipId: String(ownership._id),
+          status,
+          phase,
+        };
+      }),
+    );
+
+    return results;
+  },
+});

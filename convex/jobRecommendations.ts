@@ -248,6 +248,10 @@ export async function submitRecommendationsForBooking(
     };
     jobActualId: Id<"job_actuals">;
     mechanicId: Id<"mechanics">;
+    // Provenance for the whole batch. Defaults to "post_job" when omitted.
+    source?: string;
+    // Denormalized attribution stored on each rec (e.g. inspection author line).
+    authorLabel?: string;
     recommendations: Array<{
       recommended_service_id?: Id<"services"> | null;
       freeform_service_name?: string | null;
@@ -273,6 +277,8 @@ export async function submitRecommendationsForBooking(
   },
 ) {
   const { booking, jobActualId, mechanicId, recommendations, now } = args;
+  const source = args.source ?? "post_job";
+  const authorLabel = args.authorLabel;
   if (!booking.shop_id) {
     throw new Error("Cannot record recommendations before a shop is assigned.");
   }
@@ -360,6 +366,8 @@ export async function submitRecommendationsForBooking(
       scheduled_mechanic_id: rec.scheduled_mechanic_id ?? undefined,
       selected_service_option: rec.selected_service_option ?? undefined,
       tire_specs: rec.tire_specs ?? undefined,
+      source,
+      author_label: authorLabel,
       status,
       acknowledged_at: status === "acknowledged" ? now : undefined,
       created_at: now,
@@ -426,6 +434,8 @@ export const getOpenForVehicle = query({
           is_freeform: !rec.recommended_service_id,
           urgency: rec.urgency,
           reason: rec.reason ?? null,
+          source: rec.source ?? "post_job",
+          author_label: rec.author_label ?? null,
           created_at: rec.created_at,
         };
       }),
@@ -491,8 +501,19 @@ export const getDriverVisibleRecsForVehicle = query({
           scheduled_mechanic_name: scheduledMechanicName,
           selected_service_option: rec.selected_service_option ?? null,
           tire_specs: rec.tire_specs ?? null,
+          source: rec.source ?? "post_job",
+          // Attribution line — falls back to a sensible default for legacy rows.
+          author_label:
+            rec.author_label ??
+            (rec.source === "inspection"
+              ? `Based on last inspection @ ${shop?.name ?? "the shop"}`
+              : shop?.name
+                ? `Recommended by ${shop.name}`
+                : null),
           provenance: {
-            kind: "mechanic" as const,
+            kind: (rec.source === "inspection" ? "inspection" : "mechanic") as
+              | "inspection"
+              | "mechanic",
             shop_id: rec.shop_id,
             mechanic_id: rec.mechanic_id,
           },
@@ -555,6 +576,14 @@ export const getRecHistoryForVehicle = query({
           shop_name: shop?.name ?? null,
           mechanic_id: rec.mechanic_id,
           mechanic_name: mechanicName,
+          source: rec.source ?? "post_job",
+          author_label:
+            rec.author_label ??
+            (rec.source === "inspection"
+              ? `Based on last inspection @ ${shop?.name ?? "the shop"}`
+              : shop?.name
+                ? `Recommended by ${shop.name}`
+                : null),
           created_at: rec.created_at,
           updated_at: rec.updated_at ?? rec.created_at,
           status: rec.status,

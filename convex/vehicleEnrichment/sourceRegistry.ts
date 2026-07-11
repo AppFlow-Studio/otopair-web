@@ -35,6 +35,49 @@ export const BLOCKED_DOMAINS = [
   "chargerforums.com",              // Wrong make entirely (used for BMW in R6)
 ];
 
+/**
+ * Marketplaces — never valid OEM part-price sources. Listings mix third-party
+ * sellers, variants, and "frequently bought together" prices on one page, and
+ * pages rarely echo the OEM number cleanly, so extraction cannot positively
+ * tie a price to the target part (Jul 2026: a rear-brake-pad row was priced
+ * $31.78 from an Amazon FRONT-pad listing). Enforced at every price choke
+ * point: Batch-2 URL ingest, priceAllSources/reextract spend, and the
+ * upsertPartPrice write boundary.
+ */
+export const MARKETPLACE_DOMAINS = [
+  "ebay.com",
+  "amazon.com",
+  "walmart.com",
+  "alibaba.com",
+  "aliexpress.com",
+  "wish.com",
+  "temu.com",
+  "facebook.com",
+  "craigslist.org",
+  "offerup.com",
+  "mercari.com",
+];
+
+/** www-stripped hostname of a URL, or null if unparseable. */
+export function domainOfUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+export function isMarketplaceDomain(domain: string | null | undefined): boolean {
+  if (!domain) return false;
+  const d = domain.replace(/^www\./, "");
+  return MARKETPLACE_DOMAINS.some((m) => d === m || d.endsWith("." + m));
+}
+
+export function isMarketplaceUrl(url: string | null | undefined): boolean {
+  return isMarketplaceDomain(domainOfUrl(url));
+}
+
 // ─── Interface ────────────────────────────────────────────────────
 
 export interface MakeSourceConfig {

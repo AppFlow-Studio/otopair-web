@@ -29,7 +29,8 @@ RULES:
    - Toyota: 5-5 alphanumeric (e.g., 04152-YZZA1)
    - Honda: segmented alphanumeric (e.g., 15400-PLM-A02)
    If the format doesn't match, return null.
-5. Return VALID JSON only. No markdown fences, no explanation, no preamble.
+5. Return OEM part numbers as JSON STRINGS exactly as printed, preserving leading zeros (e.g. "07119963130", never the bare number 7119963130 — an unquoted number silently loses the leading zero and the part is rejected).
+6. Return VALID JSON only. No markdown fences, no explanation, no preamble.
 
 WIPER BLADE FIELDS:
 - wiper_blade_set_oem: front-pair part number. Front driver + passenger blades are usually sold as a single matched set; return that part number. If they are sold separately and the part numbers differ, return the driver-side part number.

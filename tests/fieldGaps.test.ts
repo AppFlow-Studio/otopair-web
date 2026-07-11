@@ -52,3 +52,48 @@ describe("classifyFieldGaps", () => {
     expect(gaps).toHaveLength(5);
   });
 });
+
+describe("classifyFieldGaps — blocked_on_identity", () => {
+  it("ledgers identity-dependent nulls as blocked when the input is unknown", () => {
+    const fields = allFilled();
+    // drivetrain unknown → transfer-case fields cannot be ruled in or out
+    fields["drivetrain"] = { ...emptyField() };
+    fields["transfer_case_fluid_type"] = { ...emptyField() };
+    const gaps = classifyFieldGaps(fields, [], {
+      drivetrain: null,
+      transmission_type: "automatic",
+      body_class: "sedan",
+    });
+    const byField = new Map(gaps.map((g) => [g.field, g.reason]));
+    expect(byField.get("transfer_case_fluid_type")).toBe("blocked_on_identity:drivetrain");
+    expect(byField.get("drivetrain")).toBe("llm_null");
+  });
+
+  it("stays llm_null when the governing identity input IS known", () => {
+    const fields = allFilled();
+    fields["drivetrain"] = { ...emptyField(), value: "AWD" };
+    fields["transfer_case_fluid_type"] = { ...emptyField() };
+    const gaps = classifyFieldGaps(fields, [], {
+      drivetrain: null, // field-level value takes priority, mirrors the rules
+      transmission_type: null,
+      body_class: null,
+    });
+    const byField = new Map(gaps.map((g) => [g.field, g.reason]));
+    expect(byField.get("transfer_case_fluid_type")).toBe("llm_null");
+  });
+
+  it("covers CVT filters and rear wiper dependencies", () => {
+    const fields = allFilled();
+    fields["transmission_type"] = { ...emptyField() };
+    fields["cvt_internal_filter_oem"] = { ...emptyField() };
+    fields["rear_wiper_size"] = { ...emptyField() };
+    const gaps = classifyFieldGaps(fields, [], {
+      drivetrain: "RWD",
+      transmission_type: null,
+      body_class: null,
+    });
+    const byField = new Map(gaps.map((g) => [g.field, g.reason]));
+    expect(byField.get("cvt_internal_filter_oem")).toBe("blocked_on_identity:transmission_type");
+    expect(byField.get("rear_wiper_size")).toBe("blocked_on_identity:body_class");
+  });
+});

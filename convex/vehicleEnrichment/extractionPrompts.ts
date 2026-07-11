@@ -176,7 +176,7 @@ ${sourceBlock(sources, "PRE-GATHERED: OEM Parts & Catalog Pages")}
    - Ford: alphanumeric with dashes
    - GM: 8-digit (e.g. 55594651)
 5. Aftermarket "replaces OEM #" listings: extract the OEM number referenced, use confidence 0.7.
-6. Part numbers with spaces are fine — return digits only (e.g. "11 42 8 570 590" → "11428570590").
+6. Part numbers with spaces are fine — return digits only (e.g. "11 42 8 570 590" → "11428570590"). Always as a JSON STRING preserving leading zeros (e.g. "07119963130", never the bare number 7119963130).
 
 ## SEARCH STRATEGY
 Check source material FIRST. Then use web_search aggressively — you have ${10} searches available:

@@ -164,10 +164,15 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   gmc: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2}-\d{3,4}[A-Z]?)$/i,
   cadillac: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2}-\d{3,4}[A-Z]?)$/i,
   buick: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2}-\d{3,4}[A-Z]?)$/i,
-  // Hyundai/Kia/Genesis: XXXXX-XXXXX
-  hyundai: /^\d{5}-?[A-Z0-9]{5}$/i,
-  kia: /^\d{5}-?[A-Z0-9]{5}$/i,
-  genesis: /^\d{5}-?[A-Z0-9]{5}$/i,
+  // Hyundai/Kia/Genesis: XXXXX-XXXXX parts, plus chemical/accessory SKUs with
+  // a third block or revision suffix (00232-FSYN5-30WAR engine oil,
+  // 08950-00020-B gear oil) — the plain 5-5 pattern rejected every fluid SKU
+  // (2015 Veloster Turbo, Jul 2026 — same failure class as the VAG G-numbers).
+  // Suffix block requires its literal dash — with it optional, any bare
+  // 11-digit string (a BMW number) parsed as 5+5+1 and slipped through.
+  hyundai: /^\d{5}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
+  kia: /^\d{5}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
+  genesis: /^\d{5}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
   // VW/Audi/Porsche (VAG): AAA BBB CCC (+ up to 2-char suffix), first block
   // alphanumeric (06L115562B); old pattern required a digits-only first block.
   // Second alternation: VAG fluid/chemical G- and B-numbers — G + 3 digits +
@@ -380,6 +385,22 @@ function isPlausiblePartNumber(value: string): boolean {
 }
 
 /**
+ * Makes whose digit-only part numbers have a FIXED canonical length, so a
+ * value that lost leading zeros (JSON-number extraction, upstream numeric
+ * coercion) fails the make pattern and can be safely restored by left-padding.
+ * Only fixed-length formats qualify: for GM/Mopar/Volvo a zero-stripped
+ * number still matches a shorter valid format, so padding there would corrupt
+ * legitimate short SKUs. Found live on the 2001 BMW 740iA (Jul 11 2026):
+ * 07119963130 arrived as 7119963130 and three real parts were rejected.
+ */
+const SALVAGE_DIGIT_LENGTHS: Record<string, number> = {
+  bmw: 11,
+  mini: 11,
+  mercedes: 10,
+  mercedesbenz: 10,
+};
+
+/**
  * Validate a part number against known OEM patterns.
  * Returns the cleaned part number or null if it's hallucinated garbage,
  * carries another manufacturer's brand signature, or fails its own make's
@@ -410,6 +431,24 @@ export function sanitizePartNumber(value: string, makeName?: string): string | n
     const makeKey = makeName.toLowerCase().replace(/[-\s]/g, "");
     const pattern = OEM_PART_PATTERNS[makeKey];
     if (pattern && !pattern.test(cleaned)) {
+      // Leading-zero salvage: digit-only value 1-2 chars short of the make's
+      // fixed canonical length — restore the zeros iff the padded form passes.
+      const canonicalLen = SALVAGE_DIGIT_LENGTHS[makeKey];
+      if (
+        process.env.PARTS_SALVAGE_LEADING_ZERO !== "off" &&
+        canonicalLen &&
+        /^\d+$/.test(cleaned) &&
+        cleaned.length < canonicalLen &&
+        canonicalLen - cleaned.length <= 2
+      ) {
+        const padded = cleaned.padStart(canonicalLen, "0");
+        if (pattern.test(padded)) {
+          console.log(
+            `[sanitize] SALVAGED leading zero: "${cleaned}" → "${padded}" for make=${makeName}`,
+          );
+          return padded;
+        }
+      }
       console.log(
         `[sanitize] REJECTED part number "${cleaned}" for make=${makeName}: fails ${makeKey} format`,
       );

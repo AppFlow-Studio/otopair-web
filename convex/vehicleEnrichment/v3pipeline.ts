@@ -35,13 +35,16 @@ import { runSanityChecks, normalizeOilViscosity, aggregateFieldConfidence } from
 import { resolveCapacities } from "./capacityResolver";
 import { validateAllOemParts } from "./validation/oemValidation";
 import { BLOCKED_DOMAINS, isMarketplaceUrl } from "./sourceRegistry";
-import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts } from "./applicabilityRules";
+import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts, applyFinalizeApplicability, IDENTITY_DEPENDENT_FIELDS } from "./applicabilityRules";
+import { deriveIdentityFromTrim, mergeIdentity } from "./identityResolution";
+import { computeEnrichmentStatus, explainGateDecision } from "./completionGate";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
 import { reextractPartPrice, isAffirmativeRejection, priceAllSources } from "./priceReextract";
 import { extractPriceFirecrawl } from "./firecrawl";
 import { discoverPriceUrls, prioritizeDiscoveryQueue, type DiscoveryQueueItem } from "./priceDiscovery";
 import { computeQuotability, type QuotabilityResult } from "./quotability";
+import { SERVICE_PARTS_REFERENCE, type PartRoleSpec } from "../lib/servicePartsReference";
 import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
 import {
@@ -73,10 +76,21 @@ const MAKES_WITH_BRAKE_PAD_SENSORS = new Set([
 
 // ─── Field Parsing (copied from pipelineBatch.ts — same logic) ────
 
-function parseField(raw: any): FieldResult {
+/** Fields whose string values must survive verbatim — numeric coercion via
+ *  parseFloat destroys leading zeros, and OEM part numbers carry them (BMW
+ *  "07119963130" → 7119963130 → 10 digits → fails the 11-digit make pattern
+ *  → oem_part_rejected; found live on the 2001 740iA, Jul 11 2026).
+ *  battery_group values like "49" are catalog strings too. Exported for tests. */
+export function isVerbatimStringField(fieldKey: string | undefined): boolean {
+  if (!fieldKey) return false;
+  return fieldKey.endsWith("_oem") || fieldKey === "battery_group";
+}
+
+/** Exported for tests. */
+export function parseField(raw: any, fieldKey?: string): FieldResult {
   if (!raw || raw.value === undefined) return emptyField();
   let value = raw.value ?? null;
-  if (typeof value === "string") {
+  if (typeof value === "string" && !isVerbatimStringField(fieldKey)) {
     // Parse price strings "$45.00" → 45.00
     if (value.startsWith("$")) {
       const n = parseFloat(value.replace(/[$,]/g, ""));
@@ -160,7 +174,7 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
     // coolant_flush / transmission_service discovery (2026-07)
     "thermostat_oem", "thermostat_gasket_oem",
     "cvt_internal_filter_oem", "cvt_external_filter_oem"]) {
-    f[k] = parseField(parts[k]);
+    f[k] = parseField(parts[k], k);
   }
 
   // Pricing from parts pages
@@ -171,7 +185,7 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
 
   // Battery & electrical
   const battery = data.battery ?? {};
-  f.battery_group = parseField(battery.battery_group);
+  f.battery_group = parseField(battery.battery_group, "battery_group");
   f.battery_cca = parseField(battery.battery_cca);
   f.battery_type = parseField(battery.battery_type);
   f.battery_location = parseField(battery.battery_location);
@@ -231,7 +245,7 @@ function parsePackageParts(data: Record<string, any>): Map<string, Record<string
     const fields: Record<string, FieldResult> = {};
     let any = false;
     for (const k of partKeys) {
-      const parsed = parseField(parts[k]);
+      const parsed = parseField(parts[k], k);
       // Only carry through fields with a real value — null overrides aren't meaningful here.
       if (parsed.value != null) {
         fields[k] = parsed;
@@ -325,15 +339,35 @@ function calculateFlatFillRate(fields: Record<string, FieldResult>): number {
  *   never_asked          — field key absent from the merged field map
  *   not_applicable       — deliberately nulled by applicability rules (final)
  *   validation_dropped:X — extracted, then nulled by sanity/authority/sanitize
+ *   blocked_on_identity:X — null AND its applicability rule couldn't run
+ *                           because identity input X is unknown (the field may
+ *                           be physically absent from the vehicle)
  *   llm_null             — asked in every batch, no source produced a value
  */
 export function classifyFieldGaps(
   fields: Record<string, FieldResult>,
   sanityFlags: Array<{ field: string; severity: string; reason: string }>,
+  identity?: {
+    drivetrain: string | null;
+    transmission_type: string | null;
+    body_class: string | null;
+  } | null,
 ): Array<{ field: string; reason: string }> {
   const rejectedBySanity = new Map<string, string>();
   for (const f of sanityFlags) {
     if (f.severity === "reject") rejectedBySanity.set(f.field, f.reason);
+  }
+  // Reverse map: field → the UNKNOWN identity input that would have decided
+  // its applicability. Field-level values take priority over the decode
+  // identity, mirroring applyApplicabilityRules' own input resolution.
+  const blockedBy = new Map<string, string>();
+  for (const [input, depFields] of Object.entries(IDENTITY_DEPENDENT_FIELDS)) {
+    const known =
+      (fields[input]?.value as string | null) ??
+      (identity ? (identity as any)[input] : null);
+    if (known == null) {
+      for (const df of depFields) blockedBy.set(df, input);
+    }
   }
   const gaps: Array<{ field: string; reason: string }> = [];
   for (const k of V4_FIELD_KEYS) {
@@ -354,6 +388,11 @@ export function classifyFieldGaps(
     }
     if (f.flagged && f.flag_reason) {
       gaps.push({ field: k, reason: `validation_dropped:${f.flag_reason}` });
+      continue;
+    }
+    const blockingInput = blockedBy.get(k);
+    if (blockingInput) {
+      gaps.push({ field: k, reason: `blocked_on_identity:${blockingInput}` });
       continue;
     }
     gaps.push({ field: k, reason: "llm_null" });
@@ -519,7 +558,7 @@ function parseBatch2(
   for (const k of nullFields) {
     const raw = gapData[k];
     if (raw && !isRejectedPriceUrl(raw.source_url)) {
-      const f = parseField(raw);
+      const f = parseField(raw, k);
       if (f.value != null) {
         f.source_type = f.source_url ? "web_search" : "gap_fill";
         gapFields[k] = f;
@@ -701,6 +740,82 @@ export const PART_FIELD_MAP: Record<string, {
   brake_wear_sensor_front_oem: { name: "Brake Wear Sensor (Front)", category: "brake", subcategory: "front_brake_wear_sensor", serviceSlug: "brake_pad_replacement", serviceRole: "as_needed", position: "front" },
   brake_wear_sensor_rear_oem: { name: "Brake Wear Sensor (Rear)", category: "brake", subcategory: "rear_brake_wear_sensor", serviceSlug: "brake_pad_replacement", serviceRole: "as_needed", position: "rear" },
 };
+
+// ─── Batch-3 gap-fill priority ───────────────────────────────────
+// The re-ask pass is capped (PARTS_GAPFILL_MAX_FIELDS, default 15) and used
+// to slice getNullFields() in V4_FIELD_KEYS declaration order — battery_oem
+// (a core role with no universalFallback: missing it singly zeroes
+// battery_replacement's quotability) competed with cosmetic fields for the
+// cap (2001 740iA: battery_oem stayed llm_null, service unbookable).
+
+/** roleKey (== oem_parts.subcategory) → reference role spec, first-declared wins. */
+const ROLE_SPEC_BY_KEY: Map<string, PartRoleSpec> = (() => {
+  const m = new Map<string, PartRoleSpec>();
+  for (const svc of Object.values(SERVICE_PARTS_REFERENCE)) {
+    for (const role of svc.roles) {
+      if (!m.has(role.roleKey)) m.set(role.roleKey, role);
+    }
+  }
+  return m;
+})();
+
+/** Capacity/spec fields that feed quantity resolution at quote time. */
+const QUANTITY_SPEC_FIELDS = new Set([
+  "oil_capacity_qts",
+  "coolant_capacity_qts",
+  "brake_fluid_capacity_oz",
+  "transmission_fluid_capacity_qts",
+  "diff_fluid_capacity_qts",
+  "transfer_case_fluid_capacity_qts",
+  "ps_fluid_capacity_oz",
+  "spark_plug_quantity",
+]);
+
+/**
+ * Order gap-fill candidates by quotability impact (stable within a tier):
+ *   P0 — core-role parts with NO universalFallback and no where_equipped /
+ *        if_found_bad condition: a miss singly zeroes a service's quotability
+ *   P1 — remaining core-role part fields
+ *   P2 — capacity/spec fields feeding quantity resolution
+ *   P3 — everything else
+ *   P4 — identity-blocked dependents while their identity input is unknown
+ *        (searching "transfer case fluid" for an unknown-drivetrain car burns
+ *        budget on a part the vehicle may not have)
+ * Exported for tests. Pure.
+ */
+export function rankGapFillFields(
+  nullFields: string[],
+  identity?: {
+    drivetrain: string | null;
+    transmission_type: string | null;
+    body_class: string | null;
+  } | null,
+): string[] {
+  const identityBlocked = new Set<string>();
+  for (const [input, depFields] of Object.entries(IDENTITY_DEPENDENT_FIELDS)) {
+    const known = identity ? (identity as any)[input] : null;
+    if (known == null) for (const df of depFields) identityBlocked.add(df);
+  }
+  const tier = (k: string): number => {
+    if (identityBlocked.has(k)) return 4;
+    const part = PART_FIELD_MAP[k];
+    if (part) {
+      if (part.serviceRole !== "core") return 3;
+      const role = ROLE_SPEC_BY_KEY.get(part.subcategory);
+      const hasEscape =
+        !!role?.universalFallback ||
+        role?.condition === "where_equipped" ||
+        role?.condition === "if_found_bad";
+      return hasEscape ? 1 : 0;
+    }
+    if (QUANTITY_SPEC_FIELDS.has(k)) return 2;
+    return 3;
+  };
+  return nullFields
+    .map((k, i) => ({ k, i, t: tier(k) }))
+    .sort((a, b) => a.t - b.t || a.i - b.i)
+    .map((e) => e.k);
+}
 
 /** Map interval field prefix to service slug. */
 const INTERVAL_TO_SERVICE: Record<string, string> = {
@@ -1484,6 +1599,18 @@ export const enrichVehicleBatchV3 = internalAction({
     // VDB advanced decode — runs once, cached by VIN. Fields used in Step 6b/6e.
     const vdbRaw = vehicleDoc.vin ? await advancedVinDecode(vehicleDoc.vin) : null;
     const vdbFields = vdbRaw ? extractVDBFields(vdbRaw) : null;
+
+    // Identity gap-fill: the applicability rules fail OPEN when drivetrain /
+    // transmission_type / body_class are null (2001 740iA: no rule fired on a
+    // RWD sedan and 9 impossible fields ended as llm_null gaps). Fill nulls
+    // from the VDB decode and the trim string before vPicData flows anywhere.
+    {
+      const trimDerived = deriveIdentityFromTrim(args.trim);
+      vPicData = mergeIdentity(vPicData, vdbFields, trimDerived);
+      console.log(
+        `[v8] Identity after merge: drivetrain=${vPicData.drivetrain}, transmission=${vPicData.transmission_type}, body=${vPicData.body_class}`,
+      );
+    }
 
     // Package detection — flags packages available for this trim that affect 1+ of
     // the 23 services. Stored on vehicle_configs.packages_available (after the upsert
@@ -2275,9 +2402,30 @@ async function runPollBatch1Body(
         duration_ms: Date.now() - args.startTime,
         fill_rate: partsFillRate,
       });
+      // Quotability isn't computed on the parts-only path — reuse the latest
+      // full run's persisted snapshot so a parts refresh can't silently flip
+      // an unquotable config to complete on fill alone.
+      let priorQuotabilityPct: number | null = null;
+      let priorHadPriceGaps = false;
+      try {
+        const latestRun = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        priorQuotabilityPct = (latestRun as any)?.quotability?.pct ?? null;
+        priorHadPriceGaps = ((latestRun as any)?.field_gaps ?? []).some(
+          (g: any) => typeof g?.field === "string" && g.field.startsWith("part_price:"),
+        );
+      } catch (e) {
+        console.warn("[v8/_pollBatch1] prior quotability read failed (non-fatal):", e);
+      }
       await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
         vehicle_config_id: args.vehicleConfigId,
-        enrichment_status: partsFillRate >= 70 ? "complete" : "partial",
+        enrichment_status: computeEnrichmentStatus({
+          fillRate: partsFillRate,
+          quotabilityPct: priorQuotabilityPct,
+          hasPriceGaps: priorHadPriceGaps,
+        }),
         fill_rate: partsFillRate,
         last_enriched_at: Date.now(),
       });
@@ -2496,7 +2644,18 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       // run's field_gaps ledger instead.
       if (process.env.PARTS_GAPFILL !== "off") {
         const gapFillMax = Number(process.env.PARTS_GAPFILL_MAX_FIELDS ?? "15");
-        const stillNull = getNullFields(allFields).slice(0, gapFillMax);
+        // Rank by quotability impact before slicing to the cap — core-role
+        // parts without a fallback (battery) must not lose their re-ask slot
+        // to cosmetic fields. Field-level identity wins over trim tokens.
+        const gfTrimIdentity = deriveIdentityFromTrim(args.trim);
+        const stillNull = rankGapFillFields(getNullFields(allFields), {
+          drivetrain:
+            (allFields.drivetrain?.value as string | null) ?? gfTrimIdentity.drivetrain,
+          transmission_type:
+            (allFields.transmission_type?.value as string | null) ??
+            gfTrimIdentity.transmission_type,
+          body_class: gfTrimIdentity.body_class,
+        }).slice(0, gapFillMax);
         if (stillNull.length > 0) {
           try {
             const gfVehicle: VehicleInput = {
@@ -2555,6 +2714,20 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       { vehicleId: args.vehicleId },
     );
     const cylinders = enginePicData?.cylinders ?? 4;
+
+    // Re-apply applicability with everything we know NOW: Batch 2/3 may have
+    // resolved drivetrain/transmission_type that Batch 1 didn't have, and the
+    // trim string carries body/transmission tokens the decode lacked (2001
+    // 740iA). Then convert residual N/A-by-elimination nulls (chain-engine
+    // timing service) so they ledger as not_applicable, not llm_null.
+    const finalIdentity = mergeIdentity(
+      enginePicData,
+      null,
+      deriveIdentityFromTrim(args.trim),
+    );
+    allFields = applyApplicabilityRules(allFields, finalIdentity);
+    allFields = applyFinalizeApplicability(allFields);
+
     const sanityFlags = runSanityChecks(allFields, cylinders);
     const oemFlags = validateAllOemParts(allFields, vehicle.make);
     if (sanityFlags.length > 0) console.log(`[v8] Sanity: ${sanityFlags.length} flags (applied before write)`);
@@ -3203,16 +3376,23 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // slow a healer for a fresh config (wave-1 stress fleet: 17-22 parts/run
     // deferred, quotability cratered until the next morning). Schedule the
     // TARGETED zero-price backfill for this config immediately, in its own
-    // action budget. Capped at 12 parts so the backfill action itself stays
-    // inside the 600s limit; anything left goes to the nightly sweep.
+    // action budget. The per-action cap keeps the backfill inside the 600s
+    // limit; leftovers re-chain (bounded) before falling to the nightly sweep.
+    // unverified-source parts count too — their poison rows hide them from
+    // the old any-row scan and they'd otherwise never be retried (740iA: 6).
     const deferredPriceCount = priceGaps.filter(
-      (g) => g.reason === "price_deferred_timeout" || g.reason === "price_budget_exhausted",
+      (g) =>
+        g.reason === "price_deferred_timeout" ||
+        g.reason === "price_budget_exhausted" ||
+        g.reason === "price_unverified_sources",
     ).length;
     if (deferredPriceCount > 0) {
+      const immediateCap = Number(process.env.PARTS_PRICE_IMMEDIATE_BACKFILL_CAP ?? "12");
       await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.priceRefresh.refreshStalePrices, {
         budget: 0,
-        backfillBudget: Math.min(deferredPriceCount, 12),
+        backfillBudget: Math.min(deferredPriceCount, immediateCap),
         vehicleConfigId: args.vehicleConfigId,
+        maxChainDepth: Number(process.env.PARTS_PRICE_BACKFILL_CHAIN_DEPTH ?? "2"),
       });
       console.log(
         `[v8/price] scheduled follow-up backfill for ${deferredPriceCount} deferred/budget-skipped part(s)`,
@@ -3270,6 +3450,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       console.log(`[v8] Confidence avg: ${confidenceAvg.toFixed(3)} from ${allEvidence.length} evidence rows`);
     }
 
+    // Applicable-fill headline metrics — not_applicable fields drop OUT of the
+    // denominator so a RWD sedan isn't penalized for lacking a transfer case
+    // (the 740iA read 72% when its applicable coverage was ~90%).
+    const fieldsFilledCount = V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null).length;
+    const fieldsNotApplicable = V4_FIELD_KEYS.filter(
+      (k) => allFields[k]?.value == null && allFields[k]?.flag_reason === "not_applicable",
+    ).length;
+    const applicableFillRate = Math.round(
+      (fieldsFilledCount / Math.max(1, V4_FIELD_KEYS.length - fieldsNotApplicable)) * 100,
+    );
+
     // Update enrichment run. A batch-2 timeout still finalizes (batch-1 data
     // is real and the config gets its normal terminal status below) but the
     // run records 'timeout' — not a fake 'complete' (review item 6).
@@ -3281,8 +3472,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       total_web_searches: totalWebSearches,
       completed_at: Date.now(),
       duration_ms: durationMs,
-      fields_filled: V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null).length,
+      fields_filled: fieldsFilledCount,
       fields_total: V4_FIELD_KEYS.length,
+      fields_not_applicable: fieldsNotApplicable,
+      applicable_fill_rate: applicableFillRate,
       fill_rate: fillRate,
       fields_changed: V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null),
       errors: [
@@ -3310,7 +3503,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           value: f.value != null ? String(f.value) : undefined,
         })),
       ],
-      field_gaps: [...classifyFieldGaps(allFields, sanityFlags), ...priceGaps],
+      field_gaps: [...classifyFieldGaps(allFields, sanityFlags, finalIdentity), ...priceGaps],
       quotability,
     });
 
@@ -3332,7 +3525,16 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       drivetrain: (allFields.drivetrain?.value as string) ?? currentVcForFinal?.drivetrain ?? "FWD",
       trim_name: args.trim,
       trim_slug: slugify(args.trim),
-      enrichment_status: fillRate >= 70 ? "complete" : "partial",
+      enrichment_status: (() => {
+        const gate = {
+          fillRate,
+          quotabilityPct: quotability?.pct,
+          hasPriceGaps: priceGaps.length > 0,
+        };
+        const status = computeEnrichmentStatus(gate);
+        console.log(`[v8] Completion gate → ${status}: ${explainGateDecision(gate)}`);
+        return status;
+      })(),
       fill_rate: fillRate,
       enrichment_version: "v8",
     });
@@ -3522,7 +3724,13 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
           vehicle_config_id: args.vehicleConfigId,
           fill_rate: finalFillRate,
-          enrichment_status: finalFillRate >= 70 ? "complete" : "partial",
+          // Same two-leg gate as the finalize upsert — a fill-only improvement
+          // must not flip an unquotable config to complete.
+          enrichment_status: computeEnrichmentStatus({
+            fillRate: finalFillRate,
+            quotabilityPct: quotability?.pct,
+            hasPriceGaps: priceGaps.length > 0,
+          }),
         });
       }
     } catch (e) {

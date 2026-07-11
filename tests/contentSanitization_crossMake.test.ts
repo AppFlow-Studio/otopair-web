@@ -100,3 +100,20 @@ describe("sanitizePartNumber — per-make format enforcement", () => {
     expect(sanitizePartNumber("1067701-00-A", "Tesla")).toBe("1067701-00-A");
   });
 });
+
+describe("sanitizePartNumber — Hyundai chemical/accessory SKUs (Veloster Turbo case)", () => {
+  it("accepts fluid SKUs with a third block or revision suffix", () => {
+    expect(sanitizePartNumber("00232-FSYN5-30WAR", "Hyundai")).toBe("00232-FSYN5-30WAR");
+    expect(sanitizePartNumber("08950-00020-B", "Hyundai")).toBe("08950-00020-B");
+  });
+
+  it("still accepts the plain 5-5 part format", () => {
+    expect(sanitizePartNumber("26300-35505", "Hyundai")).toBe("26300-35505");
+    expect(sanitizePartNumber("28113-2V100", "Kia")).toBe("28113-2V100");
+  });
+
+  it("still rejects wrong-make formats for Hyundai", () => {
+    expect(sanitizePartNumber("11428583898", "Hyundai")).toBeNull(); // BMW 11-digit
+    expect(sanitizePartNumber("BC3Z-6731-B", "Hyundai")).toBeNull(); // Ford OE
+  });
+});

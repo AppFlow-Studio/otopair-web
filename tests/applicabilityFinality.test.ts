@@ -11,7 +11,7 @@
  *    allowlisted gap-fill resurrected them.
  */
 import { describe, expect, it } from "vitest";
-import { applyApplicabilityRules } from "../convex/vehicleEnrichment/applicabilityRules";
+import { applyApplicabilityRules, applyFinalizeApplicability } from "../convex/vehicleEnrichment/applicabilityRules";
 import { getNullFields } from "../convex/vehicleEnrichment/v3pipeline";
 import { emptyField, V4_FIELD_KEYS } from "../convex/vehicleEnrichment/types";
 
@@ -112,5 +112,78 @@ describe("getNullFields — not_applicable nulls are FINAL", () => {
     expect(nulls).not.toContain("water_pump_oem");
     // a plain unfilled field is still a gap for Batch 2
     expect(nulls).toContain("oil_filter_oem");
+  });
+});
+
+describe("sedan rule covers the rear wiper OEM part too", () => {
+  it("sedan body → rear_wiper_size AND wiper_blade_rear_oem not_applicable", () => {
+    const fields = allFields();
+    applyApplicabilityRules(fields, { body_class: "Sedan/Saloon" } as any);
+    expect(fields.rear_wiper_size.flag_reason).toBe("not_applicable");
+    expect(fields.wiper_blade_rear_oem.flag_reason).toBe("not_applicable");
+  });
+
+  it("preserves an explicitly-sourced rear wiper value on a sedan", () => {
+    const fields = allFields();
+    fields.wiper_blade_rear_oem = { ...emptyField(), value: "61627074477" };
+    applyApplicabilityRules(fields, { body_class: "Sedan" } as any);
+    expect(fields.wiper_blade_rear_oem.value).toBe("61627074477");
+  });
+});
+
+describe("applyFinalizeApplicability — chain timing service N/A by elimination", () => {
+  it("converts residual null timing_service_* + labor to not_applicable on chain engines", () => {
+    const fields = allFields();
+    fields.timing_system = { ...emptyField(), value: "chain" };
+    applyFinalizeApplicability(fields);
+    for (const k of ["timing_service_miles", "timing_service_months", "estimated_labor_timing_service_hrs"]) {
+      expect(fields[k].value, k).toBeNull();
+      expect(fields[k].flag_reason, k).toBe("not_applicable");
+    }
+  });
+
+  it("preserves legitimate chain inspect-guidance values", () => {
+    const fields = allFields();
+    fields.timing_system = { ...emptyField(), value: "chain" };
+    fields.timing_service_miles = { ...emptyField(), value: 100000 };
+    applyFinalizeApplicability(fields);
+    expect(fields.timing_service_miles.value).toBe(100000);
+    expect(fields.timing_service_months.flag_reason).toBe("not_applicable");
+  });
+
+  it("leaves belt engines untouched (timing service is real work)", () => {
+    const fields = allFields();
+    fields.timing_system = { ...emptyField(), value: "belt" };
+    applyFinalizeApplicability(fields);
+    expect(fields.timing_service_miles.flag_reason).not.toBe("not_applicable");
+  });
+});
+
+describe("manual transmission nulls ATF service parts (2015 Veloster Turbo)", () => {
+  it("manual → atf_fluid / trans_filter / trans_pan_gasket not_applicable; gear oil stays searchable", () => {
+    const fields = allFields();
+    fields.transmission_type = { ...emptyField(), value: "manual" };
+    applyApplicabilityRules(fields, null);
+    for (const k of ["atf_fluid_oem", "trans_filter_oem", "trans_pan_gasket_oem"]) {
+      expect(fields[k].flag_reason, k).toBe("not_applicable");
+    }
+    expect(fields.gear_oil_oem.flag_reason).not.toBe("not_applicable");
+    // CVT rule also fires (manual is not a CVT)
+    expect(fields.cvt_internal_filter_oem.flag_reason).toBe("not_applicable");
+  });
+
+  it("DCT keeps ATF service parts searchable (dual-clutch boxes have fluid service)", () => {
+    const fields = allFields();
+    fields.transmission_type = { ...emptyField(), value: "DCT" };
+    applyApplicabilityRules(fields, null);
+    expect(fields.atf_fluid_oem.flag_reason).not.toBe("not_applicable");
+  });
+
+  it("automatic keeps ATF service parts searchable", () => {
+    const fields = allFields();
+    fields.transmission_type = { ...emptyField(), value: "automatic" };
+    applyApplicabilityRules(fields, null);
+    expect(fields.atf_fluid_oem.flag_reason).not.toBe("not_applicable");
+    expect(fields.trans_pan_gasket_oem.flag_reason).not.toBe("not_applicable");
   });
 });

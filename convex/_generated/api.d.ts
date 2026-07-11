@@ -296,6 +296,7 @@ import type * as vehicleEnrichment_buildSearchQueries from "../vehicleEnrichment
 import type * as vehicleEnrichment_cacheValidation from "../vehicleEnrichment/cacheValidation.js";
 import type * as vehicleEnrichment_capacityResolver from "../vehicleEnrichment/capacityResolver.js";
 import type * as vehicleEnrichment_claudeExtractor from "../vehicleEnrichment/claudeExtractor.js";
+import type * as vehicleEnrichment_completionGate from "../vehicleEnrichment/completionGate.js";
 import type * as vehicleEnrichment_contentSanitization from "../vehicleEnrichment/contentSanitization.js";
 import type * as vehicleEnrichment_endpointPartPriceMutations from "../vehicleEnrichment/endpointPartPriceMutations.js";
 import type * as vehicleEnrichment_evidenceConsensus from "../vehicleEnrichment/evidenceConsensus.js";
@@ -305,6 +306,7 @@ import type * as vehicleEnrichment_fitmentQuarantine from "../vehicleEnrichment/
 import type * as vehicleEnrichment_fleetEval from "../vehicleEnrichment/fleetEval.js";
 import type * as vehicleEnrichment_gapFill from "../vehicleEnrichment/gapFill.js";
 import type * as vehicleEnrichment_helpers from "../vehicleEnrichment/helpers.js";
+import type * as vehicleEnrichment_identityResolution from "../vehicleEnrichment/identityResolution.js";
 import type * as vehicleEnrichment_laborRelabor from "../vehicleEnrichment/laborRelabor.js";
 import type * as vehicleEnrichment_laborResearch from "../vehicleEnrichment/laborResearch.js";
 import type * as vehicleEnrichment_laborSibling from "../vehicleEnrichment/laborSibling.js";
@@ -665,6 +667,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/cacheValidation": typeof vehicleEnrichment_cacheValidation;
   "vehicleEnrichment/capacityResolver": typeof vehicleEnrichment_capacityResolver;
   "vehicleEnrichment/claudeExtractor": typeof vehicleEnrichment_claudeExtractor;
+  "vehicleEnrichment/completionGate": typeof vehicleEnrichment_completionGate;
   "vehicleEnrichment/contentSanitization": typeof vehicleEnrichment_contentSanitization;
   "vehicleEnrichment/endpointPartPriceMutations": typeof vehicleEnrichment_endpointPartPriceMutations;
   "vehicleEnrichment/evidenceConsensus": typeof vehicleEnrichment_evidenceConsensus;
@@ -674,6 +677,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/fleetEval": typeof vehicleEnrichment_fleetEval;
   "vehicleEnrichment/gapFill": typeof vehicleEnrichment_gapFill;
   "vehicleEnrichment/helpers": typeof vehicleEnrichment_helpers;
+  "vehicleEnrichment/identityResolution": typeof vehicleEnrichment_identityResolution;
   "vehicleEnrichment/laborRelabor": typeof vehicleEnrichment_laborRelabor;
   "vehicleEnrichment/laborResearch": typeof vehicleEnrichment_laborResearch;
   "vehicleEnrichment/laborSibling": typeof vehicleEnrichment_laborSibling;

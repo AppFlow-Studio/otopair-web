@@ -180,9 +180,11 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   // (2015 Veloster Turbo, Jul 2026 — same failure class as the VAG G-numbers).
   // Suffix block requires its literal dash — with it optional, any bare
   // 11-digit string (a BMW number) parsed as 5+5+1 and slipped through.
-  hyundai: /^\d{5}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
-  kia: /^\d{5}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
-  genesis: /^\d{5}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
+  // First block is digit-led alphanumeric, not digits-only: Mobis accessory
+  // SKUs like 2SF79-AQ000 cabin filter (2015 Veloster re-run, Jul 11 2026).
+  hyundai: /^\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
+  kia: /^\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
+  genesis: /^\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
   // VW/Audi/Porsche (VAG): AAA BBB CCC (+ up to 2-char suffix), first block
   // alphanumeric (06L115562B); old pattern required a digits-only first block.
   // Second alternation: VAG fluid/chemical G- and B-numbers — G + 3 digits +

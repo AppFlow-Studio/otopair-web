@@ -170,3 +170,14 @@ describe("sanitizePartNumber — audit-driven pattern widenings (Jul 11 2026)", 
     expect(sanitizePartNumber("G13 / G12evo (VW spec TL-VW 774 J)", "Volkswagen")).toBeNull();
   });
 });
+
+describe("sanitizePartNumber — Hyundai Mobis digit-led alphanumeric first block", () => {
+  it("accepts 2SF79-AQ000 (Veloster cabin filter, rejected live Jul 11 2026)", () => {
+    expect(sanitizePartNumber("2SF79-AQ000", "Hyundai")).toBe("2SF79-AQ000");
+  });
+
+  it("still rejects letter-led first blocks and foreign formats", () => {
+    expect(sanitizePartNumber("BC3Z-6731-B", "Hyundai")).toBeNull(); // Ford OE
+    expect(sanitizePartNumber("PE01-14-302A", "Hyundai")).toBeNull(); // Mazda
+  });
+});

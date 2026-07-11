@@ -9,7 +9,7 @@
 
 import type { FieldResult } from "../types";
 import { sanitizeCapacityQuarts } from "../contentSanitization";
-import { isLowAuthorityDomain } from "./sourceAuthority";
+import { isLowAuthorityDomain, isHighAuthorityDomain } from "./sourceAuthority";
 
 interface SanityRule {
   field: string;
@@ -345,23 +345,54 @@ export function runSanityChecks(
   // source is a low-authority forum/Q&A domain are flagged and confidence-
   // capped at 0.5 even when in-band — never dropped (drop stays reserved for
   // out-of-band values, handled by the escalation above).
+  //
+  // Mid-tier extension (A4 9.5 qt incident): oil/coolant get actively
+  // re-resolved by capacityResolver whenever the source isn't high-authority,
+  // but the remaining capacity fields have no resolver — for those, an in-band
+  // value from a single MID-TIER source (not forum, not authoritative — e.g. a
+  // generic capacity-table blog) is confidence-capped at 0.6 and flagged so it
+  // surfaces for review instead of reading as solid data. Flag-only, no drop.
   for (const capField of CAPACITY_FIELDS) {
     const field = fields[capField];
     if (!field || field.value == null) continue;
     if (field.flagged) continue; // already flagged (possibly escalated) above
-    if (!isLowAuthorityDomain(field.source_url)) continue;
-    const reason = `Numeric capacity attested only by a low-authority forum/community page (${field.source_url}) — confidence capped, needs corroboration`;
-    flags.push({ field: capField, severity: "flag", reason, value: field.value });
-    fields[capField] = {
-      ...field,
-      confidence: Math.min(field.confidence ?? 0.5, 0.5),
-      flagged: true,
-      flag_reason: reason,
-    };
+    if (isLowAuthorityDomain(field.source_url)) {
+      const reason = `Numeric capacity attested only by a low-authority forum/community page (${field.source_url}) — confidence capped, needs corroboration`;
+      flags.push({ field: capField, severity: "flag", reason, value: field.value });
+      fields[capField] = {
+        ...field,
+        confidence: Math.min(field.confidence ?? 0.5, 0.5),
+        flagged: true,
+        flag_reason: reason,
+      };
+      continue;
+    }
+    if (
+      !RESOLVER_OWNED_CAPACITY_FIELDS.has(capField) &&
+      field.source_url != null &&
+      !isHighAuthorityDomain(field.source_url)
+    ) {
+      const reason = `Numeric capacity from a single mid-tier source (${field.source_url}) — unverified, needs corroboration`;
+      flags.push({ field: capField, severity: "flag", reason, value: field.value });
+      fields[capField] = {
+        ...field,
+        confidence: Math.min(field.confidence ?? 0.6, 0.6),
+        flagged: true,
+        flag_reason: reason,
+      };
+    }
   }
 
   return flags;
 }
+
+/** Fields the capacity resolver actively re-fetches/corroborates — the mid-tier
+ *  cap above would only pre-flag them into the resolver's slower full-resolution
+ *  path for no accuracy gain. */
+const RESOLVER_OWNED_CAPACITY_FIELDS: ReadonlySet<string> = new Set([
+  "oil_capacity_qts",
+  "coolant_capacity_qts",
+]);
 
 /** Numeric fluid-capacity fields subject to the forum-corroboration rule. */
 const CAPACITY_FIELDS = [

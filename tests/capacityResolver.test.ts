@@ -138,3 +138,51 @@ describe("decideCapacity", () => {
     expect(d.value_qts).toBeCloseTo(13.8, 1);
   });
 });
+
+// ── Corroboration mode (A4 9.5 qt incident) ─────────────────────────────
+// The batch value is seeded as ONE observation; decideCapacity arbitrates.
+describe("decideCapacity — seeded batch-value arbitration", () => {
+  const I4_COOLANT = getCapacityBand("coolant_capacity_qts", 4);
+
+  test("wrong in-band batch value (9.5, one mid-tier blog) is outranked by two agreeing web domains at 7.4", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [
+        obs({ value_qts: 9.5, domain: "ricksfreeautorepairadvice.com", engine_code_matches: false }),
+        obs({ value_qts: 7.4, domain: "carcarekiosk.com", authoritative: true }),
+        obs({ value_qts: 7.4, domain: "fluidcapacity.com", authoritative: true }),
+      ],
+      I4_COOLANT,
+      { strict: false },
+    );
+    expect(d.tier).toBe("trusted");
+    expect(d.value_qts).toBe(7.4);
+  });
+
+  test("correct batch value + one agreeing independent domain → trusted at 2 domains", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [
+        obs({ value_qts: 7.4, domain: "some-blog.com", engine_code_matches: false }),
+        obs({ value_qts: 7.5, domain: "carcarekiosk.com" }), // within 0.5qt tolerance
+      ],
+      I4_COOLANT,
+      { strict: false },
+    );
+    expect(d.tier).toBe("trusted");
+    expect(d.source_count).toBe(2);
+    // cluster median of [7.4, 7.5] — the two agree within tolerance
+    expect(d.value_qts).toBe(7.5);
+  });
+
+  test("batch value alone with no web agreement stays best_effort (flagged unverified)", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [obs({ value_qts: 9.5, domain: "ricksfreeautorepairadvice.com", engine_code_matches: false })],
+      I4_COOLANT,
+      { strict: false },
+    );
+    expect(d.tier).toBe("best_effort");
+    expect(d.confidence).toBe(0.5);
+  });
+});

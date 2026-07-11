@@ -394,6 +394,41 @@ export const getPricedPartCount = internalQuery({
   },
 });
 
+/** All fitments for a config with the part's subcategory and a TRUSTED-price
+ *  flag (poison / non-pooled price rows excluded — same standard as
+ *  getPricedPartCount). Feeds computeQuotability at finalize. */
+export const getFitmentsWithPriceFlag = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicleConfigId))
+      .collect();
+    const out: Array<{
+      service_type: string;
+      subcategory: string | null;
+      has_trusted_price: boolean;
+    }> = [];
+    for (const f of fitments) {
+      const part = (await ctx.db.get(f.part_id)) as any | null;
+      const rows = await ctx.db
+        .query("part_prices")
+        .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
+        .collect();
+      out.push({
+        service_type: f.service_type,
+        subcategory: part?.subcategory ?? null,
+        has_trusted_price: rows.some(
+          (r) =>
+            !isPoisonPriceType((r as any).price_type) &&
+            !isNonPooledPriceType((r as any).price_type),
+        ),
+      });
+    }
+    return out;
+  },
+});
+
 // ─── Source discovery queries ────────────────────────────────────
 
 export const getSourcesForMake = internalQuery({

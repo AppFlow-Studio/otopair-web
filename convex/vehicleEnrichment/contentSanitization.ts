@@ -158,25 +158,36 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   ford: /^[A-Z0-9]{2,4}-[A-Z0-9]{2,7}(?:-[A-Z0-9]{1,4})?$/i,
   lincoln: /^[A-Z0-9]{2,4}-[A-Z0-9]{2,7}(?:-[A-Z0-9]{1,4})?$/i,
   // GM (Chevy/GMC/Cadillac/Buick): 7-9 digit part numbers + ACDelco codes
-  // (PF64, TS10083, 12345678).
-  chevrolet: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?)$/i,
-  gmc: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?)$/i,
-  cadillac: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?)$/i,
-  buick: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?)$/i,
+  // (PF64, TS10083, 12345678) + ACDelco fluid/chemical dash codes
+  // (10-9243 Dex-Cool, 10-4133 ATF).
+  chevrolet: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2}-\d{3,4}[A-Z]?)$/i,
+  gmc: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2}-\d{3,4}[A-Z]?)$/i,
+  cadillac: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2}-\d{3,4}[A-Z]?)$/i,
+  buick: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2}-\d{3,4}[A-Z]?)$/i,
   // Hyundai/Kia/Genesis: XXXXX-XXXXX
   hyundai: /^\d{5}-?[A-Z0-9]{5}$/i,
   kia: /^\d{5}-?[A-Z0-9]{5}$/i,
   genesis: /^\d{5}-?[A-Z0-9]{5}$/i,
   // VW/Audi/Porsche (VAG): AAA BBB CCC (+ up to 2-char suffix), first block
   // alphanumeric (06L115562B); old pattern required a digits-only first block.
-  volkswagen: /^[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,2})?$/i,
-  audi: /^[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,2})?$/i,
-  porsche: /^[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,2})?$/i,
+  // Second alternation: VAG fluid/chemical G- and B-numbers — G + 3 digits +
+  // 3 ALPHANUMERIC (G 012 A8G M1 coolant has letters in the third block) +
+  // up to two 1-3 char suffix blocks (G 052 167 A2 oil, G 060 162 A2 ATF,
+  // B 000 750 M3 brake fluid). This branch previously didn't exist, so EVERY
+  // fluid SKU failed the 3-char first block and no fluid fitment was ever
+  // written for VAG configs. TL-numbers (TL 774x) are spec designations, not
+  // orderable SKUs — deliberately still rejected.
+  // Third alternation: VAG standard-hardware N-numbers — N + 7-9 digits
+  // (N0138157 drain plug gasket, N 908 132 02). Rejected live 2026-07-10.
+  volkswagen: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,2})?|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
+  audi: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,2})?|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
+  porsche: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,2})?|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
   // Subaru: various letter-digit combos (deliberately broad)
   subaru: /^[A-Z0-9]{5,12}$/i,
-  // Nissan/Infiniti: XXXXX-XXXXX
-  nissan: /^\d{5}-?[A-Z0-9]{5}$/i,
-  infiniti: /^\d{5}-?[A-Z0-9]{5}$/i,
+  // Nissan/Infiniti: XXXXX-XXXXX + chemical/fluid SKUs whose first block mixes
+  // letters and digits (999MP-A9001 ATF, KE908-99931 oil).
+  nissan: /^(?:\d{5}-?[A-Z0-9]{5}|(?:\d{3}[A-Z]{2}|[A-Z]{2}\d{3})-?[A-Z0-9]{5,6})$/i,
+  infiniti: /^(?:\d{5}-?[A-Z0-9]{5}|(?:\d{3}[A-Z]{2}|[A-Z]{2}\d{3})-?[A-Z0-9]{5,6})$/i,
   // Mopar family (Chrysler/Dodge/Jeep/Ram/Fiat/Alfa Romeo): 8 digits + 2-letter
   // revision (68400577AA), legacy 0-prefixed (04884899AC), and alphanumeric
   // bodies with revision suffix (BB0H8800AC).
@@ -298,6 +309,14 @@ const BRAND_SIGNATURES: BrandSignature[] = [
   {
     label: "vag",
     pattern: /^[0-9A-Z]{3}[\s-]\d{3}[\s-]\d{3}(?:[\s-][A-Z0-9]{1,2})?$/i,
+    makes: VAG_FAMILY,
+  },
+  // VAG fluid/chemical G-numbers (G 052 167 A2 / G012A8GM1): the G prefix is
+  // distinctively VAG, so one extracted for another marque is contamination.
+  // (B-numbers are excluded — too short/ambiguous to be a reliable signature.)
+  {
+    label: "vag_fluid",
+    pattern: /^G[\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}$/i,
     makes: VAG_FAMILY,
   },
   // Mopar: 8 digits + 2-letter revision (68400577AA)

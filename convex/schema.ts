@@ -792,6 +792,22 @@ export default defineSchema({
         }),
       ),
     ),
+    // Parts-side quotability: per applicable parts-bearing service, do all
+    // CORE roles have a fitment AND a trusted price? fill_rate's blind spot —
+    // a 93% run can still carry an unquotable oil change (Jul 2026 A4).
+    quotability: v.optional(
+      v.object({
+        pct: v.number(),
+        services: v.array(
+          v.object({
+            slug: v.string(),
+            core_total: v.number(),
+            core_with_fitment: v.number(),
+            core_with_price: v.number(),
+          }),
+        ),
+      }),
+    ),
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
     created_at: v.optional(v.number()),

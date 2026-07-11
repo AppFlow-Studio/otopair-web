@@ -327,6 +327,7 @@ import type * as vehicleEnrichment_prompts_batch1bPrompt from "../vehicleEnrichm
 import type * as vehicleEnrichment_prompts_batch2Prompt from "../vehicleEnrichment/prompts/batch2Prompt.js";
 import type * as vehicleEnrichment_prompts_gapFillPrompt from "../vehicleEnrichment/prompts/gapFillPrompt.js";
 import type * as vehicleEnrichment_queries from "../vehicleEnrichment/queries.js";
+import type * as vehicleEnrichment_quotability from "../vehicleEnrichment/quotability.js";
 import type * as vehicleEnrichment_repairpalEndpoint from "../vehicleEnrichment/repairpalEndpoint.js";
 import type * as vehicleEnrichment_repairpalEndpointMatch from "../vehicleEnrichment/repairpalEndpointMatch.js";
 import type * as vehicleEnrichment_repairpalEndpointMutations from "../vehicleEnrichment/repairpalEndpointMutations.js";
@@ -694,6 +695,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/prompts/batch2Prompt": typeof vehicleEnrichment_prompts_batch2Prompt;
   "vehicleEnrichment/prompts/gapFillPrompt": typeof vehicleEnrichment_prompts_gapFillPrompt;
   "vehicleEnrichment/queries": typeof vehicleEnrichment_queries;
+  "vehicleEnrichment/quotability": typeof vehicleEnrichment_quotability;
   "vehicleEnrichment/repairpalEndpoint": typeof vehicleEnrichment_repairpalEndpoint;
   "vehicleEnrichment/repairpalEndpointMatch": typeof vehicleEnrichment_repairpalEndpointMatch;
   "vehicleEnrichment/repairpalEndpointMutations": typeof vehicleEnrichment_repairpalEndpointMutations;

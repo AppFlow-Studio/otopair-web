@@ -54,6 +54,48 @@ function isBlockedPriceDomain(domain: string | null): boolean {
  * Costs one Firecrawl search call; the subsequent scrapes are paid by
  * priceAllSources (and halved by Firecrawl's 2-day page cache).
  */
+/** One queued part awaiting discovery — collected across ALL services in a
+ *  run, then spent by priority (see prioritizeDiscoveryQueue). */
+export interface DiscoveryQueueItem {
+  partId: string;
+  oem: string;
+  name: string | null;
+  subcategory: string | null;
+  serviceSlug: string;
+  serviceRole: string | null;
+}
+
+/**
+ * Order the discovery queue so the per-run budget buys quotability, not
+ * whatever the fitment table happened to yield first. The old inline spend was
+ * first-come-first-served in fitment iteration order, so a 5th price source
+ * for an already-priced filter could starve the battery — the only part of its
+ * service — entirely (Jul 2026 A4 post-mortem: battery + rear pads at 0 prices
+ * while front pads held 4).
+ *
+ * Tiers (stable within each):
+ *   0. core-role parts on services with ZERO priced parts (a whole service is
+ *      unquotable without them)
+ *   1. other core-role parts (fluids land here)
+ *   2. as_needed / kit parts
+ */
+export function prioritizeDiscoveryQueue<
+  T extends { serviceSlug: string; serviceRole: string | null },
+>(queue: readonly T[], pricedCountByService: ReadonlyMap<string, number>): T[] {
+  const tierOf = (item: T): number => {
+    // An unclassifiable role is treated as core — same fail-closed stance as
+    // the quote engine (an orphaned row might be load-bearing).
+    const core = (item.serviceRole ?? "core") === "core";
+    if (core && (pricedCountByService.get(item.serviceSlug) ?? 0) === 0) return 0;
+    if (core) return 1;
+    return 2;
+  };
+  return queue
+    .map((item, idx) => ({ item, idx }))
+    .sort((a, b) => tierOf(a.item) - tierOf(b.item) || a.idx - b.idx)
+    .map((x) => x.item);
+}
+
 export async function discoverPriceUrls(
   args: { oem: string; make?: string | null; name?: string | null },
   search: UrlSearcher = searchAndFetch,

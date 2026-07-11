@@ -40,7 +40,8 @@ import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
 import { reextractPartPrice, isAffirmativeRejection, priceAllSources } from "./priceReextract";
 import { extractPriceFirecrawl } from "./firecrawl";
-import { discoverPriceUrls } from "./priceDiscovery";
+import { discoverPriceUrls, prioritizeDiscoveryQueue, type DiscoveryQueueItem } from "./priceDiscovery";
+import { computeQuotability, type QuotabilityResult } from "./quotability";
 import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
 import {
@@ -1034,7 +1035,22 @@ async function writeNormalizedData(
     console.log(`[v8-parts] ${fieldKey}: raw=${rawVal} (type=${typeof rawVal}), sanitized=${val}, confidence=${conf}, source=${src}`);
 
     if (val == null || val.length === 0) {
-      console.log(`[v8-parts] SKIPPED ${fieldKey}: reason=${rawStr ? "failed_sanitization" : "null_or_empty"}`);
+      const skipReason = rawStr ? "failed_sanitization" : "null_or_empty";
+      console.log(`[v8-parts] SKIPPED ${fieldKey}: reason=${skipReason}`);
+      if (rawStr) {
+        // A rejected part number must NOT stay "filled" in the field map —
+        // that made the loss invisible: no field_gap entry, and batch-2
+        // gap-fill never re-asked because the field looked populated, while
+        // no fitment existed (how VAG fluids stayed missing across runs).
+        // Null+flag → batch-1 callers re-ask it in batch 2; finalize ledgers
+        // it as validation_dropped.
+        fields[fieldKey] = {
+          ...(fields[fieldKey] ?? {}),
+          value: null,
+          flagged: true,
+          flag_reason: `oem_part_rejected: ${rawStr}`,
+        } as any;
+      }
       continue;
     }
 
@@ -1165,9 +1181,21 @@ async function writeNormalizedData(
     // Task 17: Sanitize evidence values and URLs before storage
     const sanitizedValue = sanitizeString(f.value) ?? String(f.value);
     const sanitizedSourceUrl = sanitizeUrl(f.source_url);
+    const entityType = getEntityType(k);
+    // Key engine/transmission evidence by the actual entity doc id — rows were
+    // previously all keyed by vehicleConfigId, so provenance lookups by engine
+    // id (the key the capacity resolver writes under) returned nothing.
+    // drivetrain_config/part/interval rows have no doc id at this point and
+    // stay keyed by config (known limitation).
+    const entityId =
+      entityType === "engine"
+        ? String(engineId)
+        : entityType === "transmission"
+          ? String(transmissionId ?? vehicleConfigId)
+          : String(vehicleConfigId);
     evidenceRows.push({
-      entity_type: getEntityType(k),
-      entity_id: String(vehicleConfigId),
+      entity_type: entityType,
+      entity_id: entityId,
       field_name: k,
       observed_value: sanitizedValue,
       observed_type: typeof f.value === "number" ? "number" : typeof f.value === "boolean" ? "boolean" : "string",
@@ -2375,6 +2403,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     const attempt = args.attempt ?? 1;
     console.log(`[v8/_pollBatch2] Poll attempt ${attempt} for batchId=${args.batchId}`);
 
+    // Convex hard-kills an action at 600s — un-catchable, so the run gets
+    // stuck at status "batch2" (observed live 2026-07-10: capacity
+    // corroboration + a 24-part discovery budget pushed finalize past the
+    // limit; one 408-hanging PDF extraction alone ate ~3 min). Past this
+    // deadline no NEW Firecrawl price work is started; skipped parts land in
+    // the gap ledger and the nightly backfill picks them up. 360s leaves room
+    // for a worst-case ~3 min in-flight extraction plus the finalize writes.
+    const actionStartedAt = Date.now();
+    const priceWorkDeadline =
+      actionStartedAt + Number(process.env.PARTS_PRICE_PASS_DEADLINE_MS ?? "360000");
+
     // Liveness heartbeat for the STEP 0 force-unstick probe.
     try {
       await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
@@ -2546,6 +2585,16 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       }
     }
 
+    // Price-gap ledger — merged into the run's field_gaps at finalize so
+    // unpriced parts are VISIBLE (and targetable by the nightly backfill)
+    // instead of silently absent. Reasons: price_budget_exhausted /
+    // price_no_source / price_unverified_sources / price_no_oem_anchor.
+    const priceGaps: Array<{ field: string; reason: string }> = [];
+
+    // Parts-side quotability — computed after pricing (below), persisted on
+    // the run so a "complete · 93%" can no longer hide an unquotable service.
+    let quotability: QuotabilityResult | undefined;
+
     // Write sanitized data to normalized tables
     if (r2) {
       const serviceCache = new Map<string, Id<"services">>();
@@ -2607,6 +2656,14 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       const priceDiscoveryEnabled = process.env.PARTS_PRICE_URL_DISCOVERY !== "off";
       const priceDiscoveryMax = Number(process.env.PARTS_PRICE_DISCOVERY_MAX ?? "10");
       let priceDiscoveryUsed = 0;
+      // URL-less parts are QUEUED here across all services (not discovered
+      // inline) so the budget above is spent by priority — core parts on
+      // otherwise-unpriced services first — instead of by fitment iteration
+      // order (which starved the battery/rear pads on the Jul 2026 A4 run).
+      const discoveryQueue: DiscoveryQueueItem[] = [];
+      const pricedPartsByService = new Map<string, number>();
+      const bumpPriced = (slug: string) =>
+        pricedPartsByService.set(slug, (pricedPartsByService.get(slug) ?? 0) + 1);
 
       // ── Multi-source labor (ONCE per car). The `laborAllSources` orchestrator
       //    fans out to OLP + RepairPal + open-web (each flag-gated), merges the
@@ -2917,8 +2974,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             urlsByPart.set(k, e);
           };
           const subcatByPartId = new Map<string, string | null>();
+          const roleByPartId = new Map<string, string | null>();
           for (const f of fitments) {
             subcatByPartId.set(String(f.part_id), ((f as any).part_subcategory as string | null) ?? null);
+            roleByPartId.set(String(f.part_id), ((f as any).service_role as string | null) ?? null);
           }
           // Seed EVERY fitment part into the map (empty urls) so a part the
           // LLM omitted from parts_breakdown still reaches the discovery
@@ -2957,34 +3016,49 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             }
           }
           for (const [partIdStr, e] of urlsByPart) {
-            let urlsDiscovered = false;
             if (e.urls.length === 0) {
-              // Discovery fallback: search for a product page instead of
-              // giving up. Skipped for parts the JSON-LD path already priced,
-              // parts with no OEM anchor, or once the per-run cap is hit.
-              if (
-                !priceDiscoveryEnabled ||
-                !e.oem ||
-                deterministicallyPriced.has(partIdStr as any) ||
-                priceDiscoveryUsed >= priceDiscoveryMax
-              ) {
+              // No Batch-2/deterministic URL: queue for the PRIORITIZED pass-2
+              // discovery after the service loop (was: inline first-come-first-
+              // served spend with a SILENT skip once the cap hit — no gap entry,
+              // no log; exactly how the A4 battery ended at 0 prices).
+              if (deterministicallyPriced.has(partIdStr as any)) {
+                bumpPriced(slug);
                 continue;
               }
-              priceDiscoveryUsed++;
-              e.urls = await discoverPriceUrls({ oem: e.oem, make: args.make, name: e.name });
-              urlsDiscovered = true;
-              if (e.urls.length === 0) {
-                console.warn(`[v8/price] discovery found no usable source for part ${partIdStr} (oem=${e.oem})`);
+              if (!e.oem) {
+                priceGaps.push({
+                  field: `part_price:${e.subcategory ?? partIdStr}`,
+                  reason: "price_no_oem_anchor",
+                });
                 continue;
               }
+              if (!priceDiscoveryEnabled) continue;
+              discoveryQueue.push({
+                partId: partIdStr,
+                oem: e.oem,
+                name: e.name,
+                subcategory: e.subcategory,
+                serviceSlug: slug,
+                serviceRole: roleByPartId.get(partIdStr) ?? null,
+              });
+              continue;
+            }
+            if (Date.now() > priceWorkDeadline) {
+              priceGaps.push({
+                field: `part_price:${e.subcategory ?? e.oem ?? partIdStr}`,
+                reason: "price_deferred_timeout",
+              });
+              continue;
             }
             const rows = await priceAllSources(
               e.urls,
-              { oem: e.oem, partName: e.name, subcategory: e.subcategory, requireOemEcho: urlsDiscovered },
+              { oem: e.oem, partName: e.name, subcategory: e.subcategory, requireOemEcho: false },
               extractPriceFirecrawl,
             );
+            let wroteSale = false;
             for (const row of rows) {
               if (row.outcome.status !== "sale") continue;
+              wroteSale = true;
               await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
                 part_id: partIdStr as any,
                 price: row.outcome.price,
@@ -2995,17 +3069,119 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
                 discount: row.outcome.discount ?? undefined,
               });
             }
-            // Observability: a part where NO source yielded a trusted price gets
-            // no row (better than an llm guess) — but log it so a degraded run
-            // (anti-bot blocks / Firecrawl outage) is diagnosable, not silent.
-            if (!rows.some((r) => r.outcome.status === "sale")) {
+            if (wroteSale) {
+              bumpPriced(slug);
+            } else {
+              // Observability: a part where NO source yielded a trusted price gets
+              // no row (better than an llm guess) — but log it so a degraded run
+              // (anti-bot blocks / Firecrawl outage) is diagnosable, not silent.
               console.warn(
                 `[v8/price] no trusted price for part ${partIdStr} (oem=${e.oem ?? "?"}) from ${e.urls.length} source(s): ` +
                   rows.map((r) => `${r.source_domain}:${r.outcome.status}${r.outcome.status === "unverified" ? `(${r.outcome.reason})` : ""}`).join(", "),
               );
+              priceGaps.push({
+                field: `part_price:${e.subcategory ?? e.oem ?? partIdStr}`,
+                reason: "price_unverified_sources",
+              });
             }
           }
         }
+      }
+      // ── Pass 2: prioritized price-URL discovery ─────────────────────────
+      // Spend the per-run discovery budget in priority order across ALL
+      // services: core parts on services with zero priced parts first, then
+      // other core parts, then as_needed/kit. Leftovers land in the gap
+      // ledger instead of vanishing.
+      if (discoveryQueue.length > 0) {
+        const ordered = prioritizeDiscoveryQueue(discoveryQueue, pricedPartsByService);
+        const attempted = new Set<string>(); // one attempt per part even if it serves 2 services
+        for (const item of ordered) {
+          if (attempted.has(item.partId)) continue;
+          attempted.add(item.partId);
+          if (Date.now() > priceWorkDeadline) {
+            priceGaps.push({
+              field: `part_price:${item.subcategory ?? item.oem}`,
+              reason: "price_deferred_timeout",
+            });
+            continue;
+          }
+          if (priceDiscoveryUsed >= priceDiscoveryMax) {
+            priceGaps.push({
+              field: `part_price:${item.subcategory ?? item.oem}`,
+              reason: "price_budget_exhausted",
+            });
+            continue;
+          }
+          priceDiscoveryUsed++;
+          const urls = await discoverPriceUrls({ oem: item.oem, make: args.make, name: item.name });
+          if (urls.length === 0) {
+            console.warn(`[v8/price] discovery found no usable source for part ${item.partId} (oem=${item.oem})`);
+            priceGaps.push({
+              field: `part_price:${item.subcategory ?? item.oem}`,
+              reason: "price_no_source",
+            });
+            continue;
+          }
+          const rows = await priceAllSources(
+            urls,
+            // Discovered pages must echo the OEM number — a search hit is a
+            // weaker tie to the part than an LLM/deterministic citation.
+            { oem: item.oem, partName: item.name, subcategory: item.subcategory, requireOemEcho: true },
+            extractPriceFirecrawl,
+          );
+          let wroteSale = false;
+          for (const row of rows) {
+            if (row.outcome.status !== "sale") continue;
+            wroteSale = true;
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+              part_id: item.partId as any,
+              price: row.outcome.price,
+              price_type: "sale",
+              source_domain: row.source_domain,
+              source_url: row.source_url,
+              msrp: row.outcome.msrp ?? undefined,
+              discount: row.outcome.discount ?? undefined,
+            });
+          }
+          if (wroteSale) {
+            bumpPriced(item.serviceSlug);
+          } else {
+            console.warn(
+              `[v8/price] no trusted price for part ${item.partId} (oem=${item.oem}) from ${urls.length} discovered source(s): ` +
+                rows.map((r) => `${r.source_domain}:${r.outcome.status}${r.outcome.status === "unverified" ? `(${r.outcome.reason})` : ""}`).join(", "),
+            );
+            priceGaps.push({
+              field: `part_price:${item.subcategory ?? item.oem}`,
+              reason: "price_unverified_sources",
+            });
+          }
+        }
+        console.log(
+          `[v8/price] discovery budget: ${priceDiscoveryUsed}/${priceDiscoveryMax} spent, ` +
+            `${discoveryQueue.length} queued, ${priceGaps.filter((g) => g.reason === "price_budget_exhausted").length} deferred to backfill`,
+        );
+      }
+
+      // Quotability snapshot — after all price writes so it reflects what a
+      // customer could actually be quoted right now. Non-fatal.
+      try {
+        const applicableSlugs = services
+          .filter((s: any) => s.is_applicable)
+          .map((s: any) => SERVICE_NAME_TO_SLUG[s.service_name])
+          .filter((x: any): x is string => !!x);
+        const qFitments = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        quotability = computeQuotability(qFitments, applicableSlugs);
+        console.log(
+          `[v8/quotability] ${Math.round(quotability.pct * 100)}% — ` +
+            quotability.services
+              .map((s) => `${s.slug}:${s.core_with_price}/${s.core_total}`)
+              .join(" "),
+        );
+      } catch (e) {
+        console.warn("[v8/quotability] compute failed (non-fatal):", e);
       }
     } else {
       // Batch-2 timed out/errored → writeNormalizedData is skipped, but the
@@ -3090,6 +3266,9 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       fields_changed: V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null),
       errors: [
         ...(timedOut ? ["batch2_timeout"] : []),
+        // Weak parts coverage routes into the manual review queue without
+        // changing status semantics (a data-complete run stays "complete").
+        ...(quotability && quotability.pct < 0.8 ? [`quotability:${quotability.pct}`] : []),
         ...sanityFlags.map((f) => `sanity:${f.field}:${f.reason}`),
         ...oemFlags.map((f) => `oem:${f.field}:${f.reason}`),
       ],
@@ -3110,7 +3289,8 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           value: f.value != null ? String(f.value) : undefined,
         })),
       ],
-      field_gaps: classifyFieldGaps(allFields, sanityFlags),
+      field_gaps: [...classifyFieldGaps(allFields, sanityFlags), ...priceGaps],
+      quotability,
     });
 
     // Read current vehicle_config to get resolved drivetrain

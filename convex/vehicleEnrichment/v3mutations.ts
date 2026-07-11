@@ -1243,6 +1243,19 @@ export const updateEnrichmentRun = internalMutation({
         }),
       ),
     ),
+    quotability: v.optional(
+      v.object({
+        pct: v.number(),
+        services: v.array(
+          v.object({
+            slug: v.string(),
+            core_total: v.number(),
+            core_with_fitment: v.number(),
+            core_with_price: v.number(),
+          }),
+        ),
+      }),
+    ),
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
   },

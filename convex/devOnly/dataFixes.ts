@@ -53,6 +53,9 @@ export const fixEngineFields = internalMutation({
     engine_id: v.id("engines"),
     timing_system: v.optional(v.string()),
     cylinders: v.optional(v.number()),
+    coolant_capacity_qts: v.optional(v.number()),
+    oil_capacity_qts: v.optional(v.number()),
+    engine_code: v.optional(v.string()),
     reason: v.string(),
   },
   handler: async (ctx, args) => {
@@ -61,7 +64,10 @@ export const fixEngineFields = internalMutation({
 
     const patch: Record<string, unknown> = {};
     const changes: string[] = [];
-    const tryPatch = (key: "timing_system" | "cylinders", nextVal: unknown) => {
+    const tryPatch = (
+      key: "timing_system" | "cylinders" | "coolant_capacity_qts" | "oil_capacity_qts" | "engine_code",
+      nextVal: unknown,
+    ) => {
       if (nextVal === undefined) return;
       const cur = (engine as any)[key];
       if (cur === nextVal) return;
@@ -70,6 +76,9 @@ export const fixEngineFields = internalMutation({
     };
     tryPatch("timing_system", args.timing_system);
     tryPatch("cylinders", args.cylinders);
+    tryPatch("coolant_capacity_qts", args.coolant_capacity_qts);
+    tryPatch("oil_capacity_qts", args.oil_capacity_qts);
+    tryPatch("engine_code", args.engine_code);
 
     // Stamp every PROVIDED field as human-verified — including ones whose
     // stored value already matched (confirming a value is itself a
@@ -80,6 +89,9 @@ export const fixEngineFields = internalMutation({
     const before = verified.size;
     if (args.timing_system !== undefined) verified.add("timing_system");
     if (args.cylinders !== undefined) verified.add("cylinders");
+    if (args.coolant_capacity_qts !== undefined) verified.add("coolant_capacity_qts");
+    if (args.oil_capacity_qts !== undefined) verified.add("oil_capacity_qts");
+    if (args.engine_code !== undefined) verified.add("engine_code");
 
     if (Object.keys(patch).length === 0) {
       if (verified.size > before) {

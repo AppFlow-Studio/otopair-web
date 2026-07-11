@@ -140,16 +140,36 @@ export interface CapacityBand {
   typicalMax: number;
 }
 
-export function getCapacityBand(field: CapacityField, cylinders: number): CapacityBand {
+/** Engine traits that move the physically-plausible capacity window. */
+export interface CapacityBandContext {
+  /** True for diesel engines — HD diesel cooling systems (6.7 Power Stroke,
+   *  6.6 Duramax, 6.7 Cummins) hold 25-36 qts, far past the gasoline reject
+   *  ceiling. Stress-fleet finding 2026-07-11: the CORRECT 31.7-35.1 qt for a
+   *  2020 F-350 6.7L was rejected by the old flat rejectMax=24 and the truck
+   *  shipped with coolant_capacity_qts = null. */
+  diesel?: boolean;
+}
+
+export function getCapacityBand(
+  field: CapacityField,
+  cylinders: number,
+  ctx: CapacityBandContext = {},
+): CapacityBand {
+  const diesel = ctx.diesel === true;
   if (field === "oil_capacity_qts") {
     return {
       rejectMin: 1,
-      rejectMax: 20,
+      rejectMax: diesel ? 24 : 20,
       typicalMin: cylinders >= 8 ? 7 : 3,
-      typicalMax: cylinders === 4 ? 7 : 16,
+      typicalMax: diesel ? 18 : cylinders === 4 ? 7 : 16,
     };
   }
   // coolant_capacity_qts
+  if (diesel && cylinders >= 6) {
+    // HD diesel: dual cooling loops are common (engine + secondary/charge
+    // cooling). Totals 25-36 qt are normal, not liters-as-quarts mixups.
+    return { rejectMin: 8, rejectMax: 40, typicalMin: 18, typicalMax: 36 };
+  }
   return {
     rejectMin: 3,
     rejectMax: 24,
@@ -158,11 +178,16 @@ export function getCapacityBand(field: CapacityField, cylinders: number): Capaci
   };
 }
 
+/** True when the extracted field map identifies a diesel engine. */
+export function isDieselFromFields(fields: Record<string, FieldResult>): boolean {
+  return /diesel/i.test(String(fields["fuel_type"]?.value ?? ""));
+}
+
 /** Engine-size-specific validation rules. Derived from getCapacityBand (no drift). */
-function getEngineSpecificRules(cylinders: number): SanityRule[] {
+function getEngineSpecificRules(cylinders: number, bandCtx: CapacityBandContext): SanityRule[] {
   const rules: SanityRule[] = [];
-  const oilBand = getCapacityBand("oil_capacity_qts", cylinders);
-  const coolantBand = getCapacityBand("coolant_capacity_qts", cylinders);
+  const oilBand = getCapacityBand("oil_capacity_qts", cylinders, bandCtx);
+  const coolantBand = getCapacityBand("coolant_capacity_qts", cylinders, bandCtx);
 
   if (cylinders >= 8) {
     rules.push({
@@ -250,7 +275,10 @@ export function runSanityChecks(
   fields: Record<string, FieldResult>,
   cylinders: number = 4,
 ): SanityFlag[] {
-  const allRules = [...SANITY_RULES, ...getEngineSpecificRules(cylinders)];
+  // Diesel detection widens the capacity bands (HD diesel coolant 25-36 qt is
+  // real, not a unit mixup) — derived from the same field map being checked.
+  const bandCtx: CapacityBandContext = { diesel: isDieselFromFields(fields) };
+  const allRules = [...SANITY_RULES, ...getEngineSpecificRules(cylinders, bandCtx)];
   const flags: SanityFlag[] = [];
 
   // Pre-normalize noisy-but-valid values BEFORE the rules run. The caller writes

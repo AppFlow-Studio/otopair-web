@@ -33,7 +33,12 @@ import {
   toHostname,
 } from "./validation/sourceAuthority";
 import { isSyntheticEngineCode } from "./utils/engineLookup";
-import { getCapacityBand, type CapacityBand, type CapacityField } from "./validation/sanityChecks";
+import {
+  getCapacityBand,
+  isDieselFromFields,
+  type CapacityBand,
+  type CapacityField,
+} from "./validation/sanityChecks";
 import { searchAndFetch, firecrawlJsonExtract } from "./firecrawl";
 
 /** Max pages we run the (paid) structured extraction on, to bound cost/time. */
@@ -139,14 +144,24 @@ export function decideCapacity(
     const med = median(c.map((o) => o.value_qts));
     return { c, distinctDomains, hasAuthority, med, typical: withinTypical(med) };
   });
-  // Physically-plausible (engine-typical) clusters first — a within-band value is
-  // preferred over an authoritative-but-implausible outlier (e.g. a 7.6 qt coolant
-  // mis-extracted from a GM TechLink PDF for a 5.3L V8). Then authoritative, then
-  // more independent domains, then closest to the typical midpoint.
+  // Composite trust score — three independent signals, one point each:
+  // engine-typical, contains an authoritative source, corroborated by 2+
+  // distinct domains. No single signal may dominate, because each has a
+  // known live failure when it does:
+  //   - typicality-first let a lone in-band 13.8 (drain-and-fill figure) beat
+  //     two agreeing sources at 17.4/17.6 — the TRUE total, just above the V8
+  //     typical ceiling (2019 Silverado L84, stress fleet 2026-07-11);
+  //   - domains-first would let two content farms echoing 16.9 beat an
+  //     authoritative 13.8 (the original Sierra poison);
+  //   - authority-first would let a mis-extracted 7.6 from one OEM PDF beat a
+  //     multi-domain typical cluster.
+  // Ties break toward more distinct domains, then closeness to the typical
+  // midpoint.
+  const trustScore = (c: (typeof scored)[number]) =>
+    Number(c.typical) + Number(c.hasAuthority) + Number(c.distinctDomains >= 2);
   scored.sort(
     (a, b) =>
-      Number(b.typical) - Number(a.typical) ||
-      Number(b.hasAuthority) - Number(a.hasAuthority) ||
+      trustScore(b) - trustScore(a) ||
       b.distinctDomains - a.distinctDomains ||
       Math.abs(a.med - mid) - Math.abs(b.med - mid),
   );
@@ -319,7 +334,7 @@ export async function resolveCapacities(
       !isHighAuthorityDomain(current?.source_url);
     if (!needsResolve) continue;
 
-    const band = getCapacityBand(field, cylinders);
+    const band = getCapacityBand(field, cylinders, { diesel: isDieselFromFields(fields) });
     // Corroboration mode: the batch supplied a clean in-band value from a real
     // (non-forum) URL — we only need 1-2 agreeing independent domains, so fetch
     // fewer pages. Full resolution (missing/flagged/training-data value) keeps

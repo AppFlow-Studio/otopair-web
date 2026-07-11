@@ -392,12 +392,12 @@ export const processVin = internalAction({
               temperature: 0,
               messages: [{
                 role: "user",
-                content: `Based on the following search results, what is the FULL manufacturer engine code including the complete variant suffix for a ${merged.year} ${merged.make} ${finalModel} ${finalTrim} with ${merged.cylinders} cylinders and ${merged.displacement}L displacement? For example, BMW uses codes like B48B20M2 or N63B44O2, not just B48 or N63. Mercedes uses M176DE40 not just M176. Include the full displacement and variant designation.\n\nSearch results:\n${searchContent.slice(0, 15000)}\n\nReply with ONLY the engine code. Nothing else.`,
+                content: `Based on the following search results, what is the FULL manufacturer engine code including the complete variant suffix for a ${merged.year} ${merged.make} ${finalModel} ${finalTrim} with ${merged.cylinders} cylinders and ${merged.displacement}L displacement? For example, BMW uses codes like B48B20M2 or N63B44O2, not just B48 or N63. Mercedes uses M176DE40 not just M176. Include the full displacement and variant designation.\n\nCRITICAL — model generation: the SAME model name often carries a DIFFERENT engine across generations even at the same displacement (the 2019+ Nissan Altima 2.5 is PR25DD, NOT the 2007-2018 QR25DE). Return the code used in the ${merged.year} model year specifically; if the results only show a code from another generation and you cannot confirm it applies to ${merged.year}, reply null.\n\nSearch results:\n${searchContent.slice(0, 15000)}\n\nReply with ONLY the engine code (or null). Nothing else.`,
               }],
             });
             const code = (resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "")
               .replace(/[^a-zA-Z0-9\-_.]/g, "");
-            if (code && code.length >= 2 && code.length <= 20) {
+            if (code && code.toLowerCase() !== "null" && code.length >= 2 && code.length <= 20) {
               console.log(`[decode] Search + Haiku resolved engine code: ${code} (was "${finalEngineCode}")`);
               finalEngineCode = code;
             }

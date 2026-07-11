@@ -29,11 +29,16 @@ describe("computeQuotability — the A4 scenario", () => {
     fit("filter_replacement", "air_filter", true),
   ];
 
-  it("marks oil_change unquotable when the engine_oil core role has no fitment", () => {
+  it("oil_change stays quotable without an engine_oil fitment via the universal fallback", () => {
+    // Stress fleet 2026-07-11: engine-oil SKUs are the most hallucination-
+    // prone extraction (5 of 8 vehicles rejected/null), so the engine_oil
+    // role now carries a universalFallback — an ABSENT fitment is satisfied
+    // by the synthesized per-quart line; a real enriched SKU wins when it
+    // exists (covered by the degradation test below).
     const r = computeQuotability(a4Fitments, ["oil_change"]);
     const oil = r.services.find((s) => s.slug === "oil_change")!;
-    expect(oil.core_with_fitment).toBeLessThan(oil.core_total);
-    expect(r.pct).toBeLessThan(1);
+    expect(oil.core_with_fitment).toBe(oil.core_total);
+    expect(oil.core_with_price).toBe(oil.core_total);
   });
 
   it("marks battery_replacement unquotable when the battery has no trusted price", () => {

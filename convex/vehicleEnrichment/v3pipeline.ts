@@ -3198,6 +3198,27 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       });
     }
 
+    // Deferred-pricing self-heal: the in-action price deadline (600s-kill
+    // guard) defers work to keep the run alive — but the nightly cron is too
+    // slow a healer for a fresh config (wave-1 stress fleet: 17-22 parts/run
+    // deferred, quotability cratered until the next morning). Schedule the
+    // TARGETED zero-price backfill for this config immediately, in its own
+    // action budget. Capped at 12 parts so the backfill action itself stays
+    // inside the 600s limit; anything left goes to the nightly sweep.
+    const deferredPriceCount = priceGaps.filter(
+      (g) => g.reason === "price_deferred_timeout" || g.reason === "price_budget_exhausted",
+    ).length;
+    if (deferredPriceCount > 0) {
+      await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.priceRefresh.refreshStalePrices, {
+        budget: 0,
+        backfillBudget: Math.min(deferredPriceCount, 12),
+        vehicleConfigId: args.vehicleConfigId,
+      });
+      console.log(
+        `[v8/price] scheduled follow-up backfill for ${deferredPriceCount} deferred/budget-skipped part(s)`,
+      );
+    }
+
     // Reverse fitment corroboration (flag-gated, PARTS_REVERSE_FITMENT=on):
     // now that part_prices carry product-page URLs, verify each part's own
     // fitment table lists this vehicle. Scheduled so it never eats this

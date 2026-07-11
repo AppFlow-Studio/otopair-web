@@ -302,6 +302,7 @@ import type * as vehicleEnrichment_evidenceConsensus from "../vehicleEnrichment/
 import type * as vehicleEnrichment_extractionPrompts from "../vehicleEnrichment/extractionPrompts.js";
 import type * as vehicleEnrichment_firecrawl from "../vehicleEnrichment/firecrawl.js";
 import type * as vehicleEnrichment_fitmentQuarantine from "../vehicleEnrichment/fitmentQuarantine.js";
+import type * as vehicleEnrichment_fleetEval from "../vehicleEnrichment/fleetEval.js";
 import type * as vehicleEnrichment_gapFill from "../vehicleEnrichment/gapFill.js";
 import type * as vehicleEnrichment_helpers from "../vehicleEnrichment/helpers.js";
 import type * as vehicleEnrichment_laborRelabor from "../vehicleEnrichment/laborRelabor.js";
@@ -670,6 +671,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/extractionPrompts": typeof vehicleEnrichment_extractionPrompts;
   "vehicleEnrichment/firecrawl": typeof vehicleEnrichment_firecrawl;
   "vehicleEnrichment/fitmentQuarantine": typeof vehicleEnrichment_fitmentQuarantine;
+  "vehicleEnrichment/fleetEval": typeof vehicleEnrichment_fleetEval;
   "vehicleEnrichment/gapFill": typeof vehicleEnrichment_gapFill;
   "vehicleEnrichment/helpers": typeof vehicleEnrichment_helpers;
   "vehicleEnrichment/laborRelabor": typeof vehicleEnrichment_laborRelabor;

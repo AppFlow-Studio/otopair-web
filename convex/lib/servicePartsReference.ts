@@ -219,6 +219,14 @@ export const SERVICE_PARTS_REFERENCE: Record<string, ServicePartsSpec> = {
         serviceRole: "core",
         primary: true,
         quantity: { kind: "fluid", capacity: "oil_capacity_qts", packageSize: 1, unit: "qt" },
+        // OEM oil-bottle SKUs are the most hallucination-prone extraction in
+        // the pipeline (stress fleet 2026-07-11: 5 of 8 vehicles ended with
+        // the SKU rejected or null — "GC555401QDSP"-style fabrications and
+        // truncated MB numbers). Without a fallback the WHOLE oil change is
+        // unquotable until a real SKU lands; with it, quoting proceeds at a
+        // market per-quart synthetic price and the enriched SKU wins the
+        // moment it exists.
+        universalFallback: { name: "Engine oil (per quart)", defaultPriceUsd: 11 },
       },
       {
         roleKey: "oil_filter",

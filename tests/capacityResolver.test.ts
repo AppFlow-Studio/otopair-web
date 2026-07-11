@@ -186,3 +186,75 @@ describe("decideCapacity — seeded batch-value arbitration", () => {
     expect(d.confidence).toBe(0.5);
   });
 });
+
+// ── Stress-fleet findings (2026-07-11) ──────────────────────────────────
+describe("getCapacityBand — diesel awareness (F-350 finding)", () => {
+  test("HD diesel V8 coolant band admits 29-36 qt totals", () => {
+    const band = getCapacityBand("coolant_capacity_qts", 8, { diesel: true });
+    expect(band.rejectMax).toBeGreaterThanOrEqual(36.5);
+    // the 2020 F-350 6.7L truth (31.7-35.1 qt) must be in-band
+    expect(31.7).toBeGreaterThanOrEqual(band.rejectMin);
+    expect(35.1).toBeLessThanOrEqual(band.rejectMax);
+  });
+
+  test("gasoline bands unchanged (no diesel ctx)", () => {
+    const band = getCapacityBand("coolant_capacity_qts", 8);
+    expect(band.rejectMax).toBe(24);
+    const band4 = getCapacityBand("coolant_capacity_qts", 4, {});
+    expect(band4.typicalMax).toBe(11);
+  });
+
+  test("diesel oil band admits 13 qt (F-350) without loosening gasoline", () => {
+    const d = getCapacityBand("oil_capacity_qts", 8, { diesel: true });
+    expect(13).toBeLessThanOrEqual(d.typicalMax);
+    const g = getCapacityBand("oil_capacity_qts", 8);
+    expect(g.rejectMax).toBe(20);
+  });
+});
+
+describe("decideCapacity — domain-count outranks typicality (Silverado L84 finding)", () => {
+  const V8 = getCapacityBand("coolant_capacity_qts", 8);
+
+  test("two agreeing domains at 17.4/17.6 beat a lone in-typical 13.8", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [
+        obs({ value_qts: 13.8, domain: "lone-blog.com" }), // typical (10-16) but single-domain
+        obs({ value_qts: 17.4, domain: "alloemmanuals.com" }), // atypical (>16) but corroborated
+        obs({ value_qts: 17.6, domain: "chevytalk.org" }),
+      ],
+      V8,
+      { strict: false },
+    );
+    expect(d.tier).toBe("trusted");
+    expect(d.value_qts).toBeGreaterThanOrEqual(17.4);
+    expect(d.source_count).toBe(2);
+  });
+
+  test("7.6-qt regression: lone authoritative outlier still loses to a multi-domain typical cluster", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [
+        obs({ value_qts: 7.6, domain: "gm-techlink.com", authoritative: true }),
+        obs({ value_qts: 13.1, domain: "carcarekiosk.com" }),
+        obs({ value_qts: 13.4, domain: "fluidcapacity.com" }),
+      ],
+      V8,
+      { strict: false },
+    );
+    expect(d.value_qts).toBeGreaterThanOrEqual(13);
+  });
+
+  test("equal domain counts: typical cluster still preferred over lone atypical authority", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [
+        obs({ value_qts: 7.6, domain: "gm-techlink.com", authoritative: true }),
+        obs({ value_qts: 13.1, domain: "carcarekiosk.com" }),
+      ],
+      V8,
+      { strict: false },
+    );
+    expect(d.value_qts).toBe(13.1);
+  });
+});

@@ -711,14 +711,8 @@ function MultiPointInspectionDialogBody({
                     <InspectionStickerFields
                       status={inspectionStatus}
                       expires={inspectionExpires}
-                      aftermarket={modAftermarket}
-                      notes={modNotes}
-                      systems={modAffectedSystems}
                       onStatus={setInspectionStatus}
                       onExpires={setInspectionExpires}
-                      onAftermarket={setModAftermarket}
-                      onNotes={setModNotes}
-                      onSystems={setModAffectedSystems}
                     />
                   ) : null
                 }
@@ -747,6 +741,15 @@ function MultiPointInspectionDialogBody({
               {findings.attention.length + findings.monitor.length})
             </button>
           ) : null}
+
+          <AftermarketModsSection
+            aftermarket={modAftermarket}
+            notes={modNotes}
+            systems={modAffectedSystems}
+            onAftermarket={setModAftermarket}
+            onNotes={setModNotes}
+            onSystems={setModAffectedSystems}
+          />
         </div>
       )}
     </SurveyDialogShell>
@@ -1137,38 +1140,14 @@ function Row({
 function InspectionStickerFields({
   status,
   expires,
-  aftermarket,
-  notes,
-  systems,
   onStatus,
   onExpires,
-  onAftermarket,
-  onNotes,
-  onSystems,
 }: {
   status: InspectionStatus | "";
   expires: string;
-  aftermarket: boolean;
-  notes: string;
-  systems: AffectedSystem[];
   onStatus: (s: InspectionStatus | "") => void;
   onExpires: (s: string) => void;
-  onAftermarket: (b: boolean) => void;
-  onNotes: (s: string) => void;
-  onSystems: (s: AffectedSystem[]) => void;
 }) {
-  const toggleSystem = (value: AffectedSystem) => {
-    if (value === "cosmetic_only") {
-      onSystems(systems.includes("cosmetic_only") ? [] : ["cosmetic_only"]);
-      return;
-    }
-    const withoutCosmetic = systems.filter((s) => s !== "cosmetic_only");
-    onSystems(
-      withoutCosmetic.includes(value)
-        ? withoutCosmetic.filter((s) => s !== value)
-        : [...withoutCosmetic, value],
-    );
-  };
   return (
     <div className="mt-3 space-y-1 rounded-lg bg-primary/[0.03] p-3">
       <Row label="Inspection sticker">
@@ -1193,21 +1172,63 @@ function InspectionStickerFields({
           className="rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
         />
       </Row>
-      <Row label="Aftermarket modifications observed">
+    </div>
+  );
+}
+
+// Vehicle-level aftermarket mods capture — rendered as the last section of
+// the inspection form (not tied to any zone).
+function AftermarketModsSection({
+  aftermarket,
+  notes,
+  systems,
+  onAftermarket,
+  onNotes,
+  onSystems,
+}: {
+  aftermarket: boolean;
+  notes: string;
+  systems: AffectedSystem[];
+  onAftermarket: (b: boolean) => void;
+  onNotes: (s: string) => void;
+  onSystems: (s: AffectedSystem[]) => void;
+}) {
+  const toggleSystem = (value: AffectedSystem) => {
+    if (value === "cosmetic_only") {
+      onSystems(systems.includes("cosmetic_only") ? [] : ["cosmetic_only"]);
+      return;
+    }
+    const withoutCosmetic = systems.filter((s) => s !== "cosmetic_only");
+    onSystems(
+      withoutCosmetic.includes(value)
+        ? withoutCosmetic.filter((s) => s !== value)
+        : [...withoutCosmetic, value],
+    );
+  };
+  return (
+    <div className="rounded-xl border border-primary/10 bg-card p-4">
+      <div className="flex items-center justify-between">
+        <h4 className="text-[15px] font-semibold text-foreground">
+          Aftermarket modifications
+        </h4>
         <input
           type="checkbox"
           checked={aftermarket}
           onChange={(e) => onAftermarket(e.target.checked)}
           className="h-4 w-4 accent-[var(--primary)]"
         />
-      </Row>
+      </div>
+      <p className="mt-0.5 text-[11px] text-muted-foreground">
+        Anything non-stock on this vehicle? Otopair flags it to future shops on
+        the services it affects.
+      </p>
       {aftermarket ? (
-        <>
+        <div className="mt-3">
           <input
             value={notes}
             onChange={(e) => onNotes(e.target.value)}
             placeholder="Modification notes"
-            className="mt-1 w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+            className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
           />
           <div className="pt-2">
             <div className="text-[12px] font-medium text-foreground">
@@ -1266,7 +1287,7 @@ function InspectionStickerFields({
               );
             })()}
           </div>
-        </>
+        </div>
       ) : null}
     </div>
   );

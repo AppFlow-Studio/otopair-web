@@ -298,6 +298,12 @@ export const SIBLING_SAFE_FIELDS = new Set([
   "trans_fluid_type",         // ZF Lifetime, Dexron VI — transmission-specific
   "diff_fluid_type",          // gear oil spec — axle-specific
   "transfer_case_fluid_type", // transfer case fluid — platform-specific
+  // Fluid capacities — physical facts of the unit/platform, stable across years
+  "diff_fluid_capacity_qts",
+  "transfer_case_fluid_capacity_qts",
+  "brake_fluid_capacity_oz",
+  "ps_fluid_capacity_oz",
+  "transmission_fluid_capacity_qts",
 ]);
 
 /** All flat FieldResult field keys for fill rate counting. */
@@ -352,9 +358,22 @@ export const V4_FIELD_KEYS = [
   "brake_wear_sensor_front_oem", "brake_wear_sensor_rear_oem",
   // ── v7 New Fluid Types (3) ──
   "trans_fluid_type", "diff_fluid_type", "transfer_case_fluid_type",
+  // ── Fluid capacities (5) ── qts for diff/TC/trans (drain-and-fill IS the
+  //    service fill), US fluid oz for brake (full flush) / PS (system; null
+  //    on electric). trans maps to transmissions.fluid_capacity_drain_fill_qts.
+  "diff_fluid_capacity_qts", "transfer_case_fluid_capacity_qts",
+  "brake_fluid_capacity_oz", "ps_fluid_capacity_oz",
+  "transmission_fluid_capacity_qts",
   // ── v7 New Fluid Intervals (4) ──
   "diff_fluid_miles", "diff_fluid_months",
   "transfer_case_fluid_miles", "transfer_case_fluid_months",
+  // ── Wear/rotation guidance intervals (4) ── brake pads = inspection/
+  //    typical-life guidance (wear-based); tire rotation = real schedule.
+  "brake_pads_miles", "brake_pads_months",
+  "tire_rotation_miles", "tire_rotation_months",
+  // ── Coolant-flush + transmission-service discovery parts (4) ──
+  "thermostat_oem", "thermostat_gasket_oem",
+  "cvt_internal_filter_oem", "cvt_external_filter_oem",
   // ── v7 New Pricing (7) ──
   "rotor_front_price", "rotor_rear_price", "battery_price",
   "serpentine_belt_price", "coolant_flush_price",
@@ -390,4 +409,22 @@ export const SERVICE_LIST = [
   "Fuel System Cleaning",
   "AC Recharge / Service",
   "Multi-Point Inspection / Diagnostic",
+] as const;
+
+/**
+ * Services (by `services.slug`) with no mileage/months schedule by nature —
+ * inspections, diagnostics, and condition-driven work. Their interval rows
+ * are stamped status="on_demand" at finalize so they count as complete in
+ * the fill rate instead of reading as permanently-missing data (Jul 2026:
+ * these 8 were the Sierra's entire "missing intervals" gap).
+ */
+export const ON_DEMAND_SERVICE_SLUGS = [
+  "battery_test",
+  "wheel_alignment",
+  "tire_balance",
+  "emissions_test",
+  "state_inspection",
+  "check_engine_light",
+  "pre_purchase_inspection",
+  "diagnostic_scan",
 ] as const;

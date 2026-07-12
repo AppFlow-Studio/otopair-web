@@ -123,7 +123,10 @@ const BASELINE: ReadonlyArray<BaselineSpec> = [
     parts_low: 42, parts_high: 48,
     parts_cost_basis: "Toyota diff oil, 2qt (rear diff + transfer case). AWD only.",
     applies_to: "awd_only",
-    parts_baseline_unit_count: 1, // fixed_kit (1 service includes both diffs)
+    // per_unit_spec conversion (2026-07): the $42-48 band explicitly covers
+    // 2 qt per parts_cost_basis, so the baseline is 2 — leaving it at 1 would
+    // double/triple every differential quote once capacities scale.
+    parts_baseline_unit_count: 2,
   },
 ];
 

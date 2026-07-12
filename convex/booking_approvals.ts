@@ -931,7 +931,10 @@ export const getReauthBreakdownForBooking = query({
     const laborCents = qb?.labor_cents ?? 0;
     const taxCents = qb?.tax_cents ?? 0;
     const feeCents = qb?.service_fee_cents ?? 0;
-    const parts = snapshot.map((p) => ({
+    // Rows the snapshotRevalidation sweep stamped as cross-make contaminated
+    // are hidden from the itemization; the frozen totals above stay the
+    // contract, so lines may sum to less than parts_cents — accepted.
+    const parts = snapshot.filter((p) => p?.integrity_flag == null).map((p) => ({
       part_name: (p?.part_name ?? "Part") as string,
       ...(p?.oem_number ? { oem_number: p.oem_number as string } : {}),
       ...(p?.brand ? { brand: p.brand as string } : {}),

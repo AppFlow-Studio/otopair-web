@@ -82,13 +82,32 @@ export const seedUniversalConsumables = internalMutation({
       }
     }
 
-    // ── Live-patch battery_replacement.requires_parts → true ──
-    const battery = await ctx.db
-      .query("services")
-      .withIndex("by_slug", (q) => q.eq("slug", "battery_replacement"))
-      .first();
-    if (battery && battery.requires_parts !== true) {
-      await ctx.db.patch(battery._id, { requires_parts: true });
+    // ── Live-patch stale requires_parts flags ──
+    // battery_replacement: the corpus's stale seed had it false despite live
+    // fitments. tire_balance: live-seeded false, but its rule declares core
+    // wheel_weights — which now exist as a universal consumable, so the
+    // service must be allowed to bill parts. The fluid services bill core
+    // fluids (brake fluid, coolant, gear oil, PS fluid) but were seeded with
+    // an explicit false — which BEATS serviceRequiresParts' slug fallback and
+    // skipped the mechanic post-job parts confirmation. requires_parts does
+    // NOT gate bookability (that trusts is_labor_only only).
+    // transmission_service is deliberately ABSENT: not offered on prod
+    // (user decision, Jul 2026) — leave its flags untouched until it launches.
+    for (const slug of [
+      "battery_replacement",
+      "tire_balance",
+      "brake_fluid_flush",
+      "coolant_flush",
+      "differential_service",
+      "power_steering_flush",
+    ]) {
+      const svc = await ctx.db
+        .query("services")
+        .withIndex("by_slug", (q) => q.eq("slug", slug))
+        .first();
+      if (svc && svc.requires_parts !== true) {
+        await ctx.db.patch(svc._id, { requires_parts: true });
+      }
     }
 
     console.log(

@@ -763,9 +763,61 @@ export default defineSchema({
     duration_ms: v.optional(v.number()),
     fields_filled: v.optional(v.number()),
     fields_total: v.optional(v.number()),
+    // Applicable-fill headline: fields the applicability rules stamped
+    // not_applicable drop out of the denominator (a RWD sedan isn't
+    // penalized for lacking a transfer case). fill_rate keeps the legacy
+    // all-fields semantics for comparability.
+    fields_not_applicable: v.optional(v.number()),
+    applicable_fill_rate: v.optional(v.number()),
     fill_rate: v.optional(v.number()),
     fields_changed: v.optional(v.array(v.string())),
     errors: v.optional(v.array(v.string())),
+    // Structured sanity/OEM-validation flags from the finalize pass. Unlike
+    // the free-string `errors` above (kept for back-compat), these are
+    // queryable — manual_review_queue.list surfaces runs that carry any.
+    sanity_flags: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          severity: v.string(), // "reject" | "flag"
+          reason: v.string(),
+          value: v.optional(v.string()),
+        }),
+      ),
+    ),
+    // Per-field ledger of WHY each V4 field ended the run empty — the
+    // completion counterpart to sanity_flags (which only covers fields that
+    // HAD a value). Reasons: never_asked | llm_null | not_applicable |
+    // validation_dropped:<flag_reason>. Feeds the gap-fill pass and the
+    // director run detail.
+    field_gaps: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          reason: v.string(),
+        }),
+      ),
+    ),
+    // Parts-side quotability: per applicable parts-bearing service, do all
+    // CORE roles have a fitment AND a trusted price? fill_rate's blind spot —
+    // a 93% run can still carry an unquotable oil change (Jul 2026 A4).
+    quotability: v.optional(
+      v.object({
+        pct: v.number(),
+        services: v.array(
+          v.object({
+            slug: v.string(),
+            core_total: v.number(),
+            core_with_fitment: v.number(),
+            core_with_price: v.number(),
+          }),
+        ),
+      }),
+    ),
+    // Stamped when the post-run price backfill / nightly cron reconciles the
+    // quotability snapshot + part_price gaps after healing prices — without
+    // it a healed config read its finalize-time quotability forever.
+    quotability_updated_at: v.optional(v.number()),
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
     created_at: v.optional(v.number()),
@@ -2188,6 +2240,17 @@ export default defineSchema({
           // priced at the mechanic's post-job confirmation. Pairs with
           // bookings.low_confidence_parts. (Jun-9 review, item 10.)
           price_unknown: v.optional(v.boolean()),
+          // TRUE when the winner's freshest price row was older than
+          // PARTS_PRICE_MAX_AGE_DAYS at quote time — price still used, line
+          // renders as an estimate.
+          price_stale: v.optional(v.boolean()),
+          // Stamped by the snapshotRevalidation sweep when the frozen row
+          // fails the I1 make guard / brand-signature check ("cross_make" |
+          // "foreign_signature"). The row is KEPT — the frozen price is the
+          // customer's contract — but display/itemization surfaces filter on
+          // it. Reversible + auditable, mirroring fitmentQuarantine's
+          // data_quality stamp.
+          integrity_flag: v.optional(v.string()),
         })
       )
     ),

@@ -47,11 +47,14 @@ describe("upsertPartAndFitment write-time guard", () => {
     const t = makeT();
     const { alfaMake, fordMake, configId } = await seedMakesAndConfig(t);
 
-    // A Ford part already in the catalog.
+    // A FORD-stamped part whose number format is Mopar-plausible — it passes
+    // number sanitization for the Alfa config (so this test exercises the
+    // make-id guard specifically, not the earlier signature rejection; that
+    // path has its own choke-point test below).
     await t.run(async (ctx) => {
       await ctx.db.insert("oem_parts", {
-        oem_part_number: "BXT-94RH7-730",
-        oem_part_number_normalized: "BXT94RH7730",
+        oem_part_number: "68318394AA",
+        oem_part_number_normalized: "68318394AA",
         name: "Battery",
         make_id: fordMake,
         is_current: true,
@@ -60,7 +63,7 @@ describe("upsertPartAndFitment write-time guard", () => {
 
     const res = await t.mutation(upsert, {
       ...baseArgs(alfaMake, configId),
-      oem_part_number: "BXT-94RH7-730",
+      oem_part_number: "68318394AA",
       subcategory: "battery",
       service_type: "battery_replacement",
     });
@@ -78,12 +81,44 @@ describe("upsertPartAndFitment write-time guard", () => {
     expect(part.make_id).toBe(fordMake);
   });
 
-  test("normalized identity: formatting variants land on ONE part row", async () => {
+  test("choke point: a NEW foreign-signature number is rejected regardless of caller", async () => {
+    // The pipeline sanitizes at extraction, but diagnoseVin/admin/future
+    // callers may not — the mutation itself must reject a Motorcraft-format
+    // number for an Alfa config even when no oem_parts row exists yet.
     const t = makeT();
     const { alfaMake, configId } = await seedMakesAndConfig(t);
 
-    await t.mutation(upsert, { ...baseArgs(alfaMake, configId), oem_part_number: "5Q0 698 451 A" });
-    await t.mutation(upsert, { ...baseArgs(alfaMake, configId), oem_part_number: "5Q0698451A" });
+    const res = await t.mutation(upsert, {
+      ...baseArgs(alfaMake, configId),
+      oem_part_number: "BAGM-94RH7-800",
+      subcategory: "battery",
+      service_type: "battery_replacement",
+    });
+
+    expect(res.part_id).toBeNull();
+    expect((res as any).rejected).toBe("invalid_number");
+    const parts = await t.run((ctx) => ctx.db.query("oem_parts").collect());
+    expect(parts).toHaveLength(0);
+  });
+
+  test("normalized identity: formatting variants land on ONE part row", async () => {
+    // VAG numbers on a VW config — both formatting variants pass the
+    // volkswagen pattern, exercising normalized-identity dedup in isolation.
+    const t = makeT();
+    const { vwMake, vwConfigId } = await t.run(async (ctx) => {
+      const vwMake = await ctx.db.insert("makes", { name: "Volkswagen" } as any);
+      const modelId = await ctx.db.insert("models", { make_id: vwMake, name: "Golf" } as any);
+      const vwConfigId = await ctx.db.insert("vehicle_configs", {
+        config_key: `2024_vw_golf_${Date.now()}`,
+        year: 2024,
+        make_id: vwMake,
+        model_id: modelId,
+      } as any);
+      return { vwMake, vwConfigId };
+    });
+
+    await t.mutation(upsert, { ...baseArgs(vwMake, vwConfigId), oem_part_number: "5Q0 698 451 A" });
+    await t.mutation(upsert, { ...baseArgs(vwMake, vwConfigId), oem_part_number: "5Q0698451A" });
 
     const parts = await t.run((ctx) => ctx.db.query("oem_parts").collect());
     expect(parts).toHaveLength(1);
@@ -97,27 +132,27 @@ describe("upsertPartAndFitment write-time guard", () => {
 
     const { oldId, newId } = await t.run(async (ctx) => {
       const oldId = await ctx.db.insert("oem_parts", {
-        oem_part_number: "11427953129",
-        oem_part_number_normalized: "11427953129",
+        oem_part_number: "68152142AA",
+        oem_part_number_normalized: "68152142AA",
         name: "Oil Filter",
         make_id: alfaMake,
         is_current: false,
-        superseded_by: "11428583898",
+        superseded_by: "68152142AB",
       } as any);
       const newId = await ctx.db.insert("oem_parts", {
-        oem_part_number: "11428583898",
-        oem_part_number_normalized: "11428583898",
+        oem_part_number: "68152142AB",
+        oem_part_number_normalized: "68152142AB",
         name: "Oil Filter",
         make_id: alfaMake,
         is_current: true,
-        supersedes: "11427953129",
+        supersedes: "68152142AA",
       } as any);
       return { oldId, newId };
     });
 
     const res = await t.mutation(upsert, {
       ...baseArgs(alfaMake, configId),
-      oem_part_number: "11427953129",
+      oem_part_number: "68152142AA",
       subcategory: "oil_filter",
       service_type: "oil_change",
     });

@@ -1,0 +1,86 @@
+/**
+ * completionGate — terminal enrichment_status requires BOTH fill and
+ * quotability legs. Regression anchor: 2001 BMW 740iA finalized at fill 72% /
+ * quotability 0.42 with 18 price gaps and was marked "complete".
+ */
+import { describe, it, expect, afterEach } from "vitest";
+import {
+  computeEnrichmentStatus,
+  explainGateDecision,
+} from "../convex/vehicleEnrichment/completionGate";
+
+afterEach(() => {
+  delete process.env.ENRICHMENT_COMPLETE_FILL_MIN;
+  delete process.env.ENRICHMENT_COMPLETE_QUOTABILITY_MIN;
+});
+
+describe("computeEnrichmentStatus", () => {
+  it("BMW 740iA post-mortem: fill 72 + quotability 0.42 → partial", () => {
+    expect(
+      computeEnrichmentStatus({ fillRate: 72, quotabilityPct: 0.42, hasPriceGaps: true }),
+    ).toBe("partial");
+  });
+
+  it("both legs passing → complete", () => {
+    expect(
+      computeEnrichmentStatus({ fillRate: 80, quotabilityPct: 0.85, hasPriceGaps: false }),
+    ).toBe("complete");
+  });
+
+  it("high quotability cannot rescue low fill", () => {
+    expect(
+      computeEnrichmentStatus({ fillRate: 50, quotabilityPct: 1.0 }),
+    ).toBe("partial");
+  });
+
+  it("boundary values pass (>= semantics on both legs)", () => {
+    expect(
+      computeEnrichmentStatus({ fillRate: 70, quotabilityPct: 0.8 }),
+    ).toBe("complete");
+    expect(
+      computeEnrichmentStatus({ fillRate: 69.9, quotabilityPct: 0.8 }),
+    ).toBe("partial");
+    expect(
+      computeEnrichmentStatus({ fillRate: 70, quotabilityPct: 0.79 }),
+    ).toBe("partial");
+  });
+
+  it("undefined quotability fails the leg only when price gaps exist", () => {
+    expect(
+      computeEnrichmentStatus({ fillRate: 90, quotabilityPct: undefined, hasPriceGaps: true }),
+    ).toBe("partial");
+    expect(
+      computeEnrichmentStatus({ fillRate: 90, quotabilityPct: null, hasPriceGaps: false }),
+    ).toBe("complete");
+    // hasPriceGaps omitted behaves as "no known price gaps"
+    expect(
+      computeEnrichmentStatus({ fillRate: 90, quotabilityPct: undefined }),
+    ).toBe("complete");
+  });
+
+  it("thresholds are env-tunable", () => {
+    process.env.ENRICHMENT_COMPLETE_QUOTABILITY_MIN = "0.4";
+    expect(
+      computeEnrichmentStatus({ fillRate: 72, quotabilityPct: 0.42 }),
+    ).toBe("complete");
+    process.env.ENRICHMENT_COMPLETE_FILL_MIN = "80";
+    expect(
+      computeEnrichmentStatus({ fillRate: 72, quotabilityPct: 0.42 }),
+    ).toBe("partial");
+  });
+
+  it("garbage env values fall back to defaults", () => {
+    process.env.ENRICHMENT_COMPLETE_FILL_MIN = "not-a-number";
+    expect(
+      computeEnrichmentStatus({ fillRate: 70, quotabilityPct: 0.8 }),
+    ).toBe("complete");
+  });
+});
+
+describe("explainGateDecision", () => {
+  it("names the failing leg", () => {
+    const s = explainGateDecision({ fillRate: 72, quotabilityPct: 0.42 });
+    expect(s).toContain("fill=72% (min 70) PASS");
+    expect(s).toContain("quotability=0.42 (min 0.8) FAIL");
+  });
+});

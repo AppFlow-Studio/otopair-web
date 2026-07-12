@@ -171,6 +171,20 @@ crons.daily(
   {},
 );
 
+// Cross-make fitment quarantine: nightly sweep marking contaminated fitments
+// (wrong-make part on a config, or a foreign brand-signature number stamped
+// with the config's own make) as data_quality: cross_make_quarantined, plus
+// normalized-number dedupe. DB-only — no Firecrawl/LLM spend. The write-time
+// guards should make this a no-op; it exists because contamination was
+// observed REGENERATING on re-enrich (Jul 2026) and a durable net beats
+// chasing every vector.
+crons.daily(
+  "quarantine-cross-make-fitments",
+  { hourUTC: 9, minuteUTC: 30 },
+  internal.vehicleEnrichment.fitmentQuarantine.runQuarantineScan,
+  { dryRun: false },
+);
+
 // Labor times: fold freshly-recorded shop data into the labor median every 6h.
 // Job finalize already recomputes inline; this catches (config, service) pairs
 // touched by labor_quote_snapshots so empirical accrues continuously without a

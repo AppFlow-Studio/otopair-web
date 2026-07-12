@@ -54,8 +54,8 @@ const basePassport: VehiclePassportData = {
       status: "current",
     },
     modifications: {
-      status: "none_observed",
-      notes: null,
+      has_mods: false,
+      affected_systems: [],
     },
   },
   usage: {

@@ -4170,9 +4170,7 @@ export const seedDashboardBookings = mutation({
         ["good", "fair", "replace_soon"] as const,
         `${vehicle.vin}:condition`
       );
-      const modificationsRatio = dashboardSeedRatio(`${vehicle.vin}:mods`);
-      const modificationStatus: "aftermarket_observed" | "none_observed" =
-        modificationsRatio > 0.72 ? "aftermarket_observed" : "none_observed";
+      const hasMods = dashboardSeedRatio(`${vehicle.vin}:mods`) > 0.72;
       const passportRecord = {
         vin: vehicle.vin,
         mileage,
@@ -4218,11 +4216,11 @@ export const seedDashboardBookings = mutation({
           ),
         },
         modifications: {
-          status: modificationStatus,
-          notes:
-            modificationStatus === "aftermarket_observed"
-              ? "Aftermarket wheels noted during prior visit."
-              : null,
+          has_mods: hasMods,
+          notes: hasMods ? "Aftermarket wheels and lowering springs noted during prior visit." : null,
+          affected_systems: hasMods
+            ? ["wheels_tires" as const, "suspension_ride_height" as const]
+            : [],
         },
         created_at: reportedAt - 35 * 24 * 60 * 60 * 1000,
         updated_at: reportedAt,

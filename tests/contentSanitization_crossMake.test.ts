@@ -100,3 +100,84 @@ describe("sanitizePartNumber — per-make format enforcement", () => {
     expect(sanitizePartNumber("1067701-00-A", "Tesla")).toBe("1067701-00-A");
   });
 });
+
+describe("sanitizePartNumber — Hyundai chemical/accessory SKUs (Veloster Turbo case)", () => {
+  it("accepts fluid SKUs with a third block or revision suffix", () => {
+    expect(sanitizePartNumber("00232-FSYN5-30WAR", "Hyundai")).toBe("00232-FSYN5-30WAR");
+    expect(sanitizePartNumber("08950-00020-B", "Hyundai")).toBe("08950-00020-B");
+  });
+
+  it("still accepts the plain 5-5 part format", () => {
+    expect(sanitizePartNumber("26300-35505", "Hyundai")).toBe("26300-35505");
+    expect(sanitizePartNumber("28113-2V100", "Kia")).toBe("28113-2V100");
+  });
+
+  it("still rejects wrong-make formats for Hyundai", () => {
+    expect(sanitizePartNumber("11428583898", "Hyundai")).toBeNull(); // BMW 11-digit
+    expect(sanitizePartNumber("BC3Z-6731-B", "Hyundai")).toBeNull(); // Ford OE
+  });
+});
+
+describe("sanitizePartNumber — audit-driven pattern widenings (Jul 11 2026)", () => {
+  it("Toyota: dashless compact + chemical third block", () => {
+    expect(sanitizePartNumber("9091602570", "Toyota")).toBe("9091602570");
+    expect(sanitizePartNumber("00544-21171-325", "Toyota")).toBe("00544-21171-325");
+    expect(sanitizePartNumber("00279-0WQTE-01", "Toyota")).toBe("00279-0WQTE-01");
+    expect(sanitizePartNumber("00544-H8AGM-TS", "Toyota")).toBe("00544-H8AGM-TS");
+    // 11-digit BMW number must NOT pass the dashless branch (exactly 5+5)
+    expect(sanitizePartNumber("11428583898", "Toyota")).toBeNull();
+  });
+
+  it("Nissan: brake-part and chemical first blocks + 7-char tails", () => {
+    expect(sanitizePartNumber("D1060-9HE0B", "Nissan")).toBe("D1060-9HE0B");
+    expect(sanitizePartNumber("D4060-9HU0A", "Nissan")).toBe("D4060-9HU0A");
+    expect(sanitizePartNumber("110D2-6CA0B", "Nissan")).toBe("110D2-6CA0B");
+    expect(sanitizePartNumber("999M1-NBH5A", "Nissan")).toBe("999M1-NBH5A");
+    expect(sanitizePartNumber("999MP-L25500P", "Nissan")).toBe("999MP-L25500P");
+    expect(sanitizePartNumber("999PK-000W20N", "Nissan")).toBe("999PK-000W20N");
+    expect(sanitizePartNumber("15208-65F0E", "Nissan")).toBe("15208-65F0E");
+  });
+
+  it("GM: ACDelco battery codes and 5-digit dash bodies", () => {
+    expect(sanitizePartNumber("94RAGM", "Chevrolet")).toBe("94RAGM");
+    expect(sanitizePartNumber("48AGM", "Chevrolet")).toBe("48AGM");
+    expect(sanitizePartNumber("15-11125", "Chevrolet")).toBe("15-11125");
+    expect(sanitizePartNumber("10-9243", "GMC")).toBe("10-9243");
+  });
+
+  it("Ford: 1-char second block (XL-3 friction modifier)", () => {
+    expect(sanitizePartNumber("XL-3", "Ford")).toBe("XL-3");
+    expect(sanitizePartNumber("FL-820-S", "Ford")).toBe("FL-820-S");
+  });
+
+  it("Honda: NGK-style plug SKUs", () => {
+    expect(sanitizePartNumber("9807B-5517W", "Honda")).toBe("9807B-5517W");
+  });
+
+  it("Mercedes: Q-prefix accessory SKUs", () => {
+    expect(sanitizePartNumber("Q1030004", "Mercedes")).toBe("Q1030004");
+    expect(sanitizePartNumber("Q 103 0004", "Mercedes-Benz")).toBe("Q 103 0004");
+  });
+
+  it("VAG: double-suffix wiper SKUs", () => {
+    expect(sanitizePartNumber("17B955425A03C", "Volkswagen")).toBe("17B955425A03C");
+    expect(sanitizePartNumber("5NN955425", "Volkswagen")).toBe("5NN955425");
+  });
+
+  it("multi-number strings and prose stay rejected", () => {
+    expect(sanitizePartNumber('99H09-AK026H (driver 26") + 99H09-AK018-H (passenger 18")', "Hyundai")).toBeNull();
+    expect(sanitizePartNumber("Included with oil filter 04152-WAA03", "Toyota")).toBeNull();
+    expect(sanitizePartNumber("G13 / G12evo (VW spec TL-VW 774 J)", "Volkswagen")).toBeNull();
+  });
+});
+
+describe("sanitizePartNumber — Hyundai Mobis digit-led alphanumeric first block", () => {
+  it("accepts 2SF79-AQ000 (Veloster cabin filter, rejected live Jul 11 2026)", () => {
+    expect(sanitizePartNumber("2SF79-AQ000", "Hyundai")).toBe("2SF79-AQ000");
+  });
+
+  it("still rejects letter-led first blocks and foreign formats", () => {
+    expect(sanitizePartNumber("BC3Z-6731-B", "Hyundai")).toBeNull(); // Ford OE
+    expect(sanitizePartNumber("PE01-14-302A", "Hyundai")).toBeNull(); // Mazda
+  });
+});

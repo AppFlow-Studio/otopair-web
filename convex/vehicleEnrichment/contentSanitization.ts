@@ -143,40 +143,73 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   mini: /^\d{2}[\s-]?\d{2}[\s-]?[0-9A-Z][\s-]?[0-9A-Z]{3}[\s-]?[0-9A-Z]{3}$/i,
   // Mercedes: (A) XXX XXX XX XX, optional variant/color suffix block. The A
   // prefix is sometimes dropped in listings.
-  mercedes: /^A?[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}(?:[\s-]?[0-9A-Z]{2,6})?$/i,
-  mercedesbenz: /^A?[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}(?:[\s-]?[0-9A-Z]{2,6})?$/i,
+  // Q-prefix accessory/chemical SKUs (Q 103 0004 wiper set) are real M-B
+  // numbers the A-prefix pattern rejected (audit Jul 11 2026).
+  mercedes: /^(?:A?[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}(?:[\s-]?[0-9A-Z]{2,6})?|Q[\s-]?\d{3}[\s-]?\d{4})$/i,
+  mercedesbenz: /^(?:A?[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}(?:[\s-]?[0-9A-Z]{2,6})?|Q[\s-]?\d{3}[\s-]?\d{4})$/i,
   // Toyota/Lexus: XXXXX-XXXXX — second block is alphanumeric (90915-YZZF2,
   // 00272-SLLC2); digits-only rejected most filters and chemicals.
-  toyota: /^\d{5}-[A-Z0-9]{4,6}$/i,
-  lexus: /^\d{5}-[A-Z0-9]{4,6}$/i,
+  // Audit findings (Jul 11 2026): compact dashless 10-char form (9091602570)
+  // — restricted to EXACTLY 5+5 so foreign 11-digit numbers can't slip in —
+  // and chemical/kit SKUs with a dashed third block (00544-21171-325,
+  // 00279-0WQTE-01, 00544-H8AGM-TS).
+  toyota: /^\d{5}(?:-[A-Z0-9]{4,6}(?:-[A-Z0-9]{1,4})?|[A-Z0-9]{5})$/i,
+  lexus: /^\d{5}(?:-[A-Z0-9]{4,6}(?:-[A-Z0-9]{1,4})?|[A-Z0-9]{5})$/i,
   // Honda/Acura: XXXXX-XXX-XXX parts, XXXXX-XXXX fluids/chemicals (08798-9080),
-  // OL999-style accessories.
-  honda: /^(?:\d{5}-[A-Z0-9]{3}-[A-Z0-9]{3,4}|\d{5}-\d{4}|[A-Z]{2}\d{3}-\d{4})$/i,
-  acura: /^(?:\d{5}-[A-Z0-9]{3}-[A-Z0-9]{3,4}|\d{5}-\d{4}|[A-Z]{2}\d{3}-\d{4})$/i,
+  // OL999-style accessories, NGK-sourced plug SKUs (9807B-5517W; audit Jul 11).
+  honda: /^(?:\d{5}-[A-Z0-9]{3}-[A-Z0-9]{3,4}|\d{5}-\d{4}|[A-Z]{2}\d{3}-\d{4}|\d{4}[A-Z]-\d{4}[A-Z]?)$/i,
+  acura: /^(?:\d{5}-[A-Z0-9]{3}-[A-Z0-9]{3,4}|\d{5}-\d{4}|[A-Z]{2}\d{3}-\d{4}|\d{4}[A-Z]-\d{4}[A-Z]?)$/i,
   // Ford/Lincoln: OE service numbers (BC3Z-6731-B / F1TZ-...) and Motorcraft
   // lines (BXT-94RH7-730, FL-820-S, SP-515).
-  ford: /^[A-Z0-9]{2,4}-[A-Z0-9]{2,7}(?:-[A-Z0-9]{1,4})?$/i,
-  lincoln: /^[A-Z0-9]{2,4}-[A-Z0-9]{2,7}(?:-[A-Z0-9]{1,4})?$/i,
+  // Second block min 1 char — the XL-3 friction modifier is a real Motorcraft
+  // SKU that the {2,7} minimum rejected (audit Jul 11 2026).
+  ford: /^[A-Z0-9]{2,4}-[A-Z0-9]{1,7}(?:-[A-Z0-9]{1,4})?$/i,
+  lincoln: /^[A-Z0-9]{2,4}-[A-Z0-9]{1,7}(?:-[A-Z0-9]{1,4})?$/i,
   // GM (Chevy/GMC/Cadillac/Buick): 7-9 digit part numbers + ACDelco codes
-  // (PF64, TS10083, 12345678).
-  chevrolet: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?)$/i,
-  gmc: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?)$/i,
-  cadillac: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?)$/i,
-  buick: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?)$/i,
-  // Hyundai/Kia/Genesis: XXXXX-XXXXX
-  hyundai: /^\d{5}-?[A-Z0-9]{5}$/i,
-  kia: /^\d{5}-?[A-Z0-9]{5}$/i,
-  genesis: /^\d{5}-?[A-Z0-9]{5}$/i,
+  // (PF64, TS10083, 12345678) + ACDelco fluid/chemical dash codes
+  // (10-9243 Dex-Cool, 10-4133 ATF).
+  // Audit findings (Jul 11 2026): digit-first ACDelco battery codes (94RAGM,
+  // 48AGM) and 5-digit dash bodies (15-11125 cabin filter).
+  chevrolet: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2}-\d{3,5}[A-Z]?)$/i,
+  gmc: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2}-\d{3,5}[A-Z]?)$/i,
+  cadillac: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2}-\d{3,5}[A-Z]?)$/i,
+  buick: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2}-\d{3,5}[A-Z]?)$/i,
+  // Hyundai/Kia/Genesis: XXXXX-XXXXX parts, plus chemical/accessory SKUs with
+  // a third block or revision suffix (00232-FSYN5-30WAR engine oil,
+  // 08950-00020-B gear oil) — the plain 5-5 pattern rejected every fluid SKU
+  // (2015 Veloster Turbo, Jul 2026 — same failure class as the VAG G-numbers).
+  // Suffix block requires its literal dash — with it optional, any bare
+  // 11-digit string (a BMW number) parsed as 5+5+1 and slipped through.
+  // First block is digit-led alphanumeric, not digits-only: Mobis accessory
+  // SKUs like 2SF79-AQ000 cabin filter (2015 Veloster re-run, Jul 11 2026).
+  hyundai: /^\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
+  kia: /^\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
+  genesis: /^\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
   // VW/Audi/Porsche (VAG): AAA BBB CCC (+ up to 2-char suffix), first block
   // alphanumeric (06L115562B); old pattern required a digits-only first block.
-  volkswagen: /^[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,2})?$/i,
-  audi: /^[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,2})?$/i,
-  porsche: /^[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,2})?$/i,
+  // Second alternation: VAG fluid/chemical G- and B-numbers — G + 3 digits +
+  // 3 ALPHANUMERIC (G 012 A8G M1 coolant has letters in the third block) +
+  // up to two 1-3 char suffix blocks (G 052 167 A2 oil, G 060 162 A2 ATF,
+  // B 000 750 M3 brake fluid). This branch previously didn't exist, so EVERY
+  // fluid SKU failed the 3-char first block and no fluid fitment was ever
+  // written for VAG configs. TL-numbers (TL 774x) are spec designations, not
+  // orderable SKUs — deliberately still rejected.
+  // Third alternation: VAG standard-hardware N-numbers — N + 7-9 digits
+  // (N0138157 drain plug gasket, N 908 132 02). Rejected live 2026-07-10.
+  // First alternation's suffix widened to two 1-3 char groups: wiper SKUs
+  // like 17B 955 425 A 03C carry index letter + revision (audit Jul 11 2026).
+  volkswagen: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
+  audi: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
+  porsche: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
   // Subaru: various letter-digit combos (deliberately broad)
   subaru: /^[A-Z0-9]{5,12}$/i,
-  // Nissan/Infiniti: XXXXX-XXXXX
-  nissan: /^\d{5}-?[A-Z0-9]{5}$/i,
-  infiniti: /^\d{5}-?[A-Z0-9]{5}$/i,
+  // Nissan/Infiniti: XXXXX-XXXXX + chemical/fluid SKUs whose first block mixes
+  // letters and digits (999MP-A9001 ATF, KE908-99931 oil).
+  // Audit findings (Jul 11 2026): brake-part first blocks letter+4digits
+  // (D1060-9HE0B pads, D4060-9HU0A rotors), mixed blocks like 110D2-6CA0B,
+  // 999M1-NBH5A, and 7-char chemical tails (999MP-L25500P, 999PK-000W20N).
+  nissan: /^(?:\d{5}|[A-Z]\d{4}|\d{3}[A-Z]{2}|[A-Z]{2}\d{3}|\d{3}[A-Z]\d)-?[A-Z0-9]{5,7}$/i,
+  infiniti: /^(?:\d{5}|[A-Z]\d{4}|\d{3}[A-Z]{2}|[A-Z]{2}\d{3}|\d{3}[A-Z]\d)-?[A-Z0-9]{5,7}$/i,
   // Mopar family (Chrysler/Dodge/Jeep/Ram/Fiat/Alfa Romeo): 8 digits + 2-letter
   // revision (68400577AA), legacy 0-prefixed (04884899AC), and alphanumeric
   // bodies with revision suffix (BB0H8800AC).
@@ -300,6 +333,14 @@ const BRAND_SIGNATURES: BrandSignature[] = [
     pattern: /^[0-9A-Z]{3}[\s-]\d{3}[\s-]\d{3}(?:[\s-][A-Z0-9]{1,2})?$/i,
     makes: VAG_FAMILY,
   },
+  // VAG fluid/chemical G-numbers (G 052 167 A2 / G012A8GM1): the G prefix is
+  // distinctively VAG, so one extracted for another marque is contamination.
+  // (B-numbers are excluded — too short/ambiguous to be a reliable signature.)
+  {
+    label: "vag_fluid",
+    pattern: /^G[\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}$/i,
+    makes: VAG_FAMILY,
+  },
   // Mopar: 8 digits + 2-letter revision (68400577AA)
   {
     label: "mopar",
@@ -361,6 +402,22 @@ function isPlausiblePartNumber(value: string): boolean {
 }
 
 /**
+ * Makes whose digit-only part numbers have a FIXED canonical length, so a
+ * value that lost leading zeros (JSON-number extraction, upstream numeric
+ * coercion) fails the make pattern and can be safely restored by left-padding.
+ * Only fixed-length formats qualify: for GM/Mopar/Volvo a zero-stripped
+ * number still matches a shorter valid format, so padding there would corrupt
+ * legitimate short SKUs. Found live on the 2001 BMW 740iA (Jul 11 2026):
+ * 07119963130 arrived as 7119963130 and three real parts were rejected.
+ */
+const SALVAGE_DIGIT_LENGTHS: Record<string, number> = {
+  bmw: 11,
+  mini: 11,
+  mercedes: 10,
+  mercedesbenz: 10,
+};
+
+/**
  * Validate a part number against known OEM patterns.
  * Returns the cleaned part number or null if it's hallucinated garbage,
  * carries another manufacturer's brand signature, or fails its own make's
@@ -391,6 +448,24 @@ export function sanitizePartNumber(value: string, makeName?: string): string | n
     const makeKey = makeName.toLowerCase().replace(/[-\s]/g, "");
     const pattern = OEM_PART_PATTERNS[makeKey];
     if (pattern && !pattern.test(cleaned)) {
+      // Leading-zero salvage: digit-only value 1-2 chars short of the make's
+      // fixed canonical length — restore the zeros iff the padded form passes.
+      const canonicalLen = SALVAGE_DIGIT_LENGTHS[makeKey];
+      if (
+        process.env.PARTS_SALVAGE_LEADING_ZERO !== "off" &&
+        canonicalLen &&
+        /^\d+$/.test(cleaned) &&
+        cleaned.length < canonicalLen &&
+        canonicalLen - cleaned.length <= 2
+      ) {
+        const padded = cleaned.padStart(canonicalLen, "0");
+        if (pattern.test(padded)) {
+          console.log(
+            `[sanitize] SALVAGED leading zero: "${cleaned}" → "${padded}" for make=${makeName}`,
+          );
+          return padded;
+        }
+      }
       console.log(
         `[sanitize] REJECTED part number "${cleaned}" for make=${makeName}: fails ${makeKey} format`,
       );
@@ -484,6 +559,58 @@ export function sanitizeNumber(val: unknown): number | undefined {
 
   const n = parseFloat(s);
   if (isNaN(n) || n === 0 || !isFinite(n)) return undefined;
+  return n;
+}
+
+// ─── Capacity Sanitization (unit-aware) ──────────────────────────
+
+const QUARTS_PER_LITER = 1.05669;
+const QUARTS_PER_GALLON = 4;
+
+/**
+ * Sanitize a fluid-capacity value that MUST end up in US quarts.
+ *
+ * Unlike sanitizeNumber (which strips the unit token WITHOUT converting — so
+ * "13.1 L" would become 13.1 and be stored as if it were quarts), this inspects
+ * the trailing unit and CONVERTS liters/ml/gallons to quarts. This closes a
+ * latent liters-as-quarts bug on every `_qts` capacity field.
+ *
+ * When the value is already numeric (unit context lost upstream) or carries a
+ * quart unit / no unit, it is returned as-is in quarts.
+ */
+export function sanitizeCapacityQuarts(val: unknown): number | undefined {
+  if (val === null || val === undefined) return undefined;
+  if (typeof val === "number") {
+    if (val === 0 || !isFinite(val)) return undefined;
+    return val;
+  }
+  if (typeof val !== "string") return undefined;
+
+  let s = stripHtml(val);
+  s = stripMarkdown(s);
+  s = unwrapValue(s);
+  s = normalizeWhitespace(s).trim();
+  if (s.length === 0) return undefined;
+
+  // Leading numeric token + optional immediately-following unit word.
+  const m = s.match(/(-?\d+(?:\.\d+)?)\s*([a-zA-Z]+)?/);
+  if (!m) return undefined;
+  const n = parseFloat(m[1]);
+  if (isNaN(n) || n === 0 || !isFinite(n)) return undefined;
+
+  const unit = (m[2] ?? "").toLowerCase();
+  const round2 = (x: number) => Math.round(x * 100) / 100;
+
+  if (unit === "l" || unit === "liter" || unit === "liters" || unit === "litre" || unit === "litres") {
+    return round2(n * QUARTS_PER_LITER);
+  }
+  if (unit === "ml") {
+    return round2((n / 1000) * QUARTS_PER_LITER);
+  }
+  if (unit === "gal" || unit === "gallon" || unit === "gallons") {
+    return round2(n * QUARTS_PER_GALLON);
+  }
+  // "qt" / "quart(s)" / no unit → already US quarts.
   return n;
 }
 

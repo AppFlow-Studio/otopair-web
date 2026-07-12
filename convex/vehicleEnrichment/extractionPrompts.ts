@@ -31,6 +31,17 @@ Confidence scoring (MUST follow):
 - 0.6 = from training knowledge, less certain or applies to a model range
 - Below 0.6 = return null — do NOT guess
 
+CRITICAL for NUMERIC SPECS (fluid capacities, torques, intervals, pressures):
+- A single forum / community / crowd-answer post is NOT a reliable source for a number.
+  If a numeric value appears ONLY on a forum with no OEM/manufacturer corroboration,
+  score it no higher than 0.6 (and prefer to return null). Never score a single-forum
+  number 0.8+.
+- Prefer OEM / manufacturer / official service documentation for every numeric spec.
+- Report the value for the EXACT engine code provided — do NOT use a figure for a
+  different engine option offered on the same model.
+- Capacities must be in US quarts. If a source gives liters, CONVERT to quarts
+  (quarts = liters × 1.057) before returning. Never copy a liter figure as a quart figure.
+
 For each field return: { "value": ..., "source": "url or 'training_data'", "confidence": 0.0-1.0 }
 
 Return ONLY valid JSON with no preamble, explanation, or markdown formatting.`;
@@ -95,9 +106,9 @@ Use remaining searches to fill gaps.
 
 ### FLUIDS
 - oil_viscosity: OEM recommended engine oil viscosity (e.g. "5W-30"). Must be manufacturer spec.
-- oil_capacity_qts: Engine oil capacity in US quarts WITH filter change. Number only.
+- oil_capacity_qts: Engine oil capacity in US quarts WITH filter change. Number only. If a source lists liters, convert to quarts (× 1.057).
 - coolant_type: OEM coolant specification (e.g. "BMW Long Life Coolant", "HOAT", "OAT", "G13").
-- coolant_capacity_qts: Cooling system total capacity in US quarts. Number only.
+- coolant_capacity_qts: Cooling system total capacity in US quarts. Number only. Often published in LITERS — convert to quarts (× 1.057); do NOT copy a liter value. Use the exact engine (${vehicle.engineCode || vehicle.displacement + "L"}), not other engine options. A lone forum post is not sufficient — needs OEM/2+ corroboration.
 - power_steering_type: One of exactly: "electric", "hydraulic", "none".
 - brake_fluid_type: Exact spec (e.g. "DOT 4", "DOT 4 LV", "DOT 3").
 
@@ -165,7 +176,7 @@ ${sourceBlock(sources, "PRE-GATHERED: OEM Parts & Catalog Pages")}
    - Ford: alphanumeric with dashes
    - GM: 8-digit (e.g. 55594651)
 5. Aftermarket "replaces OEM #" listings: extract the OEM number referenced, use confidence 0.7.
-6. Part numbers with spaces are fine — return digits only (e.g. "11 42 8 570 590" → "11428570590").
+6. Part numbers with spaces are fine — return digits only (e.g. "11 42 8 570 590" → "11428570590"). Always as a JSON STRING preserving leading zeros (e.g. "07119963130", never the bare number 7119963130).
 
 ## SEARCH STRATEGY
 Check source material FIRST. Then use web_search aggressively — you have ${10} searches available:

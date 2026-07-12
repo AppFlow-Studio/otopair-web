@@ -35,14 +35,16 @@ RULES:
 4. Labor rate: $125/hr fixed. Do not search for this.
 5. Labor hours: use training knowledge for well-established book times (mark source_type: "training_data", confidence 0.75). Oil change is typically 0.5 hrs.
 6. If you cannot find a price for a specific OEM part after 1-2 targeted searches, OMIT that part from parts_breakdown[]. Do not include it with a null or 0 price. Do not guess.
-7. Return VALID JSON only. No markdown fences, no explanation, no preamble.`;
+7. Return OEM part numbers as JSON STRINGS exactly as printed, preserving leading zeros (e.g. "07119963130", never the bare number 7119963130).
+8. Return VALID JSON only. No markdown fences, no explanation, no preamble.`;
 
-/** Field descriptions used in the gap fill user prompt. */
-const FIELD_DESCRIPTIONS: Record<string, string> = {
+/** Field descriptions used in the gap fill user prompt. Shared with the
+ *  Batch-3 gap-fill re-ask pass (gapFillPrompt.ts). */
+export const FIELD_DESCRIPTIONS: Record<string, string> = {
   oil_viscosity: "Engine oil viscosity specification (e.g., 0W-30, 5W-20)",
-  oil_capacity_qts: "Engine oil capacity in quarts (including filter)",
+  oil_capacity_qts: "Engine oil capacity in US quarts (including filter). If a source gives liters, convert (qts = L × 1.057).",
   coolant_type: "Coolant specification (e.g., BMW HT-12, Toyota SLLC)",
-  coolant_capacity_qts: "Cooling system capacity in quarts",
+  coolant_capacity_qts: "Cooling system TOTAL capacity (initial fill) in US quarts for THIS exact engine — if the source lists both 'total fill' and 'drain and refill', use total fill. Usually published in liters — convert (qts = L × 1.057); never copy a liter value as quarts.",
   brake_fluid_type: "Brake fluid specification (e.g., DOT 4, DOT 3)",
   power_steering_type: "Power steering system type (electric/hydraulic)",
   oil_change_miles: "Oil change interval in miles",
@@ -103,6 +105,22 @@ const FIELD_DESCRIPTIONS: Record<string, string> = {
   diff_fluid_months: "Differential fluid change interval in months",
   transfer_case_fluid_miles: "Transfer case fluid change interval in miles",
   transfer_case_fluid_months: "Transfer case fluid change interval in months",
+  // Fluid capacities
+  diff_fluid_capacity_qts: "Differential fluid drain-and-fill capacity in US quarts (rear diff for RWD/AWD; typical 0.5-4 qts). Convert from liters if needed (qts = L × 1.057).",
+  transfer_case_fluid_capacity_qts: "Transfer case fluid drain-and-fill capacity in US quarts (AWD/4WD only; typical 0.5-3 qts). Convert from liters if needed.",
+  brake_fluid_capacity_oz: "Full-flush brake system capacity in US fluid OUNCES (typical 16-48 oz; 1 L = 33.8 oz).",
+  ps_fluid_capacity_oz: "Power steering system capacity in US fluid OUNCES (hydraulic systems only; 1 L = 33.8 oz).",
+  transmission_fluid_capacity_qts: "Transmission DRAIN-AND-FILL (pan drop) capacity in US quarts — NOT the total/dry-fill figure (typical 2-8 qts). Convert from liters if needed (qts = L × 1.057).",
+  // Wear/rotation guidance intervals
+  brake_pads_miles: "Manufacturer's brake pad inspection / typical pad-life guidance in miles (wear-based, not a hard schedule)",
+  brake_pads_months: "Manufacturer's brake pad inspection guidance in months",
+  tire_rotation_miles: "Tire rotation schedule in miles (typically 5,000-8,000)",
+  tire_rotation_months: "Tire rotation schedule in months",
+  // coolant_flush / transmission_service discovery parts
+  thermostat_oem: "OEM thermostat part number (replaced only if found bad during a coolant flush)",
+  thermostat_gasket_oem: "OEM thermostat gasket/seal part number",
+  cvt_internal_filter_oem: "OEM CVT internal (mesh screen) filter part number — CVT transmissions only; null otherwise",
+  cvt_external_filter_oem: "OEM CVT external (cooler line) filter part number — CVT transmissions only; null otherwise",
 };
 
 export const SERVICE_LIST = [

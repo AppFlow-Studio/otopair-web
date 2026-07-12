@@ -1,6 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
+import { anyServiceAffected } from "../lib/vehicle-mod-systems";
 
 // ---------------------------------------------------------------------------
 // Local auth + formatting helpers
@@ -253,14 +254,34 @@ export const getFeed = query({
         const customer = await ctx.db.get(booking.user_id);
         const vehicle = await resolveVehicleShort(ctx, booking.vin);
         const serviceNames: string[] = [];
+        const serviceSlugs: string[] = [];
         if (booking.service_ids?.length) {
           const services = await Promise.all(
             booking.service_ids.map((id: any) => ctx.db.get(id))
           );
           for (const s of services) {
             if (s && (s as any).name) serviceNames.push((s as any).name);
+            if (s && (s as any).slug) serviceSlugs.push((s as any).slug);
           }
         }
+
+        // Vehicle-mod flag: does this vehicle have recorded mods affecting one
+        // of this booking's services?
+        let modFlag: { affected: boolean; notes: string | null } | null = null;
+        if (booking.vin) {
+          const passport: any = await ctx.db
+            .query("vehicle_passports")
+            .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
+            .first();
+          const mods = passport?.modifications;
+          if (
+            mods?.has_mods === true &&
+            anyServiceAffected(serviceSlugs, mods.affected_systems ?? [])
+          ) {
+            modFlag = { affected: true, notes: mods.notes ?? null };
+          }
+        }
+
         const createdAt = booking.created_at ?? booking._creationTime ?? 0;
         return {
           kind: "booking" as const,
@@ -290,6 +311,7 @@ export const getFeed = query({
           ),
           tireSpecs: null,
           rotorSpecs: null,
+          modFlag,
         };
       })
     );
@@ -315,6 +337,7 @@ export const getFeed = query({
           urgency: null,
           tireSpecs: booking.tire_specs ?? null,
           rotorSpecs: null,
+          modFlag: null,
         };
       })
     );
@@ -340,6 +363,7 @@ export const getFeed = query({
           urgency: null,
           tireSpecs: null,
           rotorSpecs: booking.rotor_specs ?? null,
+          modFlag: null,
         };
       })
     );

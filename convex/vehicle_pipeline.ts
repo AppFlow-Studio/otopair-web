@@ -22,6 +22,7 @@ import { advancedVinDecode, extractVDBFields } from "./lib/vehicleDatabases";
 import { findHaloVariant } from "./lib/haloVariantRules";
 import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
+import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -287,17 +288,13 @@ export const processVin = internalAction({
       // Priority: VDB code → NHTSA code (filtered) → Claude norm → web search + Haiku → synthetic
       // ════════════════════════════════════════════════════════════
 
-      // Marketing terms that are NOT real engine codes
-      const ENGINE_MARKETING_TERMS = new Set([
-        "tsi", "tfsi", "tdi", "fsi", "ecoboost", "coyote", "powerboost",
-        "vtec", "ivtec", "earth dreams", "skyactiv-g", "skyactiv-d",
-        "ecotec", "duramax", "vortec", "hemi", "pentastar", "hurricane",
-        "boxer", "fa", "fb", "gdi", "mpi", "t-gdi",
-        "hr", "mr", "vr", "sr", "qr", "hybrid", "phev", "bev", "ev",
-      ]);
-
+      // Marketing/synthetic codes are filtered by the shared classifier
+      // (utils/engineLookup.isSyntheticEngineCode) — previously only the NHTSA
+      // code was screened (against a drifted local copy) and VDB codes passed
+      // through unfiltered, which is how "TFSI" got stored as the 2012 Audi A4
+      // engine_code and poisoned every engine-pinned downstream query.
       const nhtsaEngineRaw = nhtsa.engineModel?.trim() || "";
-      const nhtsaEngineClean = ENGINE_MARKETING_TERMS.has(nhtsaEngineRaw.toLowerCase()) ? "" : nhtsaEngineRaw;
+      const nhtsaEngineClean = isSyntheticEngineCode(nhtsaEngineRaw) ? "" : nhtsaEngineRaw;
       if (nhtsaEngineRaw && !nhtsaEngineClean) {
         console.log(`[decode] NHTSA EngineModel "${nhtsaEngineRaw}" is marketing term — ignored`);
       }
@@ -306,11 +303,14 @@ export const processVin = internalAction({
       const VDB_PLACEHOLDER_CODES = new Set([
         "STDEN", "STD", "STDE", "STDN", "BASE", "STANDARD", "N/A", "NA", "NONE",
       ]);
-      const vdbCode = vdb?.engineCode && !VDB_PLACEHOLDER_CODES.has(vdb.engineCode.toUpperCase())
-        ? vdb.engineCode
-        : "";
+      const vdbCode =
+        vdb?.engineCode &&
+        !VDB_PLACEHOLDER_CODES.has(vdb.engineCode.toUpperCase()) &&
+        !isSyntheticEngineCode(vdb.engineCode)
+          ? vdb.engineCode
+          : "";
       if (vdb?.engineCode && !vdbCode) {
-        console.log(`[decode] VDB engine code "${vdb.engineCode}" is a placeholder — ignored`);
+        console.log(`[decode] VDB engine code "${vdb.engineCode}" is a placeholder/marketing term — ignored`);
       }
 
       let finalEngineCode = vdbCode || nhtsaEngineClean || "";
@@ -339,7 +339,9 @@ export const processVin = internalAction({
         if (normalized) {
           if (normalized.model) finalModel = normalized.model;
           if (normalized.trim) finalTrim = normalized.trim;
-          if (normalized.engine_code && !vdbCode) finalEngineCode = normalized.engine_code;
+          if (normalized.engine_code && !vdbCode && !isSyntheticEngineCode(normalized.engine_code)) {
+            finalEngineCode = normalized.engine_code;
+          }
           if (normalized.drivetrain_type) drivetrainType = normalized.drivetrain_type;
         }
       }
@@ -365,7 +367,7 @@ export const processVin = internalAction({
 
       // Web search + Haiku fallback when still no real engine code
       if (
-        (!finalEngineCode || finalEngineCode.includes("_")) &&
+        (!finalEngineCode || finalEngineCode.includes("_") || isSyntheticEngineCode(finalEngineCode)) &&
         merged.cylinders && merged.displacement
       ) {
         try {
@@ -390,12 +392,12 @@ export const processVin = internalAction({
               temperature: 0,
               messages: [{
                 role: "user",
-                content: `Based on the following search results, what is the FULL manufacturer engine code including the complete variant suffix for a ${merged.year} ${merged.make} ${finalModel} ${finalTrim} with ${merged.cylinders} cylinders and ${merged.displacement}L displacement? For example, BMW uses codes like B48B20M2 or N63B44O2, not just B48 or N63. Mercedes uses M176DE40 not just M176. Include the full displacement and variant designation.\n\nSearch results:\n${searchContent.slice(0, 15000)}\n\nReply with ONLY the engine code. Nothing else.`,
+                content: `Based on the following search results, what is the FULL manufacturer engine code including the complete variant suffix for a ${merged.year} ${merged.make} ${finalModel} ${finalTrim} with ${merged.cylinders} cylinders and ${merged.displacement}L displacement? For example, BMW uses codes like B48B20M2 or N63B44O2, not just B48 or N63. Mercedes uses M176DE40 not just M176. Include the full displacement and variant designation.\n\nCRITICAL — model generation: the SAME model name often carries a DIFFERENT engine across generations even at the same displacement (the 2019+ Nissan Altima 2.5 is PR25DD, NOT the 2007-2018 QR25DE). Return the code used in the ${merged.year} model year specifically; if the results only show a code from another generation and you cannot confirm it applies to ${merged.year}, reply null.\n\nSearch results:\n${searchContent.slice(0, 15000)}\n\nReply with ONLY the engine code (or null). Nothing else.`,
               }],
             });
             const code = (resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "")
               .replace(/[^a-zA-Z0-9\-_.]/g, "");
-            if (code && code.length >= 2 && code.length <= 20) {
+            if (code && code.toLowerCase() !== "null" && code.length >= 2 && code.length <= 20) {
               console.log(`[decode] Search + Haiku resolved engine code: ${code} (was "${finalEngineCode}")`);
               finalEngineCode = code;
             }
@@ -783,6 +785,7 @@ export const enrichVehicleSpecs = internalAction({
               engineId: args.engineId,
               specs: validatedSpecs,
               confidenceScore: specs.overall_confidence ?? 0.70,
+              make: args.make,
             });
             flatVehicleSpecs = validatedSpecs;
           }

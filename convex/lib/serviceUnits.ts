@@ -47,6 +47,14 @@ const VALID_ENGINE_SPEC_FIELDS = new Set([
 export function resolveServiceUnitCount(args: {
   service: Doc<"services">;
   engine: Doc<"engines"> | null;
+  /** drivetrain_configs row for the vehicle — the authoritative home of
+   *  differential fluid capacity (the same engine serves FWD and AWD
+   *  siblings, so diff capacity can't live on the engine). Optional so
+   *  callers that don't quote per_unit_spec services skip the fetch. */
+  drivetrain?: Doc<"drivetrain_configs"> | null;
+  /** transmissions row — the authoritative home of the ATF drain-and-fill
+   *  capacity (fluid_capacity_drain_fill_qts, enriched). Same optionality. */
+  transmission?: Doc<"transmissions"> | null;
   bookingPosition: AxlePosition;
   baselineFromSpec: number | null;
 }): ServiceUnitResolution {
@@ -87,14 +95,21 @@ export function resolveServiceUnitCount(args: {
 
     case "per_unit_spec": {
       const sourceField = args.service.parts_unit_spec_source;
-      if (
-        !sourceField ||
-        !VALID_ENGINE_SPEC_FIELDS.has(sourceField) ||
-        !args.engine
-      ) {
+      if (!sourceField || !VALID_ENGINE_SPEC_FIELDS.has(sourceField)) {
         return { count: baseline, label, baseline, is_estimate: true };
       }
-      const raw = (args.engine as any)[sourceField];
+      // Differential capacity is drivetrain-specific and ATF capacity is
+      // transmission-specific: prefer the enriched home-table value, fall
+      // back to the engines column (kept populated only by director edits)
+      // so a human override stays honored.
+      const raw =
+        sourceField === "differential_fluid_capacity_qts"
+          ? (args.drivetrain?.diff_fluid_capacity_qts ??
+            (args.engine as any)?.[sourceField])
+          : sourceField === "transmission_fluid_capacity_qts"
+            ? (args.transmission?.fluid_capacity_drain_fill_qts ??
+              (args.engine as any)?.[sourceField])
+            : (args.engine as any)?.[sourceField];
       const count = typeof raw === "number" && raw > 0 ? raw : baseline;
       return {
         count,

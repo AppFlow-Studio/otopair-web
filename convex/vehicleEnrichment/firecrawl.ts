@@ -246,6 +246,15 @@ export type ExtractedPrice = {
   pack_quantity: number | null;
   /** Whether sale_price is already per single unit. */
   price_is_per_unit: boolean | null;
+  /** DETERMINISTIC page echo: the scraped page text contains the target OEM
+   *  (normalized substring match) — computed by US from the raw markdown,
+   *  never by the extraction model. `oem_seen` proved untrustworthy for
+   *  positive confirmation: the model knows the target number from the prompt
+   *  and echoes it even when the page never shows it (observed live: an
+   *  air-filter page "echoing" engine-oil 19432331). null when the page text
+   *  or target OEM was unavailable. Optional so injected test extractors
+   *  predating this field keep their legacy oem_seen semantics. */
+  oem_in_page?: boolean | null;
 };
 
 const PRICE_JSON_SCHEMA = {
@@ -285,7 +294,9 @@ export async function extractPriceFirecrawl(
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${getApiKey()}` },
       body: JSON.stringify({
         url,
-        formats: [{ type: "json", prompt: basePrompt, schema: PRICE_JSON_SCHEMA }],
+        // Markdown is fetched alongside the json extraction so the OEM page
+        // echo can be verified deterministically against the page's own text.
+        formats: ["markdown", { type: "json", prompt: basePrompt, schema: PRICE_JSON_SCHEMA }],
         maxAge: FIRECRAWL_MAX_AGE_MS,
         timeout: 45000,
       }),
@@ -299,6 +310,10 @@ export async function extractPriceFirecrawl(
     const d = data.data ?? data;
     const j = d.json ?? d.extract ?? null;
     if (!j || typeof j !== "object") return null;
+    const pageText = typeof d.markdown === "string" ? d.markdown : null;
+    const normAlnum = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const oemInPage =
+      oem && pageText ? normAlnum(pageText).includes(normAlnum(oem)) : null;
     const num = (x: any) => (typeof x === "number" && Number.isFinite(x) ? x : null);
     return {
       sale_price: num(j.sale_price),
@@ -312,6 +327,7 @@ export async function extractPriceFirecrawl(
       confidence: num(j.confidence),
       pack_quantity: num(j.pack_quantity),
       price_is_per_unit: typeof j.price_is_per_unit === "boolean" ? j.price_is_per_unit : null,
+      oem_in_page: oemInPage,
     };
   } catch (e) {
     console.error(`Firecrawl json price error for ${url}:`, e);

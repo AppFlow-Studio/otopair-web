@@ -26,6 +26,10 @@ import { internal } from "../_generated/api";
 import { extractPriceFirecrawl } from "./firecrawl";
 import { priceAllSources } from "./priceReextract";
 import { discoverPriceUrls } from "./priceDiscovery";
+import { isPoisonPriceType, isNonPooledPriceType } from "../lib/priceTypes";
+import { computeQuotability } from "./quotability";
+import { PART_FIELD_MAP } from "./v3pipeline";
+import { computeEnrichmentStatus } from "./completionGate";
 
 const DEFAULT_AGE_DAYS = 30;
 
@@ -104,10 +108,24 @@ type ZeroPricePart = {
   make_name: string | null;
 };
 
+/** A part counts as unpriced when it has no TRUSTED row — poison rows
+ *  (unverified / online_discount / you_save) and non-pooled fallbacks never
+ *  feed a quote, but the old any-row check made them hide the part from
+ *  backfill forever (740iA: 6 parts stuck at price_unverified_sources). */
+async function hasTrustedPriceRow(ctx: any, partId: any): Promise<boolean> {
+  const rows = await ctx.db
+    .query("part_prices")
+    .withIndex("by_part", (q: any) => q.eq("part_id", partId))
+    .collect();
+  return rows.some(
+    (r: any) => !isPoisonPriceType(r.price_type) && !isNonPooledPriceType(r.price_type),
+  );
+}
+
 /**
  * One page of the zero-price scan. Paginates oem_parts (a part with no
  * part_prices rows never appears in the stale scan above) and returns current
- * parts that have at least one fitment but no price row at all.
+ * parts that have at least one fitment but no trusted price row.
  */
 export const zeroPricePartsPage = internalQuery({
   args: {
@@ -124,11 +142,7 @@ export const zeroPricePartsPage = internalQuery({
       // Superseded parts are no longer quoted; don't spend backfill budget.
       if (part.is_current === false) continue;
 
-      const anyPrice = await ctx.db
-        .query("part_prices")
-        .withIndex("by_part", (q) => q.eq("part_id", part._id))
-        .first();
-      if (anyPrice) continue;
+      if (await hasTrustedPriceRow(ctx, part._id)) continue;
 
       // Only parts actually attached to a vehicle feed quotes.
       const anyFitment = await ctx.db
@@ -174,11 +188,7 @@ export const zeroPricePartsForConfig = internalQuery({
       const part = await ctx.db.get(f.part_id);
       if (!part || part.is_current === false) continue;
 
-      const anyPrice = await ctx.db
-        .query("part_prices")
-        .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
-        .first();
-      if (anyPrice) continue;
+      if (await hasTrustedPriceRow(ctx, f.part_id)) continue;
 
       const make = part.make_id ? await ctx.db.get(part.make_id) : null;
       out.push({
@@ -202,6 +212,11 @@ export const refreshStalePrices = internalAction({
     backfillBudget: v.optional(v.float64()),
     // Restrict the backfill leg to one config's parts (manual healing runs).
     vehicleConfigId: v.optional(v.id("vehicle_configs")),
+    // Bounded self-rescheduling for the targeted (per-config) backfill: when a
+    // leg exhausts its per-action budget with parts still unpriced, it
+    // re-chains up to maxChainDepth times before falling to the nightly sweep.
+    chainDepth: v.optional(v.float64()),
+    maxChainDepth: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
     const budget = args.budget ?? Number(process.env.PARTS_PRICE_REFRESH_BUDGET ?? "0");
@@ -341,6 +356,80 @@ export const refreshStalePrices = internalAction({
         } catch (e) {
           console.error(`[price-refresh] backfill failed for ${t.oem_part_number}:`, e);
         }
+      }
+    }
+
+    // ── Targeted-heal epilogue (vehicleConfigId runs only) ───────────────
+    // 1. Chain: parts still unpriced + depth remaining → reschedule self.
+    // 2. Reconcile: the run's quotability + part_price gaps were a snapshot at
+    //    finalize — without this, a healed config reads "quotability:0.42"
+    //    forever and stays partial (740iA post-mortem).
+    if (args.vehicleConfigId && backfillOn) {
+      let stillUnpriced: ZeroPricePart[] = [];
+      try {
+        stillUnpriced = await ctx.runQuery(
+          internal.vehicleEnrichment.priceRefresh.zeroPricePartsForConfig,
+          { vehicle_config_id: args.vehicleConfigId },
+        );
+      } catch (e) {
+        console.warn("[price-refresh] post-heal unpriced re-scan failed:", e);
+      }
+
+      const chainDepth = args.chainDepth ?? 0;
+      const maxChainDepth = args.maxChainDepth ?? 0;
+      if (stillUnpriced.length > 0 && chainDepth < maxChainDepth && backfilledParts > 0) {
+        // Re-chain only while we're making progress — a leg that priced
+        // nothing would loop on permanently-undiscoverable parts.
+        console.log(
+          `[price-refresh] ${stillUnpriced.length} part(s) still unpriced — chaining (depth ${chainDepth + 1}/${maxChainDepth})`,
+        );
+        await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.priceRefresh.refreshStalePrices, {
+          budget: 0,
+          backfillBudget,
+          vehicleConfigId: args.vehicleConfigId,
+          chainDepth: chainDepth + 1,
+          maxChainDepth,
+        });
+      }
+
+      try {
+        const latestRun = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        const applicableSlugs: string[] = ((latestRun as any)?.quotability?.services ?? []).map(
+          (s: any) => s.slug,
+        );
+        if (applicableSlugs.length > 0) {
+          const qFitments = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
+            { vehicleConfigId: args.vehicleConfigId },
+          );
+          // Same N/A-role exclusion as the finalize compute — recovered from
+          // the run's field_gaps ledger (not_applicable entries) since the
+          // flat field map is long gone by heal time.
+          const naRoleKeys = new Set<string>(
+            (((latestRun as any)?.field_gaps ?? []) as Array<{ field: string; reason: string }>)
+              .filter((g) => g.reason === "not_applicable" && PART_FIELD_MAP[g.field])
+              .map((g) => PART_FIELD_MAP[g.field].subcategory),
+          );
+          const quotability = computeQuotability(qFitments, applicableSlugs, naRoleKeys);
+          // Keys a gap suffix can carry: subcategory ?? oem ?? part_id.
+          const stillUnpricedKeys = stillUnpriced.flatMap((p) =>
+            [p.subcategory, p.oem_part_number, p.part_id].filter((x): x is string => !!x),
+          );
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchRunPriceHealth, {
+            vehicle_config_id: args.vehicleConfigId,
+            quotability,
+            still_unpriced_keys: stillUnpricedKeys,
+          });
+          console.log(
+            `[price-refresh] reconciled run health: quotability ${quotability.pct}, ` +
+              `${stillUnpriced.length} part(s) still unpriced`,
+          );
+        }
+      } catch (e) {
+        console.warn("[price-refresh] run-health reconciliation failed (non-fatal):", e);
       }
     }
 

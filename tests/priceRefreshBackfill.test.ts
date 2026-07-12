@@ -96,3 +96,62 @@ describe("priceRefresh.zeroPricePartsForConfig", () => {
     expect(parts[0].make_name).toBe("GMC");
   });
 });
+
+describe("trusted-row filter (740iA: unverified rows hid parts from backfill)", () => {
+  test("a part with ONLY poison-type rows is selected as unpriced", async () => {
+    const t = makeT();
+    const { configId } = await t.run(async (ctx) => {
+      const makeId = await ctx.db.insert("makes", { name: "BMW" });
+      const modelId = await ctx.db.insert("models", { make_id: makeId, name: "740i" });
+      const configId = await ctx.db.insert("vehicle_configs", {
+        config_key: "2001_bmw_740i_test",
+        year: 2001,
+        make_id: makeId,
+        model_id: modelId,
+        enrichment_status: "partial",
+      });
+
+      // Only an "unverified" row → still unpriced for quoting purposes.
+      const a = await ctx.db.insert("oem_parts", {
+        oem_part_number: "34116761244", name: "Front Rotor", make_id: makeId, subcategory: "front_rotor",
+      });
+      await ctx.db.insert("part_fitments", { part_id: a, vehicle_config_id: configId });
+      await ctx.db.insert("part_prices", { part_id: a, price: 90, price_type: "unverified" });
+
+      // A trusted "sale" row alongside a poison row → excluded.
+      const b = await ctx.db.insert("oem_parts", { oem_part_number: "B-2", name: "Healed part" });
+      await ctx.db.insert("part_fitments", { part_id: b, vehicle_config_id: configId });
+      await ctx.db.insert("part_prices", { part_id: b, price: 90, price_type: "unverified" });
+      await ctx.db.insert("part_prices", { part_id: b, price: 85, price_type: "sale" });
+
+      return { configId };
+    });
+
+    const parts = await t.query(internal.vehicleEnrichment.priceRefresh.zeroPricePartsForConfig, {
+      vehicle_config_id: configId,
+    });
+    expect(parts.map((p: any) => p.oem_part_number)).toEqual(["34116761244"]);
+
+    const page = await t.query(internal.vehicleEnrichment.priceRefresh.zeroPricePartsPage, {});
+    expect(page.parts.map((p: any) => p.oem_part_number)).toEqual(["34116761244"]);
+  });
+});
+
+describe("healPriceGaps — post-backfill gap reconciliation", () => {
+  test("rewrites healed part_price gaps, keeps still-unpriced and non-price gaps", async () => {
+    const { healPriceGaps } = await import("../convex/vehicleEnrichment/v3mutations");
+    const gaps = [
+      { field: "battery_oem", reason: "llm_null" },
+      { field: "part_price:front_rotor", reason: "price_unverified_sources" },
+      { field: "part_price:serpentine_belt", reason: "price_deferred_timeout" },
+      { field: "part_price:cabin_filter", reason: "price_healed" },
+    ];
+    const out = healPriceGaps(gaps, ["front_rotor", "34116761244"]);
+    const byField = new Map(out.map((g) => [g.field, g.reason]));
+    expect(byField.get("battery_oem")).toBe("llm_null"); // untouched
+    expect(byField.get("part_price:front_rotor")).toBe("price_unverified_sources"); // still unpriced
+    expect(byField.get("part_price:serpentine_belt")).toBe("price_healed"); // priced now
+    expect(byField.get("part_price:cabin_filter")).toBe("price_healed"); // idempotent
+    expect(out).toHaveLength(4); // audit trail: never deletes entries
+  });
+});

@@ -182,6 +182,16 @@ export function applyApplicabilityRules(
       fields.cvt_internal_filter_oem = naField();
       fields.cvt_external_filter_oem = naField();
     }
+    // True 3-pedal manual: no ATF, no serviceable trans filter, no pan gasket
+    // — the gearbox takes gear oil (gear_oil_oem stays searchable). Left
+    // searchable these grew llm_null gaps on the 2015 Veloster Turbo manual
+    // (Jul 2026). "manual" is exact-match: DCT/automated-manual boxes DO have
+    // fluid + filter service and never canonicalize to plain "manual".
+    if (t === "manual") {
+      fields.atf_fluid_oem = naField();
+      fields.trans_filter_oem = naField();
+      fields.trans_pan_gasket_oem = naField();
+    }
   }
 
   // ── Sedan/Coupe: no rear wiper ────────────────────────────────
@@ -193,7 +203,60 @@ export function applyApplicabilityRules(
     if (fields.rear_wiper_size?.value == null) {
       fields.rear_wiper_size = naField();
     }
+    if (fields.wiper_blade_rear_oem?.value == null) {
+      fields.wiper_blade_rear_oem = naField();
+    }
   }
 
+  return fields;
+}
+
+/**
+ * Fields whose applicability depends on an identity input. When that input is
+ * itself unknown the rules above fail OPEN (field stays searchable) — the gap
+ * classifier uses this map to ledger such fields as blocked_on_identity:<input>
+ * instead of llm_null, so identity holes are visible instead of read as
+ * "searched everywhere, found nothing" (2001 740iA post-mortem, Jul 11 2026).
+ */
+export const IDENTITY_DEPENDENT_FIELDS: Record<string, string[]> = {
+  drivetrain: [
+    "transfer_case_fluid_type",
+    "transfer_case_fluid_miles",
+    "transfer_case_fluid_months",
+    "transfer_case_fluid_capacity_qts",
+  ],
+  transmission_type: [
+    "cvt_internal_filter_oem",
+    "cvt_external_filter_oem",
+    "atf_fluid_oem",
+    "trans_filter_oem",
+    "trans_pan_gasket_oem",
+  ],
+  body_class: ["rear_wiper_size", "wiper_blade_rear_oem"],
+};
+
+/**
+ * Finalize-time applicability: convert residual nulls that are N/A by
+ * elimination. Chain engines have no scheduled timing service — the rule in
+ * applyApplicabilityRules deliberately leaves timing_service_* searchable so
+ * legitimate "inspect at X miles" guidance can land; if nothing landed by
+ * finalize, the absence IS the answer (chain = lifetime), not an llm_null gap.
+ * Call after the last batch merge, before classifyFieldGaps.
+ */
+export function applyFinalizeApplicability(
+  fields: Record<string, FieldResult>,
+): Record<string, FieldResult> {
+  const timingSystem = (fields.timing_system?.value as string | null) ?? null;
+  if (timingSystem && timingSystem.toLowerCase().includes("chain")) {
+    for (const k of [
+      "timing_service_miles",
+      "timing_service_months",
+      "estimated_labor_timing_service_hrs",
+    ]) {
+      if (fields[k]?.value == null) {
+        fields[k] = naField();
+      }
+    }
+  }
   return fields;
 }

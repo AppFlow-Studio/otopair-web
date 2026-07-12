@@ -35,7 +35,8 @@ RULES:
    - Below 0.75: Return null — do not guess
 4. NHTSA data overrides: drivetrain, turbo, transmission_type, fuel_injection_type — use training knowledge for these only if you are highly confident.
 5. For diff_fluid and transfer_case_fluid intervals: if the vehicle is FWD (no differential, no transfer case), set status to "not_applicable" and miles/months to null.
-6. Return VALID JSON only. No markdown fences, no explanation.`;
+6. Return OEM part numbers as JSON STRINGS exactly as printed, preserving leading zeros (e.g. "07119963130", never the bare number 7119963130).
+7. Return VALID JSON only. No markdown fences, no explanation.`;
 
 export function buildBatch1bPrompt(vehicle: VehicleInput): string {
   return `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim} — ${vehicle.engineCode} ${vehicle.displacement}L

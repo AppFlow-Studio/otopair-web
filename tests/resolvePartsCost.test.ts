@@ -346,3 +346,80 @@ describe("buildQuote — real_parts band is not re-scaled by unit count", () => 
     expect(quote.parts.unit_count).toBe(1);
   });
 });
+
+describe("resolvePartsCost — oil_change fluid role scales by oil capacity", () => {
+  it("bills engine oil at ceil(oil_capacity_qts / 1qt) per-quart price plus the filter", async () => {
+    process.env.PARTS_SOURCE_REAL_PRIMARY = "on";
+    const t = makeT();
+
+    // 2012 Audi A4 shape: oil_capacity_qts 4.9 → oil billed ×5. The fitment's
+    // quantity_needed=1 (what the pipeline writes for fluids) must NOT cap the
+    // capacity math — resolveRoleQuantity's fluid branch ignores fitment qty.
+    const { configId, serviceId } = await t.run(async (ctx: any) => {
+      const makeId = await ctx.db.insert("makes", { name: "Audi" });
+      const modelId = await ctx.db.insert("models", { make_id: makeId, name: "A4" });
+      const engineId = await ctx.db.insert("engines", { cylinders: 4, oil_capacity_qts: 4.9 });
+      const cfgId = await ctx.db.insert("vehicle_configs", {
+        config_key: "a4_oil_cfg",
+        year: 2012,
+        make_id: makeId,
+        model_id: modelId,
+        engine_id: engineId,
+        pricing_tier: "T2a",
+      });
+      const svcId = await ctx.db.insert("services", {
+        name: "Oil Change",
+        slug: "oil_change",
+        parts_kind: "fixed_kit",
+      });
+      const filterId = await ctx.db.insert("oem_parts", {
+        oem_part_number: "06J115403Q",
+        name: "Oil Filter",
+        subcategory: "oil_filter",
+      });
+      const oilId = await ctx.db.insert("oem_parts", {
+        oem_part_number: "G052167A2",
+        name: "Engine Oil",
+        category: "fluid",
+        subcategory: "engine_oil",
+      });
+      await ctx.db.insert("part_fitments", {
+        part_id: filterId,
+        vehicle_config_id: cfgId,
+        service_type: "oil_change",
+        quantity_needed: 1,
+        service_role: "core",
+      });
+      await ctx.db.insert("part_fitments", {
+        part_id: oilId,
+        vehicle_config_id: cfgId,
+        service_type: "oil_change",
+        quantity_needed: 1,
+        service_role: "core",
+      });
+      await ctx.db.insert("part_prices", {
+        part_id: filterId,
+        price: 17,
+        price_type: "sale",
+        source_domain: "ecstuning.com",
+      });
+      await ctx.db.insert("part_prices", {
+        part_id: oilId,
+        price: 9,
+        price_type: "sale",
+        source_domain: "parts.audiusa.com",
+      });
+      return { configId: cfgId, serviceId: svcId };
+    });
+
+    const res: any = await t.run((ctx: any) =>
+      resolvePartsCost(ctx, {
+        vehicle_config_id: configId,
+        service_id: serviceId,
+        vehicle_tier: "T2a",
+      }),
+    );
+    // filter 17×1 + oil 9×ceil(4.9/1)=9×5=45 → 62 both ends (single price each)
+    expect(res).toMatchObject({ ok: true, source: "real_parts", low: 62, high: 62 });
+  });
+});

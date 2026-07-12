@@ -35,7 +35,8 @@ RULES:
 4. Labor rate: $125/hr fixed. Do not search for this.
 5. Labor hours: use training knowledge for well-established book times (mark source_type: "training_data", confidence 0.75). Oil change is typically 0.5 hrs.
 6. If you cannot find a price for a specific OEM part after 1-2 targeted searches, OMIT that part from parts_breakdown[]. Do not include it with a null or 0 price. Do not guess.
-7. Return VALID JSON only. No markdown fences, no explanation, no preamble.`;
+7. Return OEM part numbers as JSON STRINGS exactly as printed, preserving leading zeros (e.g. "07119963130", never the bare number 7119963130).
+8. Return VALID JSON only. No markdown fences, no explanation, no preamble.`;
 
 /** Field descriptions used in the gap fill user prompt. Shared with the
  *  Batch-3 gap-fill re-ask pass (gapFillPrompt.ts). */

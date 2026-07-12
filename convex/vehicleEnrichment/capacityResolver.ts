@@ -7,10 +7,12 @@
  * enrichment time from authoritative sources, corroborates across independent
  * domains, and writes a trustworthy value — so customers can book confidently.
  *
- * Called from _pollBatch2V3 AFTER runSanityChecks (so it only fires on a null /
- * just-rejected capacity) and BEFORE writeNormalizedData (so its result is what
- * gets stored). Synchronous Firecrawl search is used (not a batch) because we
- * need the per-source URLs to count independent corroboration.
+ * Called from _pollBatch2V3 AFTER runSanityChecks and BEFORE writeNormalizedData
+ * (so its result is what gets stored). Fires on a null / just-rejected capacity
+ * AND on any batch value whose sole source is not high-authority (corroboration
+ * mode — the batch value is seeded as one observation and must find agreement
+ * or be outranked). Synchronous Firecrawl search is used (not a batch) because
+ * we need the per-source URLs to count independent corroboration.
  *
  * Accept policy (product-confirmed):
  *   - trusted:     authoritative domain OR >=2 independent non-forum domains agree.
@@ -30,7 +32,13 @@ import {
   isHighAuthorityDomain,
   toHostname,
 } from "./validation/sourceAuthority";
-import { getCapacityBand, type CapacityBand, type CapacityField } from "./validation/sanityChecks";
+import { isSyntheticEngineCode } from "./utils/engineLookup";
+import {
+  getCapacityBand,
+  isDieselFromFields,
+  type CapacityBand,
+  type CapacityField,
+} from "./validation/sanityChecks";
 import { searchAndFetch, firecrawlJsonExtract } from "./firecrawl";
 
 /** Max pages we run the (paid) structured extraction on, to bound cost/time. */
@@ -66,14 +74,20 @@ export interface CapacityDecision {
  * Engine-code-pinned + authority-scoped search queries. Pinning the engine code
  * (e.g. L84) is the key lever: it disambiguates the 5.3L L84 from the 6.2L L87
  * and the HD siblings whose (wrong) figures poisoned this record.
+ *
+ * A synthetic/marketing code ("TFSI", "2.0l_4cyl") is worse than no code: it
+ * matches every engine of the brand, steering search toward generic all-model
+ * capacity tables (the exact page class that produced the A4's wrong 9.5 qt).
+ * Those are dropped and displacement-only phrasing is used instead.
  */
 export function buildCapacityQueries(v: VehicleInput, field: CapacityField): string[] {
   const base = `${v.year} ${v.make} ${v.model}`;
-  const eng = v.engineCode || `${v.displacement}L`;
+  const realCode = v.engineCode && !isSyntheticEngineCode(v.engineCode) ? v.engineCode : null;
+  const eng = realCode || `${v.displacement}L`;
   const noun = field === "coolant_capacity_qts" ? "cooling system coolant capacity" : "engine oil capacity";
   const short = field === "coolant_capacity_qts" ? "coolant" : "oil";
   return [
-    `${base} ${v.engineCode} ${v.displacement}L ${noun} quarts specification`,
+    `${base} ${realCode ?? ""} ${v.displacement}L ${noun} quarts specification`.replace(/\s+/g, " "),
     `${base} ${eng} ${noun} liters`,
     `${eng} engine ${noun} oem specification`,
     `${base} ${eng} ${short} capacity site:alldata.com OR site:carcarekiosk.com`,
@@ -130,14 +144,24 @@ export function decideCapacity(
     const med = median(c.map((o) => o.value_qts));
     return { c, distinctDomains, hasAuthority, med, typical: withinTypical(med) };
   });
-  // Physically-plausible (engine-typical) clusters first — a within-band value is
-  // preferred over an authoritative-but-implausible outlier (e.g. a 7.6 qt coolant
-  // mis-extracted from a GM TechLink PDF for a 5.3L V8). Then authoritative, then
-  // more independent domains, then closest to the typical midpoint.
+  // Composite trust score — three independent signals, one point each:
+  // engine-typical, contains an authoritative source, corroborated by 2+
+  // distinct domains. No single signal may dominate, because each has a
+  // known live failure when it does:
+  //   - typicality-first let a lone in-band 13.8 (drain-and-fill figure) beat
+  //     two agreeing sources at 17.4/17.6 — the TRUE total, just above the V8
+  //     typical ceiling (2019 Silverado L84, stress fleet 2026-07-11);
+  //   - domains-first would let two content farms echoing 16.9 beat an
+  //     authoritative 13.8 (the original Sierra poison);
+  //   - authority-first would let a mis-extracted 7.6 from one OEM PDF beat a
+  //     multi-domain typical cluster.
+  // Ties break toward more distinct domains, then closeness to the typical
+  // midpoint.
+  const trustScore = (c: (typeof scored)[number]) =>
+    Number(c.typical) + Number(c.hasAuthority) + Number(c.distinctDomains >= 2);
   scored.sort(
     (a, b) =>
-      Number(b.typical) - Number(a.typical) ||
-      Number(b.hasAuthority) - Number(a.hasAuthority) ||
+      trustScore(b) - trustScore(a) ||
       b.distinctDomains - a.distinctDomains ||
       Math.abs(a.med - mid) - Math.abs(b.med - mid),
   );
@@ -190,6 +214,7 @@ export async function gatherCapacityObservations(
   vehicle: VehicleInput,
   field: CapacityField,
   band: CapacityBand,
+  maxPages: number = MAX_EXTRACT_PAGES,
 ): Promise<CapacityObservation[]> {
   const queries = buildCapacityQueries(vehicle, field);
   const searchResults = await Promise.allSettled(queries.map((q) => searchAndFetch(q, 5)));
@@ -208,19 +233,27 @@ export async function gatherCapacityObservations(
     }
   }
 
-  const pages = [...urlToDomain.entries()].slice(0, MAX_EXTRACT_PAGES);
+  const pages = [...urlToDomain.entries()].slice(0, maxPages);
   if (pages.length === 0) return [];
 
   const noun =
     field === "coolant_capacity_qts"
       ? "cooling system TOTAL coolant/antifreeze capacity"
       : "engine oil capacity WITH filter change";
+  // Same synthetic-code rule as buildCapacityQueries: pinning "TFSI" tells the
+  // extractor every 2.0T/3.0T row on a brand-wide table "matches".
+  const realCode =
+    vehicle.engineCode && !isSyntheticEngineCode(vehicle.engineCode) ? vehicle.engineCode : null;
+  const engineDesc = realCode
+    ? `${realCode} ${vehicle.displacement}L`
+    : `${vehicle.displacement}L`;
+  const engineTie = realCode ? `${realCode} (or ${vehicle.displacement}L)` : `${vehicle.displacement}L`;
   const prompt =
     `Extract the ${noun} for the ${vehicle.year} ${vehicle.make} ${vehicle.model} ` +
-    `with the ${vehicle.engineCode} ${vehicle.displacement}L engine SPECIFICALLY. ` +
+    `with the ${engineDesc} engine SPECIFICALLY. ` +
     `Return the numeric value and its unit exactly as stated on the page (do not convert). ` +
-    `Set engine_code_matches=true only if the page ties this capacity to the ${vehicle.engineCode} ` +
-    `(or ${vehicle.displacement}L) engine. If the page does not give this exact engine's capacity, return value=null.`;
+    `Set engine_code_matches=true only if the page ties this capacity to the ${engineTie} ` +
+    `engine. If the page does not give this exact engine's capacity, return value=null.`;
   const schema = {
     type: "object",
     properties: {
@@ -286,17 +319,59 @@ export async function resolveCapacities(
   const decisions: CapacityDecision[] = [];
 
   for (const field of CAPACITY_FIELDS) {
-    // Never touch a human-verified value. Work on a field that is missing OR that
-    // sanity checks flagged (null-and-rejected, or an out-of-typical-band value the
-    // batch supplied — e.g. an implausible 7.6 qt V8 coolant). A clean in-band value
-    // is left alone (no wasted search).
+    // Never touch a human-verified value. Work on a field that is missing, that
+    // sanity checks flagged (null-and-rejected, or an out-of-typical-band value
+    // the batch supplied), OR — since the A4 9.5 qt incident — any value whose
+    // sole source is not a high-authority domain. An in-band wrong figure from
+    // one mid-tier blog (ricksfreeautorepairadvice.com's all-Audi table) used to
+    // sail straight to the DB because "in-band + unflagged" skipped resolution;
+    // now only a high-authority single source earns that skip.
     if (verified.has(field)) continue;
     const current = fields[field];
-    const needsResolve = current?.value == null || current?.flagged === true;
+    const needsResolve =
+      current?.value == null ||
+      current?.flagged === true ||
+      !isHighAuthorityDomain(current?.source_url);
     if (!needsResolve) continue;
 
-    const band = getCapacityBand(field, cylinders);
-    const obs = await gatherCapacityObservations(vehicle, field, band);
+    const band = getCapacityBand(field, cylinders, { diesel: isDieselFromFields(fields) });
+    // Corroboration mode: the batch supplied a clean in-band value from a real
+    // (non-forum) URL — we only need 1-2 agreeing independent domains, so fetch
+    // fewer pages. Full resolution (missing/flagged/training-data value) keeps
+    // the deeper sweep.
+    const batchUrl = current?.source_url ?? null;
+    const seedable =
+      current?.value != null &&
+      current?.flagged !== true &&
+      !!batchUrl &&
+      !isLowAuthorityDomain(batchUrl);
+    const obs = await gatherCapacityObservations(
+      vehicle, field, band, seedable ? 4 : MAX_EXTRACT_PAGES,
+    );
+
+    // Seed the batch value as one observation so decideCapacity arbitrates:
+    // batch + one agreeing web domain → trusted (2 independent domains); a
+    // disagreeing web cluster (larger / authoritative) simply outranks it.
+    if (seedable) {
+      const qts = sanitizeCapacityQuarts(current!.value);
+      const domain = toHostname(batchUrl!);
+      if (
+        qts != null &&
+        qts >= band.rejectMin &&
+        qts <= band.rejectMax &&
+        domain &&
+        !obs.some((o) => o.domain === domain)
+      ) {
+        obs.push({
+          value_qts: qts,
+          source_url: batchUrl!,
+          domain,
+          authoritative: false, // high-authority sources never reach this branch
+          engine_code_matches: false,
+        });
+      }
+    }
+
     const decision = decideCapacity(field, obs, band, { strict });
     decisions.push(decision);
 

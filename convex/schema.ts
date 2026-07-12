@@ -763,6 +763,12 @@ export default defineSchema({
     duration_ms: v.optional(v.number()),
     fields_filled: v.optional(v.number()),
     fields_total: v.optional(v.number()),
+    // Applicable-fill headline: fields the applicability rules stamped
+    // not_applicable drop out of the denominator (a RWD sedan isn't
+    // penalized for lacking a transfer case). fill_rate keeps the legacy
+    // all-fields semantics for comparability.
+    fields_not_applicable: v.optional(v.number()),
+    applicable_fill_rate: v.optional(v.number()),
     fill_rate: v.optional(v.number()),
     fields_changed: v.optional(v.array(v.string())),
     errors: v.optional(v.array(v.string())),
@@ -792,6 +798,26 @@ export default defineSchema({
         }),
       ),
     ),
+    // Parts-side quotability: per applicable parts-bearing service, do all
+    // CORE roles have a fitment AND a trusted price? fill_rate's blind spot —
+    // a 93% run can still carry an unquotable oil change (Jul 2026 A4).
+    quotability: v.optional(
+      v.object({
+        pct: v.number(),
+        services: v.array(
+          v.object({
+            slug: v.string(),
+            core_total: v.number(),
+            core_with_fitment: v.number(),
+            core_with_price: v.number(),
+          }),
+        ),
+      }),
+    ),
+    // Stamped when the post-run price backfill / nightly cron reconciles the
+    // quotability snapshot + part_price gaps after healing prices — without
+    // it a healed config read its finalize-time quotability forever.
+    quotability_updated_at: v.optional(v.number()),
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
     created_at: v.optional(v.number()),

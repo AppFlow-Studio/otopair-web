@@ -936,6 +936,23 @@ export default defineSchema({
     .index("by_service", ["service_id"])
     .index("by_status", ["status"]),
 
+  // A mechanic/director assertion that a parts-requiring service does NOT apply
+  // to this vehicle config (e.g. sealed transmission → no transmission filter).
+  // Lets the pre-job "fill in missing parts" gate stop demanding a part the car
+  // will never need, without inventing a fitment. One row per (config, service,
+  // role); presence means "excluded — don't gate on this".
+  config_service_exclusions: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_slug: v.string(),
+    role_key: v.optional(v.string()),
+    reason: v.optional(v.string()),
+    marked_by_mechanic_id: v.optional(v.id("mechanics")),
+    booking_id: v.optional(v.id("bookings")),
+    created_at: v.number(),
+  })
+    .index("by_config", ["vehicle_config_id"])
+    .index("by_config_service", ["vehicle_config_id", "service_slug"]),
+
   vin_queue: defineTable({
     vin: v.string(),
     source: v.optional(v.string()),

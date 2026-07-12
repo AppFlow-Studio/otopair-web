@@ -25,6 +25,7 @@ import {
   getServicePartsSpec,
   normalizeServiceSlug,
   roleForSubcategory,
+  SERVICE_PARTS_REFERENCE,
   type PartRoleSpec,
   type ServiceRole,
 } from "./lib/servicePartsReference";
@@ -42,6 +43,69 @@ import {
   resolveBrakeScopeForBooking,
   type BrakeScope,
 } from "./lib/brakeScope";
+import { isServiceApplicable } from "./services/applicability";
+
+/**
+ * Load the structural-applicability inputs `isServiceApplicable` needs
+ * (engine + chassis/drivetrain/trim specs) for a config, once. Used to hide
+ * gap services the vehicle's hardware makes Not Applicable — e.g. timing belt
+ * on a chain engine — so the mechanic isn't asked to mark them every job.
+ */
+async function loadStructuralContext(
+  ctx: { db: any },
+  config: Doc<"vehicle_configs"> | null,
+) {
+  const engineId = config?.engine_id ?? null;
+  const engine = engineId ? await ctx.db.get(engineId) : null;
+  if (!config) return { engine, chassis: null, drivetrain: null, trim: null };
+  const [chassis, drivetrain, trim] = await Promise.all([
+    config.chassis_code
+      ? ctx.db
+          .query("chassis_specs")
+          .withIndex("by_chassis_code", (q: any) =>
+            q.eq("chassis_code", config.chassis_code!),
+          )
+          .first()
+      : null,
+    ctx.db
+      .query("drivetrain_configs")
+      .withIndex("by_vehicle_config", (q: any) =>
+        q.eq("vehicle_config_id", config._id),
+      )
+      .first(),
+    ctx.db
+      .query("trim_specs")
+      .withIndex("by_vehicle_config", (q: any) =>
+        q.eq("vehicle_config_id", config._id),
+      )
+      .first(),
+  ]);
+  return { engine, chassis, drivetrain, trim };
+}
+
+/** Whether a spec service's structural rules (timing belt on chain engine, PS
+ *  flush on electric steering, ICE service on EV, diff on FWD, …) keep it
+ *  APPLICABLE to this config. Fails open when engine/config data is missing. */
+function gapServiceApplies(
+  svc: Doc<"services"> | undefined,
+  structural: {
+    engine: Doc<"engines"> | null;
+    chassis: Doc<"chassis_specs"> | null;
+    drivetrain: Doc<"drivetrain_configs"> | null;
+    trim: Doc<"trim_specs"> | null;
+  },
+  config: Doc<"vehicle_configs"> | null,
+): boolean {
+  if (!svc || !structural.engine || !config) return true; // fail open
+  return isServiceApplicable(
+    svc,
+    structural.engine,
+    structural.chassis,
+    structural.drivetrain,
+    structural.trim,
+    config,
+  );
+}
 
 /** Confidence floor for the selector's confidence gate. Below this a fitment
  *  can still win, but only after the gate has eliminated everyone and the
@@ -481,6 +545,450 @@ export const getOemPartsForBooking = query({
     }
 
     return out;
+  },
+});
+
+// ─── Mechanic parts fill-in: what the mechanic must verify pre-job ───────────
+
+export type PartVerifyPickOption = {
+  partId: Id<"oem_parts">;
+  oemNumber: string;
+  name: string;
+  confidence: number;
+  origin: "winner" | "loser" | "eliminated_by_gate" | "dropped_cross_make";
+};
+
+export type PartVerifyItem = {
+  serviceId: string;
+  serviceName: string;
+  serviceSlug: string;
+  roleKey: string;
+  roleLabel: string;
+  status: "MISSING" | "LOW_CONFIDENCE";
+  /** "booked" = a service on this booking. "gap" = a parts-requiring service
+   *  this vehicle has NO OEM part for at all (e.g. battery on the 2001 740iA)
+   *  — surfaced on every job so the mechanic can make the service available. */
+  kind: "booked" | "gap";
+  position?: "front" | "rear";
+  /** Present for LOW_CONFIDENCE — the current best (sub-threshold) winner. */
+  current: {
+    partId: Id<"oem_parts">;
+    oemNumber: string;
+    name: string;
+    confidence: number;
+  } | null;
+  pickOptions: PartVerifyPickOption[];
+};
+
+export type PartsNeedingVerification = {
+  noConfig?: boolean;
+  skipped?: string;
+  items: PartVerifyItem[];
+};
+
+/**
+ * Surface the parts a mechanic MUST confirm/fill in before starting a job:
+ * services whose core roles resolve to MISSING (no candidate survived the
+ * OEM-strict guard — e.g. a dropped older-BMW battery) or LOW_CONFIDENCE (a
+ * winner exists but is sub-0.70 and not mechanic-verified).
+ *
+ * Reuses the booking-time resolver (`resolveWinningPartForService`) as the
+ * single source of truth so the classification always agrees with pricing.
+ * Walk-ins (which suppress the catalog cascade) and configless bookings are
+ * skipped — the dialog then renders no verify gate.
+ */
+export const getPartsNeedingVerification = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args): Promise<PartsNeedingVerification> => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return { items: [] };
+
+    const source = (booking as any).source;
+    if (source === "mechanic_walk_in" || source === "mechanic_backfill") {
+      return { items: [], skipped: "walk_in" };
+    }
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+      .first();
+    if (!vehicle?.vehicle_config_id) return { items: [], noConfig: true };
+    const configId = vehicle.vehicle_config_id;
+    const config = await ctx.db.get(configId);
+    const configMakeId = config?.make_id ?? null;
+    const makeDoc = configMakeId ? await ctx.db.get(configMakeId) : null;
+
+    // Confirmed packages (best-effort). Absent owner → empty set; the core
+    // roles we gate on (battery, brake pads) are base/non-package anyway.
+    const owner = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+      .first();
+    const ownerSpecs = owner
+      ? await ctx.db
+          .query("vehicle_owner_specs")
+          .withIndex("by_vehicle_owner", (q) =>
+            q.eq("vehicle_owner_id", owner._id),
+          )
+          .first()
+      : null;
+    const confirmedPackages = new Set(ownerSpecs?.confirmed_packages ?? []);
+
+    const axleByServiceId = axlePositionByServiceId(booking);
+
+    const items: PartVerifyItem[] = [];
+
+    for (const serviceId of booking.service_ids ?? []) {
+      const service = await ctx.db.get(serviceId);
+      if (!service?.slug) continue;
+      const slug = normalizeServiceSlug(service.slug);
+      const spec = getServicePartsSpec(slug);
+      if (spec && (spec.laborOnly || spec.handledByDedicatedFlow)) continue;
+
+      const position = isBrakeSlug(service.slug)
+        ? axleForBrakeService(booking, String(serviceId), service.slug, axleByServiceId)
+        : undefined;
+      const positionFilter =
+        position === "front" || position === "rear" ? position : undefined;
+
+      const resolution = await resolveWinningPartForService(ctx, {
+        vin: booking.vin,
+        serviceId,
+        serviceSlug: service.slug,
+        vehicleConfigId: configId,
+        confirmedPackages,
+        positionFilter,
+      });
+
+      // Core role winners produced by the resolver, keyed by roleKey.
+      const coreWinners = new Map<string, (typeof resolution.roleWinners)[number]>();
+      for (const rw of resolution.roleWinners) {
+        if (rw.serviceRole !== "core") continue;
+        coreWinners.set(rw.roleKey, rw);
+      }
+
+      // Dropped/quarantined catalog parts for this service — parts the
+      // OEM-strict I1 guard removed from the pool, offered back to the human
+      // (the older-BMW battery lives here). Grouped by roleKey (subcategory).
+      const droppedByRole = new Map<string, PartVerifyPickOption[]>();
+      const rawFitments = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", configId).eq("service_type", slug),
+        )
+        .collect();
+      for (const f of rawFitments) {
+        if (f.package_code != null) continue;
+        const part = await ctx.db.get(f.part_id);
+        if (!part) continue;
+        const passes = passesI1ReadGuard({
+          partMakeId: part.make_id,
+          configMakeId,
+          oemPartNumber: part.oem_part_number,
+          configMakeName: makeDoc?.name,
+          mechanicVerified: f.mechanic_verified === true,
+        });
+        if (passes) continue; // survivors already flow through the resolver
+        const rk = part.subcategory ?? "";
+        const list = droppedByRole.get(rk) ?? [];
+        list.push({
+          partId: f.part_id,
+          oemNumber: part.oem_part_number,
+          name: part.name,
+          confidence: f.confidence ?? 0,
+          origin: "dropped_cross_make",
+        });
+        droppedByRole.set(rk, list);
+      }
+
+      // Expected CORE roles for this service. Roles with a universalFallback
+      // synthesize a virtual winner and are never "missing"; skip them.
+      const expectedRoles: Array<{ roleKey: string; label: string }> = (
+        spec?.roles ?? []
+      )
+        .filter((r) => r.serviceRole === "core" && r.universalFallback == null)
+        .map((r) => ({ roleKey: r.roleKey, label: r.label }));
+
+      // Fallback for services without a reference spec (or empty roles): use
+      // whatever core winners the resolver produced, plus a synthetic primary
+      // role when the whole service came back empty (nothing to iterate).
+      const rolesToCheck =
+        expectedRoles.length > 0
+          ? expectedRoles
+          : coreWinners.size > 0
+            ? [...coreWinners.keys()].map((k) => ({ roleKey: k, label: k }))
+            : [{ roleKey: slug, label: service.name }];
+
+      for (const role of rolesToCheck) {
+        const rw = coreWinners.get(role.roleKey);
+        const dropped = droppedByRole.get(role.roleKey) ?? [];
+
+        // RESOLVED: a confident, mechanic-verified, or above-gate winner that
+        // isn't flagged low-confidence. Virtual (universal-fallback) winners
+        // are deliberately synthesized — treat as resolved.
+        if (rw) {
+          const verified = rw.candidate.fitment.mechanic_verified === true;
+          if (rw.virtual === true || verified || !rw.lowConfidence) {
+            continue;
+          }
+        } else if (dropped.length === 0 && resolution.source !== "no_candidates") {
+          // No winner, nothing dropped, and the service DID resolve other
+          // roles — this role simply isn't applicable here. Don't invent a gap.
+          continue;
+        }
+
+        const status: PartVerifyItem["status"] = rw ? "LOW_CONFIDENCE" : "MISSING";
+
+        // Assemble dedup'd pick options: winner + losers + gate-eliminated +
+        // dropped catalog parts. Always let the mechanic type a freehand OEM.
+        const pickOptions: PartVerifyPickOption[] = [];
+        const seen = new Set<string>();
+        const push = (opt: PartVerifyPickOption) => {
+          const key = String(opt.partId);
+          if (seen.has(key)) return;
+          seen.add(key);
+          pickOptions.push(opt);
+        };
+        if (rw) {
+          push({
+            partId: rw.candidate.part._id,
+            oemNumber: rw.candidate.part.oem_part_number,
+            name: rw.candidate.part.name,
+            confidence: rw.candidate.fitment.confidence ?? 0,
+            origin: "winner",
+          });
+          for (const l of rw.losers) {
+            push({
+              partId: l.part._id,
+              oemNumber: l.part.oem_part_number,
+              name: l.part.name,
+              confidence: l.fitment.confidence ?? 0,
+              origin: "loser",
+            });
+          }
+          for (const pid of rw.eliminatedByGatePartIds ?? []) {
+            const part = await ctx.db.get(pid);
+            if (part) {
+              push({
+                partId: pid,
+                oemNumber: part.oem_part_number,
+                name: part.name,
+                confidence: 0,
+                origin: "eliminated_by_gate",
+              });
+            }
+          }
+        }
+        for (const opt of dropped) push(opt);
+
+        items.push({
+          serviceId: String(serviceId),
+          serviceName: service.name,
+          serviceSlug: service.slug,
+          roleKey: role.roleKey,
+          roleLabel: role.label,
+          status,
+          kind: "booked",
+          position: positionFilter,
+          current: rw
+            ? {
+                partId: rw.candidate.part._id,
+                oemNumber: rw.candidate.part.oem_part_number,
+                name: rw.candidate.part.name,
+                confidence: rw.candidate.fitment.confidence ?? 0,
+              }
+            : null,
+          pickOptions,
+        });
+      }
+    }
+
+    // ── Gap services ─────────────────────────────────────────────────────────
+    // Parts-requiring services this vehicle has NO usable OEM part for at all
+    // (dropped/never-enriched — the 2001 740iA battery). Surfaced on EVERY job
+    // (not just when booked) so the mechanic can add the part while the car is
+    // in the shop and make the service available. Excludes services already on
+    // the booking (handled above) and any the shop marked "not applicable".
+    const bookedSlugs = new Set<string>();
+    for (const sid of booking.service_ids ?? []) {
+      const svc = await ctx.db.get(sid);
+      if (svc?.slug) bookedSlugs.add(normalizeServiceSlug(svc.slug));
+    }
+
+    const exclusions = await ctx.db
+      .query("config_service_exclusions")
+      .withIndex("by_config", (q) => q.eq("vehicle_config_id", configId))
+      .collect();
+    const excludedSlugs = new Set(
+      exclusions.map((e) => normalizeServiceSlug(e.service_slug)),
+    );
+
+    // slug → service record (for id + display name).
+    const allServices = await ctx.db.query("services").collect();
+    const serviceBySlug = new Map<string, Doc<"services">>();
+    for (const svc of allServices) {
+      if (svc.slug) serviceBySlug.set(normalizeServiceSlug(svc.slug), svc);
+    }
+
+    // Structural applicability inputs (timing belt vs chain, PS type, etc.).
+    const structural = await loadStructuralContext(ctx, config);
+
+    for (const spec of Object.values(SERVICE_PARTS_REFERENCE)) {
+      if (spec.laborOnly || spec.handledByDedicatedFlow) continue;
+      const slug = normalizeServiceSlug(spec.slug);
+      if (bookedSlugs.has(slug) || excludedSlugs.has(slug)) continue;
+
+      const coreRoles = spec.roles.filter(
+        (r) => r.serviceRole === "core" && r.universalFallback == null,
+      );
+      if (coreRoles.length === 0) continue;
+
+      // Hide gaps the vehicle's hardware makes Not Applicable (chain engine →
+      // timing belt, electric PS → PS flush, EV → ICE services, …).
+      if (!gapServiceApplies(serviceBySlug.get(slug), structural, config)) {
+        continue;
+      }
+
+      // Does the config have ANY guard-passing base fitment under this slug?
+      const rows = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", configId).eq("service_type", slug),
+        )
+        .collect();
+      let hasUsable = false;
+      for (const f of rows) {
+        if (f.package_code != null) continue;
+        const part = await ctx.db.get(f.part_id);
+        if (!part) continue;
+        if (
+          passesI1ReadGuard({
+            partMakeId: part.make_id,
+            configMakeId,
+            oemPartNumber: part.oem_part_number,
+            configMakeName: makeDoc?.name,
+            mechanicVerified: f.mechanic_verified === true,
+          })
+        ) {
+          hasUsable = true;
+          break;
+        }
+      }
+      if (hasUsable) continue; // not a gap
+
+      const primary =
+        spec.roles.find((r) => r.primary && r.serviceRole === "core") ??
+        coreRoles[0];
+      const svc = serviceBySlug.get(slug);
+      items.push({
+        serviceId: svc ? String(svc._id) : slug,
+        serviceName: svc?.name ?? spec.slug.replace(/_/g, " "),
+        serviceSlug: svc?.slug ?? spec.slug,
+        roleKey: primary.roleKey,
+        roleLabel: primary.label,
+        status: "MISSING",
+        kind: "gap",
+        current: null,
+        pickOptions: [],
+      });
+    }
+
+    return { items };
+  },
+});
+
+export type ConfigServiceGap = {
+  serviceSlug: string;
+  serviceName: string;
+  roleKey: string;
+  roleLabel: string;
+};
+
+/**
+ * Parts-requiring services this vehicle CONFIG has no usable OEM part for
+ * (dropped by OEM-strict enrichment or never enriched — e.g. battery on the
+ * 2001 740iA). Powers the director "Add part" control on the config page.
+ * Excludes services marked not-applicable.
+ */
+export const getServiceGapsForConfig = query({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args): Promise<{ gaps: ConfigServiceGap[] }> => {
+    const config = await ctx.db.get(args.vehicleConfigId);
+    if (!config) return { gaps: [] };
+    const configMakeId = config.make_id ?? null;
+    const makeDoc = configMakeId ? await ctx.db.get(configMakeId) : null;
+
+    const exclusions = await ctx.db
+      .query("config_service_exclusions")
+      .withIndex("by_config", (q) => q.eq("vehicle_config_id", args.vehicleConfigId))
+      .collect();
+    const excludedSlugs = new Set(
+      exclusions.map((e) => normalizeServiceSlug(e.service_slug)),
+    );
+
+    const allServices = await ctx.db.query("services").collect();
+    const serviceBySlug = new Map<string, Doc<"services">>();
+    for (const svc of allServices) {
+      if (svc.slug) serviceBySlug.set(normalizeServiceSlug(svc.slug), svc);
+    }
+
+    const structural = await loadStructuralContext(ctx, config);
+
+    const gaps: ConfigServiceGap[] = [];
+    for (const spec of Object.values(SERVICE_PARTS_REFERENCE)) {
+      if (spec.laborOnly || spec.handledByDedicatedFlow) continue;
+      const slug = normalizeServiceSlug(spec.slug);
+      if (excludedSlugs.has(slug)) continue;
+
+      const coreRoles = spec.roles.filter(
+        (r) => r.serviceRole === "core" && r.universalFallback == null,
+      );
+      if (coreRoles.length === 0) continue;
+
+      // Hide gaps the vehicle's hardware makes Not Applicable.
+      if (!gapServiceApplies(serviceBySlug.get(slug), structural, config)) {
+        continue;
+      }
+
+      const rows = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", args.vehicleConfigId).eq("service_type", slug),
+        )
+        .collect();
+      let hasUsable = false;
+      for (const f of rows) {
+        if (f.package_code != null) continue;
+        const part = await ctx.db.get(f.part_id);
+        if (!part) continue;
+        if (
+          passesI1ReadGuard({
+            partMakeId: part.make_id,
+            configMakeId,
+            oemPartNumber: part.oem_part_number,
+            configMakeName: makeDoc?.name,
+            mechanicVerified: f.mechanic_verified === true,
+          })
+        ) {
+          hasUsable = true;
+          break;
+        }
+      }
+      if (hasUsable) continue;
+
+      const primary =
+        spec.roles.find((r) => r.primary && r.serviceRole === "core") ??
+        coreRoles[0];
+      const svc = serviceBySlug.get(slug);
+      gaps.push({
+        serviceSlug: svc?.slug ?? spec.slug,
+        serviceName: svc?.name ?? spec.slug.replace(/_/g, " "),
+        roleKey: primary.roleKey,
+        roleLabel: primary.label,
+      });
+    }
+
+    return { gaps };
   },
 });
 

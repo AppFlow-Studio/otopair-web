@@ -23,6 +23,11 @@ export interface MaintenanceItem {
   // e.g. "Mar 2025", "Aug 2025", "Unknown"
   detail: string;
   status: MaintenanceStatus;
+  /** 0–100 percent of interval used (mileage- or time-based), preserved
+   *  from computeMaintenanceStatus so Action Engine proximity uses the
+   *  real v0 ramp instead of inferring from status. Optional because
+   *  inferred fallback items (no record) don't have an actual ramp. */
+  percentUsed?: number;
   lastService?: string;
   urgency?: string;
   impacts?: Array<{ label: string; severity: 'high' | 'medium' | 'low' }>;

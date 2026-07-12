@@ -154,6 +154,12 @@ export const vehiclePassportModificationsValidator = v.object({
   affected_systems: v.array(affectedSystemValidator),
 });
 
+// TODO: remove after running fixLegacyPrejobModifications + fixLegacyPassportModifications migrations
+export const legacyModificationsShapeValidator = v.object({
+  notes: v.union(v.string(), v.null()),
+  status: v.union(v.string(), v.null()),
+});
+
 export const prejobFilterChecksValidator = v.object({
   engine_air_filter: v.optional(v.union(filterStatusValidator, v.null())),
   cabin_air_filter: v.optional(v.union(filterStatusValidator, v.null())),
@@ -183,7 +189,8 @@ export const prejobReportValidator = v.object({
   fluid_overrides: v.optional(v.union(vehiclePassportFluidsValidator, v.null())),
   filters: v.optional(v.union(prejobFilterChecksValidator, v.null())),
   inspection: v.optional(v.union(vehiclePassportInspectionValidator, v.null())),
-  modifications: v.optional(v.union(vehiclePassportModificationsValidator, v.null())),
+  // TODO: remove legacy branch after running fixLegacyPrejobModifications migration
+  modifications: v.optional(v.union(vehiclePassportModificationsValidator, legacyModificationsShapeValidator, v.null())),
   flagged_vehicle_specs: v.optional(v.boolean()),
   next_mechanic_tip: v.optional(nullableStringValidator),
 });

@@ -91,6 +91,7 @@ import {
   isLateStartTestModeEnabled,
 } from "./lib/late_start";
 import {
+  assignmentPreferenceFromRequestedMechanic,
   DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_PERCENT,
   OVERRUN_EXTENSION_OPTIONS_MINUTES,
@@ -973,7 +974,7 @@ export const create = mutation({
       estimated_labor_minutes:
         estimated_labor_minutes > 0 ? estimated_labor_minutes : undefined,
       status: "pending",
-      assignment_preference: "any",
+      assignment_preference: assignmentPreferenceFromRequestedMechanic(args.mechanic_id),
       created_at: now,
       updated_at: now,
       source_recommendation_id: args.source_recommendation_id,
@@ -1750,7 +1751,7 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       total_cost,
       estimated_labor_minutes: estimated_labor_minutes > 0 ? estimated_labor_minutes : undefined,
       status: "pending",
-      assignment_preference: "any",
+      assignment_preference: assignmentPreferenceFromRequestedMechanic(args.mechanic_id),
       created_at: now,
       updated_at: now,
       source_recommendation_id: args.source_recommendation_id,

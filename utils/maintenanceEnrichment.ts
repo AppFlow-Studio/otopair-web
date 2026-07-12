@@ -15,6 +15,7 @@ import {
   MAINTENANCE_LABELS,
   computeMaintenanceStatus,
   type MaintenanceType,
+  type OemServiceIntervalsInput,
 } from "./maintenanceStatus";
 
 // ============================================================================
@@ -187,6 +188,13 @@ export function buildMaintenanceItems(
   drivingConditions?: string,
   avgMonthlyDriving?: string,
   knownIssues?: string[],
+  vehicleYear?: number,
+  // Slug-keyed OEM service intervals from the v3 enrichment pipeline.
+  // Forwarded as-is to computeMaintenanceStatus → getInterval, which
+  // applies the tier order (OEM → MAKE → DEFAULT). Optional; when
+  // undefined the calc falls back to the existing chain — no behavior
+  // change for callers that haven't wired this yet.
+  oemIntervals?: OemServiceIntervalsInput,
 ): Map<MaintenanceType, MaintenanceItem> {
   const map = new Map<MaintenanceType, MaintenanceItem>();
 
@@ -206,6 +214,8 @@ export function buildMaintenanceItems(
       drivingConditions,
       avgMonthlyDriving,
       knownIssues,
+      vehicleYear,
+      oemIntervals,
     );
 
     map.set(type, {
@@ -214,6 +224,7 @@ export function buildMaintenanceItems(
       description: result.description,
       detail: result.detail,
       status: result.status,
+      percentUsed: result.percentUsed,
     });
   }
 

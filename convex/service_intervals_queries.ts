@@ -46,7 +46,7 @@ export type OemServiceIntervalMap = Record<string, OemServiceIntervalRow>;
 /** Resolve a list of service_intervals rows into a slug-keyed map.
  *  Pulled out so both the single-config and batch queries share the
  *  same filter + join logic. */
-async function resolveSlugMap(
+export async function resolveSlugMap(
   ctx: { db: { get: (id: Id<"services">) => Promise<Doc<"services"> | null> } },
   rows: readonly Doc<"service_intervals">[],
 ): Promise<OemServiceIntervalMap> {

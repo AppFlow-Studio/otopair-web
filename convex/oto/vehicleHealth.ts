@@ -36,6 +36,13 @@ import {
   computeVehicleHealthScore,
   computeProjectedHealthScore,
 } from "../../utils/healthScore";
+import { canonicalWarningLights } from "../../lib/warningLightVocab";
+import {
+  buildMergedMaintenanceItems,
+  type DriverRecommendationLike,
+} from "../../utils/mergedMaintenance";
+import { resolveSlugMap } from "../service_intervals_queries";
+import { bufferFor } from "../healthPoints";
 import type { MaintenanceItem, MaintenanceStatus } from "../../components/cars/MaintenanceTracker";
 
 // -----------------------------------------------------------------------------
@@ -61,14 +68,13 @@ const WARNING_LIGHT_LABELS: Record<string, string> = {
 };
 
 function describeKnownIssues(knownIssues?: string[]): string[] | undefined {
-  if (!knownIssues || knownIssues.length === 0) return undefined;
-  const sentinel = knownIssues[0];
-  if (sentinel === "no_all_clear") return undefined;
-  if (sentinel === "not_sure") return ["Driver isn't sure which warning light was on"];
-  if (sentinel === "check_engine") return [WARNING_LIGHT_LABELS.check_engine];
-  // "other" / "different_light" — sentinel followed by individual light ids.
-  const lights = knownIssues.slice(1);
-  if (lights.length === 0) return ["Driver reported a warning light but didn't specify which"];
+  // Format- and vocabulary-agnostic: canonicalWarningLights scans the whole
+  // array (so the flat Oto/check-in shape works, not just the sentinel-prefixed
+  // onboarding shape) and folds symptom aliases (brake_warning → abs) onto their
+  // canonical light. Previously keyed off knownIssues[0], so a light Oto itself
+  // logged in the flat shape was described as "didn't specify which" or dropped.
+  const lights = canonicalWarningLights(knownIssues);
+  if (lights.length === 0) return undefined;
   return lights.map((id) => WARNING_LIGHT_LABELS[id] ?? `Unrecognized warning light: ${id}`);
 }
 
@@ -149,9 +155,19 @@ export interface ProjectedHealthResponse {
 interface LoadedContext {
   owner: Doc<"vehicle_owners">;
   records: Doc<"maintenance_records">[];
+  /** Conservative, F1-anti-fabrication items Oto REPORTS to the user (unknown
+   *  fallback for services with no record). Unchanged from before. */
   enrichedItems: MaintenanceItem[];
+  /** Ring-equivalent items used ONLY to compute the score Oto quotes, so it
+   *  matches the Cars page (optimistic fallback + driver recs + warning item +
+   *  OEM cadences). See utils/mergedMaintenance.ts. */
+  scoringItems: MaintenanceItem[];
   odometerMiles: number;
   knownIssues: string[] | undefined;
+  /** Open-mechanic-rec penalty (0–15) the ring subtracts — vehicle_owners.health_score_rec_penalty. */
+  recPenalty: number | undefined;
+  /** Health-Points buffer (0–3) the ring adds — Rewards Framework v3 §11. */
+  hpBuffer: number;
   /**
    * Provenance keyed by MaintenanceType for items that DO have a record.
    * Items without a record (unknown-* fallbacks) get "inferred" downstream
@@ -240,6 +256,63 @@ async function loadVehicleContextForUser(
   const drivingConditions = owner.drivingConditions ?? undefined;
   const avgMonthlyDriving = owner.avgMonthlyDriving ?? undefined;
 
+  // ── Convergence loads ──────────────────────────────────────────────────────
+  // The SAME signals the Cars-page health ring folds into computeVehicleHealthScore,
+  // so the score Oto quotes matches the ring the user sees (utils/mergedMaintenance.ts).
+  //
+  // Mechanic (driver) recommendations — filter mirrors
+  // jobRecommendations.getDriverVisibleRecsForVehicle. Only the score-relevant
+  // field (urgency → item status) is needed; display-only shop/mechanic names are
+  // left null to avoid extra reads.
+  const recRows = await ctx.db
+    .query("job_recommendations")
+    .withIndex("by_vehicle_vin", (q: any) => q.eq("vehicle_vin", vehicle.vin))
+    .collect();
+  const driverRecommendations: DriverRecommendationLike[] = recRows
+    .filter(
+      (r: any) =>
+        (r.status === "open" || r.status === "acknowledged") &&
+        r.visible_to_driver &&
+        r.recommended_service_id,
+    )
+    .map((r: any) => ({
+      _id: String(r._id),
+      service_id: (r.recommended_service_id ?? null) as string | null,
+      service_name: "",
+      urgency: r.urgency,
+      reason: r.reason ?? null,
+      shop_name: null,
+      mechanic_name: null,
+      target_mileage: r.target_mileage ?? null,
+      scheduled_at: r.scheduled_at ?? null,
+      scheduled_mechanic_name: null,
+    }));
+
+  // OEM service intervals for the vehicle's config (same read as the ring's
+  // useOemServiceIntervals) so record-based statuses use identical cadences.
+  const oemIntervals = vehicle.vehicle_config_id
+    ? await resolveSlugMap(
+        ctx,
+        await ctx.db
+          .query("service_intervals")
+          .withIndex("by_vehicle_config", (q: any) =>
+            q.eq("vehicle_config_id", vehicle.vehicle_config_id),
+          )
+          .collect(),
+      )
+    : {};
+
+  // Health-Points buffer (+0–3) and open-mechanic-rec penalty (−0–15) — both feed
+  // the ring's score.
+  const hpRow = await ctx.db
+    .query("vehicle_health_points")
+    .withIndex("by_vin_user", (q: any) =>
+      q.eq("vin", (vehicle.vin ?? "").toUpperCase().trim()).eq("user_id", userId),
+    )
+    .unique();
+  const hpBuffer = bufferFor(hpRow?.points ?? 0);
+  const recPenalty = (owner as any).health_score_rec_penalty as number | undefined;
+
   // Normalize raw records into the builder's input shape. lastServiceDate is
   // stored as union(string|number); we only feed numeric values forward.
   const recordInputs: MaintenanceRecordInput[] = records.map((rec) => ({
@@ -282,6 +355,9 @@ async function loadVehicleContextForUser(
   // Server-side merge: user record > warning-light fallback > young-battery
   // inference > per-type default. Smartcar branches from useMergedMaintenance
   // are intentionally omitted (deprecated per Implementation Directive 1).
+  // Canonical lights folded once (both shapes + symptom vocab) so the paired
+  // fallback below fires for a light logged via Oto in ANY vocabulary.
+  const activeLights = canonicalWarningLights(knownIssues);
   const merged: MaintenanceItem[] = [];
   for (const type of ALL_MAINTENANCE_TYPES) {
     const userItem = userItems.get(type);
@@ -312,7 +388,7 @@ async function loadVehicleContextForUser(
     };
 
     const lightInfo = WARNING_LIGHT_FOR_TYPE[type];
-    if (lightInfo && knownIssues?.includes(lightInfo.lightId)) {
+    if (lightInfo && (activeLights as readonly string[]).includes(lightInfo.lightId)) {
       merged.push({
         id: `unknown-${type}`,
         serviceName: MAINTENANCE_LABELS[type] || type,
@@ -364,7 +440,46 @@ async function loadVehicleContextForUser(
 
   const enrichedItems = merged.map(enrichUrgentItem);
 
-  return { owner, records, enrichedItems, odometerMiles, knownIssues, provenanceByType };
+  // ── Scoring items ──────────────────────────────────────────────────────────
+  // The SAME merge the Cars ring uses (optimistic no-record fallback + OEM
+  // cadences + driver recs + consolidated warning item), so the score below
+  // matches the ring exactly on vehicles with real data. The REPORTED
+  // `enrichedItems` above stay conservative (unknown fallback, F1 provenance
+  // stripping) — "same states as before" for what Oto narrates; this parallel
+  // set exists only to compute the number.
+  const scoringUserItems = buildMaintenanceItems(
+    recordInputs,
+    odometerMiles > 0 ? odometerMiles : null,
+    make,
+    drivingConditions,
+    avgMonthlyDriving,
+    knownIssues,
+    vehicleYear,
+    oemIntervals as any,
+  );
+  const scoringItems = buildMergedMaintenanceItems({
+    userItems: scoringUserItems,
+    records: records.map((r) => ({
+      type: r.type,
+      confirmedHealthyAt: r.confirmedHealthyAt ?? undefined,
+    })),
+    knownIssues,
+    vehicleYear,
+    driverRecommendations,
+    scopeId: owner._id as unknown as string,
+  });
+
+  return {
+    owner,
+    records,
+    enrichedItems,
+    scoringItems,
+    odometerMiles,
+    knownIssues,
+    recPenalty,
+    hpBuffer,
+    provenanceByType,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -424,13 +539,26 @@ async function _getVehicleHealthCore(
   userId: Id<"users">,
   args: { vehicle_id: string },
 ): Promise<VehicleHealthResponse> {
-  const { owner, enrichedItems, odometerMiles, knownIssues, provenanceByType } =
-    await loadVehicleContextForUser(ctx, userId, args.vehicle_id);
-
-  const score = computeVehicleHealthScore({
-    maintenanceItems: enrichedItems,
+  const {
+    owner,
+    enrichedItems,
+    scoringItems,
     odometerMiles,
     knownIssues,
+    recPenalty,
+    hpBuffer,
+    provenanceByType,
+  } = await loadVehicleContextForUser(ctx, userId, args.vehicle_id);
+
+  // Score from the ring-equivalent items + the same penalty/buffer so the number
+  // Oto states matches the Cars page. Items REPORTED to Oto stay the conservative
+  // enrichedItems (unchanged).
+  const score = computeVehicleHealthScore({
+    maintenanceItems: scoringItems,
+    odometerMiles,
+    knownIssues,
+    recPenalty,
+    hpBuffer,
   });
 
   return {
@@ -473,13 +601,17 @@ async function _getProjectedHealthScoreCore(
   userId: Id<"users">,
   args: { vehicle_id: string; item_id: string },
 ): Promise<ProjectedHealthResponse> {
-  const { enrichedItems, odometerMiles, knownIssues } =
+  const { scoringItems, odometerMiles, knownIssues, recPenalty, hpBuffer } =
     await loadVehicleContextForUser(ctx, userId, args.vehicle_id);
 
+  // Project from the SAME base as the quoted score (scoringItems + penalty/buffer)
+  // so the "fixing this adds N pts" delta reconciles with the number Oto states.
   const input = {
-    maintenanceItems: enrichedItems,
+    maintenanceItems: scoringItems,
     odometerMiles,
     knownIssues,
+    recPenalty,
+    hpBuffer,
   };
 
   const current = computeVehicleHealthScore(input);

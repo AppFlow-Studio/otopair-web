@@ -18,6 +18,7 @@ import { v } from "convex/values";
 import { claimContributionRewardImpl } from "./rewards";
 import { awardPointsImpl } from "./healthPoints";
 import { symptomForRecordType } from "./lib/serviceSymptoms";
+import { toCanonicalLight } from "../lib/warningLightVocab";
 
 /**
  * QUERY: getRecordsByVehicle
@@ -70,6 +71,12 @@ export const upsertRecord = mutation({
     lastServiceDate: v.optional(v.float64()),
     lastServiceMileage: v.optional(v.float64()),
     customInputs: v.optional(v.any()),
+    // Sent by AIRecordConfirmation: confirmedHealthyAt on "Yes, that's right",
+    // serviceSource + confidence on "No, update it". These were undeclared, so
+    // Convex rejected the whole call → "Couldn't save that" on BOTH buttons.
+    confirmedHealthyAt: v.optional(v.number()),
+    serviceSource: v.optional(v.string()),
+    confidence: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -84,11 +91,20 @@ export const upsertRecord = mutation({
 
     let recordId;
     const isNewRecord = !existing;
+    // Only patch the optional trust fields when provided, so a caller that omits
+    // them (e.g. the input modal) doesn't clobber a "verified" confidence set by
+    // the booking-completion writer.
+    const trustFields = {
+      ...(args.confirmedHealthyAt !== undefined ? { confirmedHealthyAt: args.confirmedHealthyAt } : {}),
+      ...(args.serviceSource !== undefined ? { serviceSource: args.serviceSource } : {}),
+      ...(args.confidence !== undefined ? { confidence: args.confidence } : {}),
+    };
     if (existing) {
       await ctx.db.patch(existing._id, {
         lastServiceDate: args.lastServiceDate,
         lastServiceMileage: args.lastServiceMileage,
         customInputs: args.customInputs,
+        ...trustFields,
         updatedAt: now,
       });
       recordId = existing._id;
@@ -99,6 +115,7 @@ export const upsertRecord = mutation({
         lastServiceDate: args.lastServiceDate,
         lastServiceMileage: args.lastServiceMileage,
         customInputs: args.customInputs,
+        ...trustFields,
         createdAt: now,
         updatedAt: now,
       });
@@ -110,8 +127,17 @@ export const upsertRecord = mutation({
     // Service recorded as done → clear its warning-light code from knownIssues so
     // the pipeline stops flagging it (mirrors vehicleTruth's add). See serviceSymptoms.
     const clearedCode = symptomForRecordType(args.type);
-    if (clearedCode && owner && Array.isArray(owner.knownIssues) && owner.knownIssues.includes(clearedCode)) {
-      await ctx.db.patch(owner._id, { knownIssues: owner.knownIssues.filter((x: string) => x !== clearedCode) } as any);
+    if (clearedCode && owner && Array.isArray(owner.knownIssues)) {
+      // Clear the symptom code AND its canonical light id (brake_warning → abs,
+      // battery → battery_charging) so a light logged canonically via Oto is
+      // removed when the service is recorded done — otherwise it lingers.
+      const clearedCanon = toCanonicalLight(clearedCode);
+      const nextIssues = (owner.knownIssues as string[]).filter(
+        (x) => x !== clearedCode && (!clearedCanon || toCanonicalLight(x) !== clearedCanon),
+      );
+      if (nextIssues.length !== owner.knownIssues.length) {
+        await ctx.db.patch(owner._id, { knownIssues: nextIssues } as any);
+      }
     }
 
     if (owner?.preOnboardingComplete) {

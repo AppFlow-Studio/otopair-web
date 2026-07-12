@@ -34,6 +34,7 @@ import {
   vehiclePassportFluidsValidator,
   vehiclePassportInspectionValidator,
   vehiclePassportModificationsValidator,
+  legacyModificationsShapeValidator,
   vehiclePassportTiresValidator,
   vehicleUpdateValuesValidator,
 } from "./lib/vehicle_passports";
@@ -1356,7 +1357,8 @@ export default defineSchema({
     fluids: v.optional(vehiclePassportFluidsValidator),
     brakes: v.optional(vehiclePassportBrakesValidator),
     inspection: v.optional(vehiclePassportInspectionValidator),
-    modifications: v.optional(vehiclePassportModificationsValidator),
+    // TODO: remove legacy branch after running fixLegacyPassportModifications migration
+    modifications: v.optional(v.union(vehiclePassportModificationsValidator, legacyModificationsShapeValidator)),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
     first_shop_confirmed_at: v.optional(v.number()),

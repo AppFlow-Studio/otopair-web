@@ -36,7 +36,11 @@ import type {
   PreJobSurveyPayload,
   VehiclePassportData,
 } from "@/lib/vehicle-passport";
-import type { AffectedSystem } from "@/lib/vehicle-mod-systems";
+import {
+  AFFECTED_SYSTEMS,
+  servicesForSystems,
+  type AffectedSystem,
+} from "@/lib/vehicle-mod-systems";
 
 type SubmitIntent = "close" | "start";
 
@@ -709,10 +713,12 @@ function MultiPointInspectionDialogBody({
                       expires={inspectionExpires}
                       aftermarket={modAftermarket}
                       notes={modNotes}
+                      systems={modAffectedSystems}
                       onStatus={setInspectionStatus}
                       onExpires={setInspectionExpires}
                       onAftermarket={setModAftermarket}
                       onNotes={setModNotes}
+                      onSystems={setModAffectedSystems}
                     />
                   ) : null
                 }
@@ -1133,20 +1139,36 @@ function InspectionStickerFields({
   expires,
   aftermarket,
   notes,
+  systems,
   onStatus,
   onExpires,
   onAftermarket,
   onNotes,
+  onSystems,
 }: {
   status: InspectionStatus | "";
   expires: string;
   aftermarket: boolean;
   notes: string;
+  systems: AffectedSystem[];
   onStatus: (s: InspectionStatus | "") => void;
   onExpires: (s: string) => void;
   onAftermarket: (b: boolean) => void;
   onNotes: (s: string) => void;
+  onSystems: (s: AffectedSystem[]) => void;
 }) {
+  const toggleSystem = (value: AffectedSystem) => {
+    if (value === "cosmetic_only") {
+      onSystems(systems.includes("cosmetic_only") ? [] : ["cosmetic_only"]);
+      return;
+    }
+    const withoutCosmetic = systems.filter((s) => s !== "cosmetic_only");
+    onSystems(
+      withoutCosmetic.includes(value)
+        ? withoutCosmetic.filter((s) => s !== value)
+        : [...withoutCosmetic, value],
+    );
+  };
   return (
     <div className="mt-3 space-y-1 rounded-lg bg-primary/[0.03] p-3">
       <Row label="Inspection sticker">
@@ -1180,12 +1202,71 @@ function InspectionStickerFields({
         />
       </Row>
       {aftermarket ? (
-        <input
-          value={notes}
-          onChange={(e) => onNotes(e.target.value)}
-          placeholder="Modification notes"
-          className="mt-1 w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
-        />
+        <>
+          <input
+            value={notes}
+            onChange={(e) => onNotes(e.target.value)}
+            placeholder="Modification notes"
+            className="mt-1 w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+          />
+          <div className="pt-2">
+            <div className="text-[12px] font-medium text-foreground">
+              Which systems do these affect?
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {AFFECTED_SYSTEMS.map((sys) => {
+                const selected = systems.includes(sys.value);
+                return (
+                  <button
+                    key={sys.value}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => toggleSystem(sys.value)}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[12px] font-medium transition-colors",
+                      selected
+                        ? "border-blue-300 bg-blue-50 text-blue-700"
+                        : "border-primary/20 bg-card text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    {selected ? <Check className="h-3 w-3" /> : null}
+                    {sys.label}
+                  </button>
+                );
+              })}
+            </div>
+            {(() => {
+              const onlyCosmetic =
+                systems.length === 1 && systems[0] === "cosmetic_only";
+              const services = servicesForSystems(systems);
+              if (onlyCosmetic) {
+                return (
+                  <div className="mt-2 rounded-lg border border-primary/20 bg-card px-2.5 py-2 text-[11px] text-muted-foreground">
+                    Cosmetic only — recorded, but won&apos;t flag any future service.
+                  </div>
+                );
+              }
+              if (services.length === 0) {
+                return (
+                  <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-2 text-[11px] text-blue-700">
+                    No systems selected yet — tap the systems above and Otopair
+                    flags the right future services automatically.
+                  </div>
+                );
+              }
+              return (
+                <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-2 text-[11px] text-blue-700">
+                  <span className="font-semibold">
+                    Future shops will be alerted on {services.length} service
+                    {services.length === 1 ? "" : "s"}:
+                  </span>{" "}
+                  {services.map((s) => s.name).join(" · ")}.{" "}
+                  <span className="font-semibold">Hidden on everything else.</span>
+                </div>
+              );
+            })()}
+          </div>
+        </>
       ) : null}
     </div>
   );

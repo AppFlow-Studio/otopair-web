@@ -17,33 +17,13 @@
  */
 
 import { mutation } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import { requireDirector } from "./directorGate";
 
 /** Director session token arg — localStorage `otopair_director_token`. */
 const tokenArg = {
   token: v.string(),
 } as const;
-
-/** Validate the director session and return the audit actor. Throws on a
- *  missing/expired session. */
-async function requireDirector(
-  ctx: MutationCtx,
-  token: string,
-): Promise<{ name: string; userId: Id<"director_users"> }> {
-  if (token) {
-    const s = await ctx.db
-      .query("director_sessions")
-      .withIndex("by_token", (q) => q.eq("token", token))
-      .first();
-    if (s && s.expires_at >= Date.now()) {
-      const u = await ctx.db.get(s.user_id);
-      if (u) return { name: u.name, userId: u._id };
-    }
-  }
-  throw new Error("unauthorized: invalid or expired director session");
-}
 
 // ---------------------------------------------------------------------------
 // updateConfigBasics — patch the edit-friendly fields on vehicle_configs
@@ -61,7 +41,7 @@ export const updateConfigBasics = mutation({
     ...tokenArg,
   },
   handler: async (ctx, args) => {
-    const actor = await requireDirector(ctx, args.token);
+    const actor = await requireDirector(ctx, args.token, "data.write");
     const cfg = await ctx.db.get(args.id);
     if (!cfg) return { ok: false as const, reason: "config_not_found" };
 
@@ -164,7 +144,7 @@ export const updateEngineFields = mutation({
     ...tokenArg,
   },
   handler: async (ctx, { id, token, ...fields }) => {
-    const actor = await requireDirector(ctx, token);
+    const actor = await requireDirector(ctx, token, "data.write");
     const cur = await ctx.db.get(id);
     if (!cur) return { ok: false as const, reason: "engine_not_found" };
     const { patch, changes } = buildPatch(cur as any, Object.entries(fields) as Array<[string, unknown]>);
@@ -206,7 +186,7 @@ export const updateTransmissionFields = mutation({
     ...tokenArg,
   },
   handler: async (ctx, { id, token, ...fields }) => {
-    const actor = await requireDirector(ctx, token);
+    const actor = await requireDirector(ctx, token, "data.write");
     const cur = await ctx.db.get(id);
     if (!cur) return { ok: false as const, reason: "transmission_not_found" };
     const { patch, changes } = buildPatch(cur as any, Object.entries(fields) as Array<[string, unknown]>);
@@ -248,7 +228,7 @@ export const updateChassisSpecsFields = mutation({
     ...tokenArg,
   },
   handler: async (ctx, { chassis_code, token, ...fields }) => {
-    const actor = await requireDirector(ctx, token);
+    const actor = await requireDirector(ctx, token, "data.write");
     let row = await ctx.db
       .query("chassis_specs")
       .withIndex("by_chassis_code", (q) => q.eq("chassis_code", chassis_code))
@@ -292,7 +272,7 @@ export const updateTrimSpecsFields = mutation({
     ...tokenArg,
   },
   handler: async (ctx, { vehicle_config_id, token, ...fields }) => {
-    const actor = await requireDirector(ctx, token);
+    const actor = await requireDirector(ctx, token, "data.write");
     let row = await ctx.db
       .query("trim_specs")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", vehicle_config_id))
@@ -326,7 +306,7 @@ export const markConfigVerified = mutation({
     ...tokenArg,
   },
   handler: async (ctx, { id, token }) => {
-    const actor = await requireDirector(ctx, token);
+    const actor = await requireDirector(ctx, token, "data.write");
     const cfg = await ctx.db.get(id);
     if (!cfg) return { ok: false as const, reason: "config_not_found" };
     const now = Date.now();

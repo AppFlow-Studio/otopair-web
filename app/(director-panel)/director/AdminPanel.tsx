@@ -58,7 +58,7 @@ function getHashTab(): string {
 
 const PanelShell = ({ session, onLogout }: { session: DirectorSession; onLogout: () => void }) => {
   const [active, setActive] = useState('overview')
-  const counts = useQuery(api.director.sidebarCounts)
+  const counts = useQuery(api.director.sidebarCounts, { token: session.token })
 
   useEffect(() => {
     setActive(getHashTab())

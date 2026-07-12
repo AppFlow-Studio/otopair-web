@@ -3123,9 +3123,34 @@ export default defineSchema({
     .index("by_created_at", ["created_at"])
     .index("by_actor_id", ["actor_id"]),
 
+  // Materialized KPI counters for the internal portals (decision #3, R2
+  // class). Written only by portalStats.ts summarizers on cron; read via the
+  // gated portalStats.getStats. Realtime (R1) metrics never land here — they
+  // stay indexed window queries.
+  portal_stats: defineTable({
+    key: v.string(),
+    value: v.number(),
+    // Free-form context: sample sizes, breakdowns, threshold used, etc.
+    meta: v.optional(v.any()),
+    computed_at: v.number(),
+  }).index("by_key", ["key"]),
+
   director_users: defineTable({
     name: v.string(),
-    role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    // Legacy roles (superadmin/admin/viewer) coexist with the six portal
+    // roles until migrations/directorRoles.ts has run everywhere; the
+    // validator narrows to the six in a follow-up.
+    role: v.union(
+      v.literal("superadmin"),
+      v.literal("admin"),
+      v.literal("viewer"),
+      v.literal("super_admin"),
+      v.literal("ops_admin"),
+      v.literal("support"),
+      v.literal("readonly"),
+      v.literal("data_admin"),
+      v.literal("shop_success"),
+    ),
     totp_secret: v.string(),
     email: v.optional(v.string()),
     created_at: v.number(),

@@ -196,4 +196,17 @@ crons.interval(
   {},
 );
 
+// Portal KPI materialization (decision #3, R2 class). Cheap windowed stats
+// every 15 min; the self-chaining enrichment_evidence sweep (28k+ rows)
+// daily — each chain link paginates 4k docs, so no single mutation
+// approaches the read limit. SLO breaches land in notification_outbox
+// (deduped per key per day) for the Slack dispatcher.
+crons.interval("portal-stats-cheap", { minutes: 15 }, internal.portalStats.recomputeCheapStats, {});
+crons.daily(
+  "portal-stats-evidence-sweep",
+  { hourUTC: 6, minuteUTC: 30 },
+  internal.portalStats.recomputeEvidenceStats,
+  {},
+);
+
 export default crons;

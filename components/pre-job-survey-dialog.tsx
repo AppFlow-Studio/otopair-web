@@ -48,6 +48,11 @@ import {
   type TireCondition,
   type VehiclePassportData,
 } from "@/lib/vehicle-passport";
+import {
+  AFFECTED_SYSTEMS,
+  servicesForSystems,
+  type AffectedSystem,
+} from "@/lib/vehicle-mod-systems";
 import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
 import {
   TIRE_POSITIONS,
@@ -520,12 +525,6 @@ function rotorConditionLabel(value: string) {
   return "Select...";
 }
 
-function modificationStatusLabel(value: string) {
-  if (value === "none_observed") return "None observed";
-  if (value === "aftermarket_observed") return "Yes - see notes";
-  return "Select...";
-}
-
 function initialFilterStatus(value?: string | null): FilterStatus {
   return isFilterStatus(value) ? value : "not_checked";
 }
@@ -827,15 +826,20 @@ function PreJobSurveyDialogBody({
   const [inspectionExpiresAt, setInspectionExpiresAt] = useState(
     prefillData?.inspection?.expires_at ?? passportData?.passport.inspection.expires_at ?? ""
   );
-  const [modificationsStatus, setModificationsStatus] = useState<
-    "" | "none_observed" | "aftermarket_observed"
-  >(
-    prefillData?.modifications?.status ??
-      passportData?.passport.modifications.status ??
+  const [hasMods, setHasMods] = useState<boolean>(
+    prefillData?.modifications?.has_mods ??
+      passportData?.passport.modifications.has_mods ??
+      false
+  );
+  const [modNotes, setModNotes] = useState<string>(
+    prefillData?.modifications?.notes ??
+      passportData?.passport.modifications.notes ??
       ""
   );
-  const [modificationNotes, setModificationNotes] = useState(
-    prefillData?.modifications?.notes ?? passportData?.passport.modifications.notes ?? ""
+  const [affectedSystems, setAffectedSystems] = useState<AffectedSystem[]>(
+    prefillData?.modifications?.affected_systems ??
+      passportData?.passport.modifications.affected_systems ??
+      []
   );
   const [flaggedVehicleSpecs, setFlaggedVehicleSpecs] = useState(
     prefillData?.flagged_vehicle_specs ?? false
@@ -954,14 +958,18 @@ function PreJobSurveyDialogBody({
           prefillData?.inspection?.expires_at ??
           passportData?.passport.inspection.expires_at ??
           "",
-        modificationsStatus:
-          prefillData?.modifications?.status ??
-          passportData?.passport.modifications.status ??
-          "",
-        modificationNotes:
+        hasMods:
+          prefillData?.modifications?.has_mods ??
+          passportData?.passport.modifications.has_mods ??
+          false,
+        modNotes:
           prefillData?.modifications?.notes ??
           passportData?.passport.modifications.notes ??
           "",
+        affectedSystems:
+          prefillData?.modifications?.affected_systems ??
+          passportData?.passport.modifications.affected_systems ??
+          [],
         flaggedVehicleSpecs: prefillData?.flagged_vehicle_specs ?? false,
         nextMechanicTip: prefillData?.next_mechanic_tip ?? "",
       }),
@@ -1005,8 +1013,9 @@ function PreJobSurveyDialogBody({
     cabinAirFilterStatus,
     inspectionLooksCurrent,
     inspectionExpiresAt,
-    modificationsStatus,
-    modificationNotes,
+    hasMods,
+    modNotes,
+    affectedSystems,
     flaggedVehicleSpecs,
     nextMechanicTip,
   });
@@ -1098,8 +1107,11 @@ function PreJobSurveyDialogBody({
               : "not_visible",
       },
       modifications: {
-        status: modificationsStatus === "" ? null : modificationsStatus,
-        notes: modificationNotes.trim() || null,
+        has_mods: hasMods,
+        notes: hasMods ? (modNotes.trim() || null) : null,
+        affected_systems: hasMods
+          ? affectedSystems.filter((s) => s !== "cosmetic_only" || affectedSystems.length === 1)
+          : [],
       },
       flagged_vehicle_specs: flaggedVehicleSpecs,
       next_mechanic_tip: nextMechanicTip.trim() || null,
@@ -2322,53 +2334,126 @@ function PreJobSurveyDialogBody({
               badge="Optional"
               accent="muted"
             >
-              <FieldRow label="Any aftermarket parts?">
-                <Select
-                  selectedKey={modificationsStatus || "none"}
-                  onSelectionChange={(key) =>
-                    setModificationsStatus(
-                      key === "none"
-                        ? ""
-                        : (String(key) as "" | "none_observed" | "aftermarket_observed")
-                    )
-                  }
-                >
-                  <SelectTrigger className={cn(selectTriggerClassName, "w-[160px] justify-end")}>
-                    <SelectValue>{modificationStatusLabel(modificationsStatus)}</SelectValue>
-                  </SelectTrigger>
-                  <SelectPopover className={selectPopoverClassName}>
-                    <SelectListBox shouldFocusWrap className={selectListBoxClassName}>
-                      <SelectItem id="none" textValue="Select..." className={selectItemClassName}>
-                        Select...
-                      </SelectItem>
-                      <SelectItem
-                        id="none_observed"
-                        textValue="None observed"
-                        className={selectItemClassName}
-                      >
-                        None observed
-                      </SelectItem>
-                      <SelectItem
-                        id="aftermarket_observed"
-                        textValue="Yes - see notes"
-                        className={selectItemClassName}
-                      >
-                        Yes - see notes
-                      </SelectItem>
-                    </SelectListBox>
-                  </SelectPopover>
-                </Select>
-              </FieldRow>
-              {modificationsStatus === "aftermarket_observed" ? (
-                <textarea
-                  value={modificationNotes}
-                  onChange={(event) => setModificationNotes(event.target.value)}
-                  placeholder="Describe what you observed."
-                  className={cn(
-                    baseField(),
-                    "mt-3 min-h-[80px] w-full resize-y py-2 text-left"
-                  )}
-                />
+              <div className="flex items-center mb-3">
+                <span className="text-sm font-medium text-foreground">Any aftermarket parts?</span>
+                <span className="ml-auto inline-flex gap-2">
+                  <button
+                    type="button"
+                    aria-pressed={hasMods}
+                    onClick={() => setHasMods(true)}
+                    className={cn(
+                      "rounded-lg border px-4 py-1.5 text-sm font-semibold transition-colors",
+                      hasMods
+                        ? "border-green-300 bg-green-50 text-green-700"
+                        : "border-border bg-card text-muted-foreground hover:bg-muted"
+                    )}
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={!hasMods}
+                    onClick={() => {
+                      setHasMods(false);
+                      setAffectedSystems([]);
+                    }}
+                    className={cn(
+                      "rounded-lg border px-4 py-1.5 text-sm font-semibold transition-colors",
+                      !hasMods
+                        ? "border-foreground bg-card text-foreground"
+                        : "border-border bg-card text-muted-foreground hover:bg-muted"
+                    )}
+                  >
+                    No
+                  </button>
+                </span>
+              </div>
+
+              {hasMods ? (
+                <>
+                  <div className="mb-1.5 text-sm font-medium text-foreground">Notes</div>
+                  <textarea
+                    value={modNotes}
+                    onChange={(e) => setModNotes(e.target.value)}
+                    placeholder="e.g. H&R springs ~1.5in drop, 25mm wheel spacers, cat-back exhaust."
+                    className={cn(baseField(), "min-h-[72px] w-full resize-y py-2 text-left")}
+                  />
+
+                  <div className="mt-4 rounded-xl border border-border bg-muted/40 p-4">
+                    <div className="text-sm font-semibold text-foreground">
+                      Which systems do these affect?
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Tap every system these mods touch. Otopair flags them to future shops on the
+                      right services — automatically.
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {AFFECTED_SYSTEMS.map((sys) => {
+                        const selected = affectedSystems.includes(sys.value);
+                        return (
+                          <button
+                            key={sys.value}
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() =>
+                              setAffectedSystems((prev) => {
+                                if (sys.value === "cosmetic_only") {
+                                  return prev.includes("cosmetic_only") ? [] : ["cosmetic_only"];
+                                }
+                                const withoutCosmetic = prev.filter((s) => s !== "cosmetic_only");
+                                return withoutCosmetic.includes(sys.value)
+                                  ? withoutCosmetic.filter((s) => s !== sys.value)
+                                  : [...withoutCosmetic, sys.value];
+                              })
+                            }
+                            className={cn(
+                              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                              selected
+                                ? "border-blue-300 bg-blue-50 text-blue-700"
+                                : "border-border bg-card text-muted-foreground hover:bg-muted"
+                            )}
+                          >
+                            {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                            {sys.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {(() => {
+                      const onlyCosmetic =
+                        affectedSystems.length === 1 && affectedSystems[0] === "cosmetic_only";
+                      const services = servicesForSystems(affectedSystems);
+                      if (onlyCosmetic) {
+                        return (
+                          <div className="mt-3 rounded-lg border border-border bg-card px-3.5 py-3 text-xs text-muted-foreground">
+                            Cosmetic only — recorded, but won&apos;t flag any future service.
+                          </div>
+                        );
+                      }
+                      if (services.length === 0) {
+                        return (
+                          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3.5 py-3 text-xs text-blue-700">
+                            No systems selected yet — tap the systems above and Otopair flags the
+                            right future services automatically.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 px-3.5 py-3">
+                          <div className="text-xs font-semibold text-blue-700">
+                            Future shops will be alerted on {services.length} service
+                            {services.length === 1 ? "" : "s"}
+                          </div>
+                          <div className="mt-1 text-xs text-blue-700/90">
+                            {services.map((s) => s.name).join(" · ")}.{" "}
+                            <span className="font-semibold">Hidden on everything else.</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </>
               ) : null}
             </SectionBlock>
 

@@ -3127,7 +3127,7 @@ export default defineSchema({
 
   director_users: defineTable({
     name: v.string(),
-    role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    role: v.union(v.literal("superadmin"), v.literal("super_admin"), v.literal("admin"), v.literal("viewer")),
     totp_secret: v.string(),
     email: v.optional(v.string()),
     created_at: v.number(),

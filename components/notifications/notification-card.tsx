@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@/convex/_generated/api";
@@ -27,6 +27,7 @@ type NotificationItem = {
     pad_type?: "ceramic" | "semi_metallic" | "oem_recommended";
   } | null;
   urgency?: "urgent" | null;
+  modFlag?: { affected: boolean; notes?: string | null } | null;
 };
 
 function formatBrakeSystemLabel(t: NonNullable<NotificationItem["rotorSpecs"]>["brake_system_type"]): string {
@@ -57,6 +58,69 @@ function relativeTime(ts: number): string {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+// Mod-flag description with a "More"/"Less" toggle that only appears when the
+// text actually overflows the 2-line clamp (measured), not on a char heuristic.
+function ModNotes({
+  notes,
+  expanded,
+  onToggle,
+}: {
+  notes: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      // Only meaningful while clamped; when expanded the clamp is removed.
+      if (expanded) return;
+      setOverflowing(el.scrollHeight > el.clientHeight + 1);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [notes, expanded]);
+
+  return (
+    <div className="relative mt-1">
+      <p
+        ref={ref}
+        className={`text-xs text-amber-900/90 ${expanded ? "" : "line-clamp-2"}`}
+      >
+        {notes}
+        {expanded && (
+          <>
+            {" "}
+            <button
+              type="button"
+              onClick={onToggle}
+              className="text-xs font-semibold text-amber-800 hover:text-amber-900"
+            >
+              Less
+            </button>
+          </>
+        )}
+      </p>
+      {/* Overlaid on the end of the clamped second line so the toggle
+          doesn't spend a whole row; the gradient fades the covered text. */}
+      {!expanded && overflowing && (
+        <button
+          type="button"
+          onClick={onToggle}
+          className="absolute bottom-0 right-0 bg-gradient-to-l from-amber-50 from-60% to-transparent pl-8 text-xs font-semibold text-amber-800 hover:text-amber-900"
+        >
+          More
+        </button>
+      )}
+    </div>
+  );
+}
+
 interface NotificationCardProps {
   item: NotificationItem;
   onSkip: (bookingId: string) => void;
@@ -76,8 +140,11 @@ export function NotificationCard({
   const [error, setError] = useState<string | null>(null);
   const [confirmingDecline, setConfirmingDecline] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
+  const [modExpanded, setModExpanded] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
 
   const isBooking = item.kind === "booking";
+  const hasModFlag = isBooking && item.modFlag?.affected === true;
   const isRotorQuote = item.kind === "rotor_quote";
   const isTireQuote = item.kind === "tire_quote";
   const headerLabel = isBooking
@@ -169,7 +236,7 @@ export function NotificationCard({
         {item.vehicle.full}
         {isBooking && item.services && item.services.length > 0 && (
           <>
-            <span className="mx-1">·</span>
+            <span className="mx-1">&#183;</span>
             {item.services.slice(0, 2).join(", ")}
             {item.services.length > 2 ? ` +${item.services.length - 2}` : ""}
           </>
@@ -181,7 +248,7 @@ export function NotificationCard({
           {item.scheduledLabel}
           {item.price != null && (
             <>
-              <span className="mx-1">·</span>
+              <span className="mx-1">&#183;</span>
               <span className="font-medium text-gray-900">
                 ${item.price.toFixed(2)}
               </span>
@@ -195,11 +262,11 @@ export function NotificationCard({
           <span className="font-medium text-gray-900">
             {item.tireSpecs.size}
           </span>
-          <span className="mx-1">·</span>
+          <span className="mx-1">&#183;</span>
           {item.tireSpecs.type}
-          <span className="mx-1">·</span>
+          <span className="mx-1">&#183;</span>
           {item.tireSpecs.tier}
-          <span className="mx-1">·</span>
+          <span className="mx-1">&#183;</span>
           {item.tireSpecs.quantity} tires
         </p>
       )}
@@ -213,13 +280,13 @@ export function NotificationCard({
                 ? "Rear pair"
                 : "All four"}
           </span>
-          <span className="mx-1">·</span>
+          <span className="mx-1">&#183;</span>
           {formatBrakeSystemLabel(item.rotorSpecs.brake_system_type)}
-          <span className="mx-1">·</span>
+          <span className="mx-1">&#183;</span>
           {rotorQtyForAxle(item.rotorSpecs.axle)} rotors
           {item.rotorSpecs.include_pads && (
             <>
-              <span className="mx-1">·</span>
+              <span className="mx-1">&#183;</span>
               <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
                 + Pads
                 {item.rotorSpecs.pad_type
@@ -233,8 +300,55 @@ export function NotificationCard({
 
       {item.note && (
         <p className="mt-1 text-xs italic text-gray-500 line-clamp-2">
-          “{item.note}”
+          &ldquo;{item.note}&rdquo;
         </p>
+      )}
+
+      {hasModFlag && !acknowledged && (
+        <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+            <span aria-hidden>&#9888;</span> This vehicle is modified
+          </p>
+          {(() => {
+            const notes = item.modFlag!.notes?.trim();
+            if (!notes) {
+              return (
+                <p className="mt-1 text-xs text-amber-900/90">
+                  Aftermarket modifications affect this service.
+                </p>
+              );
+            }
+            return (
+              <ModNotes
+                notes={notes}
+                expanded={modExpanded}
+                onToggle={() => setModExpanded((v) => !v)}
+              />
+            );
+          })()}
+          <button
+            type="button"
+            onClick={() => setAcknowledged(true)}
+            className="mt-2 w-full rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+          >
+            Tap to acknowledge
+          </button>
+        </div>
+      )}
+
+      {hasModFlag && acknowledged && (
+        <div className="mt-2 flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-1">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+            <span aria-hidden>&#9888;</span> Vehicle modified
+          </span>
+          <button
+            type="button"
+            onClick={() => setAcknowledged(false)}
+            className="ml-auto text-[10px] font-medium text-amber-700 hover:text-amber-900"
+          >
+            View
+          </button>
+        </div>
       )}
 
       {error && (
@@ -242,7 +356,7 @@ export function NotificationCard({
       )}
 
       {/* Actions */}
-      {!confirmingDecline && (
+      {!confirmingDecline && (!hasModFlag || acknowledged) && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {isBooking ? (
             <>

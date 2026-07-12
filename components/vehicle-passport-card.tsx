@@ -25,6 +25,10 @@ import {
   formatMileage,
   type VehiclePassportData,
 } from "@/lib/vehicle-passport";
+import {
+  affectedSystemLabel,
+  servicesForSystems,
+} from "@/lib/vehicle-mod-systems";
 import { StatusPill } from "@/components/status-pill";
 
 interface VinHistoryPart {
@@ -602,48 +606,67 @@ function PreviousMechanicFeedbackSection({
   );
 }
 
-function NotesSection({
-  job,
-  passport,
-}: {
-  job: VehiclePassportCardJob;
-  passport: VehiclePassportData | null | undefined;
-}) {
-  const mods = passport?.passport.modifications;
+function NotesSection({ job }: { job: VehiclePassportCardJob }) {
   const customerNotes = job.customerNotes?.trim();
-  const hasMods = mods?.status === "aftermarket_observed" || mods?.notes;
-  if (!customerNotes && !hasMods) {
+  if (!customerNotes) {
     return (
       <p className="text-sm text-muted-foreground">
-        No customer notes or vehicle modifications recorded.
+        No customer notes recorded.
       </p>
     );
   }
   return (
-    <div className="space-y-3 text-sm">
-      {customerNotes && (
+    <p className="whitespace-pre-wrap text-sm text-foreground">{customerNotes}</p>
+  );
+}
+
+function VehicleModsSection({
+  passport,
+}: {
+  passport: VehiclePassportData | null | undefined;
+}) {
+  const mods = passport?.passport.modifications;
+  const affectedSystems = mods?.affected_systems ?? [];
+  if (mods?.has_mods !== true) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        No vehicle modifications recorded.
+      </p>
+    );
+  }
+  const flaggedServices = servicesForSystems(affectedSystems);
+  return (
+    <div className="space-y-2 text-sm">
+      {mods.notes ? (
+        <p className="whitespace-pre-wrap text-foreground">{mods.notes}</p>
+      ) : (
+        <p className="text-foreground">Aftermarket parts present.</p>
+      )}
+      {affectedSystems.length > 0 && (
         <div>
           <p className="text-[10px] font-bold tracking-widest text-muted-foreground">
-            CUSTOMER NOTES
+            AFFECTED SYSTEMS
           </p>
-          <p className="mt-1 whitespace-pre-wrap text-foreground">
-            {customerNotes}
-          </p>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {affectedSystems.map((s) => (
+              <span
+                key={s}
+                className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200"
+              >
+                {affectedSystemLabel(s)}
+              </span>
+            ))}
+          </div>
         </div>
       )}
-      {hasMods && (
+      {flaggedServices.length > 0 && (
         <div>
           <p className="text-[10px] font-bold tracking-widest text-muted-foreground">
-            MODIFICATIONS
+            FLAGGED SERVICES
           </p>
-          <p className="mt-1 text-foreground">
-            {mods?.status === "aftermarket_observed"
-              ? "Aftermarket observed"
-              : "None observed"}
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            {flaggedServices.map((s) => s.name).join(" · ")}
           </p>
-          {mods?.notes && (
-            <p className="mt-1 text-xs text-muted-foreground">{mods.notes}</p>
-          )}
         </div>
       )}
     </div>
@@ -731,11 +754,11 @@ export function VehiclePassportCard({
       (h) =>
         h.mechanicFindings || h.technicianNotes || h.difficultyRating != null,
     ).length ?? 0;
-  const hasNotes = Boolean(
-    job.customerNotes?.trim() ||
-      passport?.passport.modifications?.status === "aftermarket_observed" ||
-      passport?.passport.modifications?.notes,
-  );
+  const hasNotes = Boolean(job.customerNotes?.trim());
+  const modsAffectedSystems =
+    passport?.passport.modifications?.has_mods === true
+      ? (passport.passport.modifications.affected_systems ?? [])
+      : null;
 
   return (
     <div className={cn("space-y-4", className)}>
@@ -925,6 +948,23 @@ export function VehiclePassportCard({
           <PreviousMechanicFeedbackSection history={history} />
         </Section>
 
+        {/* Vehicle mods */}
+        <Section
+          icon={Wrench}
+          title="Vehicle mods"
+          rightSlot={
+            <span className="text-[11px] text-muted-foreground">
+              {modsAffectedSystems
+                ? modsAffectedSystems.length > 0
+                  ? `${modsAffectedSystems.length} system${modsAffectedSystems.length === 1 ? "" : "s"} affected`
+                  : "Recorded"
+                : "None recorded"}
+            </span>
+          }
+        >
+          <VehicleModsSection passport={passport} />
+        </Section>
+
         {/* Customer notes */}
         <Section
           icon={StickyNote}
@@ -935,7 +975,7 @@ export function VehiclePassportCard({
             </span>
           }
         >
-          <NotesSection job={job} passport={passport} />
+          <NotesSection job={job} />
         </Section>
       </div>
     </div>

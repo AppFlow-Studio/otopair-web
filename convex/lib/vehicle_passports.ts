@@ -27,11 +27,6 @@ export const inspectionStatusValidator = v.union(
   v.literal("not_visible")
 );
 
-export const modificationStatusValidator = v.union(
-  v.literal("none_observed"),
-  v.literal("aftermarket_observed")
-);
-
 export const filterStatusValidator = v.union(
   v.literal("not_checked"),
   v.literal("looks_clean"),
@@ -47,6 +42,17 @@ export const partsAccuracyStatusValidator = v.union(
 export const nullableStringValidator = v.union(v.string(), v.null());
 export const nullableNumberValidator = v.union(v.float64(), v.null());
 export const nullableBooleanValidator = v.union(v.boolean(), v.null());
+
+// Keep in sync with AFFECTED_SYSTEMS in lib/vehicle-mod-systems.ts (Convex validators can't derive from a TS union).
+export const affectedSystemValidator = v.union(
+  v.literal("suspension_ride_height"),
+  v.literal("wheels_tires"),
+  v.literal("brakes"),
+  v.literal("exhaust_emissions"),
+  v.literal("engine_drivetrain"),
+  v.literal("electrical_lighting"),
+  v.literal("cosmetic_only")
+);
 
 export const tireTreadReadingValidator = v.object({
   reported_min_32nds: v.optional(nullableNumberValidator),
@@ -143,8 +149,9 @@ export const vehiclePassportInspectionValidator = v.object({
 });
 
 export const vehiclePassportModificationsValidator = v.object({
-  status: v.optional(v.union(modificationStatusValidator, v.null())),
+  has_mods: v.boolean(),
   notes: v.optional(nullableStringValidator),
+  affected_systems: v.array(affectedSystemValidator),
 });
 
 export const prejobFilterChecksValidator = v.object({

@@ -92,12 +92,12 @@ const EntityPreview = ({ entityType, entityId }: { entityType: string; entityId:
   if (entityType === 'shop') {
     if (shop === undefined) return wrap('Shop', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
     if (!shop) return wrap('Shop', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
-    return wrap('Shop', <>{row('Name', shop.name)}{row('Status', `${shop.isActive ? 'Active' : 'Inactive'}${shop.isVerified ? ' · Verified' : ''}`)}{row('City', shop.city)}{row('Phone', shop.phone)}</>)
+    return wrap('Shop', <>{row('Name', shop.name)}{row('Status', `${shop.status}${shop.isVerified ? ' · Verified' : ''}`)}{row('City', shop.city)}{row('Phone', shop.phone)}</>)
   }
   if (entityType === 'user') {
     if (user === undefined) return wrap('User', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
     if (!user) return wrap('User', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
-    return wrap('User', <>{row('Name', user.name)}{row('Email', user.email)}{row('Phone', user.phone)}{row('Joined', user.joined)}{row('Bookings', String(user.bookings))}</>)
+    return wrap('User', <>{row('Name', user.name)}{row('Email', user.email)}{row('Phone', user.phone)}{row('Joined', user.joined)}{row('Bookings', String(user.recentBookings.length))}</>)
   }
   if (entityType === 'booking') {
     if (booking === undefined) return wrap('Booking', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)

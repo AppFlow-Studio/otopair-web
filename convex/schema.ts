@@ -3123,6 +3123,41 @@ export default defineSchema({
     .index("by_created_at", ["created_at"])
     .index("by_actor_id", ["actor_id"]),
 
+  // Thin review-queue materialization over the four real streams (decision
+  // #4, Data spec §13): consensus needs_review, mechanic corrections,
+  // report-wrong-data, survey disconfirmations. Rows are created ONLY by the
+  // idempotent per-stream backfills in reviewQueue.ts, keyed on
+  // (source_stream, source_id) so re-running a backfill never duplicates.
+  review_queue: defineTable({
+    source_stream: v.union(
+      v.literal("consensus"),
+      v.literal("correction"),
+      v.literal("report"),
+      v.literal("survey"),
+    ),
+    // _id of the source document (enrichment_run, mechanic_verification, …)
+    source_id: v.string(),
+    entity_type: v.string(),
+    entity_id: v.string(),
+    vin: v.optional(v.string()),
+    title: v.string(),
+    priority: v.union(v.literal("low"), v.literal("normal"), v.literal("high")),
+    status: v.union(
+      v.literal("open"),
+      v.literal("claimed"),
+      v.literal("resolved"),
+      v.literal("dismissed"),
+    ),
+    assignee: v.optional(v.id("director_users")),
+    resolution_note: v.optional(v.string()),
+    created_at: v.number(),
+    resolved_at: v.optional(v.number()),
+  })
+    .index("by_status", ["status"])
+    .index("by_source_stream", ["source_stream", "status"])
+    .index("by_assignee", ["assignee", "status"])
+    .index("by_source", ["source_stream", "source_id"]),
+
   // Materialized KPI counters for the internal portals (decision #3, R2
   // class). Written only by portalStats.ts summarizers on cron; read via the
   // gated portalStats.getStats. Realtime (R1) metrics never land here — they

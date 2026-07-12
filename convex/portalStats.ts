@@ -108,6 +108,24 @@ export const recomputeCheapStats = internalMutation({
     const byStatus: Record<string, number> = {};
     for (const r of vinRows) byStatus[r.status] = (byStatus[r.status] ?? 0) + 1;
     await upsertStat(ctx, "data.vin_queue_total", vinRows.length, { by_status: byStatus });
+    await upsertStat(ctx, "data.vin_queue_pending", byStatus["pending"] ?? 0);
+
+    // Review queue depth (D3 SLO tile + sidebar badge) — open items only
+    const openReview = await ctx.db
+      .query("review_queue")
+      .withIndex("by_status", (q) => q.eq("status", "open"))
+      .collect();
+    await upsertStat(ctx, "slo.review_queue_depth", openReview.length, {
+      samples: openReview.length,
+    });
+    await evaluateSlo(ctx, "slo.review_queue_depth", openReview.length, 1);
+
+    // Deletion queue badge (index-only)
+    const pendingDeletions = await ctx.db
+      .query("users")
+      .withIndex("by_isPendingDeletion", (q) => q.eq("isPendingDeletion", true))
+      .collect();
+    await upsertStat(ctx, "ops.pending_deletions", pendingDeletions.length);
 
     // spec variances 7d (0 rows live today; flagged ÷ observed — the spec's
     // "÷ jobs" denominator is ambiguous until the survey stream is live)

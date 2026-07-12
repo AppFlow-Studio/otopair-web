@@ -202,6 +202,9 @@ crons.interval(
 // approaches the read limit. SLO breaches land in notification_outbox
 // (deduped per key per day) for the Slack dispatcher.
 crons.interval("portal-stats-cheap", { minutes: 15 }, internal.portalStats.recomputeCheapStats, {});
+// review_queue materialization sweep (decision #4) — idempotent per-stream
+// backfills keyed on source doc id, so repeat runs insert zero duplicates.
+crons.interval("review-queue-sweep", { minutes: 30 }, internal.reviewQueue.sweepAllStreams, {});
 crons.daily(
   "portal-stats-evidence-sweep",
   { hourUTC: 6, minuteUTC: 30 },

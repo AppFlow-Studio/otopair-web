@@ -358,3 +358,37 @@ export const fixLegacyPrejobModifications = internalMutation({
     return { ok: true as const, dry_run: dryRun, patched };
   },
 });
+
+/**
+ * Nulls out vehicle_passports.modifications rows that carry the legacy
+ * {notes, status} shape from before the affected-systems model.
+ *
+ *   npx convex run devOnly/dataFixes:fixLegacyPassportModifications
+ */
+export const fixLegacyPassportModifications = internalMutation({
+  args: { dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dry_run ?? false;
+    const rows = (await ctx.db.query("vehicle_passports").collect()) as any[];
+    let patched = 0;
+    for (const row of rows) {
+      const mods = row.modifications;
+      if (mods === null || mods === undefined) continue;
+      const isLegacy = !("has_mods" in mods) || !("affected_systems" in mods);
+      if (!isLegacy) continue;
+      if (!dryRun) {
+        await ctx.db.patch(row._id, { modifications: undefined });
+        await ctx.db.insert("audit_log", {
+          entity_type: "vehicle_passport",
+          entity_id: String(row._id),
+          action: "data_fix",
+          actor: "CLI data fix",
+          detail: `modifications: legacy {notes,status} shape → undefined (schema migration)`,
+          created_at: Date.now(),
+        });
+      }
+      patched++;
+    }
+    return { ok: true as const, dry_run: dryRun, patched };
+  },
+});

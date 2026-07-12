@@ -166,6 +166,8 @@ export function applyApplicabilityRules(
   const psType = (fields.power_steering_type?.value as string | null) ?? null;
   if (psType === "electric") {
     fields.ps_fluid_capacity_oz = naField();
+    fields.ps_fluid_miles = naField();
+    fields.ps_fluid_months = naField();
   }
 
   // ── Known non-CVT transmission: CVT filters are N/A ───────────

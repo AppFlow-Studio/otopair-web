@@ -1904,6 +1904,12 @@ export const ensureAllServiceIntervals = internalMutation({
       hasStaggeredTires = opts.some((t: any) => t.size_rear && t.size_rear !== t.size_front);
     }
 
+    // ps_fluid_type is only persisted for hydraulic systems (patchVehicleConfig
+    // strips "electric"), so absence means electric OR unknown — either way,
+    // don't invent a flush schedule for fluid the car may not have.
+    const psFluidType = String(cfg.ps_fluid_type ?? "").toLowerCase();
+    const hasHydraulicPs = !!psFluidType && psFluidType !== "electric";
+
     // Get all 23 services
     const allServices = await ctx.db.query("services").collect();
 
@@ -1931,6 +1937,10 @@ export const ensureAllServiceIntervals = internalMutation({
         continue;
       }
       if (svc.requires_rotatable_tires && hasStaggeredTires) {
+        skipped++;
+        continue;
+      }
+      if (svc.requires_hydraulic_ps && !hasHydraulicPs) {
         skipped++;
         continue;
       }
@@ -1994,6 +2004,10 @@ export const ensureAllLaborTimes = internalMutation({
       hasStaggeredTires = opts.some((t: any) => t.size_rear && t.size_rear !== t.size_front);
     }
 
+    // Same hydraulic-PS gate as ensureAllServiceIntervals above.
+    const psFluidType = String(cfg.ps_fluid_type ?? "").toLowerCase();
+    const hasHydraulicPs = !!psFluidType && psFluidType !== "electric";
+
     const allServices = await ctx.db.query("services").collect();
 
     const existingLabor = await ctx.db
@@ -2012,6 +2026,7 @@ export const ensureAllLaborTimes = internalMutation({
       if (svc.requires_timing_belt && timingSystem.includes("chain")) { skipped++; continue; }
       if (svc.requires_differential && isFWD) { skipped++; continue; }
       if (svc.requires_rotatable_tires && hasStaggeredTires) { skipped++; continue; }
+      if (svc.requires_hydraulic_ps && !hasHydraulicPs) { skipped++; continue; }
 
       await ctx.db.insert("labor_times", {
         vehicle_config_id: args.vehicle_config_id,

@@ -9,7 +9,7 @@
 
 import type { FieldResult } from "../types";
 import { sanitizeCapacityQuarts } from "../contentSanitization";
-import { isLowAuthorityDomain } from "./sourceAuthority";
+import { isLowAuthorityDomain, isHighAuthorityDomain } from "./sourceAuthority";
 
 interface SanityRule {
   field: string;
@@ -140,16 +140,36 @@ export interface CapacityBand {
   typicalMax: number;
 }
 
-export function getCapacityBand(field: CapacityField, cylinders: number): CapacityBand {
+/** Engine traits that move the physically-plausible capacity window. */
+export interface CapacityBandContext {
+  /** True for diesel engines — HD diesel cooling systems (6.7 Power Stroke,
+   *  6.6 Duramax, 6.7 Cummins) hold 25-36 qts, far past the gasoline reject
+   *  ceiling. Stress-fleet finding 2026-07-11: the CORRECT 31.7-35.1 qt for a
+   *  2020 F-350 6.7L was rejected by the old flat rejectMax=24 and the truck
+   *  shipped with coolant_capacity_qts = null. */
+  diesel?: boolean;
+}
+
+export function getCapacityBand(
+  field: CapacityField,
+  cylinders: number,
+  ctx: CapacityBandContext = {},
+): CapacityBand {
+  const diesel = ctx.diesel === true;
   if (field === "oil_capacity_qts") {
     return {
       rejectMin: 1,
-      rejectMax: 20,
+      rejectMax: diesel ? 24 : 20,
       typicalMin: cylinders >= 8 ? 7 : 3,
-      typicalMax: cylinders === 4 ? 7 : 16,
+      typicalMax: diesel ? 18 : cylinders === 4 ? 7 : 16,
     };
   }
   // coolant_capacity_qts
+  if (diesel && cylinders >= 6) {
+    // HD diesel: dual cooling loops are common (engine + secondary/charge
+    // cooling). Totals 25-36 qt are normal, not liters-as-quarts mixups.
+    return { rejectMin: 8, rejectMax: 40, typicalMin: 18, typicalMax: 36 };
+  }
   return {
     rejectMin: 3,
     rejectMax: 24,
@@ -158,11 +178,16 @@ export function getCapacityBand(field: CapacityField, cylinders: number): Capaci
   };
 }
 
+/** True when the extracted field map identifies a diesel engine. */
+export function isDieselFromFields(fields: Record<string, FieldResult>): boolean {
+  return /diesel/i.test(String(fields["fuel_type"]?.value ?? ""));
+}
+
 /** Engine-size-specific validation rules. Derived from getCapacityBand (no drift). */
-function getEngineSpecificRules(cylinders: number): SanityRule[] {
+function getEngineSpecificRules(cylinders: number, bandCtx: CapacityBandContext): SanityRule[] {
   const rules: SanityRule[] = [];
-  const oilBand = getCapacityBand("oil_capacity_qts", cylinders);
-  const coolantBand = getCapacityBand("coolant_capacity_qts", cylinders);
+  const oilBand = getCapacityBand("oil_capacity_qts", cylinders, bandCtx);
+  const coolantBand = getCapacityBand("coolant_capacity_qts", cylinders, bandCtx);
 
   if (cylinders >= 8) {
     rules.push({
@@ -250,7 +275,10 @@ export function runSanityChecks(
   fields: Record<string, FieldResult>,
   cylinders: number = 4,
 ): SanityFlag[] {
-  const allRules = [...SANITY_RULES, ...getEngineSpecificRules(cylinders)];
+  // Diesel detection widens the capacity bands (HD diesel coolant 25-36 qt is
+  // real, not a unit mixup) — derived from the same field map being checked.
+  const bandCtx: CapacityBandContext = { diesel: isDieselFromFields(fields) };
+  const allRules = [...SANITY_RULES, ...getEngineSpecificRules(cylinders, bandCtx)];
   const flags: SanityFlag[] = [];
 
   // Pre-normalize noisy-but-valid values BEFORE the rules run. The caller writes
@@ -345,23 +373,54 @@ export function runSanityChecks(
   // source is a low-authority forum/Q&A domain are flagged and confidence-
   // capped at 0.5 even when in-band — never dropped (drop stays reserved for
   // out-of-band values, handled by the escalation above).
+  //
+  // Mid-tier extension (A4 9.5 qt incident): oil/coolant get actively
+  // re-resolved by capacityResolver whenever the source isn't high-authority,
+  // but the remaining capacity fields have no resolver — for those, an in-band
+  // value from a single MID-TIER source (not forum, not authoritative — e.g. a
+  // generic capacity-table blog) is confidence-capped at 0.6 and flagged so it
+  // surfaces for review instead of reading as solid data. Flag-only, no drop.
   for (const capField of CAPACITY_FIELDS) {
     const field = fields[capField];
     if (!field || field.value == null) continue;
     if (field.flagged) continue; // already flagged (possibly escalated) above
-    if (!isLowAuthorityDomain(field.source_url)) continue;
-    const reason = `Numeric capacity attested only by a low-authority forum/community page (${field.source_url}) — confidence capped, needs corroboration`;
-    flags.push({ field: capField, severity: "flag", reason, value: field.value });
-    fields[capField] = {
-      ...field,
-      confidence: Math.min(field.confidence ?? 0.5, 0.5),
-      flagged: true,
-      flag_reason: reason,
-    };
+    if (isLowAuthorityDomain(field.source_url)) {
+      const reason = `Numeric capacity attested only by a low-authority forum/community page (${field.source_url}) — confidence capped, needs corroboration`;
+      flags.push({ field: capField, severity: "flag", reason, value: field.value });
+      fields[capField] = {
+        ...field,
+        confidence: Math.min(field.confidence ?? 0.5, 0.5),
+        flagged: true,
+        flag_reason: reason,
+      };
+      continue;
+    }
+    if (
+      !RESOLVER_OWNED_CAPACITY_FIELDS.has(capField) &&
+      field.source_url != null &&
+      !isHighAuthorityDomain(field.source_url)
+    ) {
+      const reason = `Numeric capacity from a single mid-tier source (${field.source_url}) — unverified, needs corroboration`;
+      flags.push({ field: capField, severity: "flag", reason, value: field.value });
+      fields[capField] = {
+        ...field,
+        confidence: Math.min(field.confidence ?? 0.6, 0.6),
+        flagged: true,
+        flag_reason: reason,
+      };
+    }
   }
 
   return flags;
 }
+
+/** Fields the capacity resolver actively re-fetches/corroborates — the mid-tier
+ *  cap above would only pre-flag them into the resolver's slower full-resolution
+ *  path for no accuracy gain. */
+const RESOLVER_OWNED_CAPACITY_FIELDS: ReadonlySet<string> = new Set([
+  "oil_capacity_qts",
+  "coolant_capacity_qts",
+]);
 
 /** Numeric fluid-capacity fields subject to the forum-corroboration rule. */
 const CAPACITY_FIELDS = [

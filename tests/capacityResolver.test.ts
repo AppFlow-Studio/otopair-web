@@ -138,3 +138,123 @@ describe("decideCapacity", () => {
     expect(d.value_qts).toBeCloseTo(13.8, 1);
   });
 });
+
+// ── Corroboration mode (A4 9.5 qt incident) ─────────────────────────────
+// The batch value is seeded as ONE observation; decideCapacity arbitrates.
+describe("decideCapacity — seeded batch-value arbitration", () => {
+  const I4_COOLANT = getCapacityBand("coolant_capacity_qts", 4);
+
+  test("wrong in-band batch value (9.5, one mid-tier blog) is outranked by two agreeing web domains at 7.4", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [
+        obs({ value_qts: 9.5, domain: "ricksfreeautorepairadvice.com", engine_code_matches: false }),
+        obs({ value_qts: 7.4, domain: "carcarekiosk.com", authoritative: true }),
+        obs({ value_qts: 7.4, domain: "fluidcapacity.com", authoritative: true }),
+      ],
+      I4_COOLANT,
+      { strict: false },
+    );
+    expect(d.tier).toBe("trusted");
+    expect(d.value_qts).toBe(7.4);
+  });
+
+  test("correct batch value + one agreeing independent domain → trusted at 2 domains", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [
+        obs({ value_qts: 7.4, domain: "some-blog.com", engine_code_matches: false }),
+        obs({ value_qts: 7.5, domain: "carcarekiosk.com" }), // within 0.5qt tolerance
+      ],
+      I4_COOLANT,
+      { strict: false },
+    );
+    expect(d.tier).toBe("trusted");
+    expect(d.source_count).toBe(2);
+    // cluster median of [7.4, 7.5] — the two agree within tolerance
+    expect(d.value_qts).toBe(7.5);
+  });
+
+  test("batch value alone with no web agreement stays best_effort (flagged unverified)", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [obs({ value_qts: 9.5, domain: "ricksfreeautorepairadvice.com", engine_code_matches: false })],
+      I4_COOLANT,
+      { strict: false },
+    );
+    expect(d.tier).toBe("best_effort");
+    expect(d.confidence).toBe(0.5);
+  });
+});
+
+// ── Stress-fleet findings (2026-07-11) ──────────────────────────────────
+describe("getCapacityBand — diesel awareness (F-350 finding)", () => {
+  test("HD diesel V8 coolant band admits 29-36 qt totals", () => {
+    const band = getCapacityBand("coolant_capacity_qts", 8, { diesel: true });
+    expect(band.rejectMax).toBeGreaterThanOrEqual(36.5);
+    // the 2020 F-350 6.7L truth (31.7-35.1 qt) must be in-band
+    expect(31.7).toBeGreaterThanOrEqual(band.rejectMin);
+    expect(35.1).toBeLessThanOrEqual(band.rejectMax);
+  });
+
+  test("gasoline bands unchanged (no diesel ctx)", () => {
+    const band = getCapacityBand("coolant_capacity_qts", 8);
+    expect(band.rejectMax).toBe(24);
+    const band4 = getCapacityBand("coolant_capacity_qts", 4, {});
+    expect(band4.typicalMax).toBe(11);
+  });
+
+  test("diesel oil band admits 13 qt (F-350) without loosening gasoline", () => {
+    const d = getCapacityBand("oil_capacity_qts", 8, { diesel: true });
+    expect(13).toBeLessThanOrEqual(d.typicalMax);
+    const g = getCapacityBand("oil_capacity_qts", 8);
+    expect(g.rejectMax).toBe(20);
+  });
+});
+
+describe("decideCapacity — domain-count outranks typicality (Silverado L84 finding)", () => {
+  const V8 = getCapacityBand("coolant_capacity_qts", 8);
+
+  test("two agreeing domains at 17.4/17.6 beat a lone in-typical 13.8", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [
+        obs({ value_qts: 13.8, domain: "lone-blog.com" }), // typical (10-16) but single-domain
+        obs({ value_qts: 17.4, domain: "alloemmanuals.com" }), // atypical (>16) but corroborated
+        obs({ value_qts: 17.6, domain: "chevytalk.org" }),
+      ],
+      V8,
+      { strict: false },
+    );
+    expect(d.tier).toBe("trusted");
+    expect(d.value_qts).toBeGreaterThanOrEqual(17.4);
+    expect(d.source_count).toBe(2);
+  });
+
+  test("7.6-qt regression: lone authoritative outlier still loses to a multi-domain typical cluster", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [
+        obs({ value_qts: 7.6, domain: "gm-techlink.com", authoritative: true }),
+        obs({ value_qts: 13.1, domain: "carcarekiosk.com" }),
+        obs({ value_qts: 13.4, domain: "fluidcapacity.com" }),
+      ],
+      V8,
+      { strict: false },
+    );
+    expect(d.value_qts).toBeGreaterThanOrEqual(13);
+  });
+
+  test("equal domain counts: typical cluster still preferred over lone atypical authority", () => {
+    const d = decideCapacity(
+      "coolant_capacity_qts",
+      [
+        obs({ value_qts: 7.6, domain: "gm-techlink.com", authoritative: true }),
+        obs({ value_qts: 13.1, domain: "carcarekiosk.com" }),
+      ],
+      V8,
+      { strict: false },
+    );
+    expect(d.value_qts).toBe(13.1);
+  });
+});

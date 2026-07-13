@@ -32,6 +32,10 @@ export const LOW_AUTHORITY_DOMAINS: readonly string[] = [
   "jeepforum.com", "jlwranglerforums.com", "cherokeeforum.com",
   // ── General crowd Q&A ──
   "reddit.com", "quora.com", "answers.com", "fixya.com", "justanswer.com",
+  // ── Video platforms — numeric specs come from video descriptions/comments,
+  //    not vettable documents. A YouTube "13.8 qt" beat two agreeing real
+  //    sources on the 2019 Silverado L84 (stress fleet, 2026-07-11). ──
+  "youtube.com", "youtu.be", "tiktok.com", "vimeo.com",
 ];
 
 const LOW_AUTHORITY_SET = new Set(LOW_AUTHORITY_DOMAINS);

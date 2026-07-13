@@ -23,7 +23,7 @@ const DECAY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const HP_PER_BUFFER_POINT = 15;
 const MAX_BUFFER = 3;
 
-function bufferFor(points: number): number {
+export function bufferFor(points: number): number {
   return Math.max(0, Math.min(MAX_BUFFER, Math.floor(points / HP_PER_BUFFER_POINT)));
 }
 

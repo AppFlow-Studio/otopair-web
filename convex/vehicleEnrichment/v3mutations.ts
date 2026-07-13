@@ -1,5 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation } from "../_generated/server";
+import { internal } from "../_generated/api";
+import { computeEnrichmentStatus } from "./completionGate";
 import { updateSourceScores } from "../services/sourceScoring";
 import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
@@ -1222,6 +1224,8 @@ export const updateEnrichmentRun = internalMutation({
     duration_ms: v.optional(v.float64()),
     fields_filled: v.optional(v.float64()),
     fields_total: v.optional(v.float64()),
+    fields_not_applicable: v.optional(v.float64()),
+    applicable_fill_rate: v.optional(v.float64()),
     fill_rate: v.optional(v.float64()),
     fields_changed: v.optional(v.array(v.string())),
     errors: v.optional(v.array(v.string())),
@@ -1243,6 +1247,19 @@ export const updateEnrichmentRun = internalMutation({
         }),
       ),
     ),
+    quotability: v.optional(
+      v.object({
+        pct: v.number(),
+        services: v.array(
+          v.object({
+            slug: v.string(),
+            core_total: v.number(),
+            core_with_fitment: v.number(),
+            core_with_price: v.number(),
+          }),
+        ),
+      }),
+    ),
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
   },
@@ -1255,6 +1272,100 @@ export const updateEnrichmentRun = internalMutation({
       }
     }
     await ctx.db.patch(run_id, patch);
+  },
+});
+
+// ============================================================================
+// 12a-bis. patchRunPriceHealth — post-backfill reconciliation
+// ============================================================================
+
+/** Rewrite part_price:* gap entries whose part now carries a trusted price to
+ *  reason "price_healed" (audit trail kept — entries are never deleted).
+ *  A gap's suffix may be the part's subcategory, OEM number, or part id;
+ *  stillUnpricedKeys carries all three for every still-unpriced part.
+ *  Exported for tests. Pure. */
+export function healPriceGaps(
+  gaps: Array<{ field: string; reason: string }>,
+  stillUnpricedKeys: readonly string[],
+): Array<{ field: string; reason: string }> {
+  const unpriced = new Set(stillUnpricedKeys);
+  return gaps.map((g) => {
+    if (!g.field.startsWith("part_price:")) return g;
+    if (g.reason === "price_healed") return g;
+    const key = g.field.slice("part_price:".length);
+    if (unpriced.has(key)) return g;
+    return { field: g.field, reason: "price_healed" };
+  });
+}
+
+/**
+ * Post-backfill run-health reconciliation (2001 740iA post-mortem): the run's
+ * quotability + part_price gaps are a snapshot at finalize — after the
+ * immediate backfill or nightly cron heals prices, refresh them so the run
+ * record tells the truth, and re-run the completion gate so a now-quotable
+ * config flips partial → complete (heal-only: never demotes a complete
+ * config) with the normal owner notification.
+ */
+export const patchRunPriceHealth = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    quotability: v.object({
+      pct: v.number(),
+      services: v.array(
+        v.object({
+          slug: v.string(),
+          core_total: v.number(),
+          core_with_fitment: v.number(),
+          core_with_price: v.number(),
+        }),
+      ),
+    }),
+    still_unpriced_keys: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) =>
+        q.eq("vehicle_config_id", args.vehicle_config_id),
+      )
+      .order("desc")
+      .first();
+    if (run) {
+      const errors = ((run as any).errors ?? []).filter(
+        (e: string) => !e.startsWith("quotability:"),
+      );
+      if (args.quotability.pct < 0.8) errors.push(`quotability:${args.quotability.pct}`);
+      await ctx.db.patch(run._id, {
+        quotability: args.quotability,
+        quotability_updated_at: Date.now(),
+        field_gaps: healPriceGaps((run as any).field_gaps ?? [], args.still_unpriced_keys),
+        errors,
+      });
+    }
+
+    // Heal-only completion-gate re-run: a healed config may now pass the
+    // quotability leg. Only the partial → complete transition is taken —
+    // price rows are only ever ADDED by the heal path, so demotion would mean
+    // the gate thresholds moved, not the data.
+    const config = await ctx.db.get(args.vehicle_config_id);
+    if (config && (config as any).enrichment_status === "partial") {
+      const newStatus = computeEnrichmentStatus({
+        fillRate: (config as any).fill_rate ?? 0,
+        quotabilityPct: args.quotability.pct,
+        hasPriceGaps: args.still_unpriced_keys.length > 0,
+      });
+      if (newStatus === "complete") {
+        console.log(
+          `[price-heal] config ${args.vehicle_config_id} partial → complete (quotability ${args.quotability.pct}) — notifying owners`,
+        );
+        await ctx.db.patch(args.vehicle_config_id, { enrichment_status: "complete" });
+        await ctx.scheduler.runAfter(
+          0,
+          internal.vehicleEnrichment.v3mutations.notifyEnrichmentComplete,
+          { vehicle_config_id: args.vehicle_config_id },
+        );
+      }
+    }
   },
 });
 

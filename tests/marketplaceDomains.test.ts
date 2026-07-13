@@ -58,3 +58,19 @@ describe("isMarketplaceUrl", () => {
     expect(isMarketplaceUrl(null)).toBe(false);
   });
 });
+
+describe("isMarketplaceDomain — country-TLD variants (A4 ebay.ca leak, Jul 2026)", () => {
+  it("matches country TLDs of listed marketplaces", () => {
+    expect(isMarketplaceDomain("ebay.ca")).toBe(true);
+    expect(isMarketplaceDomain("www.ebay.co.uk")).toBe(true);
+    expect(isMarketplaceDomain("amazon.de")).toBe(true);
+    expect(isMarketplaceDomain("amazon.co.jp")).toBe(true);
+  });
+
+  it("does not match unrelated retailers or subdomain look-alikes", () => {
+    expect(isMarketplaceDomain("parts.audiusa.com")).toBe(false);
+    expect(isMarketplaceDomain("blauparts.com")).toBe(false);
+    expect(isMarketplaceDomain("ebayparts-store.com")).toBe(false);
+    expect(isMarketplaceDomain("amazonia-parts.com")).toBe(false);
+  });
+});

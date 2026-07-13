@@ -53,6 +53,9 @@ export const fixEngineFields = internalMutation({
     engine_id: v.id("engines"),
     timing_system: v.optional(v.string()),
     cylinders: v.optional(v.number()),
+    coolant_capacity_qts: v.optional(v.number()),
+    oil_capacity_qts: v.optional(v.number()),
+    engine_code: v.optional(v.string()),
     reason: v.string(),
   },
   handler: async (ctx, args) => {
@@ -61,7 +64,10 @@ export const fixEngineFields = internalMutation({
 
     const patch: Record<string, unknown> = {};
     const changes: string[] = [];
-    const tryPatch = (key: "timing_system" | "cylinders", nextVal: unknown) => {
+    const tryPatch = (
+      key: "timing_system" | "cylinders" | "coolant_capacity_qts" | "oil_capacity_qts" | "engine_code",
+      nextVal: unknown,
+    ) => {
       if (nextVal === undefined) return;
       const cur = (engine as any)[key];
       if (cur === nextVal) return;
@@ -70,6 +76,9 @@ export const fixEngineFields = internalMutation({
     };
     tryPatch("timing_system", args.timing_system);
     tryPatch("cylinders", args.cylinders);
+    tryPatch("coolant_capacity_qts", args.coolant_capacity_qts);
+    tryPatch("oil_capacity_qts", args.oil_capacity_qts);
+    tryPatch("engine_code", args.engine_code);
 
     // Stamp every PROVIDED field as human-verified — including ones whose
     // stored value already matched (confirming a value is itself a
@@ -80,6 +89,9 @@ export const fixEngineFields = internalMutation({
     const before = verified.size;
     if (args.timing_system !== undefined) verified.add("timing_system");
     if (args.cylinders !== undefined) verified.add("cylinders");
+    if (args.coolant_capacity_qts !== undefined) verified.add("coolant_capacity_qts");
+    if (args.oil_capacity_qts !== undefined) verified.add("oil_capacity_qts");
+    if (args.engine_code !== undefined) verified.add("engine_code");
 
     if (Object.keys(patch).length === 0) {
       if (verified.size > before) {
@@ -305,5 +317,78 @@ export const setServiceRequiresParts = internalMutation({
       created_at: Date.now(),
     });
     return { ok: true as const, changes: 1 };
+  },
+});
+
+/**
+ * Nulls out job_actuals.prejob_report.modifications rows that carry the
+ * legacy shape {notes, status} from before the affected-systems model.
+ * Those documents fail schema validation on push — run this once to unblock.
+ *
+ *   npx convex run devOnly/dataFixes:fixLegacyPrejobModifications
+ */
+export const fixLegacyPrejobModifications = internalMutation({
+  args: { dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dry_run ?? false;
+    const rows = (await ctx.db.query("job_actuals").collect()) as any[];
+    let patched = 0;
+    for (const row of rows) {
+      const mods = row.prejob_report?.modifications;
+      if (mods === null || mods === undefined) continue;
+      // Legacy shape: had {notes, status} but NOT has_mods / affected_systems
+      const isLegacy =
+        !("has_mods" in mods) || !("affected_systems" in mods);
+      if (!isLegacy) continue;
+      if (!dryRun) {
+        await ctx.db.patch(row._id, {
+          prejob_report: { ...row.prejob_report, modifications: null },
+        });
+        await ctx.db.insert("audit_log", {
+          entity_type: "job_actual",
+          entity_id: String(row._id),
+          action: "data_fix",
+          actor: "CLI data fix",
+          detail: `prejob_report.modifications: legacy {notes,status} shape → null (schema migration)`,
+          created_at: Date.now(),
+        });
+      }
+      patched++;
+    }
+    return { ok: true as const, dry_run: dryRun, patched };
+  },
+});
+
+/**
+ * Nulls out vehicle_passports.modifications rows that carry the legacy
+ * {notes, status} shape from before the affected-systems model.
+ *
+ *   npx convex run devOnly/dataFixes:fixLegacyPassportModifications
+ */
+export const fixLegacyPassportModifications = internalMutation({
+  args: { dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dry_run ?? false;
+    const rows = (await ctx.db.query("vehicle_passports").collect()) as any[];
+    let patched = 0;
+    for (const row of rows) {
+      const mods = row.modifications;
+      if (mods === null || mods === undefined) continue;
+      const isLegacy = !("has_mods" in mods) || !("affected_systems" in mods);
+      if (!isLegacy) continue;
+      if (!dryRun) {
+        await ctx.db.patch(row._id, { modifications: undefined });
+        await ctx.db.insert("audit_log", {
+          entity_type: "vehicle_passport",
+          entity_id: String(row._id),
+          action: "data_fix",
+          actor: "CLI data fix",
+          detail: `modifications: legacy {notes,status} shape → undefined (schema migration)`,
+          created_at: Date.now(),
+        });
+      }
+      patched++;
+    }
+    return { ok: true as const, dry_run: dryRun, patched };
   },
 });

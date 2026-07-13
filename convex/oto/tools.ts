@@ -608,7 +608,7 @@ const RENDER_TOOLS: OtoToolSchema[] = [
   {
     name: "render_record_confirmation",
     description:
-      "Surface a self_reported maintenance record to the user and ask them to confirm it's still correct, OR update it with new details. Call this when a user-described symptom contradicts an item from get_vehicle_health whose `record_provenance` is `self_reported` — the record itself may be wrong (data form hallucination is common during onboarding). The component shows the user what we have on file (last service date and mileage) with two buttons: [Yes, that's right] and [No, update it]. On confirm: the record gets stamped confirmedHealthyAt: now (locks status to on_time for 90 days). On update: an inline date+mileage form appears, the user submits new values, and the record is rewritten. Either way the user's decision is pushed back into conversation_state, so on your NEXT turn you can react to it (e.g., if they updated the record showing it was actually overdue, route to the relevant service or diagnostic). Trigger-only: do not call for `verified` items — those are backed by completed bookings or uploaded receipts, you can trust them. Do not call for `inferred` items — there's no record to confirm. Terminal render tool — calling it ends your turn.",
+      "Surface a self_reported maintenance record to the user and ask them to confirm it's still correct, OR update it with new details. Call this when a user-described symptom contradicts an item from get_vehicle_health whose `record_provenance` is `self_reported` — the record itself may be wrong (data form hallucination is common during onboarding). The component shows the user what we have on file (last service date and mileage) with two buttons: [Yes, that's right] and [No, update it]. On confirm: the record gets stamped confirmedHealthyAt: now (locks status to on_time for 90 days). On update: an inline date+mileage form appears, the user submits new values, and the record is rewritten. Either way the user's decision is pushed back into conversation_state, so on your NEXT turn you can react to it (e.g., if they updated the record showing it was actually overdue, route to the relevant service or diagnostic). Trigger-only: do not call for `verified` items — those are backed by completed bookings or uploaded receipts, you can trust them. Do not call for `inferred` items — there's no record to confirm. DO NOT call this when the user REPORTS a service they DID (\"I did a brake service\", \"log the brakes as complete\", \"just changed the oil\", \"mark it as done\") — that is a completed-service LOG that must go to render_vehicle_update with a service_claim of kind:\"completed\" (which records the new completion AND clears the flag/light). This tool only stamps confirmedHealthyAt on the EXISTING record; it does NOT log a new completion, so using it for a \"I did the service\" report leaves the flag/light uncleared. An existing self_reported record for the same maintenance type does NOT turn a completed-service report into a record-confirmation. Terminal render tool — calling it ends your turn.",
     input_schema: {
       type: "object",
       properties: {
@@ -676,9 +676,21 @@ const RENDER_TOOLS: OtoToolSchema[] = [
         },
         fault_lights: {
           type: "array",
-          items: { type: "string" },
+          items: {
+            type: "string",
+            enum: [
+              "check_engine",
+              "oil_pressure",
+              "battery_charging",
+              "temperature",
+              "abs",
+              "tpms",
+              "airbag_srs",
+              "transmission",
+            ],
+          },
           description:
-            "Optional. Array of warning-light id strings the user reported (e.g. [\"check_engine\", \"tire_pressure\"]).",
+            "Optional. Array of dashboard warning-light ids the user reported. Use ONLY these canonical ids: check_engine, oil_pressure, battery_charging, temperature, abs (brakes/ABS), tpms (tire pressure), airbag_srs, transmission. E.g. [\"check_engine\", \"tpms\"].",
         },
       },
       required: [],

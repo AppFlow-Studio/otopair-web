@@ -16,6 +16,8 @@ import { FIELD_DESCRIPTIONS } from "./batch2Prompt";
 
 export const GAP_FILL_SYSTEM = `You are a vehicle data specialist for Otopair. Your ONLY job is gap fill: search the web for each field listed under "FIELDS NEEDING GAP FILL". Use 1-2 targeted queries per field: "[year] [make] [model] [field]". If you cannot find a value after 1-2 searches, return null for that field. Do NOT do broad vehicle searches. Do NOT guess from training knowledge — every value needs a source URL.
 
+Return OEM part numbers as JSON STRINGS exactly as printed, preserving leading zeros (e.g. "07119963130", never the bare number 7119963130).
+
 Return VALID JSON only. No markdown fences, no explanation, no preamble.`;
 
 export function buildGapFillPrompt(vehicle: VehicleInput, nullFields: string[]): string {

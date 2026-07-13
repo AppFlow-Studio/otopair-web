@@ -35,36 +35,17 @@
  */
 
 import type { MaintenanceItem } from "@/components/cars/MaintenanceTracker";
+import {
+  canonicalWarningLights,
+  PAIRED_WARNING_LIGHTS,
+  type CanonicalWarningLight,
+} from "@/lib/warningLightVocab";
 
-/**
- * The light-type IDs persisted in `vehicle_owners.knownIssues[1..]`
- * when the status sentinel (`knownIssues[0]`) is `"other"`. Plus the
- * special `not_sure_which` sentinel used when the user can't identify
- * which light is lit.
- */
-type WarningLightId =
-  | "tpms"
-  | "battery_charging"
-  | "temperature"
-  | "oil_pressure"
-  | "abs"
-  | "airbag_srs"
-  | "transmission"
-  | "not_sure_which";
-
-/** Lights that ALREADY surface via the paired-tile escalation in
- *  useMergedMaintenance. The consolidated card filters these out so
- *  the user doesn't get two prompts for one root cause. */
-const PAIRED_LIGHTS: ReadonlySet<WarningLightId> = new Set([
-  "oil_pressure",
-  "battery_charging",
-  "abs",
-  "tpms",
-]);
-
-/** Display labels for each light. Used in the description copy when one
- *  or more unpaired lights are active. */
-const LIGHT_LABELS: Record<WarningLightId, string> = {
+/** Display labels for each canonical light. Used in the description copy
+ *  when one or more unpaired lights are active. `check_engine` is included
+ *  so a combined multi-light card keeps its label (its solo card uses the
+ *  richer copy in buildItemForCheckEngine). */
+const LIGHT_LABELS: Record<CanonicalWarningLight, string> = {
   tpms: "Tire pressure",
   battery_charging: "Battery / charging",
   temperature: "Temperature",
@@ -72,13 +53,16 @@ const LIGHT_LABELS: Record<WarningLightId, string> = {
   abs: "ABS / brake",
   airbag_srs: "Airbag",
   transmission: "Transmission",
+  check_engine: "Check engine",
   not_sure_which: "Unknown warning",
 };
 
 export interface BuildWarningLightItemArgs {
-  /** Raw `vehicle_owners.knownIssues` array. `[0]` is the status
-   *  sentinel (`no_all_clear` / `check_engine` / `other` / `not_sure`),
-   *  `[1..]` are the specific light type IDs when status is `"other"`. */
+  /** Raw `vehicle_owners.knownIssues` array. Read format-agnostically via
+   *  `canonicalWarningLights` — works for both the legacy sentinel-prefixed
+   *  shape (`["other", ...lights]`) and the flat code-set shape
+   *  (`["oil_pressure", "check_engine"]`), and folds symptom-code aliases
+   *  (`brake_warning` → `abs`, etc.) onto their canonical light id. */
   knownIssues: readonly string[] | undefined;
   /** Identifier appended to the item id so multiple vehicles on Home
    *  produce distinct items (`warning-active-<scopeId>`). Pass the
@@ -96,36 +80,20 @@ export function buildWarningLightItem(
   args: BuildWarningLightItemArgs,
 ): MaintenanceItem | null {
   const { knownIssues, scopeId } = args;
-  if (!knownIssues || knownIssues.length === 0) return null;
 
-  const status = knownIssues[0];
-  if (status === "no_all_clear") return null;
-
-  // Resolve the set of active lights for the consolidated card.
-  // Status sentinels:
-  //   "check_engine" → one synthetic light: check engine.
-  //   "other"        → knownIssues[1..] holds the picked light type IDs.
-  //   "not_sure"     → user knows a light is on but not which → treat
-  //                    as a single "not_sure_which" sentinel.
-  let lights: WarningLightId[];
-  if (status === "check_engine") {
-    // Check engine isn't in the light-type enum; we surface it under
-    // its own synthetic id so the description copy is clear.
-    return buildItemForCheckEngine(scopeId);
-  } else if (status === "not_sure") {
-    lights = ["not_sure_which"];
-  } else if (status === "other") {
-    const candidates = knownIssues.slice(1).filter(isWarningLightId);
-    lights = candidates;
-  } else {
-    // Unknown sentinel — be defensive, surface nothing.
-    return null;
-  }
-
-  // Filter out paired lights (the paired-tile escalation in
-  // useMergedMaintenance already prompts the user for these).
-  const unpaired = lights.filter((id) => !PAIRED_LIGHTS.has(id));
+  // Every canonical dashboard light present, regardless of array shape or
+  // vocabulary. Paired lights (oil_pressure / battery_charging / abs / tpms)
+  // already surface via the matching maintenance tile's escalation in
+  // useMergedMaintenance — filter them out so the user isn't double-prompted.
+  const unpaired = canonicalWarningLights(knownIssues).filter(
+    (id) => !PAIRED_WARNING_LIGHTS.has(id),
+  );
   if (unpaired.length === 0) return null;
+
+  // A lone check-engine light keeps its dedicated, richer copy.
+  if (unpaired.length === 1 && unpaired[0] === "check_engine") {
+    return buildItemForCheckEngine(scopeId);
+  }
 
   return buildItemForUnpaired(unpaired, scopeId);
 }
@@ -147,7 +115,7 @@ function buildItemForCheckEngine(scopeId: string): MaintenanceItem {
 }
 
 function buildItemForUnpaired(
-  lights: readonly WarningLightId[],
+  lights: readonly CanonicalWarningLight[],
   scopeId: string,
 ): MaintenanceItem {
   const labels = lights.map((id) => LIGHT_LABELS[id]).filter(Boolean);
@@ -169,9 +137,5 @@ function buildItemForUnpaired(
     percentUsed: 100,
     urgency: "Have your car scanned to pull the code.",
   };
-}
-
-function isWarningLightId(s: string): s is WarningLightId {
-  return s in LIGHT_LABELS;
 }
 

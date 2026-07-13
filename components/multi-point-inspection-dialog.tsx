@@ -36,6 +36,11 @@ import type {
   PreJobSurveyPayload,
   VehiclePassportData,
 } from "@/lib/vehicle-passport";
+import {
+  AFFECTED_SYSTEMS,
+  servicesForSystems,
+  type AffectedSystem,
+} from "@/lib/vehicle-mod-systems";
 
 type SubmitIntent = "close" | "start";
 
@@ -211,6 +216,9 @@ function MultiPointInspectionDialogBody({
   const [inspectionExpires, setInspectionExpires] = useState("");
   const [modAftermarket, setModAftermarket] = useState(false);
   const [modNotes, setModNotes] = useState("");
+  // Carried through from the pre-job survey / passport so a multi-point save
+  // doesn't wipe affected systems this dialog has no UI to edit.
+  const [modAffectedSystems, setModAffectedSystems] = useState<AffectedSystem[]>([]);
   const [nextTip, setNextTip] = useState("");
 
   // Owner-profile (skipped onboarding) answers keyed by question key.
@@ -264,8 +272,20 @@ function MultiPointInspectionDialogBody({
     if (typeof baselineMileage === "number") setMileage(String(baselineMileage));
     if (pf?.inspection?.status) setInspectionStatus(pf.inspection.status);
     if (pf?.inspection?.expires_at) setInspectionExpires(pf.inspection.expires_at);
-    if (pf?.modifications?.status === "aftermarket_observed") setModAftermarket(true);
-    if (pf?.modifications?.notes) setModNotes(pf.modifications.notes);
+    if (
+      pf?.modifications?.has_mods ??
+      passportData?.passport.modifications.has_mods
+    ) {
+      setModAftermarket(true);
+    }
+    const seedNotes =
+      pf?.modifications?.notes ?? passportData?.passport.modifications.notes;
+    if (seedNotes) setModNotes(seedNotes);
+    setModAffectedSystems(
+      pf?.modifications?.affected_systems ??
+        passportData?.passport.modifications.affected_systems ??
+        []
+    );
     if (pf?.next_mechanic_tip) setNextTip(pf.next_mechanic_tip);
 
     setHydrated(true);
@@ -338,8 +358,9 @@ function MultiPointInspectionDialogBody({
           }
         : null,
       modifications: {
-        status: modAftermarket ? "aftermarket_observed" : "none_observed",
-        notes: modNotes.trim() || null,
+        has_mods: modAftermarket,
+        notes: modAftermarket ? modNotes.trim() || null : null,
+        affected_systems: modAftermarket ? modAffectedSystems : [],
       },
       nextMechanicTip: nextTip.trim() || null,
     });
@@ -366,6 +387,7 @@ function MultiPointInspectionDialogBody({
     inspectionExpires,
     modAftermarket,
     modNotes,
+    modAffectedSystems,
     nextTip,
   ]);
 
@@ -689,12 +711,8 @@ function MultiPointInspectionDialogBody({
                     <InspectionStickerFields
                       status={inspectionStatus}
                       expires={inspectionExpires}
-                      aftermarket={modAftermarket}
-                      notes={modNotes}
                       onStatus={setInspectionStatus}
                       onExpires={setInspectionExpires}
-                      onAftermarket={setModAftermarket}
-                      onNotes={setModNotes}
                     />
                   ) : null
                 }
@@ -723,6 +741,15 @@ function MultiPointInspectionDialogBody({
               {findings.attention.length + findings.monitor.length})
             </button>
           ) : null}
+
+          <AftermarketModsSection
+            aftermarket={modAftermarket}
+            notes={modNotes}
+            systems={modAffectedSystems}
+            onAftermarket={setModAftermarket}
+            onNotes={setModNotes}
+            onSystems={setModAffectedSystems}
+          />
         </div>
       )}
     </SurveyDialogShell>
@@ -1113,21 +1140,13 @@ function Row({
 function InspectionStickerFields({
   status,
   expires,
-  aftermarket,
-  notes,
   onStatus,
   onExpires,
-  onAftermarket,
-  onNotes,
 }: {
   status: InspectionStatus | "";
   expires: string;
-  aftermarket: boolean;
-  notes: string;
   onStatus: (s: InspectionStatus | "") => void;
   onExpires: (s: string) => void;
-  onAftermarket: (b: boolean) => void;
-  onNotes: (s: string) => void;
 }) {
   return (
     <div className="mt-3 space-y-1 rounded-lg bg-primary/[0.03] p-3">
@@ -1153,21 +1172,122 @@ function InspectionStickerFields({
           className="rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
         />
       </Row>
-      <Row label="Aftermarket modifications observed">
+    </div>
+  );
+}
+
+// Vehicle-level aftermarket mods capture — rendered as the last section of
+// the inspection form (not tied to any zone).
+function AftermarketModsSection({
+  aftermarket,
+  notes,
+  systems,
+  onAftermarket,
+  onNotes,
+  onSystems,
+}: {
+  aftermarket: boolean;
+  notes: string;
+  systems: AffectedSystem[];
+  onAftermarket: (b: boolean) => void;
+  onNotes: (s: string) => void;
+  onSystems: (s: AffectedSystem[]) => void;
+}) {
+  const toggleSystem = (value: AffectedSystem) => {
+    if (value === "cosmetic_only") {
+      onSystems(systems.includes("cosmetic_only") ? [] : ["cosmetic_only"]);
+      return;
+    }
+    const withoutCosmetic = systems.filter((s) => s !== "cosmetic_only");
+    onSystems(
+      withoutCosmetic.includes(value)
+        ? withoutCosmetic.filter((s) => s !== value)
+        : [...withoutCosmetic, value],
+    );
+  };
+  return (
+    <div className="rounded-xl border border-primary/10 bg-card p-4">
+      <div className="flex items-center justify-between">
+        <h4 className="text-[15px] font-semibold text-foreground">
+          Aftermarket modifications
+        </h4>
         <input
           type="checkbox"
           checked={aftermarket}
           onChange={(e) => onAftermarket(e.target.checked)}
           className="h-4 w-4 accent-[var(--primary)]"
         />
-      </Row>
+      </div>
+      <p className="mt-0.5 text-[11px] text-muted-foreground">
+        Anything non-stock on this vehicle? Otopair flags it to future shops on
+        the services it affects.
+      </p>
       {aftermarket ? (
-        <input
-          value={notes}
-          onChange={(e) => onNotes(e.target.value)}
-          placeholder="Modification notes"
-          className="mt-1 w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
-        />
+        <div className="mt-3">
+          <input
+            value={notes}
+            onChange={(e) => onNotes(e.target.value)}
+            placeholder="Modification notes"
+            className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+          />
+          <div className="pt-2">
+            <div className="text-[12px] font-medium text-foreground">
+              Which systems do these affect?
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {AFFECTED_SYSTEMS.map((sys) => {
+                const selected = systems.includes(sys.value);
+                return (
+                  <button
+                    key={sys.value}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => toggleSystem(sys.value)}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[12px] font-medium transition-colors",
+                      selected
+                        ? "border-blue-300 bg-blue-50 text-blue-700"
+                        : "border-primary/20 bg-card text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    {selected ? <Check className="h-3 w-3" /> : null}
+                    {sys.label}
+                  </button>
+                );
+              })}
+            </div>
+            {(() => {
+              const onlyCosmetic =
+                systems.length === 1 && systems[0] === "cosmetic_only";
+              const services = servicesForSystems(systems);
+              if (onlyCosmetic) {
+                return (
+                  <div className="mt-2 rounded-lg border border-primary/20 bg-card px-2.5 py-2 text-[11px] text-muted-foreground">
+                    Cosmetic only — recorded, but won&apos;t flag any future service.
+                  </div>
+                );
+              }
+              if (services.length === 0) {
+                return (
+                  <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-2 text-[11px] text-blue-700">
+                    No systems selected yet — tap the systems above and Otopair
+                    flags the right future services automatically.
+                  </div>
+                );
+              }
+              return (
+                <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-2 text-[11px] text-blue-700">
+                  <span className="font-semibold">
+                    Future shops will be alerted on {services.length} service
+                    {services.length === 1 ? "" : "s"}:
+                  </span>{" "}
+                  {services.map((s) => s.name).join(" · ")}.{" "}
+                  <span className="font-semibold">Hidden on everything else.</span>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
       ) : null}
     </div>
   );

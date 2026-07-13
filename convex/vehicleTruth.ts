@@ -18,6 +18,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { computeMaxDelta, validateMileageUpdate } from "./oto/vehicleTruthGuard";
 import { symptomForServiceSlug } from "./lib/serviceSymptoms";
 import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
+import { normalizeFaultLight, toCanonicalLight } from "../lib/warningLightVocab";
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -213,13 +214,39 @@ async function applyVehicleTruthImpl(
       if (code) { codesToAdd.push(code); servicesFlagged.push(claim.service_slug); }
     }
   }
-  const faultLights = args.fault_lights ?? [];
+  // Canonicalize fault-light ids to the reader vocabulary before writing (e.g.
+  // the wrong "tire_pressure" the tool schema example used → "tpms"), so a
+  // logged light matches the maintenance-tracker / health-score readers. Symptom
+  // codes in codesToAdd (brake_warning/battery) are deliberately NOT normalized —
+  // the pipeline QuickReadFlags + the upsertRecord/booking clear-paths depend on
+  // that write vocabulary; the readers now understand both.
+  const faultLights = (args.fault_lights ?? []).map(normalizeFaultLight);
   let faultLightsAdded: string[] = [];
   if (codesToAdd.length || faultLights.length || codesToClear.length) {
     const current: string[] = Array.isArray(owner.knownIssues) ? owner.knownIssues : [];
     faultLightsAdded = faultLights.filter((f) => !current.includes(f));
-    let next = Array.from(new Set([...current, ...codesToAdd, ...faultLights]));
-    if (codesToClear.length) next = next.filter((c) => !codesToClear.includes(c));
+    // Drop a stale "no_all_clear" sentinel when we're adding a live light/flag —
+    // otherwise a legacy onboarding ["no_all_clear"] array keeps the light and
+    // "all clear" contradictorily co-present (the exact corruption that hid an
+    // Oto-logged light from the sentinel-strict readers).
+    const addingSignal = codesToAdd.length > 0 || faultLights.length > 0;
+    const base = addingSignal ? current.filter((c) => c !== "no_all_clear") : current;
+    let next = Array.from(new Set([...base, ...codesToAdd, ...faultLights]));
+    if (codesToClear.length) {
+      // Clear by CANONICAL light id too. A completed service's clear code is the
+      // symptom vocab (e.g. brake_warning), but a fault light the user logged is
+      // stored CANONICALLY (e.g. abs, via normalizeFaultLight). Matching only the
+      // literal symptom code left the light behind — so "I did my brakes" never
+      // cleared the ABS light. Fold both to canonical and remove either form.
+      const clearCanon = new Set(
+        codesToClear.map((c) => toCanonicalLight(c)).filter(Boolean) as string[],
+      );
+      next = next.filter((c) => {
+        if (codesToClear.includes(c)) return false;
+        const canon = toCanonicalLight(c);
+        return !(canon && clearCanon.has(canon));
+      });
+    }
     await ctx.db.patch(owner._id, { knownIssues: next } as any);
   }
 

@@ -5,12 +5,13 @@
 //   GET /v0/maintenance?config_key=…|vin=…      scope maintenance:read
 //   GET /v0/labor?config_key=…|vin=…[&service=] scope labor:read
 //
-// The gate (convex/lib/dataLayers.ts): only Layer A (OEM/official), D
-// (empirical — ours) and E (human-verified — ours) values are served. B
-// (Vehicle Databases / structured DB — licensed, not sellable), C
-// (web/model-derived) and X (flagged) are EXCLUDED, and every excluded field
-// is listed in the response with its blocking layer, per spec — the gate is
-// a feature, not a filter to hide.
+// The gate (convex/lib/dataLayers.ts): Layer A (OEM/official), C
+// (web-search/scraped — our own enrichment work, the product per team
+// decision Jul 13), D (empirical — ours) and E (human-verified — ours) are
+// served. B (Vehicle Databases / structured DB — licensed, not sellable) and
+// X (flagged) are EXCLUDED, and every excluded field is listed in the
+// response with its blocking layer — the gate is a feature, not a filter to
+// hide.
 //
 // Labor serves ONLY empirical_* values — "the one labor layer that is
 // unambiguously ours" (spec §12); book_hours (RepairPal/MOTOR/VDB blend) is
@@ -23,7 +24,7 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireDirector, logAudit, roleHasCapability, type DirectorRole } from "./directorGate";
-import { deriveLayer, SELLABLE_LAYERS, LAYER_FORMULA, type LayerLetter } from "./lib/dataLayers";
+import { deriveLayer, isServable, LAYER_FORMULA, type LayerLetter } from "./lib/dataLayers";
 import { collectSpecFields, latestFieldEvidence } from "./dataCatalog";
 import { action } from "./_generated/server";
 import { api, internal } from "./_generated/api";
@@ -160,7 +161,7 @@ export const assembleMaintenance = internalQuery({
       if (f.value == null) continue; // never serve empties
       const ev = await latestFieldEvidence(ctx, c, f.field_name);
       const layer = deriveLayer(ev?.source_type ?? null, ev?.confidence ?? null);
-      if (ev && SELLABLE_LAYERS.has(layer.letter)) {
+      if (ev && isServable(layer.letter, ev.source_type)) {
         fields.push({
           field: f.field_name,
           label: f.label,
@@ -205,7 +206,7 @@ export const assembleMaintenance = internalQuery({
       fields,
       excluded,
       meta: {
-        gate: "A+D+E (OEM, empirical, human-verified). B/C/X excluded and listed.",
+        gate: "A+C+D+E (OEM, web-derived, empirical, human-verified). B (licensed DB) and X (flagged) excluded and listed.",
         layer_formula: LAYER_FORMULA,
         generated_at: Date.now(),
       },
@@ -346,6 +347,96 @@ export const createKey = action({
       actor_name: session.name,
     });
     return { key, prefix: key.slice(0, 12), id: String(id) };
+  },
+});
+
+/** Every director gets ONE self-service sandbox key ("log in and have a
+ *  key") — any valid session may mint it, no admin.manage needed. Re-minting
+ *  revokes the previous personal key so exactly one is live per director. */
+export const createPersonalKey = action({
+  args: { token: v.string() },
+  handler: async (ctx, { token }): Promise<{ key: string; prefix: string; id: string }> => {
+    const session = await ctx.runQuery(api.director_auth.validateSession, { token });
+    if (!session) throw new Error("unauthorized: invalid or expired director session");
+
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const key = `otp_live_${hex}`;
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+    const key_hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+    const id = await ctx.runMutation(internal.dataApi._insertPersonalKey, {
+      key_hash,
+      prefix: key.slice(0, 12),
+      created_by: session.userId as Id<"director_users">,
+      actor_name: session.name,
+    });
+    return { key, prefix: key.slice(0, 12), id: String(id) };
+  },
+});
+
+export const _insertPersonalKey = internalMutation({
+  args: {
+    key_hash: v.string(),
+    prefix: v.string(),
+    created_by: v.id("director_users"),
+    actor_name: v.string(),
+  },
+  handler: async (ctx, args): Promise<Id<"api_keys">> => {
+    const name = `personal: ${args.actor_name}`;
+    // Revoke any prior live personal key for this director (one live at a time).
+    const existing = await ctx.db.query("api_keys").withIndex("by_created_at").order("desc").take(100);
+    for (const k of existing) {
+      if (k.name === name && String(k.created_by) === String(args.created_by) && k.revoked_at == null) {
+        await ctx.db.patch(k._id, { revoked_at: Date.now() });
+      }
+    }
+    const id = await ctx.db.insert("api_keys", {
+      name,
+      key_hash: args.key_hash,
+      prefix: args.prefix,
+      scopes: ["maintenance:read", "labor:read"],
+      rate_limit_per_min: DEFAULT_RATE_LIMIT_PER_MIN,
+      created_by: args.created_by,
+      created_at: Date.now(),
+      request_count: 0,
+    });
+    await logAudit(
+      ctx,
+      { name: args.actor_name, userId: args.created_by },
+      {
+        entity_type: "api_key",
+        entity_id: String(id),
+        action: "personal_key_minted",
+        detail: `self-service sandbox key (previous personal key revoked if any)`,
+      },
+    );
+    return id;
+  },
+});
+
+/** The caller's own live personal key (prefix only) — drives the "your key"
+ *  banner on the sandbox. */
+export const myPersonalKey = query({
+  args: { token: v.string() },
+  handler: async (
+    ctx,
+    { token },
+  ): Promise<{ prefix: string; created_at: number; requests_24h: number } | null> => {
+    const actor = await requireDirector(ctx, token);
+    const name = `personal: ${actor.name}`;
+    const keys = await ctx.db.query("api_keys").withIndex("by_created_at").order("desc").take(100);
+    const mine = keys.find(
+      (k) => k.name === name && String(k.created_by) === String(actor.userId) && k.revoked_at == null,
+    );
+    if (!mine) return null;
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    const recent = await ctx.db
+      .query("api_usage")
+      .withIndex("by_key_and_time", (q) => q.eq("api_key_id", mine._id).gte("created_at", dayAgo))
+      .take(1000);
+    return { prefix: mine.prefix, created_at: mine.created_at, requests_24h: recent.length };
   },
 });
 

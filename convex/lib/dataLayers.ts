@@ -5,7 +5,8 @@
 //   B  structured DB       NOT sellable (Vehicle Databases rows are licensed
 //                          for internal use; NHTSA is public but rides in B
 //                          until provenance splits them)
-//   C  web/model-derived   NOT sellable (default layer)
+//   C  web/model-derived   sellable (team decision Jul 13: our web-search /
+//                          scraped enrichment IS the product)
 //   D  empirical           sellable — measured from our own jobs
 //   E  human-verified      sellable — mechanic/director verified, ours
 //   X  flagged             never leaves the building
@@ -37,9 +38,18 @@ export function deriveLayer(sourceType: string | null, confidence: number | null
   return { letter: "C", reason: `source_type "${st || "unknown"}" → web/model-derived (default layer)` };
 }
 
-/** The layers the external API may serve (spec §12's "A+D gate"; E is our own
- *  human verification and is unambiguously ours, so it ships too). */
-export const SELLABLE_LAYERS: ReadonlySet<LayerLetter> = new Set(["A", "D", "E"]);
+/** The layers the external API may serve. Team decision Jul 13: C
+ *  (web-search/scraped — our own enrichment work) is the product and ships;
+ *  B stays blocked (Vehicle Databases licensing) and X never leaves. */
+export const SELLABLE_LAYERS: ReadonlySet<LayerLetter> = new Set(["A", "C", "D", "E"]);
+
+/** Gate predicate. Letter-based, with one carve-out: NHTSA rides in Layer B
+ *  (it IS a structured DB) but is US-government public-domain data, so it is
+ *  servable — B's block exists for LICENSED databases (Vehicle Databases). */
+export function isServable(letter: LayerLetter, sourceType: string | null): boolean {
+  if (SELLABLE_LAYERS.has(letter)) return true;
+  return letter === "B" && (sourceType ?? "").toLowerCase() === "nhtsa";
+}
 
 export const LAYER_FORMULA =
   "anomaly/conf<0.4→X · mechanic/director→E · empirical→D · oem→A · nhtsa/vdb→B · else→C";

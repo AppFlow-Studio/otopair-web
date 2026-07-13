@@ -238,33 +238,47 @@ export const DEMO_FEATURES: DemoFeature[] = [
   "trust",
 ];
 
-// Service catalog — 7 categories (RAG doc 04).
+// Service catalog — the four categories locked Jul 13 (7→4 consolidation;
+// names match the app's tabs). Same 23 services, regrouped.
 export const SERVICE_CATALOG: { category: string; services: string[] }[] = [
-  { category: "Diagnostics", services: ["Diagnostic Scan", "Check Engine Light"] },
-  { category: "Compliance", services: ["State Inspection", "Emissions Test"] },
   {
-    category: "Routine Maintenance",
+    category: "Routine",
+    services: ["Oil Change", "Filter Replacement", "Battery Replacement"],
+  },
+  {
+    category: "Tires & Brakes",
     services: [
-      "Oil Change",
-      "Filter Replacement",
+      "Tire Rotation",
+      "Tire Balance",
+      "Wheel Alignment",
+      "Tire Replacement",
+      "Brake Pad Replacement",
+      "Rotor Resurfacing",
+      "Brake Fluid Flush",
+    ],
+  },
+  {
+    category: "Scheduled Service",
+    services: [
       "Spark Plugs",
       "Timing Belt",
       "Coolant Flush",
       "Transmission Service",
+      "Power Steering Flush",
+      "Differential Service",
+      "Fuel System Cleaning",
     ],
   },
   {
-    category: "Tires",
-    services: ["Tire Rotation", "Tire Balance", "Wheel Alignment", "Tire Replacement"],
-  },
-  {
-    category: "Brakes",
-    services: ["Brake Pad Replacement", "Rotor Resurfacing", "Brake Fluid Flush"],
-  },
-  { category: "Battery", services: ["Battery Test", "Battery Replacement"] },
-  {
-    category: "Fluids",
-    services: ["Power Steering Flush", "Differential Service", "Fuel System Cleaning"],
+    category: "Inspections",
+    services: [
+      "Diagnostic Scan",
+      "Check Engine Light",
+      "Pre-Purchase Inspection",
+      "State Inspection",
+      "Emissions Test",
+      "Battery Test",
+    ],
   },
 ];
 

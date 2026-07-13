@@ -154,8 +154,39 @@ export const getServiceSpecs = internalQuery({
       .withIndex("by_engine_id", (q) => q.eq("engine_id", args.engineId))
       .collect();
 
-    // Resolve MI category for each spec by joining services → service_categories
+    // Resolve the MI bucket for each spec. The 7→4 category consolidation
+    // (Jul 13: Routine / Tires & Brakes / Scheduled Service / Inspections)
+    // made category names too coarse for MI buckets — "Tires & Brakes" can't
+    // distinguish a brake spec from a tire spec — so the bucket now derives
+    // from the service SLUG first, with category names (new AND legacy, for
+    // deployments that haven't run migrations/categoryConsolidation) as the
+    // fallback.
+    const MI_SLUG_MAP: Record<string, string> = {
+      brake_pad_replacement: "brakes",
+      rotor_replacement: "brakes",
+      brake_fluid_flush: "brakes",
+      tire_rotation: "tires",
+      tire_balance: "tires",
+      tire_replacement: "tires",
+      wheel_alignment: "tires",
+      battery_test: "battery",
+      battery_replacement: "battery",
+      coolant_flush: "fluids",
+      power_steering_flush: "fluids",
+      differential_service: "fluids",
+      transmission_service: "fluids",
+      diagnostic_scan: "diagnostics",
+      check_engine_light: "diagnostics",
+      pre_purchase_inspection: "diagnostics",
+      state_inspection: "compliance",
+      emissions_test: "compliance",
+    };
     const MI_CATEGORY_MAP: Record<string, string> = {
+      "Routine": "routine",
+      "Tires & Brakes": "tires",
+      "Scheduled Service": "routine",
+      "Inspections": "diagnostics",
+      // Legacy 7-category names (pre-consolidation deployments)
       "Routine Maintenance": "routine",
       "Maintenance": "routine",
       "Tires": "tires",
@@ -172,13 +203,18 @@ export const getServiceSpecs = internalQuery({
     for (const spec of specs) {
       let miCategory = "routine";
       const service = await ctx.db.get(spec.service_id);
-      if (service && service.service_category_id) {
-        const category = await ctx.db.get(
-          service.service_category_id as Id<"service_categories">
-        );
-        if (category) {
-          miCategory =
-            MI_CATEGORY_MAP[(category as { name: string }).name] ?? "routine";
+      if (service) {
+        const bySlug = service.slug ? MI_SLUG_MAP[service.slug] : undefined;
+        if (bySlug) {
+          miCategory = bySlug;
+        } else if (service.service_category_id) {
+          const category = await ctx.db.get(
+            service.service_category_id as Id<"service_categories">
+          );
+          if (category) {
+            miCategory =
+              MI_CATEGORY_MAP[(category as { name: string }).name] ?? "routine";
+          }
         }
       }
       enriched.push({ ...spec, service_category: miCategory });

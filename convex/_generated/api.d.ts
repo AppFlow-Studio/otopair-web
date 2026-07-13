@@ -155,6 +155,7 @@ import type * as mcp_api from "../mcp_api.js";
 import type * as mechanicNotifications from "../mechanicNotifications.js";
 import type * as mechanics from "../mechanics.js";
 import type * as migrations from "../migrations.js";
+import type * as migrations_categoryConsolidation from "../migrations/categoryConsolidation.js";
 import type * as migrations_directorRoles from "../migrations/directorRoles.js";
 import type * as models from "../models.js";
 import type * as notifications from "../notifications.js";
@@ -546,6 +547,7 @@ declare const fullApi: ApiFromModules<{
   mechanicNotifications: typeof mechanicNotifications;
   mechanics: typeof mechanics;
   migrations: typeof migrations;
+  "migrations/categoryConsolidation": typeof migrations_categoryConsolidation;
   "migrations/directorRoles": typeof migrations_directorRoles;
   models: typeof models;
   notifications: typeof notifications;

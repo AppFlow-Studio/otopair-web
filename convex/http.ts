@@ -704,4 +704,123 @@ for (const path of mcpPaths) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => corsOptions()) });
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// External Data API v0 (Data spec §12) — key-authed, layer-gated, metered.
+// See convex/dataApi.ts for assembly + the A+D+E sellability gate.
+// ════════════════════════════════════════════════════════════════════════════
+
+function apiJson(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body, null, 2), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Shared auth + rate-limit wrapper for the /v0 endpoints. */
+async function withApiKey(
+  ctx: ActionCtx,
+  request: Request,
+  endpoint: string,
+  scope: "maintenance:read" | "labor:read",
+  handler: (params: URLSearchParams) => Promise<{ status: number; body: unknown; config_key?: string }>,
+): Promise<Response> {
+  const auth = request.headers.get("Authorization");
+  const rawKey = auth?.startsWith("Bearer ") ? auth.slice(7).trim() : request.headers.get("x-api-key")?.trim();
+  if (!rawKey || !rawKey.startsWith("otp_")) {
+    return apiJson(401, {
+      error: "missing_api_key",
+      message: "Pass your key as 'Authorization: Bearer otp_live_…' or 'x-api-key'.",
+    });
+  }
+
+  const key = await ctx.runQuery(internal.dataApi.lookupKeyByHash, { key_hash: await sha256Hex(rawKey) });
+  if (!key) return apiJson(401, { error: "invalid_api_key", message: "Unknown API key." });
+  if (key.revoked) return apiJson(401, { error: "revoked_api_key", message: "This key has been revoked." });
+  if (!key.scopes.includes(scope)) {
+    await ctx.runMutation(internal.dataApi.recordUsage, { api_key_id: key.keyId, endpoint, status: 403 });
+    return apiJson(403, { error: "insufficient_scope", message: `This key lacks the '${scope}' scope.` });
+  }
+
+  const usedLastMinute = await ctx.runQuery(internal.dataApi.countRecentUsage, {
+    api_key_id: key.keyId,
+    since: Date.now() - 60_000,
+  });
+  if (usedLastMinute >= key.rate_limit_per_min) {
+    await ctx.runMutation(internal.dataApi.recordUsage, { api_key_id: key.keyId, endpoint, status: 429 });
+    return apiJson(429, {
+      error: "rate_limited",
+      message: `Limit is ${key.rate_limit_per_min} requests/minute for this key.`,
+    });
+  }
+
+  const result = await handler(new URL(request.url).searchParams);
+  await ctx.runMutation(internal.dataApi.recordUsage, {
+    api_key_id: key.keyId,
+    endpoint,
+    status: result.status,
+    config_key: result.config_key,
+  });
+  return apiJson(result.status, result.body);
+}
+
+http.route({
+  path: "/v0/maintenance",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v0/maintenance", "maintenance:read", async (params) => {
+      const config_key = params.get("config_key") ?? undefined;
+      const vin = params.get("vin") ?? undefined;
+      if (!config_key && !vin) {
+        return { status: 400, body: { error: "missing_param", message: "Pass ?config_key=… or ?vin=…" } };
+      }
+      const data = await ctx.runQuery(internal.dataApi.assembleMaintenance, { config_key, vin });
+      if (!data) {
+        return {
+          status: 404,
+          body: { error: "not_found", message: "No enriched vehicle config matches that identifier." },
+          config_key,
+        };
+      }
+      return { status: 200, body: data, config_key: data.config.config_key ?? config_key };
+    }),
+  ),
+});
+
+http.route({
+  path: "/v0/labor",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v0/labor", "labor:read", async (params) => {
+      const config_key = params.get("config_key") ?? undefined;
+      const vin = params.get("vin") ?? undefined;
+      const service = params.get("service") ?? undefined;
+      if (!config_key && !vin) {
+        return { status: 400, body: { error: "missing_param", message: "Pass ?config_key=… or ?vin=…" } };
+      }
+      const data = await ctx.runQuery(internal.dataApi.assembleLabor, { config_key, vin, service });
+      if (!data) {
+        return {
+          status: 404,
+          body: { error: "not_found", message: "No enriched vehicle config matches that identifier." },
+          config_key,
+        };
+      }
+      return { status: 200, body: data, config_key: data.config_key ?? config_key };
+    }),
+  ),
+});
+
+for (const path of ["/v0/maintenance", "/v0/labor"]) {
+  http.route({ path, method: "OPTIONS", handler: httpAction(async () => corsOptions()) });
+}
+
 export default http;

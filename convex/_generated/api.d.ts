@@ -33,6 +33,7 @@ import type * as cleanup from "../cleanup.js";
 import type * as client_logs from "../client_logs.js";
 import type * as conversion_funnels from "../conversion_funnels.js";
 import type * as crons from "../crons.js";
+import type * as dataApi from "../dataApi.js";
 import type * as dataCatalog from "../dataCatalog.js";
 import type * as dataControlRoom from "../dataControlRoom.js";
 import type * as dataLabor from "../dataLabor.js";
@@ -101,6 +102,7 @@ import type * as lib_booking_field_redaction from "../lib/booking_field_redactio
 import type * as lib_brakeScope from "../lib/brakeScope.js";
 import type * as lib_checkin_questions from "../lib/checkin_questions.js";
 import type * as lib_classifier from "../lib/classifier.js";
+import type * as lib_dataLayers from "../lib/dataLayers.js";
 import type * as lib_email_provider from "../lib/email_provider.js";
 import type * as lib_fallbackSnapshots from "../lib/fallbackSnapshots.js";
 import type * as lib_haloVariantInference from "../lib/haloVariantInference.js";
@@ -425,6 +427,7 @@ declare const fullApi: ApiFromModules<{
   client_logs: typeof client_logs;
   conversion_funnels: typeof conversion_funnels;
   crons: typeof crons;
+  dataApi: typeof dataApi;
   dataCatalog: typeof dataCatalog;
   dataControlRoom: typeof dataControlRoom;
   dataLabor: typeof dataLabor;
@@ -493,6 +496,7 @@ declare const fullApi: ApiFromModules<{
   "lib/brakeScope": typeof lib_brakeScope;
   "lib/checkin_questions": typeof lib_checkin_questions;
   "lib/classifier": typeof lib_classifier;
+  "lib/dataLayers": typeof lib_dataLayers;
   "lib/email_provider": typeof lib_email_provider;
   "lib/fallbackSnapshots": typeof lib_fallbackSnapshots;
   "lib/haloVariantInference": typeof lib_haloVariantInference;

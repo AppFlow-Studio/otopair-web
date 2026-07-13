@@ -22,44 +22,28 @@ import { AuditDrawer } from "@/components/portal/AuditDrawer";
 const CARD = "rounded-xl border border-slate-200 bg-white p-5";
 const PILL = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 
-// --- Layer badge derivation (rendered honestly: badge + confidence number,
-//     formula visible on hover). Letters per spec §4B: A blue / B grey /
-//     C amber / D green / E purple / X red. ------------------------------------
+// --- Layer badge (derivation shared with the external API's sellability gate
+//     in convex/lib/dataLayers.ts; rendered honestly: badge + confidence
+//     number, formula visible on hover). Letters per spec §4B: A blue /
+//     B grey / C amber / D green / E purple / X red. ---------------------------
+import { deriveLayer, LAYER_FORMULA, type LayerLetter } from "@/convex/lib/dataLayers";
 
-type Layer = { letter: string; classes: string; reason: string };
-
-function deriveLayer(sourceType: string | null, confidence: number | null): Layer {
-  const st = (sourceType ?? "").toLowerCase();
-  if (st === "anomaly_detection" || (confidence != null && confidence < 0.4))
-    return {
-      letter: "X",
-      classes: "bg-red-100 text-red-700",
-      reason:
-        st === "anomaly_detection"
-          ? 'source_type "anomaly_detection" → flagged'
-          : `confidence ${confidence} < 0.4 → flagged`,
-    };
-  if (st === "mechanic" || st === "director_verified")
-    return { letter: "E", classes: "bg-purple-100 text-purple-700", reason: `source_type "${st}" → human-verified` };
-  if (st.includes("empirical") || st.includes("job_actual"))
-    return { letter: "D", classes: "bg-emerald-100 text-emerald-700", reason: `source_type "${st}" → empirical` };
-  if (st.includes("oem") || st.includes("owners_manual"))
-    return { letter: "A", classes: "bg-blue-100 text-blue-700", reason: `source_type "${st}" → OEM/official` };
-  if (st === "nhtsa" || st.includes("vehicle_databases") || st === "vdb")
-    return { letter: "B", classes: "bg-slate-200 text-slate-700", reason: `source_type "${st}" → structured DB` };
-  return {
-    letter: "C",
-    classes: "bg-amber-100 text-amber-700",
-    reason: `source_type "${st || "unknown"}" → web/model-derived (default layer)`,
-  };
-}
+const LAYER_CLASSES: Record<LayerLetter, string> = {
+  A: "bg-blue-100 text-blue-700",
+  B: "bg-slate-200 text-slate-700",
+  C: "bg-amber-100 text-amber-700",
+  D: "bg-emerald-100 text-emerald-700",
+  E: "bg-purple-100 text-purple-700",
+  X: "bg-red-100 text-red-700",
+};
 
 function LayerBadge({ sourceType, confidence }: { sourceType: string | null; confidence: number | null }) {
-  const layer = deriveLayer(sourceType, confidence);
+  const layer = { ...deriveLayer(sourceType, confidence), classes: "" };
+  layer.classes = LAYER_CLASSES[layer.letter];
   return (
     <span
       className="inline-flex items-center gap-1"
-      title={`Layer ${layer.letter} — ${layer.reason}; confidence ${confidence ?? "n/a"}. Formula: anomaly/conf<0.4→X · mechanic/director→E · empirical→D · oem→A · nhtsa/vdb→B · else→C`}
+      title={`Layer ${layer.letter} — ${layer.reason}; confidence ${confidence ?? "n/a"}. Formula: ${LAYER_FORMULA}`}
     >
       <span className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold ${layer.classes}`}>
         {layer.letter}

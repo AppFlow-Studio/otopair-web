@@ -127,6 +127,6 @@ export const NAV: Record<PortalId, NavGroup[]> = {
     },
     { label: "Catalog Ops", items: [{ label: "Service Catalog", href: "/data/service-catalog", phase: "P1" }] },
     { label: "Economics", items: [{ label: "Costs & Credits", href: "/data/costs", phase: "P2" }] },
-    { label: "Product · P2", items: [{ label: "API Sandbox", href: "/data/api-sandbox", phase: "P2" }] },
+    { label: "Product", items: [{ label: "API Sandbox", href: "/data/api-sandbox" }] },
   ],
 };

@@ -13,6 +13,7 @@
 // =============================================================================
 import { v } from "convex/values";
 import { query } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
 import { requireDirector } from "./directorGate";
 import type { Doc, Id } from "./_generated/dataModel";
 
@@ -132,6 +133,111 @@ function evidenceEntityType(fieldName: string): string {
   return "vehicle_config";
 }
 
+// --- Shared spec-field collection (workspace UI + external data API) ----------
+
+export type SpecField = {
+  field_name: string;
+  label: string;
+  value: string | null;
+  entity_type: string;
+  group: string;
+};
+
+/** The curated maintenance-spec field map: stored doc value → evidence field
+ *  key. One list, consumed by configWorkspace (portal) and dataApi (external
+ *  /v0/maintenance) so the two can never drift. */
+export function collectSpecFields(
+  c: Doc<"vehicle_configs">,
+  engine: Doc<"engines"> | null,
+  transmission: Doc<"transmissions"> | null,
+): SpecField[] {
+  const fields: SpecField[] = [];
+  const push = (field_name: string, label: string, raw: unknown, group: string) => {
+    fields.push({
+      field_name,
+      label,
+      value: raw == null ? null : String(raw),
+      entity_type: evidenceEntityType(field_name),
+      group,
+    });
+  };
+
+  // Fluids (engine + config docs)
+  push("oil_viscosity", "Oil viscosity", engine?.oil_viscosity, "Fluids");
+  push("oil_capacity_qts", "Oil capacity (qts)", engine?.oil_capacity_qts, "Fluids");
+  push("coolant_type", "Coolant type", engine?.coolant_type, "Fluids");
+  push("coolant_capacity_qts", "Coolant capacity (qts)", engine?.coolant_capacity_qts, "Fluids");
+  push("brake_fluid_type", "Brake fluid type", c.brake_fluid_type, "Fluids");
+  push("brake_fluid_capacity_oz", "Brake fluid capacity (oz)", c.brake_fluid_capacity_oz, "Fluids");
+  push("power_steering_type", "Power steering fluid", c.ps_fluid_type, "Fluids");
+  push("ps_fluid_capacity_oz", "PS fluid capacity (oz)", c.ps_fluid_capacity_oz, "Fluids");
+  push(
+    "transmission_fluid_capacity_qts",
+    "Trans fluid capacity (qts)",
+    engine?.transmission_fluid_capacity_qts,
+    "Fluids",
+  );
+
+  // Attributes
+  push("drivetrain", "Drivetrain", c.drivetrain, "Attributes");
+  push("timing_system", "Timing system", engine?.timing_system ?? engine?.timing_type, "Attributes");
+  push("fuel_injection_type", "Fuel injection", engine?.fuel_injection, "Attributes");
+  push("turbo", "Aspiration", engine?.aspiration, "Attributes");
+  push("spark_plug_quantity", "Spark plug qty", engine?.spark_plug_quantity, "Attributes");
+  push(
+    "transmission_type",
+    "Transmission type",
+    transmission?.transmission_type ?? transmission?.type,
+    "Attributes",
+  );
+  push("trans_fluid_type", "Trans fluid type", transmission?.fluid_type, "Fluids");
+
+  return fields;
+}
+
+/** Newest evidence row for one field (canonical key first, then the two known
+ *  legacy keyings — every attempt an indexed bounded read). Used by the API's
+ *  layer gate; prefers is_latest rows. */
+export async function latestFieldEvidence(
+  ctx: { db: QueryCtx["db"] },
+  c: Doc<"vehicle_configs">,
+  fieldName: string,
+): Promise<{ source_type: string | null; confidence: number | null; source_domain: string | null } | null> {
+  const entityType = evidenceEntityType(fieldName);
+  const canonicalId =
+    entityType === "engine" && c.engine_id
+      ? String(c.engine_id)
+      : entityType === "transmission"
+        ? String(c.transmission_id ?? c._id)
+        : String(c._id);
+  const attempts: Array<{ type: string; id: string }> = [];
+  const addAttempt = (type: string, entityId: string) => {
+    if (!attempts.some((a) => a.type === type && a.id === entityId)) attempts.push({ type, id: entityId });
+  };
+  addAttempt(entityType, canonicalId);
+  addAttempt(entityType, String(c._id));
+  addAttempt("vehicle_config", String(c._id));
+
+  for (const attempt of attempts) {
+    const rows = await ctx.db
+      .query("enrichment_evidence")
+      .withIndex("by_entity_field", (q) =>
+        q.eq("entity_type", attempt.type).eq("entity_id", attempt.id).eq("field_name", fieldName),
+      )
+      .order("desc")
+      .take(10);
+    if (rows.length > 0) {
+      const best = rows.find((r) => r.is_latest !== false) ?? rows[0];
+      return {
+        source_type: best.source_type ?? null,
+        confidence: best.confidence ?? null,
+        source_domain: best.source_domain ?? null,
+      };
+    }
+  }
+  return null;
+}
+
 // --- List ---------------------------------------------------------------------
 
 export const listConfigs = query({
@@ -223,52 +329,7 @@ export const configWorkspace = query({
       .take(15);
 
     // Spec fields: label → stored value → evidence field key + entity type.
-    const fields: Array<{
-      field_name: string;
-      label: string;
-      value: string | null;
-      entity_type: string;
-      group: string;
-    }> = [];
-    const push = (field_name: string, label: string, raw: unknown, group: string) => {
-      fields.push({
-        field_name,
-        label,
-        value: raw == null ? null : String(raw),
-        entity_type: evidenceEntityType(field_name),
-        group,
-      });
-    };
-
-    // Fluids (engine + config docs)
-    push("oil_viscosity", "Oil viscosity", engine?.oil_viscosity, "Fluids");
-    push("oil_capacity_qts", "Oil capacity (qts)", engine?.oil_capacity_qts, "Fluids");
-    push("coolant_type", "Coolant type", engine?.coolant_type, "Fluids");
-    push("coolant_capacity_qts", "Coolant capacity (qts)", engine?.coolant_capacity_qts, "Fluids");
-    push("brake_fluid_type", "Brake fluid type", c.brake_fluid_type, "Fluids");
-    push("brake_fluid_capacity_oz", "Brake fluid capacity (oz)", c.brake_fluid_capacity_oz, "Fluids");
-    push("power_steering_type", "Power steering fluid", c.ps_fluid_type, "Fluids");
-    push("ps_fluid_capacity_oz", "PS fluid capacity (oz)", c.ps_fluid_capacity_oz, "Fluids");
-    push(
-      "transmission_fluid_capacity_qts",
-      "Trans fluid capacity (qts)",
-      engine?.transmission_fluid_capacity_qts,
-      "Fluids",
-    );
-
-    // Attributes
-    push("drivetrain", "Drivetrain", c.drivetrain, "Attributes");
-    push("timing_system", "Timing system", engine?.timing_system ?? engine?.timing_type, "Attributes");
-    push("fuel_injection_type", "Fuel injection", engine?.fuel_injection, "Attributes");
-    push("turbo", "Aspiration", engine?.aspiration, "Attributes");
-    push("spark_plug_quantity", "Spark plug qty", engine?.spark_plug_quantity, "Attributes");
-    push(
-      "transmission_type",
-      "Transmission type",
-      transmission?.transmission_type ?? transmission?.type,
-      "Attributes",
-    );
-    push("trans_fluid_type", "Trans fluid type", transmission?.fluid_type, "Fluids");
+    const fields = collectSpecFields(c, engine, transmission);
 
     return {
       id: c._id,

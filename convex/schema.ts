@@ -3142,6 +3142,36 @@ export default defineSchema({
     .index("by_created_at", ["created_at"])
     .index("by_actor_id", ["actor_id"]),
 
+  // External data-API keys (Data spec §12). Only the SHA-256 hash of a key is
+  // stored — the plaintext (otp_live_…) is shown exactly once at creation.
+  api_keys: defineTable({
+    name: v.string(),
+    key_hash: v.string(),
+    // First 12 chars of the plaintext ("otp_live_ab…") for display/support.
+    prefix: v.string(),
+    scopes: v.array(v.union(v.literal("maintenance:read"), v.literal("labor:read"))),
+    rate_limit_per_min: v.number(),
+    created_by: v.id("director_users"),
+    created_at: v.number(),
+    revoked_at: v.optional(v.number()),
+    last_used_at: v.optional(v.number()),
+    request_count: v.number(),
+  })
+    .index("by_key_hash", ["key_hash"])
+    .index("by_created_at", ["created_at"]),
+
+  // Per-request usage metering for api_keys (the future billing meter) and
+  // the rate-limit window source.
+  api_usage: defineTable({
+    api_key_id: v.id("api_keys"),
+    endpoint: v.string(),
+    status: v.number(),
+    config_key: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_key_and_time", ["api_key_id", "created_at"])
+    .index("by_created_at", ["created_at"]),
+
   // Thin review-queue materialization over the four real streams (decision
   // #4, Data spec §13): consensus needs_review, mechanic corrections,
   // report-wrong-data, survey disconfirmations. Rows are created ONLY by the

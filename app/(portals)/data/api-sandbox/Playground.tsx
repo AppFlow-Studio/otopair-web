@@ -262,25 +262,48 @@ function VehicleView({ v }: { v: VehicleOk }) {
         )}
       </div>
 
-      {/* Services: stacked cards — parts + labor per service */}
+      {/* Services: stacked cards — booking-grade labor + parts per service */}
       <div>
         <SectionHead>Services · {v.services.length}</SectionHead>
         {v.services.length === 0 ? (
-          <EmptyLine>No service parts enriched yet.</EmptyLine>
+          <EmptyLine>No services enriched yet.</EmptyLine>
         ) : (
           <div className="space-y-2">
             {v.services.map((s) => {
-              const labor = [
-                s.labor.empirical_hours != null ? `empirical ${s.labor.empirical_hours.toFixed(1)}h` : null,
-                s.labor.sample_size != null ? `n=${s.labor.sample_size}` : null,
-                s.labor.estimated_hours != null ? `estimated ${s.labor.estimated_hours.toFixed(1)}h` : null,
-              ].filter(Boolean);
+              const sourceTone: Record<string, string> = {
+                empirical: "bg-emerald-50 text-emerald-700",
+                tier_estimate: "bg-amber-50 text-amber-700",
+                service_default: "bg-slate-100 text-slate-500",
+              };
               return (
                 <div key={s.service} className="rounded-lg border border-slate-100 p-3">
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span className={`${MONO} font-semibold text-slate-900`}>{s.service}</span>
-                    {labor.length > 0 && (
-                      <span className="tabular-nums text-[12px] text-slate-500">{labor.join(" · ")}</span>
+                    <span className={`${MONO} font-semibold text-slate-900`}>{s.name ?? s.service}</span>
+                    {s.labor.hours != null ? (
+                      <>
+                        <span className="tabular-nums text-[13px] font-semibold text-slate-700">
+                          {s.labor.hours.toFixed(2)}h
+                        </span>
+                        <span
+                          className={`${PILL} ${sourceTone[s.labor.source] ?? "bg-blue-50 text-blue-700"}`}
+                          title={`confidence ${s.labor.confidence ?? "n/a"}${s.labor.sample_size != null ? ` · n=${s.labor.sample_size}` : ""}`}
+                        >
+                          {s.labor.source}
+                          {s.labor.sample_size != null ? ` n=${s.labor.sample_size}` : ""}
+                        </span>
+                        {s.labor.tier_floor_applied && (
+                          <span className={`${PILL} bg-violet-50 text-violet-700`} title="raw hours were below the tier floor — floor substituted">
+                            floor
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-[12px] text-red-500">no labor resolved</span>
+                    )}
+                    {!s.applicable && (
+                      <span className={`${PILL} bg-slate-100 text-slate-500`} title="parts exist but the applicability rules exclude this service for this vehicle">
+                        not applicable
+                      </span>
                     )}
                   </div>
                   {s.parts.length === 0 ? (

@@ -176,7 +176,7 @@ const VEHICLE_EXAMPLE = `{
           }
         }
       ],
-      "labor": { "empirical_hours": 1.1, "sample_size": 9, "estimated_hours": 1.3 }
+      "labor": { "hours": 1.1, "source": "empirical", "confidence": 0.9, "sample_size": 9, "tier_floor_applied": false }
     }
   ],
   "history": {

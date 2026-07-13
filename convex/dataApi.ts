@@ -27,6 +27,8 @@ import { requireDirector, logAudit, roleHasCapability, type DirectorRole } from 
 import { deriveLayer, isServable, LAYER_FORMULA, type LayerLetter } from "./lib/dataLayers";
 import { collectSpecFields, latestFieldEvidence } from "./dataCatalog";
 import { isPoisonPriceType, isNonPooledPriceType } from "./lib/priceTypes";
+import { resolveLaborHours, detectTier } from "./lib/quoteEngine";
+import { getApplicableServices } from "./services/applicability";
 import type { QueryCtx } from "./_generated/server";
 import { action } from "./_generated/server";
 import { api, internal } from "./_generated/api";
@@ -560,8 +562,16 @@ type ServicePartEntry = {
 
 type VehicleServiceEntry = {
   service: string;
+  name: string | null;
+  applicable: boolean;
   parts: ServicePartEntry[];
-  labor: { empirical_hours: number | null; sample_size: number | null; estimated_hours: number | null };
+  labor: {
+    hours: number | null;
+    source: string;
+    confidence: number | null;
+    sample_size: number | null;
+    tier_floor_applied: boolean;
+  };
 };
 
 /** Resolve year/make/model[/trim] against config_key's normalized prefix via
@@ -751,22 +761,33 @@ export const assembleVehicle = internalQuery({
       .query("labor_times")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
       .take(100);
-    const svsRows = engine
-      ? await ctx.db
-          .query("service_vehicle_specs")
-          .withIndex("by_engine_id", (q) => q.eq("engine_id", engine._id))
-          .take(100)
-      : [];
 
     const byService = new Map<string, VehicleServiceEntry>();
-    const serviceEntry = (slugKey: string): VehicleServiceEntry => {
+    const serviceEntry = (slugKey: string, name?: string | null, applicable = false): VehicleServiceEntry => {
       let e = byService.get(slugKey);
       if (!e) {
-        e = { service: slugKey, parts: [], labor: { empirical_hours: null, sample_size: null, estimated_hours: null } };
+        e = {
+          service: slugKey,
+          name: name ?? null,
+          applicable,
+          parts: [],
+          labor: { hours: null, source: "unresolved", confidence: null, sample_size: null, tier_floor_applied: false },
+        };
         byService.set(slugKey, e);
       }
+      if (name && !e.name) e.name = name;
+      if (applicable) e.applicable = true;
       return e;
     };
+
+    // ── Labor for EVERY bookable service — the SAME resolver the booking
+    //    flow runs (bookings.resolveBookingLaborMinutes → resolveLaborHours):
+    //    empirical → quality-gated book hours → sibling chassis → tier floor
+    //    → tier estimate; services.default_labor_hours is the final spec
+    //    minimum, so hours are never null for an applicable service. ──
+    const applicableServices = await getApplicableServices(ctx, c._id);
+    const tier = c.pricing_tier ?? (await detectTier(ctx, c));
+    const empiricalBySvc = new Map<string, { hours: number; n: number }>();
 
     const priceCache = new Map<string, ServicePartEntry["price"]>();
     for (const f of fitments) {
@@ -808,19 +829,85 @@ export const assembleVehicle = internalQuery({
     }
 
     for (const row of laborRows) {
-      const svc = serviceById.get(String(row.service_id));
-      const entry = serviceEntry(svc?.slug ?? String(row.service_id));
       if (row.empirical_hours && (row.empirical_sample_size ?? 0) > 0) {
-        entry.labor.empirical_hours = row.empirical_hours;
-        entry.labor.sample_size = row.empirical_sample_size ?? null;
+        const svc = serviceById.get(String(row.service_id));
+        empiricalBySvc.set(svc?.slug ?? String(row.service_id), {
+          hours: row.empirical_hours,
+          n: row.empirical_sample_size ?? 0,
+        });
       }
     }
-    for (const row of svsRows) {
-      const svc = serviceById.get(String(row.service_id));
-      const entry = byService.get(svc?.slug ?? String(row.service_id));
-      // Only annotate services we already surfaced (parts or empirical labor).
-      if (entry && entry.labor.estimated_hours == null) {
-        entry.labor.estimated_hours = row.estimated_labor_hours ?? row.labor_hours ?? null;
+
+    for (const svc of applicableServices) {
+      const slugKey = svc.slug ?? String(svc._id);
+      const entry = serviceEntry(slugKey, svc.name, true);
+
+      let resolved: { hours: number; source: string; confidence: number | null; floor: boolean } | null = null;
+      if (tier) {
+        const res = await resolveLaborHours(ctx, {
+          vehicle_config_id: c._id,
+          service_id: svc._id,
+          vehicle_tier: tier,
+        });
+        if (res.ok) {
+          resolved = {
+            hours: res.hours,
+            source: res.source,
+            confidence: res.confidence,
+            floor: res.tier_floor_applied === true,
+          };
+        }
+      }
+      if (!resolved && svc.default_labor_hours != null) {
+        // The spec minimum every booking falls back to when the ladder refuses.
+        resolved = { hours: svc.default_labor_hours, source: "service_default", confidence: 0.2, floor: false };
+      }
+      if (resolved) {
+        entry.labor.hours = resolved.hours;
+        entry.labor.source = resolved.source;
+        entry.labor.confidence = resolved.confidence;
+        entry.labor.tier_floor_applied = resolved.floor;
+      }
+      entry.labor.sample_size = empiricalBySvc.get(slugKey)?.n ?? null;
+    }
+
+    // ── Second pass: entries created by the parts loop that the
+    //    applicability rules excluded (e.g. differential_service on a FWD
+    //    car) still get booking-grade hours — a customer can't book them,
+    //    but the labor answer exists and integrators asked for no nulls.
+    //    Buckets with NO catalog service behind them (fitment service_type
+    //    strings like serpentine_belt) are parts-discovery only and are
+    //    labeled parts_only instead of being given invented hours. ──
+    for (const entry of byService.values()) {
+      if (entry.labor.hours != null) continue;
+      const svcDoc = await ctx.db
+        .query("services")
+        .withIndex("by_slug", (q) => q.eq("slug", entry.service))
+        .first();
+      if (!svcDoc) {
+        entry.labor.source = "parts_only";
+        continue;
+      }
+      if (!entry.name) entry.name = svcDoc.name;
+      let resolved: { hours: number; source: string; confidence: number | null; floor: boolean } | null = null;
+      if (tier) {
+        const res = await resolveLaborHours(ctx, {
+          vehicle_config_id: c._id,
+          service_id: svcDoc._id,
+          vehicle_tier: tier,
+        });
+        if (res.ok) {
+          resolved = { hours: res.hours, source: res.source, confidence: res.confidence, floor: res.tier_floor_applied === true };
+        }
+      }
+      if (!resolved && svcDoc.default_labor_hours != null) {
+        resolved = { hours: svcDoc.default_labor_hours, source: "service_default", confidence: 0.2, floor: false };
+      }
+      if (resolved) {
+        entry.labor.hours = resolved.hours;
+        entry.labor.source = resolved.source;
+        entry.labor.confidence = resolved.confidence;
+        entry.labor.tier_floor_applied = resolved.floor;
       }
     }
 

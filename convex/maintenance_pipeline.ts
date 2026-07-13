@@ -553,7 +553,14 @@ export const runPipeline = internalAction({
     // Step 3: Calculate composites per category
     const weightsByCategory = new Map<string, WeightProfile>();
     for (const w of weights) {
-      weightsByCategory.set(w.category_name, w);
+      weightsByCategory.set(w.category_name, {
+        dcm_weight: w.dcm_weight ?? 0,
+        vam_weight: w.vam_weight ?? 0,
+        mtm_weight: w.mtm_weight ?? 0,
+        pum_weight: w.pum_weight ?? 0,
+        hcm_weight: w.hcm_weight ?? 0,
+        is_fixed: w.is_fixed ?? false,
+      });
     }
 
     const getComp = (cat: string) =>
@@ -644,9 +651,18 @@ export const runPipeline = internalAction({
     // Then build a secondary map keyed by service_id for lookup during interval calc
     const anchorsByType = new Map<string, ServiceAnchor>();
     for (const r of records) {
+      // lastServiceDate is stored as either a Unix-ms number or a date string;
+      // ServiceAnchor.last_service_date expects Unix ms.
+      const lastServiceDateMs =
+        typeof r.lastServiceDate === "number"
+          ? r.lastServiceDate
+          : typeof r.lastServiceDate === "string" &&
+              !Number.isNaN(Date.parse(r.lastServiceDate))
+            ? Date.parse(r.lastServiceDate)
+            : undefined;
       anchorsByType.set(r.type, {
         last_service_mileage: r.lastServiceMileage ?? undefined,
-        last_service_date: r.lastServiceDate ?? undefined,
+        last_service_date: lastServiceDateMs,
         last_service_source: (r as any).serviceSource ?? "user_reported",
       });
     }
@@ -663,7 +679,7 @@ export const runPipeline = internalAction({
       const service = await ctx.runQuery(internal.maintenance_pipeline.getServiceById, {
         serviceId: spec.service_id,
       });
-      if (!service) continue;
+      if (!service?.slug) continue;
       const recordType = recordTypeForServiceSlug(service.slug);
       if (recordType && anchorsByType.has(recordType)) {
         anchorsByServiceId.set(spec.service_id.toString(), anchorsByType.get(recordType)!);

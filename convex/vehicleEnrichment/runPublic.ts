@@ -13,6 +13,7 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation } from "../_generated/server";
 import { internal, api } from "../_generated/api";
+import type { Doc } from "../_generated/dataModel";
 import { scrapeWheelSizeOptions } from "./utils/wheelSizeScraper";
 import { buildEngineKey } from "./types";
 
@@ -37,7 +38,7 @@ export const go = internalAction({
     if (!user) {
       console.log("[run] User not in DB — creating from Clerk ID...");
       const userId = await ctx.runMutation(internal.vehicleEnrichment.runPublic._createTestUser, {});
-      user = { _id: userId } as any;
+      user = { _id: userId } as Doc<"users">;
     }
 
     // Decode VIN

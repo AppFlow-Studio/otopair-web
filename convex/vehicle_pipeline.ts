@@ -612,7 +612,7 @@ export const enrichVehicleSpecs = internalAction({
     let effectiveEngineCode = args.engineCode?.trim() ?? "";
     if (!effectiveEngineCode) {
       const engine = await ctx.runQuery(internal.vehicle_mutations.getEngine, { engineId: args.engineId });
-      if (engine) {
+      if (engine?.trim_id) {
         const trimEngines = await ctx.runQuery(internal.vehicle_mutations.getEnginesByTrim, {
           trimId: engine.trim_id,
         });
@@ -710,7 +710,7 @@ export const enrichVehicleSpecs = internalAction({
               internal.vehicle_mutations.getEngine,
               { engineId: args.engineId }
             );
-            if (engine) {
+            if (engine?.trim_id) {
               await ctx.runMutation(internal.vehicle_mutations.patchTrim, {
                 trimId: engine.trim_id,
                 steeringType,
@@ -792,7 +792,7 @@ export const enrichVehicleSpecs = internalAction({
           if (specs.trim_specs) {
             const { flat: trimFlat } = flattenPerFieldSpecs(specs.trim_specs);
             const engine = await ctx.runQuery(internal.vehicle_mutations.getEngine, { engineId: args.engineId });
-            if (engine) {
+            if (engine?.trim_id) {
               await ctx.runMutation(internal.vehicle_mutations.storeTrimSpecs, {
                 trimId: engine.trim_id,
                 specs: trimFlat,
@@ -881,14 +881,22 @@ export const enrichVehicleSpecs = internalAction({
       // Base specs already exist — pull values for pricing prompt context
       oilViscosity = existingSpecs.oil_viscosity || "N/A";
       oilCapacityQts = existingSpecs.oil_capacity_qts || 0;
-      confidenceScore = existingSpecs.confidence_score || 0.75;
+      // engines docs don't store a confidence score — use the same default the
+      // fresh-enrichment path falls back to.
+      confidenceScore = 0.75;
+      // Reverse of updateEngineAttributes' column mapping: has_turbocharger is
+      // persisted as `aspiration`, fuel_injection_type as `fuel_injection`;
+      // power_steering / transmission / drivetrain are not stored on engines.
       vehicleAttributes = {
-        power_steering_type: existingSpecs.power_steering_type ?? null,
+        power_steering_type: null,
         timing_system: existingSpecs.timing_system ?? null,
-        has_turbocharger: existingSpecs.has_turbocharger ?? null,
-        fuel_injection_type: existingSpecs.fuel_injection_type ?? null,
-        transmission_type: existingSpecs.transmission_type ?? null,
-        drivetrain_type: existingSpecs.drivetrain_type ?? null,
+        has_turbocharger:
+          existingSpecs.aspiration != null
+            ? existingSpecs.aspiration === "turbocharged"
+            : null,
+        fuel_injection_type: existingSpecs.fuel_injection ?? null,
+        transmission_type: null,
+        drivetrain_type: null,
       };
       const existingVehicleSpecs = await ctx.runQuery(internal.vehicle_mutations.getVehicleSpecs, {
         engineId: args.engineId,
@@ -1059,7 +1067,7 @@ export const enrichVehicleSpecs = internalAction({
         // Build slug → service ID map
         const slugToService = new Map<string, any>();
         for (const svc of services) {
-          slugToService.set(svc.slug, svc);
+          if (svc.slug) slugToService.set(svc.slug, svc);
         }
 
         // Loop through results and upsert

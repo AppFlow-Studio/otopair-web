@@ -1811,8 +1811,8 @@ export const finalizeAndChargeForBooking = internalAction({
       const tax = computeBookingTax({
         laborDollars: laborCents / 100,
         partsDollars: partsSubtotalCents / 100,
-        state: (shop?.address_state as string | undefined) ?? null,
-        zip: (shop?.address_zip as string | undefined) ?? null,
+        state: shop?.state ?? null,
+        zip: shop?.zip ?? null,
       });
       const taxCents = Math.round((tax.taxDollars ?? 0) * 100);
       const feeCents = Math.round(
@@ -1853,8 +1853,8 @@ export const finalizeAndChargeForBooking = internalAction({
     const tax = computeBookingTax({
       laborDollars: laborCents / 100,
       partsDollars: partsSubtotalCents / 100,
-      state: (shop?.address_state as string | undefined) ?? null,
-      zip: (shop?.address_zip as string | undefined) ?? null,
+      state: shop?.state ?? null,
+      zip: shop?.zip ?? null,
     });
     const taxCents = Math.round((tax.taxDollars ?? 0) * 100);
     const feeCents = Math.round(

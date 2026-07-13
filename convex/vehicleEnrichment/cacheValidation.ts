@@ -49,10 +49,12 @@ export const validateCachedConfig = internalAction({
     );
     const modelName = modelDoc?.name ?? "Unknown";
 
-    const engine = await ctx.runQuery(
-      internal.vehicleEnrichment.v3queries.getEngine,
-      { engineId: vc.engine_id },
-    );
+    const engine = vc.engine_id
+      ? await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getEngine,
+          { engineId: vc.engine_id },
+        )
+      : null;
 
     const configKey = vc.config_key;
     console.log(`[validate] Starting for ${configKey} (${vc.year} ${makeName} ${modelName} ${vc.trim_name})`);
@@ -74,7 +76,7 @@ export const validateCachedConfig = internalAction({
       fitmentId: string;
       partId: string;
       partNumber: string;
-      subcategory: string;
+      subcategory?: string;
       priceId?: string;
       storedPrice?: number;
       sourceUrl?: string;
@@ -95,10 +97,14 @@ export const validateCachedConfig = internalAction({
       );
       const latestPrice = prices[0]; // first by recency
 
+      // A part with neither an OEM number nor a name can't be validated — skip it.
+      const partNumber = part.oem_part_number ?? part.name;
+      if (!partNumber) continue;
+
       partsWithPrices.push({
         fitmentId: fitment._id as string,
         partId: fitment.part_id as string,
-        partNumber: part.oem_part_number ?? part.name,
+        partNumber,
         subcategory: part.subcategory ?? part.category,
         priceId: latestPrice?._id as string | undefined,
         storedPrice: latestPrice?.price,
@@ -139,7 +145,7 @@ export const validateCachedConfig = internalAction({
 
             // Mark old part as superseded
             await ctx.runMutation(
-              internal.vehicleEnrichment.cacheValidation.markPartSuperseded,
+              internal.vehicleEnrichment.cacheValidation._markPartSupersededMut,
               {
                 part_id: part.partId as any,
                 superseded_by: candidate,
@@ -185,7 +191,7 @@ export const validateCachedConfig = internalAction({
             `[validate] PRICE CHANGE: ${part.partNumber} $${part.storedPrice.toFixed(2)} → $${closest.toFixed(2)} (${part.sourceDomain})`,
           );
           await ctx.runMutation(
-            internal.vehicleEnrichment.cacheValidation.updatePartPrice,
+            internal.vehicleEnrichment.cacheValidation._updatePartPriceMut,
             {
               part_id: part.partId as any,
               source_domain: part.sourceDomain!,
@@ -197,7 +203,7 @@ export const validateCachedConfig = internalAction({
           // Price is close enough — just refresh the timestamp
           if (part.priceId) {
             await ctx.runMutation(
-              internal.vehicleEnrichment.cacheValidation.refreshPriceTimestamp,
+              internal.vehicleEnrichment.cacheValidation._refreshPriceTimestampMut,
               { price_id: part.priceId as any },
             );
           }
@@ -229,7 +235,7 @@ export const validateCachedConfig = internalAction({
       internal.vehicleEnrichment.v3queries.getTrimSpecs,
       { vehicleConfigId: args.vehicle_config_id },
     );
-    specChecks[1].storedValue = trimSpecs?.tire_size_front ?? trimSpecs?.front_tire_size ?? null;
+    specChecks[1].storedValue = trimSpecs?.tire_size_front ?? null;
 
     for (const check of specChecks) {
       if (!check.storedValue) continue;

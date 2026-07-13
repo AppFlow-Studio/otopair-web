@@ -1,3 +1,12 @@
+RESOLVED Jul 13 2026 — all 50 errors fixed (guards, dead-field removals,
+and three real bug fixes: diagnoseVin's dead getVehicleConfig refs,
+payments_stripe reading nonexistent shop.address_state/zip so booking tax
+never saw the shop's state, vehicle_pipeline's phantom engine fields).
+convex/ is at ZERO type errors; `npx convex dev` typechecks clean again —
+the --typecheck=disable workaround is no longer needed.
+
+Original inventory kept below for the record:
+
      10 convex/vehicle_pipeline.ts
       9 convex/vehicleEnrichment/pipelineTest.ts
       6 convex/vehicleEnrichment/cacheValidation.ts

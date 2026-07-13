@@ -5,6 +5,7 @@
 
 import { internalAction, internalMutation } from "../_generated/server";
 import { internal, api } from "../_generated/api";
+import type { Doc } from "../_generated/dataModel";
 
 // ═══ CHANGE THIS ═══
 const VIN = "JTMCB3FV4ND089342";
@@ -29,7 +30,7 @@ export const go = internalAction({
     if (!user) {
       console.log("[test] User not in DB — creating from Clerk ID...");
       const userId = await ctx.runMutation(internal.vehicleEnrichment.runTest._createTestUser, {});
-      user = { _id: userId } as any;
+      user = { _id: userId } as Doc<"users">;
     }
 
     const decoded = await ctx.runAction(internal.vehicle_pipeline.processVin, { vin });

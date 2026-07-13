@@ -476,6 +476,7 @@ export default function ApiSandboxPage() {
           </div>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
+          <span className={`${PILL} bg-white/10 text-slate-200`}>GET /v0/vehicle?vin=…|year=&make=&model=…|config_key=…</span>
           <span className={`${PILL} bg-white/10 text-slate-200`}>GET /v0/maintenance?config_key=…|vin=…</span>
           <span className={`${PILL} bg-white/10 text-slate-200`}>GET /v0/labor?config_key=…|vin=…[&service=…]</span>
           <span className={`${PILL} bg-white/10 text-slate-200`}>Authorization: Bearer otp_live_…</span>

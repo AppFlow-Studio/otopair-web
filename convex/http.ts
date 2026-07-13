@@ -819,7 +819,63 @@ http.route({
   ),
 });
 
-for (const path of ["/v0/maintenance", "/v0/labor"]) {
+// The flagship endpoint: everything we hold on one vehicle. Accepts
+// config_key, vin, OR year+make+model[+trim] — YMMT resolves against the
+// config_key prefix and returns a multiple_matches disambiguation (409) when
+// more than one config fits.
+http.route({
+  path: "/v0/vehicle",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v0/vehicle", "maintenance:read", async (params) => {
+      const config_key = params.get("config_key") ?? undefined;
+      const vin = params.get("vin") ?? undefined;
+      const yearRaw = params.get("year");
+      const year = yearRaw ? Number(yearRaw) : undefined;
+      const make = params.get("make") ?? undefined;
+      const model = params.get("model") ?? undefined;
+      const trim = params.get("trim") ?? undefined;
+      const hasYmmt = year !== undefined && !Number.isNaN(year) && make && model;
+      if (!config_key && !vin && !hasYmmt) {
+        return {
+          status: 400,
+          body: {
+            error: "missing_param",
+            message: "Pass ?vin=… OR ?year=&make=&model=[&trim=] OR ?config_key=…",
+          },
+        };
+      }
+      const data = await ctx.runQuery(internal.dataApi.assembleVehicle, {
+        config_key,
+        vin,
+        year: hasYmmt ? year : undefined,
+        make,
+        model,
+        trim,
+      });
+      if (!data) {
+        return {
+          status: 404,
+          body: { error: "not_found", message: "No enriched vehicle matches that identifier." },
+          config_key,
+        };
+      }
+      if (data.object === "multiple_matches") {
+        return {
+          status: 409,
+          body: {
+            error: "multiple_matches",
+            message: "More than one config matches — retry with ?config_key= from the list (or add &trim=).",
+            matches: data.matches,
+          },
+        };
+      }
+      return { status: 200, body: data, config_key: data.config.config_key ?? config_key };
+    }),
+  ),
+});
+
+for (const path of ["/v0/maintenance", "/v0/labor", "/v0/vehicle"]) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => corsOptions()) });
 }
 

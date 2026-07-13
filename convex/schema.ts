@@ -2394,6 +2394,7 @@ export default defineSchema({
     .index("by_created_at", ["created_at"])
     .index("by_source_recommendation", ["source_recommendation_id"])
     .index("by_payment_approval_state", ["payment_approval_state"])
+    .index("by_vin", ["vin"])
     .index("by_sla_expires_at", ["sla_expires_at_ms"]),
 
   // Tire quote responses — one row per shop response to a quote-stage

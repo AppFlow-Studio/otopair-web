@@ -89,6 +89,10 @@ const SANITY_RULES: SanityRule[] = [
     reason: "Brake pad guidance outside typical range (15K-80K miles)" },
   { field: "tire_rotation_miles", type: "range", min: 3000, max: 10000, severity: "flag",
     reason: "Tire rotation interval outside typical range (3K-10K miles)" },
+  { field: "serpentine_belt_miles", type: "range", min: 30000, max: 150000, severity: "flag",
+    reason: "Serpentine belt interval outside typical range (30K-150K miles)" },
+  { field: "ps_fluid_miles", type: "range", min: 20000, max: 150000, severity: "flag",
+    reason: "Power steering flush interval outside typical range (20K-150K miles)" },
 
   // ── Intervals (months) ──
   { field: "oil_change_months", type: "range", min: 3, max: 24, severity: "flag",

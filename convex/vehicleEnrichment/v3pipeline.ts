@@ -841,9 +841,11 @@ const INTERVAL_TO_SERVICE: Record<string, string> = {
   air_filter: "filter_replacement",
   cabin_filter: "filter_replacement",
   brake_fluid_flush: "brake_fluid_flush",
+  serpentine_belt: "serpentine_belt",
   timing_service: "timing_belt",
   diff_fluid: "differential_service",
   transfer_case_fluid: "differential_service",
+  ps_fluid: "power_steering_flush",
   // Wear/rotation guidance (2026-07): brake pads are wear-based — the value
   // is the manufacturer's INSPECTION/typical-life guidance, not a hard
   // replacement schedule. adversarialVerification bounds both.

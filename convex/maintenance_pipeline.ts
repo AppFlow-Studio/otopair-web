@@ -43,6 +43,7 @@ import {
   type QuickReadFlags,
 } from "./lib/intervals";
 import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
+import { canonicalWarningLights } from "../lib/warningLightVocab";
 
 // ============================================================================
 // INTERNAL QUERIES
@@ -921,18 +922,15 @@ const LIGHT_PENALTY: Record<string, number> = {
   not_sure_which: 6,
 };
 
+// Kept in lockstep with utils/healthScore.ts:warningLightPenalty — reads via
+// canonicalWarningLights so the server-persisted pipeline score reacts to a
+// warning light logged in EITHER knownIssues shape and EITHER vocabulary. The
+// old knownIssues[0]-as-sentinel logic scored the flat/symptom-vocab arrays that
+// Oto and the check-in actually write at zero.
 function warningLightPenalty(knownIssues?: string[]): number {
-  if (!knownIssues || knownIssues.length === 0) return 0;
-
-  const status = knownIssues[0];
-  if (status === "no_all_clear") return 0;
-  if (status === "not_sure") return 5;
-  if (status === "check_engine") return LIGHT_PENALTY.check_engine;
-
-  // "other" / "different_light" — sum individual penalties (capped)
   let penalty = 0;
-  for (let i = 1; i < knownIssues.length; i++) {
-    penalty += LIGHT_PENALTY[knownIssues[i]] ?? 6;
+  for (const light of canonicalWarningLights(knownIssues)) {
+    penalty += LIGHT_PENALTY[light] ?? 6;
   }
   return Math.min(penalty, 25);
 }

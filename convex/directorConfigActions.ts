@@ -19,6 +19,7 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireDirector } from "./directorGate";
+import { writeMechanicVerifiedFitment } from "./fitments";
 
 /** Director session token arg — localStorage `otopair_director_token`. */
 const tokenArg = {
@@ -324,5 +325,69 @@ export const markConfigVerified = mutation({
       created_at:  now,
     });
     return { ok: true as const, verifications: (cfg.verification_count ?? 0) + 1 };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// addConfigFitment — director inputs a missing OEM part for a gap service so
+// that service becomes available on this config (e.g. the 2001 740iA battery
+// dropped by OEM-strict enrichment). Writes a mechanic_verified fitment and
+// clears any "not applicable" exclusion.
+// ---------------------------------------------------------------------------
+
+export const addConfigFitment = mutation({
+  args: {
+    vehicleConfigId: v.id("vehicle_configs"),
+    serviceSlug: v.string(),
+    roleKey: v.string(),
+    oemNumber: v.string(),
+    partName: v.optional(v.string()),
+    quantityNeeded: v.optional(v.number()),
+    position: v.optional(v.string()),
+    ...tokenArg,
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireDirector(ctx, args.token);
+    const config = await ctx.db.get(args.vehicleConfigId);
+    if (!config) return { ok: false as const, reason: "config_not_found" };
+
+    const serviceType = args.serviceSlug.replace(/-/g, "_");
+    const now = Date.now();
+
+    const { partId } = await writeMechanicVerifiedFitment(ctx, {
+      configId: args.vehicleConfigId,
+      configMakeId: (config as any).make_id ?? null,
+      serviceType,
+      roleKey: args.roleKey,
+      mode: "freehand",
+      oemNumber: args.oemNumber,
+      partName: args.partName,
+      quantityNeeded: args.quantityNeeded,
+      position: args.position,
+      now,
+    });
+
+    // Re-adding a part supersedes any "not applicable" mark.
+    const exclusions = await ctx.db
+      .query("config_service_exclusions")
+      .withIndex("by_config_service", (q) =>
+        q
+          .eq("vehicle_config_id", args.vehicleConfigId)
+          .eq("service_slug", serviceType),
+      )
+      .collect();
+    for (const e of exclusions) await ctx.db.delete(e._id);
+
+    await ctx.db.insert("audit_log", {
+      entity_type: "vehicle_config",
+      entity_id: String(args.vehicleConfigId),
+      action: "status_change",
+      actor: actor.name,
+      actor_id: actor.userId,
+      detail: `Added ${serviceType} part ${args.oemNumber} (${args.roleKey})`,
+      created_at: now,
+    });
+
+    return { ok: true as const, partId };
   },
 });

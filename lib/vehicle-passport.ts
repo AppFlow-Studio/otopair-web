@@ -1,3 +1,5 @@
+import type { AffectedSystem } from "./vehicle-mod-systems";
+
 export const TIRE_CONDITIONS = ["good", "fair", "replace_soon"] as const;
 export type TireCondition = (typeof TIRE_CONDITIONS)[number];
 
@@ -14,12 +16,6 @@ export const INSPECTION_STATUSES = [
   "not_visible",
 ] as const;
 export type InspectionStatus = (typeof INSPECTION_STATUSES)[number];
-
-export const MODIFICATION_STATUSES = [
-  "none_observed",
-  "aftermarket_observed",
-] as const;
-export type ModificationStatus = (typeof MODIFICATION_STATUSES)[number];
 
 export const FILTER_STATUSES = [
   "not_checked",
@@ -90,8 +86,9 @@ export type VehiclePassportInspection = {
 };
 
 export type VehiclePassportModifications = {
-  status?: ModificationStatus | null;
+  has_mods: boolean;
   notes?: string | null;
+  affected_systems: AffectedSystem[];
 };
 
 export type PreJobFilterChecks = {
@@ -374,12 +371,6 @@ export function inspectionStatusLabel(value?: InspectionStatus | null) {
   if (value === "current") return "Current";
   if (value === "not_current") return "Not current";
   if (value === "not_visible") return "Not visible";
-  return "Unknown";
-}
-
-export function modificationStatusLabel(value?: ModificationStatus | null) {
-  if (value === "aftermarket_observed") return "Aftermarket observed";
-  if (value === "none_observed") return "None observed";
   return "Unknown";
 }
 

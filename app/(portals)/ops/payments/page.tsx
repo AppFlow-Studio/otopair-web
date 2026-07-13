@@ -6,6 +6,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "@/app/(portals)/portal-session";
 
@@ -72,7 +73,7 @@ export default function OpsPaymentsPage() {
   const data = useQuery(api.opsPayments.list, {
     token,
     ...(status ? { status } : {}),
-  });
+  }) as FunctionReturnType<typeof api.opsPayments.list> | undefined;
 
   // Pills: statuses seen in the live window, plus "failed" always surfaced.
   const liveStatuses = data

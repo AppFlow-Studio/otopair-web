@@ -174,6 +174,11 @@ export const triggerReEnrich = mutation({
 
 // ─── Trigger: Fix prices (per-VIN parts-price backfill) ─────────────────────
 
+// How many unpriced parts one trigger may price (Firecrawl spend ceiling).
+// Explicit here because the director ceremony IS the deliberate-spend gate —
+// it overrides the PARTS_PRICE_BACKFILL_BUDGET=0 env default on purpose.
+const FIX_PRICES_PART_BUDGET = 12;
+
 export const triggerFixPrices = mutation({
   args: { token: v.string(), reason: v.string(), vin: v.string() },
   handler: async (ctx, args) => {
@@ -182,19 +187,38 @@ export const triggerFixPrices = mutation({
     const vin = cleanVin(args.vin);
     await enforceCooldown(ctx, "fix_prices", vin);
 
-    // RECORD-ONLY: the existing backfill
-    // (internal.vehicleEnrichment.backfills.backfillPartPrices) is a fleet
-    // cursor walker with a dry-run env kill-switch — it has no per-VIN entry
-    // point, so scheduling it from here would reprice the whole catalog, not
-    // this VIN. The trigger is recorded (audit + cooldown) so the intent and
-    // rate-limit exist; the per-VIN wiring is a pipeline-team follow-up.
+    // Resolve VIN → vehicle_config via vehicles.by_vin. Without a config
+    // there is nothing to price against — re-enrich decodes first.
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", vin))
+      .first();
+    const configId = vehicle?.vehicle_config_id;
+    if (!configId) {
+      throw new Error(
+        `${vin} has no decoded vehicle_config yet — run re-enrich first, then fix-prices.`,
+      );
+    }
+
+    // Targeted leg of the existing nightly refresher: prices this config's
+    // UNPRICED parts via known-URL / discovery machinery (priceRefresh.ts),
+    // bounded self-rechaining. budget:0 skips the fleet-wide stale sweep.
+    // Note: parts that already have (stale) price rows are refreshed by the
+    // nightly stale sweep, not this trigger.
+    await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.priceRefresh.refreshStalePrices, {
+      vehicleConfigId: configId,
+      budget: 0,
+      backfillBudget: FIX_PRICES_PART_BUDGET,
+      maxChainDepth: 2,
+    });
+
     await logAudit(ctx, actor, {
       entity_type: "vin_trigger:fix_prices",
       entity_id: vin,
       action: "trigger_fix_prices",
-      detail: `${reason} — RECORDED ONLY: no per-VIN price-backfill internal function exists yet (backfillPartPrices is fleet-wide)`,
+      detail: `${reason} — scheduled targeted price backfill for config ${String(configId)} (budget ${FIX_PRICES_PART_BUDGET} parts)`,
     });
-    return { scheduled: false, recordedOnly: true };
+    return { scheduled: true, configId: String(configId) };
   },
 });
 

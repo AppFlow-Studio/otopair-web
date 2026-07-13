@@ -9,6 +9,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "@/app/(portals)/portal-session";
 
@@ -53,7 +54,8 @@ function FillRing({ pct }: { pct: number | null }) {
 
 export default function VehicleCatalogPage() {
   const { token } = usePortalSession();
-  const data = useQuery(api.dataCatalog.listConfigs, { token });
+  const data: FunctionReturnType<typeof api.dataCatalog.listConfigs> | undefined =
+    useQuery(api.dataCatalog.listConfigs, { token });
   const stats = useQuery(api.portalStats.getStats, {
     token,
     keys: ["data.vehicle_configs_total"],

@@ -8,6 +8,7 @@
 
 import { Component, useState, type ReactNode } from "react";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession, useCan } from "../../portal-session";
 import { Ceremony } from "@/components/portal/Ceremony";
@@ -101,7 +102,7 @@ type RunRow = {
 
 function RunsPanel({ token }: { token: string }) {
   const [filter, setFilter] = useState<string>("all");
-  const runs = useQuery(listRunsRef, {
+  const runs: FunctionReturnType<typeof listRunsRef> | undefined = useQuery(listRunsRef, {
     token,
     status: filter === "all" ? undefined : filter,
   });

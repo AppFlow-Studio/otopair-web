@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { Command } from "cmdk";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "@/app/(portals)/portal-session";
 
@@ -35,7 +36,7 @@ export function CommandK({
   const results = useQuery(
     api.portalSearch.search,
     open && debounced.trim().length >= 2 ? { token, q: debounced } : "skip",
-  );
+  ) as FunctionReturnType<typeof api.portalSearch.search> | undefined;
 
   const go = (href: string) => {
     onOpenChange(false);

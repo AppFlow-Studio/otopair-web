@@ -233,7 +233,8 @@ function ProfileTab({ profile }: { profile: Profile }) {
 // ---------------------------------------------------------------------------
 function GarageTab({ userId }: { userId: Id<"users"> }) {
   const { token } = usePortalSession();
-  const rows = useQuery(api.opsUsers.garage, { token, id: userId });
+  const rows: FunctionReturnType<typeof api.opsUsers.garage> | undefined =
+    useQuery(api.opsUsers.garage, { token, id: userId });
 
   if (rows === undefined) return <div className="py-10 text-center text-sm text-slate-400">Loading garage…</div>;
   if (rows.length === 0) {
@@ -309,7 +310,8 @@ function GarageTab({ userId }: { userId: Id<"users"> }) {
 // ---------------------------------------------------------------------------
 function BookingsTab({ userId }: { userId: Id<"users"> }) {
   const { token } = usePortalSession();
-  const rows = useQuery(api.opsUsers.bookings, { token, id: userId });
+  const rows: FunctionReturnType<typeof api.opsUsers.bookings> | undefined =
+    useQuery(api.opsUsers.bookings, { token, id: userId });
 
   if (rows === undefined) return <div className="py-10 text-center text-sm text-slate-400">Loading bookings…</div>;
 
@@ -358,7 +360,8 @@ function BookingsTab({ userId }: { userId: Id<"users"> }) {
 // ---------------------------------------------------------------------------
 function MoneyTab({ userId }: { userId: Id<"users"> }) {
   const { token } = usePortalSession();
-  const data = useQuery(api.opsUsers.money, { token, id: userId });
+  const data: FunctionReturnType<typeof api.opsUsers.money> | undefined =
+    useQuery(api.opsUsers.money, { token, id: userId });
 
   if (data === undefined) return <div className="py-10 text-center text-sm text-slate-400">Loading money…</div>;
 

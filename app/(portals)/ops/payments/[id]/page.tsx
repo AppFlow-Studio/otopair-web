@@ -8,6 +8,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession } from "@/app/(portals)/portal-session";
@@ -89,7 +90,9 @@ export default function OpsPaymentDetailPage() {
   const id = params?.id as Id<"payments"> | undefined;
   const [auditOpen, setAuditOpen] = useState(false);
 
-  const data = useQuery(api.opsPayments.detail, id ? { token, id } : "skip");
+  const data = useQuery(api.opsPayments.detail, id ? { token, id } : "skip") as
+    | FunctionReturnType<typeof api.opsPayments.detail>
+    | undefined;
 
   if (!id || data === undefined) {
     return <div className="py-10 text-center text-sm text-slate-400">Loading payment…</div>;

@@ -13,6 +13,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession } from "@/app/(portals)/portal-session";
@@ -108,14 +109,16 @@ export default function ConfigWorkspacePage() {
   const configId = params.id as Id<"vehicle_configs">;
   const { token } = usePortalSession();
 
-  const ws = useQuery(api.dataCatalog.configWorkspace, { token, id: configId });
+  const ws: FunctionReturnType<typeof api.dataCatalog.configWorkspace> | undefined =
+    useQuery(api.dataCatalog.configWorkspace, { token, id: configId });
   const [selectedField, setSelectedField] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
 
-  const evidence = useQuery(
-    api.dataCatalog.fieldEvidence,
-    selectedField ? { token, configId, fieldName: selectedField } : "skip",
-  );
+  const evidence: FunctionReturnType<typeof api.dataCatalog.fieldEvidence> | undefined =
+    useQuery(
+      api.dataCatalog.fieldEvidence,
+      selectedField ? { token, configId, fieldName: selectedField } : "skip",
+    );
 
   if (ws === undefined) {
     return (

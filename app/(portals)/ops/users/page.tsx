@@ -7,6 +7,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "@/app/(portals)/portal-session";
 
@@ -26,7 +27,8 @@ function OnboardingPill({ state }: { state: string }) {
 export default function OpsUsersPage() {
   const { token } = usePortalSession();
   const router = useRouter();
-  const users = useQuery(api.opsUsers.list, { token });
+  const users: FunctionReturnType<typeof api.opsUsers.list> | undefined =
+    useQuery(api.opsUsers.list, { token });
 
   const [search, setSearch] = useState("");
   const [pendingOnly, setPendingOnly] = useState(false);

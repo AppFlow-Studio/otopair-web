@@ -6,6 +6,7 @@
 // Lifetime aggregates read from portal_stats; attention list is a live window.
 
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "../portal-session";
 
@@ -226,8 +227,10 @@ export default function DataOverviewPage() {
       "data.vin_queue_total",
     ],
   });
-  const ageHistogram = useQuery(api.vinQueueQueries.pendingAgeHistogram, { token });
-  const attention = useQuery(api.dataOverview.attention, { token });
+  const ageHistogram: FunctionReturnType<typeof api.vinQueueQueries.pendingAgeHistogram> | undefined =
+    useQuery(api.vinQueueQueries.pendingAgeHistogram, { token });
+  const attention: FunctionReturnType<typeof api.dataOverview.attention> | undefined =
+    useQuery(api.dataOverview.attention, { token });
 
   const stat = (key: string): StatRow | undefined =>
     stats === undefined ? undefined : (stats[key] ?? null);

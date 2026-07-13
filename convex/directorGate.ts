@@ -22,9 +22,6 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
 export type DirectorRole =
-  | "superadmin"
-  | "admin"
-  | "viewer"
   | "super_admin"
   | "ops_admin"
   | "support"
@@ -41,7 +38,8 @@ export type Capability =
   | "admin.manage"
   | "ai.write";
 
-/** Legacy → portal role mapping (mirrored in migrations/directorRoles.ts). */
+/** Legacy → portal role mapping. Only migrations/directorRoles.ts should
+ *  need this — the schema validator no longer admits the legacy names. */
 export const LEGACY_ROLE_MAP: Record<string, DirectorRole> = {
   superadmin: "super_admin",
   admin: "ops_admin",
@@ -67,10 +65,6 @@ export const CAPABILITIES: Record<DirectorRole, readonly Capability[]> = {
   readonly: [],
   data_admin: ["data.write", "data.trigger", "ai.write"],
   shop_success: ["shops.write"],
-  // Legacy names behave as their mapped role until the migration lands.
-  superadmin: ALL,
-  admin: ["users.write", "money.write", "shops.write", "ai.write"],
-  viewer: [],
 };
 
 export function roleHasCapability(role: DirectorRole, capability: Capability): boolean {

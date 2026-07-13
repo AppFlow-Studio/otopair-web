@@ -16,6 +16,89 @@ import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
 import type { Doc, Id } from "./_generated/dataModel";
 
+// --- Authored return types -----------------------------------------------------
+// Explicit handler return types are load-bearing (see convex/backfillTires.ts
+// _listCandidates): without them TS must infer each handler while resolving the
+// whole ApiFromModules barrel, which exhausts the checker's instantiation budget
+// and silently degrades api.* types to `any` in consumer files.
+
+export type CatalogConfigRow = {
+  id: Id<"vehicle_configs">;
+  year: number;
+  make: string;
+  model: string;
+  trim_name: string | null;
+  engine_label: string | null;
+  drivetrain: string | null;
+  fill_rate: number | null;
+  confidence_avg: number | null;
+  enrichment_status: string | null;
+  verification_count: number;
+  last_enriched_at: number | null;
+};
+export type ListConfigsResult = { rows: CatalogConfigRow[]; truncated: boolean };
+
+export type WorkspaceSpecField = {
+  field_name: string;
+  label: string;
+  value: string | null;
+  entity_type: string;
+  group: string;
+};
+export type WorkspaceRun = {
+  id: Id<"enrichment_runs">;
+  status: string;
+  trigger: string | null;
+  version: string | null;
+  fill_rate: number | null;
+  applicable_fill_rate: number | null;
+  fields_filled: number | null;
+  fields_total: number | null;
+  estimated_cost_usd: number | null;
+  started_at: number;
+  completed_at: number | null;
+  error_count: number;
+};
+export type ConfigWorkspaceResult = {
+  id: Id<"vehicle_configs">;
+  year: number;
+  make: string;
+  model: string;
+  trim_name: string | null;
+  chassis_code: string | null;
+  engine_label: string | null;
+  engine_id: Id<"engines"> | null;
+  transmission_id: Id<"transmissions"> | null;
+  enrichment_status: string | null;
+  fill_rate: number | null;
+  confidence_avg: number | null;
+  verification_count: number;
+  last_enriched_at: number | null;
+  last_verified_at: number | null;
+  enrichment_version: string | null;
+  pricing_tier: string | null;
+  fields: WorkspaceSpecField[];
+  runs: WorkspaceRun[];
+};
+
+export type FieldEvidenceRow = {
+  id: Id<"enrichment_evidence">;
+  observed_value: string | null;
+  source_domain: string | null;
+  source_url: string | null;
+  source_type: string | null;
+  confidence: number | null;
+  is_latest: boolean;
+  observed_at: number;
+  enrichment_run_id: Id<"enrichment_runs"> | null;
+};
+export type FieldEvidenceResult = {
+  entity_type_used: string;
+  entity_id_used: string;
+  canonical: boolean;
+  rows: FieldEvidenceRow[];
+};
+
 // --- Field → evidence entity_type mapping (copy of the writer's getEntityType
 //     in vehicleEnrichment/v3pipeline.ts — kept in sync manually; the writer is
 //     internal and this module must not import pipeline code). -----------------
@@ -53,7 +136,7 @@ function evidenceEntityType(fieldName: string): string {
 
 export const listConfigs = query({
   args: { token: v.string() },
-  handler: async (ctx, { token }) => {
+  handler: async (ctx, { token }): Promise<ListConfigsResult> => {
     await requireDirector(ctx, token);
     // 384 rows measured at build time — hard-capped window, not an unbounded collect.
     const configs = await ctx.db.query("vehicle_configs").take(500);
@@ -62,7 +145,7 @@ export const listConfigs = query({
     const modelNames = new Map<string, string>();
     const engineLabels = new Map<string, string>();
 
-    const rows = [];
+    const rows: CatalogConfigRow[] = [];
     for (const c of configs) {
       let make = makeNames.get(c.make_id);
       if (make === undefined) {
@@ -122,7 +205,7 @@ function formatEngineLabel(e: Doc<"engines">): string {
  *  exact evidence trail via by_entity_field. */
 export const configWorkspace = query({
   args: { token: v.string(), id: v.id("vehicle_configs") },
-  handler: async (ctx, { token, id }) => {
+  handler: async (ctx, { token, id }): Promise<ConfigWorkspaceResult | null> => {
     await requireDirector(ctx, token);
     const c = await ctx.db.get(id);
     if (!c) return null;
@@ -235,7 +318,7 @@ export const fieldEvidence = query({
     configId: v.id("vehicle_configs"),
     fieldName: v.string(),
   },
-  handler: async (ctx, { token, configId, fieldName }) => {
+  handler: async (ctx, { token, configId, fieldName }): Promise<FieldEvidenceResult | null> => {
     await requireDirector(ctx, token);
     const c = await ctx.db.get(configId);
     if (!c) return null;

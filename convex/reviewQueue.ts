@@ -154,6 +154,27 @@ async function backfillCorrectionsImpl(ctx: MutationCtx) {
     )
       inserted++;
   }
+
+  // Service-applicability exclusions (pre-job fill-in flow, Jul 2026): a
+  // mechanic asserted a parts-requiring service does NOT apply to this config
+  // (e.g. sealed transmission → no filter). These silently change quote
+  // behavior for every future car of the config, so each one gets a review
+  // item. (The flow's part CONFIRMATIONS already arrive via the pending
+  // mechanic_verifications leg above.)
+  const exclusions = await ctx.db.query("config_service_exclusions").collect();
+  for (const x of exclusions) {
+    if (
+      await insertIfNew(ctx, {
+        source_stream: "correction",
+        source_id: String(x._id),
+        entity_type: "vehicle_config",
+        entity_id: String(x.vehicle_config_id),
+        title: `Service excluded for config: ${x.service_slug}${x.role_key ? ` (${x.role_key})` : ""}${x.reason ? ` — ${x.reason.slice(0, 60)}` : ""}`,
+        priority: "high", // quote-behavior change; verify before it compounds
+      })
+    )
+      inserted++;
+  }
   return inserted;
 }
 async function backfillReportsImpl(ctx: MutationCtx) {

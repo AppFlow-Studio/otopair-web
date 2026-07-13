@@ -9,6 +9,35 @@ import { requireDirector } from "./directorGate";
 const HOUR = 60 * 60 * 1000;
 const STREAMS = ["consensus", "correction", "report", "survey"] as const;
 
+// --- Authored return types -----------------------------------------------------
+// Explicit handler return types are load-bearing (see convex/backfillTires.ts
+// _listCandidates): without them TS must infer each handler while resolving the
+// whole ApiFromModules barrel, which exhausts the checker's instantiation budget
+// and silently degrades api.* types to `any` in consumer files.
+
+export type FailedRunRow = {
+  id: string;
+  vehicle_config_id: string;
+  trigger: string | null;
+  first_error: string | null;
+  error_count: number;
+  cost_usd: number | null;
+  at: number;
+};
+export type StaleReviewRow = {
+  id: string;
+  title: string;
+  stream: string;
+  priority: string;
+  age_h: number;
+};
+export type AttentionResult = {
+  failed_runs_24h: FailedRunRow[];
+  failed_runs_24h_total: number;
+  stale_open_reviews: StaleReviewRow[];
+  open_by_stream: { consensus: number; correction: number; report: number; survey: number };
+};
+
 /**
  * Everything the overview's "needs attention" panel shows:
  *  - enrichment runs that failed in the last 24h (by_created_at window),
@@ -17,7 +46,7 @@ const STREAMS = ["consensus", "correction", "report", "survey"] as const;
  */
 export const attention = query({
   args: { token: v.string() },
-  handler: async (ctx, { token }) => {
+  handler: async (ctx, { token }): Promise<AttentionResult> => {
     await requireDirector(ctx, token);
     const now = Date.now();
 

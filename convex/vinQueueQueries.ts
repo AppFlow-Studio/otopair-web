@@ -7,8 +7,21 @@
 // =============================================================================
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
+import type { PaginationResult } from "convex/server";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
+import type { Doc } from "./_generated/dataModel";
+
+// --- Authored return types -----------------------------------------------------
+// Explicit handler return types are load-bearing (see convex/backfillTires.ts
+// _listCandidates): without them TS must infer each handler while resolving the
+// whole ApiFromModules barrel, which exhausts the checker's instantiation budget
+// and silently degrades api.* types to `any` in consumer files.
+
+export type PendingAgeHistogram = {
+  total: number;
+  buckets: { "1d": number; "7d": number; "30d": number; older: number };
+};
 
 export const listByStatus = query({
   args: {
@@ -16,7 +29,7 @@ export const listByStatus = query({
     status: v.string(),
     paginationOpts: paginationOptsValidator,
   },
-  handler: async (ctx, { token, status, paginationOpts }) => {
+  handler: async (ctx, { token, status, paginationOpts }): Promise<PaginationResult<Doc<"vin_queue">>> => {
     await requireDirector(ctx, token);
     return ctx.db
       .query("vin_queue")
@@ -28,7 +41,7 @@ export const listByStatus = query({
 
 export const byVin = query({
   args: { token: v.string(), vin: v.string() },
-  handler: async (ctx, { token, vin }) => {
+  handler: async (ctx, { token, vin }): Promise<Doc<"vin_queue"> | null> => {
     await requireDirector(ctx, token);
     return ctx.db
       .query("vin_queue")
@@ -41,7 +54,7 @@ export const byVin = query({
  *  reads pending rows only (505 measured). */
 export const pendingAgeHistogram = query({
   args: { token: v.string() },
-  handler: async (ctx, { token }) => {
+  handler: async (ctx, { token }): Promise<PendingAgeHistogram> => {
     await requireDirector(ctx, token);
     const pending = await ctx.db
       .query("vin_queue")

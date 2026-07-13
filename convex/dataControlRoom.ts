@@ -17,7 +17,30 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { requireDirector, logAudit } from "./directorGate";
+
+// Authored return type — load-bearing (see convex/backfillTires.ts
+// _listCandidates): without it TS must infer the handler while resolving the
+// whole ApiFromModules barrel, which exhausts the checker's instantiation
+// budget and silently degrades api.* types to `any` in consumer files.
+export type ControlRoomRunRow = {
+  id: Id<"enrichment_runs">;
+  configId: Id<"vehicle_configs">;
+  configLabel: string;
+  status: string;
+  trigger: string | null;
+  applicableFillRate: number | null;
+  fillRate: number | null;
+  fieldsFilled: number | null;
+  fieldsTotal: number | null;
+  costUsd: number | null;
+  durationMs: number | null;
+  sanityFlagCount: number;
+  errorCount: number;
+  cacheHit: boolean;
+  createdAt: number;
+};
 
 const RUNS_WINDOW = 50;
 const COOLDOWN_MS = 30 * 60 * 1000; // 30 min per (vin, trigger)
@@ -26,7 +49,7 @@ const COOLDOWN_MS = 30 * 60 * 1000; // 30 min per (vin, trigger)
 
 export const listRuns = query({
   args: { token: v.string(), status: v.optional(v.string()) },
-  handler: async (ctx, { token, status }) => {
+  handler: async (ctx, { token, status }): Promise<ControlRoomRunRow[]> => {
     await requireDirector(ctx, token);
 
     const runs = status
@@ -47,7 +70,7 @@ export const listRuns = query({
     const modelNames = new Map<string, string>();
     const configLabels = new Map<string, string>();
 
-    const rows = [];
+    const rows: ControlRoomRunRow[] = [];
     for (const run of runs) {
       const cfgKey = run.vehicle_config_id as unknown as string;
       let label = configLabels.get(cfgKey);

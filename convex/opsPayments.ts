@@ -12,7 +12,95 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+
+// --- Authored return types -----------------------------------------------------
+// Explicit handler return types are load-bearing (see convex/backfillTires.ts
+// _listCandidates): without them TS must infer each handler while resolving the
+// whole ApiFromModules barrel, which exhausts the checker's instantiation budget
+// and silently degrades api.* types to `any` in consumer files.
+
+export type OpsPaymentListItem = {
+  id: Id<"payments">;
+  createdAt: number | undefined;
+  amount: number;
+  capturedAmountCents: number | undefined;
+  status: string;
+  paymentMethod: string | undefined;
+  paymentOrigin: string | undefined;
+  stripePaymentIntentId: string | undefined;
+  userId: Id<"users">;
+  userName: string;
+  shopId: Id<"shops">;
+  shopName: string;
+  bookingId: Id<"bookings">;
+  bookingStatus: string | undefined;
+  backfilled: boolean;
+};
+export type OpsPaymentsListResult = {
+  items: OpsPaymentListItem[];
+  statusCounts: Record<string, number>;
+  windowSize: number;
+};
+
+export type OpsPaymentDetail = {
+  payment: {
+    id: Id<"payments">;
+    createdAt: number | undefined;
+    updatedAt: number | undefined;
+    amount: number;
+    status: string;
+    paymentMethod: string | undefined;
+    paymentOrigin: string | undefined;
+    transactionId: string | undefined;
+    stripePaymentIntentId: string | undefined;
+    reauthPaymentIntentId: string | undefined;
+    idempotencyKey: string | undefined;
+    holdAmountCents: number | undefined;
+    incrementedTotalCents: number | undefined;
+    capturedAmountCents: number | undefined;
+    invoiceNumber: string | undefined;
+    invoiceGeneratedAtMs: number | undefined;
+    invoiceEmailedAtMs: number | undefined;
+    invoiceQuoteFlags: string[] | undefined;
+    backfilledAtMs: number | undefined;
+  };
+  user: { id: Id<"users">; name: string; email: string | undefined } | null;
+  shop: { id: Id<"shops">; name: string } | null;
+  booking: {
+    id: Id<"bookings">;
+    status: string;
+    scheduledDate: string | undefined;
+    totalCost: number | undefined;
+  } | null;
+  history: {
+    id: Id<"payment_status_history">;
+    oldStatus: string | undefined;
+    newStatus: string;
+    errorCode: string | undefined;
+    errorMessage: string | undefined;
+    changedAt: number;
+  }[];
+  transactions: {
+    id: Id<"transactions">;
+    createdAt: number;
+    description: string;
+    subDescription: string | undefined;
+    amount: number;
+    status: string;
+    type: string;
+  }[];
+  disputes: {
+    id: Id<"payment_disputes">;
+    stripeDisputeId: string;
+    amountCents: number;
+    reason: string | undefined;
+    status: string;
+    openedAtMs: number;
+    closedAtMs: number | undefined;
+    evidenceDueByMs: number | undefined;
+  }[];
+};
 
 function personName(user: Doc<"users"> | null): string {
   if (!user) return "Unknown";
@@ -33,7 +121,7 @@ export const list = query({
     status: v.optional(v.string()),
     limit: v.optional(v.number()),
   },
-  handler: async (ctx, { token, status, limit }) => {
+  handler: async (ctx, { token, status, limit }): Promise<OpsPaymentsListResult> => {
     await requireDirector(ctx, token);
     const take = Math.min(limit ?? 100, 200);
 
@@ -95,7 +183,7 @@ export const list = query({
 // ---------------------------------------------------------------------------
 export const detail = query({
   args: { token: v.string(), id: v.id("payments") },
-  handler: async (ctx, { token, id }) => {
+  handler: async (ctx, { token, id }): Promise<OpsPaymentDetail | null> => {
     await requireDirector(ctx, token);
 
     const p = await ctx.db.get(id);

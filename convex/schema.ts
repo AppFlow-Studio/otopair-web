@@ -3191,13 +3191,12 @@ export default defineSchema({
 
   director_users: defineTable({
     name: v.string(),
-    // Legacy roles (superadmin/admin/viewer) coexist with the six portal
-    // roles until migrations/directorRoles.ts has run everywhere; the
-    // validator narrows to the six in a follow-up.
+    // The six portal roles (decision #2). Legacy superadmin/admin/viewer rows
+    // must be converted by migrations/directorRoles.ts BEFORE this schema can
+    // push to a deployment that still holds them — the validator rejects
+    // legacy values on write and the push-time schema check rejects legacy
+    // rows at rest.
     role: v.union(
-      v.literal("superadmin"),
-      v.literal("admin"),
-      v.literal("viewer"),
       v.literal("super_admin"),
       v.literal("ops_admin"),
       v.literal("support"),

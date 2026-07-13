@@ -150,7 +150,14 @@ export const _logFailedLogin = internalMutation({
 export const _insertUser = internalMutation({
   args: {
     name: v.string(),
-    role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    role: v.union(
+      v.literal("super_admin"),
+      v.literal("ops_admin"),
+      v.literal("support"),
+      v.literal("readonly"),
+      v.literal("data_admin"),
+      v.literal("shop_success"),
+    ),
     totp_secret: v.string(),
     email: v.optional(v.string()),
     actorName: v.string(),
@@ -304,7 +311,14 @@ export const verifyAndLogin = action({
 export const addUser = action({
   args: {
     name: v.string(),
-    role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    role: v.union(
+      v.literal("super_admin"),
+      v.literal("ops_admin"),
+      v.literal("support"),
+      v.literal("readonly"),
+      v.literal("data_admin"),
+      v.literal("shop_success"),
+    ),
     email: v.string(),
     actorName: v.string(),
     actorId: v.optional(v.id("director_users")),
@@ -364,7 +378,7 @@ export const bootstrap = action({
     if (existing.length > 0) return { ok: false, reason: "Director accounts already exist. Use Settings to add more." };
     const secret = genBase32();
     await ctx.runMutation(internal.director_auth._insertUser, {
-      name: "Bootstrap", role: "superadmin", totp_secret: secret,
+      name: "Bootstrap", role: "super_admin", totp_secret: secret,
       email: "bootstrap@otopair.com", actorName: "System",
     });
     return { ok: true, name: "Bootstrap", email: "bootstrap@otopair.com", totp_secret: secret };

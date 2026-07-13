@@ -3,9 +3,6 @@
 // (hiding/disabling write controls the session's role cannot use).
 
 export type DirectorRole =
-  | "superadmin"
-  | "admin"
-  | "viewer"
   | "super_admin"
   | "ops_admin"
   | "support"
@@ -39,9 +36,6 @@ export const CAPABILITIES: Record<DirectorRole, readonly Capability[]> = {
   readonly: [],
   data_admin: ["data.write", "data.trigger", "ai.write"],
   shop_success: ["shops.write"],
-  superadmin: ALL,
-  admin: ["users.write", "money.write", "shops.write", "ai.write"],
-  viewer: [],
 };
 
 export function can(role: string | undefined | null, capability: Capability): boolean {

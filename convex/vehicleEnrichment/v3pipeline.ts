@@ -64,6 +64,22 @@ import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { laborFlagsFromEnv } from "./laborResearch";
 import type { Id } from "../_generated/dataModel";
 
+// ─── Authored return types ─────────────────────────────────────────
+// Explicit handler return types are load-bearing (see convex/backfillTires.ts
+// _listCandidates): this module references `internal.*` (a barrel
+// self-reference) inside its handlers, so without authored annotations TS must
+// infer each handler while resolving the whole ApiFromModules barrel — a
+// circular resolution that silently degrades api.* / internal.* types to `any`
+// for every file checked afterwards (the @ts-nocheck above hides the TS2589
+// that would otherwise surface here).
+
+export type EnrichVehicleBatchV3Result =
+  | { status: "already_enriching"; configId: Id<"vehicle_configs"> }
+  | { status: "cache_hit_validating"; configId: Id<"vehicle_configs"> }
+  | { status: "cache_hit"; configId: Id<"vehicle_configs"> }
+  | { status: "error"; reason: string }
+  | { status: "batch_submitted"; configKey: string; batchId: string };
+
 // ─── Constants ─────────────────────────────────────────────────────
 
 const MAX_POLL_ATTEMPTS = 180;
@@ -1409,7 +1425,7 @@ export const enrichVehicleBatchV3 = internalAction({
     // Omitted on the signup path → behavior is byte-identical.
     targetConfigId: v.optional(v.id("vehicle_configs")),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<EnrichVehicleBatchV3Result> => {
     const startTime = Date.now();
     const scope = args.writeScope ?? "full";
     const vehicle: VehicleInput = {
@@ -2129,7 +2145,7 @@ export const _pollBatch1V3 = internalAction({
     // finalize after Batch-1 (no Batch-2). Defaults to "full".
     writeScope: v.optional(v.union(v.literal("full"), v.literal("parts"))),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<void> => {
     // Catch-all failure handler (Jun-9 review item 3): ANY unexpected throw in
     // the poll body must restore the config to a terminal status — 'pending'
     // before batch-1 data hit the normalized tables, 'partial' after — or the
@@ -2539,7 +2555,7 @@ export const _pollBatch2V3 = internalAction({
     makeId: v.id("makes"),
     runId: v.id("enrichment_runs"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<void> => {
     // Catch-all failure handler (Jun-9 review item 3): batch-1 data is always
     // written by the time this action runs, so any unexpected throw restores
     // the config to 'partial' instead of leaving it stuck 'enriching'.

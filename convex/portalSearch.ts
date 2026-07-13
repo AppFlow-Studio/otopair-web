@@ -9,16 +9,23 @@ import { requireDirector } from "./directorGate";
 
 const MAX_PER_GROUP = 8;
 
+// Authored return type — load-bearing (see convex/backfillTires.ts
+// _listCandidates): without it TS must infer the handler while resolving the
+// whole ApiFromModules barrel, which exhausts the checker's instantiation
+// budget and silently degrades api.* types to `any` in consumer files.
+export type PortalSearchHit = { id: string; label: string; sub: string };
+export type PortalSearchResult = {
+  users: PortalSearchHit[];
+  shops: PortalSearchHit[];
+  bookings: PortalSearchHit[];
+};
+
 export const search = query({
   args: { token: v.string(), q: v.string() },
-  handler: async (ctx, { token, q }) => {
+  handler: async (ctx, { token, q }): Promise<PortalSearchResult> => {
     await requireDirector(ctx, token);
     const needle = q.trim();
-    const results: {
-      users: { id: string; label: string; sub: string }[];
-      shops: { id: string; label: string; sub: string }[];
-      bookings: { id: string; label: string; sub: string }[];
-    } = { users: [], shops: [], bookings: [] };
+    const results: PortalSearchResult = { users: [], shops: [], bookings: [] };
     if (needle.length < 2) return results;
     const lower = needle.toLowerCase();
 

@@ -38,6 +38,7 @@ import type * as dataCatalog from "../dataCatalog.js";
 import type * as dataControlRoom from "../dataControlRoom.js";
 import type * as dataCosts from "../dataCosts.js";
 import type * as dataCoverage from "../dataCoverage.js";
+import type * as dataInsights from "../dataInsights.js";
 import type * as dataLabor from "../dataLabor.js";
 import type * as dataOverview from "../dataOverview.js";
 import type * as dataParts from "../dataParts.js";
@@ -446,6 +447,7 @@ declare const fullApi: ApiFromModules<{
   dataControlRoom: typeof dataControlRoom;
   dataCosts: typeof dataCosts;
   dataCoverage: typeof dataCoverage;
+  dataInsights: typeof dataInsights;
   dataLabor: typeof dataLabor;
   dataOverview: typeof dataOverview;
   dataParts: typeof dataParts;

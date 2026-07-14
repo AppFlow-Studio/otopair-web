@@ -626,6 +626,24 @@ export const recomputeCostDays = internalMutation({
         firecrawl_credits: runs.reduce((s, r) => s + (r.total_firecrawl_credits ?? 0), 0),
       });
     }
+    // Daily SLO snapshot (/data/insights history) — copies the live slo.*
+    // rows into a dated key so trends accumulate from deploy day. Upsert by
+    // key keeps same-day reruns idempotent.
+    const sloMeta: Record<string, { value: number; samples: number | null }> = {};
+    for (const key of Object.keys(SLO_THRESHOLDS)) {
+      const row = await ctx.db
+        .query("portal_stats")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .first();
+      if (row) {
+        sloMeta[key] = {
+          value: row.value,
+          samples: (row.meta as { samples?: number } | null)?.samples ?? null,
+        };
+      }
+    }
+    const today = new Date(now).toISOString().slice(0, 10);
+    await upsertStat(ctx, `data.slo.day.${today}`, Object.keys(sloMeta).length, sloMeta);
     return { days: span };
   },
 });

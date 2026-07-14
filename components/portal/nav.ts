@@ -90,7 +90,12 @@ export const NAV: Record<PortalId, NavGroup[]> = {
     },
   ],
   data: [
-    { items: [{ label: "Data Health", href: "/data" }] },
+    {
+      items: [
+        { label: "Data Health", href: "/data" },
+        { label: "Insights", href: "/data/insights" },
+      ],
+    },
     {
       label: "Catalog",
       items: [

@@ -84,8 +84,8 @@ export const NAV: Record<PortalId, NavGroup[]> = {
     {
       label: "Quality",
       items: [
-        { label: "Network Reviews", href: "/shops/reviews", phase: "P2" },
-        { label: "Performance", href: "/shops/performance", phase: "P2" },
+        { label: "Network Reviews", href: "/shops/reviews" },
+        { label: "Performance", href: "/shops/performance" },
       ],
     },
   ],

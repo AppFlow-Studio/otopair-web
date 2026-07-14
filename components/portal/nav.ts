@@ -96,7 +96,7 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       items: [
         { label: "Vehicle Catalog", href: "/data/catalog" },
         { label: "VIN Explorer", href: "/data/vins" },
-        { label: "Parts", href: "/data/parts", phase: "P1" },
+        { label: "Parts", href: "/data/parts" },
         { label: "Tire Intelligence", href: "/data/tires", phase: "P1" },
       ],
     },
@@ -112,7 +112,7 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       label: "Pricing & Labor",
       items: [
         { label: "Labor Times", href: "/data/labor" },
-        { label: "Parts Pricing", href: "/data/parts-pricing", phase: "P1" },
+        { label: "Parts Pricing", href: "/data/parts-pricing" },
         { label: "Pricing Engine", href: "/data/pricing-engine", phase: "P2" },
       ],
     },

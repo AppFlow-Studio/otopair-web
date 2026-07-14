@@ -38,6 +38,8 @@ import type * as dataCatalog from "../dataCatalog.js";
 import type * as dataControlRoom from "../dataControlRoom.js";
 import type * as dataLabor from "../dataLabor.js";
 import type * as dataOverview from "../dataOverview.js";
+import type * as dataParts from "../dataParts.js";
+import type * as dataPartsPricing from "../dataPartsPricing.js";
 import type * as dataSources from "../dataSources.js";
 import type * as dataVerification from "../dataVerification.js";
 import type * as dataVins from "../dataVins.js";
@@ -436,6 +438,8 @@ declare const fullApi: ApiFromModules<{
   dataControlRoom: typeof dataControlRoom;
   dataLabor: typeof dataLabor;
   dataOverview: typeof dataOverview;
+  dataParts: typeof dataParts;
+  dataPartsPricing: typeof dataPartsPricing;
   dataSources: typeof dataSources;
   dataVerification: typeof dataVerification;
   dataVins: typeof dataVins;

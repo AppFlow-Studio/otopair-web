@@ -3150,7 +3150,9 @@ export default defineSchema({
     key_hash: v.string(),
     // First 12 chars of the plaintext ("otp_live_ab…") for display/support.
     prefix: v.string(),
-    scopes: v.array(v.union(v.literal("maintenance:read"), v.literal("labor:read"))),
+    scopes: v.array(
+      v.union(v.literal("maintenance:read"), v.literal("labor:read"), v.literal("media:read")),
+    ),
     rate_limit_per_min: v.number(),
     created_by: v.id("director_users"),
     created_at: v.number(),

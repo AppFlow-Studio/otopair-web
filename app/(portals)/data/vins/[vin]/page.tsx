@@ -158,7 +158,9 @@ export default function VinDetailPage() {
                   className="mt-3 max-h-56 rounded-lg object-contain"
                 />
                 <p className="mt-2 text-[11px] text-slate-400">
-                  IMAGIN — licensed, never export.
+                  Vehicle Databases render (EVOX) — served externally via /v0/vehicle-image
+                  (media:read); flips to self-hosted media when the licensed VD image folder
+                  lands.
                 </p>
               </>
             ) : (

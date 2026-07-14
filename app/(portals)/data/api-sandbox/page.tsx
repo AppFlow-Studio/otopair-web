@@ -128,7 +128,7 @@ function PersonalKeyBanner({ onMinted }: { onMinted: (plaintext: string) => void
 
 // ─── Keys: admin create panel ────────────────────────────────────────────────
 
-const SCOPES = ["maintenance:read", "labor:read"] as const;
+const SCOPES = ["maintenance:read", "labor:read", "media:read"] as const;
 type Scope = (typeof SCOPES)[number];
 
 function CreateKeyPanel() {

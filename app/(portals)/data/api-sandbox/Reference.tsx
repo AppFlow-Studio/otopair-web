@@ -74,6 +74,20 @@ const LABOR_PARAMS: Param[] = [
   },
 ];
 
+const MEDIA_EXAMPLE = `{
+  "object": "vehicle_image",
+  "config": {
+    "config_key": "2021_toyota_camry_le_2_5l_4cyl_gas",
+    "year": 2021, "make": "Toyota", "model": "Camry", "trim": "LE"
+  },
+  "image": {
+    "url": "https://…/evox/…_3231303031.jpg",
+    "media_source": "vehicle_databases",
+    "licensing_note": "Rendered image sourced via the Vehicle Databases vehicle-images API. Self-hosted media (the licensed VD image set) replaces these URLs when it lands; the response shape will not change."
+  },
+  "meta": { "generated_at": 1784050000000 }
+}`;
+
 const VEHICLE_EXAMPLE = `{
   "object": "vehicle",
   "config": {
@@ -270,7 +284,7 @@ const LABOR_EXAMPLE = `{
 const ERRORS: Array<{ status: string; code: string; meaning: string }> = [
   { status: "400", code: "missing_param", meaning: "No usable identifier was provided (config_key / vin — or year+make+model on /v0/vehicle)." },
   { status: "401", code: "missing / invalid / revoked key", meaning: "No Authorization header, the key doesn't exist, or it has been revoked." },
-  { status: "403", code: "insufficient_scope", meaning: "The key is valid but lacks the endpoint's scope (maintenance:read / labor:read)." },
+  { status: "403", code: "insufficient_scope", meaning: "The key is valid but lacks the endpoint's scope (maintenance:read / labor:read / media:read)." },
   { status: "404", code: "not_found", meaning: "No vehicle config matched the given config_key or VIN." },
   { status: "409", code: "multiple_matches", meaning: "A /v0/vehicle YMMT lookup matched more than one config — the body lists matches: [{config_key, label}]; re-send with one of those config_keys." },
   { status: "429", code: "rate_limited", meaning: "Per-key per-minute rate limit exceeded. Back off and retry." },
@@ -389,6 +403,14 @@ export function Reference() {
         />
       </div>
 
+      <EndpointCard
+        path="/v0/vehicle-image"
+        description="Vehicle media: the cached exterior render for a config, identified by VIN, year + make + model [+ trim], or config_key. Requires the media:read scope. media_source is 'vehicle_databases' today (EVOX renders via the VD vehicle-images API); the licensed VD image folder is inbound, after which the URLs flip to self-hosted media without a response-shape change. 404 with error 'no_image' when the vehicle resolves but no render is cached yet."
+        params={VEHICLE_PARAMS}
+        example={MEDIA_EXAMPLE}
+        exampleQuery="year=2021&make=Toyota&model=Camry&trim=LE"
+      />
+
       <div className="grid gap-4 xl:grid-cols-2">
         {/* Authentication */}
         <div className={CARD}>
@@ -408,7 +430,7 @@ export function Reference() {
               • The plaintext is shown <strong>exactly once</strong> at mint time — only its SHA-256
               hash is stored, so it cannot be recovered later. Lose it → rotate.
             </li>
-            <li>• Each key has scopes (maintenance:read, labor:read) and its own per-minute rate limit.</li>
+            <li>• Each key has scopes (maintenance:read, labor:read, media:read) and its own per-minute rate limit.</li>
           </ul>
         </div>
 

@@ -4,6 +4,7 @@
 //
 //   GET /v0/maintenance?config_key=…|vin=…      scope maintenance:read
 //   GET /v0/labor?config_key=…|vin=…[&service=] scope labor:read
+//   GET /v0/vehicle-image?vin=…|ymmt|config_key scope media:read
 //
 // The gate (convex/lib/dataLayers.ts): Layer A (OEM/official), C
 // (web-search/scraped — our own enrichment work, the product per team
@@ -33,7 +34,7 @@ import type { QueryCtx } from "./_generated/server";
 import { action } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 
-export const API_SCOPES = ["maintenance:read", "labor:read"] as const;
+export const API_SCOPES = ["maintenance:read", "labor:read", "media:read"] as const;
 export type ApiScope = (typeof API_SCOPES)[number];
 const DEFAULT_RATE_LIMIT_PER_MIN = 60;
 
@@ -283,7 +284,9 @@ export const _insertKey = internalMutation({
     name: v.string(),
     key_hash: v.string(),
     prefix: v.string(),
-    scopes: v.array(v.union(v.literal("maintenance:read"), v.literal("labor:read"))),
+    scopes: v.array(
+      v.union(v.literal("maintenance:read"), v.literal("labor:read"), v.literal("media:read")),
+    ),
     rate_limit_per_min: v.number(),
     created_by: v.id("director_users"),
     actor_name: v.string(),
@@ -319,7 +322,9 @@ export const createKey = action({
   args: {
     token: v.string(),
     name: v.string(),
-    scopes: v.array(v.union(v.literal("maintenance:read"), v.literal("labor:read"))),
+    scopes: v.array(
+      v.union(v.literal("maintenance:read"), v.literal("labor:read"), v.literal("media:read")),
+    ),
     rate_limit_per_min: v.optional(v.number()),
   },
   handler: async (
@@ -400,7 +405,7 @@ export const _insertPersonalKey = internalMutation({
       name,
       key_hash: args.key_hash,
       prefix: args.prefix,
-      scopes: ["maintenance:read", "labor:read"],
+      scopes: ["maintenance:read", "labor:read", "media:read"],
       rate_limit_per_min: DEFAULT_RATE_LIMIT_PER_MIN,
       created_by: args.created_by,
       created_at: Date.now(),
@@ -1115,6 +1120,104 @@ export const gateCheck = query({
       total_excluded_b: totalB,
       note:
         "Same gate path as GET /v0/maintenance (collectSpecFields → latestFieldEvidence → deriveLayer → isServable). Excluded-B totals reconcile with data.layer_b_exposure.",
+    };
+  },
+});
+
+// ─── /v0/vehicle-image — vehicle media (scope media:read) ────────────────────
+// Serves the cached vehicle render for a config (VIN / YMMT / config_key).
+// Source today: Vehicle Databases' vehicle-images API (EVOX renders), cached
+// on vehicle_configs.image_url / vehicles.image_url by lib/vehicle_image.ts.
+// The full VD image folder is inbound — once hosted, media_source flips to
+// self-hosted storage and these URLs change WITHOUT the response shape
+// changing. The licensing note rides in the response until then.
+
+export type VehicleImageResponse =
+  | {
+      object: "vehicle_image";
+      config: {
+        config_key: string | null;
+        year: number;
+        make: string;
+        model: string;
+        trim: string | null;
+      };
+      image: {
+        url: string;
+        media_source: "vehicle_databases";
+        licensing_note: string;
+      } | null;
+      meta: { generated_at: number };
+    }
+  | { object: "multiple_matches"; matches: { config_key: string | null; label: string }[] }
+  | null;
+
+export const assembleVehicleImage = internalQuery({
+  args: {
+    config_key: v.optional(v.string()),
+    vin: v.optional(v.string()),
+    year: v.optional(v.number()),
+    make: v.optional(v.string()),
+    model: v.optional(v.string()),
+    trim: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<VehicleImageResponse> => {
+    let c = await resolveConfig(ctx, args.config_key ?? null, args.vin ?? null);
+    if (!c && args.year != null && args.make && args.model) {
+      const { config, matches } = await resolveByYmmt(
+        ctx,
+        args.year,
+        args.make,
+        args.model,
+        args.trim ?? null,
+      );
+      if (!config && matches.length > 1) return { object: "multiple_matches", matches };
+      c = config;
+    }
+
+    // VIN-only fallback: the vehicle row may carry an image even when its
+    // config link (or the config's own cache) is missing.
+    let url: string | null = c?.image_url ?? null;
+    if (!url && args.vin) {
+      const vehicle = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q) => q.eq("vin", args.vin!.trim().toUpperCase()))
+        .first();
+      url = vehicle?.image_url ?? null;
+    }
+    if (!url && c) {
+      // Any sibling VIN of this config with a cached image (bounded — these
+      // docs carry decode metadata, keep the window tiny).
+      const siblings = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c!._id))
+        .take(3);
+      url = siblings.find((s) => s.image_url != null)?.image_url ?? null;
+    }
+    if (!c) return null;
+
+    const make = await ctx.db.get(c.make_id);
+    const model = await ctx.db.get(c.model_id);
+    return {
+      object: "vehicle_image",
+      config: {
+        config_key: c.config_key ?? null,
+        year: c.year,
+        make: (make as { name?: string } | null)?.name ?? "?",
+        model: (model as { name?: string } | null)?.name ?? "?",
+        trim: c.trim_name ?? null,
+      },
+      image: url
+        ? {
+            url,
+            media_source: "vehicle_databases",
+            licensing_note:
+              "Rendered image sourced via the Vehicle Databases vehicle-images API. " +
+              "Self-hosted media (the licensed VD image set) replaces these URLs when it lands; " +
+              "the response shape will not change.",
+          }
+        : null,
+      meta: { generated_at: Date.now() },
     };
   },
 });

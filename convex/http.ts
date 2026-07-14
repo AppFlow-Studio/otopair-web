@@ -730,7 +730,7 @@ async function withApiKey(
   ctx: ActionCtx,
   request: Request,
   endpoint: string,
-  scope: "maintenance:read" | "labor:read",
+  scope: "maintenance:read" | "labor:read" | "media:read",
   handler: (params: URLSearchParams) => Promise<{ status: number; body: unknown; config_key?: string }>,
 ): Promise<Response> {
   const auth = request.headers.get("Authorization");
@@ -875,7 +875,72 @@ http.route({
   ),
 });
 
-for (const path of ["/v0/maintenance", "/v0/labor", "/v0/vehicle"]) {
+// Vehicle media (scope media:read) — cached VD/EVOX render per config; URLs
+// flip to self-hosted storage when the licensed VD image folder lands.
+http.route({
+  path: "/v0/vehicle-image",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v0/vehicle-image", "media:read", async (params) => {
+      const config_key = params.get("config_key") ?? undefined;
+      const vin = params.get("vin") ?? undefined;
+      const yearRaw = params.get("year");
+      const year = yearRaw ? Number(yearRaw) : undefined;
+      const make = params.get("make") ?? undefined;
+      const model = params.get("model") ?? undefined;
+      const trim = params.get("trim") ?? undefined;
+      const hasYmmt = year !== undefined && !Number.isNaN(year) && make && model;
+      if (!config_key && !vin && !hasYmmt) {
+        return {
+          status: 400,
+          body: {
+            error: "missing_param",
+            message: "Pass ?vin=… OR ?year=&make=&model=[&trim=] OR ?config_key=…",
+          },
+        };
+      }
+      const data = await ctx.runQuery(internal.dataApi.assembleVehicleImage, {
+        config_key,
+        vin,
+        year: hasYmmt ? year : undefined,
+        make,
+        model,
+        trim,
+      });
+      if (!data) {
+        return {
+          status: 404,
+          body: { error: "not_found", message: "No vehicle matches that identifier." },
+          config_key,
+        };
+      }
+      if (data.object === "multiple_matches") {
+        return {
+          status: 409,
+          body: {
+            error: "multiple_matches",
+            message: "More than one config matches — retry with ?config_key= from the list (or add &trim=).",
+            matches: data.matches,
+          },
+        };
+      }
+      if (data.image === null) {
+        return {
+          status: 404,
+          body: {
+            error: "no_image",
+            message: "Vehicle resolved but no image is cached for it yet.",
+            config_key: data.config.config_key,
+          },
+          config_key: data.config.config_key ?? config_key,
+        };
+      }
+      return { status: 200, body: data, config_key: data.config.config_key ?? config_key };
+    }),
+  ),
+});
+
+for (const path of ["/v0/maintenance", "/v0/labor", "/v0/vehicle", "/v0/vehicle-image"]) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => corsOptions()) });
 }
 

@@ -1,6 +1,8 @@
 // =============================================================================
 // Data · Vehicle Catalog read layer — /data/catalog list + config workspace.
-// Read-only (no mutations). All queries token-gated via requireDirector.
+// All functions token-gated via requireDirector. One write surface:
+// fetchConfigImage (data.trigger + ceremony + cooldown) schedules the VD
+// vehicle-images resolver for a config with no cached render.
 // Bounded reads only: vehicle_configs is 384 rows (take 500); enrichment_runs
 // windowed via by_vehicle_config; enrichment_evidence ONLY via by_entity_field
 // per selected field (never collected en masse).
@@ -12,9 +14,10 @@
 // drivetrain_config) stay keyed by the vehicle_config id.
 // =============================================================================
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
-import { requireDirector } from "./directorGate";
+import { internal } from "./_generated/api";
+import { requireDirector, logAudit } from "./directorGate";
 import type { Doc, Id } from "./_generated/dataModel";
 
 // --- Authored return types -----------------------------------------------------
@@ -36,6 +39,7 @@ export type CatalogConfigRow = {
   enrichment_status: string | null;
   verification_count: number;
   last_enriched_at: number | null;
+  image_url: string | null;
 };
 export type ListConfigsResult = { rows: CatalogConfigRow[]; truncated: boolean };
 
@@ -78,6 +82,7 @@ export type ConfigWorkspaceResult = {
   last_verified_at: number | null;
   enrichment_version: string | null;
   pricing_tier: string | null;
+  image_url: string | null;
   fields: WorkspaceSpecField[];
   runs: WorkspaceRun[];
 };
@@ -287,6 +292,7 @@ export const listConfigs = query({
         enrichment_status: c.enrichment_status ?? null,
         verification_count: c.verification_count ?? 0,
         last_enriched_at: c.last_enriched_at ?? null,
+        image_url: c.image_url ?? null,
       });
     }
     rows.sort((a, b) => b.year - a.year || a.make.localeCompare(b.make) || a.model.localeCompare(b.model));
@@ -349,6 +355,7 @@ export const configWorkspace = query({
       last_verified_at: c.last_verified_at ?? null,
       enrichment_version: c.enrichment_version ?? null,
       pricing_tier: c.pricing_tier ?? null,
+      image_url: c.image_url ?? null,
       fields,
       runs: runs.map((r) => ({
         id: r._id,
@@ -429,5 +436,72 @@ export const fieldEvidence = query({
       }
     }
     return { entity_type_used: entityType, entity_id_used: canonicalId, canonical: true, rows: [] };
+  },
+});
+
+// --- Image fetch trigger --------------------------------------------------------
+
+const IMAGE_FETCH_COOLDOWN_MS = 30 * 60 * 1000;
+
+/** Schedule the Vehicle Databases image resolver for a config (Data portal
+ *  catalog). VIN-first when a decoded sibling exists, else YMMT. Ceremony +
+ *  audit + 30-min per-config cooldown — each miss costs a VDB call. */
+export const fetchConfigImage = mutation({
+  args: { token: v.string(), reason: v.string(), configId: v.id("vehicle_configs") },
+  handler: async (
+    ctx,
+    { token, reason, configId },
+  ): Promise<{ ok: true; via: "vin" | "ymmt" }> => {
+    const actor = await requireDirector(ctx, token, "data.trigger");
+    if (reason.trim().length < 4) throw new Error("A reason is required.");
+    const c = await ctx.db.get(configId);
+    if (!c) throw new Error("That config no longer exists.");
+    if (c.image_url) throw new Error("This config already has a cached image.");
+
+    // Cooldown via the audit trail (same pattern as the Control Room triggers).
+    const recent = await ctx.db
+      .query("audit_log")
+      .withIndex("by_entity", (q) =>
+        q.eq("entity_type", "vehicle_config").eq("entity_id", String(configId)),
+      )
+      .order("desc")
+      .take(10);
+    const lastFetch = recent.find((r) => r.action === "image_fetch_triggered");
+    if (lastFetch && Date.now() - lastFetch.created_at < IMAGE_FETCH_COOLDOWN_MS) {
+      const mins = Math.ceil(
+        (IMAGE_FETCH_COOLDOWN_MS - (Date.now() - lastFetch.created_at)) / 60000,
+      );
+      throw new Error(`Image fetch is on cooldown for this config — available in ${mins}m.`);
+    }
+
+    // VIN-first: any decoded sibling of this config.
+    const sibling = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", configId))
+      .first();
+    const make = await ctx.db.get(c.make_id);
+    const model = await ctx.db.get(c.model_id);
+    const via: "vin" | "ymmt" = sibling ? "vin" : "ymmt";
+    if (!sibling && !c.trim_name) {
+      throw new Error(
+        "No linked VIN and no trim name — the VDB YMMT image endpoint needs a trim. " +
+          "Queue a VIN for this config first.",
+      );
+    }
+    await ctx.scheduler.runAfter(0, internal.lib.vehicle_image.resolveVehicleImage, {
+      vin: sibling?.vin,
+      year: c.year,
+      make: (make as { name?: string } | null)?.name,
+      model: (model as { name?: string } | null)?.name,
+      trim: c.trim_name ?? undefined,
+      vehicle_config_id: configId,
+    });
+    await logAudit(ctx, actor, {
+      entity_type: "vehicle_config",
+      entity_id: String(configId),
+      action: "image_fetch_triggered",
+      detail: `via ${via}${sibling ? ` (${sibling.vin})` : ""} — one VDB vehicle-images call — ${reason.trim()}`,
+    });
+    return { ok: true, via };
   },
 });

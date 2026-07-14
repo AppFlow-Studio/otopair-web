@@ -198,6 +198,7 @@ export default function VehicleCatalogPage() {
             <table className="w-full text-[13px]">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <th className="pb-2 pr-3" title="Vehicle Databases render (cached)">Img</th>
                   <th className="pb-2 pr-4">Fill</th>
                   <th className="pb-2 pr-4">Vehicle</th>
                   <th className="pb-2 pr-4">Trim</th>
@@ -212,6 +213,21 @@ export default function VehicleCatalogPage() {
               <tbody>
                 {filtered.map((r) => (
                   <tr key={r.id} className="border-b border-slate-50 hover:bg-slate-50">
+                    <td className="py-2.5 pr-3">
+                      {r.image_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={r.image_url}
+                          alt=""
+                          loading="lazy"
+                          className="h-9 w-14 rounded-md bg-slate-50 object-contain"
+                        />
+                      ) : (
+                        <div className="flex h-9 w-14 items-center justify-center rounded-md border border-dashed border-slate-200 text-[10px] text-slate-300">
+                          no img
+                        </div>
+                      )}
+                    </td>
                     <td className="py-2.5 pr-4">
                       <FillRing pct={r.fill_rate} />
                     </td>

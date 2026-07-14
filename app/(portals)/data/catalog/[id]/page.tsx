@@ -16,8 +16,10 @@ import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { usePortalSession } from "@/app/(portals)/portal-session";
+import { usePortalSession, useCan } from "@/app/(portals)/portal-session";
 import { AuditDrawer } from "@/components/portal/AuditDrawer";
+import { Ceremony } from "@/components/portal/Ceremony";
+import { useMutation } from "convex/react";
 
 const CARD = "rounded-xl border border-slate-200 bg-white p-5";
 const PILL = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
@@ -97,6 +99,9 @@ export default function ConfigWorkspacePage() {
     useQuery(api.dataCatalog.configWorkspace, { token, id: configId });
   const [selectedField, setSelectedField] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState(false);
+  const [imageFetchOpen, setImageFetchOpen] = useState(false);
+  const canTrigger = useCan("data.trigger");
+  const fetchImage = useMutation(api.dataCatalog.fetchConfigImage);
 
   const evidence: FunctionReturnType<typeof api.dataCatalog.fieldEvidence> | undefined =
     useQuery(
@@ -136,6 +141,30 @@ export default function ConfigWorkspacePage() {
     <div className="space-y-6">
       {/* Zone 1 — workspace header */}
       <div className={`${CARD} flex flex-wrap items-center gap-4`}>
+        {/* Vehicle render — VD/EVOX cache on the config (YMMT-level).
+            The licensed VD image folder will replace these URLs with
+            self-hosted media; the card stays the same. */}
+        {ws.image_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={ws.image_url}
+            alt={`${ws.year} ${ws.make} ${ws.model}`}
+            className="h-20 w-32 shrink-0 rounded-lg bg-slate-50 object-contain"
+            title="Vehicle Databases render (cached at the config level)"
+          />
+        ) : (
+          <div className="flex h-20 w-32 shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-slate-200">
+            <span className="text-[10px] text-slate-400">no image cached</span>
+            {canTrigger && (
+              <button
+                onClick={() => setImageFetchOpen(true)}
+                className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-blue-600 hover:bg-blue-50"
+              >
+                Fetch from VD
+              </button>
+            )}
+          </div>
+        )}
         <FillRing pct={ws.fill_rate} />
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -357,6 +386,25 @@ export default function ConfigWorkspacePage() {
         onOpenChange={setAuditOpen}
         entityType="vehicle_config"
         entityId={String(configId)}
+      />
+
+      {/* Image fetch ceremony — one VDB vehicle-images call, 30-min cooldown */}
+      <Ceremony
+        open={imageFetchOpen}
+        onOpenChange={setImageFetchOpen}
+        title={`Fetch vehicle image — ${ws.year} ${ws.make} ${ws.model}`}
+        confirmLabel="Fetch"
+        summary={
+          <>
+            Calls the Vehicle Databases vehicle-images API once (VIN-first if a decoded
+            sibling exists, else year/make/model/trim) and caches the render on this
+            config. 30-minute cooldown per config; the licensed VD image folder will
+            replace these with self-hosted media later.
+          </>
+        }
+        onConfirm={async (reason) => {
+          await fetchImage({ token, reason, configId });
+        }}
       />
     </div>
   );

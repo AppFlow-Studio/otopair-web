@@ -36,6 +36,10 @@ export const resolveVehicleImage = internalAction({
     make: v.optional(v.string()),
     model: v.optional(v.string()),
     trim: v.optional(v.string()),
+    // When set, a successful resolution ALSO stamps the config's YMMT-level
+    // cache (vehicle_configs.image_url) — the path the Data portal's catalog
+    // "fetch image" trigger uses for configs with no linked VIN.
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
   },
   handler: async (ctx, args): Promise<string | null> => {
     const vin = (args.vin ?? "").toUpperCase().trim();
@@ -139,6 +143,16 @@ export const resolveVehicleImage = internalAction({
             "[vehicle_image] failed to cache image_url on vehicles row:",
             err,
           );
+        }
+      }
+      if (args.vehicle_config_id) {
+        try {
+          await ctx.runMutation(internal.vehicles._stampConfigImage, {
+            vehicle_config_id: args.vehicle_config_id,
+            image_url: picked,
+          });
+        } catch (err) {
+          console.warn("[vehicle_image] failed to stamp config image_url:", err);
         }
       }
 

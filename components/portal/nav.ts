@@ -122,11 +122,11 @@ export const NAV: Record<PortalId, NavGroup[]> = {
         { label: "Verification", href: "/data/verification" },
         { label: "Vehicle ID", href: "/data/vehicle-id" },
         { label: "Coverage", href: "/data/coverage" },
-        { label: "Provenance", href: "/data/provenance", phase: "P2" },
+        { label: "Provenance", href: "/data/provenance", badgeKey: "data.incidents_open" },
       ],
     },
     { label: "Catalog Ops", items: [{ label: "Service Catalog", href: "/data/service-catalog" }] },
-    { label: "Economics", items: [{ label: "Costs & Credits", href: "/data/costs", phase: "P2" }] },
+    { label: "Economics", items: [{ label: "Costs & Credits", href: "/data/costs" }] },
     { label: "Product", items: [{ label: "API Sandbox", href: "/data/api-sandbox" }] },
   ],
 };

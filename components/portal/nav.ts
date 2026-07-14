@@ -95,7 +95,7 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       label: "Catalog",
       items: [
         { label: "Vehicle Catalog", href: "/data/catalog" },
-        { label: "VIN Explorer", href: "/data/vins", phase: "P1" },
+        { label: "VIN Explorer", href: "/data/vins" },
         { label: "Parts", href: "/data/parts", phase: "P1" },
         { label: "Tire Intelligence", href: "/data/tires", phase: "P1" },
       ],
@@ -104,7 +104,7 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       label: "Pipeline",
       items: [
         { label: "Control Room", href: "/data/control-room", badgeKey: "data.vin_queue_pending" },
-        { label: "Sources & Cache", href: "/data/sources", phase: "P1" },
+        { label: "Sources & Cache", href: "/data/sources" },
         { label: "Review Queue", href: "/data/review-queue", badgeKey: "slo.review_queue_depth" },
       ],
     },
@@ -119,7 +119,7 @@ export const NAV: Record<PortalId, NavGroup[]> = {
     {
       label: "Quality",
       items: [
-        { label: "Verification", href: "/data/verification", phase: "P1" },
+        { label: "Verification", href: "/data/verification" },
         { label: "Vehicle ID", href: "/data/vehicle-id", phase: "P1" },
         { label: "Coverage", href: "/data/coverage", phase: "P1" },
         { label: "Provenance", href: "/data/provenance", phase: "P2" },

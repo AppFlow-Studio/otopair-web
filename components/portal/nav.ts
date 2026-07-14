@@ -57,8 +57,8 @@ export const NAV: Record<PortalId, NavGroup[]> = {
     {
       label: "Insight",
       items: [
-        { label: "Analytics", href: "/ops/analytics", phase: "P2" },
-        { label: "System Health", href: "/ops/system-health", phase: "P2" },
+        { label: "Analytics", href: "/ops/analytics" },
+        { label: "System Health", href: "/ops/system-health" },
       ],
     },
     { label: "Governance", items: [{ label: "Audit Log", href: "/ops/audit" }] },

@@ -36,22 +36,22 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       label: "Marketplace",
       items: [
         { label: "Bookings", href: "/ops/bookings" },
-        { label: "Reviews", href: "/ops/reviews", phase: "P1" },
+        { label: "Reviews", href: "/ops/reviews" },
       ],
     },
     {
       label: "Money",
       items: [
         { label: "Payments", href: "/ops/payments" },
-        { label: "Transactions", href: "/ops/transactions", phase: "P1" },
+        { label: "Transactions", href: "/ops/transactions" },
         { label: "Rewards", href: "/ops/rewards", phase: "P2" },
       ],
     },
     {
       label: "Engagement",
       items: [
-        { label: "Oto AI", href: "/ops/oto-ai", phase: "P1" },
-        { label: "Follow-ups", href: "/ops/follow-ups", phase: "P1" },
+        { label: "Oto AI", href: "/ops/oto-ai" },
+        { label: "Follow-ups", href: "/ops/follow-ups" },
       ],
     },
     {

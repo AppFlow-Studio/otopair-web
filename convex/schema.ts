@@ -2643,7 +2643,10 @@ export default defineSchema({
     .index("by_user_id_created_at", ["user_id", "created_at"])
     .index("by_user_id_type", ["user_id", "transaction_type"])
     .index("by_user_id_type_created_at", ["user_id", "transaction_type", "created_at"])
-    .index("by_payment_id", ["payment_id"]),
+    .index("by_payment_id", ["payment_id"])
+    // Global time index — the Ops ledger (/ops/transactions) reads the whole
+    // network's ledger newest-first; every prior index is user-scoped.
+    .index("by_created_at", ["created_at"]),
 
   // [I] Daniel/Waleed
   ownership_credit_transactions: defineTable({
@@ -2681,6 +2684,12 @@ export default defineSchema({
     rating: v.number(),
     comment: v.optional(v.string()),
     created_at: v.optional(v.number()),
+    // Moderation (Ops portal /ops/reviews — hide = ceremony, never delete).
+    // Hidden reviews stay in the table for the audit trail; consumer reads
+    // must filter hidden_at == undefined.
+    hidden_at: v.optional(v.number()),
+    hidden_reason: v.optional(v.string()),
+    hidden_by: v.optional(v.string()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_id", ["shop_id"])

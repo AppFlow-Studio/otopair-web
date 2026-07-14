@@ -5,7 +5,8 @@
 // vehicle-images resolver for a config with no cached render.
 // Bounded reads only: vehicle_configs is 384 rows (take 500); enrichment_runs
 // windowed via by_vehicle_config; enrichment_evidence ONLY via by_entity_field
-// per selected field (never collected en masse).
+// per selected field (never collected en masse); the image fallback's sibling
+// lookup is take(3) on by_vehicle_config per config (see configImageUrl).
 //
 // Evidence entity keying mirrors the writer (vehicleEnrichment/v3pipeline.ts
 // getEntityType + entityId rule): engine fields are keyed by the engine doc id,
@@ -245,6 +246,27 @@ export async function latestFieldEvidence(
 
 // --- List ---------------------------------------------------------------------
 
+/** A config's render, falling back to any linked VIN's cached image.
+ *
+ *  vehicle_configs.image_url is the YMMT-level cache, but the only thing that
+ *  routinely resolves an image is the booking-confirmation email path, which
+ *  writes vehicles.image_url per VIN. Its promotion to the config slot
+ *  (vehicles.saveVehicleImageUrl) postdates the images already on file, so
+ *  those rows never stamped a config and read as "no img" here while the same
+ *  render shows in the director panel. Same sibling lookup as
+ *  dataApi.assembleVehicleImage — bounded take(3), by_vehicle_config index. */
+async function configImageUrl(
+  ctx: QueryCtx,
+  c: Doc<"vehicle_configs">,
+): Promise<string | null> {
+  if (c.image_url) return c.image_url;
+  const siblings = await ctx.db
+    .query("vehicles")
+    .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
+    .take(3);
+  return siblings.find((s) => s.image_url != null)?.image_url ?? null;
+}
+
 export const listConfigs = query({
   args: { token: v.string() },
   handler: async (ctx, { token }): Promise<ListConfigsResult> => {
@@ -292,7 +314,7 @@ export const listConfigs = query({
         enrichment_status: c.enrichment_status ?? null,
         verification_count: c.verification_count ?? 0,
         last_enriched_at: c.last_enriched_at ?? null,
-        image_url: c.image_url ?? null,
+        image_url: await configImageUrl(ctx, c),
       });
     }
     rows.sort((a, b) => b.year - a.year || a.make.localeCompare(b.make) || a.model.localeCompare(b.model));
@@ -355,7 +377,7 @@ export const configWorkspace = query({
       last_verified_at: c.last_verified_at ?? null,
       enrichment_version: c.enrichment_version ?? null,
       pricing_tier: c.pricing_tier ?? null,
-      image_url: c.image_url ?? null,
+      image_url: await configImageUrl(ctx, c),
       fields,
       runs: runs.map((r) => ({
         id: r._id,

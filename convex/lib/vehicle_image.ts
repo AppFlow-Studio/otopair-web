@@ -54,7 +54,14 @@ export const resolveVehicleImage = internalAction({
         (internal as any).vehicles.getCachedVehicleImage,
         { vin },
       );
-      if (cached?.image_url) return cached.image_url as string;
+      if (cached?.image_url) {
+        // Promote to the config's YMMT slot before returning. The VIN row's
+        // image predates the saveVehicleImageUrl promotion for every render
+        // resolved so far, so without this the config cache can only ever be
+        // filled by a paid VDB call — a cache hit would leave it empty.
+        await stampConfig(ctx, args.vehicle_config_id, cached.image_url as string);
+        return cached.image_url as string;
+      }
 
       // YMMT-level cache hit — a sibling VIN with the same
       // year/make/model/trim already resolved an image for this
@@ -145,16 +152,7 @@ export const resolveVehicleImage = internalAction({
           );
         }
       }
-      if (args.vehicle_config_id) {
-        try {
-          await ctx.runMutation(internal.vehicles._stampConfigImage, {
-            vehicle_config_id: args.vehicle_config_id,
-            image_url: picked,
-          });
-        } catch (err) {
-          console.warn("[vehicle_image] failed to stamp config image_url:", err);
-        }
-      }
+      await stampConfig(ctx, args.vehicle_config_id, picked);
 
       return picked;
     }
@@ -162,6 +160,24 @@ export const resolveVehicleImage = internalAction({
     return null;
   },
 });
+
+/** Best-effort stamp of the config's YMMT cache. First-fetched-wins is enforced
+ *  in _stampConfigImage; a write failure must not lose the resolved URL. */
+async function stampConfig(
+  ctx: { runMutation: (ref: any, args: any) => Promise<any> },
+  vehicleConfigId: string | undefined,
+  imageUrl: string,
+): Promise<void> {
+  if (!vehicleConfigId) return;
+  try {
+    await ctx.runMutation(internal.vehicles._stampConfigImage, {
+      vehicle_config_id: vehicleConfigId as any,
+      image_url: imageUrl,
+    });
+  } catch (err) {
+    console.warn("[vehicle_image] failed to stamp config image_url:", err);
+  }
+}
 
 async function fetchVdb(url: string, apiKey: string): Promise<any | null> {
   const controller = new AbortController();

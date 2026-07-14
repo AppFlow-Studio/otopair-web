@@ -69,15 +69,15 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       label: "Partners",
       items: [
         { label: "Directory", href: "/shops/all" },
-        { label: "Onboarding Pipeline", href: "/shops/pipeline", phase: "P1" },
+        { label: "Onboarding Pipeline", href: "/shops/pipeline" },
       ],
     },
-    { label: "People", items: [{ label: "Mechanics", href: "/shops/mechanics", phase: "P1" }] },
+    { label: "People", items: [{ label: "Mechanics", href: "/shops/mechanics" }] },
     {
       label: "Supply",
       items: [
-        { label: "Capacity & Scheduling", href: "/shops/capacity", phase: "P1" },
-        { label: "Offerings Matrix", href: "/shops/offerings", phase: "P1" },
+        { label: "Capacity & Scheduling", href: "/shops/capacity" },
+        { label: "Offerings Matrix", href: "/shops/offerings" },
       ],
     },
     { label: "Money", items: [{ label: "Stripe Connect Health", href: "/shops/stripe-health" }] },

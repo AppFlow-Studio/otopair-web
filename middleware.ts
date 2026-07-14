@@ -26,6 +26,9 @@ const isPublicRoute = createRouteMatcher([
   // Walk-in customers without Clerk accounts need to reach the page from
   // the invoice email without being bounced to sign-in.
   "/receipts(.*)",
+  // Public car-data teaser (marketing) — anonymous lookup, layer-gated
+  // teaser subset served by convex/dataPublic.teaserLookup.
+  "/car-data(.*)",
 ]);
 
 const isPortalRoute = createRouteMatcher([

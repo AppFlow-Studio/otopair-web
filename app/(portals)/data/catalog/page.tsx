@@ -8,10 +8,12 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "@/app/(portals)/portal-session";
+import { ConfigPicker } from "@/components/portal/ConfigPicker";
 
 const CARD = "rounded-xl border border-slate-200 bg-white p-5";
 const PILL = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
@@ -54,6 +56,7 @@ function FillRing({ pct }: { pct: number | null }) {
 
 export default function VehicleCatalogPage() {
   const { token } = usePortalSession();
+  const router = useRouter();
   const data: FunctionReturnType<typeof api.dataCatalog.listConfigs> | undefined =
     useQuery(api.dataCatalog.listConfigs, { token });
   const stats = useQuery(api.portalStats.getStats, {
@@ -121,6 +124,16 @@ export default function VehicleCatalogPage() {
             <div className="text-xs font-medium text-slate-500">avg fill (filtered)</div>
           </div>
         </div>
+      </div>
+
+      {/* Zone 1b — jump straight to a workspace by VIN / year-make-model */}
+      <div className={`${CARD} py-4`}>
+        <ConfigPicker
+          token={token}
+          selected={null}
+          onSelect={(c) => c && router.push(`/data/catalog/${c.id}`)}
+          label="Jump to a vehicle's workspace (VIN · year/make/model · config_key)"
+        />
       </div>
 
       {/* Zone 2 — filter row */}

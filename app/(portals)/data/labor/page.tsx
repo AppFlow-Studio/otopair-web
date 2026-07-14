@@ -12,6 +12,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession } from "../../portal-session";
+import { ConfigPicker, type PickedConfig } from "@/components/portal/ConfigPicker";
 
 const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 
@@ -22,13 +23,6 @@ type ServiceOpt = {
   name: string;
   slug: string | null;
   default_labor_hours: number | null;
-};
-type ConfigHit = {
-  id: string;
-  config_key: string;
-  year: number;
-  pricing_tier: string | null;
-  enrichment_status: string | null;
 };
 type Obs = {
   id: string;
@@ -126,17 +120,7 @@ export default function LaborCommandCenterPage() {
   const services = useQuery(api.dataLabor.servicesList, { token });
 
   const [serviceId, setServiceId] = useState<string>("");
-  const [configSearch, setConfigSearch] = useState("");
-  const [selectedConfig, setSelectedConfig] = useState<{
-    id: string;
-    config_key: string;
-  } | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-
-  const configResults = useQuery(api.dataLabor.searchConfigs, {
-    token,
-    search: configSearch,
-  });
+  const [selectedConfig, setSelectedConfig] = useState<PickedConfig | null>(null);
 
   const ladder = useQuery(
     api.dataLabor.laborLadder,
@@ -232,60 +216,12 @@ export default function LaborCommandCenterPage() {
             )}
           </div>
 
-          <div className="relative">
-            <label className="text-xs font-semibold text-slate-600">
-              Vehicle config
-            </label>
-            <input
-              value={selectedConfig && !pickerOpen ? selectedConfig.config_key : configSearch}
-              onChange={(e) => {
-                setConfigSearch(e.target.value);
-                setPickerOpen(true);
-                setSelectedConfig(null);
-              }}
-              onFocus={() => setPickerOpen(true)}
-              placeholder="Search config_key — e.g. 2020_toyota_camry…"
-              className="mt-1.5 w-full rounded-lg border-[1.5px] border-slate-200 px-3 py-2 font-mono text-[13px] text-slate-900 outline-none focus:border-blue-500"
-            />
-            {pickerOpen && (
-              <div className="absolute z-10 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-                {configResults === undefined ? (
-                  <div className="px-3 py-2 text-sm text-slate-500">Loading…</div>
-                ) : configResults.results.length === 0 ? (
-                  <div className="px-3 py-2 text-sm text-slate-500">
-                    No configs match that search.
-                  </div>
-                ) : (
-                  <>
-                    {configResults.results.map((c: ConfigHit) => (
-                      <button
-                        key={c.id}
-                        onClick={() => {
-                          setSelectedConfig({ id: c.id, config_key: c.config_key });
-                          setPickerOpen(false);
-                        }}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-slate-50"
-                      >
-                        <span className="truncate font-mono text-[12px] text-slate-800">
-                          {c.config_key}
-                        </span>
-                        {c.pricing_tier && (
-                          <span className={`${pill} ml-auto bg-slate-100 text-slate-600`}>
-                            {c.pricing_tier}
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                    {configResults.truncated && (
-                      <div className="border-t border-slate-100 px-3 py-1.5 text-[11px] text-slate-400">
-                        Window truncated at 400 configs — narrow the search.
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+          <ConfigPicker
+            token={token}
+            selected={selectedConfig}
+            onSelect={setSelectedConfig}
+            label="Vehicle (VIN · year/make/model · config_key)"
+          />
         </div>
       </div>
 

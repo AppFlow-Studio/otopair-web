@@ -36,13 +36,16 @@ export const costSeries = query({
   args: { token: v.string(), days: v.optional(v.number()) },
   handler: async (ctx, { token, days }): Promise<CostSeriesResult> => {
     await requireDirector(ctx, token);
-    const windowDays = Math.min(Math.max(days ?? 90, 7), 180);
+    // SHORT live window only — runs carry errors/sanity_flags/field_gaps
+    // arrays, so a wide window is the same 16MB read-limit bug class that bit
+    // /data/sources (Jul 14). History comes from the data.costs.day.*
+    // snapshots (longRunSeries; backfilled via recomputeCostDays daysBack).
+    const windowDays = Math.min(Math.max(days ?? 14, 1), 30);
     const since = Date.now() - windowDays * DAY;
-    // 412 lifetime runs measured — 3000 leaves deep headroom; honest flag if hit.
     const runs = await ctx.db
       .query("enrichment_runs")
       .withIndex("by_created_at", (q) => q.gte("created_at", since))
-      .take(3000);
+      .take(1000);
     const buckets = new Map<string, CostDayBucket>();
     for (const r of runs) {
       const at = r.created_at ?? r._creationTime;
@@ -73,7 +76,7 @@ export const costSeries = query({
     return {
       days: out,
       window_days: windowDays,
-      truncated: runs.length === 3000,
+      truncated: runs.length === 1000,
       band: { low: 0.3, high: 0.6 },
     };
   },

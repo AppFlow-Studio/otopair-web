@@ -176,7 +176,7 @@ export default function CostsPage() {
           </div>
         )}
         {live?.truncated && (
-          <p className="mt-2 text-[11px] text-amber-600">window truncated at 3,000 runs</p>
+          <p className="mt-2 text-[11px] text-amber-600">live window truncated at 1,000 runs</p>
         )}
       </div>
 

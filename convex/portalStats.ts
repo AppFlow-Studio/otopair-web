@@ -600,11 +600,14 @@ export const recomputeEvidenceStats = internalMutation({
 // --- Daily cost snapshots (Costs & Credits page, Data spec §11) -------------
 // Recomputes the last 3 UTC days each run so late-arriving completed_at /
 // cost stamps self-heal. Each day is one bounded by_created_at window.
+// daysBack > 3 is the one-time backfill path:
+//   npx convex run portalStats:recomputeCostDays '{"daysBack":120}'
 export const recomputeCostDays = internalMutation({
-  args: {},
-  handler: async (ctx): Promise<{ days: number }> => {
+  args: { daysBack: v.optional(v.number()) },
+  handler: async (ctx, { daysBack }): Promise<{ days: number }> => {
     const now = Date.now();
-    for (let back = 0; back < 3; back++) {
+    const span = Math.min(Math.max(daysBack ?? 3, 1), 366);
+    for (let back = 0; back < span; back++) {
       const dayStart = new Date(now - back * DAY);
       dayStart.setUTCHours(0, 0, 0, 0);
       const start = dayStart.getTime();
@@ -623,7 +626,7 @@ export const recomputeCostDays = internalMutation({
         firecrawl_credits: runs.reduce((s, r) => s + (r.total_firecrawl_credits ?? 0), 0),
       });
     }
-    return { days: 3 };
+    return { days: span };
   },
 });
 

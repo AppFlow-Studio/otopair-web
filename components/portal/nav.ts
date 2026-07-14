@@ -97,7 +97,7 @@ export const NAV: Record<PortalId, NavGroup[]> = {
         { label: "Vehicle Catalog", href: "/data/catalog" },
         { label: "VIN Explorer", href: "/data/vins" },
         { label: "Parts", href: "/data/parts" },
-        { label: "Tire Intelligence", href: "/data/tires", phase: "P1" },
+        { label: "Tire Intelligence", href: "/data/tires" },
       ],
     },
     {
@@ -121,7 +121,7 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       items: [
         { label: "Verification", href: "/data/verification" },
         { label: "Vehicle ID", href: "/data/vehicle-id", phase: "P1" },
-        { label: "Coverage", href: "/data/coverage", phase: "P1" },
+        { label: "Coverage", href: "/data/coverage" },
         { label: "Provenance", href: "/data/provenance", phase: "P2" },
       ],
     },

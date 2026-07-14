@@ -122,7 +122,6 @@ export type CacheGroup = {
 };
 export type CacheDomainStat = { domain: string; count: number; success: number };
 export type ExpiringRow = {
-  id: string;
   cache_key: string;
   domain: string | null;
   source_type: string | null;
@@ -133,56 +132,45 @@ export type CacheOverviewResult = {
   by_domain: CacheDomainStat[];
   expiring_soon: ExpiringRow[];
   total: number;
-  truncated: boolean;
+  computed_at: number | null;
 };
 
 export const cacheOverview = query({
   args: { token: v.string() },
   handler: async (ctx, { token }): Promise<CacheOverviewResult> => {
     await requireDirector(ctx, token);
-    // 40 rows measured; window generous.
-    const rows = await ctx.db.query("scrape_cache").take(500);
-    const groups = new Map<string, CacheGroup>();
-    const byDomain = new Map<string, CacheDomainStat>();
-    for (const r of rows) {
-      const st = r.source_type ?? "(untyped)";
-      const g = groups.get(st) ?? {
-        source_type: st,
-        count: 0,
-        ttl_days: r.ttl_days ?? null,
-        newest_scraped_at: null,
-        success_count: 0,
-      };
-      g.count++;
-      if (r.ttl_days != null) g.ttl_days = r.ttl_days;
-      if (r.scraped_at != null)
-        g.newest_scraped_at = Math.max(g.newest_scraped_at ?? 0, r.scraped_at);
-      if (r.scrape_success === true) g.success_count++;
-      groups.set(st, g);
-      if (r.domain) {
-        const d = byDomain.get(r.domain) ?? { domain: r.domain, count: 0, success: 0 };
-        d.count++;
-        if (r.scrape_success === true) d.success++;
-        byDomain.set(r.domain, d);
-      }
+    // scrape_cache docs carry the full scraped page markdown — reading even a
+    // few hundred live blew the 16MB execution read limit (Jul 14). The
+    // rollup is materialized by the daily portalStats sweep ("cache" phase,
+    // 100 docs/link); this query reads ONLY the thin stat row.
+    const stat = await ctx.db
+      .query("portal_stats")
+      .withIndex("by_key", (q) => q.eq("key", "data.cache.summary"))
+      .first();
+    if (!stat) {
+      return { groups: [], by_domain: [], expiring_soon: [], total: 0, computed_at: null };
     }
-    const now = Date.now();
-    const expiring = await ctx.db
-      .query("scrape_cache")
-      .withIndex("by_expires_at", (q) => q.gte("expires_at", now).lte("expires_at", now + 7 * DAY))
-      .take(50);
+    const meta = (stat.meta ?? {}) as {
+      groups?: { source_type: string; n: number; ttl_days: number | null; newest: number; success: number }[];
+      by_domain?: { domain: string; n: number; success: number }[];
+      expiring_soon?: ExpiringRow[];
+    };
     return {
-      groups: [...groups.values()].sort((a, b) => b.count - a.count),
-      by_domain: [...byDomain.values()].sort((a, b) => b.count - a.count),
-      expiring_soon: expiring.map((r) => ({
-        id: String(r._id),
-        cache_key: r.cache_key,
-        domain: r.domain ?? null,
-        source_type: r.source_type ?? null,
-        expires_at: r.expires_at ?? 0,
+      groups: (meta.groups ?? []).map((g) => ({
+        source_type: g.source_type,
+        count: g.n,
+        ttl_days: g.ttl_days,
+        newest_scraped_at: g.newest > 0 ? g.newest : null,
+        success_count: g.success,
       })),
-      total: rows.length,
-      truncated: rows.length === 500,
+      by_domain: (meta.by_domain ?? []).map((d) => ({
+        domain: d.domain,
+        count: d.n,
+        success: d.success,
+      })),
+      expiring_soon: meta.expiring_soon ?? [],
+      total: stat.value,
+      computed_at: stat.computed_at,
     };
   },
 });
@@ -281,15 +269,16 @@ export const clearVehicleCache = mutation({
     if (reason.trim().length < 4) throw new Error("A reason is required.");
     const config = await ctx.db.get(configId);
     if (!config) throw new Error("That vehicle config no longer exists.");
-    // Cache rows are keyed by make/year (+ model). Bounded: one vehicle's
-    // cache is a handful of rows across source types.
+    // Cache rows are keyed by make/year (+ model). Bounded tightly: these
+    // docs carry full page markdown (megabytes each) and one vehicle's cache
+    // is a handful of rows across source types.
     const candidates = config.make_id
       ? await ctx.db
           .query("scrape_cache")
           .withIndex("by_make_year", (q) =>
             q.eq("make_id", config.make_id).eq("year", config.year),
           )
-          .take(50)
+          .take(15)
       : [];
     let deleted = 0;
     for (const row of candidates) {

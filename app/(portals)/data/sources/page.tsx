@@ -345,7 +345,10 @@ export default function SourcesPage() {
               <div className="rounded-xl border border-slate-200 bg-white p-4">
                 <div className="text-2xl font-bold text-slate-900">{cache.total}</div>
                 <div className="mt-1 text-xs font-medium text-slate-500">
-                  cached scrapes{cache.truncated ? " (window truncated at 500)" : ""}
+                  cached scrapes
+                  {cache.computed_at != null
+                    ? ` (daily rollup, ${new Date(cache.computed_at).toLocaleDateString()})`
+                    : " — rollup not computed yet: run portalStats:recomputeEvidenceStats"}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 bg-white p-4">

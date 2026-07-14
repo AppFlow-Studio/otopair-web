@@ -229,6 +229,7 @@ type SweepPhase =
   | "tires"
   | "tires_pricing"
   | "coverage"
+  | "cache"
   | "finalize";
 
 const B_FIELD_CAP = 200;
@@ -252,6 +253,7 @@ export const recomputeEvidenceStats = internalMutation({
         v.literal("tires"),
         v.literal("tires_pricing"),
         v.literal("coverage"),
+        v.literal("cache"),
         v.literal("finalize"),
       ),
     ),
@@ -266,6 +268,33 @@ export const recomputeEvidenceStats = internalMutation({
     perSource: v.optional(
       v.array(v.object({ source: v.string(), n: v.number(), newest: v.number() })),
     ),
+    // cache-phase accumulators (scrape_cache docs carry full page markdown —
+    // MEGABYTES each; this phase paginates 100/link and only ever forwards
+    // these thin aggregates between links)
+    cacheGroups: v.optional(
+      v.array(
+        v.object({
+          source_type: v.string(),
+          n: v.number(),
+          ttl_days: v.union(v.number(), v.null()),
+          newest: v.number(),
+          success: v.number(),
+        }),
+      ),
+    ),
+    cacheDomains: v.optional(
+      v.array(v.object({ domain: v.string(), n: v.number(), success: v.number() })),
+    ),
+    cacheExpiring: v.optional(
+      v.array(
+        v.object({
+          cache_key: v.string(),
+          domain: v.union(v.string(), v.null()),
+          source_type: v.union(v.string(), v.null()),
+          expires_at: v.number(),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const phase: SweepPhase = args.phase ?? "evidence";
@@ -279,6 +308,20 @@ export const recomputeEvidenceStats = internalMutation({
       bFields?: { field: string; n: number }[];
       pricedModelIds?: string[];
       perSource?: { source: string; n: number; newest: number }[];
+      cacheGroups?: {
+        source_type: string;
+        n: number;
+        ttl_days: number | null;
+        newest: number;
+        success: number;
+      }[];
+      cacheDomains?: { domain: string; n: number; success: number }[];
+      cacheExpiring?: {
+        cache_key: string;
+        domain: string | null;
+        source_type: string | null;
+        expires_at: number;
+      }[];
     }) => ctx.scheduler.runAfter(0, internal.portalStats.recomputeEvidenceStats, next);
 
     if (phase === "evidence") {
@@ -472,8 +515,79 @@ export const recomputeEvidenceStats = internalMutation({
           configs: configs.length,
         },
       );
-      await chain({ phase: "finalize" });
+      await chain({ phase: "cache" });
       return { phase, chained: true, configs: configs.length };
+    }
+
+    if (phase === "cache") {
+      // scrape_cache health rollup. Each doc carries the FULL scraped page
+      // markdown (often 100s of KB) — a .take(500) here blew the 16MB read
+      // limit live (Jul 14). 100 docs/link stays far under it; the page reads
+      // only the materialized data.cache.summary stat.
+      const page = await ctx.db
+        .query("scrape_cache")
+        .paginate({ cursor: args.cursor ?? null, numItems: 100 });
+      const groups = new Map(
+        (args.cacheGroups ?? []).map((g) => [g.source_type, { ...g }]),
+      );
+      const domains = new Map(
+        (args.cacheDomains ?? []).map((d) => [d.domain, { ...d }]),
+      );
+      const expiring = [...(args.cacheExpiring ?? [])];
+      const now = Date.now();
+      const total = (args.count ?? 0) + page.page.length;
+      for (const r of page.page) {
+        const st = r.source_type ?? "(untyped)";
+        const g = groups.get(st) ?? {
+          source_type: st,
+          n: 0,
+          ttl_days: null as number | null,
+          newest: 0,
+          success: 0,
+        };
+        g.n++;
+        if (r.ttl_days != null) g.ttl_days = r.ttl_days;
+        if (r.scraped_at != null) g.newest = Math.max(g.newest, r.scraped_at);
+        if (r.scrape_success === true) g.success++;
+        groups.set(st, g);
+        if (r.domain) {
+          const d = domains.get(r.domain) ?? { domain: r.domain, n: 0, success: 0 };
+          d.n++;
+          if (r.scrape_success === true) d.success++;
+          domains.set(r.domain, d);
+        }
+        if (
+          r.expires_at != null &&
+          r.expires_at >= now &&
+          r.expires_at <= now + 7 * DAY &&
+          expiring.length < 50
+        ) {
+          expiring.push({
+            cache_key: r.cache_key,
+            domain: r.domain ?? null,
+            source_type: r.source_type ?? null,
+            expires_at: r.expires_at,
+          });
+        }
+      }
+      if (!page.isDone) {
+        await chain({
+          phase: "cache",
+          cursor: page.continueCursor,
+          count: total,
+          cacheGroups: [...groups.values()],
+          cacheDomains: [...domains.values()],
+          cacheExpiring: expiring,
+        });
+        return { phase, chained: true, count: total };
+      }
+      await upsertStat(ctx, "data.cache.summary", total, {
+        groups: [...groups.values()].sort((a, b) => b.n - a.n),
+        by_domain: [...domains.values()].sort((a, b) => b.n - a.n),
+        expiring_soon: expiring.sort((a, b) => a.expires_at - b.expires_at),
+      });
+      await chain({ phase: "finalize" });
+      return { phase, chained: true, count: total };
     }
 
     // finalize: vehicle_configs (384 measured — safe to collect)

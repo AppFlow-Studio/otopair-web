@@ -211,5 +211,13 @@ crons.daily(
   internal.portalStats.recomputeEvidenceStats,
   {},
 );
+// Daily cost snapshots for /data/costs — recomputes the last 3 UTC days so
+// late-arriving run stamps self-heal (each day one bounded window read).
+crons.daily(
+  "portal-stats-cost-day",
+  { hourUTC: 6, minuteUTC: 45 },
+  internal.portalStats.recomputeCostDays,
+  {},
+);
 
 export default crons;

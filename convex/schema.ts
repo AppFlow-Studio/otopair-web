@@ -3208,6 +3208,38 @@ export default defineSchema({
     .index("by_assignee", ["assignee", "status"])
     .index("by_source", ["source_stream", "source_id"]),
 
+  // Data incidents — institutional memory for data-quality events (Data spec
+  // §10.4/§13). Seeded with the two historical incidents (Ford-on-Alfa, VD
+  // labor under-read) by migrations/seedDataIncidents.ts; new rows come from
+  // the Provenance page's declare ceremony only.
+  data_incidents: defineTable({
+    // Display number ("#1") — assigned at declare time, monotonic.
+    number: v.number(),
+    // Stable slug — the seed migration's idempotency key.
+    slug: v.string(),
+    title: v.string(),
+    severity: v.union(v.literal("sev1"), v.literal("sev2"), v.literal("sev3")),
+    status: v.union(v.literal("open"), v.literal("monitoring"), v.literal("resolved")),
+    summary: v.string(),
+    root_cause: v.optional(v.string()),
+    // Deployment-scope caveat (Incident #1: backfill scope is per-deployment).
+    scope_note: v.optional(v.string()),
+    affected_entity_type: v.optional(v.string()),
+    affected_count: v.optional(v.number()),
+    // Pre-filled context when declared from another page (reserved).
+    source_context: v.optional(v.string()),
+    declared_by: v.string(),
+    declared_by_id: v.optional(v.id("director_users")),
+    declared_at: v.number(),
+    resolved_by: v.optional(v.string()),
+    resolved_at: v.optional(v.number()),
+    resolution_note: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_slug", ["slug"])
+    .index("by_number", ["number"]),
+
   // Materialized KPI counters for the internal portals (decision #3, R2
   // class). Written only by portalStats.ts summarizers on cron; read via the
   // gated portalStats.getStats. Realtime (R1) metrics never land here — they

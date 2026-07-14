@@ -1015,3 +1015,106 @@ export const assembleVehicle = internalQuery({
     };
   },
 });
+
+// ─── Sandbox P2 deltas (spec §12 gaps) ───────────────────────────────────────
+
+export type UsageDayBucket = { date: string; requests: number; errors: number };
+
+/** Per-key daily usage buckets — the spec's "usage chart per key". Window
+ *  bounded by the by_key_and_time index (default 30 days). */
+export const usageSeriesByKey = query({
+  args: { token: v.string(), id: v.id("api_keys"), days: v.optional(v.number()) },
+  handler: async (ctx, { token, id, days }): Promise<UsageDayBucket[]> => {
+    await requireDirector(ctx, token);
+    const windowDays = Math.min(Math.max(days ?? 30, 1), 90);
+    const since = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+    const rows = await ctx.db
+      .query("api_usage")
+      .withIndex("by_key_and_time", (q) => q.eq("api_key_id", id).gte("created_at", since))
+      .take(2000);
+    const buckets = new Map<string, UsageDayBucket>();
+    for (const r of rows) {
+      const date = new Date(r.created_at).toISOString().slice(0, 10);
+      const b = buckets.get(date) ?? { date, requests: 0, errors: 0 };
+      b.requests++;
+      if (r.status >= 400) b.errors++;
+      buckets.set(date, b);
+    }
+    return [...buckets.values()].sort((a, b) => a.date.localeCompare(b.date));
+  },
+});
+
+export type GateCheckRow = {
+  config_key: string;
+  served: number;
+  excluded_b: number;
+  excluded_x: number;
+  clean: boolean;
+};
+export type GateCheckResult = {
+  rows: GateCheckRow[];
+  all_clean: boolean;
+  total_excluded_b: number;
+  note: string;
+};
+
+/** The P2 exit-test harness: run the maintenance gate over the top-25 configs
+ *  by fill rate and assert zero licensed-B / X fields would be SERVED. Uses
+ *  the same collectSpecFields + latestFieldEvidence + deriveLayer/isServable
+ *  path the live endpoint uses, so the numbers cross-check the
+ *  data.layer_b_exposure stat by construction. */
+export const gateCheck = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }): Promise<GateCheckResult> => {
+    await requireDirector(ctx, token);
+    const configs = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_fill_rate")
+      .order("desc")
+      .take(25);
+    const rows: GateCheckRow[] = [];
+    let totalB = 0;
+    for (const c of configs) {
+      const engine = c.engine_id ? await ctx.db.get(c.engine_id) : null;
+      const transmission = c.transmission_id ? await ctx.db.get(c.transmission_id) : null;
+      let served = 0;
+      let excludedB = 0;
+      let excludedX = 0;
+      let leaked = false;
+      for (const f of collectSpecFields(c, engine, transmission)) {
+        if (f.value == null) continue;
+        const ev = await latestFieldEvidence(ctx, c, f.field_name);
+        const layer = ev
+          ? deriveLayer(ev.source_type, ev.confidence)
+          : deriveLayer(null, null); // stored value without evidence → C by default
+        const servable = isServable(layer.letter, ev?.source_type ?? null);
+        if (servable) {
+          served++;
+          // A served field must never carry licensed-B or X — the exit test.
+          if (layer.letter === "X") leaked = true;
+          if (layer.letter === "B" && (ev?.source_type ?? "").toLowerCase() !== "nhtsa")
+            leaked = true;
+        } else if (layer.letter === "B") {
+          excludedB++;
+        } else if (layer.letter === "X") {
+          excludedX++;
+        }
+      }
+      totalB += excludedB;
+      rows.push({
+        config_key: c.config_key,
+        served,
+        excluded_b: excludedB,
+        excluded_x: excludedX,
+        clean: !leaked,
+      });
+    }
+    return {
+      rows,
+      all_clean: rows.every((r) => r.clean),
+      total_excluded_b: totalB,
+      note:
+        "Same gate path as GET /v0/maintenance (collectSpecFields → latestFieldEvidence → deriveLayer → isServable). Excluded-B totals reconcile with data.layer_b_exposure.",
+    };
+  },
+});

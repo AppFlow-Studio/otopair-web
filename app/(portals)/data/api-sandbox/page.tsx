@@ -235,6 +235,7 @@ function KeysSection() {
   const keys: ApiKeyRow[] | undefined = useQuery(api.dataApi.listKeys, { token });
   const revokeKey = useMutation(api.dataApi.revokeKey);
   const [revoking, setRevoking] = useState<{ id: Id<"api_keys">; name: string } | null>(null);
+  const [chartFor, setChartFor] = useState<{ id: Id<"api_keys">; name: string } | null>(null);
 
   return (
     <div className="space-y-3">
@@ -300,7 +301,17 @@ function KeysSection() {
                         <span className={`${PILL} bg-emerald-50 text-emerald-700`}>active</span>
                       )}
                     </td>
-                    <td className="py-2.5 text-right">
+                    <td className="py-2.5 text-right whitespace-nowrap">
+                      <button
+                        onClick={() =>
+                          setChartFor(
+                            chartFor?.id === k.id ? null : { id: k.id, name: k.name },
+                          )
+                        }
+                        className="mr-3 text-[12px] font-semibold text-blue-600 hover:underline"
+                      >
+                        {chartFor?.id === k.id ? "hide chart" : "chart"}
+                      </button>
                       {!k.revoked_at && canManage && (
                         <button
                           onClick={() => setRevoking({ id: k.id, name: k.name })}
@@ -318,6 +329,8 @@ function KeysSection() {
         )}
       </div>
 
+      {chartFor && <KeyUsageChart id={chartFor.id} name={chartFor.name} />}
+
       <Ceremony
         open={revoking !== null}
         onOpenChange={(o) => !o && setRevoking(null)}
@@ -334,6 +347,124 @@ function KeysSection() {
           setRevoking(null);
         }}
       />
+    </div>
+  );
+}
+
+// Per-key daily request sparkline (spec §12 "usage chart per key").
+function KeyUsageChart({ id, name }: { id: Id<"api_keys">; name: string }) {
+  const { token } = usePortalSession();
+  const series = useQuery(api.dataApi.usageSeriesByKey, { token, id });
+  return (
+    <div className={CARD}>
+      <div className="text-[13px] font-semibold text-slate-900">
+        {name} — requests by day (30d)
+      </div>
+      {series === undefined ? (
+        <div className="mt-2 h-16 animate-pulse rounded bg-slate-100" />
+      ) : series.length === 0 ? (
+        <p className="mt-2 text-[13px] text-slate-400">No requests in the window.</p>
+      ) : (
+        <div className="mt-3 flex items-end gap-1 overflow-x-auto pb-1">
+          {series.map((d: { date: string; requests: number; errors: number }) => {
+            const maxR = Math.max(...series.map((x: { requests: number }) => x.requests), 1);
+            return (
+              <div
+                key={d.date}
+                className="flex w-5 shrink-0 flex-col items-center"
+                title={`${d.date}: ${d.requests} requests, ${d.errors} errors`}
+              >
+                <div
+                  className="w-3.5 rounded-t-sm bg-blue-500"
+                  style={{ height: 3 + (d.requests / maxR) * 56 }}
+                />
+                {d.errors > 0 && <div className="mt-0.5 h-1 w-3.5 rounded-sm bg-red-500" />}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// P2 exit-test harness (spec p.22): top-25 configs by fill rate through the
+// live gate path — zero served licensed-B/X fields = clean.
+function GateCheckPanel() {
+  const { token } = usePortalSession();
+  const [armed, setArmed] = useState(false);
+  const check = useQuery(api.dataApi.gateCheck, armed ? { token } : "skip");
+  return (
+    <div className={CARD}>
+      <div className="flex items-center gap-2">
+        <div className="text-[13px] font-semibold text-slate-900">
+          Gate check — P2 exit test
+        </div>
+        {check && (
+          <span
+            className={`${PILL} ${check.all_clean ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}
+          >
+            {check.all_clean ? "CLEAN — no B/X served" : "LEAK DETECTED"}
+          </span>
+        )}
+        <button
+          onClick={() => setArmed(true)}
+          className="ml-auto rounded-lg bg-slate-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-slate-700"
+        >
+          {armed ? "Re-run" : "Run over top-25 configs"}
+        </button>
+      </div>
+      <p className="mt-1 text-[12px] text-slate-500">
+        Runs the /v0/maintenance gate path over the 25 highest-fill configs and asserts no
+        licensed-B or X field would be served. Excluded-B totals reconcile with the
+        provenance page&apos;s Layer-B exposure stat (same derivation).
+      </p>
+      {armed &&
+        (check === undefined ? (
+          <div className="mt-3 h-24 animate-pulse rounded bg-slate-100" />
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <div className="mb-2 text-[12px] text-slate-500">
+              total excluded-B across the set: {check.total_excluded_b}
+            </div>
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className={TH}>
+                  <th className="pb-2 pr-4">Config</th>
+                  <th className="pb-2 pr-4">Served</th>
+                  <th className="pb-2 pr-4">Excluded B</th>
+                  <th className="pb-2 pr-4">Excluded X</th>
+                  <th className="pb-2">Verdict</th>
+                </tr>
+              </thead>
+              <tbody>
+                {check.rows.map(
+                  (r: {
+                    config_key: string;
+                    served: number;
+                    excluded_b: number;
+                    excluded_x: number;
+                    clean: boolean;
+                  }) => (
+                    <tr key={r.config_key} className="border-b border-slate-50 last:border-0">
+                      <td className={`py-1.5 pr-4 ${MONO} text-slate-700`}>{r.config_key}</td>
+                      <td className="py-1.5 pr-4 tabular-nums">{r.served}</td>
+                      <td className="py-1.5 pr-4 tabular-nums">{r.excluded_b}</td>
+                      <td className="py-1.5 pr-4 tabular-nums">{r.excluded_x}</td>
+                      <td className="py-1.5">
+                        <span
+                          className={`${PILL} ${r.clean ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}
+                        >
+                          {r.clean ? "clean" : "LEAK"}
+                        </span>
+                      </td>
+                    </tr>
+                  ),
+                )}
+              </tbody>
+            </table>
+          </div>
+        ))}
     </div>
   );
 }
@@ -516,6 +647,7 @@ export default function ApiSandboxPage() {
       <section id="usage" className="scroll-mt-16 space-y-3">
         <h2 className="text-sm font-semibold text-slate-900">Usage</h2>
         <UsageSection />
+        <GateCheckPanel />
       </section>
     </div>
   );

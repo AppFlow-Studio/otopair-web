@@ -43,6 +43,7 @@ import type * as dataOverview from "../dataOverview.js";
 import type * as dataParts from "../dataParts.js";
 import type * as dataPartsPricing from "../dataPartsPricing.js";
 import type * as dataPassports from "../dataPassports.js";
+import type * as dataPricingEngine from "../dataPricingEngine.js";
 import type * as dataProvenance from "../dataProvenance.js";
 import type * as dataServiceCatalog from "../dataServiceCatalog.js";
 import type * as dataSources from "../dataSources.js";
@@ -450,6 +451,7 @@ declare const fullApi: ApiFromModules<{
   dataParts: typeof dataParts;
   dataPartsPricing: typeof dataPartsPricing;
   dataPassports: typeof dataPassports;
+  dataPricingEngine: typeof dataPricingEngine;
   dataProvenance: typeof dataProvenance;
   dataServiceCatalog: typeof dataServiceCatalog;
   dataSources: typeof dataSources;

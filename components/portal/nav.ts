@@ -113,7 +113,7 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       items: [
         { label: "Labor Times", href: "/data/labor" },
         { label: "Parts Pricing", href: "/data/parts-pricing" },
-        { label: "Pricing Engine", href: "/data/pricing-engine", phase: "P2" },
+        { label: "Pricing Engine", href: "/data/pricing-engine" },
       ],
     },
     {

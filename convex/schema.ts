@@ -3163,14 +3163,19 @@ export default defineSchema({
       v.union(v.literal("maintenance:read"), v.literal("labor:read"), v.literal("media:read")),
     ),
     rate_limit_per_min: v.number(),
-    created_by: v.id("director_users"),
+    // Team-minted keys carry the director who created them; self-serve dev
+    // keys (the /developers dashboard) carry owner_user_id instead — a key
+    // has exactly one of the two.
+    created_by: v.optional(v.id("director_users")),
+    owner_user_id: v.optional(v.id("users")),
     created_at: v.number(),
     revoked_at: v.optional(v.number()),
     last_used_at: v.optional(v.number()),
     request_count: v.number(),
   })
     .index("by_key_hash", ["key_hash"])
-    .index("by_created_at", ["created_at"]),
+    .index("by_created_at", ["created_at"])
+    .index("by_owner", ["owner_user_id"]),
 
   // Per-request usage metering for api_keys (the future billing meter) and
   // the rate-limit window source.

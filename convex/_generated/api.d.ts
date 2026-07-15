@@ -73,6 +73,7 @@ import type * as devOnly_validateQuoteEngine from "../devOnly/validateQuoteEngin
 import type * as devOnly_vdbProbe from "../devOnly/vdbProbe.js";
 import type * as devOnly_verifyLabor from "../devOnly/verifyLabor.js";
 import type * as devOnly_verifyParts from "../devOnly/verifyParts.js";
+import type * as devPortal from "../devPortal.js";
 import type * as devScratch from "../devScratch.js";
 import type * as diagnoseVin from "../diagnoseVin.js";
 import type * as director from "../director.js";
@@ -495,6 +496,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/vdbProbe": typeof devOnly_vdbProbe;
   "devOnly/verifyLabor": typeof devOnly_verifyLabor;
   "devOnly/verifyParts": typeof devOnly_verifyParts;
+  devPortal: typeof devPortal;
   devScratch: typeof devScratch;
   diagnoseVin: typeof diagnoseVin;
   director: typeof director;

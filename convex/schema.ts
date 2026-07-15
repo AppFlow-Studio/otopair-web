@@ -3160,7 +3160,13 @@ export default defineSchema({
     // First 12 chars of the plaintext ("otp_live_ab…") for display/support.
     prefix: v.string(),
     scopes: v.array(
-      v.union(v.literal("maintenance:read"), v.literal("labor:read"), v.literal("media:read")),
+      v.union(
+        v.literal("maintenance:read"),
+        v.literal("labor:read"),
+        v.literal("media:read"),
+        v.literal("enrich:write"),
+        v.literal("service_history:read"),
+      ),
     ),
     rate_limit_per_min: v.number(),
     // Team-minted keys carry the director who created them; self-serve dev

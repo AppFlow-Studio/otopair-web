@@ -2,9 +2,12 @@
 // External Data API (Data spec §12) — key-authed read access to the enriched
 // vehicle catalog, with the sellability gate applied VISIBLY.
 //
-//   GET /v0/maintenance?config_key=…|vin=…      scope maintenance:read
-//   GET /v0/labor?config_key=…|vin=…[&service=] scope labor:read
-//   GET /v0/vehicle-image?vin=…|ymmt|config_key scope media:read
+//   GET  /v0/maintenance?config_key=…|vin=…      scope maintenance:read
+//   GET  /v0/labor?config_key=…|vin=…[&service=] scope labor:read
+//   GET  /v0/vehicle?vin=…|ymmt|config_key       scope maintenance:read
+//   GET  /v0/vehicle-image?vin=…|ymmt|config_key scope media:read
+//   GET  /v0/service-history?vin=…               scope service_history:read
+//   POST /v0/enrich {vin} (+ GET status)         scope enrich:write
 //
 // The gate (convex/lib/dataLayers.ts): Layer A (OEM/official), C
 // (web-search/scraped — our own enrichment work, the product per team
@@ -14,9 +17,11 @@
 // response with its blocking layer — the gate is a feature, not a filter to
 // hide.
 //
-// Labor serves ONLY empirical_* values — "the one labor layer that is
-// unambiguously ours" (spec §12); book_hours (RepairPal/MOTOR/VDB blend) is
-// internal-use and never leaves.
+// Labor serves empirical_* values — "the one labor layer that is
+// unambiguously ours" (spec §12) — plus tier-model ESTIMATES gated through
+// lib/publicLabor.ts (the Camry-anchor × own-multiplier derivation). Raw
+// book_hours (RepairPal/MOTOR/VDB blend) is internal-use and never leaves;
+// laborGateCheck is the exit test.
 //
 // Keys: otp_live_… plaintext shown once; SHA-256 hash stored. Per-key
 // rate limit enforced over an api_usage index window; every request metered.
@@ -28,15 +33,38 @@ import { requireDirector, logAudit, roleHasCapability, type DirectorRole } from 
 import { deriveLayer, isServable, LAYER_FORMULA, type LayerLetter } from "./lib/dataLayers";
 import { collectSpecFields, latestFieldEvidence } from "./dataCatalog";
 import { isPoisonPriceType, isNonPooledPriceType } from "./lib/priceTypes";
-import { resolveLaborHours, detectTier } from "./lib/quoteEngine";
+import { detectTier } from "./lib/quoteEngine";
+import { resolvePublicLaborEstimate } from "./lib/publicLabor";
+import { computeLaborTierFloorHours } from "./lib/laborFallback";
+import type { VehicleTier } from "./lib/vehicleTiers";
 import { getApplicableServices } from "./services/applicability";
 import type { QueryCtx } from "./_generated/server";
 import { action } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 
-export const API_SCOPES = ["maintenance:read", "labor:read", "media:read"] as const;
+export const API_SCOPES = [
+  "maintenance:read",
+  "labor:read",
+  "media:read",
+  "enrich:write",
+  "service_history:read",
+] as const;
 export type ApiScope = (typeof API_SCOPES)[number];
 const DEFAULT_RATE_LIMIT_PER_MIN = 60;
+// Daily cost guardrails, metered from api_usage rows (enforced in http.ts):
+// only 202 "scheduled" enrich responses and live VDB image fetches count.
+export const ENRICH_DAILY_QUOTA = 5;
+export const IMAGE_LIVE_FETCH_DAILY_CAP = 10;
+
+/** One validator for every place that accepts key scopes — keep in sync with
+ *  API_SCOPES and schema.ts api_keys.scopes. */
+const scopeValidator = v.union(
+  v.literal("maintenance:read"),
+  v.literal("labor:read"),
+  v.literal("media:read"),
+  v.literal("enrich:write"),
+  v.literal("service_history:read"),
+);
 
 // ─── Key auth plumbing (used by http.ts) ─────────────────────────────────────
 
@@ -230,6 +258,17 @@ export type LaborResponse = {
     p25_hours: number | null;
     p75_hours: number | null;
   }>;
+  /** Gated estimate for every applicable service (lib/publicLabor.ts):
+   *  "empirical" = measured Otopair jobs; "model_estimate" = our own
+   *  Camry-anchored tier model. Licensed book-time blends never appear. */
+  estimates: Array<{
+    service: string;
+    name: string;
+    estimated_hours: number;
+    estimate_source: "empirical" | "model_estimate";
+    estimate_confidence: number | null;
+  }>;
+  tier: string | null;
   note: string;
 } | null;
 
@@ -268,11 +307,50 @@ export const assembleLabor = internalQuery({
       });
     }
 
+    // ── Estimates: the quote engine's answer for every applicable service,
+    //    gated through lib/publicLabor.ts (empirical | model_estimate only).
+    const estimates: NonNullable<LaborResponse>["estimates"] = [];
+    const tier = c.pricing_tier ?? (await detectTier(ctx, c));
+    if (tier) {
+      for (const svc of await getApplicableServices(ctx, c._id)) {
+        const slug = svc.slug ?? String(svc._id);
+        if (service && slug !== service) continue;
+        let est = await resolvePublicLaborEstimate(ctx, {
+          vehicle_config_id: c._id,
+          service_id: svc._id,
+          vehicle_tier: tier as VehicleTier,
+        });
+        if (!est && svc.default_labor_hours != null) {
+          // The spec minimum every booking falls back to when the ladder refuses.
+          est = {
+            hours: svc.default_labor_hours,
+            source: "model_estimate",
+            confidence: 0.2,
+            tier_floor_applied: false,
+          };
+        }
+        if (est) {
+          estimates.push({
+            service: slug,
+            name: svc.name ?? slug,
+            estimated_hours: est.hours,
+            estimate_source: est.source,
+            estimate_confidence: est.confidence,
+          });
+        }
+      }
+    }
+
     return {
       object: "empirical_labor",
       config_key: c.config_key ?? null,
       services,
-      note: "Empirical values only — measured from completed Otopair jobs. Book-time blends are not served by this API.",
+      estimates,
+      tier: tier ?? null,
+      note:
+        "services[] are empirical values measured from completed Otopair jobs. estimates[] blend " +
+        "empirical with our own Camry-anchored tier model (model_estimate). Licensed book-time " +
+        "blends are never served by this API.",
     };
   },
 });
@@ -284,9 +362,7 @@ export const _insertKey = internalMutation({
     name: v.string(),
     key_hash: v.string(),
     prefix: v.string(),
-    scopes: v.array(
-      v.union(v.literal("maintenance:read"), v.literal("labor:read"), v.literal("media:read")),
-    ),
+    scopes: v.array(scopeValidator),
     rate_limit_per_min: v.number(),
     created_by: v.id("director_users"),
     actor_name: v.string(),
@@ -322,9 +398,7 @@ export const createKey = action({
   args: {
     token: v.string(),
     name: v.string(),
-    scopes: v.array(
-      v.union(v.literal("maintenance:read"), v.literal("labor:read"), v.literal("media:read")),
-    ),
+    scopes: v.array(scopeValidator),
     rate_limit_per_min: v.optional(v.number()),
   },
   handler: async (
@@ -604,6 +678,51 @@ async function resolveByYmmt(
   return { config: pool.length === 1 ? pool[0] : null, matches };
 }
 
+/** Completed platform visits for a VIN (bookings.by_vin), shop names joined,
+ *  date-desc. Shared by assembleVehicle's history block (which serves shop
+ *  names) and assembleServiceHistory (which deliberately drops them). */
+async function collectCompletedVisits(
+  ctx: QueryCtx,
+  vinUpper: string,
+  serviceById: Map<string, Doc<"services">>,
+): Promise<
+  Array<{ booking: Doc<"bookings">; date: string | null; services: string[]; shop: string | null }>
+> {
+  const visitsRaw = await ctx.db
+    .query("bookings")
+    .withIndex("by_vin", (q) => q.eq("vin", vinUpper))
+    .take(50);
+  const shopNames = new Map<string, string | null>();
+  const visits: Array<{
+    booking: Doc<"bookings">;
+    date: string | null;
+    services: string[];
+    shop: string | null;
+  }> = [];
+  for (const b of visitsRaw) {
+    if (b.status !== "completed") continue;
+    let shop: string | null = null;
+    if (b.shop_id) {
+      if (shopNames.has(String(b.shop_id))) {
+        shop = shopNames.get(String(b.shop_id)) ?? null;
+      } else {
+        shop = (await ctx.db.get(b.shop_id))?.name ?? null;
+        shopNames.set(String(b.shop_id), shop);
+      }
+    }
+    visits.push({
+      booking: b,
+      date: b.scheduled_date ?? null,
+      services: (b.service_ids ?? [])
+        .map((id) => serviceById.get(String(id))?.name)
+        .filter((n): n is string => Boolean(n)),
+      shop,
+    });
+  }
+  visits.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  return visits;
+}
+
 export type VehicleResponse =
   | {
       object: "vehicle";
@@ -785,11 +904,11 @@ export const assembleVehicle = internalQuery({
       return e;
     };
 
-    // ── Labor for EVERY bookable service — the SAME resolver the booking
-    //    flow runs (bookings.resolveBookingLaborMinutes → resolveLaborHours):
-    //    empirical → quality-gated book hours → sibling chassis → tier floor
-    //    → tier estimate; services.default_labor_hours is the final spec
-    //    minimum, so hours are never null for an applicable service. ──
+    // ── Labor for EVERY bookable service — the booking flow's ladder
+    //    (resolveLaborHours) gated through lib/publicLabor.ts: only
+    //    "empirical" and "model_estimate" (the Camry×tier derivation) leave;
+    //    licensed book-hour resolutions are substituted with the tier floor.
+    //    services.default_labor_hours remains the final spec minimum. ──
     const applicableServices = await getApplicableServices(ctx, c._id);
     const tier = c.pricing_tier ?? (await detectTier(ctx, c));
     const empiricalBySvc = new Map<string, { hours: number; n: number }>();
@@ -849,17 +968,17 @@ export const assembleVehicle = internalQuery({
 
       let resolved: { hours: number; source: string; confidence: number | null; floor: boolean } | null = null;
       if (tier) {
-        const res = await resolveLaborHours(ctx, {
+        const est = await resolvePublicLaborEstimate(ctx, {
           vehicle_config_id: c._id,
           service_id: svc._id,
           vehicle_tier: tier,
         });
-        if (res.ok) {
+        if (est) {
           resolved = {
-            hours: res.hours,
-            source: res.source,
-            confidence: res.confidence,
-            floor: res.tier_floor_applied === true,
+            hours: est.hours,
+            source: est.source,
+            confidence: est.confidence,
+            floor: est.tier_floor_applied,
           };
         }
       }
@@ -896,13 +1015,13 @@ export const assembleVehicle = internalQuery({
       if (!entry.name) entry.name = svcDoc.name;
       let resolved: { hours: number; source: string; confidence: number | null; floor: boolean } | null = null;
       if (tier) {
-        const res = await resolveLaborHours(ctx, {
+        const est = await resolvePublicLaborEstimate(ctx, {
           vehicle_config_id: c._id,
           service_id: svcDoc._id,
           vehicle_tier: tier,
         });
-        if (res.ok) {
-          resolved = { hours: res.hours, source: res.source, confidence: res.confidence, floor: res.tier_floor_applied === true };
+        if (est) {
+          resolved = { hours: est.hours, source: est.source, confidence: est.confidence, floor: est.tier_floor_applied };
         }
       }
       if (!resolved && svcDoc.default_labor_hours != null) {
@@ -925,33 +1044,12 @@ export const assembleVehicle = internalQuery({
         .query("vehicle_passports")
         .withIndex("by_vin", (q) => q.eq("vin", vinUpper))
         .first();
-      const visitsRaw = await ctx.db
-        .query("bookings")
-        .withIndex("by_vin", (q) => q.eq("vin", vinUpper))
-        .take(50);
-      const shopNames = new Map<string, string | null>();
-      const visits: Array<{ date: string | null; status: string; services: string[]; shop: string | null }> = [];
-      for (const b of visitsRaw) {
-        if (b.status !== "completed") continue;
-        let shop: string | null = null;
-        if (b.shop_id) {
-          if (shopNames.has(String(b.shop_id))) {
-            shop = shopNames.get(String(b.shop_id)) ?? null;
-          } else {
-            shop = (await ctx.db.get(b.shop_id))?.name ?? null;
-            shopNames.set(String(b.shop_id), shop);
-          }
-        }
-        visits.push({
-          date: b.scheduled_date ?? null,
-          status: b.status,
-          services: (b.service_ids ?? [])
-            .map((id) => serviceById.get(String(id))?.name)
-            .filter((n): n is string => Boolean(n)),
-          shop,
-        });
-      }
-      visits.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+      const visits = (await collectCompletedVisits(ctx, vinUpper, serviceById)).map((vst) => ({
+        date: vst.date,
+        status: vst.booking.status,
+        services: vst.services,
+        shop: vst.shop,
+      }));
       history = {
         passport: passport
           ? {
@@ -1124,6 +1222,80 @@ export const gateCheck = query({
   },
 });
 
+export type LaborGateCheckRow = {
+  config_key: string;
+  services_checked: number;
+  empirical: number;
+  model_estimate: number;
+  clean: boolean;
+};
+export type LaborGateCheckResult = {
+  rows: LaborGateCheckRow[];
+  all_clean: boolean;
+  note: string;
+};
+
+/** Exit test for the public labor gate (lib/publicLabor.ts): over the top-25
+ *  configs by fill rate, every estimate the /v0 surface would serve must be
+ *  "empirical" or "model_estimate", and every model_estimate must equal the
+ *  recomputed Camry×tier floor — proof no licensed book-hours leak.
+ *  Run: npx convex run dataApi:laborGateCheck '{"token":"…"}' */
+export const laborGateCheck = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }): Promise<LaborGateCheckResult> => {
+    await requireDirector(ctx, token);
+    const configs = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_fill_rate")
+      .order("desc")
+      .take(25);
+    const rows: LaborGateCheckRow[] = [];
+    for (const c of configs) {
+      const tier = c.pricing_tier ?? (await detectTier(ctx, c));
+      let checked = 0;
+      let empirical = 0;
+      let modelEstimate = 0;
+      let clean = true;
+      if (tier) {
+        for (const svc of await getApplicableServices(ctx, c._id)) {
+          const est = await resolvePublicLaborEstimate(ctx, {
+            vehicle_config_id: c._id,
+            service_id: svc._id,
+            vehicle_tier: tier as VehicleTier,
+          });
+          if (!est) continue;
+          checked++;
+          if (est.source === "empirical") {
+            empirical++;
+          } else if (est.source === "model_estimate") {
+            modelEstimate++;
+            const floor = await computeLaborTierFloorHours(ctx, {
+              serviceId: svc._id,
+              vehicleTier: tier as unknown as string,
+            });
+            if (floor == null || Math.abs(est.hours - floor) > 1e-9) clean = false;
+          } else {
+            clean = false; // fails closed on any future source-label drift
+          }
+        }
+      }
+      rows.push({
+        config_key: c.config_key,
+        services_checked: checked,
+        empirical,
+        model_estimate: modelEstimate,
+        clean,
+      });
+    }
+    return {
+      rows,
+      all_clean: rows.every((r) => r.clean),
+      note:
+        "Same path as GET /v0/labor estimates[] (resolvePublicLaborEstimate). Every model_estimate must equal the recomputed Camry×tier floor; any other source label fails closed.",
+    };
+  },
+});
+
 // ─── /v0/vehicle-image — vehicle media (scope media:read) ────────────────────
 // Serves the cached vehicle render for a config (VIN / YMMT / config_key).
 // Source today: Vehicle Databases' vehicle-images API (EVOX renders), cached
@@ -1219,5 +1391,274 @@ export const assembleVehicleImage = internalQuery({
         : null,
       meta: { generated_at: Date.now() },
     };
+  },
+});
+
+/** config_key → { id, sibling_vin } for the /v0/vehicle-image fetch-on-miss:
+ *  the id lets resolveVehicleImage stamp the config's YMMT cache, and the
+ *  sibling VIN makes the VDB call actually land — VDB's YMMT endpoint wants
+ *  its own verbose trim names ("SE 4dr All-wheel Drive CVT"), so plain trims
+ *  rarely match, while the VIN endpoint is reliable (same trick as
+ *  dataCatalog.fetchConfigImage). */
+export const configForImageFetch = internalQuery({
+  args: { config_key: v.string() },
+  handler: async (
+    ctx,
+    { config_key },
+  ): Promise<{ id: Id<"vehicle_configs">; sibling_vin: string | null } | null> => {
+    const c = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_config_key", (q) => q.eq("config_key", config_key))
+      .first();
+    if (!c) return null;
+    const sibling = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
+      .first();
+    return { id: c._id, sibling_vin: sibling?.vin ?? null };
+  },
+});
+
+// ─── /v0/service-history — sanitized Carfax-style records by VIN ─────────────
+// Union of three VIN-keyed record streams:
+//   shop_visit     — completed platform bookings + job_actuals (dates, mileage,
+//                    services, parts). Confidence "verified".
+//   owner_reported — the owner's maintenance_records (one row per category).
+//   document       — accepted Reducto extractions of uploaded receipts.
+// Sanitization IS the contract: no PII, no costs, no shop identity, no
+// free-text notes (technician_notes, mechanic_findings, prices, shop names,
+// recommendations, warning-light text are all withheld).
+
+export type ServiceHistoryRecord = {
+  date: string | null;
+  mileage: number | null;
+  source: "shop_visit" | "owner_reported" | "document";
+  confidence: string | number | null;
+  services: string[];
+  parts: Array<{
+    name: string | null;
+    oem_number: string | null;
+    brand: string | null;
+    quantity: number | null;
+  }>;
+};
+
+export type ServiceHistoryResponse = {
+  object: "service_history";
+  vin: string;
+  records: ServiceHistoryRecord[];
+  meta: { record_count: number; sanitization: string; generated_at: number };
+} | null;
+
+/** Best-effort ISO yyyy-mm-dd; ms epochs and parseable strings normalize,
+ *  anything else passes through raw (still string-sortable). */
+function normalizeHistoryDate(d: string | number | undefined | null): string | null {
+  if (d == null) return null;
+  if (typeof d === "number") return new Date(d).toISOString().slice(0, 10);
+  const t = Date.parse(d);
+  return Number.isNaN(t) ? d : new Date(t).toISOString().slice(0, 10);
+}
+
+export const assembleServiceHistory = internalQuery({
+  args: { vin: v.string() },
+  handler: async (ctx, { vin }): Promise<ServiceHistoryResponse> => {
+    const vinUpper = vin.trim().toUpperCase();
+    const records: ServiceHistoryRecord[] = [];
+
+    const allServices = await ctx.db.query("services").collect();
+    const serviceById = new Map(allServices.map((s) => [String(s._id), s]));
+
+    // 1) Completed platform visits (+ job_actuals mileage/parts). The shop
+    //    name collectCompletedVisits joins is deliberately DROPPED here.
+    for (const visit of await collectCompletedVisits(ctx, vinUpper, serviceById)) {
+      const actual = await ctx.db
+        .query("job_actuals")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", visit.booking._id))
+        .first();
+      const parts: ServiceHistoryRecord["parts"] = [];
+      const rawParts: unknown = actual?.parts_used;
+      if (Array.isArray(rawParts)) {
+        for (const p of rawParts.slice(0, 25) as Array<Record<string, unknown>>) {
+          if (!p || typeof p !== "object") continue;
+          parts.push({
+            name:
+              typeof p.part_name === "string" && p.part_name.length > 0
+                ? p.part_name
+                : typeof p.name === "string"
+                  ? p.name
+                  : null,
+            oem_number:
+              typeof p.oem_number === "string" && p.oem_number.length > 0
+                ? p.oem_number
+                : typeof p.oem_part_number === "string"
+                  ? p.oem_part_number
+                  : null,
+            brand: typeof p.brand === "string" && p.brand.length > 0 ? p.brand : null,
+            quantity:
+              typeof p.quantity === "number" && Number.isFinite(p.quantity) ? p.quantity : null,
+          });
+        }
+      }
+      records.push({
+        date: normalizeHistoryDate(visit.date),
+        mileage: actual?.completion_mileage ?? actual?.odometer_in ?? null,
+        source: "shop_visit",
+        confidence: "verified",
+        services: visit.services,
+        parts,
+      });
+    }
+
+    // 2) Owner-reported maintenance_records (active ownerships only).
+    const owners = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin", (q) => q.eq("vin", vinUpper))
+      .take(10);
+    for (const owner of owners) {
+      if (owner.removed_at != null) continue;
+      const rows = await ctx.db
+        .query("maintenance_records")
+        .withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", owner._id))
+        .take(50);
+      for (const r of rows) {
+        records.push({
+          date: normalizeHistoryDate(r.lastServiceDate ?? null),
+          mileage: r.lastServiceMileage ?? null,
+          source: "owner_reported",
+          confidence: r.confidence ?? "self_reported",
+          services: [r.type],
+          parts: [], // customInputs stays internal
+        });
+      }
+    }
+
+    // 3) Accepted document extractions (auto_accepted | user_confirmed only).
+    const docs = await ctx.db
+      .query("vehicle_documents")
+      .withIndex("by_vin", (q) => q.eq("vin", vinUpper))
+      .take(50);
+    for (const doc of docs) {
+      if (doc.parse_status !== "parsed") continue;
+      const ext = await ctx.db
+        .query("vehicle_document_extractions")
+        .withIndex("by_document", (q) => q.eq("document_id", doc._id))
+        .first();
+      if (!ext || (ext.review_state !== "auto_accepted" && ext.review_state !== "user_confirmed"))
+        continue;
+      const payload = (ext.payload ?? {}) as {
+        service_date?: string;
+        vehicle?: { odometer_in?: number };
+        line_items?: Array<{ kind?: string; description?: string; fluid_type?: string; brand?: string }>;
+      };
+      const items = Array.isArray(payload.line_items) ? payload.line_items : [];
+      const services: string[] = [];
+      const parts: ServiceHistoryRecord["parts"] = [];
+      for (const item of items) {
+        if (!item || typeof item !== "object") continue;
+        if (item.kind === "service" && typeof item.description === "string") {
+          services.push(item.description);
+        } else if (item.kind === "fluid") {
+          const label =
+            typeof item.description === "string"
+              ? item.description
+              : item.fluid_type
+                ? `${item.fluid_type} fluid service`
+                : null;
+          if (label) services.push(label);
+        } else if (item.kind === "part") {
+          parts.push({
+            name: typeof item.description === "string" ? item.description : null,
+            oem_number: null,
+            brand: typeof item.brand === "string" ? item.brand : null,
+            quantity: null,
+          });
+        }
+      }
+      records.push({
+        date: normalizeHistoryDate(payload.service_date ?? null),
+        mileage:
+          typeof payload.vehicle?.odometer_in === "number" ? payload.vehicle.odometer_in : null,
+        source: "document",
+        confidence: ext.overall_confidence,
+        services,
+        parts,
+      });
+    }
+
+    // 404 only for a VIN we know NOTHING about: zero records AND no vehicles row.
+    if (records.length === 0) {
+      const vehicle = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q) => q.eq("vin", vinUpper))
+        .first();
+      if (!vehicle) return null;
+    }
+
+    records.sort((a, b) => String(b.date ?? "").localeCompare(String(a.date ?? "")));
+    return {
+      object: "service_history",
+      vin: vinUpper,
+      records,
+      meta: {
+        record_count: records.length,
+        sanitization:
+          "No PII, costs, shop identity, or free-text notes are served. shop_visit records are shop-verified; owner_reported and document records carry their own confidence.",
+        generated_at: Date.now(),
+      },
+    };
+  },
+});
+
+// ─── /v0/enrich support — status lookup + daily-quota metering ───────────────
+
+export type EnrichStatus = {
+  config_key: string | null;
+  enrichment_status: string | null;
+  last_enriched_at: number | null;
+  fill_rate: number | null;
+  year: number;
+  make: string;
+  model: string;
+  trim: string | null;
+} | null;
+
+export const getEnrichStatusByVin = internalQuery({
+  args: { vin: v.optional(v.string()), config_key: v.optional(v.string()) },
+  handler: async (ctx, { vin, config_key }): Promise<EnrichStatus> => {
+    const c = await resolveConfig(ctx, config_key ?? null, vin ?? null);
+    if (!c) return null;
+    const make = await ctx.db.get(c.make_id);
+    const model = await ctx.db.get(c.model_id);
+    return {
+      config_key: c.config_key ?? null,
+      enrichment_status: c.enrichment_status ?? null,
+      last_enriched_at: c.last_enriched_at ?? null,
+      fill_rate: c.fill_rate ?? null,
+      year: c.year,
+      make: make?.name ?? "?",
+      model: model?.name ?? "?",
+      trim: c.trim_name ?? null,
+    };
+  },
+});
+
+/** Daily-quota meter: api_usage rows for one key × endpoint since a cutoff,
+ *  optionally filtered to one status (202 = an enrich run actually scheduled;
+ *  cache hits respond 200 and never consume quota). */
+export const countUsageForEndpointSince = internalQuery({
+  args: {
+    api_key_id: v.id("api_keys"),
+    endpoint: v.string(),
+    since: v.number(),
+    status: v.optional(v.number()),
+  },
+  handler: async (ctx, { api_key_id, endpoint, since, status }): Promise<number> => {
+    const rows = await ctx.db
+      .query("api_usage")
+      .withIndex("by_key_and_time", (q) => q.eq("api_key_id", api_key_id).gte("created_at", since))
+      .take(1000);
+    return rows.filter(
+      (r) => r.endpoint === endpoint && (status === undefined || r.status === status),
+    ).length;
   },
 });

@@ -8,8 +8,10 @@
 //
 // Free-tier defaults, deliberately locked down: ONE live key per account
 // (re-mint revokes the old one — same pattern as the directors' personal
-// keys), all three read scopes, 60 req/min. Paid tiers/billing ride the
-// existing api_usage metering later (customer_data_product_plan §5.4).
+// keys), the four read scopes, 60 req/min. enrich:write (POST /v0/enrich —
+// costs a paid VDB decode + an Anthropic batch per run) is NOT on free keys;
+// it's mintable only via the director createKey path. Paid tiers/billing
+// ride the existing api_usage metering later (customer_data_product_plan §5.4).
 // =============================================================================
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
@@ -144,12 +146,32 @@ export const _insertDevKey = internalMutation({
       name: `dev: ${args.label}`,
       key_hash: args.key_hash,
       prefix: args.prefix,
-      scopes: ["maintenance:read", "labor:read", "media:read"],
+      // enrich:write deliberately absent — see file header.
+      scopes: ["maintenance:read", "labor:read", "media:read", "service_history:read"],
       rate_limit_per_min: DEV_RATE_LIMIT_PER_MIN,
       owner_user_id: args.owner_user_id,
       created_at: Date.now(),
       request_count: 0,
     });
+  },
+});
+
+/** One-shot post-deploy backfill: append service_history:read to every LIVE
+ *  self-serve dev key so existing developers get the new endpoint without
+ *  rotating (re-minting) their key.
+ *  Run once: npx convex run devPortal:backfillDevKeyScopes */
+export const backfillDevKeyScopes = internalMutation({
+  args: {},
+  handler: async (ctx): Promise<{ updated: number }> => {
+    const keys = await ctx.db.query("api_keys").withIndex("by_created_at").take(1000);
+    let updated = 0;
+    for (const k of keys) {
+      if (k.owner_user_id == null || k.revoked_at != null) continue;
+      if (k.scopes.includes("service_history:read")) continue;
+      await ctx.db.patch(k._id, { scopes: [...k.scopes, "service_history:read"] });
+      updated++;
+    }
+    return { updated };
   },
 });
 

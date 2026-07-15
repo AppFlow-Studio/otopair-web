@@ -74,6 +74,75 @@ const LABOR_PARAMS: Param[] = [
   },
 ];
 
+const ENRICH_PARAMS: Param[] = [
+  {
+    name: "vin",
+    type: "string",
+    required: "required",
+    description:
+      'POST body {"vin": "…"} — the 17-char VIN to enrich. The GET status poll takes ?vin= or ?config_key= instead.',
+  },
+];
+
+const HISTORY_PARAMS: Param[] = [
+  {
+    name: "vin",
+    type: "string",
+    required: "required",
+    description: "17-char VIN. Returns every sanitized service record we hold for it.",
+  },
+];
+
+const ENRICH_EXAMPLE = `{
+  "object": "enrichment",
+  "status": "queued",
+  "vin": "KMHTC6AE4FU123456",
+  "poll": {
+    "method": "GET",
+    "url": "/v0/enrich?vin=KMHTC6AE4FU123456",
+    "interval_seconds": 60,
+    "note": "Enrichment typically completes in 7-40 minutes. Fetch the full payload via GET /v0/vehicle?vin=… once complete."
+  }
+}`;
+
+const HISTORY_EXAMPLE = `{
+  "object": "service_history",
+  "vin": "KMHTC6AE4FU123456",
+  "records": [
+    {
+      "date": "2026-05-02",
+      "mileage": 88410,
+      "source": "shop_visit",
+      "confidence": "verified",
+      "services": ["Oil change", "Front brake pads"],
+      "parts": [
+        { "name": "Front brake pad set", "oem_number": "58101-2VA10", "brand": "Hyundai", "quantity": 1 }
+      ]
+    },
+    {
+      "date": "2025-11-14",
+      "mileage": 81200,
+      "source": "document",
+      "confidence": 0.92,
+      "services": ["Oil change"],
+      "parts": [{ "name": "Oil filter", "oem_number": null, "brand": "Mobil 1", "quantity": null }]
+    },
+    {
+      "date": "2025-06-01",
+      "mileage": 74000,
+      "source": "owner_reported",
+      "confidence": "self_reported",
+      "services": ["tires"],
+      "parts": []
+    }
+  ],
+  "meta": {
+    "record_count": 3,
+    "sanitization": "No PII, costs, shop identity, or free-text notes are served. shop_visit records are shop-verified; owner_reported and document records carry their own confidence.",
+    "generated_at": 1784050000000
+  }
+}`;
+
 const MEDIA_EXAMPLE = `{
   "object": "vehicle_image",
   "config": {
@@ -278,16 +347,36 @@ const LABOR_EXAMPLE = `{
       "p75_hours": 0.5
     }
   ],
-  "note": "Empirical values only — measured from completed Otopair jobs. Book-time blends are not served by this API."
+  "estimates": [
+    {
+      "service": "front-brake-pads",
+      "name": "Front brake pads",
+      "estimated_hours": 1.2,
+      "estimate_source": "empirical",
+      "estimate_confidence": 0.9
+    },
+    {
+      "service": "coolant-flush",
+      "name": "Coolant flush",
+      "estimated_hours": 1.1,
+      "estimate_source": "model_estimate",
+      "estimate_confidence": 0.3
+    }
+  ],
+  "tier": "T1",
+  "note": "services[] are empirical values measured from completed Otopair jobs. estimates[] blend empirical with our own Camry-anchored tier model (model_estimate). Licensed book-time blends are never served by this API."
 }`;
 
 const ERRORS: Array<{ status: string; code: string; meaning: string }> = [
   { status: "400", code: "missing_param", meaning: "No usable identifier was provided (config_key / vin — or year+make+model on /v0/vehicle)." },
+  { status: "400", code: "vin_decode_failed", meaning: "POST /v0/enrich: the VIN did not decode against Vehicle Databases or NHTSA." },
   { status: "401", code: "missing / invalid / revoked key", meaning: "No Authorization header, the key doesn't exist, or it has been revoked." },
-  { status: "403", code: "insufficient_scope", meaning: "The key is valid but lacks the endpoint's scope (maintenance:read / labor:read / media:read)." },
+  { status: "403", code: "insufficient_scope", meaning: "The key is valid but lacks the endpoint's scope (maintenance:read / labor:read / media:read / service_history:read / enrich:write)." },
   { status: "404", code: "not_found", meaning: "No vehicle config matched the given config_key or VIN." },
   { status: "409", code: "multiple_matches", meaning: "A /v0/vehicle YMMT lookup matched more than one config — the body lists matches: [{config_key, label}]; re-send with one of those config_keys." },
+  { status: "422", code: "unsupported_vehicle", meaning: "POST /v0/enrich: the VIN decoded but no engine code resolved — the pipeline can't enrich it." },
   { status: "429", code: "rate_limited", meaning: "Per-key per-minute rate limit exceeded. Back off and retry." },
+  { status: "429", code: "quota_exceeded", meaning: "POST /v0/enrich: the key's daily quota of scheduled enrichment runs is spent. Cache hits stay free." },
 ];
 
 function EndpointCard({
@@ -297,6 +386,8 @@ function EndpointCard({
   example,
   exampleQuery,
   footnote,
+  method = "GET",
+  exampleBody,
 }: {
   path: string;
   description: string;
@@ -304,12 +395,21 @@ function EndpointCard({
   example: string;
   exampleQuery: string;
   footnote?: ReactNode;
+  method?: "GET" | "POST";
+  exampleBody?: string;
 }) {
-  const curl = `curl '${baseUrl()}${path}?${exampleQuery}' \\\n  -H 'Authorization: Bearer otp_live_…'`;
+  const curl =
+    method === "POST"
+      ? `curl -X POST '${baseUrl()}${path}' \\\n  -H 'Authorization: Bearer otp_live_…' \\\n  -H 'Content-Type: application/json' \\\n  -d '${exampleBody ?? "{}"}'`
+      : `curl '${baseUrl()}${path}?${exampleQuery}' \\\n  -H 'Authorization: Bearer otp_live_…'`;
   return (
     <div className={CARD}>
       <div className="flex flex-wrap items-center gap-2">
-        <span className={`${PILL} bg-emerald-50 text-emerald-700`}>GET</span>
+        <span
+          className={`${PILL} ${method === "POST" ? "bg-sky-50 text-sky-700" : "bg-emerald-50 text-emerald-700"}`}
+        >
+          {method}
+        </span>
         <code className={`${MONO} font-semibold text-slate-900`}>{path}</code>
       </div>
       <p className="mt-2 text-[13px] leading-5 text-slate-600">{description}</p>
@@ -396,7 +496,7 @@ export function Reference() {
         />
         <EndpointCard
           path="/v0/labor"
-          description="Empirical labor times measured from completed Otopair jobs — hours, sample size, and the p25–p75 spread per service. Book-time blends (RepairPal / MOTOR / VDB) are internal-only and never served."
+          description="Labor times per service. services[] holds empirical measurements from completed Otopair jobs — hours, sample size, and the p25–p75 spread. estimates[] adds an estimated_hours answer for every applicable service, sourced either from those measurements ('empirical') or from our own Camry-anchored vehicle-tier model ('model_estimate', with its confidence). Book-time blends (RepairPal / MOTOR / VDB) are internal-only and never served."
           params={LABOR_PARAMS}
           example={LABOR_EXAMPLE}
           exampleQuery="config_key=toyota%7Ccamry%7C2019%7Cle%7C2.5l&service=front-brake-pads"
@@ -405,11 +505,51 @@ export function Reference() {
 
       <EndpointCard
         path="/v0/vehicle-image"
-        description="Vehicle media: the cached exterior render for a config, identified by VIN, year + make + model [+ trim], or config_key. Requires the media:read scope. media_source is 'vehicle_databases' today (EVOX renders via the VD vehicle-images API); the licensed VD image folder is inbound, after which the URLs flip to self-hosted media without a response-shape change. 404 with error 'no_image' when the vehicle resolves but no render is cached yet."
+        description="Vehicle media: the exterior render for a config, identified by VIN, year + make + model [+ trim], or config_key. Requires the media:read scope. Cache-first; on a cache miss the API fetches the render live (expect ~6s on that first call) and caches it, so the next lookup is instant. media_source is 'vehicle_databases' today (EVOX renders via the VD vehicle-images API); the licensed VD image folder is inbound, after which the URLs flip to self-hosted media without a response-shape change."
         params={VEHICLE_PARAMS}
         example={MEDIA_EXAMPLE}
         exampleQuery="year=2021&make=Toyota&model=Camry&trim=LE"
+        footnote={
+          <>
+            <strong>Live-fetch cap</strong> — cached lookups are unlimited, but each key gets 10 live
+            fetches per day (a live fetch is a paid upstream call). Over the cap, uncached vehicles
+            return <code className={MONO}>404 no_image</code> with a cap note until the day rolls over.
+          </>
+        }
       />
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <EndpointCard
+          path="/v0/service-history"
+          description="Sanitized service records for a VIN — Carfax-style. Unions three streams: completed Otopair shop visits (verified; dates, mileage, services, parts installed), the owner's self-reported maintenance records, and accepted extractions of uploaded service documents. Requires the service_history:read scope."
+          params={HISTORY_PARAMS}
+          example={HISTORY_EXAMPLE}
+          exampleQuery="vin=KMHTC6AE4FU123456"
+          footnote={
+            <>
+              <strong>Sanitized by contract</strong> — no PII, no dollar amounts, no shop identity, no
+              free-text notes. Ever. 404 only when the VIN is entirely unknown; a known VIN with no
+              records returns 200 with an empty <code className={MONO}>records</code> array.
+            </>
+          }
+        />
+        <EndpointCard
+          path="/v0/enrich"
+          method="POST"
+          description="Enrichment on demand: POST a VIN we haven't seen (or whose data has gone stale) and the full enrichment pipeline runs for it — VIN decode, spec research, parts, intervals, labor. Fresh cache hits return 200 immediately and cost nothing. A scheduled run returns 202; poll GET /v0/enrich?vin=… (free) until status is 'complete', then fetch the payload via /v0/vehicle. Requires the enrich:write scope."
+          params={ENRICH_PARAMS}
+          example={ENRICH_EXAMPLE}
+          exampleQuery="vin=KMHTC6AE4FU123456"
+          exampleBody='{"vin": "KMHTC6AE4FU123456"}'
+          footnote={
+            <>
+              <strong>Not on free keys</strong> — enrichment runs cost real compute, so{" "}
+              <code className={MONO}>enrich:write</code> is granted separately (contact us). Each key
+              gets 5 scheduled runs per day; cache hits and status polls are free and unlimited.
+            </>
+          }
+        />
+      </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
         {/* Authentication */}
@@ -430,7 +570,11 @@ export function Reference() {
               • The plaintext is shown <strong>exactly once</strong> at mint time — only its SHA-256
               hash is stored, so it cannot be recovered later. Lose it → rotate.
             </li>
-            <li>• Each key has scopes (maintenance:read, labor:read, media:read) and its own per-minute rate limit.</li>
+            <li>
+              • Each key has scopes and its own per-minute rate limit. Free dev keys carry
+              maintenance:read, labor:read, media:read and service_history:read; enrich:write is
+              granted separately.
+            </li>
           </ul>
         </div>
 

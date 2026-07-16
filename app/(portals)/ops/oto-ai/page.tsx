@@ -6,17 +6,28 @@
 // the pinned PII banner is enforced, not decorative.
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession } from "../../portal-session";
+import {
+  CARD_STATIC,
+  MICRO_H,
+  PILL as pill,
+  PageHeader,
+  StatTile,
+  TrendArea,
+  fmtNum,
+  money,
+} from "@/components/portal/ChartKit";
 
-const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 const fmtDT = (ms: number) => new Date(ms).toLocaleString();
 
 type ConversationRow = {
   id: string;
   user: string | null;
+  user_id: string;
   started_at: number;
   ended_at: number | null;
   scenario: string | null;
@@ -38,6 +49,7 @@ export default function OpsOtoAiPage() {
   const [focusMsg, setFocusMsg] = useState<TranscriptMessage | null>(null);
 
   const data = useQuery(api.opsOtoAi.conversations, { token });
+  const usage = useQuery(api.directorData.otoUsage, { token, days: 14 });
   const transcript = useQuery(
     api.opsOtoAi.transcript,
     selected ? { token, conversationId: selected as Id<"ai_conversations"> } : "skip",
@@ -52,13 +64,60 @@ export default function OpsOtoAiPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
+  const hitCapPct = usage == null ? null : usage.totals.hit_cap_rate * 100;
+
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-slate-900">Oto AI</h1>
+        <PageHeader
+          title="Oto AI"
+          subtitle="Model usage, spend, and read-only transcripts of the in-app assistant."
+        />
         <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-[12px] font-semibold text-amber-800">
           Private user conversation — access logged. Every transcript open writes an audit
           row with your name on it.
+        </div>
+      </div>
+
+      {/* Usage analytics zone */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatTile
+          label="Turns · 7d"
+          value={usage === undefined ? "—" : fmtNum(usage.totals.turns_7d)}
+          spark={usage?.days.map((d) => d.turns)}
+        />
+        <StatTile
+          label="Cost · 7d (est.)"
+          value={usage === undefined ? "—" : money(usage.totals.est_cost_7d_usd, { cents: true })}
+        />
+        <StatTile
+          label="p50 latency"
+          value={usage === undefined ? "—" : `${fmtNum(usage.totals.p50_latency_ms)} ms`}
+        />
+        <StatTile
+          label="Hit-cap rate · 7d"
+          value={hitCapPct == null ? "—" : `${hitCapPct.toFixed(1)}%`}
+          chip={
+            hitCapPct != null && hitCapPct > 10 ? (
+              <span className={`${pill} bg-amber-50 text-amber-700`}>high</span>
+            ) : undefined
+          }
+        />
+      </div>
+      <div className={CARD_STATIC}>
+        <div className={MICRO_H}>
+          Estimated model spend per day · last {usage === undefined ? 14 : usage.days.length} days
+          {usage !== undefined && ` · ${fmtNum(usage.totals.distinct_users)} distinct users`}
+        </div>
+        <div className="mt-3">
+          <TrendArea
+            data={usage?.days}
+            dataKey="est_cost_usd"
+            name="Est. cost"
+            color="#10b981"
+            height={150}
+            isMoney
+          />
         </div>
       </div>
 
@@ -70,12 +129,12 @@ export default function OpsOtoAiPage() {
           ))
         ) : (
           <>
-            <Kpi label="conversations 7d" value={String(data.kpis.conversations_7d)} />
-            <Kpi
-              label="avg messages"
+            <StatTile label="Conversations · 7d" value={fmtNum(data.kpis.conversations_7d)} />
+            <StatTile
+              label="Avg messages"
               value={data.kpis.avg_messages == null ? "—" : data.kpis.avg_messages.toFixed(1)}
             />
-            <Kpi
+            <StatTile
               label="→ booking"
               value={
                 data.kpis.to_booking_pct == null
@@ -101,20 +160,33 @@ export default function OpsOtoAiPage() {
             <p className="p-4 text-sm text-slate-500">No conversations on this deployment.</p>
           ) : (
             (data.rows as ConversationRow[]).map((c) => (
-              <button
+              <div
                 key={c.id}
+                role="button"
+                tabIndex={0}
                 onClick={() => {
                   setSelected(c.id);
                   setFocusMsg(null);
                 }}
-                className={`block w-full border-b border-slate-50 px-3 py-2.5 text-left hover:bg-slate-50 ${
+                onKeyDown={(ev) => {
+                  if (ev.key === "Enter" || ev.key === " ") {
+                    ev.preventDefault();
+                    setSelected(c.id);
+                    setFocusMsg(null);
+                  }
+                }}
+                className={`block w-full cursor-pointer border-b border-slate-50 px-3 py-2.5 text-left hover:bg-slate-50 ${
                   selected === c.id ? "bg-blue-50" : ""
                 }`}
               >
                 <div className="flex items-center gap-1.5">
-                  <span className="truncate text-[13px] font-medium text-slate-800">
+                  <Link
+                    href={`/ops/users/${c.user_id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="truncate text-[13px] font-medium text-slate-800 hover:text-blue-700 hover:underline"
+                  >
                     {c.user ?? "Unknown user"}
-                  </span>
+                  </Link>
                   {c.led_to_booking && (
                     <span className={`${pill} bg-emerald-50 text-emerald-700`}>→ booking</span>
                   )}
@@ -126,7 +198,7 @@ export default function OpsOtoAiPage() {
                   )}
                   {c.message_count != null && <span>{c.message_count} msgs</span>}
                 </div>
-              </button>
+              </div>
             ))
           )}
         </div>
@@ -211,15 +283,6 @@ export default function OpsOtoAiPage() {
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function Kpi({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="text-2xl font-bold text-slate-900">{value}</div>
-      <div className="mt-1 text-xs font-medium text-slate-500">{label}</div>
     </div>
   );
 }

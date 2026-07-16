@@ -15,6 +15,7 @@ const DAY = 24 * 60 * 60 * 1000;
 export type ConversationRow = {
   id: string;
   user: string | null;
+  user_id: string;
   started_at: number;
   ended_at: number | null;
   scenario: string | null;
@@ -48,6 +49,7 @@ export const conversations = query({
       out.push({
         id: String(c._id),
         user: userName.get(uid) ?? null,
+        user_id: uid,
         started_at: c.started_at,
         ended_at: c.ended_at ?? null,
         scenario: c.scenario_detected ?? null,

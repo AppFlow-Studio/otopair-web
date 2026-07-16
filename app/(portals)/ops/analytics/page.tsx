@@ -1,15 +1,26 @@
 "use client";
 
 // Ops · Analytics — /ops/analytics (Ops spec p.11).
-// Events: filter row + hourly volume bars above the table, row expands to a
-// JSON viewer. Funnels: stage bars with drop-off labels + reason breakdown.
+// PageHeader → pulse zone (7d stat tiles + hourly MiniBars + top event types)
+// → Events: filter row + hourly volume bars above the stream, row expands to
+// a JSON viewer. Funnels: stage bars with drop-off labels + reason breakdown.
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "../../portal-session";
+import {
+  BarRows,
+  CARD_STATIC,
+  MICRO_H,
+  MiniBars,
+  PILL as pill,
+  PageHeader,
+  StatTile,
+  fmtNum,
+} from "@/components/portal/ChartKit";
 
-const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 const fmtDT = (ms: number) => new Date(ms).toLocaleString();
 
 type EventRow = {
@@ -40,12 +51,15 @@ export default function OpsAnalyticsPage() {
     eventType: typeFilter || undefined,
   });
   const funnels = useQuery(api.opsAnalytics.funnels, { token });
+  const pulse = useQuery(api.directorData.appEventPulse, { token });
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold text-slate-900">Analytics</h1>
-        <div className="ml-auto flex gap-1 rounded-lg border border-slate-200 bg-white p-1">
+      <PageHeader
+        title="Analytics"
+        subtitle="Raw app events and conversion funnels — what users actually do in the app."
+      >
+        <div className="flex gap-1 rounded-lg border border-slate-200 bg-white p-1">
           {(["Events", "Funnels"] as const).map((t) => (
             <button
               key={t}
@@ -58,6 +72,44 @@ export default function OpsAnalyticsPage() {
             </button>
           ))}
         </div>
+      </PageHeader>
+
+      {/* Pulse zone — 7d event stream at a glance */}
+      <div className="grid grid-cols-3 gap-4">
+        <StatTile label="Events · 7d" value={pulse === undefined ? "—" : fmtNum(pulse.total)} />
+        <StatTile label="Sessions · 7d" value={pulse === undefined ? "—" : fmtNum(pulse.sessions)} />
+        <StatTile label="Users · 7d" value={pulse === undefined ? "—" : fmtNum(pulse.users)} />
+      </div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className={`${CARD_STATIC} lg:col-span-2`}>
+          <div className={MICRO_H}>Hourly event pulse · last 7 days</div>
+          <div className="mt-3">
+            {pulse === undefined ? (
+              <div className="h-9 animate-pulse rounded bg-slate-100" />
+            ) : (
+              <MiniBars values={pulse.hourly.map((h) => h.count)} height={44} />
+            )}
+          </div>
+          {pulse !== undefined && pulse.truncated && (
+            <p className="mt-2 text-[11px] text-slate-400">Window truncated at 2,000 events.</p>
+          )}
+        </div>
+        <div className={CARD_STATIC}>
+          <div className={MICRO_H}>Top event types · 7d</div>
+          <div className="mt-3">
+            {pulse === undefined ? (
+              <div className="space-y-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="h-5 animate-pulse rounded bg-slate-100" />
+                ))}
+              </div>
+            ) : pulse.top_types.length === 0 ? (
+              <p className="text-sm text-slate-500">No events in the window.</p>
+            ) : (
+              <BarRows rows={pulse.top_types.map((t) => ({ label: t.type, value: t.count }))} />
+            )}
+          </div>
+        </div>
       </div>
 
       {tab === "Events" &&
@@ -66,7 +118,7 @@ export default function OpsAnalyticsPage() {
         ) : (
           <>
             {/* Filter row + hourly volume */}
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className={CARD_STATIC}>
               <div className="flex flex-wrap items-center gap-2">
                 <select
                   value={typeFilter}
@@ -91,7 +143,7 @@ export default function OpsAnalyticsPage() {
                     return (
                       <div
                         key={h.hour}
-                        className="w-2 shrink-0 rounded-t-sm bg-blue-500"
+                        className="w-2 shrink-0 rounded-t-sm bg-[#93c5fd]"
                         style={{ height: 4 + (h.count / max) * 110 }}
                         title={`${h.hour}:00 — ${h.count} events`}
                       />
@@ -106,12 +158,20 @@ export default function OpsAnalyticsPage() {
                 No events in the window.
               </div>
             ) : (
-              <div className="rounded-xl border border-slate-200 bg-white">
+              <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
                 {(events.rows as EventRow[]).map((e) => (
                   <div key={e.id} className="border-b border-slate-50">
-                    <button
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setExpanded(expanded === e.id ? null : e.id)}
-                      className="flex w-full flex-wrap items-center gap-2 px-4 py-2 text-left hover:bg-slate-50"
+                      onKeyDown={(ev) => {
+                        if (ev.key === "Enter" || ev.key === " ") {
+                          ev.preventDefault();
+                          setExpanded(expanded === e.id ? null : e.id);
+                        }
+                      }}
+                      className="flex w-full cursor-pointer flex-wrap items-center gap-2 px-4 py-2 text-left hover:bg-slate-50"
                     >
                       <span className={`${pill} bg-slate-100 text-slate-700`}>{e.event_type}</span>
                       {e.event_category && (
@@ -119,11 +179,20 @@ export default function OpsAnalyticsPage() {
                           {e.event_category}
                         </span>
                       )}
+                      {e.user_id && (
+                        <Link
+                          href={`/ops/users/${e.user_id}`}
+                          onClick={(ev) => ev.stopPropagation()}
+                          className="text-[12px] font-medium text-blue-600 hover:underline"
+                        >
+                          user →
+                        </Link>
+                      )}
                       <span className="text-[12px] text-slate-400">
                         {e.session_id ? `session ${e.session_id.slice(0, 8)}…` : "no session"}
                       </span>
                       <span className="ml-auto text-[12px] text-slate-400">{fmtDT(e.at)}</span>
-                    </button>
+                    </div>
                     {expanded === e.id && (
                       <pre className="max-h-64 overflow-auto bg-slate-50 px-4 py-3 text-[11px] leading-snug text-slate-700">
                         {e.data_json ?? "(no event_data)"}
@@ -146,7 +215,10 @@ export default function OpsAnalyticsPage() {
         ) : (
           <div className="space-y-4">
             {(funnels.funnels as FunnelSummary[]).map((f) => (
-              <div key={f.funnel_type} className="rounded-xl border border-slate-200 bg-white p-5">
+              <div
+                key={f.funnel_type}
+                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
+              >
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-sm font-semibold text-slate-900">{f.funnel_type}</h2>
                   <span className={`${pill} bg-slate-100 text-slate-600`}>{f.total} entered</span>
@@ -162,13 +234,14 @@ export default function OpsAnalyticsPage() {
                     return (
                       <div key={s.stage} className="flex items-center gap-2 text-[13px]">
                         <span className="w-40 truncate text-slate-600">{s.stage}</span>
-                        <div className="h-4 flex-1 overflow-hidden rounded bg-slate-100">
+                        <div className="h-4 flex-1 overflow-hidden rounded bg-slate-50">
                           <div
-                            className="h-full bg-blue-400"
-                            style={{ width: `${(s.entered / max) * 100}%` }}
+                            className="h-full rounded-r bg-[#93c5fd]"
+                            style={{ width: `${Math.max(4, (s.entered / max) * 100)}%` }}
+                            title={`${s.stage} — ${s.entered} entered, ${s.completed} completed`}
                           />
                         </div>
-                        <span className="w-24 text-right text-slate-500">
+                        <span className="w-24 text-right tabular-nums text-slate-500">
                           {s.entered}
                           {dropped > 0 && (
                             <span className="ml-1 text-[11px] text-red-500">−{dropped}</span>

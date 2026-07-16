@@ -15,8 +15,11 @@ export type ReviewRow = {
   rating: number;
   comment: string | null;
   user: string | null;
+  user_id: string;
   shop: string | null;
+  shop_id: string;
   mechanic: string | null;
+  mechanic_id: string | null;
   booking_id: string;
   hidden: boolean;
   hidden_reason: string | null;
@@ -61,8 +64,11 @@ export const list = query({
         rating: r.rating,
         comment: r.comment ?? null,
         user: userName.get(uid) ?? null,
+        user_id: uid,
         shop: shopName.get(sid) ?? null,
+        shop_id: sid,
         mechanic,
+        mechanic_id: r.mechanic_id ? String(r.mechanic_id) : null,
         booking_id: String(r.booking_id),
         hidden: r.hidden_at != null,
         hidden_reason: r.hidden_reason ?? null,

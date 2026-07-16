@@ -14,9 +14,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession } from "@/app/(portals)/portal-session";
 import { AuditDrawer } from "@/components/portal/AuditDrawer";
-
-const PILL = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
-const CARD = "rounded-xl border border-slate-200 bg-white p-5";
+import { CARD_STATIC as CARD, PILL, Skeleton } from "@/components/portal/ChartKit";
 
 function fmtDate(ms: number | null | undefined): string {
   if (!ms) return "—";
@@ -63,7 +61,12 @@ export default function OpsUserDetailPage() {
   const profile = useQuery(api.opsUsers.profile, { token, id: userId });
 
   if (profile === undefined) {
-    return <div className="py-16 text-center text-sm text-slate-400">Loading user…</div>;
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-32 w-full" />
+        <Skeleton className="h-64 w-full" />
+      </div>
+    );
   }
   if (profile === null) {
     return (
@@ -266,7 +269,13 @@ function GarageTab({ userId }: { userId: Id<"users"> }) {
             </span>
             {v.isPrimary && <span className={`${PILL} bg-emerald-50 text-emerald-700`}>Primary</span>}
             <span className={statusPill(v.status)}>{v.status}</span>
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-500">{v.vin}</span>
+            <Link
+              href={`/director/data/vins/${v.vin}`}
+              title="Open VIN in the data portal"
+              className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+            >
+              {v.vin}
+            </Link>
           </div>
           <div className="mt-1 text-[13px] text-slate-500">
             {[v.ymm, v.trim, v.engine].filter(Boolean).join(" · ") || "Spec unresolved"}
@@ -324,9 +333,9 @@ function BookingsTab({ userId }: { userId: Id<"users"> }) {
           <table className="w-full text-[13px]">
             <thead>
               <tr>
-                {["Status", "Shop", "Services", "Scheduled", "Created", "Total"].map((h) => (
+                {["Status", "Shop", "Services", "Scheduled", "Created", "Total", ""].map((h, i) => (
                   <th
-                    key={h}
+                    key={i}
                     className="border-b border-slate-200 pb-2 pr-4 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400"
                   >
                     {h}
@@ -337,14 +346,37 @@ function BookingsTab({ userId }: { userId: Id<"users"> }) {
             <tbody>
               {rows.map((b) => (
                 <tr key={b.id} className="border-b border-slate-50 hover:bg-slate-50">
-                  <td className="py-2.5 pr-4"><span className={statusPill(b.status)}>{b.status}</span></td>
-                  <td className="py-2.5 pr-4 text-slate-700">{b.shop}</td>
+                  <td className="py-2.5 pr-4">
+                    <Link href={`/ops/bookings/${b.id}`}>
+                      <span className={statusPill(b.status)}>{b.status}</span>
+                    </Link>
+                  </td>
+                  <td className="py-2.5 pr-4 text-slate-700">
+                    {b.shop_id ? (
+                      <Link
+                        href={`/shops/all/${b.shop_id}`}
+                        className="hover:text-blue-700 hover:underline"
+                      >
+                        {b.shop}
+                      </Link>
+                    ) : (
+                      b.shop
+                    )}
+                  </td>
                   <td className="py-2.5 pr-4 text-slate-600">
                     {b.services.length > 0 ? b.services.join(", ") : "—"}
                   </td>
                   <td className="py-2.5 pr-4 text-slate-500">{b.scheduledDate ?? "—"}</td>
                   <td className="py-2.5 pr-4 text-slate-500">{fmtDate(b.created)}</td>
                   <td className="py-2.5 pr-4 tabular-nums text-slate-700">{fmtMoney(b.total)}</td>
+                  <td className="py-2.5 pr-4 text-right">
+                    <Link
+                      href={`/ops/bookings/${b.id}`}
+                      className="text-[12px] font-medium text-blue-600 hover:underline"
+                    >
+                      Open booking →
+                    </Link>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -376,7 +408,7 @@ function MoneyTab({ userId }: { userId: Id<"users"> }) {
             <table className="w-full text-[13px]">
               <thead>
                 <tr>
-                  {["Date", "Amount", "Captured", "Status", "Method", "Invoice"].map((h) => (
+                  {["Date", "Amount", "Captured", "Status", "Method", "Invoice", "Links"].map((h) => (
                     <th
                       key={h}
                       className="border-b border-slate-200 pb-2 pr-4 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400"
@@ -397,6 +429,15 @@ function MoneyTab({ userId }: { userId: Id<"users"> }) {
                     <td className="py-2.5 pr-4"><span className={statusPill(p.status)}>{p.status}</span></td>
                     <td className="py-2.5 pr-4 text-slate-500">{p.origin ?? p.method ?? "—"}</td>
                     <td className="py-2.5 pr-4 font-mono text-[12px] text-slate-500">{p.invoiceNumber ?? "—"}</td>
+                    <td className="py-2.5 pr-4 whitespace-nowrap text-[12px]">
+                      <Link href={`/ops/payments/${p.id}`} className="font-medium text-blue-600 hover:underline">
+                        Payment
+                      </Link>
+                      <span className="mx-1 text-slate-300">·</span>
+                      <Link href={`/ops/bookings/${p.bookingId}`} className="font-medium text-blue-600 hover:underline">
+                        Booking
+                      </Link>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -421,6 +462,17 @@ function MoneyTab({ userId }: { userId: Id<"users"> }) {
                   <div className="text-[12px] text-slate-400">
                     {fmtDate(t.created)} · {t.type}
                     {t.subDescription ? ` · ${t.subDescription}` : ""}
+                    {t.bookingId && (
+                      <>
+                        {" · "}
+                        <Link
+                          href={`/ops/bookings/${t.bookingId}`}
+                          className="font-medium text-blue-600 hover:underline"
+                        >
+                          booking →
+                        </Link>
+                      </>
+                    )}
                   </div>
                 </div>
                 <div

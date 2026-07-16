@@ -16,6 +16,7 @@ const DAY = 24 * 60 * 60 * 1000;
 export type LedgerRow = {
   id: string;
   user: string | null;
+  user_id: string | null;
   description: string;
   sub_description: string | null;
   amount: number;
@@ -72,6 +73,7 @@ export const ledger = query({
       out.push({
         id: String(t._id),
         user: userName.get(uid) ?? null,
+        user_id: uid,
         description: t.description,
         sub_description: t.sub_description ?? null,
         amount: t.amount,

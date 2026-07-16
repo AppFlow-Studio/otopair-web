@@ -9,6 +9,16 @@ import Link from "next/link";
 import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "../../portal-session";
+import {
+  CARD_STATIC,
+  MICRO_H,
+  PageHeader,
+  SegmentedControl,
+  Skeleton,
+  StatTile,
+  TrendBars,
+  fmtNum,
+} from "@/components/portal/ChartKit";
 
 const STATUSES = [
   "pending",
@@ -82,6 +92,73 @@ function money(n: number | null | undefined): string {
 
 function shortDate(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// ---------------------------------------------------------------------------
+// Analytics zone — created per day + completed-vs-cancelled summary tiles,
+// all from portalSeries.bookingsDaily (single query, zero-filled days).
+// ---------------------------------------------------------------------------
+const TREND_PERIODS = ["7d", "30d", "90d"] as const;
+type TrendPeriod = (typeof TREND_PERIODS)[number];
+const TREND_DAYS: Record<TrendPeriod, number> = { "7d": 7, "30d": 30, "90d": 90 };
+
+function AnalyticsZone({
+  token,
+  period,
+}: {
+  token: string;
+  period: TrendPeriod;
+}) {
+  const days = TREND_DAYS[period];
+  const series = useQuery(api.portalSeries.bookingsDaily, { token, days });
+
+  const sum = (key: "created" | "completed" | "cancelled" | "revenue") =>
+    series?.reduce((s, d) => s + d[key], 0);
+  const spark = (key: "created" | "completed" | "cancelled") => series?.map((d) => d[key]);
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile
+          label={`Created (${period})`}
+          value={series === undefined ? <Skeleton /> : fmtNum(sum("created"))}
+          spark={spark("created")}
+          sparkColor="#3b82f6"
+        />
+        <StatTile
+          label={`Completed (${period})`}
+          value={series === undefined ? <Skeleton /> : fmtNum(sum("completed"))}
+          spark={spark("completed")}
+          sparkColor="#059669"
+        />
+        <StatTile
+          label={`Cancelled (${period})`}
+          value={series === undefined ? <Skeleton /> : fmtNum(sum("cancelled"))}
+          spark={spark("cancelled")}
+          sparkColor="#dc2626"
+        />
+        <StatTile
+          label={`Completed revenue (${period})`}
+          value={series === undefined ? <Skeleton /> : money(sum("revenue") ?? 0)}
+        />
+      </div>
+      <div className={CARD_STATIC}>
+        <div className="flex items-baseline justify-between">
+          <h2 className={MICRO_H}>Bookings created per day</h2>
+          <span className="text-[11px] text-slate-400">last {days} days</span>
+        </div>
+        <div className="mt-2">
+          <TrendBars
+            data={series}
+            dataKey="created"
+            name="Bookings created"
+            color="#93c5fd"
+            height={140}
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -224,7 +301,15 @@ function ListView({ token }: { token: string }) {
                     </Link>
                   </td>
                   <td className="py-2.5 pr-4 font-mono text-[11px] text-slate-500">{r.vin || "—"}</td>
-                  <td className="py-2.5 pr-4">{r.shop}</td>
+                  <td className="py-2.5 pr-4">
+                    {r.shopId ? (
+                      <Link href={`/shops/all/${r.shopId}`} className="text-slate-700 hover:underline">
+                        {r.shop}
+                      </Link>
+                    ) : (
+                      r.shop || "—"
+                    )}
+                  </td>
                   <td className="py-2.5 pr-4 text-slate-600" title={r.services.join(", ")}>
                     {r.services.length}
                   </td>
@@ -262,25 +347,33 @@ function ListView({ token }: { token: string }) {
 export default function OpsBookingsPage() {
   const { token } = usePortalSession();
   const [view, setView] = useState<"board" | "list">("board");
+  const [period, setPeriod] = useState<TrendPeriod>("30d");
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-slate-900">Bookings</h1>
-        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
-          {(["board", "list"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`rounded-md px-3 py-1 text-[13px] font-medium ${
-                view === v ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50"
-              }`}
-            >
-              {v === "board" ? "Board" : "List"}
-            </button>
-          ))}
+      <PageHeader
+        title="Bookings"
+        subtitle="The heartbeat page — every booking across the network, by status."
+      >
+        <div className="flex items-center gap-2">
+          <SegmentedControl value={period} options={TREND_PERIODS} onChange={setPeriod} />
+          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+            {(["board", "list"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`rounded-md px-3 py-1 text-[13px] font-medium ${
+                  view === v ? "bg-slate-900 text-white" : "text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                {v === "board" ? "Board" : "List"}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      </PageHeader>
+
+      <AnalyticsZone token={token} period={period} />
 
       {view === "board" ? <BoardView token={token} /> : <ListView token={token} />}
     </div>

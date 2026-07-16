@@ -17,6 +17,8 @@ const DAY = 24 * 60 * 60 * 1000;
 export type FollowUpRow = {
   id: string;
   user: string | null;
+  user_id: string;
+  booking_id: string | null;
   vin: string;
   service: string | null;
   type: string;
@@ -73,6 +75,8 @@ export const board = query({
       return {
         id: String(r._id),
         user: userName.get(uid) ?? null,
+        user_id: uid,
+        booking_id: r.booking_id != null ? String(r.booking_id) : null,
         vin: r.vin,
         service,
         type: r.follow_up_type,

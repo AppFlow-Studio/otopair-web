@@ -13,6 +13,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession } from "@/app/(portals)/portal-session";
 import { AuditDrawer } from "@/components/portal/AuditDrawer";
+import { PageHeader } from "@/components/portal/ChartKit";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -119,29 +120,35 @@ export default function OpsPaymentDetailPage() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-xs text-slate-400">
-            <Link href="/ops/payments" className="hover:underline">
-              Payments
-            </Link>{" "}
-            / <span className="font-mono">{p.id}</span>
-          </div>
-          <h1 className="mt-1 flex items-center gap-3 text-xl font-semibold text-slate-900">
-            {money(p.amount)}
-            <span className={statusPillClass(p.status)}>{p.status}</span>
-            {p.backfilledAtMs != null && (
-              <span className={`${PILL} bg-slate-100 text-slate-500`}>backfilled</span>
-            )}
-          </h1>
+      <div>
+        <div className="text-xs text-slate-400">
+          <Link href="/ops/payments" className="hover:underline">
+            ← Payments
+          </Link>{" "}
+          / <span className="font-mono">{p.id}</span>
         </div>
-        <button
-          type="button"
-          onClick={() => setAuditOpen(true)}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-        >
-          Audit
-        </button>
+        <div className="mt-1">
+          <PageHeader
+            title={`Payment · ${money(p.amount)}`}
+            subtitle={`Created ${ts(p.createdAt)}${
+              user ? ` · ${user.name}` : ""
+            }${shop ? ` at ${shop.name}` : ""}`}
+          >
+            <div className="flex items-center gap-2">
+              <span className={statusPillClass(p.status)}>{p.status}</span>
+              {p.backfilledAtMs != null && (
+                <span className={`${PILL} bg-slate-100 text-slate-500`}>backfilled</span>
+              )}
+              <button
+                type="button"
+                onClick={() => setAuditOpen(true)}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Audit
+              </button>
+            </div>
+          </PageHeader>
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -243,7 +250,15 @@ export default function OpsPaymentDetailPage() {
                   "Unknown"
                 )}
               </Field>
-              <Field label="Shop">{shop ? shop.name : "—"}</Field>
+              <Field label="Shop">
+                {shop ? (
+                  <Link href={`/shops/all/${shop.id}`} className="hover:underline">
+                    {shop.name}
+                  </Link>
+                ) : (
+                  "—"
+                )}
+              </Field>
               <Field label="Booking">
                 {booking ? (
                   <Link href={`/ops/bookings/${booking.id}`} className="hover:underline">

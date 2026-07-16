@@ -7,10 +7,19 @@
 // through the write ceremony.
 
 import { useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Ceremony } from "@/components/portal/Ceremony";
 import { useCan, usePortalSession } from "../../portal-session";
+import {
+  CARD_STATIC,
+  PILL,
+  PageHeader,
+  Skeleton,
+  StatTile,
+  fmtNum,
+} from "@/components/portal/ChartKit";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -58,36 +67,54 @@ export default function DeletionQueuePage() {
   const [restoring, setRestoring] = useState<Row | null>(null);
 
   const oldest = rows && rows.length > 0 ? ageDays(rows[0].requested_at) : null;
+  const blocked = rows?.filter((r: Row) => r.open_bookings > 0).length;
 
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold text-slate-900">Deletion Queue</h1>
-        {rows !== undefined && (
-          <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-            {rows.length}
-          </span>
-        )}
-        <div className="ml-auto text-sm">
-          {rows === undefined ? (
-            <span className="text-slate-400">Loading…</span>
-          ) : rows.length === 0 ? (
-            <span className="text-slate-500">Queue empty</span>
-          ) : (
-            <span
-              className={`font-medium ${
-                oldest !== null && oldest > 25 ? "text-red-600" : "text-slate-600"
-              }`}
-            >
-              Oldest request: {oldest === null ? "unknown" : `${oldest} days`}
-            </span>
-          )}
-        </div>
+      <PageHeader
+        title="Deletion Queue"
+        subtitle="Compliance queue — users who asked to be deleted, oldest first."
+      />
+
+      {/* Stat tiles */}
+      <div className="grid grid-cols-3 gap-3">
+        <StatTile
+          label="Pending requests"
+          value={rows === undefined ? <Skeleton /> : fmtNum(rows.length)}
+          chip={
+            rows !== undefined && rows.length > 0 ? (
+              <span className={`${PILL} bg-amber-50 text-amber-700`}>queue</span>
+            ) : undefined
+          }
+        />
+        <StatTile
+          label="Oldest request"
+          value={
+            rows === undefined ? (
+              <Skeleton />
+            ) : rows.length === 0 ? (
+              "—"
+            ) : oldest === null ? (
+              "unknown"
+            ) : (
+              <span className={oldest > 25 ? "text-red-600" : undefined}>{oldest}d</span>
+            )
+          }
+          chip={
+            oldest !== null && oldest > 25 ? (
+              <span className={`${PILL} bg-red-50 text-red-700`}>SLA breach</span>
+            ) : undefined
+          }
+        />
+        <StatTile
+          label="Blocked by open bookings"
+          value={rows === undefined ? <Skeleton /> : fmtNum(blocked)}
+        />
       </div>
 
       {/* Table */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <div className={CARD_STATIC}>
         {rows === undefined ? (
           <div className="space-y-2">
             {Array.from({ length: 4 }).map((_, i) => (
@@ -117,7 +144,12 @@ export default function DeletionQueuePage() {
                   return (
                     <tr key={r.id} className="border-b border-slate-50 hover:bg-slate-50">
                       <td className="py-2.5 pr-4">
-                        <div className="font-medium text-slate-900">{r.name}</div>
+                        <Link
+                          href={`/ops/users/${r.id}`}
+                          className="font-medium text-slate-900 hover:underline"
+                        >
+                          {r.name}
+                        </Link>
                         {r.email && <div className="text-xs text-slate-500">{r.email}</div>}
                       </td>
                       <td className="py-2.5 pr-4 text-slate-600">

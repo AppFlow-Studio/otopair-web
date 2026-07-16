@@ -1,23 +1,35 @@
 "use client";
 
 // Ops · Follow-ups — /ops/follow-ups (Ops spec p.10).
-// Metrics strip → Queue / Sent / Dismissed views. Drawer shows the message
-// in a phone frame. Cancel = ceremony. Create/edit/send-now are honestly
-// descoped (the sending engine is consumer-side) — stated in the header.
+// PageHeader → analytics (created trend + status mix) → metrics strip →
+// Queue / Sent / Dismissed views. Drawer shows the message in a phone frame.
+// Cancel = ceremony. Create/edit/send-now are honestly descoped (the sending
+// engine is consumer-side) — stated in the header.
 
 import { useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession, useCan } from "../../portal-session";
 import { Ceremony } from "@/components/portal/Ceremony";
+import {
+  CARD_STATIC,
+  MICRO_H,
+  PILL as pill,
+  PageHeader,
+  StatTile,
+  TrendBars,
+  fmtNum,
+} from "@/components/portal/ChartKit";
 
-const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 const fmtDT = (ms: number) => new Date(ms).toLocaleString();
 
 type FollowUpRow = {
   id: string;
   user: string | null;
+  user_id: string;
+  booking_id: string | null;
   vin: string;
   service: string | null;
   type: string;
@@ -38,6 +50,13 @@ function countdown(ms: number): string {
   return `in ${Math.floor(hours / 24)}d`;
 }
 
+/** Amber for pending-ish states, emerald for sent, slate otherwise. */
+function statusPillClass(status: string): string {
+  if (["pending", "scheduled", "queued"].includes(status)) return `${pill} bg-amber-50 text-amber-700`;
+  if (status === "sent") return `${pill} bg-emerald-50 text-emerald-700`;
+  return `${pill} bg-slate-100 text-slate-600`;
+}
+
 export default function OpsFollowUpsPage() {
   const { token } = usePortalSession();
   const canWrite = useCan("users.write");
@@ -46,34 +65,38 @@ export default function OpsFollowUpsPage() {
   const [cancelTarget, setCancelTarget] = useState<FollowUpRow | null>(null);
 
   const data = useQuery(api.opsFollowUps.board, { token });
+  const daily = useQuery(api.portalSeries.followUpsDaily, { token, days: 30 });
   const cancel = useMutation(api.opsFollowUps.cancel);
 
   const rows: FollowUpRow[] =
     data === undefined ? [] : view === "queue" ? data.queue : view === "sent" ? data.sent : data.dismissed;
 
+  const created30d = daily?.days.reduce((s, d) => s + d.created, 0);
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-slate-900">Follow-ups</h1>
-        <p className="mt-1 text-[13px] text-slate-500">
-          Read + cancel. Creating and firing follow-ups stays with the consumer-side engine
-          for now — the create wizard ships when ops-triggered sends get their own design
-          pass.
-        </p>
-      </div>
+      <PageHeader
+        title="Follow-ups"
+        subtitle="Read + cancel. Creating and firing follow-ups stays with the consumer-side engine for now — the create wizard ships when ops-triggered sends get their own design pass."
+      />
 
-      {/* Metrics strip */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* Analytics zone */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatTile
+          label="Created · 30d"
+          value={created30d == null ? "—" : fmtNum(created30d)}
+          spark={daily?.days.map((d) => d.created)}
+        />
         {data === undefined ? (
           Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-20 animate-pulse rounded-xl bg-slate-100" />
+            <div key={i} className="h-24 animate-pulse rounded-xl bg-slate-100" />
           ))
         ) : (
           <>
-            <Kpi label="pending" value={String(data.metrics.pending)} />
-            <Kpi label="sent 7d" value={String(data.metrics.sent_7d)} />
-            <Kpi
-              label="sent → booking"
+            <StatTile label="Pending" value={fmtNum(data.metrics.pending)} />
+            <StatTile label="Sent · 7d" value={fmtNum(data.metrics.sent_7d)} />
+            <StatTile
+              label="Sent → booking"
               value={
                 data.metrics.conversion_pct == null
                   ? "—"
@@ -82,6 +105,25 @@ export default function OpsFollowUpsPage() {
             />
           </>
         )}
+      </div>
+      <div className={CARD_STATIC}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className={MICRO_H}>Follow-ups created per day · last 30 days</div>
+          {daily !== undefined && (
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(daily.by_status)
+                .sort((a, b) => b[1] - a[1])
+                .map(([status, count]) => (
+                  <span key={status} className={statusPillClass(status)}>
+                    {status} × {count}
+                  </span>
+                ))}
+            </div>
+          )}
+        </div>
+        <div className="mt-3">
+          <TrendBars data={daily?.days} dataKey="created" name="Created" color="#93c5fd" height={150} />
+        </div>
       </div>
 
       <div className="flex gap-1 rounded-lg border border-slate-200 bg-white p-1">
@@ -109,7 +151,7 @@ export default function OpsFollowUpsPage() {
           Nothing in {view}.
         </div>
       ) : (
-        <div className="rounded-xl border border-slate-200 bg-white">
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full text-left text-[13px]">
             <thead>
               <tr className="border-b border-slate-100 text-[11px] uppercase tracking-wide text-slate-400">
@@ -123,7 +165,7 @@ export default function OpsFollowUpsPage() {
             </thead>
             <tbody>
               {rows.map((f) => (
-                <tr key={f.id} className="border-b border-slate-50">
+                <tr key={f.id} className="border-b border-slate-50 hover:bg-slate-50">
                   <td className="px-4 py-2">
                     {view === "queue" ? (
                       <span className={`${pill} bg-blue-50 text-blue-700`}>
@@ -135,8 +177,27 @@ export default function OpsFollowUpsPage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-2 py-2 text-slate-600">{f.user ?? "—"}</td>
-                  <td className="px-2 py-2 font-mono text-[12px] text-slate-600">{f.vin}</td>
+                  <td className="px-2 py-2 text-slate-600">
+                    {f.user ? (
+                      <Link
+                        href={`/ops/users/${f.user_id}`}
+                        className="hover:text-blue-700 hover:underline"
+                      >
+                        {f.user}
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="px-2 py-2 font-mono text-[12px]">
+                    <Link
+                      href={`/director/data/vins/${f.vin}`}
+                      title="Open VIN in the data portal"
+                      className="text-slate-600 hover:text-slate-900 hover:underline"
+                    >
+                      {f.vin}
+                    </Link>
+                  </td>
                   <td className="px-2 py-2 text-slate-700">
                     {f.service ?? "—"}
                     <span className={`${pill} ml-1.5 bg-slate-100 text-slate-500`}>{f.type}</span>
@@ -147,9 +208,17 @@ export default function OpsFollowUpsPage() {
                         mechanic rec
                       </span>
                     )}
-                    {f.led_to_booking && (
-                      <span className={`${pill} bg-emerald-50 text-emerald-700`}>→ booking</span>
-                    )}
+                    {f.led_to_booking &&
+                      (f.booking_id ? (
+                        <Link
+                          href={`/ops/bookings/${f.booking_id}`}
+                          className={`${pill} bg-emerald-50 text-emerald-700 hover:underline`}
+                        >
+                          booking →
+                        </Link>
+                      ) : (
+                        <span className={`${pill} bg-emerald-50 text-emerald-700`}>→ booking</span>
+                      ))}
                     {f.dismissed_reason && (
                       <span className="text-[12px] italic text-slate-400">
                         {f.dismissed_reason}
@@ -234,15 +303,6 @@ export default function OpsFollowUpsPage() {
           await cancel({ token, reason, id: cancelTarget.id as Id<"follow_ups"> });
         }}
       />
-    </div>
-  );
-}
-
-function Kpi({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <div className="text-2xl font-bold text-slate-900">{value}</div>
-      <div className="mt-1 text-xs font-medium text-slate-500">{label}</div>
     </div>
   );
 }

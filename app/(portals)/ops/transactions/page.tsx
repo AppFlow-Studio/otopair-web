@@ -5,9 +5,21 @@
 // with reason chip, orphan payments listed, summary bar green at zero.
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "../../portal-session";
+import {
+  CARD_STATIC,
+  MICRO_H,
+  PageHeader,
+  Skeleton,
+  StatTile,
+  TrendArea,
+  TrendBars,
+  fmtNum,
+  money,
+} from "@/components/portal/ChartKit";
 
 const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 const fmtDate = (ms: number) => new Date(ms).toLocaleDateString();
@@ -17,6 +29,7 @@ const fmtAmt = (n: number, cur: string) =>
 type LedgerRow = {
   id: string;
   user: string | null;
+  user_id: string | null;
   description: string;
   sub_description: string | null;
   amount: number;
@@ -35,6 +48,55 @@ const MISMATCH_LABEL: Record<string, string> = {
   orphan_transaction: "orphan transaction",
 };
 
+// Analytics zone — ledger volume $/day (emerald area) + rows/day (blue bars)
+// as two stacked panels from portalSeries.transactionsDaily.
+function TransactionsAnalytics({ token }: { token: string }) {
+  const days = 30;
+  const series = useQuery(api.portalSeries.transactionsDaily, { token, days });
+
+  const volume = series?.reduce((s, d) => s + d.volume_usd, 0);
+  const count = series?.reduce((s, d) => s + d.count, 0);
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <StatTile
+          label="Ledger volume (30d)"
+          value={series === undefined ? <Skeleton /> : money(volume)}
+          spark={series?.map((d) => d.volume_usd)}
+          sparkColor="#059669"
+        />
+        <StatTile
+          label="Ledger rows (30d)"
+          value={series === undefined ? <Skeleton /> : fmtNum(count)}
+          spark={series?.map((d) => d.count)}
+          sparkColor="#3b82f6"
+        />
+      </div>
+      <div className={CARD_STATIC}>
+        <div className="flex items-baseline justify-between">
+          <h2 className={MICRO_H}>Volume per day</h2>
+          <span className="text-[11px] text-slate-400">last {days} days</span>
+        </div>
+        <div className="mt-2">
+          <TrendArea
+            data={series}
+            dataKey="volume_usd"
+            name="Volume"
+            color="#059669"
+            height={150}
+            isMoney
+          />
+        </div>
+        <h2 className={`${MICRO_H} mt-5`}>Transactions per day</h2>
+        <div className="mt-2">
+          <TrendBars data={series} dataKey="count" name="Transactions" color="#93c5fd" height={110} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OpsTransactionsPage() {
   const { token } = usePortalSession();
   const [reconcile, setReconcile] = useState(false);
@@ -42,9 +104,11 @@ export default function OpsTransactionsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold text-slate-900">Transactions Ledger</h1>
-        <label className="ml-auto flex items-center gap-2 text-[13px] font-medium text-slate-600">
+      <PageHeader
+        title="Transactions Ledger"
+        subtitle="The signed-amount ledger the user's app shows — a record, not a lever."
+      >
+        <label className="flex items-center gap-2 text-[13px] font-medium text-slate-600">
           <input
             type="checkbox"
             checked={reconcile}
@@ -52,7 +116,9 @@ export default function OpsTransactionsPage() {
           />
           Reconciliation mode
         </label>
-      </div>
+      </PageHeader>
+
+      <TransactionsAnalytics token={token} />
 
       {reconcile && data && (
         <div
@@ -79,7 +145,7 @@ export default function OpsTransactionsPage() {
           No transactions on this deployment.
         </div>
       ) : (
-        <div className="rounded-xl border border-slate-200 bg-white">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
           <table className="w-full text-left text-[13px]">
             <thead>
               <tr className="border-b border-slate-100 text-[11px] uppercase tracking-wide text-slate-400">
@@ -89,6 +155,7 @@ export default function OpsTransactionsPage() {
                 <th className="px-2 py-2">Type</th>
                 <th className="px-2 py-2">Status</th>
                 <th className="px-2 py-2 text-right">Amount</th>
+                <th className="px-2 py-2">Trace</th>
                 {reconcile && <th className="px-2 py-2">Check</th>}
               </tr>
             </thead>
@@ -99,7 +166,15 @@ export default function OpsTransactionsPage() {
                   className={`border-b border-slate-50 ${t.mismatch ? "bg-amber-50/60" : ""}`}
                 >
                   <td className="px-4 py-2 text-slate-500">{fmtDate(t.at)}</td>
-                  <td className="px-2 py-2 text-slate-600">{t.user ?? "—"}</td>
+                  <td className="px-2 py-2 text-slate-600">
+                    {t.user && t.user_id ? (
+                      <Link href={`/ops/users/${t.user_id}`} className="hover:text-blue-700 hover:underline">
+                        {t.user}
+                      </Link>
+                    ) : (
+                      (t.user ?? "—")
+                    )}
+                  </td>
                   <td className="px-2 py-2 text-slate-800">
                     {t.description}
                     {t.sub_description && (
@@ -120,6 +195,29 @@ export default function OpsTransactionsPage() {
                     }`}
                   >
                     {fmtAmt(t.amount, t.currency)}
+                  </td>
+                  <td className="px-2 py-2">
+                    <span className="flex items-center gap-2">
+                      {t.booking_id ? (
+                        <Link
+                          href={`/ops/bookings/${t.booking_id}`}
+                          className="text-[12px] font-medium text-blue-600 hover:underline"
+                        >
+                          booking →
+                        </Link>
+                      ) : null}
+                      {t.payment_id ? (
+                        <Link
+                          href={`/ops/payments/${t.payment_id}`}
+                          className="text-[12px] font-medium text-blue-600 hover:underline"
+                        >
+                          payment →
+                        </Link>
+                      ) : null}
+                      {!t.booking_id && !t.payment_id && (
+                        <span className="text-[12px] text-slate-300">—</span>
+                      )}
+                    </span>
                   </td>
                   {reconcile && (
                     <td className="px-2 py-2">
@@ -162,7 +260,12 @@ export default function OpsTransactionsPage() {
             {data.orphan_payments.map(
               (p: { id: string; amount: number; status: string; at: number }) => (
                 <div key={p.id} className="flex items-center gap-3 text-[13px] text-slate-600">
-                  <span className="font-mono text-[12px]">{p.id.slice(0, 12)}…</span>
+                  <Link
+                    href={`/ops/payments/${p.id}`}
+                    className="font-medium text-blue-600 hover:underline"
+                  >
+                    payment …{p.id.slice(-6)} →
+                  </Link>
                   <span className="font-semibold text-slate-800">${p.amount.toFixed(2)}</span>
                   <span>{fmtDate(p.at)}</span>
                 </div>

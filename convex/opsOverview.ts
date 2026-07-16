@@ -75,23 +75,42 @@ export const activityFeed = query({
     const bookings = await ctx.db.query("bookings").withIndex("by_created_at").order("desc").take(n);
     const payments = await ctx.db.query("payments").withIndex("by_created_at").order("desc").take(n);
 
+    // Name the actor on every row — feed labels must be traceable, not
+    // "Booking pending". Bounded: ≤2n cached user lookups.
+    const userNames = new Map<string, string>();
+    const nameOf = async (userId: (typeof bookings)[number]["user_id"]): Promise<string> => {
+      const key = String(userId);
+      const cached = userNames.get(key);
+      if (cached !== undefined) return cached;
+      const u = await ctx.db.get(userId);
+      const name = u
+        ? [u.first_name, u.last_name].filter(Boolean).join(" ").trim() || u.email || "unknown"
+        : "unknown";
+      userNames.set(key, name);
+      return name;
+    };
+
     const feed = [
-      ...bookings.map((b) => ({
-        kind: "booking" as const,
-        id: String(b._id),
-        at: b.created_at ?? b._creationTime,
-        label: `Booking ${b.status}`,
-        amount: b.total_cost ?? null,
-        entity: { type: "booking", id: String(b._id) },
-      })),
-      ...payments.map((p) => ({
-        kind: "payment" as const,
-        id: String(p._id),
-        at: p.created_at ?? p._creationTime,
-        label: `Payment ${p.status}`,
-        amount: p.captured_amount_cents != null ? p.captured_amount_cents / 100 : p.amount,
-        entity: { type: "payment", id: String(p._id) },
-      })),
+      ...(await Promise.all(
+        bookings.map(async (b) => ({
+          kind: "booking" as const,
+          id: String(b._id),
+          at: b.created_at ?? b._creationTime,
+          label: `${await nameOf(b.user_id)} — booking ${b.status.replace(/_/g, " ")}`,
+          amount: b.total_cost ?? null,
+          entity: { type: "booking", id: String(b._id) },
+        })),
+      )),
+      ...(await Promise.all(
+        payments.map(async (p) => ({
+          kind: "payment" as const,
+          id: String(p._id),
+          at: p.created_at ?? p._creationTime,
+          label: `${await nameOf(p.user_id)} — payment ${p.status.replace(/_/g, " ")}`,
+          amount: p.captured_amount_cents != null ? p.captured_amount_cents / 100 : p.amount,
+          entity: { type: "payment", id: String(p._id) },
+        })),
+      )),
     ]
       .sort((a, b) => b.at - a.at)
       .slice(0, n);

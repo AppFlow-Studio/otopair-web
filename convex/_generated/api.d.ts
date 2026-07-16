@@ -81,6 +81,7 @@ import type * as director from "../director.js";
 import type * as directorCars from "../directorCars.js";
 import type * as directorConfigActions from "../directorConfigActions.js";
 import type * as directorConfigBackfills from "../directorConfigBackfills.js";
+import type * as directorData from "../directorData.js";
 import type * as directorGate from "../directorGate.js";
 import type * as directorOverview from "../directorOverview.js";
 import type * as directorPricing from "../directorPricing.js";
@@ -244,6 +245,7 @@ import type * as payments_backfill_helpers from "../payments_backfill_helpers.js
 import type * as payments_stripe from "../payments_stripe.js";
 import type * as platform_settings from "../platform_settings.js";
 import type * as portalSearch from "../portalSearch.js";
+import type * as portalSeries from "../portalSeries.js";
 import type * as portalStats from "../portalStats.js";
 import type * as preSignups from "../preSignups.js";
 import type * as preferences from "../preferences.js";
@@ -406,6 +408,7 @@ import type * as vehicleEnrichment_utils_chassisLookup from "../vehicleEnrichmen
 import type * as vehicleEnrichment_utils_claudeClient from "../vehicleEnrichment/utils/claudeClient.js";
 import type * as vehicleEnrichment_utils_engineCodeLookup from "../vehicleEnrichment/utils/engineCodeLookup.js";
 import type * as vehicleEnrichment_utils_engineLookup from "../vehicleEnrichment/utils/engineLookup.js";
+import type * as vehicleEnrichment_utils_partFitmentVerifier from "../vehicleEnrichment/utils/partFitmentVerifier.js";
 import type * as vehicleEnrichment_utils_wheelSizeScraper from "../vehicleEnrichment/utils/wheelSizeScraper.js";
 import type * as vehicleEnrichment_v3TestSuite from "../vehicleEnrichment/v3TestSuite.js";
 import type * as vehicleEnrichment_v3mutations from "../vehicleEnrichment/v3mutations.js";
@@ -506,6 +509,7 @@ declare const fullApi: ApiFromModules<{
   directorCars: typeof directorCars;
   directorConfigActions: typeof directorConfigActions;
   directorConfigBackfills: typeof directorConfigBackfills;
+  directorData: typeof directorData;
   directorGate: typeof directorGate;
   directorOverview: typeof directorOverview;
   directorPricing: typeof directorPricing;
@@ -669,6 +673,7 @@ declare const fullApi: ApiFromModules<{
   payments_stripe: typeof payments_stripe;
   platform_settings: typeof platform_settings;
   portalSearch: typeof portalSearch;
+  portalSeries: typeof portalSeries;
   portalStats: typeof portalStats;
   preSignups: typeof preSignups;
   preferences: typeof preferences;
@@ -831,6 +836,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/utils/claudeClient": typeof vehicleEnrichment_utils_claudeClient;
   "vehicleEnrichment/utils/engineCodeLookup": typeof vehicleEnrichment_utils_engineCodeLookup;
   "vehicleEnrichment/utils/engineLookup": typeof vehicleEnrichment_utils_engineLookup;
+  "vehicleEnrichment/utils/partFitmentVerifier": typeof vehicleEnrichment_utils_partFitmentVerifier;
   "vehicleEnrichment/utils/wheelSizeScraper": typeof vehicleEnrichment_utils_wheelSizeScraper;
   "vehicleEnrichment/v3TestSuite": typeof vehicleEnrichment_v3TestSuite;
   "vehicleEnrichment/v3mutations": typeof vehicleEnrichment_v3mutations;

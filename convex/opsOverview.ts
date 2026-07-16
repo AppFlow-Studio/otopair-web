@@ -120,8 +120,18 @@ export const needsAttention = query({
       null,
     );
 
-    // Stuck: vehicle_at_shop or pending_quote older than 48h
-    const stuck: { id: string; status: string; age_h: number }[] = [];
+    // Stuck: vehicle_at_shop or pending_quote older than 48h. Every row is
+    // traceable — customer + shop named, deep-linkable by id.
+    const stuck: {
+      id: string;
+      status: string;
+      age_h: number;
+      user: string;
+      shop: string;
+      vin: string | null;
+      total: number | null;
+      scheduled: string | null;
+    }[] = [];
     for (const status of ["vehicle_at_shop", "pending_quote", "quotes_ready"]) {
       const rows = await ctx.db
         .query("bookings")
@@ -130,7 +140,24 @@ export const needsAttention = query({
       for (const b of rows) {
         const at = b.created_at ?? b._creationTime;
         if (now - at > 2 * DAY) {
-          stuck.push({ id: String(b._id), status, age_h: Math.round((now - at) / 36e5) });
+          const [user, shop] = await Promise.all([
+            ctx.db.get(b.user_id),
+            b.shop_id ? ctx.db.get(b.shop_id) : null,
+          ]);
+          stuck.push({
+            id: String(b._id),
+            status,
+            age_h: Math.round((now - at) / 36e5),
+            user: user
+              ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() ||
+                user.email ||
+                "Unknown user"
+              : "Unknown user",
+            shop: shop?.name ?? "no shop assigned",
+            vin: b.vin ?? null,
+            total: b.total_cost ?? null,
+            scheduled: b.scheduled_date ?? null,
+          });
         }
       }
     }

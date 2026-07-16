@@ -68,11 +68,15 @@ export const attention = query({
       .filter((p) => p.status === "failed" || p.status === "requires_action")
       .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
     for (const p of failed.slice(0, 3)) {
+      const user = await ctx.db.get(p.user_id);
+      const who = user
+        ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.email || "unknown"
+        : "unknown";
       items.push({
         key: `payment:${p._id}`,
         severity: "red",
-        label: `Payment ${p.status === "failed" ? "failed" : "needs action"} — $${(p.amount ?? 0).toFixed(0)}`,
-        href: "/ops/payments",
+        label: `Payment ${p.status === "failed" ? "failed" : "needs action"} — $${(p.amount ?? 0).toFixed(0)} · ${who}`,
+        href: `/ops/payments/${String(p._id)}`,
         at: p.created_at ?? p._creationTime,
       });
     }
@@ -89,10 +93,19 @@ export const attention = query({
         if (now - at > 2 * DAY) {
           stuckCount++;
           if (items.filter((i) => i.key.startsWith("booking:")).length < 4) {
+            const [user, shop] = await Promise.all([
+              ctx.db.get(b.user_id),
+              b.shop_id ? ctx.db.get(b.shop_id) : null,
+            ]);
+            const who = user
+              ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() ||
+                user.email ||
+                "unknown"
+              : "unknown";
             items.push({
               key: `booking:${b._id}`,
               severity: "amber",
-              label: `Booking stuck in ${status.replace(/_/g, " ")} ${Math.round((now - at) / HOUR)}h`,
+              label: `${who}'s booking${shop ? ` at ${shop.name}` : ""} stuck in ${status.replace(/_/g, " ")} ${Math.round((now - at) / HOUR)}h`,
               href: `/ops/bookings/${String(b._id)}`,
               at,
             });

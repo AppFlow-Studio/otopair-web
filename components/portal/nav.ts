@@ -19,7 +19,7 @@ export type PortalId = "ops" | "shops" | "data";
 export const PORTALS: { id: PortalId; label: string; base: string }[] = [
   { id: "ops", label: "Ops", base: "/ops" },
   { id: "shops", label: "Shops", base: "/shops" },
-  { id: "data", label: "Data", base: "/data" },
+  { id: "data", label: "Data", base: "/director/data" },
 ];
 
 export const NAV: Record<PortalId, NavGroup[]> = {
@@ -92,46 +92,45 @@ export const NAV: Record<PortalId, NavGroup[]> = {
   data: [
     {
       items: [
-        { label: "Data Health", href: "/data" },
-        { label: "Insights", href: "/data/insights" },
+        { label: "Command Center", href: "/director/data" },
+        { label: "Insights", href: "/director/data/insights" },
       ],
     },
     {
       label: "Catalog",
       items: [
-        { label: "Vehicle Catalog", href: "/data/catalog" },
-        { label: "VIN Explorer", href: "/data/vins" },
-        { label: "Parts", href: "/data/parts" },
-        { label: "Tire Intelligence", href: "/data/tires" },
+        { label: "Vehicle Catalog", href: "/director/data/catalog" },
+        { label: "VIN Explorer", href: "/director/data/vins" },
+        { label: "Parts", href: "/director/data/parts" },
+        { label: "Tire Intelligence", href: "/director/data/tires" },
       ],
     },
     {
       label: "Pipeline",
       items: [
-        { label: "Control Room", href: "/data/control-room", badgeKey: "data.vin_queue_pending" },
-        { label: "Sources & Cache", href: "/data/sources" },
-        { label: "Review Queue", href: "/data/review-queue", badgeKey: "slo.review_queue_depth" },
+        { label: "Control Room", href: "/director/data/control-room", badgeKey: "data.vin_queue_pending" },
+        { label: "Sources & Cache", href: "/director/data/sources" },
+        { label: "Review Queue", href: "/director/data/review-queue", badgeKey: "slo.review_queue_depth" },
       ],
     },
     {
       label: "Pricing & Labor",
       items: [
-        { label: "Labor Times", href: "/data/labor" },
-        { label: "Parts Pricing", href: "/data/parts-pricing" },
-        { label: "Pricing Engine", href: "/data/pricing-engine" },
+        { label: "Labor Times", href: "/director/data/labor" },
+        { label: "Parts Pricing", href: "/director/data/parts-pricing" },
+        { label: "Pricing Engine", href: "/director/data/pricing-engine" },
       ],
     },
     {
       label: "Quality",
       items: [
-        { label: "Verification", href: "/data/verification" },
-        { label: "Vehicle ID", href: "/data/vehicle-id" },
-        { label: "Coverage", href: "/data/coverage" },
-        { label: "Provenance", href: "/data/provenance", badgeKey: "data.incidents_open" },
+        { label: "Verification", href: "/director/data/verification" },
+        { label: "Vehicle ID", href: "/director/data/vehicle-id" },
+        { label: "Coverage", href: "/director/data/coverage" },
+        { label: "Provenance", href: "/director/data/provenance", badgeKey: "data.incidents_open" },
       ],
     },
-    { label: "Catalog Ops", items: [{ label: "Service Catalog", href: "/data/service-catalog" }] },
-    { label: "Economics", items: [{ label: "Costs & Credits", href: "/data/costs" }] },
-    { label: "Product", items: [{ label: "API Sandbox", href: "/data/api-sandbox" }] },
+    { label: "Catalog Ops", items: [{ label: "Service Catalog", href: "/director/data/service-catalog" }] },
+    { label: "Economics", items: [{ label: "Costs & Credits", href: "/director/data/costs" }] },
   ],
 };

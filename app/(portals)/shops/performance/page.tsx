@@ -89,7 +89,7 @@ export default function ShopsPerformancePage() {
                   </span>
                   <span className="w-10 text-right text-[11px] text-slate-400">n={s.n}</span>
                   {s.systematically_wrong && (
-                    <Link href="/data/labor" className={`${pill} bg-red-50 text-red-700 hover:bg-red-100`}>
+                    <Link href="/director/data/labor" className={`${pill} bg-red-50 text-red-700 hover:bg-red-100`}>
                       → Data portal
                     </Link>
                   )}

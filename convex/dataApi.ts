@@ -355,7 +355,10 @@ export const assembleLabor = internalQuery({
   },
 });
 
-// ─── Key management (portal, gated) ─────────────────────────────────────────
+// ─── Key management (director-gated; CLI/admin escape hatches) ───────────────
+// The internal console UI is gone — self-serve keys live in /developers
+// (convex/devPortal.ts). These remain for admin issuance/revocation, e.g.
+//   npx convex run dataApi:listKeys '{"token":"…"}'
 
 export const _insertKey = internalMutation({
   args: {
@@ -433,96 +436,6 @@ export const createKey = action({
   },
 });
 
-/** Every director gets ONE self-service sandbox key ("log in and have a
- *  key") — any valid session may mint it, no admin.manage needed. Re-minting
- *  revokes the previous personal key so exactly one is live per director. */
-export const createPersonalKey = action({
-  args: { token: v.string() },
-  handler: async (ctx, { token }): Promise<{ key: string; prefix: string; id: string }> => {
-    const session = await ctx.runQuery(api.director_auth.validateSession, { token });
-    if (!session) throw new Error("unauthorized: invalid or expired director session");
-
-    const bytes = new Uint8Array(24);
-    crypto.getRandomValues(bytes);
-    const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
-    const key = `otp_live_${hex}`;
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
-    const key_hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-
-    const id = await ctx.runMutation(internal.dataApi._insertPersonalKey, {
-      key_hash,
-      prefix: key.slice(0, 12),
-      created_by: session.userId as Id<"director_users">,
-      actor_name: session.name,
-    });
-    return { key, prefix: key.slice(0, 12), id: String(id) };
-  },
-});
-
-export const _insertPersonalKey = internalMutation({
-  args: {
-    key_hash: v.string(),
-    prefix: v.string(),
-    created_by: v.id("director_users"),
-    actor_name: v.string(),
-  },
-  handler: async (ctx, args): Promise<Id<"api_keys">> => {
-    const name = `personal: ${args.actor_name}`;
-    // Revoke any prior live personal key for this director (one live at a time).
-    const existing = await ctx.db.query("api_keys").withIndex("by_created_at").order("desc").take(100);
-    for (const k of existing) {
-      if (k.name === name && String(k.created_by) === String(args.created_by) && k.revoked_at == null) {
-        await ctx.db.patch(k._id, { revoked_at: Date.now() });
-      }
-    }
-    const id = await ctx.db.insert("api_keys", {
-      name,
-      key_hash: args.key_hash,
-      prefix: args.prefix,
-      scopes: ["maintenance:read", "labor:read", "media:read"],
-      rate_limit_per_min: DEFAULT_RATE_LIMIT_PER_MIN,
-      created_by: args.created_by,
-      created_at: Date.now(),
-      request_count: 0,
-    });
-    await logAudit(
-      ctx,
-      { name: args.actor_name, userId: args.created_by },
-      {
-        entity_type: "api_key",
-        entity_id: String(id),
-        action: "personal_key_minted",
-        detail: `self-service sandbox key (previous personal key revoked if any)`,
-      },
-    );
-    return id;
-  },
-});
-
-/** The caller's own live personal key (prefix only) — drives the "your key"
- *  banner on the sandbox. */
-export const myPersonalKey = query({
-  args: { token: v.string() },
-  handler: async (
-    ctx,
-    { token },
-  ): Promise<{ prefix: string; created_at: number; requests_24h: number } | null> => {
-    const actor = await requireDirector(ctx, token);
-    const name = `personal: ${actor.name}`;
-    const keys = await ctx.db.query("api_keys").withIndex("by_created_at").order("desc").take(100);
-    const mine = keys.find(
-      (k) => k.name === name && String(k.created_by) === String(actor.userId) && k.revoked_at == null,
-    );
-    if (!mine) return null;
-    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    const recent = await ctx.db
-      .query("api_usage")
-      .withIndex("by_key_and_time", (q) => q.eq("api_key_id", mine._id).gte("created_at", dayAgo))
-      .take(1000);
-    return { prefix: mine.prefix, created_at: mine.created_at, requests_24h: recent.length };
-  },
-});
-
 export const revokeKey = mutation({
   args: { token: v.string(), reason: v.string(), id: v.id("api_keys") },
   handler: async (ctx, { token, reason, id }): Promise<{ ok: true }> => {
@@ -581,39 +494,6 @@ export const listKeys = query({
       });
     }
     return rows;
-  },
-});
-
-export type UsageRow = {
-  endpoint: string;
-  status: number;
-  config_key: string | null;
-  created_at: number;
-  key_prefix: string;
-};
-
-export const recentUsage = query({
-  args: { token: v.string() },
-  handler: async (ctx, { token }): Promise<UsageRow[]> => {
-    await requireDirector(ctx, token);
-    const rows = await ctx.db.query("api_usage").withIndex("by_created_at").order("desc").take(50);
-    const prefixes = new Map<string, string>();
-    const out: UsageRow[] = [];
-    for (const r of rows) {
-      let prefix = prefixes.get(String(r.api_key_id));
-      if (prefix === undefined) {
-        prefix = (await ctx.db.get(r.api_key_id))?.prefix ?? "(deleted)";
-        prefixes.set(String(r.api_key_id), prefix);
-      }
-      out.push({
-        endpoint: r.endpoint,
-        status: r.status,
-        config_key: r.config_key ?? null,
-        created_at: r.created_at,
-        key_prefix: prefix,
-      });
-    }
-    return out;
   },
 });
 
@@ -1119,33 +999,7 @@ export const assembleVehicle = internalQuery({
   },
 });
 
-// ─── Sandbox P2 deltas (spec §12 gaps) ───────────────────────────────────────
-
-export type UsageDayBucket = { date: string; requests: number; errors: number };
-
-/** Per-key daily usage buckets — the spec's "usage chart per key". Window
- *  bounded by the by_key_and_time index (default 30 days). */
-export const usageSeriesByKey = query({
-  args: { token: v.string(), id: v.id("api_keys"), days: v.optional(v.number()) },
-  handler: async (ctx, { token, id, days }): Promise<UsageDayBucket[]> => {
-    await requireDirector(ctx, token);
-    const windowDays = Math.min(Math.max(days ?? 30, 1), 90);
-    const since = Date.now() - windowDays * 24 * 60 * 60 * 1000;
-    const rows = await ctx.db
-      .query("api_usage")
-      .withIndex("by_key_and_time", (q) => q.eq("api_key_id", id).gte("created_at", since))
-      .take(2000);
-    const buckets = new Map<string, UsageDayBucket>();
-    for (const r of rows) {
-      const date = new Date(r.created_at).toISOString().slice(0, 10);
-      const b = buckets.get(date) ?? { date, requests: 0, errors: 0 };
-      b.requests++;
-      if (r.status >= 400) b.errors++;
-      buckets.set(date, b);
-    }
-    return [...buckets.values()].sort((a, b) => a.date.localeCompare(b.date));
-  },
-});
+// ─── Gate exit tests ─────────────────────────────────────────────────────────
 
 export type GateCheckRow = {
   config_key: string;
@@ -1165,7 +1019,8 @@ export type GateCheckResult = {
  *  by fill rate and assert zero licensed-B / X fields would be SERVED. Uses
  *  the same collectSpecFields + latestFieldEvidence + deriveLayer/isServable
  *  path the live endpoint uses, so the numbers cross-check the
- *  data.layer_b_exposure stat by construction. */
+ *  data.layer_b_exposure stat by construction.
+ *  Run: npx convex run dataApi:gateCheck '{"token":"…"}' */
 export const gateCheck = query({
   args: { token: v.string() },
   handler: async (ctx, { token }): Promise<GateCheckResult> => {

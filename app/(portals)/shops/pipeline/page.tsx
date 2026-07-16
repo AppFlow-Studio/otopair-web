@@ -6,9 +6,18 @@
 // themselves the moment the facts change — no buttons, honestly.
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "../../portal-session";
+import {
+  CARD,
+  BarRows,
+  PageHeader,
+  StatTile,
+  Skeleton,
+  fmtNum,
+} from "@/components/portal/ChartKit";
 
 const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 
@@ -29,14 +38,71 @@ export default function ShopsPipelinePage() {
   const data = useQuery(api.shopsPipeline.board, { token });
   const [drawer, setDrawer] = useState<PipelineCard | null>(null);
 
+  // ── Stage analytics (client-side from the board payload) ───────────────────
+  const columns = data?.columns as { stage: string; cards: PipelineCard[] }[] | undefined;
+  const allCards = columns?.flatMap((c) => c.cards);
+  const liveCount = columns
+    ?.filter((c) => c.stage === "Live")
+    .reduce((s, c) => s + c.cards.length, 0);
+  const inPipeline =
+    allCards === undefined || liveCount === undefined ? undefined : allCards.length - liveCount;
+  const stuckCount = allCards?.filter(
+    (c) => c.stage !== "Live" && c.age_days != null && c.age_days > 5,
+  ).length;
+  const stageRows = columns?.map((c) => ({
+    label: c.stage,
+    value: c.cards.length,
+  }));
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-slate-900">Onboarding Pipeline</h1>
-        <p className="mt-1 text-[13px] text-slate-500">
-          Every stage is auto-verified against the tables — cards advance the moment the
-          facts change. No checkbox of vibes; the drawer names the query behind each ✓.
-        </p>
+      <PageHeader
+        title="Onboarding Pipeline"
+        subtitle="Every stage is auto-verified against the tables — cards advance the moment the facts change. No checkbox of vibes; the drawer names the query behind each ✓."
+      />
+
+      {/* ── Stat tiles ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile
+          label="Shops on the board"
+          value={allCards === undefined ? <Skeleton /> : fmtNum(allCards.length)}
+        />
+        <StatTile
+          label="Still onboarding"
+          value={inPipeline === undefined ? <Skeleton /> : fmtNum(inPipeline)}
+        />
+        <StatTile
+          label="Fully onboarded (Live)"
+          value={liveCount === undefined ? <Skeleton /> : fmtNum(liveCount)}
+        />
+        <StatTile
+          label="Onboarding >5 days"
+          value={stuckCount === undefined ? <Skeleton /> : fmtNum(stuckCount)}
+          chip={
+            stuckCount !== undefined ? (
+              <span
+                className={`${pill} ${
+                  stuckCount > 0 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"
+                }`}
+              >
+                {stuckCount > 0 ? "nudge these" : "none stuck"}
+              </span>
+            ) : undefined
+          }
+        />
+      </div>
+
+      {/* ── Stage summary strip ── */}
+      <div className={CARD}>
+        <div className="mb-3 flex items-baseline gap-2">
+          <h2 className="text-sm font-semibold text-slate-900">Shops per stage</h2>
+          <span className="text-[11px] text-slate-400">derived live from table checks</span>
+        </div>
+        {stageRows === undefined ? (
+          <Skeleton className="h-24 w-full" />
+        ) : (
+          <BarRows rows={stageRows} color="#93c5fd" />
+        )}
       </div>
 
       {data === undefined ? (
@@ -113,6 +179,12 @@ export default function ShopsPipelinePage() {
                 ✕
               </button>
             </div>
+            <Link
+              href={`/shops/all/${drawer.shop_id}`}
+              className="mt-1 inline-block text-[12px] font-medium text-blue-600 hover:underline"
+            >
+              Open shop detail →
+            </Link>
             <div className="mt-4 space-y-2">
               {drawer.checklist.map((item) => (
                 <div

@@ -26,6 +26,8 @@ export type ShopHeatRow = { shop_id: string; shop: string; cells: HeatCell[] };
 export type IntegrityIssue = {
   kind: "double_booked" | "booked_but_available";
   shop: string;
+  shop_id: string;
+  booking_id: string | null;
   mechanic_id: string | null;
   date: string;
   detail: string;
@@ -83,6 +85,8 @@ export const overview = query({
               integrity.push({
                 kind: "double_booked",
                 shop: s.name,
+                shop_id: String(s._id),
+                booking_id: null,
                 mechanic_id: mech,
                 date,
                 detail: `${sorted[i - 1].start_time}–${sorted[i - 1].end_time} overlaps ${sorted[i].start_time}–${sorted[i].end_time}`,
@@ -120,6 +124,8 @@ export const overview = query({
           integrity.push({
             kind: "booked_but_available",
             shop: s.name,
+            shop_id: String(s._id),
+            booking_id: String(b._id),
             mechanic_id: null,
             date: bDate,
             detail: `booking ${String(b._id).slice(0, 10)}… at ${bTime} (${b.status}) — every covering slot still is_available`,

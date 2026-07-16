@@ -1,14 +1,26 @@
 "use client";
 
 // Shops Directory — /shops/all (Shops Atlas T2, §4.2).
-// One row per shop: name + health dot (hover popover lists the exact failing
-// checks, computed server-side), city/ZIP, $/hr, rating, mechanics, active,
+// Stat tiles → one row per shop: name + health dot (hover popover lists the
+// exact failing checks, computed server-side), city/ZIP, $/hr, rating,
+// mechanics, bookings/revenue 30d (client-side join on portalSeries), active,
 // verified. Row click → Shop Detail.
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "convex/react";
 import { anyApi } from "convex/server";
+import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "@/app/(portals)/portal-session";
+import {
+  CARD_STATIC,
+  MICRO_H,
+  PageHeader,
+  StatTile,
+  Skeleton,
+  money,
+  fmtNum,
+} from "@/components/portal/ChartKit";
 
 const shopsDirectoryApi = anyApi.shopsDirectory;
 
@@ -71,21 +83,66 @@ export default function ShopsDirectoryPage() {
   const rows = useQuery(shopsDirectoryApi.directoryList, { token }) as
     | DirectoryRow[]
     | undefined;
+  const stats30 = useQuery(api.portalSeries.bookingsByShop, { token, days: 30 }) as
+    | Record<string, { bookings: number; revenue: number }>
+    | undefined;
+
+  // ── Tile derivations (client-side from loaded rows) ────────────────────────
+  const activeCount = rows?.filter((r) => r.isActive).length;
+  const healthyCount = rows?.filter((r) => r.health === "green").length;
+  const rated = rows?.filter((r) => r.rating !== null) ?? [];
+  const avgRating =
+    rows === undefined
+      ? undefined
+      : rated.length > 0
+        ? rated.reduce((s, r) => s + (r.rating ?? 0), 0) / rated.length
+        : null;
 
   return (
-    <div>
-      <div className="mb-5 flex items-center gap-3">
-        <h1 className="text-xl font-semibold text-slate-900">Shops</h1>
-        {rows !== undefined && (
-          <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-            {rows.length}
-          </span>
-        )}
+    <div className="space-y-4">
+      <PageHeader
+        title="Shops Directory"
+        subtitle="Every partner shop, with server-computed health checks — rows open the shop detail."
+      >
+        <Link
+          href="/shops"
+          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50"
+        >
+          ← Network map
+        </Link>
+      </PageHeader>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile label="Shops" value={rows === undefined ? <Skeleton /> : fmtNum(rows.length)} />
+        <StatTile
+          label="Active"
+          value={activeCount === undefined ? <Skeleton /> : fmtNum(activeCount)}
+        />
+        <StatTile
+          label="All checks passing"
+          value={
+            healthyCount === undefined || rows === undefined ? (
+              <Skeleton />
+            ) : (
+              `${fmtNum(healthyCount)} / ${fmtNum(rows.length)}`
+            )
+          }
+        />
+        <StatTile
+          label="Avg rating"
+          value={
+            avgRating === undefined ? <Skeleton /> : avgRating === null ? "—" : `★ ${avgRating.toFixed(2)}`
+          }
+        />
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <div className={CARD_STATIC}>
         {rows === undefined && (
-          <div className="py-10 text-center text-sm text-slate-400">Loading directory…</div>
+          <div className="space-y-2 py-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </div>
         )}
 
         {rows !== undefined && rows.length === 0 && (
@@ -98,55 +155,84 @@ export default function ShopsDirectoryPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-[13px]">
               <thead>
-                <tr className="border-b border-slate-200 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                <tr className={`border-b border-slate-200 text-left ${MICRO_H}`}>
                   <th className="pb-2 pr-4">Shop</th>
                   <th className="pb-2 pr-4">City / ZIP</th>
                   <th className="pb-2 pr-4">$/hr</th>
                   <th className="pb-2 pr-4">Rating</th>
                   <th className="pb-2 pr-4">Mechanics</th>
+                  <th className="pb-2 pr-4">Bookings 30d</th>
+                  <th className="pb-2 pr-4">Revenue 30d</th>
                   <th className="pb-2 pr-4">Active</th>
                   <th className="pb-2 pr-4">Verified</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr
-                    key={r.id}
-                    onClick={() => router.push(`/shops/all/${r.id}`)}
-                    className="cursor-pointer border-b border-slate-50 hover:bg-slate-50"
-                  >
-                    <td className="py-2.5 pr-4">
-                      <span className="flex items-center gap-2">
-                        <HealthDot health={r.health} failingChecks={r.failingChecks} />
-                        <span className="font-medium text-slate-900">{r.name}</span>
-                      </span>
-                    </td>
-                    <td className="py-2.5 pr-4 text-slate-600">
-                      {r.city}
-                      {r.zip !== "—" && <span className="text-slate-400"> · {r.zip}</span>}
-                    </td>
-                    <td className="py-2.5 pr-4 text-slate-700">
-                      {r.laborRate !== null ? `$${r.laborRate}/hr` : <span className="text-slate-300">—</span>}
-                    </td>
-                    <td className="py-2.5 pr-4 text-slate-700">
-                      {r.rating !== null ? (
-                        <>
-                          {r.rating.toFixed(1)}{" "}
-                          <span className="text-[11px] text-slate-400">({r.reviewCount})</span>
-                        </>
-                      ) : (
-                        <span className="text-slate-300">—</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 pr-4 text-slate-700">{r.mechanics}</td>
-                    <td className="py-2.5 pr-4">
-                      <BoolMark on={r.isActive} />
-                    </td>
-                    <td className="py-2.5 pr-4">
-                      <BoolMark on={r.isVerified} />
-                    </td>
-                  </tr>
-                ))}
+                {rows.map((r) => {
+                  const s30 = stats30?.[r.id];
+                  return (
+                    <tr
+                      key={r.id}
+                      onClick={() => router.push(`/shops/all/${r.id}`)}
+                      className="cursor-pointer border-b border-slate-50 hover:bg-slate-50"
+                    >
+                      <td className="py-2.5 pr-4">
+                        <span className="flex items-center gap-2">
+                          <HealthDot health={r.health} failingChecks={r.failingChecks} />
+                          <Link
+                            href={`/shops/all/${r.id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="font-medium text-slate-900 hover:underline"
+                          >
+                            {r.name}
+                          </Link>
+                        </span>
+                      </td>
+                      <td className="py-2.5 pr-4 text-slate-600">
+                        {r.city}
+                        {r.zip !== "—" && <span className="text-slate-400"> · {r.zip}</span>}
+                      </td>
+                      <td className="py-2.5 pr-4 text-slate-700">
+                        {r.laborRate !== null ? `$${r.laborRate}/hr` : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className="py-2.5 pr-4 text-slate-700">
+                        {r.rating !== null ? (
+                          <>
+                            {r.rating.toFixed(1)}{" "}
+                            <span className="text-[11px] text-slate-400">({r.reviewCount})</span>
+                          </>
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-4 text-slate-700">{r.mechanics}</td>
+                      <td className="py-2.5 pr-4 tabular-nums text-slate-700">
+                        {stats30 === undefined ? (
+                          <Skeleton className="h-4 w-8" />
+                        ) : s30 ? (
+                          fmtNum(s30.bookings)
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-4 tabular-nums text-slate-700">
+                        {stats30 === undefined ? (
+                          <Skeleton className="h-4 w-12" />
+                        ) : s30 && s30.revenue > 0 ? (
+                          money(s30.revenue)
+                        ) : (
+                          <span className="text-slate-300">—</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        <BoolMark on={r.isActive} />
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        <BoolMark on={r.isVerified} />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

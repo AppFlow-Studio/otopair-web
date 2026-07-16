@@ -17,6 +17,8 @@ export type ShopReviewRow = {
   rating: number;
   comment: string | null;
   mechanic: string | null;
+  mechanic_id: string | null;
+  booking_id: string;
   hidden: boolean;
   at: number;
 };
@@ -63,6 +65,8 @@ export const byShop = query({
           rating: r.rating,
           comment: r.comment ?? null,
           mechanic,
+          mechanic_id: r.mechanic_id ? String(r.mechanic_id) : null,
+          booking_id: String(r.booking_id),
           hidden: r.hidden_at != null,
           at: r.created_at ?? r._creationTime,
         });

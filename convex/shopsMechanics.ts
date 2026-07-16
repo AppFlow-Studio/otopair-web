@@ -84,6 +84,7 @@ export type MechanicDetail = {
   title: string | null;
   photo: string | null;
   shop: string | null;
+  shop_id: string;
   active: boolean;
   rating: number | null;
   review_count: number | null;
@@ -151,6 +152,7 @@ export const detail = query({
       title: m.title ?? null,
       photo: m.photo ?? null,
       shop: shop ? ((shop as { name?: string }).name ?? null) : null,
+      shop_id: String(m.shop_id),
       active: m.is_active !== false,
       rating: m.rating ?? null,
       review_count: m.review_count ?? null,

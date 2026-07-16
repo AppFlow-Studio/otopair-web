@@ -5,12 +5,22 @@
 // click = ceremony toggle (shops.write). Right rail: coverage gaps. Price
 // band mini-bars are honestly descoped (needs a quote-engine run per cell).
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession, useCan } from "../../portal-session";
 import { Ceremony } from "@/components/portal/Ceremony";
+import {
+  CARD,
+  PILL as KIT_PILL,
+  BarRows,
+  PageHeader,
+  StatTile,
+  Skeleton,
+  fmtNum,
+} from "@/components/portal/ChartKit";
 
 const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 
@@ -43,9 +53,115 @@ export default function ShopsOfferingsPage() {
     return [...map.entries()];
   }, [data]);
 
+  // ── Coverage analytics (client-side from the matrix payload) ───────────────
+  const coverage = useMemo(() => {
+    if (!data) return undefined;
+    const services = data.services as MatrixService[];
+    const shopCount = (data.shops as { id: string; name: string }[]).length;
+    const offeredCells = services.reduce((s, svc) => s + svc.offered_by.length, 0);
+    const totalCells = services.length * shopCount;
+    const sorted = [...services].sort((a, b) => b.offered_by.length - a.offered_by.length);
+    return {
+      serviceCount: services.length,
+      shopCount,
+      offeredCells,
+      pct: totalCells > 0 ? Math.round((offeredCells / totalCells) * 100) : null,
+      most: sorted.slice(0, 6).map((s) => ({
+        label: s.name,
+        value: s.offered_by.length,
+        sub: `of ${shopCount}`,
+      })),
+      least: sorted
+        .slice(-6)
+        .reverse()
+        .map((s) => ({ label: s.name, value: s.offered_by.length, sub: `of ${shopCount}` })),
+    };
+  }, [data]);
+
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-slate-900">Offerings Matrix</h1>
+      <PageHeader
+        title="Offerings Matrix"
+        subtitle="Which shop offers which service — cells toggle through a ceremony (shops.write)."
+      />
+
+      {/* ── Coverage tiles ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile
+          label="Services in catalog"
+          value={coverage === undefined ? <Skeleton /> : fmtNum(coverage.serviceCount)}
+        />
+        <StatTile
+          label="Shops"
+          value={coverage === undefined ? <Skeleton /> : fmtNum(coverage.shopCount)}
+        />
+        <StatTile
+          label="Matrix coverage"
+          value={
+            coverage === undefined ? (
+              <Skeleton />
+            ) : coverage.pct === null ? (
+              "—"
+            ) : (
+              `${coverage.pct}%`
+            )
+          }
+          chip={
+            coverage !== undefined ? (
+              <span className={`${KIT_PILL} bg-blue-50 text-blue-700`}>
+                {fmtNum(coverage.offeredCells)} offered cells
+              </span>
+            ) : undefined
+          }
+        />
+        <StatTile
+          label="Coverage gaps (≤1 shop)"
+          value={data === undefined ? <Skeleton /> : fmtNum(data.coverage_gaps.length)}
+          chip={
+            data !== undefined ? (
+              <span
+                className={`${KIT_PILL} ${
+                  data.coverage_gaps.length > 0
+                    ? "bg-red-50 text-red-700"
+                    : "bg-emerald-50 text-emerald-700"
+                }`}
+              >
+                {data.coverage_gaps.length > 0 ? "thin coverage" : "all ≥2 shops"}
+              </span>
+            ) : undefined
+          }
+        />
+      </div>
+
+      {/* ── Most / least offered ── */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className={CARD}>
+          <div className="mb-3 flex items-baseline gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">Most offered services</h2>
+            <span className="text-[11px] text-slate-400">shops offering each</span>
+          </div>
+          {coverage === undefined ? (
+            <Skeleton className="h-24 w-full" />
+          ) : coverage.most.length === 0 ? (
+            <p className="text-sm text-slate-500">No services in the catalog yet.</p>
+          ) : (
+            <BarRows rows={coverage.most} color="#6ee7b7" />
+          )}
+        </div>
+        <div className={CARD}>
+          <div className="mb-3 flex items-baseline gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">Least offered services</h2>
+            <span className="text-[11px] text-slate-400">expansion candidates</span>
+          </div>
+          {coverage === undefined ? (
+            <Skeleton className="h-24 w-full" />
+          ) : coverage.least.length === 0 ? (
+            <p className="text-sm text-slate-500">No services in the catalog yet.</p>
+          ) : (
+            <BarRows rows={coverage.least} color="#fcd34d" />
+          )}
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_260px]">
         <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -63,7 +179,9 @@ export default function ShopsOfferingsPage() {
                     </th>
                     {data.shops.map((s: { id: string; name: string }) => (
                       <th key={s.id} className="px-2 py-2 text-center text-[11px] font-semibold text-slate-500">
-                        {s.name}
+                        <Link href={`/shops/all/${s.id}`} className="hover:text-blue-700 hover:underline">
+                          {s.name}
+                        </Link>
                       </th>
                     ))}
                   </tr>

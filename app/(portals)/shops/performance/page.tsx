@@ -10,6 +10,15 @@ import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "../../portal-session";
+import {
+  CARD,
+  PageHeader,
+  StatTile,
+  Skeleton,
+  TrendArea,
+  money,
+  fmtNum,
+} from "@/components/portal/ChartKit";
 
 const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 
@@ -33,13 +42,69 @@ export default function ShopsPerformancePage() {
   const { token } = usePortalSession();
   const cal = useQuery(api.shopsPerformance.calibration, { token });
   const league = useQuery(api.shopsNetwork.leagueTable, { token });
+  const daily = useQuery(api.portalSeries.bookingsDaily, { token, days: 30 }) as
+    | { date: string; created: number; completed: number; cancelled: number; revenue: number }[]
+    | undefined;
+
+  // ── 30d tiles (client-side from the daily series) ──────────────────────────
+  const revenue30 = daily?.reduce((s, d) => s + d.revenue, 0);
+  const created30 = daily?.reduce((s, d) => s + d.created, 0);
+  const completed30 = daily?.reduce((s, d) => s + d.completed, 0);
+  const cancelled30 = daily?.reduce((s, d) => s + d.cancelled, 0);
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-slate-900">Performance</h1>
+      <PageHeader
+        title="Performance"
+        subtitle="Network revenue, labor calibration, and the 7-day league — the shop scoreboard."
+      />
+
+      {/* ── Stat tiles ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile
+          label="Revenue (30d, completed)"
+          value={revenue30 === undefined ? <Skeleton /> : money(revenue30)}
+          spark={daily?.map((d) => d.revenue)}
+          sparkColor="#059669"
+        />
+        <StatTile
+          label="Bookings created (30d)"
+          value={created30 === undefined ? <Skeleton /> : fmtNum(created30)}
+          spark={daily?.map((d) => d.created)}
+          sparkColor="#3b82f6"
+        />
+        <StatTile
+          label="Completed (30d)"
+          value={completed30 === undefined ? <Skeleton /> : fmtNum(completed30)}
+        />
+        <StatTile
+          label="Cancelled / refunded (30d)"
+          value={cancelled30 === undefined ? <Skeleton /> : fmtNum(cancelled30)}
+          chip={
+            cancelled30 !== undefined && created30 !== undefined && created30 > 0 ? (
+              <span
+                className={`${pill} ${
+                  cancelled30 > 0 ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"
+                }`}
+              >
+                {Math.round((cancelled30 / created30) * 100)}%
+              </span>
+            ) : undefined
+          }
+        />
+      </div>
+
+      {/* ── Revenue trend ── */}
+      <div className={CARD}>
+        <div className="mb-2 flex items-baseline gap-2">
+          <h2 className="text-sm font-semibold text-slate-900">Network revenue</h2>
+          <span className="text-[11px] text-slate-400">completed bookings per day, last 30 days</span>
+        </div>
+        <TrendArea data={daily} dataKey="revenue" name="Revenue" color="#059669" isMoney />
+      </div>
 
       {/* Calibration */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-900">
           Calibration — median labor variance by service
         </h2>
@@ -106,7 +171,7 @@ export default function ShopsPerformancePage() {
       </div>
 
       {/* League table */}
-      <div className="rounded-xl border border-slate-200 bg-white">
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-900">
           7-day league table
         </div>
@@ -129,10 +194,19 @@ export default function ShopsPerformancePage() {
             </thead>
             <tbody>
               {(league as LeagueRow[]).map((s) => (
-                <tr key={s.id} className="border-b border-slate-50">
-                  <td className="px-4 py-2 font-medium text-slate-800">{s.name}</td>
+                <tr key={s.id} className="border-b border-slate-50 hover:bg-slate-50">
+                  <td className="px-4 py-2">
+                    <Link
+                      href={`/shops/all/${s.id}`}
+                      className="font-medium text-slate-800 hover:underline"
+                    >
+                      {s.name}
+                    </Link>
+                  </td>
                   <td className="px-2 py-2 text-slate-600">{s.bookings_7d}</td>
-                  <td className="px-2 py-2 text-slate-600">${(s.gmv_7d ?? 0).toFixed(0)}</td>
+                  <td className="px-2 py-2 text-slate-600">
+                    {s.gmv_7d > 0 ? money(s.gmv_7d) : <span className="text-slate-300">—</span>}
+                  </td>
                   <td className="px-2 py-2 text-slate-600">
                     {s.completion_rate_7d == null
                       ? "—"

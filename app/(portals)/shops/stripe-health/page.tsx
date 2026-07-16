@@ -8,9 +8,11 @@
 // secret or full account id. Refund/dispute UI stays Stripe-hosted (LOCKED).
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery } from "convex/react";
 import { anyApi } from "convex/server";
 import { usePortalSession } from "@/app/(portals)/portal-session";
+import { PageHeader, StatTile, Skeleton, PILL, fmtNum } from "@/components/portal/ChartKit";
 
 const stripeHealthApi = anyApi.shopsStripeHealth;
 
@@ -110,20 +112,28 @@ export default function StripeHealthPage() {
   const rows =
     allRows === undefined ? undefined : showAll ? allRows : allRows.filter((r) => r.status !== "connected");
 
+  const connectedCount = allRows?.filter((r) => r.status === "connected").length;
+  const chargesCount = allRows?.filter((r) => r.chargesEnabled === true).length;
+  const payoutsCount = allRows?.filter((r) => r.payoutsEnabled === true).length;
+  const notReady = allRows?.filter((r) => r.status !== "connected");
+
   return (
-    <div>
-      <div className="mb-4 flex items-center gap-3">
-        <h1 className="text-xl font-semibold text-slate-900">Stripe Connect Health</h1>
-        {allRows !== undefined && (
-          <span
-            className={`${PILL_BASE} ${
-              problemCount > 0 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"
-            }`}
-          >
-            {problemCount > 0 ? `${problemCount} need attention` : "all green"}
-          </span>
-        )}
-        <div className="ml-auto flex gap-1 rounded-lg border border-slate-200 bg-white p-0.5 text-[12px]">
+    <div className="space-y-4">
+      <PageHeader
+        title="Stripe Connect Health"
+        subtitle="Webhook-synced Connect status per shop — read-only, never calls Stripe live."
+      >
+        <div className="flex items-center gap-3">
+          {allRows !== undefined && (
+            <span
+              className={`${PILL_BASE} ${
+                problemCount > 0 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"
+              }`}
+            >
+              {problemCount > 0 ? `${problemCount} need attention` : "all green"}
+            </span>
+          )}
+          <div className="flex gap-1 rounded-lg border border-slate-200 bg-white p-0.5 text-[12px]">
           <button
             onClick={() => setShowAll(false)}
             className={`rounded-md px-2.5 py-1 font-medium ${
@@ -140,19 +150,73 @@ export default function StripeHealthPage() {
           >
             All shops
           </button>
+          </div>
         </div>
+      </PageHeader>
+
+      {/* ── Stat tiles ── */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile
+          label="Shops"
+          value={allRows === undefined ? <Skeleton /> : fmtNum(allRows.length)}
+        />
+        <StatTile
+          label="Connected"
+          value={connectedCount === undefined ? <Skeleton /> : fmtNum(connectedCount)}
+          chip={
+            allRows !== undefined && allRows.length > 0 && connectedCount !== undefined ? (
+              <span
+                className={`${PILL} ${
+                  connectedCount === allRows.length
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-amber-50 text-amber-700"
+                }`}
+              >
+                {Math.round((connectedCount / allRows.length) * 100)}%
+              </span>
+            ) : undefined
+          }
+        />
+        <StatTile
+          label="Charges enabled"
+          value={chargesCount === undefined ? <Skeleton /> : fmtNum(chargesCount)}
+        />
+        <StatTile
+          label="Payouts enabled"
+          value={payoutsCount === undefined ? <Skeleton /> : fmtNum(payoutsCount)}
+        />
       </div>
 
-      <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[12px] text-slate-600">
+      {/* ── Not-ready list — every shop links to its detail ── */}
+      {notReady !== undefined && notReady.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-[12px] text-amber-800">
+          <span className="font-semibold">Not payment-ready:</span>{" "}
+          {notReady.map((r, i) => (
+            <span key={r.id}>
+              {i > 0 && ", "}
+              <Link href={`/shops/all/${r.id}`} className="font-medium underline hover:text-amber-900">
+                {r.name}
+              </Link>
+              <span className="text-amber-600"> ({r.status})</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[12px] text-slate-600">
         <span className="mr-1.5 font-semibold uppercase tracking-wider text-slate-400">Locked</span>
         Read-only mirror of webhook-synced Connect status — this page never calls Stripe live.
         Refunds and disputes live in Stripe-hosted flows; this page links, never rebuilds. Account
         ids are shown masked; no secrets are ever rendered.
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         {rows === undefined && (
-          <div className="py-10 text-center text-sm text-slate-400">Loading Connect status…</div>
+          <div className="space-y-2 py-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </div>
         )}
 
         {rows !== undefined && allRows !== undefined && allRows.length === 0 && (
@@ -192,7 +256,13 @@ export default function StripeHealthPage() {
                       className="cursor-pointer border-b border-slate-50 hover:bg-slate-50"
                     >
                       <td className="py-2.5 pr-4">
-                        <span className="font-medium text-slate-900">{r.name}</span>
+                        <Link
+                          href={`/shops/all/${r.id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="font-medium text-slate-900 hover:underline"
+                        >
+                          {r.name}
+                        </Link>
                         {r.city && <span className="ml-1.5 text-[11px] text-slate-400">{r.city}</span>}
                       </td>
                       <td className="py-2.5 pr-4">
@@ -253,7 +323,7 @@ export default function StripeHealthPage() {
       </div>
 
       {data !== undefined && (
-        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-5">
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-2 flex items-baseline gap-2">
             <h2 className="text-sm font-semibold text-slate-900">Platform-level webhook events</h2>
             <span className="text-[11px] text-slate-400">

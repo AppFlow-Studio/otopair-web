@@ -12,7 +12,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession } from "../../../portal-session";
 
 const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
-const CARD = "rounded-xl border border-slate-200 bg-white p-5";
+const CARD =
+  "rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md";
 const fmtDate = (ms: number) => new Date(ms).toLocaleDateString();
 
 export default function MechanicDetailPage() {
@@ -48,6 +49,15 @@ export default function MechanicDetailPage() {
 
   return (
     <div className="space-y-6">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-1.5 text-[12px] text-slate-500">
+        <Link href="/shops/mechanics" className="font-medium text-slate-600 hover:underline">
+          Mechanics
+        </Link>
+        <span className="text-slate-300">/</span>
+        <span className="text-slate-700">{detail.name}</span>
+      </div>
+
       {/* Header */}
       <div className={`${CARD} flex flex-wrap items-center gap-4`}>
         {detail.photo ? (
@@ -62,7 +72,14 @@ export default function MechanicDetailPage() {
           <h1 className="text-xl font-semibold text-slate-900">{detail.name}</h1>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-[13px] text-slate-500">
             {detail.title && <span>{detail.title}</span>}
-            {detail.shop && <span className={`${pill} bg-blue-50 text-blue-700`}>{detail.shop}</span>}
+            {detail.shop && (
+              <Link
+                href={`/shops/all/${detail.shop_id}`}
+                className={`${pill} bg-blue-50 text-blue-700 hover:underline`}
+              >
+                {detail.shop}
+              </Link>
+            )}
             {detail.rating != null && (
               <span>★ {detail.rating.toFixed(1)} ({detail.review_count ?? 0})</span>
             )}

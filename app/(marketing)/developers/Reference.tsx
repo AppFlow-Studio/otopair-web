@@ -1,8 +1,8 @@
 "use client";
 
-// Data · API console — "Reference" section: per-endpoint docs cards,
-// authentication, error codes, and the data-layer legend. Static content,
-// hand-written examples matching convex/dataApi.ts response shapes exactly.
+// Developers — endpoint "Reference": per-endpoint docs cards, authentication,
+// error codes, and the data-layer legend. Static content, hand-written
+// examples matching convex/dataApi.ts response shapes exactly.
 
 import type { ReactNode } from "react";
 import { LAYER_FORMULA } from "@/convex/lib/dataLayers";

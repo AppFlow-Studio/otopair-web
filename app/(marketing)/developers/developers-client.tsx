@@ -3,15 +3,14 @@
 // Developer portal (client half). Signed out: marketing-brand landing with
 // Clerk sign-up/sign-in (modal). Signed in: the dashboard — key card
 // (mint/rotate/revoke, plaintext shown exactly once), quickstart cURL,
-// 30-day usage chart, and the full endpoint Reference (reused verbatim from
-// the internal sandbox — same docs, same response shapes).
+// 30-day usage chart, and the full endpoint Reference.
 
 import { useState } from "react";
 import { SignedIn, SignedOut, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Reference } from "@/app/(portals)/data/api-sandbox/Reference";
-import { baseUrl } from "@/app/(portals)/data/api-sandbox/shared";
+import { Reference } from "./Reference";
+import { baseUrl } from "./shared";
 
 const ink = "#1a1a1a";
 const muted = "#6b655d";

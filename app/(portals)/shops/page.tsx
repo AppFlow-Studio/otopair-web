@@ -9,9 +9,10 @@
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useQuery } from "convex/react";
+import { useState } from "react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { usePortalSession } from "@/app/(portals)/portal-session";
+import { useCan, usePortalSession } from "@/app/(portals)/portal-session";
 import {
   CARD,
   CARD_STATIC,
@@ -226,21 +227,7 @@ export default function ShopsOverviewPage() {
           <ShopsMap pins={mapData.pins} stats={shopStats} height={380} />
         )}
         {mapData !== undefined && mapData.missing_coords.length > 0 && (
-          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
-            <span className="font-semibold">
-              {mapData.missing_coords.length} shop{mapData.missing_coords.length === 1 ? "" : "s"}{" "}
-              missing coordinates
-            </span>{" "}
-            (not on the map — fix the lat/lng):{" "}
-            {mapData.missing_coords.map((s, i) => (
-              <span key={s.id}>
-                {i > 0 && ", "}
-                <Link href={`/shops/all/${s.id}`} className="font-medium underline hover:text-amber-900">
-                  {s.name}
-                </Link>
-              </span>
-            ))}
-          </div>
+          <MissingCoordsBanner missing={mapData.missing_coords} />
         )}
       </div>
 
@@ -393,6 +380,63 @@ export default function ShopsOverviewPage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Shops without lat/lng: listed + one-click geocode from their street address
+// (Nominatim, persisted onto the shop row — the map updates reactively).
+function MissingCoordsBanner({ missing }: { missing: { id: string; name: string }[] }) {
+  const { token } = usePortalSession();
+  const canWrite = useCan("shops.write");
+  const geocode = useAction(api.shopsGeo.geocodeMissingShops);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await geocode({ token });
+      const failures = r.failed.map((f) => `${f.name}: ${f.reason}`).join("; ");
+      setResult(
+        `${r.geocoded.length} pinned${r.failed.length > 0 ? ` · ${r.failed.length} failed (${failures})` : ""}`,
+      );
+    } catch (e) {
+      setResult(e instanceof Error ? e.message : "geocoding failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span>
+          <span className="font-semibold">
+            {missing.length} shop{missing.length === 1 ? "" : "s"} missing coordinates
+          </span>{" "}
+          (not on the map):{" "}
+          {missing.map((s, i) => (
+            <span key={s.id}>
+              {i > 0 && ", "}
+              <Link href={`/shops/all/${s.id}`} className="font-medium underline hover:text-amber-900">
+                {s.name}
+              </Link>
+            </span>
+          ))}
+        </span>
+        {canWrite && (
+          <button
+            onClick={() => void run()}
+            disabled={busy}
+            className="shrink-0 rounded-lg bg-amber-600 px-3 py-1 text-[12px] font-semibold text-white transition hover:bg-amber-700 disabled:opacity-50"
+          >
+            {busy ? "Locating…" : "Pin by address"}
+          </button>
+        )}
+      </div>
+      {result && <div className="mt-1.5 font-medium text-amber-900">{result}</div>}
     </div>
   );
 }

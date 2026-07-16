@@ -310,6 +310,7 @@ import type * as shop_services from "../shop_services.js";
 import type * as shops from "../shops.js";
 import type * as shopsCapacity from "../shopsCapacity.js";
 import type * as shopsDirectory from "../shopsDirectory.js";
+import type * as shopsGeo from "../shopsGeo.js";
 import type * as shopsMechanics from "../shopsMechanics.js";
 import type * as shopsNetwork from "../shopsNetwork.js";
 import type * as shopsOfferings from "../shopsOfferings.js";
@@ -738,6 +739,7 @@ declare const fullApi: ApiFromModules<{
   shops: typeof shops;
   shopsCapacity: typeof shopsCapacity;
   shopsDirectory: typeof shopsDirectory;
+  shopsGeo: typeof shopsGeo;
   shopsMechanics: typeof shopsMechanics;
   shopsNetwork: typeof shopsNetwork;
   shopsOfferings: typeof shopsOfferings;

@@ -14,13 +14,13 @@ const isPublicRoute = createRouteMatcher([
   "/api/elevenlabs(.*)",
   "/shop-only",
   "/account-deactivated",
+  // /director covers the legacy panel and /director/data (the data portal).
   "/director(.*)",
   // Internal portals — same doctrine as /director: middleware stays UX-only,
   // the security boundary is requireDirector inside every Convex function.
   // Must be public BEFORE isPortalRoute runs, or "/shop(.*)" swallows "/shops".
   "/ops(.*)",
   "/shops(.*)",
-  "/data(.*)",
   // Receipts deep-link is public — the page validates either Clerk
   // ownership OR a capability token (`?t=…`) against payments.receipt_token.
   // Walk-in customers without Clerk accounts need to reach the page from

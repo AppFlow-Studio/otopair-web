@@ -149,7 +149,7 @@ export default function SettingsPage() {
               <div className="flex items-start justify-between">
                 <div className="flex items-start gap-4">
                   <ShopLogoUploader
-                    shopId={shop._id}
+                    shopId={(shop as any)._id}
                     logoUrl={(shop as any).logoUrl ?? null}
                     memberRole={(shop as any).memberRole}
                   />

@@ -332,6 +332,90 @@ export const otoUsage = query({
   },
 });
 
+// ─── growthSignals — previously-dark lifecycle data, surfaced ────────────────
+// referrals, reward wallets (liability), connected cars, late-start SLA,
+// urgency-tier demand events. All bounded/indexed reads; `truncated` flags
+// where a cap was hit. vehicle_service_states stays dark until it gets a
+// portalStats sweep (per-owner × per-service table, no cheap aggregate read).
+
+export type GrowthSignals = {
+  referrals: { total_90d: number; pending: number; credited: number; cancelled: number };
+  rewards: { wallets: number; balance_total: number; deals: number; truncated: boolean };
+  connected_cars: { by_status: Record<string, number>; total: number; last_sync: number | null };
+  late_starts: { by_status: Record<string, number>; open: number };
+  urgency_30d: { by_tier: Record<string, number>; total: number; truncated: boolean };
+};
+
+export const growthSignals = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }): Promise<GrowthSignals> => {
+    await requireDirector(ctx, token);
+    const now = Date.now();
+
+    const refs = await ctx.db
+      .query("referrals")
+      .withIndex("by_creation_time", (q) => q.gte("_creationTime", now - 90 * DAY))
+      .take(2000);
+    const refCounts = { pending: 0, credited: 0, cancelled: 0 };
+    for (const r of refs) refCounts[r.status]++;
+
+    const wallets = await ctx.db.query("user_reward_wallets").take(5000);
+    const deals = await ctx.db.query("reward_deals").take(200);
+
+    const carStatuses: Record<string, number> = {};
+    let carTotal = 0;
+    let lastSync: number | null = null;
+    for (const status of ["active", "disconnected", "error", "expired"]) {
+      const rows = await ctx.db
+        .query("smartcar_connections")
+        .withIndex("by_status", (q) => q.eq("status", status))
+        .take(500);
+      if (rows.length > 0) {
+        carStatuses[status] = rows.length;
+        carTotal += rows.length;
+        for (const c of rows) {
+          if (c.lastSyncedAt != null && (lastSync === null || c.lastSyncedAt > lastSync))
+            lastSync = c.lastSyncedAt;
+        }
+      }
+    }
+
+    const lateByStatus: Record<string, number> = {};
+    let lateOpen = 0;
+    for (const status of ["active", "pending", "warned", "applied", "resolved", "cancelled"]) {
+      const rows = await ctx.db
+        .query("late_start_monitors")
+        .withIndex("by_status", (q) => q.eq("status", status))
+        .take(500);
+      if (rows.length > 0) {
+        lateByStatus[status] = rows.length;
+        if (status === "active" || status === "pending" || status === "warned")
+          lateOpen += rows.length;
+      }
+    }
+
+    const urgency = await ctx.db
+      .query("urgency_tier_events")
+      .withIndex("by_creation_time", (q) => q.gte("_creationTime", now - 30 * DAY))
+      .take(2000);
+    const byTier: Record<string, number> = {};
+    for (const u of urgency) byTier[u.to_tier] = (byTier[u.to_tier] ?? 0) + 1;
+
+    return {
+      referrals: { total_90d: refs.length, ...refCounts },
+      rewards: {
+        wallets: wallets.length,
+        balance_total: wallets.reduce((s, w) => s + w.balance, 0),
+        deals: deals.length,
+        truncated: wallets.length === 5000,
+      },
+      connected_cars: { by_status: carStatuses, total: carTotal, last_sync: lastSync },
+      late_starts: { by_status: lateByStatus, open: lateOpen },
+      urgency_30d: { by_tier: byTier, total: urgency.length, truncated: urgency.length === 2000 },
+    };
+  },
+});
+
 // ─── appEventPulse — analytics_events aggregates (overview weight) ──────────
 // Sibling of opsAnalytics.events, but ships NO rows — the overview renders
 // three numbers and a bar strip, not a table.

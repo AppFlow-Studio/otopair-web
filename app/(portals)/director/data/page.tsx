@@ -20,6 +20,7 @@ import { RevenueChart } from "./components/RevenueChart";
 import { AttentionRail } from "./components/AttentionRail";
 import { ShopActivity } from "./components/ShopActivity";
 import { UsageCards } from "./components/UsageCards";
+import { GrowthSignals } from "./components/GrowthSignals";
 import { ActionFeeds } from "./components/ActionFeeds";
 import { DataHealthStrip, SLO_DEFS } from "./components/DataHealthStrip";
 
@@ -68,6 +69,9 @@ export default function CommandCenterPage() {
   const otoUsage = useQuery(api.directorData.otoUsage, { token });
   const eventPulse = useQuery(api.directorData.appEventPulse, { token });
 
+  // Zone 4b — growth & lifecycle (previously-dark tables).
+  const signals = useQuery(api.directorData.growthSignals, { token });
+
   // Zone 5 — actions.
   const audit = useQuery(api.audit_log.listRecent, { token });
   const activityFeed = useQuery(api.opsOverview.activityFeed, { token, limit: 12 });
@@ -112,6 +116,9 @@ export default function CommandCenterPage() {
 
       {/* Zone 4 — usage & AI */}
       <UsageCards apiSeries={apiSeries} oto={otoUsage} pulse={eventPulse} />
+
+      {/* Zone 4b — growth & lifecycle signals */}
+      <GrowthSignals signals={signals} />
 
       {/* Zone 5 — action feeds */}
       <ActionFeeds audit={audit} feed={activityFeed} />

@@ -220,6 +220,89 @@ export const systemHealthDaily = query({
   },
 });
 
+/** Reliability & delivery health — the previously-dark telemetry tables:
+ *  reliability_events, client_logs, sms_delivery_log, notification_outbox.
+ *  Bounded window/indexed reads; recent failures are fully traceable. */
+export const reliabilityOverview = query({
+  args: daysArg,
+  handler: async (ctx, { token, days }) => {
+    await requireDirector(ctx, token);
+    const span = clampDays(days, 7);
+    const since = Date.now() - span * DAY;
+
+    const [relEvents, clientErrors, smsFailed, smsRecent] = await Promise.all([
+      ctx.db
+        .query("reliability_events")
+        .withIndex("by_creation_time", (q) => q.gte("_creationTime", since))
+        .take(2000),
+      ctx.db
+        .query("client_logs")
+        .withIndex("by_timestamp", (q) => q.gte("timestamp", since))
+        .take(2000),
+      ctx.db.query("sms_delivery_log").withIndex("by_status", (q) => q.eq("status", "failed")).take(50),
+      ctx.db.query("sms_delivery_log").withIndex("by_creation_time", (q) => q.gte("_creationTime", since)).take(1000),
+    ]);
+
+    const outboxByStatus: Record<string, number> = {};
+    for (const status of ["pending", "sent", "failed", "processed", "skipped"]) {
+      const rows = await ctx.db
+        .query("notification_outbox")
+        .withIndex("by_status", (q) => q.eq("status", status))
+        .take(500);
+      if (rows.length > 0) outboxByStatus[status] = rows.length;
+    }
+
+    const relBuckets = emptyDays(span, { events: 0, errors: 0 });
+    const relBySurface: Record<string, number> = {};
+    for (const e of relEvents) {
+      const d = relBuckets.get(dateKey(e._creationTime));
+      if (d) {
+        d.events++;
+        if (e.error_message) d.errors++;
+      }
+      relBySurface[e.surface] = (relBySurface[e.surface] ?? 0) + 1;
+    }
+
+    const clientByLevel: Record<string, number> = {};
+    for (const l of clientErrors) clientByLevel[l.level] = (clientByLevel[l.level] ?? 0) + 1;
+
+    return {
+      window_days: span,
+      reliability: {
+        days: [...relBuckets.values()],
+        by_surface: relBySurface,
+        total: relEvents.length,
+        truncated: relEvents.length === 2000,
+      },
+      client_logs: {
+        total: clientErrors.length,
+        by_level: clientByLevel,
+        recent_errors: clientErrors
+          .filter((l) => l.level === "error")
+          .slice(-8)
+          .reverse()
+          .map((l) => ({
+            message: l.message.slice(0, 160),
+            at: l.timestamp,
+            session_id: l.session_id ?? null,
+          })),
+        truncated: clientErrors.length === 2000,
+      },
+      sms: {
+        sent_window: smsRecent.length,
+        failed_open: smsFailed.length,
+        recent_failures: smsFailed.slice(0, 8).map((s) => ({
+          to_phone: `…${s.to_phone.slice(-4)}`,
+          error: (s.error ?? "unknown").slice(0, 120),
+          at: s.attempted_at_ms,
+          booking_id: s.booking_id ? String(s.booking_id) : null,
+        })),
+      },
+      outbox_by_status: outboxByStatus,
+    };
+  },
+});
+
 // ─── Shops ───────────────────────────────────────────────────────────────────
 
 export const shopsDaily = query({

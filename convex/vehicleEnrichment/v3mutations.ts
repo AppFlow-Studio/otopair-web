@@ -879,6 +879,22 @@ export const upsertServiceInterval = internalMutation({
     data_quality: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Wear items (pads/rotors/tires/battery) are condition-based: miles is a
+    // useful wear ESTIMATE, but a months recurrence is meaningless and reads
+    // as "replace brake pads every 12 months" (Jul 2026 5-VIN test: Atlas
+    // pads landed 10k/12mo at 0.95 — an inspection cadence stored as a
+    // replacement schedule). Strip months for these services on every write
+    // path that funnels through this mutation.
+    const WEAR_ITEM_SLUGS = new Set([
+      "brake_pad_replacement",
+      "rotor_replacement",
+      "tire_replacement",
+      "battery_replacement",
+    ]);
+    const svc = await ctx.db.get(args.service_id);
+    const isWearItem = WEAR_ITEM_SLUGS.has(((svc as any)?.slug ?? "").replace(/-/g, "_"));
+    const intervalMonths = isWearItem ? undefined : args.interval_months;
+
     const existing = await ctx.db
       .query("service_intervals")
       .withIndex("by_config_service", (q) =>
@@ -892,7 +908,7 @@ export const upsertServiceInterval = internalMutation({
       vehicle_config_id: args.vehicle_config_id,
       service_id: args.service_id,
       interval_miles: args.interval_miles,
-      interval_months: args.interval_months,
+      interval_months: intervalMonths,
       status: args.status,
       display_string: args.display_string,
       confidence: args.confidence,
@@ -904,8 +920,8 @@ export const upsertServiceInterval = internalMutation({
       const valuesAgree =
         args.interval_miles != null && existing.interval_miles != null
           ? args.interval_miles === existing.interval_miles
-          : args.interval_months != null && existing.interval_months != null
-            ? args.interval_months === existing.interval_months
+          : intervalMonths != null && existing.interval_months != null
+            ? intervalMonths === existing.interval_months
             : false;
 
       if (valuesAgree) {
@@ -913,7 +929,7 @@ export const upsertServiceInterval = internalMutation({
         await ctx.db.patch(existing._id, {
           source_count: (existing.source_count ?? 1) + 1,
           confidence: Math.max(args.confidence, existing.confidence ?? 0),
-          interval_months: args.interval_months ?? existing.interval_months,
+          interval_months: isWearItem ? undefined : (intervalMonths ?? existing.interval_months),
           display_string: args.display_string ?? existing.display_string,
         });
       } else {
@@ -923,7 +939,7 @@ export const upsertServiceInterval = internalMutation({
         if (existingCount <= 1 && args.confidence > (existing.confidence ?? 0)) {
           await ctx.db.patch(existing._id, {
             interval_miles: args.interval_miles,
-            interval_months: args.interval_months,
+            interval_months: intervalMonths,
             status: args.status,
             display_string: args.display_string,
             confidence: args.confidence,
@@ -1419,6 +1435,42 @@ export const failEnrichmentRun = internalMutation({
       return { config_restored: true };
     }
     return { config_restored: false };
+  },
+});
+
+// ============================================================================
+// 12b. removeRefutedFitments — fitment-verification gate (Jul 2026)
+// ============================================================================
+// Deletes part_fitments whose OEM number the adversarial fitment verifier
+// REFUTED for this config (wrong engine variant / wrong model / wrong axle).
+// The oem_parts row is kept — the number is a real part, it just doesn't fit
+// THIS vehicle. With the fitment gone, the role falls to its universal
+// fallback or reads as an honest gap instead of quoting a wrong part.
+
+export const removeRefutedFitments = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    refuted: v.array(v.object({ oem: v.string(), reason: v.string() })),
+  },
+  handler: async (ctx, args) => {
+    if (args.refuted.length === 0) return { removed: 0 };
+    const refutedByOem = new Map(args.refuted.map((r) => [r.oem.toUpperCase(), r.reason]));
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicle_config_id))
+      .collect();
+    let removed = 0;
+    for (const f of fitments) {
+      const part = await ctx.db.get(f.part_id);
+      const oem = ((part as any)?.oem_part_number ?? "").toUpperCase();
+      if (!oem || !refutedByOem.has(oem)) continue;
+      console.warn(
+        `[fitment-verify] Removing refuted fitment ${String(f._id)} (${oem}, service=${(f as any).service_type ?? "?"}): ${refutedByOem.get(oem)}`,
+      );
+      await ctx.db.delete(f._id);
+      removed++;
+    }
+    return { removed };
   },
 });
 
@@ -1948,12 +2000,17 @@ export const ensureAllServiceIntervals = internalMutation({
       // Determine status and interval
       const defaults = svc.slug ? SERVICE_DEFAULTS[svc.slug] : undefined;
       const isOnDemand = svc.is_labor_only && !defaults;
+      // Wear items are condition-based — miles is a wear estimate, a months
+      // recurrence is nonsense ("pads every 48 months"). Same guard as
+      // upsertServiceInterval.
+      const isWearItem = ["brake_pad_replacement", "rotor_replacement", "tire_replacement", "battery_replacement"]
+        .includes((svc.slug ?? "").replace(/-/g, "_"));
 
       await ctx.db.insert("service_intervals", {
         vehicle_config_id: args.vehicle_config_id,
         service_id: svc._id,
         interval_miles: defaults?.miles,
-        interval_months: defaults?.months,
+        interval_months: isWearItem ? undefined : defaults?.months,
         status: isOnDemand ? "on_demand" : "scheduled",
         display_string: isOnDemand ? "As needed" : undefined,
         confidence: 0.50, // low confidence — these are fallback defaults
@@ -2032,7 +2089,13 @@ export const ensureAllLaborTimes = internalMutation({
         vehicle_config_id: args.vehicle_config_id,
         service_id: svc._id,
         book_hours: svc.default_labor_hours,
-        source: "training_data",
+        // These rows ARE the service defaults, not observations — label them
+        // so (Jul 2026 5-VIN test: 8 rows/vehicle stamped "training_data"
+        // read as vehicle data in every report). Both labels sit in the
+        // quote gate's disqualified sets, so quoting behavior is unchanged;
+        // "default_fallback" matches the intervals seeder's provenance.
+        source: "default_fallback",
+        data_quality: "default_fallback",
         confidence: 0.45,
         empirical_sample_size: 0,
         created_at: now,

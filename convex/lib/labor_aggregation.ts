@@ -207,13 +207,32 @@ export async function recomputeLaborForConfigService(
       sourcesDisagree = !withinAgreementBand(Math.min(...hrs), Math.max(...hrs));
     }
 
-    if (strong.length >= 2 && !sourcesDisagree) {
+    // Contested AND far outside the tier guardrail: reject the aggregate
+    // entirely. The Jul 2026 5-VIN test shipped 3.5h spark plugs on a 3.6L
+    // Durango (≈2× reality — model-level HEMI data polluting the V6 config)
+    // with exactly this signature: labor_sources_disagree=true and
+    // fallback_gap_minutes=138. When the sources both disagree with each
+    // other AND the median lands >15min from the tier anchor, the value is
+    // more likely contamination than truth — punt to the tier estimate
+    // instead of quoting it at 0.75.
+    if (sourcesDisagree && fallbackOutOfBand) {
+      console.warn(
+        `[labor-agg] REJECTED aggregate for service ${String(serviceId)}: ` +
+        `sources disagree AND ${fallbackGapMinutes}min from tier fallback — leaving to tier estimate`,
+      );
+      bookHours = undefined;
+      confidence = undefined;
+      sourcesDisagree = false;
+      outsideFallbackBand = false;
+      fallbackGapMinutes = undefined;
+    } else if (strong.length >= 2 && !sourcesDisagree) {
       confidence = 0.9; // ≥2 strong sources agree
     } else if (sourcesDisagree) {
-      // Contested but real — quotable (clears the 0.75 gate) and flagged for
-      // director review, rather than punting to a worse tier estimate.
+      // Contested but real (within the tier guardrail) — quotable (clears the
+      // 0.75 gate) and flagged for director review, rather than punting to a
+      // worse tier estimate.
       confidence = 0.75;
-    } else if (strong.length >= 1 && strong.some((o: any) => withinAgreementBand(o.hours as number, bookHours))) {
+    } else if (strong.length >= 1 && strong.some((o: any) => withinAgreementBand(o.hours as number, bookHours!))) {
       // 1 strong source that actually DROVE book_hours (its value is within the
       // agreement band of the weighted-median result). A strong source that
       // SURVIVED MAD but was OUTVOTED on the frontier must not lend its 0.8 to a

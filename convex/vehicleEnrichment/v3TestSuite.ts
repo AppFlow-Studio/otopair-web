@@ -306,7 +306,7 @@ export const runFullTestSuite = internalAction({
           })),
           labor: {
             total: labor.length,
-            non_training: labor.filter((l: any) => l.source !== "training_data").length,
+            non_training: labor.filter((l: any) => l.source !== "training_data" && l.source !== "default_fallback").length,
             list: labor.map((l: any) => ({
               service: slugMap[l.service_id] ?? l.service_id,
               book_hours: l.book_hours, source: l.source,

@@ -59,6 +59,7 @@ import {
 import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
+import { verifyPartFitments, VERIFY_ROLE_KEYS } from "./utils/partFitmentVerifier";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { laborFlagsFromEnv } from "./laborResearch";
@@ -84,6 +85,15 @@ export type EnrichVehicleBatchV3Result =
 
 const MAX_POLL_ATTEMPTS = 180;
 const POLL_INTERVAL_MS = 1 * 60 * 1000;
+// Batch-1 slow-poll extension (5-VIN test, Jul 2026): a 3h Anthropic batch
+// queue is normal-tail, not dead — the Soul's batch completed after the old
+// 180-attempt cap had already abandoned the run, leaving a zombie "pending"
+// config and orphaned paid results. Batches resolve (or expire) within 24h,
+// so after the fast window we keep polling every 10 min out to ~24h total.
+// 10 min stays under the 15-min heartbeat-liveness window, so force-unstick
+// still treats the run as alive.
+const SLOW_POLL_INTERVAL_MS = 10 * 60 * 1000;
+const MAX_POLL_ATTEMPTS_TOTAL = MAX_POLL_ATTEMPTS + 126; // 3h fast + ~21h slow ≈ 24h
 
 const MAKES_WITH_BRAKE_PAD_SENSORS = new Set([
   "BMW", "Mercedes-Benz", "Porsche", "Audi", "Mini", "Rolls-Royce",
@@ -1560,8 +1570,8 @@ export const enrichVehicleBatchV3 = internalAction({
         args.displacement, vPicData?.cylinders ?? 4,
         vPicData?.fuel_type ?? "Gasoline", args.engineCode,
       );
-      if (resolved.source === "haiku" && !isNhtsaDescriptor(resolved.engineCode)) {
-        console.log(`[v8] Engine code resolved: "${args.engineCode}" → "${resolved.engineCode}"`);
+      if (resolved.source === "verified" && !isNhtsaDescriptor(resolved.engineCode)) {
+        console.log(`[v8] Engine code resolved+verified: "${args.engineCode}" → "${resolved.engineCode}"`);
         vehicle.engineCode = resolved.engineCode;
         configKey = buildEngineKey(vehicle);
         resolvedEngineCodeForPersist = resolved.engineCode;
@@ -1578,6 +1588,11 @@ export const enrichVehicleBatchV3 = internalAction({
           );
           return { status: "cache_hit" as const, configId: resolvedConfig._id };
         }
+      } else if (resolved.source === "unverified") {
+        // 5-VIN test (Jul 2026): unverified codes were how CZDA/ERG/G4FJ
+        // poisoned config keys and extraction prompts. Keep the displacement
+        // placeholder — it is honest and still unique enough to key on.
+        console.warn(`[v8] Engine code candidate "${resolved.engineCode}" failed verification — keeping placeholder "${args.engineCode}"`);
       } else if (resolved.source === "unknown") {
         console.log(`[v8] Engine code resolution returned unknown — keeping placeholder "${args.engineCode}"`);
       }
@@ -2202,19 +2217,25 @@ async function runPollBatch1Body(
       console.warn(`[v8/_pollBatch1] getBatchStatus failed (attempt ${attempt}) — treating as not-ended:`, e);
     }
     if (status !== "ended") {
-      if (attempt >= MAX_POLL_ATTEMPTS) {
-        console.error(`[v8/_pollBatch1] Timed out after ${attempt} attempts`);
+      if (attempt >= MAX_POLL_ATTEMPTS_TOTAL) {
+        // ~24h: the batch should have ended or expired by now. Fail the run
+        // loudly (config back to retryable "pending"); this branch should be
+        // near-unreachable since Anthropic force-resolves batches at 24h.
+        console.error(`[v8/_pollBatch1] Batch not ended after ~24h (${attempt} attempts) — failing run`);
         await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
           run_id: args.runId,
           vehicle_config_id: args.vehicleConfigId,
           run_status: "failed",
-          errors: ["batch1_timeout"],
+          errors: ["batch1_timeout_24h"],
           config_status: "pending",
         });
         return;
       }
+      if (attempt === MAX_POLL_ATTEMPTS) {
+        console.warn(`[v8/_pollBatch1] Batch still queued after ${attempt} fast polls (~3h) — switching to 10-min slow poll (paid batch, will collect when it ends)`);
+      }
       await ctx.scheduler.runAfter(
-        POLL_INTERVAL_MS,
+        attempt >= MAX_POLL_ATTEMPTS ? SLOW_POLL_INTERVAL_MS : POLL_INTERVAL_MS,
         internal.vehicleEnrichment.v3pipeline._pollBatch1V3,
         { ...args, attempt: attempt + 1 },
       );
@@ -3498,6 +3519,70 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       (fieldsFilledCount / Math.max(1, V4_FIELD_KEYS.length - fieldsNotApplicable)) * 100,
     );
 
+    // ── Fitment verification gate (Jul 2026, 5-VIN test) ──────────────
+    // Format sanitization can't catch a REAL part number from the WRONG
+    // vehicle (HEMI filter on the 3.6, Golf pads on the Atlas, Seltos filter
+    // on the Soul). One adversarial web-search call cross-examines the
+    // core-role parts written this run; refuted fitments are deleted so the
+    // role falls to its universal fallback or an honest gap. "uncertain"
+    // never deletes. Disable with PARTS_FITMENT_VERIFY=0.
+    let fitmentRefutedErrors: string[] = [];
+    if ((process.env.PARTS_FITMENT_VERIFY ?? "1") !== "0" && !timedOut) {
+      try {
+        const allFitments = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getPartFitments,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        const toVerify: { roleKey: string; oem: string; name: string }[] = [];
+        const seenOem = new Set<string>();
+        for (const f of allFitments) {
+          if (toVerify.length >= 8) break;
+          const part: any = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getOemPartById,
+            { partId: (f as any).part_id },
+          );
+          const sub = part?.subcategory ?? "";
+          const oem = part?.oem_part_number ?? "";
+          if (!oem || oem.startsWith("OTOPAIR-UNIV") || seenOem.has(oem)) continue;
+          if (!VERIFY_ROLE_KEYS.has(sub)) continue;
+          seenOem.add(oem);
+          toVerify.push({ roleKey: sub, oem, name: part?.name ?? sub });
+        }
+        if (toVerify.length > 0) {
+          const verdicts = await verifyPartFitments(
+            {
+              year: args.year,
+              make: args.make,
+              model: args.model,
+              trim: args.trim,
+              engineCode: vehicle.engineCode,
+              displacement: args.displacement,
+            },
+            toVerify,
+          );
+          const refuted = verdicts.filter((vd) => vd.verdict === "refuted");
+          console.log(
+            `[fitment-verify] ${toVerify.length} core parts checked: ` +
+              `${verdicts.filter((vd) => vd.verdict === "confirmed").length} confirmed, ` +
+              `${refuted.length} refuted, ` +
+              `${verdicts.filter((vd) => vd.verdict === "uncertain").length} uncertain`,
+          );
+          if (refuted.length > 0) {
+            await ctx.runMutation(
+              internal.vehicleEnrichment.v3mutations.removeRefutedFitments,
+              {
+                vehicle_config_id: args.vehicleConfigId,
+                refuted: refuted.map((r) => ({ oem: r.oem, reason: r.reason })),
+              },
+            );
+            fitmentRefutedErrors = refuted.map((r) => `fitment_refuted:${r.roleKey}:${r.oem}`);
+          }
+        }
+      } catch (e) {
+        console.warn("[fitment-verify] pass failed (non-fatal):", e);
+      }
+    }
+
     // Pattern-suspect sentinel: >=2 oem_part_rejected gaps in ONE run means
     // the make's part pattern is probably wrong, not the data — every pattern
     // gap found so far (BMW leading zeros, VAG G-numbers, Hyundai fluid SKUs)
@@ -3540,6 +3625,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         // Repeated part rejections on one run = suspect make pattern, not bad
         // data — routes to review so unknown formats on NEW makes surface.
         ...(partRejectCount >= 2 ? [`part_pattern_suspect:${args.make}:${partRejectCount}`] : []),
+        // Fitment-verification refutations: wrong-vehicle parts removed at
+        // finalize (the fitment rows are already deleted; this is the audit
+        // trail + review-queue routing).
+        ...fitmentRefutedErrors,
         ...sanityFlags.map((f) => `sanity:${f.field}:${f.reason}`),
         ...oemFlags.map((f) => `oem:${f.field}:${f.reason}`),
       ],

@@ -114,4 +114,49 @@ describe("shop logo mutations (ported from otopair-1)", () => {
     expect(typeof url).toBe("string");
     expect(url.length).toBeGreaterThan(0);
   });
+
+  test("owner_user_id fallback authorizes an owner with no shop_users membership", async () => {
+    const t = makeT();
+    // Deliberately NO shop_users row: authorization must come from the
+    // `owner_user_id` fallback branch in requireShopOwner, not membership.
+    const { ownerClerkId, shopId } = await t.run(async (ctx) => {
+      const now = Date.now();
+      const ownerClerkId = `clerk_logo_fallback_owner_${now}`;
+      const ownerId = await ctx.db.insert("users", {
+        clerkUserId: ownerClerkId,
+        email: "e-owner@test.local",
+        first_name: "Fallback",
+        role: "shop_owner",
+        createdAt: now,
+      });
+      const shopId = await ctx.db.insert("shops", {
+        name: "Logo Shop e",
+        owner_user_id: ownerId,
+        is_active: true,
+      });
+      return { ownerClerkId, shopId };
+    });
+    const asOwner = t.withIdentity(identityFor(ownerClerkId));
+    const storageId = await storeFakeImage(t);
+
+    // Membership-less owners don't appear in getMyShops (known/accepted),
+    // so call the mutations directly and verify against the db.
+    await asOwner.mutation(api.shops.setShopLogo, { shopId, storageId });
+    const afterSet = await t.run(async (ctx) => ctx.db.get(shopId));
+    expect(afterSet!.logo_storage_id).toBe(storageId);
+
+    await asOwner.mutation(api.shops.clearShopLogo, { shopId });
+    const afterClear = await t.run(async (ctx) => ctx.db.get(shopId));
+    expect(afterClear!.logo_storage_id).toBeUndefined();
+  });
+
+  test("an unauthenticated caller is rejected", async () => {
+    const t = makeT();
+    const { shopId } = await seedShopWithOwner(t, "f");
+    const storageId = await storeFakeImage(t);
+
+    await expect(
+      t.mutation(api.shops.setShopLogo, { shopId, storageId }),
+    ).rejects.toThrow("Not authenticated");
+  });
 });

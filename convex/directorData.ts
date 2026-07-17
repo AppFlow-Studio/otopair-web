@@ -256,6 +256,14 @@ export type OtoUsageDay = {
   errors: number;
 };
 
+export type OtoUsageModelSplit = {
+  model: string;
+  turns: number;
+  tokens_in: number;
+  tokens_out: number;
+  est_cost_usd: number;
+};
+
 export type OtoUsageResult = {
   days: OtoUsageDay[];
   totals: {
@@ -265,6 +273,13 @@ export type OtoUsageResult = {
     cache_read_pct: number;
     p50_latency_ms: number;
     distinct_users: number;
+    // Token split over the 7d window (input vs output vs cache reads) — the
+    // ground truth behind the cost estimate.
+    tokens_in_7d: number;
+    tokens_out_7d: number;
+    cache_read_7d: number;
+    // Spend + volume broken out per model (haiku / sonnet / opus routing).
+    by_model: OtoUsageModelSplit[];
   };
   truncated: boolean;
 };
@@ -287,8 +302,11 @@ export const otoUsage = query({
     let cost7d = 0;
     let hitCap7d = 0;
     let in7d = 0;
+    let out7d = 0;
     let cacheRead7d = 0;
     const latencies7d: number[] = [];
+    // Per-model rollup over the 7d window, keyed by the raw model string.
+    const modelAgg = new Map<string, OtoUsageModelSplit>();
 
     for (const r of rows) {
       const date = new Date(r.ts).toISOString().slice(0, 10);
@@ -311,8 +329,18 @@ export const otoUsage = query({
         cost7d += cost;
         if (r.hit_cap) hitCap7d++;
         in7d += r.input_tokens;
+        out7d += r.output_tokens;
         cacheRead7d += cacheRead;
         latencies7d.push(r.total_latency_ms);
+        const model = r.model || "unknown";
+        const agg =
+          modelAgg.get(model) ??
+          { model, turns: 0, tokens_in: 0, tokens_out: 0, est_cost_usd: 0 };
+        agg.turns++;
+        agg.tokens_in += r.input_tokens;
+        agg.tokens_out += r.output_tokens;
+        agg.est_cost_usd += cost;
+        modelAgg.set(model, agg);
       }
     }
 
@@ -326,6 +354,12 @@ export const otoUsage = query({
         cache_read_pct: in7d + cacheRead7d > 0 ? cacheRead7d / (in7d + cacheRead7d) : 0,
         p50_latency_ms: latencies7d.length > 0 ? latencies7d[Math.floor(latencies7d.length / 2)] : 0,
         distinct_users: users.size,
+        tokens_in_7d: in7d,
+        tokens_out_7d: out7d,
+        cache_read_7d: cacheRead7d,
+        by_model: [...modelAgg.values()]
+          .map((m) => ({ ...m, est_cost_usd: Math.round(m.est_cost_usd * 100) / 100 }))
+          .sort((a, b) => b.est_cost_usd - a.est_cost_usd),
       },
       truncated: rows.length === 5000,
     };

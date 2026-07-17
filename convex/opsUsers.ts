@@ -41,6 +41,7 @@ export type OpsUserListRow = {
   onboarding: OnboardingState;
   isPendingDeletion: boolean;
   authProvider: string | null;
+  acquisitionSource: string | null;
 };
 
 export type OpsUserProfile = {
@@ -55,6 +56,10 @@ export type OpsUserProfile = {
   phoneVerified: boolean;
   photoUrl: string | null;
   authProvider: string | null;
+  acquisitionSource: string | null;
+  walkInClaimedAt: number | null;
+  pushRegistered: boolean;
+  pushTokenUpdatedAt: number | null;
   clerkUserId: string;
   language: string | null;
   units: string | null;
@@ -108,6 +113,32 @@ export type OpsUserBookingRow = {
   total: number | null;
   laborCost: number | null;
   partsCost: number | null;
+};
+
+export type OpsUserEngagement = {
+  // Notification preferences (from user_settings_preferences.notification_preferences,
+  // an unstructured blob) normalized to display rows + push registration.
+  notifications: {
+    entries: { key: string; enabled: boolean | null; value: string | null }[];
+    hasPreferencesRow: boolean;
+  };
+  pushRegistered: boolean;
+  pushTokenUpdatedAt: number | null;
+  // Acquisition: how this account originated + referral attribution.
+  authProvider: string | null;
+  acquisitionSource: string | null;
+  walkInClaimedAt: number | null;
+  // The referral that brought this user in (they are the referee), if any.
+  referredBy: {
+    code: string | null;
+    status: string;
+    referrerId: Id<"users"> | null;
+    referrerName: string | null;
+    createdAt: number;
+    creditedAt: number | null;
+  } | null;
+  // Referrals this user has made (they are the referrer).
+  referralsMade: { total: number; credited: number; pending: number };
 };
 
 export type OpsUserMoneyResult = {
@@ -223,6 +254,7 @@ export const list = query({
           onboarding: onboardingState(u),
           isPendingDeletion: u.isPendingDeletion ?? false,
           authProvider: u.auth_provider ?? null,
+          acquisitionSource: u.acquisition_source ?? null,
         };
       }),
     );
@@ -250,6 +282,10 @@ export const profile = query({
       phoneVerified: u.phoneVerified ?? false,
       photoUrl: u.profile_photo_url ?? null,
       authProvider: u.auth_provider ?? null,
+      acquisitionSource: u.acquisition_source ?? null,
+      walkInClaimedAt: u.walkInClaimedAt ?? null,
+      pushRegistered: u.push_token != null,
+      pushTokenUpdatedAt: u.push_token_updated_at_ms ?? null,
       clerkUserId: u.clerkUserId,
       language: u.language ?? null,
       units: u.units ?? null,
@@ -408,6 +444,94 @@ export const money = query({
         iconType: t.icon_type ?? null,
         bookingId: t.booking_id ?? null,
       })),
+    };
+  },
+});
+
+// -----------------------------------------------------------------------------
+// Detail — Engagement. Notification preferences (user_settings_preferences) +
+// push registration + acquisition/referral attribution. Answers "how did this
+// person get here, and how do we reach them" — none of which the Profile tab
+// surfaced before.
+// -----------------------------------------------------------------------------
+/** Flatten the loose notification_preferences blob into display rows. Handles
+ *  the common shapes: { push: true, sms: false, ... } or nested channel maps.
+ *  Unknown shapes fall back to a single JSON value row so nothing is hidden. */
+function normalizeNotificationPrefs(
+  blob: unknown,
+): { key: string; enabled: boolean | null; value: string | null }[] {
+  if (blob == null || typeof blob !== "object") return [];
+  const out: { key: string; enabled: boolean | null; value: string | null }[] = [];
+  for (const [key, raw] of Object.entries(blob as Record<string, unknown>)) {
+    if (typeof raw === "boolean") {
+      out.push({ key, enabled: raw, value: null });
+    } else if (typeof raw === "string" || typeof raw === "number") {
+      out.push({ key, enabled: null, value: String(raw) });
+    } else if (raw != null && typeof raw === "object") {
+      // Nested channel map (e.g. { marketing: { push: true, email: false } }).
+      for (const [subKey, subRaw] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof subRaw === "boolean") {
+          out.push({ key: `${key}.${subKey}`, enabled: subRaw, value: null });
+        } else {
+          out.push({ key: `${key}.${subKey}`, enabled: null, value: String(subRaw) });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export const engagement = query({
+  args: { token: v.string(), id: v.id("users") },
+  handler: async (ctx, { token, id }): Promise<OpsUserEngagement | null> => {
+    await requireDirector(ctx, token);
+    const u = await ctx.db.get(id);
+    if (!u) return null;
+
+    const [prefsRow, referredByRow, referralsMade] = await Promise.all([
+      ctx.db
+        .query("user_settings_preferences")
+        .withIndex("by_user_id", (q) => q.eq("user_id", id))
+        .first(),
+      ctx.db
+        .query("referrals")
+        .withIndex("by_referee", (q) => q.eq("referee_user_id", id))
+        .first(),
+      ctx.db
+        .query("referrals")
+        .withIndex("by_referrer", (q) => q.eq("referrer_user_id", id))
+        .collect(),
+    ]);
+
+    let referredBy: OpsUserEngagement["referredBy"] = null;
+    if (referredByRow) {
+      const referrer = await ctx.db.get(referredByRow.referrer_user_id);
+      referredBy = {
+        code: referredByRow.code_used ?? null,
+        status: referredByRow.status,
+        referrerId: referredByRow.referrer_user_id,
+        referrerName: referrer ? fullName(referrer) : null,
+        createdAt: referredByRow.created_at,
+        creditedAt: referredByRow.credited_at ?? null,
+      };
+    }
+
+    return {
+      notifications: {
+        entries: normalizeNotificationPrefs(prefsRow?.notification_preferences),
+        hasPreferencesRow: prefsRow != null,
+      },
+      pushRegistered: u.push_token != null,
+      pushTokenUpdatedAt: u.push_token_updated_at_ms ?? null,
+      authProvider: u.auth_provider ?? null,
+      acquisitionSource: u.acquisition_source ?? null,
+      walkInClaimedAt: u.walkInClaimedAt ?? null,
+      referredBy,
+      referralsMade: {
+        total: referralsMade.length,
+        credited: referralsMade.filter((r) => r.status === "credited").length,
+        pending: referralsMade.filter((r) => r.status === "pending").length,
+      },
     };
   },
 });

@@ -26,6 +26,31 @@ function fmtDate(ms: number | null): string {
   return new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+// Human labels for the raw auth-provider / acquisition-source strings.
+const PROVIDER_LABEL: Record<string, string> = {
+  password: "Email + password",
+  oauth_google: "Google",
+  google: "Google",
+  oauth_apple: "Apple",
+  apple: "Apple",
+  phone: "Phone",
+};
+const SOURCE_LABEL: Record<string, string> = {
+  shop_portal_web: "Shop portal",
+  web_signup: "Web",
+  ios_app: "iOS app",
+  android_app: "Android app",
+  referral: "Referral",
+};
+function providerLabel(p: string | null): string {
+  if (!p) return "Unknown";
+  return PROVIDER_LABEL[p] ?? p.replace(/_/g, " ");
+}
+function sourceLabel(s: string | null): string | null {
+  if (!s) return null;
+  return SOURCE_LABEL[s] ?? s.replace(/_/g, " ");
+}
+
 function OnboardingPill({ state }: { state: string }) {
   if (state === "completed") return <span className={`${PILL} bg-emerald-50 text-emerald-700`}>Completed</span>;
   if (state === "tell_us_pending") return <span className={`${PILL} bg-amber-50 text-amber-700`}>Tell-us pending</span>;
@@ -144,7 +169,7 @@ export default function OpsUsersPage() {
             <table className="w-full text-[13px]">
               <thead>
                 <tr>
-                  {["Name", "Email", "Phone", "Vehicles", "Bookings", "Onboarding", "Created", "Flags"].map((h) => (
+                  {["Name", "Email", "Phone", "Vehicles", "Bookings", "Source", "Onboarding", "Created", "Last active", "Flags"].map((h) => (
                     <th
                       key={h}
                       className="border-b border-slate-200 pb-2 pr-4 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400"
@@ -181,8 +206,19 @@ export default function OpsUsersPage() {
                     </td>
                     <td className="py-2.5 pr-4 tabular-nums text-slate-600">{u.vehicles}</td>
                     <td className="py-2.5 pr-4 tabular-nums text-slate-600">{u.bookings}</td>
+                    <td className="py-2.5 pr-4">
+                      <span className="text-slate-700">{providerLabel(u.authProvider)}</span>
+                      {sourceLabel(u.acquisitionSource) && (
+                        <div className="text-[11px] text-slate-400">
+                          via {sourceLabel(u.acquisitionSource)}
+                        </div>
+                      )}
+                    </td>
                     <td className="py-2.5 pr-4"><OnboardingPill state={u.onboarding} /></td>
                     <td className="py-2.5 pr-4 text-slate-500">{fmtDate(u.created)}</td>
+                    <td className="py-2.5 pr-4 text-slate-500" title={u.lastActive ? new Date(u.lastActive).toLocaleString() : undefined}>
+                      {fmtDate(u.lastActive)}
+                    </td>
                     <td className="py-2.5 pr-4">
                       {u.isPendingDeletion ? (
                         <span className={`${PILL} bg-red-50 text-red-700`}>Pending deletion</span>

@@ -13,6 +13,11 @@ import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
 import type { Doc } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
+import { resolveVehicleDisplay } from "./lib/bookingEnrichment";
+
+/** cents → dollars, null-safe. */
+const centsToDollars = (c: number | null | undefined): number | null =>
+  c == null ? null : c / 100;
 
 /** MEASURED status set on this deployment (NOT confirmed/in_progress). */
 export const BOOKING_STATUSES = [
@@ -29,9 +34,10 @@ export const BOOKING_STATUSES = [
 // Shared row shape (board cards + list rows)
 // ---------------------------------------------------------------------------
 async function bookingRow(ctx: QueryCtx, b: Doc<"bookings">) {
-  const [user, shop] = await Promise.all([
+  const [user, shop, vehicle] = await Promise.all([
     ctx.db.get(b.user_id),
     b.shop_id ? ctx.db.get(b.shop_id) : null,
+    resolveVehicleDisplay(ctx, b.vin),
   ]);
   const serviceNames = await Promise.all(
     b.service_ids.map(async (sid) => {
@@ -48,6 +54,7 @@ async function bookingRow(ctx: QueryCtx, b: Doc<"bookings">) {
     shopId: b.shop_id ?? null,
     shop: shop?.name ?? "—",
     vin: b.vin,
+    vehicleYmm: vehicle.ymm,
     services: serviceNames,
     scheduledDate: b.scheduled_date ?? null,
     scheduledTime: b.scheduled_time ?? null,
@@ -55,6 +62,15 @@ async function bookingRow(ctx: QueryCtx, b: Doc<"bookings">) {
     status: b.status,
     liveStage: b.live_stage ?? null,
     total: b.total_cost ?? null,
+    // Quote band for quote-stage bookings (total_cost is null pre-payment).
+    // Gives pending_quote / quotes_ready cards a real number to show instead
+    // of a bare "—". All dollars.
+    quote: {
+      low: centsToDollars(b.disclosed_range_low_cents),
+      high: centsToDollars(b.disclosed_range_high_cents),
+      setPrice: centsToDollars(b.quoted_set_price_cents),
+      isFixed: b.is_fixed_price ?? false,
+    },
   };
 }
 
@@ -134,29 +150,11 @@ export const detail = query({
     );
 
     // Vehicle year/make/model so support recognizes the car, not just the VIN.
-    let vehicleYmm: string | null = null;
-    if (booking.vin) {
-      const veh = await ctx.db
-        .query("vehicles")
-        .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
-        .first();
-      if (veh) {
-        let make = "";
-        let model = "";
-        if (veh.trim_id) {
-          const trim = await ctx.db.get(veh.trim_id);
-          if (trim) {
-            const m = await ctx.db.get(trim.model_id);
-            if (m) {
-              model = m.name ?? "";
-              const mk = await ctx.db.get(m.make_id);
-              if (mk) make = mk.name ?? "";
-            }
-          }
-        }
-        vehicleYmm = [veh.year, make, model].filter(Boolean).join(" ") || veh.vin;
-      }
-    }
+    const vehicle = await resolveVehicleDisplay(ctx, booking.vin);
+    const vehicleYmm = vehicle.ymm;
+
+    // Per-service name map so each priced-part line can name its service.
+    const serviceNameById = new Map(services.map((s) => [String(s.id), s.name]));
 
     const [statusHistory, payments, review] = await Promise.all([
       ctx.db
@@ -192,6 +190,45 @@ export const detail = query({
       partsCost: booking.parts_cost ?? null,
       totalCost: booking.total_cost ?? null,
       estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
+
+      // Quote band + itemized breakdown so ops can see the price the customer
+      // was shown, not just the top-line total. All dollars.
+      isFixedPrice: booking.is_fixed_price ?? false,
+      disclosedLow: centsToDollars(booking.disclosed_range_low_cents),
+      disclosedHigh: centsToDollars(booking.disclosed_range_high_cents),
+      quotedSetPrice: centsToDollars(booking.quoted_set_price_cents),
+      disclosedBreakdown: booking.disclosed_breakdown
+        ? {
+            partsLow: centsToDollars(booking.disclosed_breakdown.parts_low_cents),
+            partsHigh: centsToDollars(booking.disclosed_breakdown.parts_high_cents),
+            labor: centsToDollars(booking.disclosed_breakdown.labor_cents),
+            taxLow: centsToDollars(booking.disclosed_breakdown.tax_low_cents),
+            taxHigh: centsToDollars(booking.disclosed_breakdown.tax_high_cents),
+            serviceFeeLow: centsToDollars(booking.disclosed_breakdown.service_fee_low_cents),
+            serviceFeeHigh: centsToDollars(booking.disclosed_breakdown.service_fee_high_cents),
+          }
+        : null,
+      quotedBreakdown: booking.quoted_breakdown
+        ? {
+            parts: centsToDollars(booking.quoted_breakdown.parts_cents),
+            labor: centsToDollars(booking.quoted_breakdown.labor_cents),
+            tax: centsToDollars(booking.quoted_breakdown.tax_cents),
+            serviceFee: centsToDollars(booking.quoted_breakdown.service_fee_cents),
+          }
+        : null,
+      // Itemized parts the customer saw on Review & Pay. Dollars per line.
+      pricedParts: (booking.priced_parts_snapshot ?? []).map((p) => ({
+        serviceName: serviceNameById.get(String(p.service_id)) ?? "—",
+        partName: p.part_name,
+        oemNumber: p.oem_number,
+        brand: p.brand ?? null,
+        tier: p.part_tier ?? null,
+        quantity: p.quantity,
+        unitPrice: centsToDollars(p.unit_price_cents),
+        lineTotal: centsToDollars(p.line_total_cents),
+        priceUnknown: p.price_unknown ?? false,
+        priceStale: p.price_stale ?? false,
+      })),
 
       user: user
         ? {

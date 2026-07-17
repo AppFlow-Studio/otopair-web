@@ -37,8 +37,34 @@ function statusPill(status: string): string {
   return `${PILL} bg-slate-100 text-slate-600`;
 }
 
-const TABS = ["Profile", "Garage", "Bookings", "Money"] as const;
+const TABS = ["Profile", "Engagement", "Garage", "Bookings", "Money"] as const;
 type Tab = (typeof TABS)[number];
+
+// Human labels for raw auth-provider / acquisition-source strings (mirrors
+// the users list). Keeps ops from staring at "oauth_google".
+const PROVIDER_LABEL: Record<string, string> = {
+  password: "Email + password",
+  oauth_google: "Google",
+  google: "Google",
+  oauth_apple: "Apple",
+  apple: "Apple",
+  phone: "Phone",
+};
+const SOURCE_LABEL: Record<string, string> = {
+  shop_portal_web: "Shop portal (web)",
+  web_signup: "Web signup",
+  ios_app: "iOS app",
+  android_app: "Android app",
+  referral: "Referral",
+};
+function providerLabel(p: string | null): string {
+  if (!p) return "Unknown";
+  return PROVIDER_LABEL[p] ?? p.replace(/_/g, " ");
+}
+function sourceLabel(s: string | null): string {
+  if (!s) return "Unknown / direct";
+  return SOURCE_LABEL[s] ?? s.replace(/_/g, " ");
+}
 
 function Field({ label, value, mono }: { label: string; value: React.ReactNode; mono?: boolean }) {
   return (
@@ -146,6 +172,7 @@ export default function OpsUserDetailPage() {
 
       <div className="mt-4">
         {tab === "Profile" && <ProfileTab profile={profile} />}
+        {tab === "Engagement" && <EngagementTab userId={userId} />}
         {tab === "Garage" && <GarageTab userId={userId} />}
         {tab === "Bookings" && <BookingsTab userId={userId} />}
         {tab === "Money" && <MoneyTab userId={userId} />}
@@ -177,12 +204,16 @@ function ProfileTab({ profile }: { profile: Profile }) {
           <Field label="Last name" value={profile.lastName ?? "—"} />
           <Field label="Email" value={profile.email ?? "—"} />
           <Field label="Phone" value={profile.phone ?? "—"} />
-          <Field label="Auth provider" value={profile.authProvider ?? "—"} />
+          <Field label="Auth provider" value={providerLabel(profile.authProvider)} />
+          <Field label="Acquisition source" value={sourceLabel(profile.acquisitionSource)} />
           <Field label="Role" value={profile.role} />
           <Field label="Language" value={profile.language ?? "—"} />
           <Field label="Units" value={profile.units ?? "—"} />
           <Field label="Created" value={fmtDate(profile.created)} />
-          <Field label="Last updated" value={fmtDate(profile.lastUpdated)} />
+          <Field label="Last active" value={fmtDate(profile.lastUpdated)} />
+          {profile.walkInClaimedAt != null && (
+            <Field label="Walk-in claimed" value={fmtDate(profile.walkInClaimedAt)} />
+          )}
           <Field label="Clerk ID" value={profile.clerkUserId} mono />
           <Field label="Stripe customer" value={profile.stripeCustomerId ?? "—"} mono />
         </div>
@@ -217,7 +248,7 @@ function ProfileTab({ profile }: { profile: Profile }) {
             </div>
             <p className="mt-3 text-[12px] text-red-700">
               Processing and restore happen on the{" "}
-              <Link href="/ops/users/deletions" className="underline">Deletion Queue</Link>.
+              <Link href="/ops/deletion-queue" className="underline">Deletion Queue</Link>.
             </p>
           </div>
         ) : (
@@ -226,6 +257,134 @@ function ProfileTab({ profile }: { profile: Profile }) {
             <p className="mt-2 text-[13px] text-slate-500">No deletion request on file.</p>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Engagement tab — acquisition/referral attribution + notification prefs.
+// ---------------------------------------------------------------------------
+function EngagementTab({ userId }: { userId: Id<"users"> }) {
+  const { token } = usePortalSession();
+  const data: FunctionReturnType<typeof api.opsUsers.engagement> | undefined =
+    useQuery(api.opsUsers.engagement, { token, id: userId });
+
+  if (data === undefined)
+    return <div className="py-10 text-center text-sm text-slate-400">Loading engagement…</div>;
+  if (data === null)
+    return <div className="py-10 text-center text-sm text-slate-400">User not found.</div>;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      {/* Acquisition */}
+      <div className={CARD}>
+        <h2 className="text-sm font-semibold text-slate-900">Acquisition</h2>
+        <div className="mt-4 grid grid-cols-2 gap-4">
+          <Field label="Auth provider" value={providerLabel(data.authProvider)} />
+          <Field label="Source" value={sourceLabel(data.acquisitionSource)} />
+          {data.walkInClaimedAt != null && (
+            <Field label="Walk-in claimed" value={fmtDate(data.walkInClaimedAt)} />
+          )}
+        </div>
+
+        <div className="mt-5 border-t border-slate-100 pt-4">
+          <div className="text-xs font-medium text-slate-500">Referred by</div>
+          {data.referredBy ? (
+            <div className="mt-1 text-[13px] text-slate-800">
+              {data.referredBy.referrerId ? (
+                <Link
+                  href={`/ops/users/${data.referredBy.referrerId}`}
+                  className="font-medium text-blue-600 hover:underline"
+                >
+                  {data.referredBy.referrerName ?? "Unknown referrer"}
+                </Link>
+              ) : (
+                <span className="font-medium">{data.referredBy.referrerName ?? "Unknown referrer"}</span>
+              )}
+              <span className="ml-2">
+                <span className={statusPill(data.referredBy.status)}>{data.referredBy.status}</span>
+              </span>
+              <div className="mt-0.5 text-[12px] text-slate-400">
+                {data.referredBy.code ? `code ${data.referredBy.code} · ` : ""}
+                {fmtDate(data.referredBy.createdAt)}
+                {data.referredBy.creditedAt ? ` · credited ${fmtDate(data.referredBy.creditedAt)}` : ""}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-1 text-[13px] text-slate-500">Not referred (direct signup).</div>
+          )}
+        </div>
+
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <div className="text-xs font-medium text-slate-500">Referrals made</div>
+          <div className="mt-1 flex items-center gap-3 text-[13px]">
+            <span className="font-semibold text-slate-900">{data.referralsMade.total}</span>
+            <span className="text-slate-400">total</span>
+            {data.referralsMade.credited > 0 && (
+              <span className={`${PILL} bg-emerald-50 text-emerald-700`}>
+                {data.referralsMade.credited} credited
+              </span>
+            )}
+            {data.referralsMade.pending > 0 && (
+              <span className={`${PILL} bg-amber-50 text-amber-700`}>
+                {data.referralsMade.pending} pending
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Notifications */}
+      <div className={CARD}>
+        <h2 className="text-sm font-semibold text-slate-900">Notifications &amp; preferences</h2>
+        <div className="mt-4 flex items-center gap-2">
+          <span
+            className={
+              data.pushRegistered
+                ? `${PILL} bg-emerald-50 text-emerald-700`
+                : `${PILL} bg-slate-100 text-slate-500`
+            }
+          >
+            {data.pushRegistered ? "Push registered" : "No push token"}
+          </span>
+          {data.pushTokenUpdatedAt != null && (
+            <span className="text-[12px] text-slate-400">
+              updated {fmtDate(data.pushTokenUpdatedAt)}
+            </span>
+          )}
+        </div>
+
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          {!data.notifications.hasPreferencesRow ? (
+            <p className="text-[13px] text-slate-500">
+              No preferences row — user hasn’t customized notifications (platform defaults apply).
+            </p>
+          ) : data.notifications.entries.length === 0 ? (
+            <p className="text-[13px] text-slate-500">Preferences row exists but is empty.</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {data.notifications.entries.map((e) => (
+                <li key={e.key} className="flex items-center justify-between text-[13px]">
+                  <span className="text-slate-600">{e.key.replace(/_/g, " ")}</span>
+                  {e.enabled != null ? (
+                    <span
+                      className={
+                        e.enabled
+                          ? `${PILL} bg-emerald-50 text-emerald-700`
+                          : `${PILL} bg-slate-100 text-slate-500`
+                      }
+                    >
+                      {e.enabled ? "On" : "Off"}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">{e.value ?? "—"}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -368,7 +527,19 @@ function BookingsTab({ userId }: { userId: Id<"users"> }) {
                   </td>
                   <td className="py-2.5 pr-4 text-slate-500">{b.scheduledDate ?? "—"}</td>
                   <td className="py-2.5 pr-4 text-slate-500">{fmtDate(b.created)}</td>
-                  <td className="py-2.5 pr-4 tabular-nums text-slate-700">{fmtMoney(b.total)}</td>
+                  <td className="py-2.5 pr-4 tabular-nums text-slate-700">
+                    {fmtMoney(b.total)}
+                    {(b.laborCost != null || b.partsCost != null) && (
+                      <div className="text-[11px] font-normal text-slate-400">
+                        {[
+                          b.laborCost != null ? `Labor ${fmtMoney(b.laborCost)}` : null,
+                          b.partsCost != null ? `Parts ${fmtMoney(b.partsCost)}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
+                    )}
+                  </td>
                   <td className="py-2.5 pr-4 text-right">
                     <Link
                       href={`/ops/bookings/${b.id}`}

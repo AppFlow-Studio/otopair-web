@@ -126,6 +126,33 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
               ? "cancelled"
               : null;
       if (mapped) {
+        // On a successful charge, resolve the card network + last-4 from the
+        // charge's payment_method_details so ops can show "Visa ···· 4242"
+        // (works for wallet payments too — the underlying network card is
+        // reported). Best-effort: a retrieval failure must not fail the
+        // webhook, so we swallow and let the backfill fill it later.
+        let cardBrand: string | undefined;
+        let cardLast4: string | undefined;
+        if (event.type === "payment_intent.succeeded") {
+          try {
+            const chargeId =
+              typeof pi.latest_charge === "string"
+                ? pi.latest_charge
+                : pi.latest_charge?.id;
+            if (chargeId) {
+              const charge =
+                await getStripeForWebhook().charges.retrieve(chargeId);
+              const card = charge.payment_method_details?.card;
+              cardBrand = card?.brand ?? undefined;
+              cardLast4 = card?.last4 ?? undefined;
+            }
+          } catch (error) {
+            console.error(
+              "[Stripe Webhook] card details retrieval failed:",
+              error,
+            );
+          }
+        }
         await ctx.runMutation(
           internal.payments_stripe.handlePaymentIntentEvent,
           {
@@ -138,6 +165,8 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
             errorCode: pi.last_payment_error?.code ?? undefined,
             errorMessage: pi.last_payment_error?.message?.slice(0, 500) ?? undefined,
             amountReceived: pi.amount_received ?? undefined,
+            cardBrand,
+            cardLast4,
             livemode: event.livemode,
             stripeAccountId:
               typeof event.account === "string" ? event.account : undefined,

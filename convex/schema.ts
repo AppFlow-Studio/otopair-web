@@ -1661,6 +1661,12 @@ export default defineSchema({
     profile_photo_url: v.optional(v.string()),
     profile_photo_storage_id: v.optional(v.string()),
     auth_provider: v.optional(v.string()),
+    // First-touch acquisition attribution captured at account creation:
+    // the entry surface / campaign the user arrived from (e.g. "referral",
+    // "web_signup", "ios_app", or a raw utm_source). Null = unknown/direct
+    // (older accounts, or a signup that carried no entry context). Never
+    // overwritten once set — first touch wins.
+    acquisition_source: v.optional(v.string()),
     onboardingCompleted: v.optional(v.boolean()),
     essentialOnboardingCompleted: v.optional(v.boolean()),
     tellUsAboutCompleted: v.optional(v.boolean()),
@@ -2534,6 +2540,15 @@ export default defineSchema({
         v.literal("google_pay"),
       ),
     ),
+
+    // Card network + last-4, resolved from the charge's
+    // payment_method_details.card at capture time (and backfilled for
+    // historical rows). Present for card + wallet payments alike (wallets
+    // resolve the underlying network card). Display-only — operators see
+    // "Visa ···· 4242" instead of a bare "card" origin. Absent on rows that
+    // never reached a successful charge or predate collection.
+    card_brand: v.optional(v.string()),
+    card_last4: v.optional(v.string()),
 
     // Invoice PDF (generated server-side after capture). Identical layout to
     // the email attachment, stored once in Convex file storage and reused for

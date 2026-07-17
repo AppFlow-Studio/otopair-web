@@ -25,6 +25,7 @@ type MechanicRow = {
   id: string;
   name: string;
   title: string | null;
+  email: string | null;
   photo: string | null;
   shop: string | null;
   shop_id: string;
@@ -163,6 +164,14 @@ export default function ShopsMechanicsPage() {
                             inactive
                           </span>
                         )}
+                        {m.email && (
+                          <a
+                            href={`mailto:${m.email}`}
+                            className="block text-[11px] text-slate-400 hover:text-blue-600 hover:underline"
+                          >
+                            {m.email}
+                          </a>
+                        )}
                       </span>
                     </span>
                   </td>
@@ -192,12 +201,19 @@ export default function ShopsMechanicsPage() {
                           ? "bg-emerald-50 text-emerald-700"
                           : "bg-slate-100 text-slate-400"
                       }`}
+                      title="Spec/part verifications this mechanic submitted — the data moat"
                     >
                       {m.contributions} verifications
                     </span>
                   </td>
-                  <td className="px-2 py-2 font-mono text-[12px] text-slate-500">
-                    {m.next_slot ?? "—"}
+                  <td className="px-2 py-2 text-[12px]">
+                    {m.next_slot ? (
+                      <span className="font-mono text-slate-600" title="Next available appointment slot">
+                        {m.next_slot}
+                      </span>
+                    ) : (
+                      <span className="text-slate-300" title="No upcoming availability">no availability</span>
+                    )}
                   </td>
                   <td className="px-2 py-2">
                     <Link

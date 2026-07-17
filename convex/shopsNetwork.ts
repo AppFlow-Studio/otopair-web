@@ -32,20 +32,31 @@ export const weekKpis = query({
   handler: async (ctx, { token }) => {
     await requireDirector(ctx, token);
     const weekStart = startOfWeekMs();
+    const prevWeekStart = weekStart - 7 * DAY;
 
-    const bookingsWeek = await ctx.db
+    // One window covering both weeks, split client-of-this-fn by weekStart.
+    const rows = await ctx.db
       .query("bookings")
-      .withIndex("by_created_at", (q) => q.gte("created_at", weekStart))
+      .withIndex("by_created_at", (q) => q.gte("created_at", prevWeekStart))
       .collect();
 
-    const gmvWeek = bookingsWeek
-      .filter((b) => b.status !== "cancelled")
-      .reduce((s, b) => s + (b.total_cost ?? 0), 0);
+    const gmv = (list: typeof rows) =>
+      list.filter((b) => b.status !== "cancelled").reduce((s, b) => s + (b.total_cost ?? 0), 0);
+
+    const thisWeek = rows.filter((b) => (b.created_at ?? b._creationTime) >= weekStart);
+    const prevWeek = rows.filter((b) => {
+      const at = b.created_at ?? b._creationTime;
+      return at >= prevWeekStart && at < weekStart;
+    });
 
     return {
       week_start: weekStart,
-      bookings_week: bookingsWeek.length,
-      gmv_week: gmvWeek,
+      bookings_week: thisWeek.length,
+      gmv_week: gmv(thisWeek),
+      // Prior full week for a WoW comparison. Note: the current week is partial,
+      // so the client labels this "vs last wk" rather than implying a full-week pace.
+      bookings_prev_week: prevWeek.length,
+      gmv_prev_week: gmv(prevWeek),
     };
   },
 });

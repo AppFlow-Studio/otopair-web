@@ -72,6 +72,11 @@ export default function MechanicDetailPage() {
           <h1 className="text-xl font-semibold text-slate-900">{detail.name}</h1>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-[13px] text-slate-500">
             {detail.title && <span>{detail.title}</span>}
+            {detail.email && (
+              <a href={`mailto:${detail.email}`} className="text-blue-600 hover:underline">
+                {detail.email}
+              </a>
+            )}
             {detail.shop && (
               <Link
                 href={`/shops/all/${detail.shop_id}`}
@@ -117,7 +122,9 @@ export default function MechanicDetailPage() {
                       <td className="py-1.5 text-slate-700">
                         {j.parts_cost != null ? `$${j.parts_cost.toFixed(0)}` : "—"}
                       </td>
-                      <td className="py-1.5 text-slate-600">{j.difficulty ?? "—"}/5</td>
+                      <td className="py-1.5 text-slate-600">
+                        {j.difficulty != null ? `${j.difficulty}/5` : "—"}
+                      </td>
                     </tr>
                   ),
                 )}

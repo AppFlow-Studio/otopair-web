@@ -33,6 +33,8 @@ type Profile = {
   email: string | null;
   website: string | null;
   timezone: string | null;
+  lat: number | null;
+  lng: number | null;
   description: string | null;
   laborRate: number | null;
   rating: number | null;
@@ -349,8 +351,26 @@ export default function ShopDetailPage() {
               ["Slug", profile.slug ?? "—"],
               ["Address", profile.address ?? "—"],
               ["City / State / ZIP", [profile.city, profile.state, profile.zip].filter(Boolean).join(", ") || "—"],
-              ["Phone", profile.phone ?? "—"],
-              ["Email", profile.email ?? "—"],
+              [
+                "Phone",
+                profile.phone ? (
+                  <a href={`tel:${profile.phone}`} className="text-blue-600 hover:underline">
+                    {profile.phone}
+                  </a>
+                ) : (
+                  "—"
+                ),
+              ],
+              [
+                "Email",
+                profile.email ? (
+                  <a href={`mailto:${profile.email}`} className="text-blue-600 hover:underline">
+                    {profile.email}
+                  </a>
+                ) : (
+                  "—"
+                ),
+              ],
               [
                 "Owner",
                 profile.owner ? (
@@ -364,8 +384,37 @@ export default function ShopDetailPage() {
                   "—"
                 ),
               ],
-              ["Website", profile.website ?? "—"],
+              [
+                "Website",
+                profile.website ? (
+                  <a
+                    href={profile.website.startsWith("http") ? profile.website : `https://${profile.website}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    {profile.website}
+                  </a>
+                ) : (
+                  "—"
+                ),
+              ],
               ["Timezone", profile.timezone ?? "—"],
+              [
+                "Coordinates",
+                profile.lat != null && profile.lng != null ? (
+                  <a
+                    href={`https://www.openstreetmap.org/?mlat=${profile.lat}&mlon=${profile.lng}#map=16/${profile.lat}/${profile.lng}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-[12px] text-blue-600 hover:underline"
+                  >
+                    {profile.lat.toFixed(5)}, {profile.lng.toFixed(5)}
+                  </a>
+                ) : (
+                  <span className="text-amber-600" title="Missing from the network map">not geocoded</span>
+                ),
+              ],
               ["Labor rate", profile.laborRate !== null ? `$${profile.laborRate}/hr` : "—"],
               ["Active", profile.isActive ? "Yes" : "No"],
               ["Verified", profile.isVerified ? "Yes" : "No"],

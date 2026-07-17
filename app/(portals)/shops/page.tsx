@@ -33,7 +33,13 @@ const ShopsMap = dynamic(() => import("@/components/portal/ShopsMap"), {
 
 const networkApi = api.shopsNetwork;
 
-type WeekKpis = { week_start: number; bookings_week: number; gmv_week: number };
+type WeekKpis = {
+  week_start: number;
+  bookings_week: number;
+  gmv_week: number;
+  bookings_prev_week: number;
+  gmv_prev_week: number;
+};
 
 type LeagueRow = {
   id: string;
@@ -64,6 +70,27 @@ const CHECK_LABEL: Record<string, string> = {
 function checkPillClass(kind: string): string {
   if (kind === "rating_low" || kind === "inactive") return `${PILL} bg-red-50 text-red-700`;
   return `${PILL} bg-amber-50 text-amber-700`;
+}
+
+// Week-over-week delta chip vs the prior full week. The current week is partial,
+// so the label is "vs last wk" (a comparison, not a full-week pace claim).
+function wowChip(current: number, prev: number) {
+  if (prev === 0) {
+    return current > 0 ? (
+      <span className={`${PILL} bg-emerald-50 text-emerald-700`}>new vs last wk</span>
+    ) : undefined;
+  }
+  const pct = Math.round(((current - prev) / prev) * 100);
+  if (pct === 0) return <span className={`${PILL} bg-slate-100 text-slate-500`}>flat vs last wk</span>;
+  const up = pct > 0;
+  return (
+    <span
+      className={`${PILL} ${up ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}
+      title={`Prior full week: ${prev.toLocaleString()}`}
+    >
+      {up ? "▲" : "▼"} {Math.abs(pct)}% vs last wk
+    </span>
+  );
 }
 
 function LegendDot({ color, label }: { color: string; label: string }) {
@@ -188,10 +215,12 @@ export default function ShopsOverviewPage() {
         <StatTile
           label="Bookings this week"
           value={week === undefined ? <Skeleton /> : fmtNum(week.bookings_week)}
+          chip={week === undefined ? undefined : wowChip(week.bookings_week, week.bookings_prev_week)}
         />
         <StatTile
           label="Network GMV (this week)"
           value={week === undefined ? <Skeleton /> : money(week.gmv_week)}
+          chip={week === undefined ? undefined : wowChip(week.gmv_week, week.gmv_prev_week)}
         />
         <StatTile
           label="New shops (90d)"

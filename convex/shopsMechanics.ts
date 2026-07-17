@@ -17,6 +17,7 @@ export type MechanicRow = {
   id: string;
   name: string;
   title: string | null;
+  email: string | null;
   photo: string | null;
   shop: string | null;
   shop_id: string;
@@ -61,6 +62,7 @@ export const directory = query({
           id: String(m._id),
           name: [m.first_name, m.last_name].filter(Boolean).join(" "),
           title: m.title ?? null,
+          email: m.email ?? null,
           photo: m.photo ?? null,
           shop: s.name,
           shop_id: String(s._id),
@@ -82,6 +84,7 @@ export type MechanicDetail = {
   id: string;
   name: string;
   title: string | null;
+  email: string | null;
   photo: string | null;
   shop: string | null;
   shop_id: string;
@@ -150,6 +153,7 @@ export const detail = query({
       id: String(m._id),
       name: [m.first_name, m.last_name].filter(Boolean).join(" "),
       title: m.title ?? null,
+      email: m.email ?? null,
       photo: m.photo ?? null,
       shop: shop ? ((shop as { name?: string }).name ?? null) : null,
       shop_id: String(m.shop_id),

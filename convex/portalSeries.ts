@@ -331,6 +331,9 @@ export type ShopPin = {
   lat: number;
   lng: number;
   city: string;
+  address: string | null;
+  phone: string | null;
+  mechanics: number;
   is_active: boolean;
   is_verified: boolean;
   rating: number | null;
@@ -352,6 +355,10 @@ export const shopsMap = query({
     const missing: { id: string; name: string }[] = [];
     for (const s of shops) {
       if (s.lat != null && s.lng != null) {
+        const mechanics = await ctx.db
+          .query("mechanics")
+          .withIndex("by_shop_id", (q) => q.eq("shop_id", s._id))
+          .collect();
         pins.push({
           id: String(s._id),
           name: s.name,
@@ -359,6 +366,9 @@ export const shopsMap = query({
           lat: s.lat,
           lng: s.lng,
           city: [s.city, s.state].filter(Boolean).join(", ") || "—",
+          address: s.address ?? null,
+          phone: s.phone ?? null,
+          mechanics: mechanics.filter((m) => m.is_active !== false).length,
           is_active: s.is_active === true,
           is_verified: s.is_verified === true,
           rating: s.rating ?? null,

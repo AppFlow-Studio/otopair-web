@@ -470,6 +470,34 @@ export const updateTransmissionSpecs = internalMutation({
         patch[key] = value;
       }
     }
+    // Reconcile the decode-time display string with the enriched canonical
+    // type. Batch-2 audit (Jul 2026): a 2015 WRX 6MT row carried
+    // type:"manual" (LLM, correct) next to transmission_type:"Continuously
+    // Variable Transmission (CVT)" (decode, the OTHER 2015 WRX gearbox) —
+    // and every transmission_type-keyed gate (CVT-filter nulling, manual
+    // ATF nulling) then fired wrong. When the canonical type lands and the
+    // stored display string names a DIFFERENT canonical family, replace it.
+    if (typeof patch.type === "string") {
+      const existing = await ctx.db.get(transmission_id);
+      const display = String((existing as any)?.transmission_type ?? "").toLowerCase();
+      const canon = (patch.type as string).toLowerCase();
+      const displayFamily =
+        display.includes("cvt") || display.includes("continuously variable") ? "cvt"
+        : display.includes("manual") ? "manual"
+        : display.includes("dct") || display.includes("dual clutch") ? "dct"
+        : display.includes("auto") ? "automatic"
+        : null;
+      if (displayFamily && displayFamily !== canon.toLowerCase()) {
+        const DISPLAY: Record<string, string> = {
+          manual: "Manual", automatic: "Automatic",
+          cvt: "Continuously Variable Transmission (CVT)", dct: "Dual-Clutch (DCT)", amt: "Automated Manual (AMT)",
+        };
+        patch.transmission_type = DISPLAY[canon] ?? patch.type;
+        console.warn(
+          `[v8] Transmission display/type contradiction — "${(existing as any)?.transmission_type}" vs canonical "${patch.type}"; display reconciled`,
+        );
+      }
+    }
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(transmission_id, patch);
     }
@@ -1439,6 +1467,42 @@ export const failEnrichmentRun = internalMutation({
 });
 
 // ============================================================================
+// 12a. renameConfigKey — migrate a config to its corrected engine-code key
+// ============================================================================
+// Batch-2 audit (Jul 2026): a verified engine-code correction persisted to
+// engines.engine_code but the config_key never followed (the Soul stayed
+// "..._g4fj" after "U" verified), so future decodes resolving the correct
+// code build a different key, miss the config, and create duplicates — the
+// mechanism behind the ~70 duplicate config groups in dev. Rename when the
+// corrected key is free; on conflict leave the row and report (merging two
+// enriched configs is a director decision, not an automatic one).
+
+export const renameConfigKey = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    new_key: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.vehicle_config_id);
+    if (!row) return { renamed: false, reason: "no_config" as const };
+    if ((row as any).config_key === args.new_key) return { renamed: true, reason: "already" as const };
+    const holder = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_config_key", (q: any) => q.eq("config_key", args.new_key))
+      .first();
+    if (holder && holder._id !== args.vehicle_config_id) {
+      console.warn(
+        `[v8] config_key migration conflict: "${args.new_key}" already held by ${String(holder._id)} — keeping "${(row as any).config_key}" (needs manual merge)`,
+      );
+      return { renamed: false, reason: "conflict" as const };
+    }
+    console.log(`[v8] config_key migrated: "${(row as any).config_key}" → "${args.new_key}"`);
+    await ctx.db.patch(args.vehicle_config_id, { config_key: args.new_key });
+    return { renamed: true, reason: "renamed" as const };
+  },
+});
+
+// ============================================================================
 // 12b. removeRefutedFitments — fitment-verification gate (Jul 2026)
 // ============================================================================
 // Deletes part_fitments whose OEM number the adversarial fitment verifier
@@ -1975,6 +2039,35 @@ export const ensureAllServiceIntervals = internalMutation({
     let added = 0;
     let skipped = 0;
 
+    // ── Retro-cleanup (batch-2 audit, Jul 2026): the wear-months and
+    // applicability fixes were insert-only, so configs enriched before them
+    // kept stale rows through re-enrichment (Soul re-run kept rotor 72mo /
+    // tire 60mo / battery 48mo). Every re-run now repairs existing rows too.
+    const svcById = new Map(allServices.map((s) => [s._id.toString(), s]));
+    const WEAR_SLUGS = new Set(["brake_pad_replacement", "rotor_replacement", "tire_replacement", "battery_replacement"]);
+    let cleaned = 0;
+    for (const row of existingIntervals) {
+      const svc = svcById.get(row.service_id.toString());
+      if (!svc) continue;
+      const slug = (svc.slug ?? "").replace(/-/g, "_");
+      const notApplicable =
+        (svc.requires_timing_belt && timingSystem.includes("chain")) ||
+        (svc.requires_differential && isFWD) ||
+        (svc.requires_rotatable_tires && hasStaggeredTires) ||
+        (svc.requires_hydraulic_ps && !hasHydraulicPs);
+      if (notApplicable) {
+        await ctx.db.delete(row._id);
+        existingServiceIds.delete(row.service_id.toString());
+        cleaned++;
+        continue;
+      }
+      if (WEAR_SLUGS.has(slug) && row.interval_months != null) {
+        await ctx.db.patch(row._id, { interval_months: undefined });
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) console.log(`[fallback] Retro-cleaned ${cleaned} stale interval row(s)`);
+
     for (const svc of allServices) {
       // Already has an interval — skip
       if (existingServiceIds.has(svc._id.toString())) continue;
@@ -2075,6 +2168,33 @@ export const ensureAllLaborTimes = internalMutation({
 
     let added = 0;
     let skipped = 0;
+
+    // ── Retro-cleanup (batch-2 audit, Jul 2026): pre-fix configs carry
+    // "training_data"-labeled default rows and labor rows for services their
+    // hardware can't receive (FWD diff service on the Atlas). Insert-only
+    // seeding never repaired them; every re-run now does.
+    const svcByIdL = new Map(allServices.map((s) => [s._id.toString(), s]));
+    let cleanedL = 0;
+    for (const row of existingLabor) {
+      const svc = svcByIdL.get(row.service_id.toString());
+      if (!svc) continue;
+      const notApplicable =
+        (svc.requires_timing_belt && timingSystem.includes("chain")) ||
+        (svc.requires_differential && isFWD) ||
+        (svc.requires_rotatable_tires && hasStaggeredTires) ||
+        (svc.requires_hydraulic_ps && !hasHydraulicPs);
+      if (notApplicable) {
+        await ctx.db.delete(row._id);
+        existingServiceIds.delete(row.service_id.toString());
+        cleanedL++;
+        continue;
+      }
+      if ((row as any).source === "training_data") {
+        await ctx.db.patch(row._id, { source: "default_fallback", data_quality: "default_fallback" });
+        cleanedL++;
+      }
+    }
+    if (cleanedL > 0) console.log(`[fallback] Retro-cleaned ${cleanedL} stale labor row(s)`);
 
     for (const svc of allServices) {
       if (existingServiceIds.has(svc._id.toString())) continue;

@@ -283,6 +283,35 @@ export const processVin = internalAction({
         return null;
       }
 
+      // ── Identity consistency: trim vs engine (batch-2 audit, Jul 2026) ──
+      // The cross-source merge can build a chimera: VDB's trim string embeds
+      // an engine qualifier that contradicts the engine NHTSA won (a real
+      // 3.6L Atlas decoded as trim "2.0T SE" + engine 3.6 FSI, and the
+      // contradiction then poisoned the config key, the trim label users
+      // see, and the engine-code verifier's input). When the trim's embedded
+      // displacement or cylinder token disagrees with the merged engine,
+      // strip the token — the rest of the trim ("SE") is still right.
+      {
+        const dispNum = parseFloat(merged.displacement || "");
+        const cyl = merged.cylinders || 0;
+        let trim = merged.trim;
+        const dispTok = trim.match(/(\d\.\d)\s*T?(?:SI|FSI|DI)?L?\b/i);
+        if (dispTok && dispNum && Math.abs(parseFloat(dispTok[1]) - dispNum) > 0.15) {
+          trim = trim.replace(dispTok[0], "").replace(/\s{2,}/g, " ").trim();
+          console.warn(
+            `[decode] Trim/engine contradiction — trim "${merged.trim}" embeds ${dispTok[1]}L but engine is ${dispNum}L; using trim "${trim || "Base"}"`,
+          );
+        }
+        const cylTok = trim.match(/\b[VvIiHh](\d{1,2})\b/);
+        if (cylTok && cyl && parseInt(cylTok[1]) !== cyl) {
+          trim = trim.replace(cylTok[0], "").replace(/\s{2,}/g, " ").trim();
+          console.warn(
+            `[decode] Trim/engine contradiction — trim "${merged.trim}" says ${cylTok[0]} but engine has ${cyl} cylinders; using trim "${trim || "Base"}"`,
+          );
+        }
+        merged.trim = trim || "Base";
+      }
+
       // ════════════════════════════════════════════════════════════
       // ENGINE CODE RESOLUTION
       // Priority: VDB code → NHTSA code (filtered) → Claude norm → web search + Haiku → synthetic

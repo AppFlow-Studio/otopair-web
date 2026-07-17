@@ -24,9 +24,9 @@ function getClient(): Anthropic {
   return _client;
 }
 
-/** Core roles worth spending verification searches on — the parts that drive
- *  the most common services and caused the P0s in the 5-VIN test. */
-export const VERIFY_ROLE_KEYS = new Set([
+/** Highest-consequence roles, checked first when the per-run cap bites —
+ *  the parts that drive the most common services and caused the 5-VIN P0s. */
+export const VERIFY_PRIORITY_ROLE_KEYS = new Set([
   "oil_filter",
   "air_filter",
   "cabin_filter",
@@ -37,6 +37,14 @@ export const VERIFY_ROLE_KEYS = new Set([
   "atf_fluid",
   "engine_oil",
 ]);
+
+/** Batch-2 audit: a wrong-model o-ring (Genesis V6 part on a Soul) shipped
+ *  because only the priority roles were sampled. Every priced non-universal
+ *  part is now eligible, priority roles first, up to this cap. */
+export const VERIFY_MAX_PARTS = 14;
+
+/** Back-compat alias (v3pipeline imported this name in round 1). */
+export const VERIFY_ROLE_KEYS = VERIFY_PRIORITY_ROLE_KEYS;
 
 export interface FitmentToVerify {
   roleKey: string;
@@ -56,13 +64,14 @@ const SYSTEM = `You are an automotive parts fact-checker. You will be given a ve
 A claim is REFUTED when the part number belongs to:
 - a different engine variant of the same model (e.g. the V8 oil filter on the V6, a spin-on filter on a cartridge-filter engine),
 - a different model or platform from the same manufacturer (e.g. Golf pads listed for an Atlas, a Seltos air filter listed for a Soul),
+- **a different GENERATION or year range of the SAME nameplate** — this is the sneakiest failure: the part number looks right because the model name matches, but its catalog fitment range ends before (or starts after) this model year. Example: pad kit 26296SC011 fits Subaru "WRX" only through 2014; on a 2015 WRX (new VA chassis) it is WRONG even though every listing says "WRX". ALWAYS check the exact fitment YEAR RANGE against this vehicle's model year — "same model name" is not confirmation.
 - the wrong axle or position (a front-axle pad set claimed as rear pads),
 - a fluid spec the vehicle must not use (e.g. an older-generation coolant on a car requiring the newer chemistry).
 
 Rules:
 - Budget your searches: check the parts most likely to be wrong first; mark anything you could not check as "uncertain".
-- Only mark "refuted" when a source ties the part to a DIFFERENT vehicle/variant and nothing credible ties it to this one.
-- Only mark "confirmed" when a source ties the part to this exact vehicle (or its exact platform+engine).
+- Only mark "refuted" when a source ties the part to a DIFFERENT vehicle/variant/year-range and nothing credible ties it to this one.
+- Only mark "confirmed" when a source ties the part to this exact vehicle — model AND year within the part's fitment range (or its exact platform+engine). A listing that names the model but whose year range excludes this vehicle's year is grounds for refuted, not confirmed.
 - Respond with ONLY a JSON array, one object per input part, same order:
 [{"idx": 1, "verdict": "confirmed" | "refuted" | "uncertain", "reason": "<one short sentence>"}]`;
 
@@ -100,10 +109,10 @@ export async function verifyPartFitments(
   try {
     const response = await getClient().messages.create({
       model: MODEL_HAIKU,
-      max_tokens: 2000,
+      max_tokens: 3000,
       temperature: 0,
       system: SYSTEM,
-      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 } as any],
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 12 } as any],
       messages: [{
         role: "user",
         content: `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim}${engineDesc ? ` (${engineDesc})` : ""}\n\nClaimed parts:\n${partLines}`,

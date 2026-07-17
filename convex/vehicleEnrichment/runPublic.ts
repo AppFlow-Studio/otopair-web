@@ -245,26 +245,41 @@ export const purgeAndRerun = internalAction({
   args: { vin: v.string() },
   handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();
+
+    // Resolve the config via the vehicle's ATTACHED config first. Rebuilding
+    // the key from a fresh decode broke whenever the stored key used a
+    // resolved/corrected engine code while the decode yields a placeholder
+    // (batch-2, Jul 2026: decode built "..._2l_4cyl" while the Soul's config
+    // was keyed "..._g4fj" → no_config_found). Key rebuild is the fallback
+    // for vehicles that were never attached.
+    const vehicleDoc = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleByVin, { vin });
+    let config: any = (vehicleDoc as any)?.vehicle_config_id
+      ? await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfigById, {
+          vehicleConfigId: (vehicleDoc as any).vehicle_config_id,
+        })
+      : null;
+
     const decoded = await ctx.runAction(internal.vehicle_pipeline.processVin, { vin });
     if (!decoded) return { status: "error", reason: "decode_failed" };
 
-    const configKey = buildEngineKey({
-      vehicleId: "" as any,
-      year: decoded.year,
-      make: decoded.make,
-      model: decoded.model,
-      trim: decoded.trim,
-      engineCode: decoded.engineCode,
-      displacement: decoded.displacement ?? "",
-    });
-
-    const config = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfigByKey, { configKey });
-    if (!config) return { status: "error", reason: "no_config_found", configKey };
+    if (!config) {
+      const configKey = buildEngineKey({
+        vehicleId: "" as any,
+        year: decoded.year,
+        make: decoded.make,
+        model: decoded.model,
+        trim: decoded.trim,
+        engineCode: decoded.engineCode,
+        displacement: decoded.displacement ?? "",
+      });
+      config = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfigByKey, { configKey });
+      if (!config) return { status: "error", reason: "no_config_found", configKey };
+    }
 
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.purgeVehicleConfig, {
       vehicleConfigId: config._id,
     });
-    console.log(`[purge] Wiped config for ${configKey}, re-running...`);
+    console.log(`[purge] Wiped config for ${(config as any).config_key}, re-running...`);
 
     return await ctx.runAction(internal.vehicleEnrichment.runPublic.go, { vin });
   },

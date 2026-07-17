@@ -90,7 +90,17 @@ export const shopProfile = query({
       .query("mechanics")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
       .collect();
+    const owner = shop.owner_user_id ? await ctx.db.get(shop.owner_user_id) : null;
     return {
+      owner: owner
+        ? {
+            id: String(owner._id),
+            name:
+              [owner.first_name, owner.last_name].filter(Boolean).join(" ").trim() ||
+              owner.email ||
+              "Unknown",
+          }
+        : null,
       id: shop._id,
       name: shop.name,
       slug: shop.slug ?? null,
@@ -342,6 +352,7 @@ export const shopBookings = query({
           user: user
             ? `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || user.email || "Unknown"
             : "Unknown",
+          user_id: String(b.user_id),
           services: serviceNames,
           status: b.status,
           date: b.scheduled_date ?? null,

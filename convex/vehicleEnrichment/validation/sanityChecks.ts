@@ -87,6 +87,11 @@ const SANITY_RULES: SanityRule[] = [
     reason: "Cabin filter interval outside typical range" },
   { field: "brake_pads_miles", type: "range", min: 15000, max: 80000, severity: "flag",
     reason: "Brake pad guidance outside typical range (15K-80K miles)" },
+  // Sub-15K "replace pads" figures are inspection cadences misread as
+  // replacement intervals (batch-2 audit: 2021 Atlas stored pads-every-10K at
+  // conf 0.9 with only the flag fired). Definitely wrong as guidance — reject.
+  { field: "brake_pads_miles", type: "range", min: 15000, max: 150000, severity: "reject",
+    reason: "Brake pad interval ≤15K miles — inspection cadence misread as replacement interval" },
   { field: "tire_rotation_miles", type: "range", min: 3000, max: 10000, severity: "flag",
     reason: "Tire rotation interval outside typical range (3K-10K miles)" },
   { field: "serpentine_belt_miles", type: "range", min: 30000, max: 150000, severity: "flag",
@@ -364,7 +369,16 @@ export function runSanityChecks(
       if (severity === "reject") {
         fields[rule.field] = { ...field, value: null, flagged: true, flag_reason: reason };
       } else {
-        fields[rule.field] = { ...field, flagged: true, flag_reason: reason };
+        // A fired flag means "suspicious, needs review" — it must not persist
+        // at extraction confidence (batch-2 audit: a flagged out-of-band
+        // interval stored at 0.9 read as solid data downstream). Cap at 0.6:
+        // below the 0.75 quote/consensus gates, above resolver floors.
+        fields[rule.field] = {
+          ...field,
+          flagged: true,
+          flag_reason: reason,
+          confidence: Math.min(field.confidence ?? 0.6, 0.6),
+        };
       }
     }
   }

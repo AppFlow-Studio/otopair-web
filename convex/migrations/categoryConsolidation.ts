@@ -12,6 +12,7 @@
 // cutover, per the implementation plan.
 import { v } from "convex/values";
 import { internalMutation } from "../_generated/server";
+import type { MutationCtx } from "../_generated/server";
 
 // Target taxonomy. display_order = app tab order.
 const TARGETS: { name: string; icon_name: string; display_order: number }[] = [
@@ -59,9 +60,22 @@ const SERVICE_TO_CATEGORY: Record<string, string> = {
   battery_test: "Inspections",
 };
 
-export const migrate = internalMutation({
-  args: { dryRun: v.optional(v.boolean()) },
-  handler: async (ctx, { dryRun = false }) => {
+export type ConsolidationResult = {
+  dryRun: boolean;
+  creates: string[];
+  moves: { slug: string; from: string; to: string }[];
+  deletes: string[];
+  services?: number;
+};
+
+/** The migration body, extracted so the Service Catalog portal page can run
+ *  the same logic (dry-run diff + execute) through a gated mutation without
+ *  the scheduler. Behavior-identical to the original internalMutation. */
+export async function runCategoryConsolidation(
+  ctx: MutationCtx,
+  dryRun: boolean,
+): Promise<ConsolidationResult> {
+  {
     const services = await ctx.db.query("services").collect();
     const categories = await ctx.db.query("service_categories").collect();
     const categoryNameById = new Map(categories.map((c) => [String(c._id), c.name]));
@@ -133,5 +147,11 @@ export const migrate = internalMutation({
     });
 
     return { dryRun: false, creates, moves, deletes };
-  },
+  }
+}
+
+export const migrate = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, { dryRun = false }): Promise<ConsolidationResult> =>
+    runCategoryConsolidation(ctx, dryRun),
 });

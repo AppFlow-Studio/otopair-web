@@ -101,6 +101,7 @@ export type OpsUserBookingRow = {
   id: Id<"bookings">;
   status: string;
   shop: string;
+  shop_id: string | null;
   services: string[];
   scheduledDate: string | null;
   created: number;
@@ -346,6 +347,7 @@ export const bookings = query({
           id: b._id,
           status: b.status,
           shop: shop?.name ?? "—",
+          shop_id: b.shop_id ? String(b.shop_id) : null,
           services,
           scheduledDate: b.scheduled_date ?? null,
           created: b.created_at ?? b._creationTime,

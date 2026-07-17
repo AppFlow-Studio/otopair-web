@@ -8,6 +8,8 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { ActionCtx } from "./_generated/server";
+import type { ApiScope, KeyAuth } from "./dataApi";
+import { ENRICH_DAILY_QUOTA, IMAGE_LIVE_FETCH_DAILY_CAP } from "./dataApi";
 import Stripe from "stripe";
 
 const http = httpRouter();
@@ -426,7 +428,7 @@ function corsOptions() {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key",
     },
   });
 }
@@ -725,13 +727,17 @@ async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Shared auth + rate-limit wrapper for the /v0 endpoints. */
+/** Shared auth + rate-limit wrapper for the /v0 endpoints. Handlers get the
+ *  authenticated key as a second arg for per-key quota checks (enrich/image). */
 async function withApiKey(
   ctx: ActionCtx,
   request: Request,
   endpoint: string,
-  scope: "maintenance:read" | "labor:read",
-  handler: (params: URLSearchParams) => Promise<{ status: number; body: unknown; config_key?: string }>,
+  scope: ApiScope,
+  handler: (
+    params: URLSearchParams,
+    key: KeyAuth,
+  ) => Promise<{ status: number; body: unknown; config_key?: string }>,
 ): Promise<Response> {
   const auth = request.headers.get("Authorization");
   const rawKey = auth?.startsWith("Bearer ") ? auth.slice(7).trim() : request.headers.get("x-api-key")?.trim();
@@ -762,7 +768,7 @@ async function withApiKey(
     });
   }
 
-  const result = await handler(new URL(request.url).searchParams);
+  const result = await handler(new URL(request.url).searchParams, key);
   await ctx.runMutation(internal.dataApi.recordUsage, {
     api_key_id: key.keyId,
     endpoint,
@@ -875,7 +881,320 @@ http.route({
   ),
 });
 
-for (const path of ["/v0/maintenance", "/v0/labor", "/v0/vehicle"]) {
+// Vehicle media (scope media:read) — cached VD/EVOX render per config; URLs
+// flip to self-hosted storage when the licensed VD image folder lands.
+// Cache-first; on a miss spends ONE live VDB fetch (metered as the pseudo-
+// endpoint "/v0/vehicle-image:vdb_fetch", capped per key per day), persists
+// first-fetched-wins, and re-assembles so the response shape never changes.
+http.route({
+  path: "/v0/vehicle-image",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v0/vehicle-image", "media:read", async (params, key) => {
+      const config_key = params.get("config_key") ?? undefined;
+      const vin = params.get("vin") ?? undefined;
+      const yearRaw = params.get("year");
+      const year = yearRaw ? Number(yearRaw) : undefined;
+      const make = params.get("make") ?? undefined;
+      const model = params.get("model") ?? undefined;
+      const trim = params.get("trim") ?? undefined;
+      const hasYmmt = year !== undefined && !Number.isNaN(year) && make && model;
+      if (!config_key && !vin && !hasYmmt) {
+        return {
+          status: 400,
+          body: {
+            error: "missing_param",
+            message: "Pass ?vin=… OR ?year=&make=&model=[&trim=] OR ?config_key=…",
+          },
+        };
+      }
+      const data = await ctx.runQuery(internal.dataApi.assembleVehicleImage, {
+        config_key,
+        vin,
+        year: hasYmmt ? year : undefined,
+        make,
+        model,
+        trim,
+      });
+      if (!data) {
+        return {
+          status: 404,
+          body: { error: "not_found", message: "No vehicle matches that identifier." },
+          config_key,
+        };
+      }
+      if (data.object === "multiple_matches") {
+        return {
+          status: 409,
+          body: {
+            error: "multiple_matches",
+            message: "More than one config matches — retry with ?config_key= from the list (or add &trim=).",
+            matches: data.matches,
+          },
+        };
+      }
+      if (data.image === null) {
+        const resolvedKey = data.config.config_key ?? config_key ?? null;
+        const fetchesToday = await ctx.runQuery(internal.dataApi.countUsageForEndpointSince, {
+          api_key_id: key.keyId,
+          endpoint: "/v0/vehicle-image:vdb_fetch",
+          since: Date.now() - 24 * 60 * 60 * 1000,
+        });
+        if (fetchesToday >= IMAGE_LIVE_FETCH_DAILY_CAP) {
+          return {
+            status: 404,
+            body: {
+              error: "no_image",
+              message:
+                `Vehicle resolved but no image is cached, and this key's live-fetch cap ` +
+                `(${IMAGE_LIVE_FETCH_DAILY_CAP}/day) is reached. Cached lookups remain unlimited.`,
+              config_key: resolvedKey,
+            },
+            config_key: resolvedKey ?? undefined,
+          };
+        }
+        // Live VDB fetch (~6s worst case) — persists onto vehicles/config rows
+        // via resolveVehicleImage, so the next call is a cache hit. A sibling
+        // VIN of the config drives the reliable VDB VIN endpoint (its YMMT
+        // endpoint wants VDB's own verbose trim names and rarely matches).
+        const cfg = resolvedKey
+          ? await ctx.runQuery(internal.dataApi.configForImageFetch, { config_key: resolvedKey })
+          : null;
+        const cfgMake = data.config.make !== "?" ? data.config.make : undefined;
+        const cfgModel = data.config.model !== "?" ? data.config.model : undefined;
+        const url = await ctx.runAction(internal.lib.vehicle_image.resolveVehicleImage, {
+          vin: vin ?? cfg?.sibling_vin ?? undefined,
+          year: hasYmmt ? year : data.config.year,
+          make: make ?? cfgMake,
+          model: model ?? cfgModel,
+          trim: trim ?? data.config.trim ?? undefined,
+          vehicle_config_id: cfg?.id ?? undefined,
+        });
+        await ctx.runMutation(internal.dataApi.recordUsage, {
+          api_key_id: key.keyId,
+          endpoint: "/v0/vehicle-image:vdb_fetch",
+          status: url ? 200 : 404,
+          config_key: resolvedKey ?? undefined,
+        });
+        if (url) {
+          const refreshed = await ctx.runQuery(internal.dataApi.assembleVehicleImage, {
+            config_key: resolvedKey ?? undefined,
+            vin,
+          });
+          if (refreshed && refreshed.object === "vehicle_image" && refreshed.image !== null) {
+            return { status: 200, body: refreshed, config_key: resolvedKey ?? undefined };
+          }
+        }
+        return {
+          status: 404,
+          body: {
+            error: "no_image",
+            message: "Vehicle resolved but no image could be fetched for it.",
+            config_key: resolvedKey,
+          },
+          config_key: resolvedKey ?? undefined,
+        };
+      }
+      return { status: 200, body: data, config_key: data.config.config_key ?? config_key };
+    }),
+  ),
+});
+
+// ── /v0/enrich (scope enrich:write) — grow-the-dataset trigger. ─────────────
+// POST {vin}: fresh cache hit (complete/verified within 180d) → 200, free;
+// already in-flight → 200, free; otherwise decode + schedule the v3 batch
+// pipeline (7-40 min) → 202 — the ONLY response that consumes the daily
+// quota (metered off api_usage status=202 rows). GET is the free status poll.
+
+const ENRICH_FRESH_MS = 180 * 24 * 60 * 60 * 1000; // mirrors confirmVehicleForUser's staleness window
+
+/** Coarse public status for a config's enrichment_status. */
+function publicEnrichStatus(s: string | null): "complete" | "enriching" | "failed" | "incomplete" {
+  if (s === "complete" || s === "verified") return "complete";
+  if (s === "enriching" || s === "pending") return "enriching";
+  if (s === "failed") return "failed";
+  return "incomplete"; // partial / null / anything the pipeline adds later
+}
+
+http.route({
+  path: "/v0/enrich",
+  method: "POST",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v0/enrich", "enrich:write", async (params, key) => {
+      const body = (await request.json().catch(() => ({}))) as { vin?: unknown };
+      const vinRaw = typeof body.vin === "string" ? body.vin : params.get("vin");
+      const vin = vinRaw?.trim().toUpperCase();
+      if (!vin) {
+        return {
+          status: 400,
+          body: { error: "missing_param", message: 'Pass {"vin":"…"} in the JSON body (or ?vin=…).' },
+        };
+      }
+      if (vin.length !== 17) {
+        return { status: 400, body: { error: "invalid_vin", message: "A VIN is exactly 17 characters." } };
+      }
+
+      const existing = await ctx.runQuery(internal.dataApi.getEnrichStatusByVin, { vin });
+      const fresh =
+        existing != null &&
+        (existing.enrichment_status === "complete" || existing.enrichment_status === "verified") &&
+        existing.last_enriched_at != null &&
+        existing.last_enriched_at >= Date.now() - ENRICH_FRESH_MS;
+      if (existing && fresh) {
+        return {
+          status: 200,
+          body: {
+            object: "enrichment",
+            status: "complete",
+            config: {
+              config_key: existing.config_key,
+              year: existing.year,
+              make: existing.make,
+              model: existing.model,
+              trim: existing.trim,
+            },
+            enrichment_status: existing.enrichment_status,
+            fill_rate: existing.fill_rate,
+            note: "Cache hit — already enriched (free, no quota). Fetch the full payload via GET /v0/vehicle?vin=…",
+          },
+          config_key: existing.config_key ?? undefined,
+        };
+      }
+      if (existing && (existing.enrichment_status === "enriching" || existing.enrichment_status === "pending")) {
+        return {
+          status: 200,
+          body: {
+            object: "enrichment",
+            status: "enriching",
+            config_key: existing.config_key,
+            poll: { method: "GET", url: `/v0/enrich?vin=${vin}`, interval_seconds: 60 },
+          },
+          config_key: existing.config_key ?? undefined,
+        };
+      }
+
+      const scheduledToday = await ctx.runQuery(internal.dataApi.countUsageForEndpointSince, {
+        api_key_id: key.keyId,
+        endpoint: "/v0/enrich",
+        since: Date.now() - 24 * 60 * 60 * 1000,
+        status: 202,
+      });
+      if (scheduledToday >= ENRICH_DAILY_QUOTA) {
+        return {
+          status: 429,
+          body: {
+            error: "quota_exceeded",
+            message: `Daily enrichment quota (${ENRICH_DAILY_QUOTA} scheduled runs/day/key) reached. Cache hits stay free and unlimited.`,
+          },
+        };
+      }
+
+      const result = await ctx.runAction(internal.dataApiEnrich.triggerEnrichForVin, { vin });
+      if (result.status === "decode_failed") {
+        return {
+          status: 400,
+          body: { error: "vin_decode_failed", message: "The VIN did not decode against Vehicle Databases or NHTSA." },
+        };
+      }
+      if (result.status === "no_engine_code") {
+        return {
+          status: 422,
+          body: {
+            error: "unsupported_vehicle",
+            message: "The VIN decoded but no engine code could be resolved — this vehicle cannot be enriched.",
+          },
+        };
+      }
+      if (result.status === "vehicle_upsert_failed") {
+        return { status: 500, body: { error: "internal_error", message: "Vehicle row creation failed — retry later." } };
+      }
+      return {
+        status: 202,
+        body: {
+          object: "enrichment",
+          status: "queued",
+          vin,
+          poll: {
+            method: "GET",
+            url: `/v0/enrich?vin=${vin}`,
+            interval_seconds: 60,
+            note: "Enrichment typically completes in 7-40 minutes. Fetch the full payload via GET /v0/vehicle?vin=… once complete.",
+          },
+        },
+      };
+    }),
+  ),
+});
+
+http.route({
+  path: "/v0/enrich",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v0/enrich", "enrich:write", async (params) => {
+      const vin = params.get("vin") ?? undefined;
+      const config_key = params.get("config_key") ?? undefined;
+      if (!vin && !config_key) {
+        return { status: 400, body: { error: "missing_param", message: "Pass ?vin=… or ?config_key=…" } };
+      }
+      const s = await ctx.runQuery(internal.dataApi.getEnrichStatusByVin, { vin, config_key });
+      if (!s) {
+        return {
+          status: 404,
+          body: {
+            error: "not_found",
+            message: "Nothing is known for that identifier — POST /v0/enrich {vin} to enrich it.",
+          },
+          config_key,
+        };
+      }
+      return {
+        status: 200,
+        body: {
+          object: "enrichment_status",
+          status: publicEnrichStatus(s.enrichment_status),
+          config_key: s.config_key,
+          enrichment_status: s.enrichment_status,
+          last_enriched_at: s.last_enriched_at,
+          fill_rate: s.fill_rate,
+        },
+        config_key: s.config_key ?? undefined,
+      };
+    }),
+  ),
+});
+
+// ── /v0/service-history (scope service_history:read) — sanitized records ────
+// Carfax-style per-VIN history: dates, mileage, services, parts. No PII, no
+// costs, no shop identity, no free-text notes (see dataApi.assembleServiceHistory).
+http.route({
+  path: "/v0/service-history",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v0/service-history", "service_history:read", async (params) => {
+      const vin = params.get("vin");
+      if (!vin) {
+        return { status: 400, body: { error: "missing_param", message: "Pass ?vin=…" } };
+      }
+      const data = await ctx.runQuery(internal.dataApi.assembleServiceHistory, { vin });
+      if (!data) {
+        return {
+          status: 404,
+          body: { error: "not_found", message: "No vehicle or service records are known for that VIN." },
+        };
+      }
+      return { status: 200, body: data };
+    }),
+  ),
+});
+
+for (const path of [
+  "/v0/maintenance",
+  "/v0/labor",
+  "/v0/vehicle",
+  "/v0/vehicle-image",
+  "/v0/enrich",
+  "/v0/service-history",
+]) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => corsOptions()) });
 }
 

@@ -10,7 +10,6 @@ import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { PortalLogin } from "@/components/portal/PortalLogin";
-import { EnvBanner } from "@/components/portal/EnvBanner";
 import {
   PORTAL_SESSION_KEY,
   PortalSessionContext,
@@ -79,10 +78,7 @@ export default function PortalsLayout({ children }: { children: React.ReactNode 
 
   return (
     <PortalSessionContext.Provider value={session}>
-      <div className="min-h-screen bg-slate-50 text-slate-900">
-        <EnvBanner />
-        {children}
-      </div>
+      <div className="min-h-screen bg-slate-50 text-slate-900">{children}</div>
     </PortalSessionContext.Provider>
   );
 }

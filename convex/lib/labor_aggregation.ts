@@ -122,6 +122,37 @@ export async function recomputeLaborForConfigService(
 ): Promise<void> {
   const ts = now ?? Date.now();
 
+  // ── Structural applicability (batch-2 audit, Jul 2026): the parts and
+  // seeder paths gate on requires_differential / requires_hydraulic_ps but
+  // this aggregation path didn't — a FWD Atlas shipped a 0.7h aggregated
+  // differential_service row. Skip (and remove any existing row for) a
+  // service the vehicle's hardware can't receive.
+  {
+    const svcDoc: any = await ctx.db.get(serviceId);
+    const cfgDoc: any = await ctx.db.get(vehicleConfigId);
+    if (svcDoc && cfgDoc) {
+      const drivetrain = String(cfgDoc.drivetrain ?? "").toUpperCase();
+      const psFluid = String(cfgDoc.ps_fluid_type ?? "").toLowerCase();
+      const hasHydraulicPs = !!psFluid && psFluid !== "electric";
+      const notApplicable =
+        (svcDoc.requires_differential === true && drivetrain === "FWD") ||
+        (svcDoc.requires_hydraulic_ps === true && !hasHydraulicPs);
+      if (notApplicable) {
+        const existingRow = await ctx.db
+          .query("labor_times")
+          .withIndex("by_vehicle_config_and_service", (q: any) =>
+            q.eq("vehicle_config_id", vehicleConfigId).eq("service_id", serviceId),
+          )
+          .first();
+        if (existingRow) await ctx.db.delete(existingRow._id);
+        console.log(
+          `[labor-agg] Skipped non-applicable service ${svcDoc.slug ?? String(serviceId)} (drivetrain=${drivetrain || "?"}, hydraulicPs=${hasHydraulicPs})`,
+        );
+        return;
+      }
+    }
+  }
+
   // ── Catalog tier: weighted robust median of per-source observations ──
   const obs = await ctx.db
     .query("labor_observations")
@@ -207,13 +238,56 @@ export async function recomputeLaborForConfigService(
       sourcesDisagree = !withinAgreementBand(Math.min(...hrs), Math.max(...hrs));
     }
 
-    if (strong.length >= 2 && !sourcesDisagree) {
+    // ── Physical floor: spark plugs scale with cylinder count. Batch-2
+    // (Jul 2026) shipped 0.8h plugs on a Pentastar V6 (real 2-3h; intake
+    // R&R) at conf 0.4 — a LOW-side outlier the disagree-gate can't see
+    // because the few weak sources agreed with each other. 0.2h/cylinder is
+    // deliberately loose (I4=0.8, V6=1.2, V8=1.6): it only rejects values no
+    // competent shop could bill, not tight-but-real times.
+    let plugFloorViolated = false;
+    {
+      const svcDoc = serviceId ? await ctx.db.get(serviceId) : null;
+      const slug = ((svcDoc as any)?.slug ?? "").replace(/-/g, "_");
+      if (slug === "spark_plugs" && cfg?.engine_id) {
+        const eng: any = await ctx.db.get(cfg.engine_id);
+        const cylinders = typeof eng?.cylinders === "number" ? eng.cylinders : null;
+        if (cylinders && bookHours < cylinders * 0.2) {
+          plugFloorViolated = true;
+          console.warn(
+            `[labor-agg] plug floor violated: ${bookHours}h for ${cylinders} cylinders (floor ${(cylinders * 0.2).toFixed(1)}h)`,
+          );
+        }
+      }
+    }
+
+    // Reject the aggregate when it is untrustworthy in EITHER direction:
+    //  (a) contested AND outside the tier guardrail (batch-1 Durango 3.5h
+    //      HEMI-contamination signature: disagree + gap 138min), or
+    //  (b) outside the guardrail WITHOUT >=2 strong sources backing it — a
+    //      weak/single-source value that contradicts the tier anchor by
+    //      >15min shouldn't override the anchor (batch-2 Challenger 0.8h
+    //      V6-plugs low-side signature), or
+    //  (c) below the physical plug floor regardless of sources.
+    // Punt to the tier estimate instead of quoting.
+    if ((sourcesDisagree && fallbackOutOfBand) || (fallbackOutOfBand && strong.length < 2) || plugFloorViolated) {
+      console.warn(
+        `[labor-agg] REJECTED aggregate for service ${String(serviceId)}: ` +
+        `${plugFloorViolated ? "below plug floor" : sourcesDisagree ? "sources disagree" : `only ${strong.length} strong source(s)`}` +
+        ` AND ${fallbackGapMinutes ?? "?"}min from tier fallback — leaving to tier estimate`,
+      );
+      bookHours = undefined;
+      confidence = undefined;
+      sourcesDisagree = false;
+      outsideFallbackBand = false;
+      fallbackGapMinutes = undefined;
+    } else if (strong.length >= 2 && !sourcesDisagree) {
       confidence = 0.9; // ≥2 strong sources agree
     } else if (sourcesDisagree) {
-      // Contested but real — quotable (clears the 0.75 gate) and flagged for
-      // director review, rather than punting to a worse tier estimate.
+      // Contested but real (within the tier guardrail) — quotable (clears the
+      // 0.75 gate) and flagged for director review, rather than punting to a
+      // worse tier estimate.
       confidence = 0.75;
-    } else if (strong.length >= 1 && strong.some((o: any) => withinAgreementBand(o.hours as number, bookHours))) {
+    } else if (strong.length >= 1 && strong.some((o: any) => withinAgreementBand(o.hours as number, bookHours!))) {
       // 1 strong source that actually DROVE book_hours (its value is within the
       // agreement band of the weighted-median result). A strong source that
       // SURVIVED MAD but was OUTVOTED on the frontier must not lend its 0.8 to a

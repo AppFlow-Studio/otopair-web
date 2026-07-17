@@ -2643,7 +2643,10 @@ export default defineSchema({
     .index("by_user_id_created_at", ["user_id", "created_at"])
     .index("by_user_id_type", ["user_id", "transaction_type"])
     .index("by_user_id_type_created_at", ["user_id", "transaction_type", "created_at"])
-    .index("by_payment_id", ["payment_id"]),
+    .index("by_payment_id", ["payment_id"])
+    // Global time index — the Ops ledger (/ops/transactions) reads the whole
+    // network's ledger newest-first; every prior index is user-scoped.
+    .index("by_created_at", ["created_at"]),
 
   // [I] Daniel/Waleed
   ownership_credit_transactions: defineTable({
@@ -2681,6 +2684,12 @@ export default defineSchema({
     rating: v.number(),
     comment: v.optional(v.string()),
     created_at: v.optional(v.number()),
+    // Moderation (Ops portal /ops/reviews — hide = ceremony, never delete).
+    // Hidden reviews stay in the table for the audit trail; consumer reads
+    // must filter hidden_at == undefined.
+    hidden_at: v.optional(v.number()),
+    hidden_reason: v.optional(v.string()),
+    hidden_by: v.optional(v.string()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_id", ["shop_id"])
@@ -3150,16 +3159,29 @@ export default defineSchema({
     key_hash: v.string(),
     // First 12 chars of the plaintext ("otp_live_ab…") for display/support.
     prefix: v.string(),
-    scopes: v.array(v.union(v.literal("maintenance:read"), v.literal("labor:read"))),
+    scopes: v.array(
+      v.union(
+        v.literal("maintenance:read"),
+        v.literal("labor:read"),
+        v.literal("media:read"),
+        v.literal("enrich:write"),
+        v.literal("service_history:read"),
+      ),
+    ),
     rate_limit_per_min: v.number(),
-    created_by: v.id("director_users"),
+    // Team-minted keys carry the director who created them; self-serve dev
+    // keys (the /developers dashboard) carry owner_user_id instead — a key
+    // has exactly one of the two.
+    created_by: v.optional(v.id("director_users")),
+    owner_user_id: v.optional(v.id("users")),
     created_at: v.number(),
     revoked_at: v.optional(v.number()),
     last_used_at: v.optional(v.number()),
     request_count: v.number(),
   })
     .index("by_key_hash", ["key_hash"])
-    .index("by_created_at", ["created_at"]),
+    .index("by_created_at", ["created_at"])
+    .index("by_owner", ["owner_user_id"]),
 
   // Per-request usage metering for api_keys (the future billing meter) and
   // the rate-limit window source.
@@ -3207,6 +3229,38 @@ export default defineSchema({
     .index("by_source_stream", ["source_stream", "status"])
     .index("by_assignee", ["assignee", "status"])
     .index("by_source", ["source_stream", "source_id"]),
+
+  // Data incidents — institutional memory for data-quality events (Data spec
+  // §10.4/§13). Seeded with the two historical incidents (Ford-on-Alfa, VD
+  // labor under-read) by migrations/seedDataIncidents.ts; new rows come from
+  // the Provenance page's declare ceremony only.
+  data_incidents: defineTable({
+    // Display number ("#1") — assigned at declare time, monotonic.
+    number: v.number(),
+    // Stable slug — the seed migration's idempotency key.
+    slug: v.string(),
+    title: v.string(),
+    severity: v.union(v.literal("sev1"), v.literal("sev2"), v.literal("sev3")),
+    status: v.union(v.literal("open"), v.literal("monitoring"), v.literal("resolved")),
+    summary: v.string(),
+    root_cause: v.optional(v.string()),
+    // Deployment-scope caveat (Incident #1: backfill scope is per-deployment).
+    scope_note: v.optional(v.string()),
+    affected_entity_type: v.optional(v.string()),
+    affected_count: v.optional(v.number()),
+    // Pre-filled context when declared from another page (reserved).
+    source_context: v.optional(v.string()),
+    declared_by: v.string(),
+    declared_by_id: v.optional(v.id("director_users")),
+    declared_at: v.number(),
+    resolved_by: v.optional(v.string()),
+    resolved_at: v.optional(v.number()),
+    resolution_note: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_slug", ["slug"])
+    .index("by_number", ["number"]),
 
   // Materialized KPI counters for the internal portals (decision #3, R2
   // class). Written only by portalStats.ts summarizers on cron; read via the

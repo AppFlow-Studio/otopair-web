@@ -1,16 +1,35 @@
 "use client";
 
 // Shops · Network Overview — /shops (Shops Atlas T1, §4.1).
-// Zones top-to-bottom per the Atlas: KPI row → lower split (league table 55% /
-// needs-attention 45%). The spec's 320px map band is intentionally not built
-// (no map dependency in this repo); pin health logic lives in the attention
-// panel instead. Lifetime aggregates come from portal_stats; week/7d numbers
-// come from gated indexed-window queries in convex/shopsNetwork.ts.
+// Zones top-to-bottom: PageHeader → stat tiles → NETWORK MAP (every shop
+// pinned, popups deep-link to detail) → new-shops trend → lower split
+// (league table 55% / needs-attention 45%). Lifetime aggregates come from
+// portal_stats; week/7d numbers from gated indexed-window queries in
+// convex/shopsNetwork.ts; map pins + per-shop 30d stats from portalSeries.
 
 import Link from "next/link";
-import { useQuery } from "convex/react";
+import dynamic from "next/dynamic";
+import { useState } from "react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { usePortalSession } from "@/app/(portals)/portal-session";
+import { useCan, usePortalSession } from "@/app/(portals)/portal-session";
+import {
+  CARD,
+  CARD_STATIC,
+  MICRO_H,
+  PILL,
+  PageHeader,
+  StatTile,
+  Skeleton,
+  TrendBars,
+  money,
+  fmtNum,
+} from "@/components/portal/ChartKit";
+
+const ShopsMap = dynamic(() => import("@/components/portal/ShopsMap"), {
+  ssr: false,
+  loading: () => <div className="h-[380px] animate-pulse rounded-lg bg-slate-100" />,
+});
 
 const networkApi = api.shopsNetwork;
 
@@ -34,8 +53,6 @@ type AttentionShop = {
   checks: { kind: string; detail: string }[];
 };
 
-const PILL_BASE = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
-
 const CHECK_LABEL: Record<string, string> = {
   hours_missing: "Hours",
   no_services: "Services",
@@ -45,31 +62,19 @@ const CHECK_LABEL: Record<string, string> = {
 };
 
 function checkPillClass(kind: string): string {
-  if (kind === "rating_low" || kind === "inactive") return `${PILL_BASE} bg-red-50 text-red-700`;
-  return `${PILL_BASE} bg-amber-50 text-amber-700`;
+  if (kind === "rating_low" || kind === "inactive") return `${PILL} bg-red-50 text-red-700`;
+  return `${PILL} bg-amber-50 text-amber-700`;
 }
 
-function fmtMoney(n: number): string {
-  return n.toLocaleString(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  });
-}
-
-function KpiTile({ label, value, hint }: { label: string; value: string | null; hint?: string }) {
+function LegendDot({ color, label }: { color: string; label: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5">
-      {value === null ? (
-        <div className="h-8 w-16 animate-pulse rounded bg-slate-100" />
-      ) : (
-        <div className="text-2xl font-bold text-slate-900">{value}</div>
-      )}
-      <div className="mt-1 text-xs font-medium text-slate-500">
-        {label}
-        {hint && <span className="ml-1 text-slate-400">{hint}</span>}
-      </div>
-    </div>
+    <span className="flex items-center gap-1.5 text-[12px] text-slate-600">
+      <span
+        className="inline-block h-3 w-3 rounded-full border-2 border-white shadow"
+        style={{ background: color }}
+      />
+      {label}
+    </span>
   );
 }
 
@@ -86,68 +91,170 @@ export default function ShopsOverviewPage() {
   const league = useQuery(networkApi.leagueTable, { token }) as LeagueRow[] | undefined;
   const attention = useQuery(networkApi.attention, { token }) as AttentionShop[] | undefined;
 
+  const mapData = useQuery(api.portalSeries.shopsMap, { token });
+  const shopStats = useQuery(api.portalSeries.bookingsByShop, { token, days: 30 }) as
+    | Record<string, { bookings: number; revenue: number }>
+    | undefined;
+  const shopsDaily = useQuery(api.portalSeries.shopsDaily, { token, days: 90 }) as
+    | { date: string; new_shops: number }[]
+    | undefined;
+
   const statVal = (key: string): number | null =>
     stats === undefined ? null : stats[key]?.value ?? 0;
 
-  const shopsTotal = statVal("shops.total");
   const mechanicsTotal = statVal("shops.mechanics_total");
-  const avgRating = statVal("shops.avg_rating");
+  const avgRatingStat = statVal("shops.avg_rating");
+
+  // ── Derivations from the map payload (pins + shops missing coords) ─────────
+  const pins = mapData?.pins;
+  const totalShops =
+    mapData === undefined ? null : mapData.pins.length + mapData.missing_coords.length;
+  const activeShops = pins === undefined ? null : pins.filter((p) => p.is_active).length;
+  const stripeReady = pins === undefined ? null : pins.filter((p) => p.stripe_ready).length;
+  const ratedPins = pins?.filter((p) => p.rating != null) ?? [];
+  const avgRating =
+    pins === undefined
+      ? avgRatingStat
+      : ratedPins.length > 0
+        ? ratedPins.reduce((s, p) => s + (p.rating ?? 0), 0) / ratedPins.length
+        : avgRatingStat;
+  const newShops90 =
+    shopsDaily === undefined ? null : shopsDaily.reduce((s, d) => s + d.new_shops, 0);
+  const newShopsSpark = shopsDaily?.map((d) => d.new_shops);
 
   return (
-    <div>
+    <div className="space-y-4">
       {/* ---- Header ---- */}
-      <div className="mb-4 flex items-center gap-3">
-        <h1 className="text-xl font-semibold text-slate-900">Network Overview</h1>
-        {attention !== undefined && (
-          <span
-            className={`${PILL_BASE} ${
-              attention.length > 0 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"
-            }`}
+      <PageHeader
+        title="Shop Network"
+        subtitle="Every partner shop on one map — pins, health checks, and the 7-day league."
+      >
+        <div className="flex items-center gap-2">
+          {attention !== undefined && (
+            <span
+              className={`${PILL} ${
+                attention.length > 0 ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"
+              }`}
+            >
+              {attention.length > 0 ? `${attention.length} need attention` : "all healthy"}
+            </span>
+          )}
+          <Link
+            href="/shops/all"
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50"
           >
-            {attention.length > 0 ? `${attention.length} need attention` : "all healthy"}
-          </span>
-        )}
-        <Link
+            Open Directory →
+          </Link>
+        </div>
+      </PageHeader>
+
+      {/* ---- Stat tiles ---- */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatTile
+          label="Total shops"
+          value={totalShops === null ? <Skeleton /> : fmtNum(totalShops)}
           href="/shops/all"
-          className="ml-auto rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50"
-        >
-          Open Directory →
-        </Link>
+        />
+        <StatTile
+          label="Active shops"
+          value={activeShops === null ? <Skeleton /> : fmtNum(activeShops)}
+        />
+        <StatTile
+          label="Stripe-ready"
+          value={stripeReady === null ? <Skeleton /> : fmtNum(stripeReady)}
+          chip={
+            stripeReady !== null && activeShops !== null && activeShops > 0 ? (
+              <span
+                className={`${PILL} ${
+                  stripeReady < activeShops ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"
+                }`}
+              >
+                {Math.round((stripeReady / activeShops) * 100)}% of active
+              </span>
+            ) : undefined
+          }
+          href="/shops/stripe-health"
+        />
+        <StatTile
+          label="Avg shop rating"
+          value={avgRating === null ? <Skeleton /> : `★ ${avgRating.toFixed(2)}`}
+          href="/shops/reviews"
+        />
+        <StatTile
+          label="Active mechanics"
+          value={mechanicsTotal === null ? <Skeleton /> : fmtNum(mechanicsTotal)}
+          href="/shops/mechanics"
+        />
+        <StatTile
+          label="Bookings this week"
+          value={week === undefined ? <Skeleton /> : fmtNum(week.bookings_week)}
+        />
+        <StatTile
+          label="Network GMV (this week)"
+          value={week === undefined ? <Skeleton /> : money(week.gmv_week)}
+        />
+        <StatTile
+          label="New shops (90d)"
+          value={newShops90 === null ? <Skeleton /> : fmtNum(newShops90)}
+          spark={newShopsSpark}
+          sparkColor="#3b82f6"
+        />
       </div>
 
-      {/* ---- KPI row ---- */}
-      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-        <KpiTile label="Active shops" value={shopsTotal === null ? null : String(shopsTotal)} />
-        <KpiTile
-          label="Active mechanics"
-          value={mechanicsTotal === null ? null : String(mechanicsTotal)}
-        />
-        <KpiTile
-          label="Bookings this week"
-          value={week === undefined ? null : String(week.bookings_week)}
-        />
-        <KpiTile
-          label="Network GMV"
-          hint="this week"
-          value={week === undefined ? null : fmtMoney(week.gmv_week)}
-        />
-        <KpiTile
-          label="Avg shop rating"
-          value={avgRating === null ? null : avgRating.toFixed(2)}
-        />
+      {/* ---- Network map (flagship) ---- */}
+      <div className={CARD_STATIC}>
+        <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+          <h2 className="text-sm font-semibold text-slate-900">Network map</h2>
+          {pins !== undefined && (
+            <span className="text-[11px] text-slate-400">
+              {pins.length} shop{pins.length === 1 ? "" : "s"} pinned · popups deep-link to shop
+              detail
+            </span>
+          )}
+          <div className="ml-auto flex flex-wrap items-center gap-3">
+            <LegendDot color="#059669" label="active + Stripe-ready" />
+            <LegendDot color="#3b82f6" label="active" />
+            <LegendDot color="#94a3b8" label="inactive" />
+          </div>
+        </div>
+        {mapData === undefined ? (
+          <div className="h-[380px] animate-pulse rounded-lg bg-slate-100" />
+        ) : mapData.pins.length === 0 ? (
+          <div className="flex h-[200px] items-center justify-center text-sm text-slate-500">
+            No shops have coordinates yet — the map fills in as lat/lng land on shop rows.
+          </div>
+        ) : (
+          <ShopsMap pins={mapData.pins} stats={shopStats} height={380} />
+        )}
+        {mapData !== undefined && mapData.missing_coords.length > 0 && (
+          <MissingCoordsBanner missing={mapData.missing_coords} />
+        )}
+      </div>
+
+      {/* ---- New shops trend ---- */}
+      <div className={CARD}>
+        <div className="mb-2 flex items-baseline gap-2">
+          <h2 className="text-sm font-semibold text-slate-900">New shops</h2>
+          <span className="text-[11px] text-slate-400">last 90 days</span>
+        </div>
+        <TrendBars data={shopsDaily} dataKey="new_shops" name="New shops" color="#93c5fd" />
       </div>
 
       {/* ---- Lower split: league table 55% / needs attention 45% ---- */}
       <div className="grid gap-4 lg:grid-cols-[55fr_45fr]">
         {/* League table */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5">
+        <div className={CARD}>
           <div className="mb-3 flex items-baseline gap-2">
             <h2 className="text-sm font-semibold text-slate-900">League table</h2>
             <span className="text-[11px] text-slate-400">last 7 days</span>
           </div>
 
           {league === undefined && (
-            <div className="py-10 text-center text-sm text-slate-400">Loading league table…</div>
+            <div className="space-y-2 py-2">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-9 w-full" />
+              ))}
+            </div>
           )}
 
           {league !== undefined && league.length === 0 && (
@@ -160,7 +267,7 @@ export default function ShopsOverviewPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-[13px]">
                 <thead>
-                  <tr className="border-b border-slate-200 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <tr className={`border-b border-slate-200 text-left ${MICRO_H}`}>
                     <th className="pb-2 pr-4">Shop</th>
                     <th className="pb-2 pr-4">Bookings 7d</th>
                     <th className="pb-2 pr-4">GMV 7d</th>
@@ -177,14 +284,14 @@ export default function ShopsOverviewPage() {
                         </Link>
                         {r.city && <span className="ml-1.5 text-[11px] text-slate-400">{r.city}</span>}
                         {!r.is_active && (
-                          <span className={`ml-1.5 ${PILL_BASE} bg-slate-100 text-slate-600`}>
+                          <span className={`ml-1.5 ${PILL} bg-slate-100 text-slate-600`}>
                             inactive
                           </span>
                         )}
                       </td>
                       <td className="py-2.5 pr-4 tabular-nums">{r.bookings_7d}</td>
                       <td className="py-2.5 pr-4 tabular-nums">
-                        {r.gmv_7d > 0 ? fmtMoney(r.gmv_7d) : <span className="text-slate-300">—</span>}
+                        {r.gmv_7d > 0 ? money(r.gmv_7d) : <span className="text-slate-300">—</span>}
                       </td>
                       <td className="py-2.5 pr-4 tabular-nums">
                         {r.completion_rate_7d === null ? (
@@ -218,7 +325,7 @@ export default function ShopsOverviewPage() {
         </div>
 
         {/* Needs attention */}
-        <div className="rounded-xl border border-amber-200 bg-white p-5">
+        <div className="rounded-xl border border-amber-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md">
           <div className="mb-3 flex items-baseline gap-2">
             <h2 className="text-sm font-semibold text-slate-900">Needs attention</h2>
             <span className="text-[11px] text-slate-400">
@@ -227,7 +334,11 @@ export default function ShopsOverviewPage() {
           </div>
 
           {attention === undefined && (
-            <div className="py-10 text-center text-sm text-slate-400">Running health checks…</div>
+            <div className="space-y-2 py-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-14 w-full" />
+              ))}
+            </div>
           )}
 
           {attention !== undefined && attention.length === 0 && (
@@ -269,6 +380,63 @@ export default function ShopsOverviewPage() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Shops without lat/lng: listed + one-click geocode from their street address
+// (Nominatim, persisted onto the shop row — the map updates reactively).
+function MissingCoordsBanner({ missing }: { missing: { id: string; name: string }[] }) {
+  const { token } = usePortalSession();
+  const canWrite = useCan("shops.write");
+  const geocode = useAction(api.shopsGeo.geocodeMissingShops);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await geocode({ token });
+      const failures = r.failed.map((f) => `${f.name}: ${f.reason}`).join("; ");
+      setResult(
+        `${r.geocoded.length} pinned${r.failed.length > 0 ? ` · ${r.failed.length} failed (${failures})` : ""}`,
+      );
+    } catch (e) {
+      setResult(e instanceof Error ? e.message : "geocoding failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span>
+          <span className="font-semibold">
+            {missing.length} shop{missing.length === 1 ? "" : "s"} missing coordinates
+          </span>{" "}
+          (not on the map):{" "}
+          {missing.map((s, i) => (
+            <span key={s.id}>
+              {i > 0 && ", "}
+              <Link href={`/shops/all/${s.id}`} className="font-medium underline hover:text-amber-900">
+                {s.name}
+              </Link>
+            </span>
+          ))}
+        </span>
+        {canWrite && (
+          <button
+            onClick={() => void run()}
+            disabled={busy}
+            className="shrink-0 rounded-lg bg-amber-600 px-3 py-1 text-[12px] font-semibold text-white transition hover:bg-amber-700 disabled:opacity-50"
+          >
+            {busy ? "Locating…" : "Pin by address"}
+          </button>
+        )}
+      </div>
+      {result && <div className="mt-1.5 font-medium text-amber-900">{result}</div>}
     </div>
   );
 }

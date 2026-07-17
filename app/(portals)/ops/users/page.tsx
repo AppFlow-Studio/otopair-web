@@ -1,22 +1,30 @@
 "use client";
 
 // Ops · Users list — /ops/users (Atlas T2).
-// Zones: header (title + count pill) → search/filter row → table.
-// Read-only; row click → /ops/users/[id].
+// Zones: PageHeader → analytics (signup trend + stat tiles) → search/filter
+// row → table. Read-only; row click → /ops/users/[id].
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "@/app/(portals)/portal-session";
+import {
+  CARD_STATIC,
+  MICRO_H,
+  PILL,
+  PageHeader,
+  StatTile,
+  TrendBars,
+  fmtNum,
+} from "@/components/portal/ChartKit";
 
 function fmtDate(ms: number | null): string {
   if (!ms) return "—";
   return new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
-
-const PILL = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 
 function OnboardingPill({ state }: { state: string }) {
   if (state === "completed") return <span className={`${PILL} bg-emerald-50 text-emerald-700`}>Completed</span>;
@@ -29,6 +37,7 @@ export default function OpsUsersPage() {
   const router = useRouter();
   const users: FunctionReturnType<typeof api.opsUsers.list> | undefined =
     useQuery(api.opsUsers.list, { token });
+  const daily = useQuery(api.portalSeries.usersDaily, { token, days: 30 });
 
   const [search, setSearch] = useState("");
   const [pendingOnly, setPendingOnly] = useState(false);
@@ -44,18 +53,53 @@ export default function OpsUsersPage() {
     });
   }, [users, search, pendingOnly]);
 
+  const new30d = daily?.reduce((s, d) => s + d.new_users, 0);
+  const spark = daily?.map((d) => d.new_users);
+  const pendingDeletion = users?.filter((u) => u.isPendingDeletion).length;
+  const onboarded = users?.filter((u) => u.onboarding === "completed").length;
+
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold text-slate-900">Users</h1>
+    <div className="space-y-5">
+      <PageHeader
+        title="Users"
+        subtitle="Every consumer account — signups, onboarding state, and deletion flags."
+      >
         {users !== undefined && (
-          <span className={`${PILL} bg-slate-100 text-slate-600`}>{users.length}</span>
+          <span className={`${PILL} bg-slate-100 text-slate-600`}>{users.length} users</span>
         )}
+      </PageHeader>
+
+      {/* Analytics zone */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatTile
+          label="New users · 30d"
+          value={new30d == null ? "—" : fmtNum(new30d)}
+          spark={spark}
+        />
+        <StatTile label="Total users (recent window)" value={users === undefined ? "—" : fmtNum(users.length)} />
+        <StatTile
+          label="Onboarding completed"
+          value={onboarded == null ? "—" : fmtNum(onboarded)}
+        />
+        <StatTile
+          label="Pending deletion"
+          value={pendingDeletion == null ? "—" : fmtNum(pendingDeletion)}
+          chip={
+            pendingDeletion != null && pendingDeletion > 0 ? (
+              <span className={`${PILL} bg-red-50 text-red-700`}>needs review</span>
+            ) : undefined
+          }
+        />
+      </div>
+      <div className={CARD_STATIC}>
+        <div className={MICRO_H}>New users per day · last 30 days</div>
+        <div className="mt-3">
+          <TrendBars data={daily} dataKey="new_users" name="New users" color="#93c5fd" height={150} />
+        </div>
       </div>
 
       {/* Filter row */}
-      <div className="mt-4 flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <input
           type="text"
           value={search}
@@ -80,9 +124,13 @@ export default function OpsUsersPage() {
       </div>
 
       {/* Table */}
-      <div className="mt-4 rounded-xl border border-slate-200 bg-white p-5">
+      <div className={CARD_STATIC}>
         {filtered === undefined && (
-          <div className="py-10 text-center text-sm text-slate-400">Loading users…</div>
+          <div className="space-y-2">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-9 animate-pulse rounded bg-slate-100" />
+            ))}
+          </div>
         )}
         {filtered !== undefined && filtered.length === 0 && (
           <div className="py-10 text-center text-sm text-slate-400">
@@ -114,7 +162,13 @@ export default function OpsUsersPage() {
                     className="cursor-pointer border-b border-slate-50 hover:bg-slate-50"
                   >
                     <td className="py-2.5 pr-4">
-                      <div className="font-medium text-slate-900">{u.name}</div>
+                      <Link
+                        href={`/ops/users/${u.id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="font-medium text-slate-900 hover:underline"
+                      >
+                        {u.name}
+                      </Link>
                       {u.username && <div className="text-[11px] text-slate-400">@{u.username}</div>}
                     </td>
                     <td className="py-2.5 pr-4 text-slate-600">

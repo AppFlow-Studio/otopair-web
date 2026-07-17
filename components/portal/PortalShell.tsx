@@ -3,6 +3,9 @@
 // The shared shell (Ops spec §3A): 240px sidebar with the portal switcher on
 // top, grouped nav with badge pills, ⌘K search in the header, session menu.
 // One build, three nav trees — every portal page mounts inside this.
+// Visual system: dark console sidebar with a per-portal accent (ops = blue,
+// shops = emerald, data = violet); light content pane, max-width so big
+// monitors don't stretch tables into unreadability.
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -16,6 +19,28 @@ import { AuditDrawer } from "./AuditDrawer";
 
 const BADGE_KEYS = ["ops.pending_deletions", "data.vin_queue_pending", "slo.review_queue_depth"];
 
+// Per-portal accent — switcher pill, active nav item, left rail.
+const ACCENT: Record<PortalId, { pill: string; active: string; rail: string; badge: string }> = {
+  ops: {
+    pill: "bg-blue-500 text-white",
+    active: "bg-blue-500/15 text-blue-200",
+    rail: "bg-blue-400",
+    badge: "bg-blue-400/20 text-blue-200",
+  },
+  shops: {
+    pill: "bg-emerald-500 text-white",
+    active: "bg-emerald-500/15 text-emerald-200",
+    rail: "bg-emerald-400",
+    badge: "bg-emerald-400/20 text-emerald-200",
+  },
+  data: {
+    pill: "bg-violet-500 text-white",
+    active: "bg-violet-500/15 text-violet-200",
+    rail: "bg-violet-400",
+    badge: "bg-violet-400/20 text-violet-200",
+  },
+};
+
 export function PortalShell({ portal, children }: { portal: PortalId; children: React.ReactNode }) {
   const session = usePortalSession();
   const pathname = usePathname();
@@ -25,6 +50,7 @@ export function PortalShell({ portal, children }: { portal: PortalId; children: 
   const [menuOpen, setMenuOpen] = useState(false);
 
   const stats = useQuery(api.portalStats.getStats, { token: session.token, keys: BADGE_KEYS });
+  const accent = ACCENT[portal];
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -52,31 +78,41 @@ export function PortalShell({ portal, children }: { portal: PortalId; children: 
   }, [pathname, portal]);
 
   return (
-    <div className="flex min-h-[calc(100vh-1.5rem)]">
-      {/* Sidebar — 240px per spec */}
-      <aside className="fixed bottom-0 top-6 z-40 flex w-60 flex-col border-r border-slate-200 bg-white">
-        {/* Portal switcher */}
-        <div className="flex items-center gap-1 border-b border-slate-100 px-3 py-3">
-          {PORTALS.map((p) => (
-            <Link
-              key={p.id}
-              href={p.base}
-              className={`rounded-md px-2.5 py-1 text-[13px] font-semibold ${
-                p.id === portal
-                  ? "bg-slate-900 text-white"
-                  : "text-slate-500 hover:bg-slate-100 hover:text-slate-800"
-              }`}
-            >
-              {p.label}
-            </Link>
-          ))}
+    <div className="flex min-h-screen">
+      {/* Sidebar — 240px per spec, dark console */}
+      <aside className="fixed inset-y-0 z-40 flex w-60 flex-col bg-slate-950">
+        {/* Brand + portal switcher */}
+        <div className="border-b border-white/5 px-3 pb-3 pt-4">
+          <div className="mb-3 flex items-center gap-2 px-1">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-violet-600 text-[13px] font-black text-white">
+              O
+            </span>
+            <span className="text-[14px] font-bold tracking-tight text-white">
+              OtoPair <span className="font-medium text-slate-400">Console</span>
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            {PORTALS.map((p) => (
+              <Link
+                key={p.id}
+                href={p.base}
+                className={`flex-1 rounded-md px-2 py-1 text-center text-[12px] font-semibold transition ${
+                  p.id === portal
+                    ? ACCENT[p.id].pill
+                    : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                }`}
+              >
+                {p.label}
+              </Link>
+            ))}
+          </div>
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3">
           {NAV[portal].map((group, gi) => (
             <div key={gi} className="mb-4">
               {group.label && (
-                <div className="mb-1 px-2 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">
+                <div className="mb-1 px-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
                   {group.label}
                 </div>
               )}
@@ -87,11 +123,11 @@ export function PortalShell({ portal, children }: { portal: PortalId; children: 
                   return (
                     <div
                       key={item.href}
-                      className="flex cursor-default items-center justify-between rounded-md px-2 py-1.5 text-[13px] text-slate-300"
+                      className="flex cursor-default items-center justify-between rounded-md px-2 py-1.5 text-[13px] text-slate-600"
                       title={`Ships in ${item.phase}`}
                     >
                       {item.label}
-                      <span className="rounded bg-slate-100 px-1 text-[10px] font-semibold text-slate-400">
+                      <span className="rounded bg-white/5 px-1 text-[10px] font-semibold text-slate-500">
                         {item.phase}
                       </span>
                     </div>
@@ -101,15 +137,20 @@ export function PortalShell({ portal, children }: { portal: PortalId; children: 
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={`flex items-center justify-between rounded-md px-2 py-1.5 text-[13px] font-medium ${
+                    className={`relative flex items-center justify-between rounded-md px-2 py-1.5 text-[13px] font-medium transition ${
                       isActive
-                        ? "bg-blue-50 text-blue-700"
-                        : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                        ? accent.active
+                        : "text-slate-400 hover:bg-white/5 hover:text-slate-100"
                     }`}
                   >
+                    {isActive && (
+                      <span
+                        className={`absolute -left-2 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full ${accent.rail}`}
+                      />
+                    )}
                     {item.label}
                     {b !== null && (
-                      <span className="rounded-full bg-blue-100 px-1.5 text-[11px] font-semibold text-blue-700">
+                      <span className={`rounded-full px-1.5 text-[11px] font-semibold ${accent.badge}`}>
                         {b}
                       </span>
                     )}
@@ -121,19 +162,19 @@ export function PortalShell({ portal, children }: { portal: PortalId; children: 
         </nav>
 
         {/* Session footer */}
-        <div className="relative border-t border-slate-100 px-3 py-2.5">
+        <div className="relative border-t border-white/5 px-3 py-2.5">
           <button
             onClick={() => setMenuOpen((o) => !o)}
-            className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-slate-50"
+            className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-white/5"
           >
-            <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600">
+            <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-slate-600 to-slate-800 text-xs font-bold text-white">
               {session.name.slice(0, 1).toUpperCase()}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-semibold text-slate-800">
+              <span className="block truncate text-[13px] font-semibold text-slate-200">
                 {session.name}
               </span>
-              <span className="block text-[11px] text-slate-400">{session.role}</span>
+              <span className="block text-[11px] text-slate-500">{session.role}</span>
             </span>
           </button>
           {menuOpen && (
@@ -159,8 +200,8 @@ export function PortalShell({ portal, children }: { portal: PortalId; children: 
       </aside>
 
       {/* Content */}
-      <div className="ml-60 flex-1">
-        <header className="sticky top-6 z-30 flex h-12 items-center justify-between border-b border-slate-200 bg-white/90 px-6 backdrop-blur">
+      <div className="ml-60 min-w-0 flex-1">
+        <header className="sticky top-0 z-30 flex h-12 items-center justify-between border-b border-slate-200 bg-white/90 px-6 backdrop-blur">
           <div className="text-[13px] text-slate-400">
             <span className="font-semibold text-slate-700">
               {PORTALS.find((p) => p.id === portal)?.label}
@@ -174,7 +215,7 @@ export function PortalShell({ portal, children }: { portal: PortalId; children: 
           </div>
           <button
             onClick={() => setCmdOpen(true)}
-            className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[12px] text-slate-400 hover:border-slate-300"
+            className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[12px] text-slate-400 transition hover:border-slate-300 hover:text-slate-600"
           >
             Search…
             <kbd className="rounded border border-slate-200 bg-white px-1 text-[10px] font-semibold text-slate-400">
@@ -182,7 +223,7 @@ export function PortalShell({ portal, children }: { portal: PortalId; children: 
             </kbd>
           </button>
         </header>
-        <main className="p-6">{children}</main>
+        <main className="mx-auto max-w-[1440px] p-6">{children}</main>
       </div>
 
       <CommandK open={cmdOpen} onOpenChange={setCmdOpen} onNavigate={(href) => router.push(href)} />

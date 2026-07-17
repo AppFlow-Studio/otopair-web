@@ -19,7 +19,7 @@ export type PortalId = "ops" | "shops" | "data";
 export const PORTALS: { id: PortalId; label: string; base: string }[] = [
   { id: "ops", label: "Ops", base: "/ops" },
   { id: "shops", label: "Shops", base: "/shops" },
-  { id: "data", label: "Data", base: "/data" },
+  { id: "data", label: "Data", base: "/director/data" },
 ];
 
 export const NAV: Record<PortalId, NavGroup[]> = {
@@ -36,29 +36,29 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       label: "Marketplace",
       items: [
         { label: "Bookings", href: "/ops/bookings" },
-        { label: "Reviews", href: "/ops/reviews", phase: "P1" },
+        { label: "Reviews", href: "/ops/reviews" },
       ],
     },
     {
       label: "Money",
       items: [
         { label: "Payments", href: "/ops/payments" },
-        { label: "Transactions", href: "/ops/transactions", phase: "P1" },
+        { label: "Transactions", href: "/ops/transactions" },
         { label: "Rewards", href: "/ops/rewards", phase: "P2" },
       ],
     },
     {
       label: "Engagement",
       items: [
-        { label: "Oto AI", href: "/ops/oto-ai", phase: "P1" },
-        { label: "Follow-ups", href: "/ops/follow-ups", phase: "P1" },
+        { label: "Oto AI", href: "/ops/oto-ai" },
+        { label: "Follow-ups", href: "/ops/follow-ups" },
       ],
     },
     {
       label: "Insight",
       items: [
-        { label: "Analytics", href: "/ops/analytics", phase: "P2" },
-        { label: "System Health", href: "/ops/system-health", phase: "P2" },
+        { label: "Analytics", href: "/ops/analytics" },
+        { label: "System Health", href: "/ops/system-health" },
       ],
     },
     { label: "Governance", items: [{ label: "Audit Log", href: "/ops/audit" }] },
@@ -69,64 +69,68 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       label: "Partners",
       items: [
         { label: "Directory", href: "/shops/all" },
-        { label: "Onboarding Pipeline", href: "/shops/pipeline", phase: "P1" },
+        { label: "Onboarding Pipeline", href: "/shops/pipeline" },
       ],
     },
-    { label: "People", items: [{ label: "Mechanics", href: "/shops/mechanics", phase: "P1" }] },
+    { label: "People", items: [{ label: "Mechanics", href: "/shops/mechanics" }] },
     {
       label: "Supply",
       items: [
-        { label: "Capacity & Scheduling", href: "/shops/capacity", phase: "P1" },
-        { label: "Offerings Matrix", href: "/shops/offerings", phase: "P1" },
+        { label: "Capacity & Scheduling", href: "/shops/capacity" },
+        { label: "Offerings Matrix", href: "/shops/offerings" },
       ],
     },
     { label: "Money", items: [{ label: "Stripe Connect Health", href: "/shops/stripe-health" }] },
     {
       label: "Quality",
       items: [
-        { label: "Network Reviews", href: "/shops/reviews", phase: "P2" },
-        { label: "Performance", href: "/shops/performance", phase: "P2" },
+        { label: "Network Reviews", href: "/shops/reviews" },
+        { label: "Performance", href: "/shops/performance" },
       ],
     },
   ],
   data: [
-    { items: [{ label: "Data Health", href: "/data" }] },
+    {
+      items: [
+        { label: "Command Center", href: "/director/data" },
+        { label: "Insights", href: "/director/data/insights" },
+      ],
+    },
     {
       label: "Catalog",
       items: [
-        { label: "Vehicle Catalog", href: "/data/catalog" },
-        { label: "VIN Explorer", href: "/data/vins", phase: "P1" },
-        { label: "Parts", href: "/data/parts", phase: "P1" },
-        { label: "Tire Intelligence", href: "/data/tires", phase: "P1" },
+        { label: "Vehicle Catalog", href: "/director/data/catalog" },
+        { label: "VIN Explorer", href: "/director/data/vins" },
+        { label: "Parts", href: "/director/data/parts" },
+        { label: "Tire Intelligence", href: "/director/data/tires" },
       ],
     },
     {
       label: "Pipeline",
       items: [
-        { label: "Control Room", href: "/data/control-room", badgeKey: "data.vin_queue_pending" },
-        { label: "Sources & Cache", href: "/data/sources", phase: "P1" },
-        { label: "Review Queue", href: "/data/review-queue", badgeKey: "slo.review_queue_depth" },
+        { label: "Control Room", href: "/director/data/control-room", badgeKey: "data.vin_queue_pending" },
+        { label: "Sources & Cache", href: "/director/data/sources" },
+        { label: "Review Queue", href: "/director/data/review-queue", badgeKey: "slo.review_queue_depth" },
       ],
     },
     {
       label: "Pricing & Labor",
       items: [
-        { label: "Labor Times", href: "/data/labor" },
-        { label: "Parts Pricing", href: "/data/parts-pricing", phase: "P1" },
-        { label: "Pricing Engine", href: "/data/pricing-engine", phase: "P2" },
+        { label: "Labor Times", href: "/director/data/labor" },
+        { label: "Parts Pricing", href: "/director/data/parts-pricing" },
+        { label: "Pricing Engine", href: "/director/data/pricing-engine" },
       ],
     },
     {
       label: "Quality",
       items: [
-        { label: "Verification", href: "/data/verification", phase: "P1" },
-        { label: "Vehicle ID", href: "/data/vehicle-id", phase: "P1" },
-        { label: "Coverage", href: "/data/coverage", phase: "P1" },
-        { label: "Provenance", href: "/data/provenance", phase: "P2" },
+        { label: "Verification", href: "/director/data/verification" },
+        { label: "Vehicle ID", href: "/director/data/vehicle-id" },
+        { label: "Coverage", href: "/director/data/coverage" },
+        { label: "Provenance", href: "/director/data/provenance", badgeKey: "data.incidents_open" },
       ],
     },
-    { label: "Catalog Ops", items: [{ label: "Service Catalog", href: "/data/service-catalog", phase: "P1" }] },
-    { label: "Economics", items: [{ label: "Costs & Credits", href: "/data/costs", phase: "P2" }] },
-    { label: "Product", items: [{ label: "API Sandbox", href: "/data/api-sandbox" }] },
+    { label: "Catalog Ops", items: [{ label: "Service Catalog", href: "/director/data/service-catalog" }] },
+    { label: "Economics", items: [{ label: "Costs & Credits", href: "/director/data/costs" }] },
   ],
 };

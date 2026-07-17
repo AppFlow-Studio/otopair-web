@@ -5,6 +5,14 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  async redirects() {
+    return [
+      // The internal API console is gone — key management lives in /developers.
+      { source: "/data/api-sandbox", destination: "/developers", permanent: false },
+      // The data portal moved under the director umbrella.
+      { source: "/data/:path*", destination: "/director/data/:path*", permanent: false },
+    ];
+  },
   images: {
     domains: ["images.unsplash.com", "images.pexels.com"],
     remotePatterns: [

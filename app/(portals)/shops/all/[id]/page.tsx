@@ -46,6 +46,7 @@ type Profile = {
   createdAt: number;
   health: "green" | "amber";
   failingChecks: string[];
+  owner: { id: string; name: string } | null;
 } | null;
 
 type HourRow = {
@@ -97,6 +98,7 @@ type CalendarResult = {
 type BookingRow = {
   id: string;
   user: string;
+  user_id: string;
   services: string[];
   status: string;
   date: string | null;
@@ -143,7 +145,13 @@ function weekDates(monday: Date): string[] {
 }
 
 function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={`rounded-xl border border-slate-200 bg-white p-5 ${className}`}>{children}</div>;
+  return (
+    <div
+      className={`rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md ${className}`}
+    >
+      {children}
+    </div>
+  );
 }
 
 function Loading({ label }: { label: string }) {
@@ -240,6 +248,15 @@ export default function ShopDetailPage() {
 
   return (
     <div>
+      {/* ---- Breadcrumb ---------------------------------------------------- */}
+      <div className="mb-3 flex items-center gap-1.5 text-[12px] text-slate-500">
+        <Link href="/shops/all" className="font-medium text-slate-600 hover:underline">
+          Shops Directory
+        </Link>
+        <span className="text-slate-300">/</span>
+        <span className="text-slate-700">{profile.name}</span>
+      </div>
+
       {/* ---- Header card -------------------------------------------------- */}
       <Card className="mb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -334,6 +351,19 @@ export default function ShopDetailPage() {
               ["City / State / ZIP", [profile.city, profile.state, profile.zip].filter(Boolean).join(", ") || "—"],
               ["Phone", profile.phone ?? "—"],
               ["Email", profile.email ?? "—"],
+              [
+                "Owner",
+                profile.owner ? (
+                  <Link
+                    href={`/ops/users/${profile.owner.id}`}
+                    className="font-medium text-blue-600 hover:underline"
+                  >
+                    {profile.owner.name}
+                  </Link>
+                ) : (
+                  "—"
+                ),
+              ],
               ["Website", profile.website ?? "—"],
               ["Timezone", profile.timezone ?? "—"],
               ["Labor rate", profile.laborRate !== null ? `$${profile.laborRate}/hr` : "—"],
@@ -556,7 +586,12 @@ export default function ShopDetailPage() {
                       </div>
                     )}
                     <div>
-                      <div className="text-[15px] font-semibold text-slate-900">{m.name}</div>
+                      <Link
+                        href={`/shops/mechanics/${m.id}`}
+                        className="text-[15px] font-semibold text-slate-900 hover:underline"
+                      >
+                        {m.name}
+                      </Link>
                       <div className="text-[12px] text-slate-500">{m.title ?? profile.name}</div>
                     </div>
                   </div>
@@ -575,6 +610,12 @@ export default function ShopDetailPage() {
                     )}
                   </div>
                   {m.email && <div className="mt-1.5 text-[12px] text-slate-400">{m.email}</div>}
+                  <Link
+                    href={`/shops/mechanics/${m.id}`}
+                    className="mt-2 inline-block text-[12px] font-medium text-blue-600 hover:underline"
+                  >
+                    Open mechanic →
+                  </Link>
                 </Card>
               ))}
             </div>
@@ -736,7 +777,14 @@ export default function ShopDetailPage() {
                           …{b.id.slice(-6)}
                         </Link>
                       </td>
-                      <td className="py-2.5 pr-4 text-slate-800">{b.user}</td>
+                      <td className="py-2.5 pr-4 text-slate-800">
+                        <Link
+                          href={`/ops/users/${b.user_id}`}
+                          className="hover:text-blue-700 hover:underline"
+                        >
+                          {b.user}
+                        </Link>
+                      </td>
                       <td className="py-2.5 pr-4 text-slate-600">{b.services.join(", ") || "—"}</td>
                       <td className="py-2.5 pr-4 text-slate-600">
                         {b.date ?? "—"}

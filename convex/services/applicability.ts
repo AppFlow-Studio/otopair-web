@@ -40,24 +40,40 @@ export function isServiceApplicable(
     return false;
   }
 
-  // 3. Hydraulic PS services don't apply to electric steering
-  // (case-insensitive — same NHTSA/VDB capitalization hazard as rule 1).
-  if (
-    service.requires_hydraulic_ps === true &&
-    (chassisSpecs?.steering_type ?? "").toLowerCase() === "electric"
-  ) {
-    return false;
+  // 3. Hydraulic PS services require POSITIVE evidence of hydraulic steering.
+  // This rule deliberately fails CLOSED, unlike the others: it used to gate
+  // only on chassis_specs.steering_type === "electric", but that row rarely
+  // exists (chassis lookup misses most configs) and the open-fail sold a
+  // power-steering flush on three EPS vehicles in the Jul 2026 5-VIN test
+  // (2021 Atlas, 2023 Soul, 2024 Durango — all electric racks). Nearly every
+  // modern car is EPS, so "unknown" must mean "don't sell the flush". The
+  // evidence signals mirror ensureAllLaborTimes (v3mutations), which already
+  // failed closed on ps_fluid_type — parts and labor now agree.
+  if (service.requires_hydraulic_ps === true) {
+    const steering = (chassisSpecs?.steering_type ?? "").toLowerCase();
+    const psFluid = ((vehicleConfig as any).ps_fluid_type ?? "").toLowerCase();
+    const hydraulicEvidence =
+      (steering !== "" && steering !== "electric") ||
+      (psFluid !== "" && psFluid !== "electric" && psFluid !== "none" && psFluid !== "n/a");
+    if (!hydraulicEvidence) {
+      return false;
+    }
   }
 
-  // 4. Differential services require a serviceable differential. Exclude
-  // only on a POSITIVE "no differential" — a missing drivetrain row or
-  // unset flag fails open (consistent with every other rule here).
-  if (
-    service.requires_differential === true &&
-    drivetrainConfig != null &&
-    drivetrainConfig.has_differential === false
-  ) {
-    return false;
+  // 4. Differential services require a serviceable differential. Exclude on
+  // a POSITIVE "no differential", and also on FWD without positive evidence
+  // of a separate diff — a FWD transaxle's final drive shares the trans
+  // fluid, so there is nothing to service (1999 Taurus AX4N and 2023 Soul
+  // IVT were both sold GL-5 gear oil in the Jul 2026 test). FWD-based AWD
+  // vehicles carry drivetrain "AWD"/"4WD" and are unaffected.
+  if (service.requires_differential === true) {
+    if (drivetrainConfig != null && drivetrainConfig.has_differential === false) {
+      return false;
+    }
+    const drivetrain = ((vehicleConfig as any).drivetrain ?? "").toUpperCase();
+    if (drivetrain === "FWD" && drivetrainConfig?.has_differential !== true) {
+      return false;
+    }
   }
 
   // 5. Tire rotation not possible if staggered AND directional

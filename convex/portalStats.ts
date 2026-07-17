@@ -17,6 +17,8 @@ import { internalMutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireDirector } from "./directorGate";
+import { deriveLayer, type LayerLetter } from "./lib/dataLayers";
+import { collectSpecFields } from "./dataCatalog";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -187,6 +189,22 @@ export const recomputeCheapStats = internalMutation({
         : 0;
     await upsertStat(ctx, "shops.avg_rating", avgRating, { samples: reviews.length });
 
+    // Data incidents open/monitoring (Provenance page + nav badge)
+    const openIncidents = await ctx.db
+      .query("data_incidents")
+      .withIndex("by_status", (q) => q.eq("status", "open"))
+      .collect();
+    const monitoringIncidents = await ctx.db
+      .query("data_incidents")
+      .withIndex("by_status", (q) => q.eq("status", "monitoring"))
+      .collect();
+    await upsertStat(
+      ctx,
+      "data.incidents_open",
+      openIncidents.length + monitoringIncidents.length,
+      { open: openIncidents.length, monitoring: monitoringIncidents.length },
+    );
+
     return { ok: true };
   },
 });
@@ -195,25 +213,115 @@ export const recomputeCheapStats = internalMutation({
 // Convex allows exactly ONE paginated query per function execution, so the
 // chain sweeps one table per phase, one page per invocation, rescheduling
 // itself until each table is exhausted: evidence → part_fitments →
-// labor_times → finalize (vehicle_configs, small enough to collect).
+// labor_times → tires (tire_models) → tires_pricing (tire_pricing) →
+// coverage (vehicle_configs field families) → finalize.
+//
+// The evidence phase also derives the provenance layer of every latest row
+// (lib/dataLayers — the SAME derivation the external API gate uses, so the
+// Layer-B exposure number reconciles with what the gate blocks by
+// construction) and snapshots the moat line once per day
+// (data.moat.day.<YYYY-MM-DD>).
+
+type SweepPhase =
+  | "evidence"
+  | "fitments"
+  | "labor"
+  | "tires"
+  | "tires_pricing"
+  | "coverage"
+  | "cache"
+  | "finalize";
+
+const B_FIELD_CAP = 200;
+
+const layerCountsValidator = v.object({
+  A: v.number(),
+  B: v.number(),
+  C: v.number(),
+  D: v.number(),
+  E: v.number(),
+  X: v.number(),
+});
+
 export const recomputeEvidenceStats = internalMutation({
   args: {
     phase: v.optional(
-      v.union(v.literal("evidence"), v.literal("fitments"), v.literal("labor"), v.literal("finalize")),
+      v.union(
+        v.literal("evidence"),
+        v.literal("fitments"),
+        v.literal("labor"),
+        v.literal("tires"),
+        v.literal("tires_pricing"),
+        v.literal("coverage"),
+        v.literal("cache"),
+        v.literal("finalize"),
+      ),
     ),
     cursor: v.optional(v.union(v.string(), v.null())),
     count: v.optional(v.number()),
     confSum: v.optional(v.number()),
     confN: v.optional(v.number()),
+    layerCounts: v.optional(layerCountsValidator),
+    bFields: v.optional(v.array(v.object({ field: v.string(), n: v.number() }))),
+    // tires_pricing accumulators (distinct priced models + per-source stats)
+    pricedModelIds: v.optional(v.array(v.string())),
+    perSource: v.optional(
+      v.array(v.object({ source: v.string(), n: v.number(), newest: v.number() })),
+    ),
+    // cache-phase accumulators (scrape_cache docs carry full page markdown —
+    // MEGABYTES each; this phase paginates 100/link and only ever forwards
+    // these thin aggregates between links)
+    cacheGroups: v.optional(
+      v.array(
+        v.object({
+          source_type: v.string(),
+          n: v.number(),
+          ttl_days: v.union(v.number(), v.null()),
+          newest: v.number(),
+          success: v.number(),
+        }),
+      ),
+    ),
+    cacheDomains: v.optional(
+      v.array(v.object({ domain: v.string(), n: v.number(), success: v.number() })),
+    ),
+    cacheExpiring: v.optional(
+      v.array(
+        v.object({
+          cache_key: v.string(),
+          domain: v.union(v.string(), v.null()),
+          source_type: v.union(v.string(), v.null()),
+          expires_at: v.number(),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
-    const phase = args.phase ?? "evidence";
+    const phase: SweepPhase = args.phase ?? "evidence";
     const chain = (next: {
-      phase: "evidence" | "fitments" | "labor" | "finalize";
+      phase: SweepPhase;
       cursor?: string | null;
       count?: number;
       confSum?: number;
       confN?: number;
+      layerCounts?: Record<LayerLetter, number>;
+      bFields?: { field: string; n: number }[];
+      pricedModelIds?: string[];
+      perSource?: { source: string; n: number; newest: number }[];
+      cacheGroups?: {
+        source_type: string;
+        n: number;
+        ttl_days: number | null;
+        newest: number;
+        success: number;
+      }[];
+      cacheDomains?: { domain: string; n: number; success: number }[];
+      cacheExpiring?: {
+        cache_key: string;
+        domain: string | null;
+        source_type: string | null;
+        expires_at: number;
+      }[];
     }) => ctx.scheduler.runAfter(0, internal.portalStats.recomputeEvidenceStats, next);
 
     if (phase === "evidence") {
@@ -223,20 +331,62 @@ export const recomputeEvidenceStats = internalMutation({
       let count = (args.count ?? 0) + page.page.length;
       let confSum = args.confSum ?? 0;
       let confN = args.confN ?? 0;
+      const layerCounts: Record<LayerLetter, number> = args.layerCounts ?? {
+        A: 0,
+        B: 0,
+        C: 0,
+        D: 0,
+        E: 0,
+        X: 0,
+      };
+      const bFields = new Map<string, number>((args.bFields ?? []).map((b) => [b.field, b.n]));
       for (const row of page.page) {
-        if (row.is_latest !== false && typeof row.confidence === "number") {
+        if (row.is_latest === false) continue;
+        if (typeof row.confidence === "number") {
           confSum += row.confidence;
           confN++;
         }
+        const layer = deriveLayer(row.source_type ?? null, row.confidence ?? null);
+        layerCounts[layer.letter]++;
+        // Layer-B exposure: licensed structured-DB rows only (NHTSA is the
+        // public-domain carve-out the API gate also makes).
+        if (layer.letter === "B" && (row.source_type ?? "").toLowerCase() !== "nhtsa") {
+          const field = row.field_name ?? "(unknown)";
+          const key = bFields.has(field) || bFields.size < B_FIELD_CAP ? field : "__other";
+          bFields.set(key, (bFields.get(key) ?? 0) + 1);
+        }
       }
+      const bFieldsArr = [...bFields.entries()].map(([field, n]) => ({ field, n }));
       if (!page.isDone) {
-        await chain({ phase: "evidence", cursor: page.continueCursor, count, confSum, confN });
+        await chain({
+          phase: "evidence",
+          cursor: page.continueCursor,
+          count,
+          confSum,
+          confN,
+          layerCounts,
+          bFields: bFieldsArr,
+        });
         return { phase, chained: true, count };
       }
       const avgConfidence = confN > 0 ? confSum / confN : 0;
       await upsertStat(ctx, "data.evidence_total", count);
       await upsertStat(ctx, "slo.avg_confidence", avgConfidence, { samples: confN });
       await evaluateSlo(ctx, "slo.avg_confidence", avgConfidence, confN);
+      // Provenance rollups (latest rows only). The moat snapshot is keyed by
+      // day — upsert makes same-day reruns idempotent.
+      const latestTotal = Object.values(layerCounts).reduce((s, n) => s + n, 0);
+      const bTotal = bFieldsArr.reduce((s, b) => s + b.n, 0);
+      await upsertStat(ctx, "data.layer_distribution", latestTotal, { by_layer: layerCounts });
+      await upsertStat(ctx, "data.layer_b_exposure", bTotal, {
+        by_field: [...bFieldsArr].sort((a, b) => b.n - a.n).slice(0, 100),
+        definition:
+          "Latest evidence rows whose derived layer is B excluding NHTSA " +
+          "(lib/dataLayers.deriveLayer — the same derivation the external API " +
+          "gate uses, so this count reconciles with gate exclusions).",
+      });
+      const day = new Date().toISOString().slice(0, 10);
+      await upsertStat(ctx, `data.moat.day.${day}`, layerCounts.D, { by_layer: layerCounts });
       await chain({ phase: "fitments" });
       return { phase, chained: true, count, avgConfidence };
     }
@@ -253,14 +403,248 @@ export const recomputeEvidenceStats = internalMutation({
         return { phase, chained: true, count };
       }
       await upsertStat(ctx, key, count);
-      await chain({ phase: phase === "fitments" ? "labor" : "finalize" });
+      await chain({ phase: phase === "fitments" ? "labor" : "tires" });
       return { phase, chained: true, count };
+    }
+
+    if (phase === "tires") {
+      // tire_models total (813 measured — one link at 4k page size)
+      const page = await ctx.db
+        .query("tire_models")
+        .paginate({ cursor: args.cursor ?? null, numItems: 4000 });
+      const count = (args.count ?? 0) + page.page.length;
+      if (!page.isDone) {
+        await chain({ phase: "tires", cursor: page.continueCursor, count });
+        return { phase, chained: true, count };
+      }
+      await chain({ phase: "tires_pricing", count });
+      return { phase, chained: true, count };
+    }
+
+    if (phase === "tires_pricing") {
+      // tire_pricing sweep (1,036 measured): distinct priced models +
+      // per-source row counts and freshest scrape.
+      const modelsTotal = args.count ?? 0;
+      const page = await ctx.db
+        .query("tire_pricing")
+        .paginate({ cursor: args.cursor ?? null, numItems: 4000 });
+      const priced = new Set<string>(args.pricedModelIds ?? []);
+      const perSource = new Map<string, { n: number; newest: number }>(
+        (args.perSource ?? []).map((s) => [s.source, { n: s.n, newest: s.newest }]),
+      );
+      for (const row of page.page) {
+        priced.add(String(row.tire_model_id));
+        const prev = perSource.get(row.source) ?? { n: 0, newest: 0 };
+        perSource.set(row.source, {
+          n: prev.n + 1,
+          newest: Math.max(prev.newest, row.scraped_at),
+        });
+      }
+      const perSourceArr = [...perSource.entries()].map(([source, s]) => ({
+        source,
+        n: s.n,
+        newest: s.newest,
+      }));
+      if (!page.isDone) {
+        await chain({
+          phase: "tires_pricing",
+          cursor: page.continueCursor,
+          count: modelsTotal,
+          pricedModelIds: [...priced],
+          perSource: perSourceArr,
+        });
+        return { phase, chained: true };
+      }
+      await upsertStat(ctx, "data.tires.pricing_summary", modelsTotal, {
+        models_with_price: priced.size,
+        fill_pct: modelsTotal > 0 ? priced.size / modelsTotal : 0,
+        per_source: perSourceArr,
+        benchmark_pct: 0.94, // the BMW 320i fill benchmark (Apr checkins)
+      });
+      await chain({ phase: "coverage" });
+      return { phase, chained: true };
+    }
+
+    if (phase === "coverage") {
+      // Field-family completeness over vehicle_configs (384 measured — one
+      // link: ~384 × 3 gets + 1 bounded run read each ≈ well under limits).
+      // Applicability-aware denominators come from the runs' own
+      // applicable_fill_rate / quotability stamps.
+      const configs = await ctx.db.query("vehicle_configs").collect();
+      const families = new Map<string, { filled: number; total: number }>();
+      let intervalsSum = 0;
+      let intervalsN = 0;
+      let quotSum = 0;
+      let quotN = 0;
+      for (const c of configs) {
+        const engine = c.engine_id ? await ctx.db.get(c.engine_id) : null;
+        const transmission = c.transmission_id ? await ctx.db.get(c.transmission_id) : null;
+        for (const f of collectSpecFields(c, engine, transmission)) {
+          const fam = families.get(f.group) ?? { filled: 0, total: 0 };
+          fam.total++;
+          if (f.value != null && f.value !== "") fam.filled++;
+          families.set(f.group, fam);
+        }
+        const latestRun = await ctx.db
+          .query("enrichment_runs")
+          .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
+          .order("desc")
+          .first();
+        if (latestRun?.applicable_fill_rate != null) {
+          intervalsSum += latestRun.applicable_fill_rate;
+          intervalsN++;
+        }
+        if (latestRun?.quotability?.pct != null) {
+          quotSum += latestRun.quotability.pct;
+          quotN++;
+        }
+      }
+      const familiesObj = Object.fromEntries(families);
+      const specTotals = [...families.values()].reduce(
+        (s, f) => ({ filled: s.filled + f.filled, total: s.total + f.total }),
+        { filled: 0, total: 0 },
+      );
+      await upsertStat(
+        ctx,
+        "data.coverage.field_families",
+        specTotals.total > 0 ? specTotals.filled / specTotals.total : 0,
+        {
+          families: familiesObj,
+          intervals: { avg_applicable_fill_rate: intervalsN > 0 ? intervalsSum / intervalsN : 0, samples: intervalsN },
+          parts_quotability: { avg_pct: quotN > 0 ? quotSum / quotN : 0, samples: quotN },
+          configs: configs.length,
+        },
+      );
+      await chain({ phase: "cache" });
+      return { phase, chained: true, configs: configs.length };
+    }
+
+    if (phase === "cache") {
+      // scrape_cache health rollup. Each doc carries the FULL scraped page
+      // markdown (often 100s of KB) — a .take(500) here blew the 16MB read
+      // limit live (Jul 14). 100 docs/link stays far under it; the page reads
+      // only the materialized data.cache.summary stat.
+      const page = await ctx.db
+        .query("scrape_cache")
+        .paginate({ cursor: args.cursor ?? null, numItems: 100 });
+      const groups = new Map(
+        (args.cacheGroups ?? []).map((g) => [g.source_type, { ...g }]),
+      );
+      const domains = new Map(
+        (args.cacheDomains ?? []).map((d) => [d.domain, { ...d }]),
+      );
+      const expiring = [...(args.cacheExpiring ?? [])];
+      const now = Date.now();
+      const total = (args.count ?? 0) + page.page.length;
+      for (const r of page.page) {
+        const st = r.source_type ?? "(untyped)";
+        const g = groups.get(st) ?? {
+          source_type: st,
+          n: 0,
+          ttl_days: null as number | null,
+          newest: 0,
+          success: 0,
+        };
+        g.n++;
+        if (r.ttl_days != null) g.ttl_days = r.ttl_days;
+        if (r.scraped_at != null) g.newest = Math.max(g.newest, r.scraped_at);
+        if (r.scrape_success === true) g.success++;
+        groups.set(st, g);
+        if (r.domain) {
+          const d = domains.get(r.domain) ?? { domain: r.domain, n: 0, success: 0 };
+          d.n++;
+          if (r.scrape_success === true) d.success++;
+          domains.set(r.domain, d);
+        }
+        if (
+          r.expires_at != null &&
+          r.expires_at >= now &&
+          r.expires_at <= now + 7 * DAY &&
+          expiring.length < 50
+        ) {
+          expiring.push({
+            cache_key: r.cache_key,
+            domain: r.domain ?? null,
+            source_type: r.source_type ?? null,
+            expires_at: r.expires_at,
+          });
+        }
+      }
+      if (!page.isDone) {
+        await chain({
+          phase: "cache",
+          cursor: page.continueCursor,
+          count: total,
+          cacheGroups: [...groups.values()],
+          cacheDomains: [...domains.values()],
+          cacheExpiring: expiring,
+        });
+        return { phase, chained: true, count: total };
+      }
+      await upsertStat(ctx, "data.cache.summary", total, {
+        groups: [...groups.values()].sort((a, b) => b.n - a.n),
+        by_domain: [...domains.values()].sort((a, b) => b.n - a.n),
+        expiring_soon: expiring.sort((a, b) => a.expires_at - b.expires_at),
+      });
+      await chain({ phase: "finalize" });
+      return { phase, chained: true, count: total };
     }
 
     // finalize: vehicle_configs (384 measured — safe to collect)
     const configs = await ctx.db.query("vehicle_configs").collect();
     await upsertStat(ctx, "data.vehicle_configs_total", configs.length);
     return { phase, chained: false, configs: configs.length };
+  },
+});
+
+// --- Daily cost snapshots (Costs & Credits page, Data spec §11) -------------
+// Recomputes the last 3 UTC days each run so late-arriving completed_at /
+// cost stamps self-heal. Each day is one bounded by_created_at window.
+// daysBack > 3 is the one-time backfill path:
+//   npx convex run portalStats:recomputeCostDays '{"daysBack":120}'
+export const recomputeCostDays = internalMutation({
+  args: { daysBack: v.optional(v.number()) },
+  handler: async (ctx, { daysBack }): Promise<{ days: number }> => {
+    const now = Date.now();
+    const span = Math.min(Math.max(daysBack ?? 3, 1), 366);
+    for (let back = 0; back < span; back++) {
+      const dayStart = new Date(now - back * DAY);
+      dayStart.setUTCHours(0, 0, 0, 0);
+      const start = dayStart.getTime();
+      const end = start + DAY;
+      const runs = await ctx.db
+        .query("enrichment_runs")
+        .withIndex("by_created_at", (q) => q.gte("created_at", start).lt("created_at", end))
+        .collect();
+      const key = `data.costs.day.${dayStart.toISOString().slice(0, 10)}`;
+      const cost = runs.reduce((s, r) => s + (r.estimated_cost_usd ?? 0), 0);
+      await upsertStat(ctx, key, cost, {
+        runs: runs.length,
+        tokens_in: runs.reduce((s, r) => s + (r.total_tokens_in ?? 0), 0),
+        tokens_out: runs.reduce((s, r) => s + (r.total_tokens_out ?? 0), 0),
+        web_searches: runs.reduce((s, r) => s + (r.total_web_searches ?? 0), 0),
+        firecrawl_credits: runs.reduce((s, r) => s + (r.total_firecrawl_credits ?? 0), 0),
+      });
+    }
+    // Daily SLO snapshot (/data/insights history) — copies the live slo.*
+    // rows into a dated key so trends accumulate from deploy day. Upsert by
+    // key keeps same-day reruns idempotent.
+    const sloMeta: Record<string, { value: number; samples: number | null }> = {};
+    for (const key of Object.keys(SLO_THRESHOLDS)) {
+      const row = await ctx.db
+        .query("portal_stats")
+        .withIndex("by_key", (q) => q.eq("key", key))
+        .first();
+      if (row) {
+        sloMeta[key] = {
+          value: row.value,
+          samples: (row.meta as { samples?: number } | null)?.samples ?? null,
+        };
+      }
+    }
+    const today = new Date(now).toISOString().slice(0, 10);
+    await upsertStat(ctx, `data.slo.day.${today}`, Object.keys(sloMeta).length, sloMeta);
+    return { days: span };
   },
 });
 

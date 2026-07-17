@@ -13,6 +13,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession } from "../../../portal-session";
 import { AuditDrawer } from "@/components/portal/AuditDrawer";
+import { PageHeader } from "@/components/portal/ChartKit";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pending",
@@ -138,45 +139,46 @@ export default function OpsBookingDetailPage() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <Link href="/ops/bookings" className="text-[13px] text-slate-400 hover:text-slate-600">
-              Bookings /
-            </Link>
-            <h1 className="text-xl font-semibold text-slate-900">
-              {booking.invoiceNumber ?? `…${String(booking.id).slice(-6)}`}
-            </h1>
-            <StatusPill status={booking.status} />
-            {booking.liveStage && (
-              <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                {booking.liveStage}
-              </span>
-            )}
-          </div>
-          <div className="mt-1 text-[12px] text-slate-500">
-            Created {ts(booking.createdAt)}
-            {booking.scheduledDate && (
-              <>
-                {" · "}Scheduled {booking.scheduledDate}
-                {booking.scheduledTime ? ` ${booking.scheduledTime}` : ""}
-              </>
-            )}
-          </div>
+      <div>
+        <Link href="/ops/bookings" className="text-[13px] text-slate-400 hover:text-slate-600">
+          ← Bookings
+        </Link>
+        <div className="mt-1">
+          <PageHeader
+            title={`Booking ${booking.invoiceNumber ?? `…${String(booking.id).slice(-6)}`}`}
+            subtitle={`Created ${ts(booking.createdAt)}${
+              booking.scheduledDate
+                ? ` · Scheduled ${booking.scheduledDate}${
+                    booking.scheduledTime ? ` ${booking.scheduledTime}` : ""
+                  }`
+                : ""
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <StatusPill status={booking.status} />
+              {booking.liveStage && (
+                <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                  {booking.liveStage}
+                </span>
+              )}
+              <button
+                onClick={() => setAuditOpen(true)}
+                className="rounded-md border border-slate-200 px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Audit
+              </button>
+            </div>
+          </PageHeader>
         </div>
-        <button
-          onClick={() => setAuditOpen(true)}
-          className="rounded-md border border-slate-200 px-3 py-1.5 text-[13px] font-medium text-slate-600 hover:bg-slate-50"
-        >
-          Audit
-        </button>
       </div>
 
       {/* Entity chips */}
       <div className="flex flex-wrap gap-2">
         <Chip href={`/ops/users/${booking.user.id}`} label="User" value={booking.user.name} />
         <Chip label="VIN" value={booking.vehicleYmm ?? booking.vin ?? "—"} />
-        {booking.shop && <Chip label="Shop" value={booking.shop.name} />}
+        {booking.shop && (
+          <Chip href={`/shops/all/${booking.shop.id}`} label="Shop" value={booking.shop.name} />
+        )}
         {booking.mechanic && (
           <Chip
             label="Mechanic"
@@ -306,8 +308,19 @@ export default function OpsBookingDetailPage() {
               <tbody>
                 {booking.payments.map((p: PaymentRow) => (
                   <tr key={p.id} className="border-b border-slate-50 hover:bg-slate-50">
-                    <td className="py-2.5 pr-4 text-slate-500">{ts(p.createdAt)}</td>
-                    <td className="py-2.5 pr-4 font-medium">{money(p.amount)}</td>
+                    <td className="py-2.5 pr-4 text-slate-500">
+                      <Link href={`/ops/payments/${p.id}`} className="hover:underline">
+                        {ts(p.createdAt)}
+                      </Link>
+                    </td>
+                    <td className="py-2.5 pr-4 font-medium">
+                      <Link
+                        href={`/ops/payments/${p.id}`}
+                        className="text-slate-900 hover:underline"
+                      >
+                        {money(p.amount)}
+                      </Link>
+                    </td>
                     <td className="py-2.5 pr-4">
                       {p.capturedAmountCents != null ? money(p.capturedAmountCents / 100) : "—"}
                     </td>
@@ -355,7 +368,12 @@ export default function OpsBookingDetailPage() {
               <div className="flex justify-between gap-4 border-t border-slate-100 pt-1.5">
                 <dt className="text-slate-500">Shop</dt>
                 <dd className="text-right">
-                  <div className="font-medium text-slate-800">{booking.shop.name}</div>
+                  <Link
+                    href={`/shops/all/${booking.shop.id}`}
+                    className="font-medium text-slate-800 hover:underline"
+                  >
+                    {booking.shop.name}
+                  </Link>
                   <div className="text-[11px] text-slate-400">
                     {[booking.shop.address, booking.shop.phone].filter(Boolean).join(" · ") || "—"}
                   </div>

@@ -9,6 +9,16 @@ import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "@/app/(portals)/portal-session";
+import {
+  CARD_STATIC,
+  MICRO_H,
+  PageHeader,
+  Skeleton,
+  StatTile,
+  TrendArea,
+  TrendBars,
+  fmtNum,
+} from "@/components/portal/ChartKit";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -64,6 +74,72 @@ function CopyableMono({ value }: { value: string }) {
   );
 }
 
+// --- analytics zone ----------------------------------------------------------
+// Captured $/day (emerald area) and failures/day (red bars) as two stacked
+// panels — never dual-axis. Tiles sum the same portalSeries.paymentsDaily data.
+
+function PaymentsAnalytics({ token }: { token: string }) {
+  const days = 30;
+  const series = useQuery(api.portalSeries.paymentsDaily, { token, days });
+
+  const captured = series?.reduce((s, d) => s + d.captured_usd, 0);
+  const failed = series?.reduce((s, d) => s + d.failed, 0);
+  const count = series?.reduce((s, d) => s + d.count, 0);
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 gap-3">
+        <StatTile
+          label="Captured (30d)"
+          value={series === undefined ? <Skeleton /> : money(captured)}
+          spark={series?.map((d) => d.captured_usd)}
+          sparkColor="#059669"
+        />
+        <StatTile
+          label="Payments (30d)"
+          value={series === undefined ? <Skeleton /> : fmtNum(count)}
+          spark={series?.map((d) => d.count)}
+          sparkColor="#3b82f6"
+        />
+        <StatTile
+          label="Failed (30d)"
+          value={
+            series === undefined ? (
+              <Skeleton />
+            ) : (failed ?? 0) > 0 ? (
+              <span className="text-red-600">{fmtNum(failed)}</span>
+            ) : (
+              fmtNum(failed)
+            )
+          }
+          spark={series?.map((d) => d.failed)}
+          sparkColor="#dc2626"
+        />
+      </div>
+      <div className={CARD_STATIC}>
+        <div className="flex items-baseline justify-between">
+          <h2 className={MICRO_H}>Captured per day</h2>
+          <span className="text-[11px] text-slate-400">last {days} days</span>
+        </div>
+        <div className="mt-2">
+          <TrendArea
+            data={series}
+            dataKey="captured_usd"
+            name="Captured"
+            color="#059669"
+            height={150}
+            isMoney
+          />
+        </div>
+        <h2 className={`${MICRO_H} mt-5`}>Failed per day</h2>
+        <div className="mt-2">
+          <TrendBars data={series} dataKey="failed" name="Failed" color="#fca5a5" height={110} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- page --------------------------------------------------------------------
 
 export default function OpsPaymentsPage() {
@@ -83,20 +159,18 @@ export default function OpsPaymentsPage() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-900">Payments</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
-            Forensic window on Stripe payment state. Money changes only via Stripe
-            webhooks — this surface is read-only.
-          </p>
-        </div>
+      <PageHeader
+        title="Payments"
+        subtitle="Forensic window on Stripe payment state. Money changes only via Stripe webhooks — this surface is read-only."
+      >
         {data && (
           <span className="text-xs text-slate-400">
             showing {data.items.length} of last {data.windowSize} payments
           </span>
         )}
-      </div>
+      </PageHeader>
+
+      <PaymentsAnalytics token={token} />
 
       {/* Status filter pills */}
       <div className="flex flex-wrap items-center gap-2">
@@ -134,7 +208,7 @@ export default function OpsPaymentsPage() {
       </div>
 
       {/* Table */}
-      <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <div className={CARD_STATIC}>
         {data === undefined && (
           <div className="py-10 text-center text-sm text-slate-400">Loading payments…</div>
         )}
@@ -194,7 +268,15 @@ export default function OpsPaymentsPage() {
                         {p.userName}
                       </Link>
                     </td>
-                    <td className="py-2.5 pr-4 text-slate-600">{p.shopName}</td>
+                    <td className="py-2.5 pr-4 text-slate-600">
+                      {p.shopId ? (
+                        <Link href={`/shops/all/${p.shopId}`} className="hover:underline">
+                          {p.shopName}
+                        </Link>
+                      ) : (
+                        p.shopName
+                      )}
+                    </td>
                     <td className="py-2.5 pr-4">
                       <Link
                         href={`/ops/bookings/${p.bookingId}`}

@@ -139,6 +139,29 @@ export type OpsUserEngagement = {
   } | null;
   // Referrals this user has made (they are the referrer).
   referralsMade: { total: number; credited: number; pending: number };
+  // Saved addresses (home/work/other).
+  savedAddresses: {
+    id: string;
+    type: string;
+    label: string;
+    address: string;
+    isPrimary: boolean;
+  }[];
+  // Favorited / hidden mechanics.
+  mechanicPreferences: {
+    id: string;
+    mechanicId: string;
+    mechanic: string | null;
+    isFavorite: boolean;
+    isHidden: boolean;
+  }[];
+  // Onboarding answers (car-knowledge level + intent).
+  onboarding: {
+    carKnowledgeLevel: string | null;
+    hasAnswers: boolean;
+    hasIntentions: boolean;
+    lastUpdated: number | null;
+  } | null;
 };
 
 export type OpsUserMoneyResult = {
@@ -174,6 +197,16 @@ export type OpsUserMoneyResult = {
     refundTotal: number; // dollars refunded (negative ledger rows, abs)
     refundRate: number | null; // refundTotal / capturedTotal
   };
+  // Loyalty / ownership-credit ledger.
+  credits: {
+    id: Id<"ownership_credit_transactions">;
+    amount: number;
+    type: string;
+    description: string | null;
+    created: number;
+    expiresAt: number | null;
+  }[];
+  creditBalance: number;
 };
 
 export type OpsUserFootprint = {
@@ -436,7 +469,7 @@ export const money = query({
   handler: async (ctx, { token, id }): Promise<OpsUserMoneyResult> => {
     await requireDirector(ctx, token);
 
-    const [payments, transactions] = await Promise.all([
+    const [payments, transactions, creditRows] = await Promise.all([
       ctx.db
         .query("payments")
         .withIndex("by_user_id", (q) => q.eq("user_id", id))
@@ -447,7 +480,13 @@ export const money = query({
         .withIndex("by_user_id_created_at", (q) => q.eq("user_id", id))
         .order("desc")
         .take(100),
+      ctx.db
+        .query("ownership_credit_transactions")
+        .withIndex("by_user_id_created_at", (q) => q.eq("user_id", id))
+        .order("desc")
+        .take(100),
     ]);
+    const creditBalance = creditRows.reduce((s, c) => s + c.amount, 0);
 
     // Rollups: captured $ (prefer captured_amount_cents, else amount for
     // succeeded rows), refunds from negative ledger rows.
@@ -495,6 +534,15 @@ export const money = query({
         iconType: t.icon_type ?? null,
         bookingId: t.booking_id ?? null,
       })),
+      credits: creditRows.map((c) => ({
+        id: c._id,
+        amount: c.amount,
+        type: c.type,
+        description: c.description ?? null,
+        created: c.created_at ?? c._creationTime,
+        expiresAt: c.expires_at ?? null,
+      })),
+      creditBalance,
     };
   },
 });
@@ -539,20 +587,47 @@ export const engagement = query({
     const u = await ctx.db.get(id);
     if (!u) return null;
 
-    const [prefsRow, referredByRow, referralsMade] = await Promise.all([
-      ctx.db
-        .query("user_settings_preferences")
-        .withIndex("by_user_id", (q) => q.eq("user_id", id))
-        .first(),
-      ctx.db
-        .query("referrals")
-        .withIndex("by_referee", (q) => q.eq("referee_user_id", id))
-        .first(),
-      ctx.db
-        .query("referrals")
-        .withIndex("by_referrer", (q) => q.eq("referrer_user_id", id))
-        .collect(),
-    ]);
+    const [prefsRow, referredByRow, referralsMade, addressRows, mechPrefRows, onboardingRow] =
+      await Promise.all([
+        ctx.db
+          .query("user_settings_preferences")
+          .withIndex("by_user_id", (q) => q.eq("user_id", id))
+          .first(),
+        ctx.db
+          .query("referrals")
+          .withIndex("by_referee", (q) => q.eq("referee_user_id", id))
+          .first(),
+        ctx.db
+          .query("referrals")
+          .withIndex("by_referrer", (q) => q.eq("referrer_user_id", id))
+          .collect(),
+        ctx.db
+          .query("user_saved_addresses")
+          .withIndex("by_user_id", (q) => q.eq("user_id", id))
+          .collect(),
+        ctx.db
+          .query("user_mechanic_preferences")
+          .withIndex("by_user_id", (q) => q.eq("user_id", id))
+          .collect(),
+        ctx.db
+          .query("onboarding_questions_answers")
+          .withIndex("by_user_id", (q) => q.eq("user_id", id))
+          .first(),
+      ]);
+
+    const mechanicPreferences = await Promise.all(
+      mechPrefRows.map(async (m) => {
+        const mech = await ctx.db.get(m.mechanic_id);
+        const mo = mech as { first_name?: string; last_name?: string } | null;
+        return {
+          id: String(m._id),
+          mechanicId: String(m.mechanic_id),
+          mechanic: mo ? [mo.first_name, mo.last_name].filter(Boolean).join(" ") || null : null,
+          isFavorite: m.is_favorite === true,
+          isHidden: m.is_hidden === true,
+        };
+      }),
+    );
 
     let referredBy: OpsUserEngagement["referredBy"] = null;
     if (referredByRow) {
@@ -583,6 +658,25 @@ export const engagement = query({
         credited: referralsMade.filter((r) => r.status === "credited").length,
         pending: referralsMade.filter((r) => r.status === "pending").length,
       },
+      savedAddresses: addressRows.map((a) => ({
+        id: String(a._id),
+        type: a.type,
+        label: a.label,
+        address: a.address,
+        isPrimary: a.is_primary === true,
+      })),
+      mechanicPreferences,
+      onboarding: onboardingRow
+        ? {
+            carKnowledgeLevel:
+              onboardingRow.car_knowledge_level != null
+                ? String(onboardingRow.car_knowledge_level)
+                : null,
+            hasAnswers: onboardingRow.questions_and_answers != null,
+            hasIntentions: onboardingRow.user_intentions != null,
+            lastUpdated: onboardingRow.last_updated ?? null,
+          }
+        : null,
     };
   },
 });
@@ -638,6 +732,158 @@ export const footprint = query({
         refund: d.resolution_refund_cents != null ? d.resolution_refund_cents / 100 : null,
         filedAt: d.filed_at_ms,
         resolvedAt: d.resolved_at_ms ?? null,
+      })),
+    };
+  },
+});
+
+// -----------------------------------------------------------------------------
+// Detail — Vehicle records. All the per-vehicle history that was dark until now:
+// maintenance, odometer, documents, inspections, health, classification,
+// driving profile, service states, and check-ins. Lazy-loaded when a garage
+// card is expanded. Keyed by vehicle_owner_id (most tables), vin (inspections),
+// and vin+user_id (health points) — see the schema field-name gotchas.
+// -----------------------------------------------------------------------------
+export const vehicleRecords = query({
+  args: {
+    token: v.string(),
+    userId: v.id("users"),
+    ownerId: v.id("vehicle_owners"),
+    vin: v.string(),
+  },
+  handler: async (ctx, { token, userId, ownerId, vin }) => {
+    await requireDirector(ctx, token);
+
+    const [
+      maintenance,
+      odometer,
+      documentRows,
+      inspectionRows,
+      healthPoints,
+      snapshots,
+      classifications,
+      drivingProfile,
+      serviceStateRows,
+      checkins,
+    ] = await Promise.all([
+      ctx.db.query("maintenance_records").withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", ownerId)).collect(),
+      ctx.db.query("odometer_history").withIndex("by_vehicle_and_date", (q) => q.eq("vehicleOwnerId", ownerId)).order("desc").take(20),
+      ctx.db.query("vehicle_documents").withIndex("by_vehicle_owner", (q) => q.eq("vehicle_owner_id", ownerId)).collect(),
+      ctx.db.query("vehicle_inspections").withIndex("by_vin", (q) => q.eq("vin", vin)).order("desc").take(20),
+      ctx.db.query("vehicle_health_points").withIndex("by_vin_user", (q) => q.eq("vin", vin).eq("user_id", userId)).first(),
+      ctx.db.query("vehicle_health_snapshots").withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", ownerId)).order("desc").take(20),
+      ctx.db.query("vehicle_classifications").withIndex("by_vehicle_owner", (q) => q.eq("vehicle_owner_id", ownerId)).collect(),
+      ctx.db.query("vehicle_driving_profiles").withIndex("by_vehicle_owner", (q) => q.eq("vehicle_owner_id", ownerId)).first(),
+      ctx.db.query("vehicle_service_states").withIndex("by_vehicle_owner", (q) => q.eq("vehicle_owner_id", ownerId)).collect(),
+      ctx.db.query("vehicle_checkins").withIndex("by_vehicle_owner_completed", (q) => q.eq("vehicle_owner_id", ownerId)).order("desc").take(20),
+    ]);
+
+    // Resolve document + inspection storage ids to URLs.
+    const documents = await Promise.all(
+      documentRows
+        .sort((a, b) => b.uploaded_at - a.uploaded_at)
+        .map(async (d) => ({
+          id: String(d._id),
+          filename: d.original_filename,
+          mimeType: d.mime_type,
+          source: d.source,
+          parseStatus: d.parse_status,
+          uploadedAt: d.uploaded_at,
+          url: await ctx.storage.getUrl(d.storage_id),
+        })),
+    );
+    const inspections = await Promise.all(
+      inspectionRows.map(async (i) => ({
+        id: String(i._id),
+        bookingId: String(i.booking_id),
+        templateVersion: i.template_version,
+        attention: (i.findings_attention ?? []).length,
+        monitor: (i.findings_monitor ?? []).length,
+        createdAt: i.created_at,
+        pdfUrl: i.pdf_storage_id ? await ctx.storage.getUrl(i.pdf_storage_id) : null,
+      })),
+    );
+
+    // Latest classification (prefer active, else newest computed).
+    const classification =
+      classifications.sort(
+        (a, b) =>
+          (b.status === "active" ? 1 : 0) - (a.status === "active" ? 1 : 0) ||
+          (b.computed_at ?? 0) - (a.computed_at ?? 0),
+      )[0] ?? null;
+
+    // Surfaced service states, service names resolved.
+    const svcName = new Map<string, string>();
+    const serviceStates = await Promise.all(
+      serviceStateRows
+        .filter((s) => s.is_surfaced !== false)
+        .slice(0, 30)
+        .map(async (s) => {
+          const key = String(s.service_id);
+          if (!svcName.has(key)) {
+            const svc = await ctx.db.get(s.service_id);
+            svcName.set(key, svc?.name ?? "(service)");
+          }
+          return {
+            service: svcName.get(key) ?? "(service)",
+            urgency: s.urgency ?? null,
+            dueAtMileage: s.due_at_mileage ?? null,
+            dueAtDate: s.due_at_date ?? null,
+          };
+        }),
+    );
+
+    return {
+      maintenance: maintenance.map((m) => ({
+        id: String(m._id),
+        type: m.type,
+        lastServiceDate: m.lastServiceDate != null ? String(m.lastServiceDate) : null,
+        lastServiceMileage: m.lastServiceMileage ?? null,
+        serviceSource: m.serviceSource ?? null,
+        confidence: m.confidence ?? null,
+      })),
+      odometer: odometer.map((o) => ({
+        id: String(o._id),
+        distance: o.distance,
+        unit: o.unit,
+        recordedAt: o.recordedAt,
+      })),
+      documents,
+      inspections,
+      healthPoints: healthPoints ? { points: healthPoints.points, updatedAt: healthPoints.updated_at } : null,
+      snapshots: snapshots.map((s) => ({
+        id: String(s._id),
+        type: s.snapshotType,
+        source: s.source ?? null,
+        recordedAt: s.recordedAt,
+      })),
+      classification: classification
+        ? {
+            vehicleMode: classification.vehicle_mode,
+            ownerSegment: classification.owner_segment ?? null,
+            annualMileage: classification.annual_mileage_estimated ?? null,
+            status: classification.status ?? null,
+            computedAt: classification.computed_at ?? null,
+          }
+        : null,
+      drivingProfile: drivingProfile
+        ? {
+            currentMileage: drivingProfile.current_mileage ?? null,
+            annualMileageBand: drivingProfile.annual_mileage_band ?? null,
+            usagePattern: drivingProfile.usage_pattern ?? null,
+            ownershipDuration: drivingProfile.ownership_duration ?? null,
+            lastServiceWhat: Array.isArray(drivingProfile.last_service_what)
+              ? drivingProfile.last_service_what.join(", ")
+              : drivingProfile.last_service_what ?? null,
+          }
+        : null,
+      serviceStates,
+      checkins: checkins.map((c) => ({
+        id: String(c._id),
+        status: c.status ?? null,
+        mileageReported: c.mileage_reported ?? null,
+        symptoms: c.symptoms_text ?? null,
+        completedAt: c.completed_at ?? null,
       })),
     };
   },

@@ -387,6 +387,73 @@ function EngagementTab({ userId }: { userId: Id<"users"> }) {
           )}
         </div>
       </div>
+
+      {/* Saved addresses */}
+      <div className={CARD}>
+        <h2 className="text-sm font-semibold text-slate-900">Saved addresses</h2>
+        {data.savedAddresses.length === 0 ? (
+          <p className="mt-2 text-[13px] text-slate-500">No saved addresses.</p>
+        ) : (
+          <ul className="mt-3 space-y-2">
+            {data.savedAddresses.map((a) => (
+              <li key={a.id} className="text-[13px]">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-slate-800">{a.label}</span>
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{a.type}</span>
+                  {a.isPrimary && <span className={`${PILL} bg-emerald-50 text-emerald-700`}>primary</span>}
+                </div>
+                <div className="text-[12px] text-slate-500">{a.address}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Mechanic preferences + onboarding */}
+      <div className={CARD}>
+        <h2 className="text-sm font-semibold text-slate-900">Preferences</h2>
+        <div className="mt-3 space-y-3">
+          <div>
+            <div className="text-xs font-medium text-slate-500">Mechanic preferences</div>
+            {data.mechanicPreferences.length === 0 ? (
+              <p className="mt-1 text-[13px] text-slate-500">None set.</p>
+            ) : (
+              <ul className="mt-1 space-y-1">
+                {data.mechanicPreferences.map((m) => (
+                  <li key={m.id} className="flex items-center gap-2 text-[13px]">
+                    {m.mechanic && m.mechanicId ? (
+                      <Link href={`/shops/mechanics/${m.mechanicId}`} className="text-blue-600 hover:underline">
+                        {m.mechanic}
+                      </Link>
+                    ) : (
+                      <span className="text-slate-700">{m.mechanic ?? "Unknown mechanic"}</span>
+                    )}
+                    {m.isFavorite && <span className={`${PILL} bg-amber-50 text-amber-700`}>★ favorite</span>}
+                    {m.isHidden && <span className={`${PILL} bg-slate-100 text-slate-500`}>hidden</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="border-t border-slate-100 pt-3">
+            <div className="text-xs font-medium text-slate-500">Onboarding</div>
+            {data.onboarding ? (
+              <div className="mt-1 text-[13px] text-slate-700">
+                {data.onboarding.carKnowledgeLevel && (
+                  <span className="mr-2">Car knowledge: <span className="font-medium">{data.onboarding.carKnowledgeLevel}</span></span>
+                )}
+                {data.onboarding.hasAnswers && <span className={`${PILL} bg-slate-100 text-slate-600`}>Q&amp;A on file</span>}
+                {data.onboarding.hasIntentions && <span className={`${PILL} ml-1 bg-slate-100 text-slate-600`}>intent captured</span>}
+                {data.onboarding.lastUpdated && (
+                  <div className="mt-0.5 text-[11px] text-slate-400">updated {fmtDate(data.onboarding.lastUpdated)}</div>
+                )}
+              </div>
+            ) : (
+              <p className="mt-1 text-[13px] text-slate-500">No onboarding answers on file.</p>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -456,6 +523,7 @@ function GarageTab({ userId }: { userId: Id<"users"> }) {
           )}
         </div>
       </div>
+      <VehicleRecordsPanel userId={userId} ownerId={v.ownerId} vin={v.vin} />
     </div>
   );
 
@@ -469,6 +537,170 @@ function GarageTab({ userId }: { userId: Id<"users"> }) {
           </div>
           {removed.map((v) => <VehicleCard key={v.ownerId} v={v} />)}
         </>
+      )}
+    </div>
+  );
+}
+
+// Per-vehicle "records & history" — lazy-loaded on expand. Surfaces the
+// maintenance / odometer / documents / inspections / health / classification /
+// driving-profile / service-state / check-in data that was previously dark.
+function VehicleRecordsPanel({
+  userId,
+  ownerId,
+  vin,
+}: {
+  userId: Id<"users">;
+  ownerId: Id<"vehicle_owners">;
+  vin: string;
+}) {
+  const { token } = usePortalSession();
+  const [open, setOpen] = useState(false);
+  const data = useQuery(
+    api.opsUsers.vehicleRecords,
+    open ? { token, userId, ownerId, vin } : "skip",
+  );
+
+  return (
+    <div className="mt-3 border-t border-slate-100 pt-3">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="text-[12px] font-medium text-blue-600 hover:underline"
+      >
+        {open ? "▾ Hide records & history" : "▸ Records & history"}
+      </button>
+      {open && (
+        <div className="mt-3">
+          {data === undefined ? (
+            <div className="h-16 animate-pulse rounded bg-slate-100" />
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {/* Classification + driving profile */}
+              {(data.classification || data.drivingProfile || data.healthPoints) && (
+                <div className="rounded-lg bg-slate-50 p-3 text-[12px]">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Profile</div>
+                  <div className="mt-1 space-y-0.5 text-slate-600">
+                    {data.classification && (
+                      <div>Mode: <span className="text-slate-800">{data.classification.vehicleMode}</span>{data.classification.ownerSegment ? ` · ${data.classification.ownerSegment}` : ""}{data.classification.annualMileage != null ? ` · ~${data.classification.annualMileage.toLocaleString()} mi/yr` : ""}</div>
+                    )}
+                    {data.drivingProfile && (
+                      <div>{[data.drivingProfile.usagePattern, data.drivingProfile.annualMileageBand, data.drivingProfile.ownershipDuration].filter(Boolean).join(" · ") || "—"}</div>
+                    )}
+                    {data.healthPoints && <div>Health points: <span className="text-slate-800">{data.healthPoints.points}</span></div>}
+                  </div>
+                </div>
+              )}
+
+              {/* Maintenance records */}
+              <div className="rounded-lg bg-slate-50 p-3 text-[12px]">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Maintenance ({data.maintenance.length})</div>
+                {data.maintenance.length === 0 ? (
+                  <p className="mt-1 text-slate-400">No records.</p>
+                ) : (
+                  <ul className="mt-1 space-y-0.5 text-slate-600">
+                    {data.maintenance.slice(0, 6).map((m) => (
+                      <li key={m.id}>
+                        {m.type.replace(/_/g, " ")}
+                        {m.lastServiceMileage != null ? ` · ${m.lastServiceMileage.toLocaleString()} mi` : ""}
+                        {m.lastServiceDate ? ` · ${m.lastServiceDate}` : ""}
+                        {m.confidence ? ` (${m.confidence})` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Odometer */}
+              <div className="rounded-lg bg-slate-50 p-3 text-[12px]">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Odometer ({data.odometer.length})</div>
+                {data.odometer.length === 0 ? (
+                  <p className="mt-1 text-slate-400">No readings.</p>
+                ) : (
+                  <ul className="mt-1 space-y-0.5 text-slate-600">
+                    {data.odometer.slice(0, 5).map((o) => (
+                      <li key={o.id}>{o.distance.toLocaleString()} {o.unit} · {fmtDate(o.recordedAt)}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Documents */}
+              <div className="rounded-lg bg-slate-50 p-3 text-[12px]">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Documents ({data.documents.length})</div>
+                {data.documents.length === 0 ? (
+                  <p className="mt-1 text-slate-400">No documents.</p>
+                ) : (
+                  <ul className="mt-1 space-y-0.5">
+                    {data.documents.map((d) => (
+                      <li key={d.id}>
+                        {d.url ? (
+                          <a href={d.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{d.filename}</a>
+                        ) : (
+                          <span className="text-slate-600">{d.filename}</span>
+                        )}
+                        <span className="text-slate-400"> · {d.source.replace(/_/g, " ")} · {d.parseStatus}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Inspections */}
+              <div className="rounded-lg bg-slate-50 p-3 text-[12px]">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Inspections ({data.inspections.length})</div>
+                {data.inspections.length === 0 ? (
+                  <p className="mt-1 text-slate-400">No inspections.</p>
+                ) : (
+                  <ul className="mt-1 space-y-0.5 text-slate-600">
+                    {data.inspections.slice(0, 6).map((i) => (
+                      <li key={i.id}>
+                        <Link href={`/ops/bookings/${i.bookingId}`} className="text-blue-600 hover:underline">{fmtDate(i.createdAt)}</Link>
+                        <span className="text-slate-400"> · {i.attention} attention · {i.monitor} monitor</span>
+                        {i.pdfUrl && <a href={i.pdfUrl} target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-600 hover:underline">PDF</a>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Service states (due) */}
+              <div className="rounded-lg bg-slate-50 p-3 text-[12px]">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Service states ({data.serviceStates.length})</div>
+                {data.serviceStates.length === 0 ? (
+                  <p className="mt-1 text-slate-400">None surfaced.</p>
+                ) : (
+                  <ul className="mt-1 space-y-0.5 text-slate-600">
+                    {data.serviceStates.slice(0, 8).map((s, i) => (
+                      <li key={i}>
+                        {s.service}
+                        {s.urgency ? ` · ${s.urgency}` : ""}
+                        {s.dueAtMileage != null ? ` · due ${s.dueAtMileage.toLocaleString()} mi` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* Check-ins */}
+              <div className="rounded-lg bg-slate-50 p-3 text-[12px]">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Check-ins ({data.checkins.length})</div>
+                {data.checkins.length === 0 ? (
+                  <p className="mt-1 text-slate-400">No check-ins.</p>
+                ) : (
+                  <ul className="mt-1 space-y-0.5 text-slate-600">
+                    {data.checkins.slice(0, 5).map((c) => (
+                      <li key={c.id}>
+                        {c.completedAt ? fmtDate(c.completedAt) : "in progress"}
+                        {c.mileageReported != null ? ` · ${c.mileageReported.toLocaleString()} mi` : ""}
+                        {c.symptoms ? ` · "${c.symptoms.slice(0, 40)}"` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -680,6 +912,36 @@ function MoneyTab({ userId }: { userId: Id<"users"> }) {
                   }`}
                 >
                   {t.amount < 0 ? "−" : "+"}{fmtMoney(Math.abs(t.amount))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Loyalty / ownership-credit ledger */}
+      <div className={CARD}>
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold text-slate-900">Loyalty credits</h2>
+          <span className="text-[13px] font-semibold text-slate-800">
+            Balance {fmtMoney(data.creditBalance)}
+          </span>
+        </div>
+        {data.credits.length === 0 ? (
+          <div className="py-4 text-center text-sm text-slate-400">No credit transactions.</div>
+        ) : (
+          <div className="mt-3">
+            {data.credits.map((c) => (
+              <div key={c.id} className="flex items-center justify-between gap-3 border-b border-slate-50 py-2 last:border-0">
+                <div className="min-w-0">
+                  <div className="truncate text-[13px] text-slate-800">{c.description ?? c.type.replace(/_/g, " ")}</div>
+                  <div className="text-[11px] text-slate-400">
+                    {fmtDate(c.created)} · {c.type.replace(/_/g, " ")}
+                    {c.expiresAt ? ` · expires ${fmtDate(c.expiresAt)}` : ""}
+                  </div>
+                </div>
+                <div className={`shrink-0 tabular-nums text-[13px] font-semibold ${c.amount < 0 ? "text-red-600" : "text-emerald-600"}`}>
+                  {c.amount < 0 ? "−" : "+"}{fmtMoney(Math.abs(c.amount))}
                 </div>
               </div>
             ))}

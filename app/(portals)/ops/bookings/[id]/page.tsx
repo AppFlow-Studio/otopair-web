@@ -680,6 +680,41 @@ function CompletionTab({ token, id }: { token: string; id: Id<"bookings"> }) {
           </ul>
         )}
       </Card>
+
+      {/* Post-job recommendations */}
+      {Array.isArray(data.recommendations) && data.recommendations.length > 0 && (
+        <Card title={`Recommendations (${data.recommendations.length})`}>
+          <div className="space-y-2">
+            {data.recommendations.map((r: {
+              id: string; service: string | null; freeformText: string | null;
+              urgency: string; status: string; reason: string | null;
+              authorLabel: string | null; targetMileage: number | null;
+              visibleToDriver: boolean; createdAt: number;
+            }) => (
+              <div key={r.id} className="rounded-lg border border-slate-100 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[13px] font-medium text-slate-800">
+                    {r.service ?? r.freeformText ?? "Recommendation"}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] ${
+                      r.urgency === "soon" ? "bg-red-50 text-red-700" : r.urgency === "within_3_months" ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600"
+                    }`}>{r.urgency.replace(/_/g, " ")}</span>
+                    <span className="rounded px-1.5 py-0.5 text-[10px] bg-slate-100 text-slate-600">{r.status}</span>
+                  </span>
+                </div>
+                {r.reason && <p className="mt-1 text-[12px] text-slate-600">{r.reason}</p>}
+                <div className="mt-1 text-[11px] text-slate-400">
+                  {ts(r.createdAt)}
+                  {r.authorLabel ? ` · ${r.authorLabel}` : ""}
+                  {r.targetMileage != null ? ` · target ${r.targetMileage.toLocaleString()} mi` : ""}
+                  {r.visibleToDriver ? " · visible to driver" : " · internal"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
@@ -808,6 +843,50 @@ function MoneyApprovalsTab({ token, id }: { token: string; id: Id<"bookings"> })
                   {d.closedAtMs && ` · closed ${ts(d.closedAtMs)}`}
                   {d.evidenceDueByMs && ` · evidence due ${ts(d.evidenceDueByMs)}`}
                 </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Shop quote responses (tire/rotor jobs) + dismissals */}
+      {(data.tireQuotes.length > 0 || data.rotorQuotes.length > 0 || data.dismissals.length > 0) && (
+        <Card title="Shop quote responses">
+          <div className="space-y-2">
+            {data.tireQuotes.map((q) => (
+              <div key={q.id} className={`rounded-lg border border-slate-100 p-3 text-[12px] ${q.superseded ? "opacity-50" : ""}`}>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-slate-800">
+                    🛞 {q.shop ?? "Shop"} — {q.brand}{q.model ? ` ${q.model}` : ""} ×{q.quantity}
+                  </span>
+                  <span className="font-semibold text-slate-800">{money(q.total)}</span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-400">
+                  {money(q.perUnit)}/tire · labor {money(q.labor)}
+                  {q.availability && ` · avail ${q.availability}`}
+                  {q.superseded && " · superseded"}
+                </div>
+              </div>
+            ))}
+            {data.rotorQuotes.map((q) => (
+              <div key={q.id} className={`rounded-lg border border-slate-100 p-3 text-[12px] ${q.superseded ? "opacity-50" : ""}`}>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-slate-800">
+                    🛑 {q.shop ?? "Shop"} — {q.brand}{q.model ? ` ${q.model}` : ""} ×{q.quantity}
+                  </span>
+                  <span className="font-semibold text-slate-800">{money(q.total)}</span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-400">
+                  {money(q.perUnit)}/rotor · labor {money(q.labor)}
+                  {q.padBrand && ` · pads ${q.padBrand}`}
+                  {q.availability && ` · avail ${q.availability}`}
+                  {q.superseded && " · superseded"}
+                </div>
+              </div>
+            ))}
+            {data.dismissals.map((d) => (
+              <div key={d.id} className="text-[11px] text-slate-400">
+                {d.shop ?? "Shop"} dismissed the {d.kind} quote request · {ts(d.dismissedAtMs)}
               </div>
             ))}
           </div>

@@ -471,28 +471,47 @@ export const shopInsights = query({
   handler: async (ctx, { token, id }) => {
     await requireDirector(ctx, token);
 
-    const [reviewRows, auditRows, fixedPriceRows, bookings, disputes] = await Promise.all([
-      ctx.db
-        .query("reviews")
-        .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
-        .take(100),
-      ctx.db
-        .query("audit_log")
-        .withIndex("by_entity", (q) => q.eq("entity_type", "shops").eq("entity_id", String(id)))
-        .collect(),
-      ctx.db
-        .query("shop_service_fixed_prices")
-        .withIndex("by_shop", (q) => q.eq("shop_id", id))
-        .collect(),
-      ctx.db
-        .query("bookings")
-        .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
-        .take(500),
-      ctx.db
-        .query("payment_disputes")
-        .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
-        .take(100),
-    ]);
+    const [reviewRows, auditRows, fixedPriceRows, bookings, disputes, portfolioRows] =
+      await Promise.all([
+        ctx.db
+          .query("reviews")
+          .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+          .take(100),
+        ctx.db
+          .query("audit_log")
+          .withIndex("by_entity", (q) => q.eq("entity_type", "shops").eq("entity_id", String(id)))
+          .collect(),
+        ctx.db
+          .query("shop_service_fixed_prices")
+          .withIndex("by_shop", (q) => q.eq("shop_id", id))
+          .collect(),
+        ctx.db
+          .query("bookings")
+          .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+          .take(500),
+        ctx.db
+          .query("payment_disputes")
+          .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+          .take(100),
+        ctx.db
+          .query("shop_portfolio")
+          .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+          .collect(),
+      ]);
+
+    // Portfolio photos — content_id references cdn_assets (url + caption).
+    const portfolio = (
+      await Promise.all(
+        portfolioRows
+          .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
+          .map(async (p) => {
+            const asset = (await ctx.db.get(
+              p.content_id as Id<"cdn_assets">,
+            )) as { url?: string; caption?: string } | null;
+            return { id: String(p._id), url: asset?.url ?? null, caption: asset?.caption ?? null };
+          }),
+      )
+    ).filter((x): x is { id: string; url: string; caption: string | null } => x.url != null);
 
     // Reviews (visible + hidden), reviewer + mechanic resolved.
     const userName = new Map<string, string | null>();
@@ -560,6 +579,7 @@ export const shopInsights = query({
       reviews,
       rateHistory,
       fixedPrices,
+      portfolio,
       stats: {
         total,
         completed,

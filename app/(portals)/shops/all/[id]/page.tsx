@@ -122,6 +122,7 @@ type ShopInsights = {
   }[];
   rateHistory: { actor: string; detail: string | null; at: number }[];
   fixedPrices: { service: string; tier: string; price: number }[];
+  portfolio: { id: string; url: string; caption: string | null }[];
   stats: {
     total: number;
     completed: number;
@@ -924,6 +925,21 @@ export default function ShopDetailPage() {
                   <div className="mt-0.5 text-lg font-bold text-slate-900">{insights.stats.disputeCount}</div>
                 </Card>
               </div>
+
+              {/* Portfolio gallery */}
+              {insights.portfolio.length > 0 && (
+                <Card>
+                  <h2 className="text-sm font-semibold text-slate-900">Portfolio ({insights.portfolio.length})</h2>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {insights.portfolio.map((p) => (
+                      <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" title={p.caption ?? undefined}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={p.url} alt={p.caption ?? "portfolio"} className="h-24 w-32 rounded-lg object-cover ring-1 ring-slate-200 hover:ring-slate-400" />
+                      </a>
+                    ))}
+                  </div>
+                </Card>
+              )}
 
               <div className="grid gap-4 lg:grid-cols-2">
                 {/* Reviews */}

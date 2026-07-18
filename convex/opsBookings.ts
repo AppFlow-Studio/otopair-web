@@ -616,6 +616,35 @@ export const completion = query({
       };
     }
 
+    // Structured post-job recommendations logged by the mechanic.
+    const recRows = await ctx.db
+      .query("job_recommendations")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+      .collect();
+    const recommendations = await Promise.all(
+      recRows
+        .sort((a, b) => b.created_at - a.created_at)
+        .map(async (r) => {
+          let serviceName: string | null = null;
+          if (r.recommended_service_id) {
+            const s = await ctx.db.get(r.recommended_service_id);
+            serviceName = s?.name ?? null;
+          }
+          return {
+            id: String(r._id),
+            service: serviceName,
+            freeformText: r.freeform_text ?? null,
+            urgency: r.urgency,
+            status: r.status,
+            reason: r.reason ?? null,
+            authorLabel: r.author_label ?? null,
+            targetMileage: r.target_mileage ?? null,
+            visibleToDriver: r.visible_to_driver,
+            createdAt: r.created_at,
+          };
+        }),
+    );
+
     return {
       arrivedAtMs: booking.vehicle_arrived_at_ms ?? null,
       completedAtMs: booking.completed_at_ms ?? null,
@@ -633,6 +662,7 @@ export const completion = query({
       recommendedServiceName,
       recommendationSentAtMs: booking.recommendation_sent_at_ms ?? null,
       recommendationDecidedAtMs: booking.recommendation_decided_at_ms ?? null,
+      recommendations,
       jobActual,
     };
   },
@@ -682,7 +712,7 @@ export const moneyDetail = query({
       })),
     );
 
-    const [bDisputes, pDisputes] = await Promise.all([
+    const [bDisputes, pDisputes, tireRows, rotorRows, dismissalRows] = await Promise.all([
       ctx.db
         .query("booking_disputes")
         .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
@@ -691,7 +721,69 @@ export const moneyDetail = query({
         .query("payment_disputes")
         .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
         .collect(),
+      ctx.db
+        .query("tire_quote_responses")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+        .collect(),
+      ctx.db
+        .query("rotor_quote_responses")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+        .collect(),
+      ctx.db
+        .query("quote_request_dismissals")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+        .collect(),
     ]);
+
+    // Shop-name cache for the quote responses / dismissals.
+    const shopName = new Map<string, string | null>();
+    const nameOfShop = async (sid: Id<"shops">): Promise<string | null> => {
+      const key = String(sid);
+      if (!shopName.has(key)) {
+        const s = await ctx.db.get(sid);
+        shopName.set(key, (s as { name?: string } | null)?.name ?? null);
+      }
+      return shopName.get(key) ?? null;
+    };
+    const tireQuotes = await Promise.all(
+      tireRows.map(async (t) => ({
+        id: String(t._id),
+        shop: await nameOfShop(t.shop_id),
+        brand: t.tire_brand,
+        model: t.tire_model ?? null,
+        perUnit: t.per_tire_price,
+        quantity: t.quantity,
+        labor: t.labor_cost,
+        total: t.total,
+        availability: t.availability ? `${t.availability.date} ${t.availability.time}` : null,
+        expiresAtMs: t.expires_at ?? null,
+        superseded: t.superseded_at != null,
+      })),
+    );
+    const rotorQuotes = await Promise.all(
+      rotorRows.map(async (r) => ({
+        id: String(r._id),
+        shop: await nameOfShop(r.shop_id),
+        brand: r.rotor_brand,
+        model: r.rotor_model ?? null,
+        perUnit: r.per_rotor_price,
+        quantity: r.quantity,
+        labor: r.labor_cost,
+        total: r.total,
+        padBrand: r.pad_brand ?? null,
+        availability: r.availability ? `${r.availability.date} ${r.availability.time}` : null,
+        expiresAtMs: r.expires_at ?? null,
+        superseded: r.superseded_at != null,
+      })),
+    );
+    const dismissals = await Promise.all(
+      dismissalRows.map(async (d) => ({
+        id: String(d._id),
+        shop: await nameOfShop(d.shop_id),
+        kind: d.kind,
+        dismissedAtMs: d.dismissed_at,
+      })),
+    );
 
     return {
       approvalState: booking.payment_approval_state ?? null,
@@ -734,6 +826,10 @@ export const moneyDetail = query({
         closedAtMs: d.closed_at_ms ?? null,
         evidenceDueByMs: d.evidence_due_by_ms ?? null,
       })),
+      // Shop responses to quote-stage tire/rotor requests + dismissals.
+      tireQuotes,
+      rotorQuotes,
+      dismissals,
     };
   },
 });

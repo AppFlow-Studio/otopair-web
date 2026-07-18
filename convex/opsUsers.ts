@@ -166,6 +166,36 @@ export type OpsUserMoneyResult = {
     iconType: string | null;
     bookingId: Id<"bookings"> | null;
   }[];
+  // Lifetime money rollups computed from the fetched windows.
+  rollups: {
+    capturedTotal: number; // dollars captured across payments
+    paymentCount: number;
+    avgTicket: number | null;
+    refundTotal: number; // dollars refunded (negative ledger rows, abs)
+    refundRate: number | null; // refundTotal / capturedTotal
+  };
+};
+
+export type OpsUserFootprint = {
+  reviews: {
+    id: string;
+    rating: number;
+    comment: string | null;
+    shop: string | null;
+    shopId: string | null;
+    hidden: boolean;
+    at: number;
+  }[];
+  disputes: {
+    id: string;
+    bookingId: string;
+    reason: string;
+    status: string;
+    resolution: string | null;
+    refund: number | null; // dollars
+    filedAt: number;
+    resolvedAt: number | null;
+  }[];
 };
 
 function fullName(u: Doc<"users">): string {
@@ -419,6 +449,20 @@ export const money = query({
         .take(100),
     ]);
 
+    // Rollups: captured $ (prefer captured_amount_cents, else amount for
+    // succeeded rows), refunds from negative ledger rows.
+    const capturedTotal = payments.reduce((s, p) => {
+      const isCaptured = ["succeeded", "captured", "paid", "completed"].includes(p.status);
+      if (p.captured_amount_cents != null) return s + p.captured_amount_cents / 100;
+      return s + (isCaptured ? p.amount : 0);
+    }, 0);
+    const capturedCount = payments.filter((p) =>
+      ["succeeded", "captured", "paid", "completed"].includes(p.status),
+    ).length;
+    const refundTotal = transactions
+      .filter((t) => t.amount < 0)
+      .reduce((s, t) => s + Math.abs(t.amount), 0);
+
     return {
       payments: payments.map((p) => ({
         id: p._id,
@@ -433,6 +477,13 @@ export const money = query({
         invoiceNumber: p.invoice_number ?? null,
         created: p.created_at ?? p._creationTime,
       })),
+      rollups: {
+        capturedTotal,
+        paymentCount: payments.length,
+        avgTicket: capturedCount > 0 ? capturedTotal / capturedCount : null,
+        refundTotal,
+        refundRate: capturedTotal > 0 ? refundTotal / capturedTotal : null,
+      },
       transactions: transactions.map((t) => ({
         id: t._id,
         created: t.created_at,
@@ -532,6 +583,62 @@ export const engagement = query({
         credited: referralsMade.filter((r) => r.status === "credited").length,
         pending: referralsMade.filter((r) => r.status === "pending").length,
       },
+    };
+  },
+});
+
+// -----------------------------------------------------------------------------
+// Detail — Footprint. Reviews this user has written + disputes they've filed.
+// -----------------------------------------------------------------------------
+export const footprint = query({
+  args: { token: v.string(), id: v.id("users") },
+  handler: async (ctx, { token, id }): Promise<OpsUserFootprint> => {
+    await requireDirector(ctx, token);
+    const [reviews, disputes] = await Promise.all([
+      ctx.db
+        .query("reviews")
+        .withIndex("by_user_id", (q) => q.eq("user_id", id))
+        .order("desc")
+        .take(100),
+      ctx.db
+        .query("booking_disputes")
+        .withIndex("by_user_id", (q) => q.eq("user_id", id))
+        .order("desc")
+        .take(100),
+    ]);
+
+    const shopName = new Map<string, string | null>();
+    const reviewRows = await Promise.all(
+      reviews.map(async (r) => {
+        const sid = String(r.shop_id);
+        if (!shopName.has(sid)) {
+          const s = await ctx.db.get(r.shop_id);
+          shopName.set(sid, (s as { name?: string } | null)?.name ?? null);
+        }
+        return {
+          id: String(r._id),
+          rating: r.rating,
+          comment: r.comment ?? null,
+          shop: shopName.get(sid) ?? null,
+          shopId: sid,
+          hidden: r.hidden_at != null,
+          at: r.created_at ?? r._creationTime,
+        };
+      }),
+    );
+
+    return {
+      reviews: reviewRows,
+      disputes: disputes.map((d) => ({
+        id: String(d._id),
+        bookingId: String(d.booking_id),
+        reason: d.reason,
+        status: d.status,
+        resolution: d.resolution ?? null,
+        refund: d.resolution_refund_cents != null ? d.resolution_refund_cents / 100 : null,
+        filedAt: d.filed_at_ms,
+        resolvedAt: d.resolved_at_ms ?? null,
+      })),
     };
   },
 });

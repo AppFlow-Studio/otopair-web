@@ -24,7 +24,7 @@ import {
 type HeatCell = { date: string; total: number; available: number; booked: number };
 type ShopHeatRow = { shop_id: string; shop: string; cells: HeatCell[] };
 type IntegrityIssue = {
-  kind: "double_booked" | "booked_but_available";
+  kind: "double_booked";
   shop: string;
   shop_id: string;
   booking_id: string | null;
@@ -208,15 +208,17 @@ export default function ShopsCapacityPage() {
         )}
       </div>
 
-      {/* Integrity checks */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {(["double_booked", "booked_but_available"] as const).map((kind) => {
+      {/* Integrity checks — under the optimistic model the only always-on
+          should-be-empty invariant is double-booking (two live bookings
+          overlapping the same mechanic). "Booked-but-available" was retired
+          with the pre-generated-slot model. */}
+      <div className="grid grid-cols-1 gap-4">
+        {(["double_booked"] as const).map((kind) => {
           const issues =
             data === undefined
               ? undefined
               : (data.integrity as IntegrityIssue[]).filter((i) => i.kind === kind);
-          const label =
-            kind === "double_booked" ? "Double-booked slots" : "Booked-but-available";
+          const label = "Double-booked mechanics";
           return (
             <div
               key={kind}
@@ -260,8 +262,8 @@ export default function ShopsCapacityPage() {
                     </div>
                   ))}
                   <p className="text-[11px] text-slate-400">
-                    Fixes run through the shop&apos;s own calendar (block/regenerate) — flagged
-                    here, actioned there.
+                    Fixes run through the shop&apos;s own calendar (reassign / reschedule) —
+                    flagged here, actioned there.
                   </p>
                 </div>
               )}

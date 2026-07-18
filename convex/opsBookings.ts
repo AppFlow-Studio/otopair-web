@@ -11,13 +11,17 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
-import { resolveVehicleDisplay } from "./lib/bookingEnrichment";
+import { resolveVehicleDisplay, userDisplayName } from "./lib/bookingEnrichment";
 
 /** cents → dollars, null-safe. */
 const centsToDollars = (c: number | null | undefined): number | null =>
   c == null ? null : c / 100;
+
+/** cents → "$X.XX" string, null-safe. */
+const fmtCents = (c: number | null | undefined): string =>
+  c == null ? "—" : `$${(c / 100).toFixed(2)}`;
 
 /** MEASURED status set on this deployment (NOT confirmed/in_progress). */
 export const BOOKING_STATUSES = [
@@ -286,6 +290,450 @@ export const detail = query({
       })),
 
       review: review ? { rating: review.rating, comment: review.comment ?? null } : null,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// auditTimeline — director-gated, fully-merged booking audit trail. Unions
+// every lifecycle source into one chronological, actor-resolved feed:
+//   status transitions · estimate submissions + decisions (booking_approvals)
+//   · part edits · labor edits · payment status history · customer disputes
+//   · Stripe payment disputes · director audit_log rows.
+// booking_activity.getBookingActivityLog builds a subset of this but is
+// customer/shop-gated; this is the /ops-native equivalent (+ labor edits,
+// payment history, disputes, audit_log).
+// ---------------------------------------------------------------------------
+export type BookingAuditEvent = {
+  at: number;
+  kind:
+    | "status"
+    | "estimate_submitted"
+    | "estimate_decision"
+    | "part_edit"
+    | "labor_edit"
+    | "payment_status"
+    | "dispute_filed"
+    | "dispute_resolved"
+    | "payment_dispute"
+    | "audit";
+  actor: string | null;
+  title: string;
+  detail: string | null;
+};
+
+export const auditTimeline = query({
+  args: { token: v.string(), id: v.id("bookings") },
+  handler: async (ctx, { token, id }): Promise<{ events: BookingAuditEvent[] } | null> => {
+    await requireDirector(ctx, token);
+    const booking = await ctx.db.get(id);
+    if (!booking) return null;
+
+    // Actor resolver — cache user-id → display name; pass sentinels through.
+    const actorCache = new Map<string, string | null>();
+    const resolveActor = async (
+      raw: string | Id<"users"> | null | undefined,
+    ): Promise<string | null> => {
+      if (raw == null) return null;
+      const s = String(raw);
+      if (s === "system" || s === "stripe_webhook") return s;
+      if (actorCache.has(s)) return actorCache.get(s)!;
+      let name: string | null = s;
+      try {
+        name = userDisplayName(await ctx.db.get(s as Id<"users">));
+      } catch {
+        name = s;
+      }
+      actorCache.set(s, name);
+      return name;
+    };
+
+    const events: BookingAuditEvent[] = [];
+
+    // 1. Status transitions.
+    const statusRows = await ctx.db
+      .query("booking_status_history")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+      .collect();
+    for (const h of statusRows) {
+      events.push({
+        at: h.changed_at,
+        kind: "status",
+        actor: await resolveActor(h.changed_by),
+        title: h.old_status
+          ? `${h.old_status.replace(/_/g, " ")} → ${h.new_status.replace(/_/g, " ")}`
+          : `created (${h.new_status.replace(/_/g, " ")})`,
+        detail: h.reason ?? null,
+      });
+    }
+
+    // 2. Estimate submissions + decisions (approval cycles).
+    const approvals = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q) => q.eq("booking_id", id))
+      .collect();
+    for (const a of approvals) {
+      const over = a.mechanic_set_price_cents > a.prior_ceiling_cents;
+      events.push({
+        at: a.submitted_at_ms,
+        kind: "estimate_submitted",
+        actor: await resolveActor(a.submitted_by_user_id),
+        title: `${a.cycle.replace(/_/g, " ")} estimate — ${fmtCents(a.mechanic_set_price_cents)}`,
+        detail: `ceiling ${fmtCents(a.prior_ceiling_cents)} · ${over ? "OVER ceiling" : "in range"}`,
+      });
+      if (a.decision) {
+        events.push({
+          at: a.decided_at_ms ?? a.submitted_at_ms,
+          kind: "estimate_decision",
+          actor: await resolveActor(a.decided_by_user_id ?? a.decision_actor),
+          title: `${a.cycle.replace(/_/g, " ")} estimate ${a.decision.replace(/_/g, " ")}`,
+          detail:
+            [
+              a.ceiling_after_decision_cents != null
+                ? `new ceiling ${fmtCents(a.ceiling_after_decision_cents)}`
+                : null,
+              a.stripe_action ? a.stripe_action.replace(/_/g, " ") : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || null,
+        });
+      }
+    }
+
+    // 3. Part edits.
+    const partEdits = await ctx.db
+      .query("job_actual_part_edits")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+      .collect();
+    for (const e of partEdits) {
+      events.push({
+        at: e.edited_at,
+        kind: "part_edit",
+        actor: await resolveActor(e.edited_by_user_id),
+        title: `part ${e.edit_type.replace(/_/g, " ")} — ${e.part_name_snapshot ?? e.part_key}`,
+        detail:
+          [
+            e.oem_number_snapshot ? `OEM ${e.oem_number_snapshot}` : null,
+            e.old_value != null || e.new_value != null
+              ? `${e.old_value ?? "—"} → ${e.new_value ?? "—"}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ") || null,
+      });
+    }
+
+    // 4. Labor edits.
+    const laborEdits = await ctx.db
+      .query("job_actual_labor_edits")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+      .collect();
+    for (const e of laborEdits) {
+      events.push({
+        at: e.edited_at,
+        kind: "labor_edit",
+        actor: await resolveActor(e.edited_by_user_id),
+        title: "labor time edited",
+        detail: `${e.old_minutes ?? "—"} → ${e.new_minutes ?? "—"} min`,
+      });
+    }
+
+    // 5. Payment status history (across all of the booking's payments).
+    const payments = await ctx.db
+      .query("payments")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+      .collect();
+    for (const p of payments) {
+      const ph = await ctx.db
+        .query("payment_status_history")
+        .withIndex("by_payment_id", (q) => q.eq("payment_id", p._id))
+        .collect();
+      for (const h of ph) {
+        events.push({
+          at: h.changed_at,
+          kind: "payment_status",
+          actor: null,
+          title: `payment ${h.old_status ?? "—"} → ${h.new_status}`,
+          detail: h.error_message ?? h.error_code ?? null,
+        });
+      }
+    }
+
+    // 6. Customer disputes.
+    const bDisputes = await ctx.db
+      .query("booking_disputes")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+      .collect();
+    for (const d of bDisputes) {
+      events.push({
+        at: d.filed_at_ms,
+        kind: "dispute_filed",
+        actor: await resolveActor(d.user_id),
+        title: `dispute filed — ${d.reason.replace(/_/g, " ")}`,
+        detail: d.notes ?? null,
+      });
+      if (d.resolved_at_ms) {
+        events.push({
+          at: d.resolved_at_ms,
+          kind: "dispute_resolved",
+          actor: await resolveActor(d.resolved_by_user_id),
+          title: `dispute ${d.status.replace(/_/g, " ")}`,
+          detail:
+            [
+              d.resolution ? d.resolution.replace(/_/g, " ") : null,
+              d.resolution_refund_cents
+                ? `refund ${fmtCents(d.resolution_refund_cents)}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || null,
+        });
+      }
+    }
+
+    // 7. Stripe payment disputes (chargebacks).
+    const pDisputes = await ctx.db
+      .query("payment_disputes")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+      .collect();
+    for (const d of pDisputes) {
+      events.push({
+        at: d.opened_at_ms,
+        kind: "payment_dispute",
+        actor: "stripe_webhook",
+        title: `Stripe dispute opened (${d.status})`,
+        detail: `${fmtCents(d.amount_cents)}${d.reason ? ` · ${d.reason}` : ""}`,
+      });
+      if (d.closed_at_ms) {
+        events.push({
+          at: d.closed_at_ms,
+          kind: "payment_dispute",
+          actor: "stripe_webhook",
+          title: `Stripe dispute closed (${d.status})`,
+          detail: null,
+        });
+      }
+    }
+
+    // 8. Director audit_log rows for this booking (e.g. refund tags).
+    const auditRows = await ctx.db
+      .query("audit_log")
+      .withIndex("by_entity", (q) =>
+        q.eq("entity_type", "booking").eq("entity_id", String(id)),
+      )
+      .collect();
+    for (const a of auditRows) {
+      events.push({
+        at: a.created_at,
+        kind: "audit",
+        actor: a.actor ?? null,
+        title: a.action.replace(/_/g, " "),
+        detail: a.detail ?? null,
+      });
+    }
+
+    events.sort((x, y) => x.at - y.at);
+    return { events };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// completion — the "what actually happened" tab: job_actuals (labor/parts
+// actuals, odometer, findings, photos) + diagnostics + arrival/completion
+// timestamps + recommendation. Latest job_actual read directly (the shop-gated
+// job_actuals.getByBookingId throws on completed jobs, so we don't reuse it).
+// ---------------------------------------------------------------------------
+export const completion = query({
+  args: { token: v.string(), id: v.id("bookings") },
+  handler: async (ctx, { token, id }) => {
+    await requireDirector(ctx, token);
+    const booking = await ctx.db.get(id);
+    if (!booking) return null;
+
+    const ja = await ctx.db
+      .query("job_actuals")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+      .order("desc")
+      .first();
+
+    let recommendedServiceName: string | null = null;
+    if (booking.recommended_service_id) {
+      const s = await ctx.db.get(booking.recommended_service_id);
+      recommendedServiceName = s?.name ?? null;
+    }
+
+    let jobActual: {
+      startedAt: number | null;
+      completedAtMs: number | null;
+      finalizedAtMs: number | null;
+      finalizedBy: string | null;
+      actualLaborMinutes: number | null;
+      actualPartsCost: number | null;
+      difficultyRating: number | null;
+      technicianNotes: string | null;
+      mechanicFindings: string | null;
+      additionalObservations: string | null;
+      odometerIn: number | null;
+      completionMileage: number | null;
+      inProgressNotes: string | null;
+      inProgressPhotos: { url: string; caption: string | null; takenAt: number }[];
+      hasPrejobReport: boolean;
+      hasPostjobReport: boolean;
+    } | null = null;
+
+    if (ja) {
+      const rawPhotos = (ja.in_progress_photos ?? []) as {
+        storage_id: Id<"_storage">;
+        caption?: string | null;
+        taken_at: number;
+      }[];
+      const photos = await Promise.all(
+        rawPhotos.map(async (p) => ({
+          url: await ctx.storage.getUrl(p.storage_id),
+          caption: p.caption ?? null,
+          takenAt: p.taken_at,
+        })),
+      );
+      jobActual = {
+        startedAt: ja.started_at ?? null,
+        completedAtMs: ja.completed_at_ms ?? null,
+        finalizedAtMs: ja.finalized_at_ms ?? null,
+        finalizedBy: ja.finalized_by_user_id
+          ? userDisplayName(await ctx.db.get(ja.finalized_by_user_id))
+          : null,
+        actualLaborMinutes: ja.actual_labor_minutes ?? null,
+        actualPartsCost: ja.actual_parts_cost ?? null,
+        difficultyRating: ja.difficulty_rating ?? null,
+        technicianNotes: ja.technician_notes ?? null,
+        mechanicFindings: ja.mechanic_findings ?? null,
+        additionalObservations: ja.additional_observations ?? null,
+        odometerIn: ja.odometer_in ?? null,
+        completionMileage: ja.completion_mileage ?? null,
+        inProgressNotes: ja.in_progress_notes ?? null,
+        inProgressPhotos: photos.filter((p): p is { url: string; caption: string | null; takenAt: number } => p.url != null),
+        hasPrejobReport: ja.prejob_report != null,
+        hasPostjobReport: ja.postjob_report != null,
+      };
+    }
+
+    return {
+      arrivedAtMs: booking.vehicle_arrived_at_ms ?? null,
+      completedAtMs: booking.completed_at_ms ?? null,
+      estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
+      diagnosticSystem: booking.diagnostic_system ?? null,
+      diagnosticFindingsNote: booking.diagnostic_findings_note ?? null,
+      diagnosticChecklistCompletedAtMs: booking.diagnostic_checklist_completed_at_ms ?? null,
+      diagnosticChecklist: (booking.diagnostic_checklist ?? []).map((c) => ({
+        label: c.label,
+        status: c.status,
+        mechanicNote: c.mechanic_note ?? null,
+        skipReason: c.skip_reason ?? null,
+      })),
+      recommendationState: booking.recommendation_state ?? null,
+      recommendedServiceName,
+      recommendationSentAtMs: booking.recommendation_sent_at_ms ?? null,
+      recommendationDecidedAtMs: booking.recommendation_decided_at_ms ?? null,
+      jobActual,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// moneyDetail — the approval + quote + dispute money trail. Every approval
+// cycle (submit + decision, actor-resolved), running ceiling / final capture,
+// mechanic-vs-catalog quote, and both dispute tables. Pairs with detail's
+// disclosed/quoted breakdown + priced parts (Money & approvals tab).
+// ---------------------------------------------------------------------------
+export const moneyDetail = query({
+  args: { token: v.string(), id: v.id("bookings") },
+  handler: async (ctx, { token, id }) => {
+    await requireDirector(ctx, token);
+    const booking = await ctx.db.get(id);
+    if (!booking) return null;
+
+    const approvalRows = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q) => q.eq("booking_id", id))
+      .collect();
+    approvalRows.sort((a, b) => a.submitted_at_ms - b.submitted_at_ms);
+    const approvals = await Promise.all(
+      approvalRows.map(async (a) => ({
+        cycle: a.cycle,
+        submittedAtMs: a.submitted_at_ms,
+        submittedBy: a.submitted_by_user_id
+          ? userDisplayName(await ctx.db.get(a.submitted_by_user_id))
+          : null,
+        mechanicSetPrice: centsToDollars(a.mechanic_set_price_cents),
+        priorCeiling: centsToDollars(a.prior_ceiling_cents),
+        over: a.mechanic_set_price_cents > a.prior_ceiling_cents,
+        parts: centsToDollars(a.parts_subtotal_cents),
+        labor: centsToDollars(a.labor_cents),
+        tax: centsToDollars(a.tax_cents),
+        serviceFee: centsToDollars(a.service_fee_cents),
+        decision: a.decision ?? null,
+        decidedAtMs: a.decided_at_ms ?? null,
+        decidedBy: a.decided_by_user_id
+          ? userDisplayName(await ctx.db.get(a.decided_by_user_id))
+          : a.decision_actor ?? null,
+        ceilingAfter: centsToDollars(a.ceiling_after_decision_cents),
+        slaExpiresAtMs: a.sla_expires_at_ms ?? null,
+        stripeAction: a.stripe_action ?? null,
+        notes: a.notes ?? null,
+      })),
+    );
+
+    const [bDisputes, pDisputes] = await Promise.all([
+      ctx.db
+        .query("booking_disputes")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+        .collect(),
+      ctx.db
+        .query("payment_disputes")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", id))
+        .collect(),
+    ]);
+
+    return {
+      approvalState: booking.payment_approval_state ?? null,
+      runningApprovedCeiling: centsToDollars(booking.running_approved_ceiling_cents),
+      mechanicSetPrice: centsToDollars(booking.mechanic_set_price_cents),
+      finalTotal: centsToDollars(booking.final_total_cents),
+      finalCaptureAmount: centsToDollars(booking.final_capture_amount_cents),
+      slaExpiresAtMs: booking.sla_expires_at_ms ?? null,
+      // Walk-in baselines (dollars on the row).
+      mechanicQuotedPrice: booking.mechanic_quoted_price ?? null,
+      catalogQuotedPrice: booking.catalog_quoted_price ?? null,
+      mechanicEstimatedMinutes: booking.mechanic_estimated_minutes ?? null,
+      catalogEstimatedMinutes: booking.catalog_estimated_minutes ?? null,
+      quoteFlags: booking.quote_flags ?? [],
+      lowConfidenceParts: booking.low_confidence_parts ?? false,
+      serviceQuoteFlagCount: (booking.service_quote_flags ?? []).reduce(
+        (n, s) => n + (s.flags?.length ?? 0),
+        0,
+      ),
+      approvals,
+      bookingDisputes: bDisputes.map((d) => ({
+        id: String(d._id),
+        reason: d.reason,
+        status: d.status,
+        notes: d.notes ?? null,
+        disputedPartKeys: d.disputed_part_keys ?? [],
+        filedAtMs: d.filed_at_ms,
+        resolvedAtMs: d.resolved_at_ms ?? null,
+        resolution: d.resolution ?? null,
+        resolutionRefund: centsToDollars(d.resolution_refund_cents),
+        resolutionNotes: d.resolution_notes ?? null,
+      })),
+      paymentDisputes: pDisputes.map((d) => ({
+        id: String(d._id),
+        stripeDisputeId: d.stripe_dispute_id,
+        amount: centsToDollars(d.amount_cents),
+        reason: d.reason ?? null,
+        status: d.status,
+        openedAtMs: d.opened_at_ms,
+        closedAtMs: d.closed_at_ms ?? null,
+        evidenceDueByMs: d.evidence_due_by_ms ?? null,
+      })),
     };
   },
 });

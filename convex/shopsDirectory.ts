@@ -10,6 +10,41 @@ import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireDirector, logAudit } from "./directorGate";
 import type { Doc, Id } from "./_generated/dataModel";
+import { listAvailableWindowsForShopDate } from "./lib/timeSlotAvailability";
+import { SLOT_GRID_MINUTES } from "./lib/schedule_overlap";
+import { userDisplayName } from "./lib/bookingEnrichment";
+
+// Booking statuses that no longer occupy a bay (mirrors the availability
+// engine's TERMINAL_BOOKING_STATUSES so the portal calendar agrees with what
+// the booking flow actually treats as "open").
+const TERMINAL_BOOKING_STATUSES = new Set([
+  "cancelled",
+  "completed",
+  "no_show",
+  "declined",
+]);
+
+/** "HH:MM" + minutes → "HH:MM" (24h, clamped to 23:59). */
+function addMinutesHHMM(time: string, minutes: number): string {
+  const [h, m] = time.split(":").map(Number);
+  const total = Math.min(h * 60 + (m || 0) + minutes, 23 * 60 + 59);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/** Coalesce contiguous 15-min availability windows (end == next start) into a
+ *  few "open HH:MM–HH:MM" ranges so the calendar shows ranges, not 32 pills. */
+function coalesceWindows(
+  windows: { start_time: string; end_time: string }[],
+): { start: string; end: string }[] {
+  const sorted = [...windows].sort((a, b) => a.start_time.localeCompare(b.start_time));
+  const out: { start: string; end: string }[] = [];
+  for (const w of sorted) {
+    const last = out[out.length - 1];
+    if (last && last.end === w.start_time) last.end = w.end_time;
+    else out.push({ start: w.start_time, end: w.end_time });
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Health model (shared by directory + detail header).
@@ -283,9 +318,16 @@ export const shopCalendarWeek = query({
       .query("mechanics")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
       .collect();
+    const activeMechanics = mechanics.filter((m) => m.is_active !== false);
 
+    // NEW (optimistic) model: availability is DERIVED — a bay is open unless a
+    // booking or a manual block occupies it, bounded by shop hours. time_slots
+    // rows are now only blocks. So each cell is built from three live layers:
+    //   available = coalesced free windows from the availability engine
+    //   booked    = live non-terminal bookings for that mechanic/day
+    //   blocked   = time_slots rows with block_kind set
     const slots: Array<{
-      id: Id<"time_slots">;
+      id: string;
       mechanicId: Id<"mechanics">;
       date: string;
       start: string;
@@ -296,34 +338,82 @@ export const shopCalendarWeek = query({
     }> = [];
 
     for (const date of dates) {
-      const daySlots = await ctx.db
-        .query("time_slots")
-        .withIndex("by_shop_and_date", (q) => q.eq("shop_id", id).eq("date", date))
-        .take(200);
-      for (const s of daySlots) {
-        const state: "available" | "booked" | "blocked" = s.is_available
-          ? "available"
-          : s.block_kind
-            ? "blocked"
-            : "booked";
-        slots.push({
-          id: s._id,
-          mechanicId: s.mechanic_id,
-          date: s.date,
-          start: s.start_time,
-          end: s.end_time,
-          state,
-          note: s.note ?? null,
-          title: s.title ?? null,
+      // Manual blocks (time_slots with block_kind) + live bookings for the day.
+      const [dayBlocks, dayBookings] = await Promise.all([
+        ctx.db
+          .query("time_slots")
+          .withIndex("by_shop_and_date", (q) => q.eq("shop_id", id).eq("date", date))
+          .take(200),
+        ctx.db
+          .query("bookings")
+          .withIndex("by_shop_and_date", (q) =>
+            q.eq("shop_id", id).eq("scheduled_date", date),
+          )
+          .take(200),
+      ]);
+
+      for (const m of activeMechanics) {
+        // Derived open windows (15-min grid), coalesced to ranges.
+        const windows = await listAvailableWindowsForShopDate(ctx, {
+          shopId: id,
+          date,
+          mechanicId: m._id,
+          durationMinutes: SLOT_GRID_MINUTES,
         });
+        for (const r of coalesceWindows(windows)) {
+          slots.push({
+            id: `avail:${String(m._id)}:${date}:${r.start}`,
+            mechanicId: m._id,
+            date,
+            start: r.start,
+            end: r.end,
+            state: "available",
+            note: null,
+            title: null,
+          });
+        }
+
+        // Manual blocks for this mechanic.
+        for (const b of dayBlocks) {
+          if (b.is_available || !b.block_kind) continue;
+          if (String(b.mechanic_id) !== String(m._id)) continue;
+          slots.push({
+            id: String(b._id),
+            mechanicId: m._id,
+            date,
+            start: b.start_time,
+            end: b.end_time,
+            state: "blocked",
+            note: b.note ?? null,
+            title: b.title ?? b.block_kind,
+          });
+        }
+
+        // Live bookings assigned to this mechanic (non-terminal, timed).
+        for (const bk of dayBookings) {
+          if (TERMINAL_BOOKING_STATUSES.has(bk.status)) continue;
+          if (!bk.scheduled_time) continue;
+          if (String(bk.mechanic_id) !== String(m._id)) continue;
+          const dur = bk.estimated_labor_minutes ?? 60;
+          slots.push({
+            id: `bk:${String(bk._id)}`,
+            mechanicId: m._id,
+            date,
+            start: bk.scheduled_time,
+            end: addMinutesHHMM(bk.scheduled_time, dur),
+            state: "booked",
+            note: bk.status,
+            title: null,
+          });
+        }
       }
     }
 
     return {
-      mechanics: mechanics.map((m) => ({
+      mechanics: activeMechanics.map((m) => ({
         id: m._id,
         name: `${m.first_name} ${m.last_name}`.trim(),
-        isActive: m.is_active !== false,
+        isActive: true,
       })),
       slots,
     };
@@ -368,5 +458,117 @@ export const shopBookings = query({
         };
       }),
     );
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Tab 7 — Insights. Reviews, rate-change history (audit_log), fixed-price
+// overrides, and quality rates (cancellation / no-show / disputes) — the
+// "how is this shop actually doing" read the profile never had.
+// ---------------------------------------------------------------------------
+export const shopInsights = query({
+  args: { token: v.string(), id: v.id("shops") },
+  handler: async (ctx, { token, id }) => {
+    await requireDirector(ctx, token);
+
+    const [reviewRows, auditRows, fixedPriceRows, bookings, disputes] = await Promise.all([
+      ctx.db
+        .query("reviews")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+        .take(100),
+      ctx.db
+        .query("audit_log")
+        .withIndex("by_entity", (q) => q.eq("entity_type", "shops").eq("entity_id", String(id)))
+        .collect(),
+      ctx.db
+        .query("shop_service_fixed_prices")
+        .withIndex("by_shop", (q) => q.eq("shop_id", id))
+        .collect(),
+      ctx.db
+        .query("bookings")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+        .take(500),
+      ctx.db
+        .query("payment_disputes")
+        .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+        .take(100),
+    ]);
+
+    // Reviews (visible + hidden), reviewer + mechanic resolved.
+    const userName = new Map<string, string | null>();
+    const mechName = new Map<string, string | null>();
+    const reviews = await Promise.all(
+      reviewRows
+        .sort((a, b) => (b.created_at ?? b._creationTime) - (a.created_at ?? a._creationTime))
+        .slice(0, 50)
+        .map(async (r) => {
+          const uid = String(r.user_id);
+          if (!userName.has(uid)) userName.set(uid, userDisplayName(await ctx.db.get(r.user_id)));
+          let mechanic: string | null = null;
+          if (r.mechanic_id) {
+            const mid = String(r.mechanic_id);
+            if (!mechName.has(mid)) {
+              const m = await ctx.db.get(r.mechanic_id);
+              const mo = m as { first_name?: string; last_name?: string } | null;
+              mechName.set(mid, mo ? [mo.first_name, mo.last_name].filter(Boolean).join(" ") || null : null);
+            }
+            mechanic = mechName.get(mid) ?? null;
+          }
+          return {
+            id: String(r._id),
+            rating: r.rating,
+            comment: r.comment ?? null,
+            reviewer: userName.get(uid) ?? null,
+            reviewerId: uid,
+            mechanic,
+            hidden: r.hidden_at != null,
+            at: r.created_at ?? r._creationTime,
+          };
+        }),
+    );
+
+    // Rate-change history from the audit trail.
+    const rateHistory = auditRows
+      .filter((a) => a.action === "labor_rate.change")
+      .sort((a, b) => b.created_at - a.created_at)
+      .map((a) => ({ actor: a.actor, detail: a.detail ?? null, at: a.created_at }));
+
+    // Fixed-price overrides, service names resolved.
+    const svcName = new Map<string, string>();
+    const fixedPrices = await Promise.all(
+      fixedPriceRows.map(async (f) => {
+        const sid = String(f.service_id);
+        if (!svcName.has(sid)) {
+          const s = await ctx.db.get(f.service_id);
+          svcName.set(sid, s?.name ?? "(service)");
+        }
+        return {
+          service: svcName.get(sid) ?? "(service)",
+          tier: f.tier,
+          price: f.price_cents / 100,
+        };
+      }),
+    );
+
+    // Quality rates.
+    const total = bookings.length;
+    const completed = bookings.filter((b) => b.status === "completed").length;
+    const cancelled = bookings.filter((b) => b.status === "cancelled").length;
+    const noShow = bookings.filter((b) => b.status === "no_show").length;
+
+    return {
+      reviews,
+      rateHistory,
+      fixedPrices,
+      stats: {
+        total,
+        completed,
+        cancelled,
+        noShow,
+        cancelRate: total > 0 ? cancelled / total : null,
+        noShowRate: total > 0 ? noShow / total : null,
+        disputeCount: disputes.length,
+      },
+    };
   },
 });

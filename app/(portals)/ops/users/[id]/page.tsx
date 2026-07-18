@@ -37,7 +37,7 @@ function statusPill(status: string): string {
   return `${PILL} bg-slate-100 text-slate-600`;
 }
 
-const TABS = ["Profile", "Engagement", "Garage", "Bookings", "Money"] as const;
+const TABS = ["Profile", "Engagement", "Garage", "Bookings", "Money", "Footprint"] as const;
 type Tab = (typeof TABS)[number];
 
 // Human labels for raw auth-provider / acquisition-source strings (mirrors
@@ -176,6 +176,7 @@ export default function OpsUserDetailPage() {
         {tab === "Garage" && <GarageTab userId={userId} />}
         {tab === "Bookings" && <BookingsTab userId={userId} />}
         {tab === "Money" && <MoneyTab userId={userId} />}
+        {tab === "Footprint" && <FootprintTab userId={userId} />}
       </div>
 
       <AuditDrawer
@@ -570,6 +571,33 @@ function MoneyTab({ userId }: { userId: Id<"users"> }) {
 
   return (
     <div className="space-y-4">
+      {/* Spend rollups */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className={CARD}>
+          <div className="text-[11px] font-medium text-slate-500">Captured (lifetime)</div>
+          <div className="mt-0.5 text-lg font-bold text-slate-900">{fmtMoney(data.rollups.capturedTotal)}</div>
+        </div>
+        <div className={CARD}>
+          <div className="text-[11px] font-medium text-slate-500">Avg ticket</div>
+          <div className="mt-0.5 text-lg font-bold text-slate-900">{fmtMoney(data.rollups.avgTicket)}</div>
+        </div>
+        <div className={CARD}>
+          <div className="text-[11px] font-medium text-slate-500">Payments</div>
+          <div className="mt-0.5 text-lg font-bold text-slate-900">{data.rollups.paymentCount}</div>
+        </div>
+        <div className={CARD}>
+          <div className="text-[11px] font-medium text-slate-500">Refunded</div>
+          <div className="mt-0.5 text-lg font-bold text-slate-900">
+            {fmtMoney(data.rollups.refundTotal)}
+            {data.rollups.refundRate != null && data.rollups.refundRate > 0 && (
+              <span className="ml-1 text-[11px] font-normal text-red-500">
+                {Math.round(data.rollups.refundRate * 100)}%
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className={CARD}>
         <h2 className="text-sm font-semibold text-slate-900">Payments</h2>
         {data.payments.length === 0 ? (
@@ -653,6 +681,73 @@ function MoneyTab({ userId }: { userId: Id<"users"> }) {
                 >
                   {t.amount < 0 ? "−" : "+"}{fmtMoney(Math.abs(t.amount))}
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Footprint tab — reviews written + disputes filed by this user.
+// ---------------------------------------------------------------------------
+function FootprintTab({ userId }: { userId: Id<"users"> }) {
+  const { token } = usePortalSession();
+  const data: FunctionReturnType<typeof api.opsUsers.footprint> | undefined =
+    useQuery(api.opsUsers.footprint, { token, id: userId });
+
+  if (data === undefined) return <div className="py-10 text-center text-sm text-slate-400">Loading footprint…</div>;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <div className={CARD}>
+        <h2 className="text-sm font-semibold text-slate-900">Reviews written ({data.reviews.length})</h2>
+        {data.reviews.length === 0 ? (
+          <p className="mt-2 text-[13px] text-slate-400">This user hasn’t written any reviews.</p>
+        ) : (
+          <div className="mt-3 space-y-2">
+            {data.reviews.map((r) => (
+              <div key={r.id} className="border-b border-slate-50 pb-2 last:border-0">
+                <div className="flex items-center gap-2">
+                  <span style={{ color: "#F59E0B" }}>{"★".repeat(Math.round(r.rating))}</span>
+                  {r.shop && r.shopId && (
+                    <Link href={`/shops/all/${r.shopId}`} className="text-[12px] font-medium text-blue-600 hover:underline">
+                      {r.shop}
+                    </Link>
+                  )}
+                  {r.hidden && <span className={`${PILL} bg-slate-100 text-slate-500`}>hidden</span>}
+                  <span className="ml-auto text-[11px] text-slate-400">{fmtDate(r.at)}</span>
+                </div>
+                {r.comment && <p className="mt-1 text-[12px] text-slate-600">{r.comment}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className={CARD}>
+        <h2 className="text-sm font-semibold text-slate-900">Disputes filed ({data.disputes.length})</h2>
+        {data.disputes.length === 0 ? (
+          <p className="mt-2 text-[13px] text-slate-400">No disputes filed by this user.</p>
+        ) : (
+          <div className="mt-3 space-y-2">
+            {data.disputes.map((d) => (
+              <div key={d.id} className="rounded-lg border border-red-100 bg-red-50/40 p-3 text-[12px]">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-slate-800">{d.reason.replace(/_/g, " ")}</span>
+                  <span className={statusPill(d.status)}>{d.status.replace(/_/g, " ")}</span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-400">
+                  filed {fmtDate(d.filedAt)}
+                  {d.resolvedAt && ` · resolved ${fmtDate(d.resolvedAt)}`}
+                  {d.resolution && ` · ${d.resolution.replace(/_/g, " ")}`}
+                  {d.refund != null && ` · refund ${fmtMoney(d.refund)}`}
+                </div>
+                <Link href={`/ops/bookings/${d.bookingId}`} className="mt-1 inline-block text-[12px] font-medium text-blue-600 hover:underline">
+                  booking →
+                </Link>
               </div>
             ))}
           </div>

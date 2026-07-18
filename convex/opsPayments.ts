@@ -134,6 +134,24 @@ export type OpsPaymentDetail = {
     closedAtMs: number | undefined;
     evidenceDueByMs: number | undefined;
   }[];
+  // Refund + capture reconciliation. Refunds proper live on the booking
+  // (refund_reason, dispute resolution refunds, voided auth) and the ledger —
+  // NOT as first-class payment fields — so we assemble them here.
+  refunds: {
+    bookingRefundReason: string | null;
+    authVoidedAtMs: number | null;
+    finalTotalCents: number | null;
+    finalCaptureAmountCents: number | null;
+    incrementedTotalCents: number | null;
+    // Refunds granted by resolving customer disputes.
+    disputeRefunds: {
+      amountCents: number;
+      resolution: string | null;
+      resolvedAtMs: number | null;
+    }[];
+    // Negative ledger rows linked to this payment (refund transactions).
+    ledgerRefunds: { amount: number; description: string; createdAt: number }[];
+  };
 };
 
 function personName(user: Doc<"users"> | null): string {
@@ -237,23 +255,28 @@ export const detail = query({
     const p = await ctx.db.get(id);
     if (!p) return null;
 
-    const [user, shop, booking, history, transactions, disputes] = await Promise.all([
-      ctx.db.get(p.user_id),
-      ctx.db.get(p.shop_id),
-      ctx.db.get(p.booking_id),
-      ctx.db
-        .query("payment_status_history")
-        .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
-        .take(100),
-      ctx.db
-        .query("transactions")
-        .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
-        .take(25),
-      ctx.db
-        .query("payment_disputes")
-        .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
-        .take(10),
-    ]);
+    const [user, shop, booking, history, transactions, disputes, bookingDisputes] =
+      await Promise.all([
+        ctx.db.get(p.user_id),
+        ctx.db.get(p.shop_id),
+        ctx.db.get(p.booking_id),
+        ctx.db
+          .query("payment_status_history")
+          .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
+          .take(100),
+        ctx.db
+          .query("transactions")
+          .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
+          .take(25),
+        ctx.db
+          .query("payment_disputes")
+          .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
+          .take(10),
+        ctx.db
+          .query("booking_disputes")
+          .withIndex("by_booking_id", (q) => q.eq("booking_id", p.booking_id))
+          .take(10),
+      ]);
 
     return {
       payment: {
@@ -350,6 +373,27 @@ export const detail = query({
         closedAtMs: d.closed_at_ms,
         evidenceDueByMs: d.evidence_due_by_ms,
       })),
+      refunds: {
+        bookingRefundReason: booking?.refund_reason ?? null,
+        authVoidedAtMs: booking?.stripe_authorization_voided_at_ms ?? null,
+        finalTotalCents: booking?.final_total_cents ?? null,
+        finalCaptureAmountCents: booking?.final_capture_amount_cents ?? null,
+        incrementedTotalCents: p.incremented_total_cents ?? null,
+        disputeRefunds: bookingDisputes
+          .filter((d) => d.resolution_refund_cents != null && d.resolution_refund_cents > 0)
+          .map((d) => ({
+            amountCents: d.resolution_refund_cents!,
+            resolution: d.resolution ?? null,
+            resolvedAtMs: d.resolved_at_ms ?? null,
+          })),
+        ledgerRefunds: transactions
+          .filter((t) => t.amount < 0)
+          .map((t) => ({
+            amount: t.amount,
+            description: t.description,
+            createdAt: t.created_at,
+          })),
+      },
     };
   },
 });

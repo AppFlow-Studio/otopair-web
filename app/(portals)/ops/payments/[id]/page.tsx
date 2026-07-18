@@ -136,7 +136,7 @@ export default function OpsPaymentDetailPage() {
     );
   }
 
-  const { payment: p, user, shop, booking, history, transactions, disputes } = data;
+  const { payment: p, user, shop, booking, history, transactions, disputes, refunds } = data;
 
   return (
     <div className="space-y-4">
@@ -401,6 +401,67 @@ export default function OpsPaymentDetailPage() {
                 ))}
               </div>
             )}
+          </div>
+
+          {/* Refunds & capture reconciliation */}
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <h2 className="text-sm font-semibold text-slate-900">Refunds & capture</h2>
+            {(() => {
+              const hasAny =
+                refunds.bookingRefundReason != null ||
+                refunds.authVoidedAtMs != null ||
+                refunds.disputeRefunds.length > 0 ||
+                refunds.ledgerRefunds.length > 0 ||
+                (refunds.finalCaptureAmountCents != null &&
+                  refunds.finalTotalCents != null &&
+                  refunds.finalCaptureAmountCents < refunds.finalTotalCents);
+              if (!hasAny)
+                return (
+                  <p className="mt-2 text-[12px] text-slate-400">
+                    No refunds or capture shortfall on this payment.
+                  </p>
+                );
+              return (
+                <div className="mt-3 space-y-2 text-[12px]">
+                  {refunds.finalTotalCents != null &&
+                    refunds.finalCaptureAmountCents != null &&
+                    refunds.finalCaptureAmountCents < refunds.finalTotalCents && (
+                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">
+                        Captured {cents(refunds.finalCaptureAmountCents)} of a{" "}
+                        {cents(refunds.finalTotalCents)} final total —{" "}
+                        {cents(refunds.finalTotalCents - refunds.finalCaptureAmountCents)} not
+                        captured (deposit forfeit, partial capture, or refund).
+                      </p>
+                    )}
+                  {refunds.authVoidedAtMs != null && (
+                    <div className="text-slate-600">
+                      Authorization voided · {ts(refunds.authVoidedAtMs)}
+                    </div>
+                  )}
+                  {refunds.bookingRefundReason && (
+                    <div className="text-slate-600">
+                      <span className="font-medium text-slate-800">Refund reason:</span>{" "}
+                      {refunds.bookingRefundReason}
+                    </div>
+                  )}
+                  {refunds.disputeRefunds.map((r, i) => (
+                    <div key={i} className="flex justify-between text-slate-600">
+                      <span>
+                        Dispute refund{r.resolution ? ` (${r.resolution.replace(/_/g, " ")})` : ""}
+                        {r.resolvedAtMs ? ` · ${ts(r.resolvedAtMs)}` : ""}
+                      </span>
+                      <span className="font-semibold text-red-600">−{cents(r.amountCents)}</span>
+                    </div>
+                  ))}
+                  {refunds.ledgerRefunds.map((r, i) => (
+                    <div key={i} className="flex justify-between text-slate-600">
+                      <span>{r.description} · {ts(r.createdAt)}</span>
+                      <span className="font-semibold text-red-600">{money(r.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>

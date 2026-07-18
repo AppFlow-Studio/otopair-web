@@ -355,6 +355,7 @@ import type * as vehicleEnrichment_capacityResolver from "../vehicleEnrichment/c
 import type * as vehicleEnrichment_claudeExtractor from "../vehicleEnrichment/claudeExtractor.js";
 import type * as vehicleEnrichment_completionGate from "../vehicleEnrichment/completionGate.js";
 import type * as vehicleEnrichment_contentSanitization from "../vehicleEnrichment/contentSanitization.js";
+import type * as vehicleEnrichment_drivetrainReconcile from "../vehicleEnrichment/drivetrainReconcile.js";
 import type * as vehicleEnrichment_endpointPartPriceMutations from "../vehicleEnrichment/endpointPartPriceMutations.js";
 import type * as vehicleEnrichment_evidenceConsensus from "../vehicleEnrichment/evidenceConsensus.js";
 import type * as vehicleEnrichment_extractionPrompts from "../vehicleEnrichment/extractionPrompts.js";
@@ -785,6 +786,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/claudeExtractor": typeof vehicleEnrichment_claudeExtractor;
   "vehicleEnrichment/completionGate": typeof vehicleEnrichment_completionGate;
   "vehicleEnrichment/contentSanitization": typeof vehicleEnrichment_contentSanitization;
+  "vehicleEnrichment/drivetrainReconcile": typeof vehicleEnrichment_drivetrainReconcile;
   "vehicleEnrichment/endpointPartPriceMutations": typeof vehicleEnrichment_endpointPartPriceMutations;
   "vehicleEnrichment/evidenceConsensus": typeof vehicleEnrichment_evidenceConsensus;
   "vehicleEnrichment/extractionPrompts": typeof vehicleEnrichment_extractionPrompts;

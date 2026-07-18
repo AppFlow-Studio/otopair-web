@@ -200,8 +200,11 @@ describe("getCapacityBand — diesel awareness (F-350 finding)", () => {
   test("gasoline bands unchanged (no diesel ctx)", () => {
     const band = getCapacityBand("coolant_capacity_qts", 8);
     expect(band.rejectMax).toBe(24);
+    // 4-cyl coolant typicalMax raised 11→13 in the batch-3 hybrid fix (Sienna
+    // dual-loop 11.4 qt engine circuit). Reject ceiling stays 24.
     const band4 = getCapacityBand("coolant_capacity_qts", 4, {});
-    expect(band4.typicalMax).toBe(11);
+    expect(band4.typicalMax).toBe(13);
+    expect(band4.rejectMax).toBe(24);
   });
 
   test("diesel oil band admits 13 qt (F-350) without loosening gasoline", () => {

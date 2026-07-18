@@ -23,6 +23,7 @@ import { findHaloVariant } from "./lib/haloVariantRules";
 import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
+import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -451,11 +452,16 @@ export const processVin = internalAction({
         modelId, name: finalTrim, year: merged.year,
       });
 
-      // Drivetrain: AI normalized > NHTSA mapped > VDB > unknown
-      const nhtsaDrivetrain = mapNhtsaDriveType(merged.driveType);
-      const canonicalDrivetrain = drivetrainType
+      // Drivetrain: NHTSA VIN-decoded axle count is authoritative (2WD vs 4WD);
+      // the AI only refines within that class. Prevents the batch-3 failure
+      // where a "4x2" VIN (dropped by the old mapNhtsaDriveType) let the LLM's
+      // AWD guess win and phantom transfer-case/diff services shipped.
+      const aiCanonicalDrivetrain = drivetrainType
         ? toCanonicalDrivetrain(drivetrainType)
-        : nhtsaDrivetrain;
+        : undefined;
+      const canonicalDrivetrain =
+        reconcileDrivetrain(merged.driveType, aiCanonicalDrivetrain, merged.bodyClass) ??
+        mapNhtsaDriveType(merged.driveType);
       if (canonicalDrivetrain && canonicalDrivetrain !== "unknown") {
         await ctx.runMutation(api.chassis_variants.upsertChassisVariant, {
           trim_id: trimId,

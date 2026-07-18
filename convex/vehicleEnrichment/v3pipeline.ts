@@ -60,6 +60,7 @@ import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
 import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/partFitmentVerifier";
+import { reconcileDrivetrain } from "./drivetrainReconcile";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { laborFlagsFromEnv } from "./laborResearch";
@@ -1044,19 +1045,33 @@ async function writeNormalizedData(
   );
   const existingDrivetrain = currentVc?.drivetrain;
 
-  // Priority: Batch 1B > existing (if real) > "FWD" as absolute last resort
+  // Priority: the NHTSA-decoded value stored on the config (existingDrivetrain)
+  // is authoritative on the 2WD-vs-4WD axle count; Batch-1B only refines within
+  // that axle class. Batch-3 audit: the Sienna (4x2 FWD) and F-150 (4x2) had
+  // their correct 2WD decode overwritten by a Batch-1B "AWD" guess, shipping
+  // phantom diff/transfer-case service. reconcileDrivetrain keeps NHTSA's axle
+  // count and takes Batch-1B's specific label only when they agree on the axle.
   const isResolved = (val: string | undefined | null): val is string =>
     !!val && val !== "unknown";
 
-  const resolvedDrivetrain = isResolved(batch1Drivetrain)
-    ? batch1Drivetrain
-    : isResolved(existingDrivetrain)
-      ? existingDrivetrain
-      : "FWD"; // last resort — all sources exhausted
+  const resolvedDrivetrain =
+    reconcileDrivetrain(existingDrivetrain, batch1Drivetrain) ??
+    (isResolved(batch1Drivetrain)
+      ? batch1Drivetrain
+      : isResolved(existingDrivetrain)
+        ? existingDrivetrain
+        : "FWD"); // last resort — all sources exhausted
 
-  if (batch1Drivetrain && batch1Drivetrain !== existingDrivetrain) {
-    console.log(`[v8] Drivetrain resolved by Batch 1B: "${existingDrivetrain}" → "${batch1Drivetrain}"`);
-    // Update vehicle_config with the real drivetrain
+  if (resolvedDrivetrain !== existingDrivetrain) {
+    const overrode =
+      isResolved(batch1Drivetrain) && resolvedDrivetrain !== batch1Drivetrain;
+    console.log(
+      `[v8] Drivetrain "${existingDrivetrain}" → "${resolvedDrivetrain}"` +
+        (overrode
+          ? ` (kept NHTSA axle over Batch-1B guess "${batch1Drivetrain}")`
+          : ` (Batch 1B)`),
+    );
+    // Update vehicle_config with the reconciled drivetrain
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
       vehicle_config_id: vehicleConfigId,
       drivetrain: resolvedDrivetrain,
@@ -3609,6 +3624,14 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               trim: args.trim,
               engineCode: vehicle.engineCode,
               displacement: args.displacement,
+              // Aspiration + transmission family feed the batch-3 hardening
+              // (NA-plug-on-turbo, DCT-filter-on-torque-converter). turbo is the
+              // boolean the extractor writes; the verifier prompt still confirms
+              // via search, this is just the seed hint.
+              aspiration:
+                allFields.turbo?.value === true ? "turbocharged" : undefined,
+              transmissionType:
+                (allFields.transmission_type?.value as string | null) ?? undefined,
             },
             toVerify,
           );
@@ -3748,7 +3771,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       model_id: (await ctx.runQuery(internal.vehicleEnrichment.v3queries.getModelByMakeAndName, { makeId: args.makeId, name: args.model }))?._id ?? args.makeId as any,
       engine_id: args.engineId,
       transmission_id: args.transmissionId,
-      drivetrain: (allFields.drivetrain?.value as string) ?? currentVcForFinal?.drivetrain ?? "FWD",
+      // The resolved config drivetrain (NHTSA axle-authoritative) wins over the
+      // raw LLM field here too — otherwise finalize re-overwrites the reconciled
+      // value with the same Batch-1B guess (batch-3 drivetrain fix).
+      drivetrain:
+        reconcileDrivetrain(
+          currentVcForFinal?.drivetrain,
+          allFields.drivetrain?.value as string | null,
+        ) ??
+        currentVcForFinal?.drivetrain ??
+        (allFields.drivetrain?.value as string) ??
+        "FWD",
       trim_name: args.trim,
       trim_slug: slugify(args.trim),
       enrichment_status: (() => {

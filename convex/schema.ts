@@ -1819,6 +1819,7 @@ export default defineSchema({
     owner_user_id: v.optional(v.id("users")),
     description: v.optional(v.string()),
     logo: v.optional(v.string()),
+    logo_storage_id: v.optional(v.id("_storage")),
     stripe_connect_account_id: v.optional(v.string()),
     stripe_charges_enabled: v.optional(v.boolean()),
     stripe_payouts_enabled: v.optional(v.boolean()),
@@ -1859,7 +1860,8 @@ export default defineSchema({
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
-    .index("by_stripe_connect_account_id", ["stripe_connect_account_id"]),
+    .index("by_stripe_connect_account_id", ["stripe_connect_account_id"])
+    .index("by_logo_storage_id", ["logo_storage_id"]),
 
   // [I]
   shops_hours: defineTable({

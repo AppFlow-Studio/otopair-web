@@ -4,12 +4,14 @@
 // 2×2 panel grid: Performance (recent jobs) · Reviews · Week strip · Data
 // contributions (verification stream). Read-only.
 
+import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession } from "../../../portal-session";
+import { AuditDrawer } from "@/components/portal/AuditDrawer";
 
 const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 const CARD =
@@ -19,6 +21,7 @@ const fmtDate = (ms: number) => new Date(ms).toLocaleDateString();
 export default function MechanicDetailPage() {
   const { token } = usePortalSession();
   const params = useParams<{ id: string }>();
+  const [auditOpen, setAuditOpen] = useState(false);
   const detail = useQuery(api.shopsMechanics.detail, {
     token,
     mechanicId: params.id as Id<"mechanics">,
@@ -68,10 +71,15 @@ export default function MechanicDetailPage() {
             {detail.name.slice(0, 1)}
           </span>
         )}
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="text-xl font-semibold text-slate-900">{detail.name}</h1>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-[13px] text-slate-500">
             {detail.title && <span>{detail.title}</span>}
+            {detail.email && (
+              <a href={`mailto:${detail.email}`} className="text-blue-600 hover:underline">
+                {detail.email}
+              </a>
+            )}
             {detail.shop && (
               <Link
                 href={`/shops/all/${detail.shop_id}`}
@@ -86,6 +94,38 @@ export default function MechanicDetailPage() {
             <span className={`${pill} ${detail.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
               {detail.active ? "active" : "inactive"}
             </span>
+          </div>
+        </div>
+        <button
+          onClick={() => setAuditOpen(true)}
+          className="rounded-lg border border-slate-200 px-3 py-1.5 text-[13px] text-slate-600 hover:bg-slate-50"
+        >
+          Audit
+        </button>
+      </div>
+
+      {/* Utilization aggregates */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className={CARD}>
+          <div className="text-[11px] font-medium text-slate-500">Jobs logged</div>
+          <div className="mt-0.5 text-lg font-bold text-slate-900">{detail.aggregates.total_jobs}</div>
+        </div>
+        <div className={CARD}>
+          <div className="text-[11px] font-medium text-slate-500">Avg labor</div>
+          <div className="mt-0.5 text-lg font-bold text-slate-900">
+            {detail.aggregates.avg_labor_minutes != null ? `${detail.aggregates.avg_labor_minutes} min` : "—"}
+          </div>
+        </div>
+        <div className={CARD}>
+          <div className="text-[11px] font-medium text-slate-500">Parts handled</div>
+          <div className="mt-0.5 text-lg font-bold text-slate-900">
+            ${Math.round(detail.aggregates.total_parts_cost).toLocaleString()}
+          </div>
+        </div>
+        <div className={CARD}>
+          <div className="text-[11px] font-medium text-slate-500">Avg difficulty</div>
+          <div className="mt-0.5 text-lg font-bold text-slate-900">
+            {detail.aggregates.avg_difficulty != null ? `${detail.aggregates.avg_difficulty.toFixed(1)}/5` : "—"}
           </div>
         </div>
       </div>
@@ -108,16 +148,22 @@ export default function MechanicDetailPage() {
               </thead>
               <tbody>
                 {detail.recent_jobs.map(
-                  (j: { id: string; minutes: number | null; parts_cost: number | null; difficulty: number | null; at: number }) => (
+                  (j: { id: string; booking_id: string; minutes: number | null; parts_cost: number | null; difficulty: number | null; at: number }) => (
                     <tr key={j.id} className="border-b border-slate-50">
-                      <td className="py-1.5 text-slate-500">{fmtDate(j.at)}</td>
+                      <td className="py-1.5 text-slate-500">
+                        <Link href={`/ops/bookings/${j.booking_id}`} className="hover:text-blue-700 hover:underline">
+                          {fmtDate(j.at)}
+                        </Link>
+                      </td>
                       <td className="py-1.5 text-slate-700">
                         {j.minutes != null ? `${j.minutes} min` : "—"}
                       </td>
                       <td className="py-1.5 text-slate-700">
                         {j.parts_cost != null ? `$${j.parts_cost.toFixed(0)}` : "—"}
                       </td>
-                      <td className="py-1.5 text-slate-600">{j.difficulty ?? "—"}/5</td>
+                      <td className="py-1.5 text-slate-600">
+                        {j.difficulty != null ? `${j.difficulty}/5` : "—"}
+                      </td>
                     </tr>
                   ),
                 )}
@@ -149,15 +195,19 @@ export default function MechanicDetailPage() {
           )}
         </div>
 
-        {/* Week strip */}
+        {/* Week strip — derived open 15-min windows vs live bookings */}
         <div className={CARD}>
           <h2 className="text-sm font-semibold text-slate-900">This week</h2>
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            Open windows are derived from shop hours minus bookings &amp; blocks.
+          </p>
           <div className="mt-3 flex gap-2">
-            {detail.week_slots.map((d: { date: string; total: number; available: number }) => (
+            {detail.week_slots.map((d: { date: string; available: number; booked: number }) => (
               <div key={d.date} className="flex-1 rounded-lg border border-slate-100 p-2 text-center">
                 <div className="text-[10px] font-semibold text-slate-400">{d.date.slice(5)}</div>
-                <div className="mt-1 text-[15px] font-bold text-slate-900">{d.available}</div>
-                <div className="text-[10px] text-slate-400">of {d.total} open</div>
+                <div className="mt-1 text-[15px] font-bold text-emerald-700">{d.available}</div>
+                <div className="text-[10px] text-slate-400">open</div>
+                <div className="mt-0.5 text-[11px] font-medium text-slate-600">{d.booked} booked</div>
               </div>
             ))}
           </div>
@@ -199,6 +249,14 @@ export default function MechanicDetailPage() {
           )}
         </div>
       </div>
+
+      <AuditDrawer
+        open={auditOpen}
+        onOpenChange={setAuditOpen}
+        entityType="mechanic"
+        entityId={String(params.id)}
+        title={`Audit — ${detail.name}`}
+      />
     </div>
   );
 }

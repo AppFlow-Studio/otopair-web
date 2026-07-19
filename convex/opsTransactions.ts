@@ -8,6 +8,11 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
+import {
+  resolveVehicleDisplay,
+  resolveServiceNames,
+  userDisplayName,
+} from "./lib/bookingEnrichment";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -23,6 +28,11 @@ export type LedgerRow = {
   currency: string;
   status: string;
   transaction_type: string;
+  icon_type: string | null;
+  shop: string | null;
+  shop_id: string | null;
+  service: string | null;
+  vehicleYmm: string | null;
   payment_id: string | null;
   booking_id: string | null;
   mismatch: "amount" | "orphan_transaction" | null;
@@ -47,14 +57,56 @@ export const ledger = query({
       .order("desc")
       .take(300);
     const userName = new Map<string, string | null>();
+    const shopName = new Map<string, string | null>();
+    // Cache booking-derived context (service + vehicle) per booking_id — many
+    // ledger rows (auth, capture, refund) can share one booking.
+    const bookingCtx = new Map<string, { service: string | null; vehicleYmm: string | null }>();
     const out: LedgerRow[] = [];
     let mismatches = 0;
     for (const t of rows) {
       const uid = String(t.user_id);
       if (!userName.has(uid)) {
-        const u = await ctx.db.get(t.user_id);
-        const uo = u as { name?: string; firstName?: string; email?: string } | null;
-        userName.set(uid, uo?.name ?? uo?.firstName ?? uo?.email ?? null);
+        // first_name/last_name via the shared helper (old name?/firstName? guess
+        // silently returned null for every real user row).
+        userName.set(uid, userDisplayName(await ctx.db.get(t.user_id)));
+      }
+      let shop: string | null = null;
+      if (t.shop_id) {
+        const sid = String(t.shop_id);
+        if (!shopName.has(sid)) {
+          const s = await ctx.db.get(t.shop_id);
+          shopName.set(sid, (s as { name?: string } | null)?.name ?? null);
+        }
+        shop = shopName.get(sid) ?? null;
+      }
+      let service: string | null = null;
+      let vehicleYmm: string | null = null;
+      if (t.booking_id) {
+        const bid = String(t.booking_id);
+        if (!bookingCtx.has(bid)) {
+          const booking = await ctx.db.get(t.booking_id);
+          if (booking) {
+            const [names, vehicle] = await Promise.all([
+              resolveServiceNames(ctx, booking.service_ids),
+              resolveVehicleDisplay(ctx, booking.vin),
+            ]);
+            const clean = names.filter((n) => n && n !== "—");
+            bookingCtx.set(bid, {
+              service:
+                clean.length === 0
+                  ? null
+                  : clean.length === 1
+                    ? clean[0]
+                    : `${clean[0]} +${clean.length - 1}`,
+              vehicleYmm: vehicle.ymm,
+            });
+          } else {
+            bookingCtx.set(bid, { service: null, vehicleYmm: null });
+          }
+        }
+        const bctx = bookingCtx.get(bid)!;
+        service = bctx.service;
+        vehicleYmm = bctx.vehicleYmm;
       }
       let mismatch: LedgerRow["mismatch"] = null;
       let paymentAmount: number | null = null;
@@ -80,6 +132,11 @@ export const ledger = query({
         currency: t.currency ?? "usd",
         status: t.status,
         transaction_type: t.transaction_type,
+        icon_type: t.icon_type ?? null,
+        shop,
+        shop_id: t.shop_id ? String(t.shop_id) : null,
+        service,
+        vehicleYmm,
         payment_id: t.payment_id ? String(t.payment_id) : null,
         booking_id: t.booking_id ? String(t.booking_id) : null,
         mismatch,

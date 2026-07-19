@@ -35,6 +35,8 @@ type ReviewRow = {
   mechanic: string | null;
   mechanic_id: string | null;
   booking_id: string;
+  vehicleYmm: string | null;
+  services: string[];
   hidden: boolean;
   hidden_reason: string | null;
   hidden_by: string | null;
@@ -58,6 +60,7 @@ export default function OpsReviewsPage() {
   const [target, setTarget] = useState<{ row: ReviewRow; action: "hide" | "restore" } | null>(null);
 
   const reviews = useQuery(api.opsReviews.list, { token });
+  const insights = useQuery(api.opsReviews.insights, { token });
   const daily = useQuery(api.portalSeries.reviewsDaily, { token, days: 30 });
   const hide = useMutation(api.opsReviews.hide);
   const restore = useMutation(api.opsReviews.restore);
@@ -134,6 +137,117 @@ export default function OpsReviewsPage() {
         />
         <StatTile label="Hidden" value={hiddenCount == null ? "—" : fmtNum(hiddenCount)} />
       </div>
+      {/* Insights: rating distribution + shop/mechanic rollups */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+        <div className={CARD_STATIC}>
+          <div className={MICRO_H}>
+            Rating distribution
+            {insights && (
+              <span className="ml-2 font-normal normal-case text-slate-400">
+                {insights.total} visible · {insights.avg != null ? `${insights.avg.toFixed(2)}★ avg` : "no ratings"}
+              </span>
+            )}
+          </div>
+          <div className="mt-3 space-y-1.5">
+            {insights === undefined ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="h-5 animate-pulse rounded bg-slate-100" />
+              ))
+            ) : (
+              [...insights.distribution].reverse().map((d) => {
+                const max = Math.max(1, ...insights.distribution.map((x) => x.count));
+                const pct = Math.round((d.count / max) * 100);
+                const color =
+                  d.rating >= 4 ? "#10b981" : d.rating === 3 ? "#f59e0b" : "#ef4444";
+                return (
+                  <div key={d.rating} className="flex items-center gap-2">
+                    <span className="w-8 shrink-0 text-[12px] tabular-nums text-slate-500">
+                      {d.rating}★
+                    </span>
+                    <div className="h-4 flex-1 overflow-hidden rounded bg-slate-100">
+                      <div
+                        className="h-full rounded"
+                        style={{ width: `${pct}%`, backgroundColor: color }}
+                      />
+                    </div>
+                    <span className="w-8 shrink-0 text-right text-[12px] tabular-nums text-slate-600">
+                      {d.count}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className={CARD_STATIC}>
+          <div className={MICRO_H}>Shop & mechanic rollups (≥2 reviews)</div>
+          {insights === undefined ? (
+            <div className="mt-3 h-24 animate-pulse rounded bg-slate-100" />
+          ) : (
+            <div className="mt-3 grid gap-4 sm:grid-cols-2">
+              <div>
+                <div className="mb-1.5 text-[11px] font-semibold text-emerald-700">Top shops</div>
+                {insights.topShops.length === 0 ? (
+                  <p className="text-[12px] text-slate-400">Not enough rated shops yet.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {insights.topShops.map((s) => (
+                      <li key={s.id} className="flex items-center justify-between gap-2 text-[12px]">
+                        <Link href={`/shops/all/${s.id}`} className="truncate text-slate-700 hover:text-blue-700 hover:underline">
+                          {s.name}
+                        </Link>
+                        <span className="shrink-0 tabular-nums text-slate-500">
+                          {s.avg.toFixed(1)}★ · {s.count}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {insights.worstShops.length > 0 && insights.worstShops[0].avg < 4 && (
+                  <>
+                    <div className="mb-1.5 mt-3 text-[11px] font-semibold text-red-700">Needs attention</div>
+                    <ul className="space-y-1">
+                      {insights.worstShops
+                        .filter((s) => s.avg < 4)
+                        .map((s) => (
+                          <li key={s.id} className="flex items-center justify-between gap-2 text-[12px]">
+                            <Link href={`/shops/all/${s.id}`} className="truncate text-slate-700 hover:text-blue-700 hover:underline">
+                              {s.name}
+                            </Link>
+                            <span className="shrink-0 tabular-nums text-red-600">
+                              {s.avg.toFixed(1)}★ · {s.count}
+                            </span>
+                          </li>
+                        ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+              <div>
+                <div className="mb-1.5 text-[11px] font-semibold text-slate-600">Top mechanics</div>
+                {insights.topMechanics.length === 0 ? (
+                  <p className="text-[12px] text-slate-400">Not enough rated mechanics yet.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {insights.topMechanics.map((m) => (
+                      <li key={m.id} className="flex items-center justify-between gap-2 text-[12px]">
+                        <Link href={`/shops/mechanics/${m.id}`} className="truncate text-slate-700 hover:text-blue-700 hover:underline">
+                          {m.name}
+                        </Link>
+                        <span className="shrink-0 tabular-nums text-slate-500">
+                          {m.avg.toFixed(1)}★ · {m.count}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className={CARD_STATIC}>
         <div className={MICRO_H}>Reviews per day · last 30 days</div>
         <div className="mt-3">
@@ -266,6 +380,17 @@ export default function OpsReviewsPage() {
                     </button>
                   )}
                 </div>
+                {/* What was reviewed — car + job, joined from the booking. */}
+                {(r.vehicleYmm || r.services.length > 0) && (
+                  <div className="mt-1.5 text-[12px] text-slate-500">
+                    {[
+                      r.vehicleYmm,
+                      r.services.filter((s) => s && s !== "—").join(", ") || null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </div>
+                )}
                 {r.comment && (
                   <p
                     onClick={() => toggleExpand(r.id)}

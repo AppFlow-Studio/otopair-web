@@ -25,23 +25,32 @@ function getClient(): Anthropic {
 }
 
 /** Highest-consequence roles, checked first when the per-run cap bites —
- *  the parts that drive the most common services and caused the 5-VIN P0s. */
+ *  the parts that drive the most common services and caused the 5-VIN P0s.
+ *  Batch-3 audit added the rotor roles: rotors were wrong on ALL THREE
+ *  vehicles that had them (truck rotor on the Traverse, Impreza-era on the
+ *  Crosstrek, Ranger/Bronco rotors on the F-150) because the priority set
+ *  covered pads but never rotors, so the cap frequently cut them. */
 export const VERIFY_PRIORITY_ROLE_KEYS = new Set([
   "oil_filter",
   "air_filter",
   "cabin_filter",
   "front_brake_pad",
   "rear_brake_pad",
+  "front_rotor",
+  "rear_rotor",
   "spark_plug",
   "coolant",
   "atf_fluid",
+  "trans_filter",
   "engine_oil",
 ]);
 
 /** Batch-2 audit: a wrong-model o-ring (Genesis V6 part on a Soul) shipped
  *  because only the priority roles were sampled. Every priced non-universal
- *  part is now eligible, priority roles first, up to this cap. */
-export const VERIFY_MAX_PARTS = 14;
+ *  part is now eligible, priority roles first, up to this cap. Raised 14→16
+ *  in batch-3 to fit the added rotor/trans-filter priority roles alongside the
+ *  existing consumables on parts-dense vehicles. */
+export const VERIFY_MAX_PARTS = 16;
 
 /** Back-compat alias (v3pipeline imported this name in round 1). */
 export const VERIFY_ROLE_KEYS = VERIFY_PRIORITY_ROLE_KEYS;
@@ -62,16 +71,20 @@ export interface FitmentVerdict {
 const SYSTEM = `You are an automotive parts fact-checker. You will be given a vehicle and a list of OEM part numbers a pipeline claims fit it. Search the web and try to REFUTE each claim.
 
 A claim is REFUTED when the part number belongs to:
+- **a different ENGINE within the same year+model — this is a top failure mode.** Same displacement is NOT enough: a naturally-aspirated engine and a turbocharged engine of the same litres take different plugs/thermostats/intake gaskets/filters (e.g. a 3.2L NA-FSI spark plug on a 3.0T turbo, a supercharged-engine thermostat on the turbo engine of a later generation). Check ASPIRATION (turbo vs supercharged vs naturally-aspirated) and the exact engine code/family, not just the litres. A part whose catalog ties it to a different engine family — even same make, same displacement — is REFUTED.
+- **a different TRANSMISSION family — also a top failure mode.** A dual-clutch (DCT / S-tronic / DSG / PDK) filter or pan part does NOT fit a torque-converter automatic (ZF 8HP, 6R80, 6T75, Aisin) and vice-versa; a CVT part does not fit a geared automatic. If the vehicle's transmission is stated, any trans part (filter, pan gasket, internal/external filter) that a source ties to a DIFFERENT transmission type/family is REFUTED — even if it contradicts another trans part in the same list.
 - a different engine variant of the same model (e.g. the V8 oil filter on the V6, a spin-on filter on a cartridge-filter engine),
-- a different model or platform from the same manufacturer (e.g. Golf pads listed for an Atlas, a Seltos air filter listed for a Soul),
-- **a different GENERATION or year range of the SAME nameplate** — this is the sneakiest failure: the part number looks right because the model name matches, but its catalog fitment range ends before (or starts after) this model year. Example: pad kit 26296SC011 fits Subaru "WRX" only through 2014; on a 2015 WRX (new VA chassis) it is WRONG even though every listing says "WRX". ALWAYS check the exact fitment YEAR RANGE against this vehicle's model year — "same model name" is not confirmation.
+- a different model or platform from the same manufacturer (e.g. Golf pads listed for an Atlas, a Seltos air filter listed for a Soul, a full-size-TRUCK rotor/sensor listed for a crossover),
+- **a different GENERATION or year range of the SAME nameplate** — this is the sneakiest failure: the part number looks right because the model name matches, but its catalog fitment range ends before (or starts after) this model year. Example: pad kit 26296SC011 fits Subaru "WRX" only through 2014; on a 2015 WRX (new VA chassis) it is WRONG even though every listing says "WRX". This includes generation splits WITHIN one engine name (a "Gen-2 3.5 EcoBoost" plug on a Gen-1 3.5 EcoBoost truck). ALWAYS check the exact fitment YEAR RANGE against this vehicle's model year — "same model name" is not confirmation.
 - the wrong axle or position (a front-axle pad set claimed as rear pads),
 - a fluid spec the vehicle must not use (e.g. an older-generation coolant on a car requiring the newer chemistry).
 
+A part is a phantom (REFUTED) when the vehicle's platform does not have that component at all (e.g. an electronic brake-pad WEAR SENSOR part on a platform that uses only mechanical wear indicators).
+
 Rules:
 - Budget your searches: check the parts most likely to be wrong first; mark anything you could not check as "uncertain".
-- Only mark "refuted" when a source ties the part to a DIFFERENT vehicle/variant/year-range and nothing credible ties it to this one.
-- Only mark "confirmed" when a source ties the part to this exact vehicle — model AND year within the part's fitment range (or its exact platform+engine). A listing that names the model but whose year range excludes this vehicle's year is grounds for refuted, not confirmed.
+- Only mark "refuted" when a source ties the part to a DIFFERENT vehicle/variant/engine/transmission/year-range and nothing credible ties it to this one.
+- Only mark "confirmed" when a source ties the part to this exact vehicle — model AND year within the part's fitment range, AND (for engine/trans parts) the matching engine family / transmission family. A listing that names the model but whose year range or engine/transmission excludes this vehicle is grounds for refuted, not confirmed. Beware supersession chains: an older superseded number that still physically fits is CONFIRMED, not refuted.
 - Respond with ONLY a JSON array, one object per input part, same order:
 [{"idx": 1, "verdict": "confirmed" | "refuted" | "uncertain", "reason": "<one short sentence>"}]`;
 
@@ -88,6 +101,8 @@ export async function verifyPartFitments(
     trim: string;
     engineCode?: string | null;
     displacement?: string | null;
+    aspiration?: string | null;
+    transmissionType?: string | null;
   },
   parts: FitmentToVerify[],
 ): Promise<FitmentVerdict[]> {
@@ -97,10 +112,19 @@ export async function verifyPartFitments(
   if (parts.length === 0) return [];
   if (!process.env.ANTHROPIC_API_KEY) return uncertainAll("no_api_key");
 
+  // Aspiration + transmission family are load-bearing for the batch-3 failure
+  // modes (NA plug on a turbo, DCT filter on a torque-converter auto). Surface
+  // them explicitly so the checker keys on family, not just displacement.
   const engineDesc = [
     vehicle.displacement ? `${vehicle.displacement}L` : null,
+    vehicle.aspiration && vehicle.aspiration.toLowerCase() !== "naturally aspirated"
+      ? vehicle.aspiration
+      : null,
     vehicle.engineCode ? `engine code ${vehicle.engineCode}` : null,
   ].filter(Boolean).join(", ");
+  const transDesc = vehicle.transmissionType
+    ? `\nTransmission: ${vehicle.transmissionType}`
+    : "";
 
   const partLines = parts
     .map((p, i) => `${i + 1}. ${p.roleKey}: ${p.oem} (${p.name})`)
@@ -115,7 +139,7 @@ export async function verifyPartFitments(
       tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 12 } as any],
       messages: [{
         role: "user",
-        content: `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim}${engineDesc ? ` (${engineDesc})` : ""}\n\nClaimed parts:\n${partLines}`,
+        content: `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim}${engineDesc ? ` (${engineDesc})` : ""}${transDesc}\n\nClaimed parts:\n${partLines}`,
       }],
     });
 

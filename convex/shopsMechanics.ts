@@ -8,8 +8,20 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
+import {
+  listAvailableWindowsForShopDate,
+  listNextAvailableWindowsForShop,
+} from "./lib/timeSlotAvailability";
+import { SLOT_GRID_MINUTES } from "./lib/schedule_overlap";
 
 const DAY = 24 * 60 * 60 * 1000;
+
+const TERMINAL_BOOKING_STATUSES = new Set([
+  "cancelled",
+  "completed",
+  "no_show",
+  "declined",
+]);
 
 // --- Authored return types (see dataOverview.ts header) -----------------------
 
@@ -17,6 +29,7 @@ export type MechanicRow = {
   id: string;
   name: string;
   title: string | null;
+  email: string | null;
   photo: string | null;
   shop: string | null;
   shop_id: string;
@@ -50,17 +63,20 @@ export const directory = query({
           .query("mechanic_verifications")
           .withIndex("by_mechanic", (q) => q.eq("mechanic_id", m._id))
           .take(101);
-        const slots = await ctx.db
-          .query("time_slots")
-          .withIndex("by_mechanic_id", (q) => q.eq("mechanic_id", m._id))
-          .take(200);
-        const next = slots
-          .filter((sl) => sl.is_available && sl.date >= today)
-          .sort((a, b) => a.date.localeCompare(b.date) || a.start_time.localeCompare(b.start_time))[0];
+        // Next available slot is DERIVED (optimistic model): shop hours minus
+        // this mechanic's bookings/blocks — not a stored is_available row.
+        const nextWindows = await listNextAvailableWindowsForShop(ctx, {
+          shopId: s._id,
+          mechanicId: m._id,
+          startDate: today,
+          limit: 1,
+        });
+        const next = nextWindows[0];
         out.push({
           id: String(m._id),
           name: [m.first_name, m.last_name].filter(Boolean).join(" "),
           title: m.title ?? null,
+          email: m.email ?? null,
           photo: m.photo ?? null,
           shop: s.name,
           shop_id: String(s._id),
@@ -82,6 +98,7 @@ export type MechanicDetail = {
   id: string;
   name: string;
   title: string | null;
+  email: string | null;
   photo: string | null;
   shop: string | null;
   shop_id: string;
@@ -90,13 +107,20 @@ export type MechanicDetail = {
   review_count: number | null;
   recent_jobs: {
     id: string;
+    booking_id: string;
     minutes: number | null;
     parts_cost: number | null;
     difficulty: number | null;
     at: number;
   }[];
+  aggregates: {
+    total_jobs: number;
+    avg_labor_minutes: number | null;
+    total_parts_cost: number;
+    avg_difficulty: number | null;
+  };
   reviews: { rating: number; comment: string | null; hidden: boolean; at: number }[];
-  week_slots: { date: string; total: number; available: number }[];
+  week_slots: { date: string; available: number; booked: number }[];
   contributions: {
     id: string;
     status: string | null;
@@ -114,30 +138,68 @@ export const detail = query({
     if (!m) return null;
     const shop = await ctx.db.get(m.shop_id);
 
+    // Broader window for utilization aggregates; first 25 shown as recent.
     const jobs = await ctx.db
       .query("job_actuals")
       .withIndex("by_mechanic_id", (q) => q.eq("mechanic_id", mechanicId))
       .order("desc")
-      .take(25);
+      .take(200);
+    const laborSamples = jobs
+      .map((j) => j.actual_labor_minutes)
+      .filter((m): m is number => m != null);
+    const difficultySamples = jobs
+      .map((j) => j.difficulty_rating)
+      .filter((d): d is number => d != null);
+    const aggregates = {
+      total_jobs: jobs.length,
+      avg_labor_minutes:
+        laborSamples.length > 0
+          ? Math.round(laborSamples.reduce((s, m) => s + m, 0) / laborSamples.length)
+          : null,
+      total_parts_cost: jobs.reduce((s, j) => s + (j.actual_parts_cost ?? 0), 0),
+      avg_difficulty:
+        difficultySamples.length > 0
+          ? difficultySamples.reduce((s, d) => s + d, 0) / difficultySamples.length
+          : null,
+    };
     const reviews = await ctx.db
       .query("reviews")
       .withIndex("by_mechanic_id", (q) => q.eq("mechanic_id", mechanicId))
       .take(50);
 
-    // Personal week strip: next 7 days of slots.
-    const weekSlots: { date: string; total: number; available: number }[] = [];
-    const slots = await ctx.db
-      .query("time_slots")
-      .withIndex("by_mechanic_id", (q) => q.eq("mechanic_id", mechanicId))
-      .take(400);
+    // Personal week strip: next 7 days. Availability DERIVED (optimistic
+    // model) = open 15-min windows for this mechanic; booked = their live
+    // non-terminal bookings that day.
+    const weekSlots: { date: string; available: number; booked: number }[] = [];
+    const weekDates: string[] = [];
     for (let d = 0; d < 7; d++) {
-      const date = new Date(Date.now() + d * DAY).toISOString().slice(0, 10);
-      const day = slots.filter((s) => s.date === date);
-      weekSlots.push({
+      weekDates.push(new Date(Date.now() + d * DAY).toISOString().slice(0, 10));
+    }
+    const weekBookings = m.shop_id
+      ? await ctx.db
+          .query("bookings")
+          .withIndex("by_shop_and_date", (q) =>
+            q
+              .eq("shop_id", m.shop_id)
+              .gte("scheduled_date", weekDates[0])
+              .lte("scheduled_date", weekDates[weekDates.length - 1]),
+          )
+          .take(300)
+      : [];
+    for (const date of weekDates) {
+      const windows = await listAvailableWindowsForShopDate(ctx, {
+        shopId: m.shop_id,
         date,
-        total: day.length,
-        available: day.filter((s) => s.is_available).length,
+        mechanicId,
+        durationMinutes: SLOT_GRID_MINUTES,
       });
+      const booked = weekBookings.filter(
+        (b) =>
+          b.scheduled_date === date &&
+          String(b.mechanic_id) === String(mechanicId) &&
+          !TERMINAL_BOOKING_STATUSES.has(b.status),
+      ).length;
+      weekSlots.push({ date, available: windows.length, booked });
     }
 
     const verifications = await ctx.db
@@ -150,19 +212,22 @@ export const detail = query({
       id: String(m._id),
       name: [m.first_name, m.last_name].filter(Boolean).join(" "),
       title: m.title ?? null,
+      email: m.email ?? null,
       photo: m.photo ?? null,
       shop: shop ? ((shop as { name?: string }).name ?? null) : null,
       shop_id: String(m.shop_id),
       active: m.is_active !== false,
       rating: m.rating ?? null,
       review_count: m.review_count ?? null,
-      recent_jobs: jobs.map((j) => ({
+      recent_jobs: jobs.slice(0, 25).map((j) => ({
         id: String(j._id),
+        booking_id: String(j.booking_id),
         minutes: j.actual_labor_minutes ?? null,
         parts_cost: j.actual_parts_cost ?? null,
         difficulty: j.difficulty_rating ?? null,
         at: j.created_at ?? j._creationTime,
       })),
+      aggregates,
       reviews: reviews
         .map((r) => ({
           rating: r.rating,

@@ -7,6 +7,7 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
+import { userDisplayName } from "./lib/bookingEnrichment";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -16,6 +17,8 @@ export type ShopReviewRow = {
   id: string;
   rating: number;
   comment: string | null;
+  reviewer: string | null;
+  reviewer_id: string | null;
   mechanic: string | null;
   mechanic_id: string | null;
   booking_id: string;
@@ -38,6 +41,7 @@ export const byShop = query({
     await requireDirector(ctx, token);
     const shops = await ctx.db.query("shops").collect(); // 9 rows
     const mechName = new Map<string, string | null>();
+    const reviewerName = new Map<string, string | null>();
     const out: ShopReviewGroup[] = [];
     const now = Date.now();
 
@@ -60,10 +64,17 @@ export const byShop = query({
           }
           mechanic = mechName.get(mid) ?? null;
         }
+        // Who left the review — the shop-reviews page never showed this before.
+        const rid = String(r.user_id);
+        if (!reviewerName.has(rid)) {
+          reviewerName.set(rid, userDisplayName(await ctx.db.get(r.user_id)));
+        }
         reviews.push({
           id: String(r._id),
           rating: r.rating,
           comment: r.comment ?? null,
+          reviewer: reviewerName.get(rid) ?? null,
+          reviewer_id: rid,
           mechanic,
           mechanic_id: r.mechanic_id ? String(r.mechanic_id) : null,
           booking_id: String(r.booking_id),

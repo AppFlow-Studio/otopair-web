@@ -30,9 +30,14 @@ import {
 type FeedItem = {
   kind: "booking" | "payment";
   id: string;
+  bookingId: string | null;
   at: number;
-  label: string;
+  status: string;
   amount: number | null;
+  user: { id: string; name: string };
+  vehicleYmm: string | null;
+  services: string[];
+  shop: string | null;
 };
 
 type StuckBooking = {
@@ -188,14 +193,25 @@ export default function OpsOverviewPage() {
             <p className="mt-4 text-sm text-slate-500">Quiet so far today.</p>
           ) : (
             <ul className="mt-3 divide-y divide-slate-50">
-              {feed.map((e: FeedItem) => (
-                <li key={`${e.kind}-${e.id}`}>
-                  <Link
-                    href={e.kind === "booking" ? `/ops/bookings/${e.id}` : `/ops/payments/${e.id}`}
-                    className="-mx-2 flex items-center gap-3 rounded-lg px-2 py-2.5 hover:bg-slate-50"
+              {feed.map((e: FeedItem) => {
+                const detailHref =
+                  e.kind === "booking"
+                    ? `/ops/bookings/${e.id}`
+                    : `/ops/payments/${e.id}`;
+                const context = [
+                  e.vehicleYmm,
+                  e.services.filter((s) => s && s !== "—").join(", ") || null,
+                  e.shop,
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
+                return (
+                  <li
+                    key={`${e.kind}-${e.id}`}
+                    className="-mx-2 flex items-start gap-3 rounded-lg px-2 py-2.5 hover:bg-slate-50"
                   >
                     <span
-                      className={`${PILL} ${
+                      className={`${PILL} mt-0.5 shrink-0 ${
                         e.kind === "booking"
                           ? "bg-blue-50 text-blue-700"
                           : "bg-emerald-50 text-emerald-700"
@@ -203,17 +219,49 @@ export default function OpsOverviewPage() {
                     >
                       {e.kind}
                     </span>
-                    <span className="flex-1 truncate text-[13px] text-slate-700">{e.label}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-1.5 text-[13px]">
+                        {/* Customer links to their profile, not the entity. */}
+                        <Link
+                          href={`/ops/users/${e.user.id}`}
+                          className="font-medium text-slate-900 hover:text-blue-600 hover:underline"
+                        >
+                          {e.user.name}
+                        </Link>
+                        <span className="text-slate-400">·</span>
+                        <span className="text-slate-600">
+                          {STATUS_LABEL[e.status] ?? e.status.replace(/_/g, " ")}
+                        </span>
+                      </div>
+                      <Link
+                        href={detailHref}
+                        className="mt-0.5 block truncate text-[12px] text-slate-500 hover:text-blue-600"
+                      >
+                        {context || "no vehicle / service on file"}
+                      </Link>
+                    </div>
                     {e.amount != null && (
-                      <span className="text-[13px] font-medium text-slate-900">
+                      <span className="mt-0.5 shrink-0 text-[13px] font-medium text-slate-900">
                         {money(e.amount)}
                       </span>
                     )}
-                    <span className="text-xs text-slate-400">{timeAgo(e.at)}</span>
-                    <span className="text-xs text-slate-300">→</span>
-                  </Link>
-                </li>
-              ))}
+                    {/* Relative time, with the absolute timestamp on hover. */}
+                    <span
+                      className="mt-0.5 shrink-0 text-xs text-slate-400"
+                      title={new Date(e.at).toLocaleString()}
+                    >
+                      {timeAgo(e.at)}
+                    </span>
+                    <Link
+                      href={detailHref}
+                      className="mt-0.5 shrink-0 text-xs text-slate-300 hover:text-blue-600"
+                      aria-label="Open detail"
+                    >
+                      →
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

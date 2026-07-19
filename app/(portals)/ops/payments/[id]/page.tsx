@@ -56,6 +56,27 @@ function statusPillClass(status: string): string {
   }
 }
 
+// A breakdown line that renders "low–high" when a range is present, else a
+// single value. Keeps the range-vs-fixed quote honest.
+function BreakdownRow({
+  label,
+  low,
+  high,
+}: {
+  label: string;
+  low: number | null;
+  high: number | null;
+}) {
+  return (
+    <div className="flex justify-between">
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="tabular-nums font-medium text-slate-800">
+        {high != null && high !== low ? `${money(low)}–${money(high)}` : money(low)}
+      </dd>
+    </div>
+  );
+}
+
 function CopyableMono({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -115,7 +136,7 @@ export default function OpsPaymentDetailPage() {
     );
   }
 
-  const { payment: p, user, shop, booking, history, transactions, disputes } = data;
+  const { payment: p, user, shop, booking, history, transactions, disputes, refunds } = data;
 
   return (
     <div className="space-y-4">
@@ -157,8 +178,20 @@ export default function OpsPaymentDetailPage() {
           <h2 className="text-sm font-semibold text-slate-900">Payment</h2>
           <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-4">
             <Field label="Amount">{money(p.amount)}</Field>
-            <Field label="Method / origin">
-              {p.paymentOrigin ?? p.paymentMethod ?? "—"}
+            <Field label="Card">
+              {p.cardLast4 ? (
+                <span>
+                  <span className="capitalize">{p.cardBrand ?? "card"}</span>
+                  <span className="ml-1 font-mono text-slate-500">···· {p.cardLast4}</span>
+                  {p.paymentOrigin && p.paymentOrigin !== "card" && (
+                    <span className="ml-1 text-[11px] text-slate-400">
+                      via {p.paymentOrigin.replace(/_/g, " ")}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                p.paymentOrigin ?? p.paymentMethod ?? "—"
+              )}
             </Field>
             <Field label="Created">{ts(p.createdAt)}</Field>
             <Field label="Updated">{ts(p.updatedAt)}</Field>
@@ -184,9 +217,14 @@ export default function OpsPaymentDetailPage() {
             </Field>
             <Field label="Invoice">
               {p.invoiceNumber ?? "—"}
+              {p.invoiceGeneratedAtMs != null && (
+                <span className="ml-1 text-[11px] text-slate-400">
+                  generated {ts(p.invoiceGeneratedAtMs)}
+                </span>
+              )}
               {p.invoiceEmailedAtMs != null && (
                 <span className="ml-1 text-[11px] text-slate-400">
-                  emailed {ts(p.invoiceEmailedAtMs)}
+                  · emailed {ts(p.invoiceEmailedAtMs)}
                 </span>
               )}
             </Field>
@@ -261,21 +299,78 @@ export default function OpsPaymentDetailPage() {
               </Field>
               <Field label="Booking">
                 {booking ? (
-                  <Link href={`/ops/bookings/${booking.id}`} className="hover:underline">
-                    {booking.scheduledDate ?? "booking"} ·{" "}
-                    <span className={statusPillClass(booking.status)}>{booking.status}</span>
-                    {booking.totalCost != null && (
-                      <span className="ml-1 text-[11px] text-slate-400">
-                        {money(booking.totalCost)}
-                      </span>
+                  <div>
+                    <Link href={`/ops/bookings/${booking.id}`} className="hover:underline">
+                      {booking.scheduledDate ?? "booking"} ·{" "}
+                      <span className={statusPillClass(booking.status)}>{booking.status}</span>
+                      {booking.totalCost != null && (
+                        <span className="ml-1 text-[11px] text-slate-400">
+                          {money(booking.totalCost)}
+                        </span>
+                      )}
+                    </Link>
+                    {(booking.services?.length > 0 || booking.vehicleYmm) && (
+                      <div className="mt-0.5 text-[12px] text-slate-500">
+                        {[
+                          booking.services
+                            ?.filter((s: string) => s && s !== "—")
+                            .join(", ") || null,
+                          booking.vehicleYmm,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
                     )}
-                  </Link>
+                  </div>
                 ) : (
                   "—"
                 )}
               </Field>
             </div>
           </div>
+
+          {/* Price breakdown — lives on the booking (parts/labor/tax/fee) */}
+          {booking?.breakdown && (
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <h2 className="text-sm font-semibold text-slate-900">
+                Price breakdown
+                {booking.breakdown.isRange && (
+                  <span className="ml-1.5 text-[11px] font-normal text-slate-400">
+                    quoted range
+                  </span>
+                )}
+              </h2>
+              <dl className="mt-3 space-y-1.5 text-[13px]">
+                <BreakdownRow
+                  label="Parts"
+                  low={booking.breakdown.parts}
+                  high={booking.breakdown.partsHigh}
+                />
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Labor</dt>
+                  <dd className="tabular-nums font-medium text-slate-800">
+                    {money(booking.breakdown.labor)}
+                  </dd>
+                </div>
+                <BreakdownRow
+                  label="Tax"
+                  low={booking.breakdown.tax}
+                  high={booking.breakdown.taxHigh}
+                />
+                <BreakdownRow
+                  label="Service fee"
+                  low={booking.breakdown.serviceFee}
+                  high={booking.breakdown.serviceFeeHigh}
+                />
+                <div className="flex justify-between border-t border-slate-100 pt-1.5">
+                  <dt className="font-semibold text-slate-700">Booking total</dt>
+                  <dd className="tabular-nums font-bold text-slate-900">
+                    {money(booking.totalCost)}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          )}
 
           {/* Disputes */}
           <div className="rounded-xl border border-slate-200 bg-white p-5">
@@ -306,6 +401,67 @@ export default function OpsPaymentDetailPage() {
                 ))}
               </div>
             )}
+          </div>
+
+          {/* Refunds & capture reconciliation */}
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <h2 className="text-sm font-semibold text-slate-900">Refunds & capture</h2>
+            {(() => {
+              const hasAny =
+                refunds.bookingRefundReason != null ||
+                refunds.authVoidedAtMs != null ||
+                refunds.disputeRefunds.length > 0 ||
+                refunds.ledgerRefunds.length > 0 ||
+                (refunds.finalCaptureAmountCents != null &&
+                  refunds.finalTotalCents != null &&
+                  refunds.finalCaptureAmountCents < refunds.finalTotalCents);
+              if (!hasAny)
+                return (
+                  <p className="mt-2 text-[12px] text-slate-400">
+                    No refunds or capture shortfall on this payment.
+                  </p>
+                );
+              return (
+                <div className="mt-3 space-y-2 text-[12px]">
+                  {refunds.finalTotalCents != null &&
+                    refunds.finalCaptureAmountCents != null &&
+                    refunds.finalCaptureAmountCents < refunds.finalTotalCents && (
+                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-amber-800">
+                        Captured {cents(refunds.finalCaptureAmountCents)} of a{" "}
+                        {cents(refunds.finalTotalCents)} final total —{" "}
+                        {cents(refunds.finalTotalCents - refunds.finalCaptureAmountCents)} not
+                        captured (deposit forfeit, partial capture, or refund).
+                      </p>
+                    )}
+                  {refunds.authVoidedAtMs != null && (
+                    <div className="text-slate-600">
+                      Authorization voided · {ts(refunds.authVoidedAtMs)}
+                    </div>
+                  )}
+                  {refunds.bookingRefundReason && (
+                    <div className="text-slate-600">
+                      <span className="font-medium text-slate-800">Refund reason:</span>{" "}
+                      {refunds.bookingRefundReason}
+                    </div>
+                  )}
+                  {refunds.disputeRefunds.map((r, i) => (
+                    <div key={i} className="flex justify-between text-slate-600">
+                      <span>
+                        Dispute refund{r.resolution ? ` (${r.resolution.replace(/_/g, " ")})` : ""}
+                        {r.resolvedAtMs ? ` · ${ts(r.resolvedAtMs)}` : ""}
+                      </span>
+                      <span className="font-semibold text-red-600">−{cents(r.amountCents)}</span>
+                    </div>
+                  ))}
+                  {refunds.ledgerRefunds.map((r, i) => (
+                    <div key={i} className="flex justify-between text-slate-600">
+                      <span>{r.description} · {ts(r.createdAt)}</span>
+                      <span className="font-semibold text-red-600">{money(r.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>

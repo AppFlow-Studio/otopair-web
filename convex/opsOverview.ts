@@ -9,6 +9,11 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
+import {
+  resolveVehicleDisplay,
+  resolveServiceNames,
+  userDisplayName,
+} from "./lib/bookingEnrichment";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -65,7 +70,12 @@ export const kpis = query({
   },
 });
 
-/** Live activity feed — most recent bookings and payments, merged. */
+/** Live activity feed — most recent bookings and payments, merged. Every row
+ *  carries a structured, traceable entity: linked customer, vehicle (YMM),
+ *  service(s), shop, amount, status — not a pre-baked truncated sentence. The
+ *  client links the customer to /ops/users/[id] and deep-links the row to the
+ *  booking/payment. Bounded: ≤2n bookings/payments, each with a few cached
+ *  joins (user names + vehicle/service resolution). */
 export const activityFeed = query({
   args: { token: v.string(), limit: v.optional(v.number()) },
   handler: async (ctx, { token, limit = 30 }) => {
@@ -75,47 +85,72 @@ export const activityFeed = query({
     const bookings = await ctx.db.query("bookings").withIndex("by_created_at").order("desc").take(n);
     const payments = await ctx.db.query("payments").withIndex("by_created_at").order("desc").take(n);
 
-    // Name the actor on every row — feed labels must be traceable, not
-    // "Booking pending". Bounded: ≤2n cached user lookups.
+    // Cache user display names across both streams (a user often appears in
+    // both a booking and its payment). Bounded ≤2n lookups.
     const userNames = new Map<string, string>();
-    const nameOf = async (userId: (typeof bookings)[number]["user_id"]): Promise<string> => {
+    const nameOf = async (
+      userId: (typeof bookings)[number]["user_id"],
+    ): Promise<string> => {
       const key = String(userId);
       const cached = userNames.get(key);
       if (cached !== undefined) return cached;
-      const u = await ctx.db.get(userId);
-      const name = u
-        ? [u.first_name, u.last_name].filter(Boolean).join(" ").trim() || u.email || "unknown"
-        : "unknown";
+      const name = userDisplayName(await ctx.db.get(userId));
       userNames.set(key, name);
       return name;
     };
 
-    const feed = [
-      ...(await Promise.all(
-        bookings.map(async (b) => ({
+    const bookingRows = await Promise.all(
+      bookings.map(async (b) => {
+        const [userName, vehicle, serviceNames, shop] = await Promise.all([
+          nameOf(b.user_id),
+          resolveVehicleDisplay(ctx, b.vin),
+          resolveServiceNames(ctx, b.service_ids),
+          b.shop_id ? ctx.db.get(b.shop_id) : null,
+        ]);
+        return {
           kind: "booking" as const,
           id: String(b._id),
+          bookingId: String(b._id),
           at: b.created_at ?? b._creationTime,
-          label: `${await nameOf(b.user_id)} — booking ${b.status.replace(/_/g, " ")}`,
+          status: b.status,
           amount: b.total_cost ?? null,
-          entity: { type: "booking", id: String(b._id) },
-        })),
-      )),
-      ...(await Promise.all(
-        payments.map(async (p) => ({
+          user: { id: String(b.user_id), name: userName },
+          vehicleYmm: vehicle.ymm,
+          services: serviceNames,
+          shop: shop?.name ?? null,
+        };
+      }),
+    );
+
+    const paymentRows = await Promise.all(
+      payments.map(async (p) => {
+        // Resolve the booking behind the payment so the row can show the same
+        // "which car / which service" context as a booking row.
+        const booking = p.booking_id ? await ctx.db.get(p.booking_id) : null;
+        const [userName, vehicle, serviceNames, shop] = await Promise.all([
+          nameOf(p.user_id),
+          booking ? resolveVehicleDisplay(ctx, booking.vin) : Promise.resolve(null),
+          booking ? resolveServiceNames(ctx, booking.service_ids) : Promise.resolve([]),
+          p.shop_id ? ctx.db.get(p.shop_id) : null,
+        ]);
+        return {
           kind: "payment" as const,
           id: String(p._id),
+          bookingId: p.booking_id ? String(p.booking_id) : null,
           at: p.created_at ?? p._creationTime,
-          label: `${await nameOf(p.user_id)} — payment ${p.status.replace(/_/g, " ")}`,
+          status: p.status,
           amount: p.captured_amount_cents != null ? p.captured_amount_cents / 100 : p.amount,
-          entity: { type: "payment", id: String(p._id) },
-        })),
-      )),
-    ]
+          user: { id: String(p.user_id), name: userName },
+          vehicleYmm: vehicle?.ymm ?? null,
+          services: serviceNames,
+          shop: shop?.name ?? null,
+        };
+      }),
+    );
+
+    return [...bookingRows, ...paymentRows]
       .sort((a, b) => b.at - a.at)
       .slice(0, n);
-
-    return feed;
   },
 });
 

@@ -33,6 +33,8 @@ type Profile = {
   email: string | null;
   website: string | null;
   timezone: string | null;
+  lat: number | null;
+  lng: number | null;
   description: string | null;
   laborRate: number | null;
   rating: number | null;
@@ -107,7 +109,32 @@ type BookingRow = {
   createdAt: number;
 };
 
-const TABS = ["Profile", "Hours", "Services & Rate", "Mechanics", "Calendar", "Bookings"] as const;
+type ShopInsights = {
+  reviews: {
+    id: string;
+    rating: number;
+    comment: string | null;
+    reviewer: string | null;
+    reviewerId: string;
+    mechanic: string | null;
+    hidden: boolean;
+    at: number;
+  }[];
+  rateHistory: { actor: string; detail: string | null; at: number }[];
+  fixedPrices: { service: string; tier: string; price: number }[];
+  portfolio: { id: string; url: string; caption: string | null }[];
+  stats: {
+    total: number;
+    completed: number;
+    cancelled: number;
+    noShow: number;
+    cancelRate: number | null;
+    noShowRate: number | null;
+    disputeCount: number;
+  };
+};
+
+const TABS = ["Profile", "Hours", "Services & Rate", "Mechanics", "Calendar", "Bookings", "Insights"] as const;
 type Tab = (typeof TABS)[number];
 
 // ---------------------------------------------------------------------------
@@ -201,6 +228,10 @@ export default function ShopDetailPage() {
     shopsDirectoryApi.shopCalendarWeek,
     tab === "Calendar" ? { token, id: shopId, dates } : "skip",
   ) as CalendarResult | undefined;
+  const insights = useQuery(
+    shopsDirectoryApi.shopInsights,
+    tab === "Insights" ? { token, id: shopId } : "skip",
+  ) as ShopInsights | undefined;
 
   // Rate-change ceremony state (tab 3)
   const setLaborRate = useMutation(shopsDirectoryApi.setLaborRate);
@@ -349,8 +380,26 @@ export default function ShopDetailPage() {
               ["Slug", profile.slug ?? "—"],
               ["Address", profile.address ?? "—"],
               ["City / State / ZIP", [profile.city, profile.state, profile.zip].filter(Boolean).join(", ") || "—"],
-              ["Phone", profile.phone ?? "—"],
-              ["Email", profile.email ?? "—"],
+              [
+                "Phone",
+                profile.phone ? (
+                  <a href={`tel:${profile.phone}`} className="text-blue-600 hover:underline">
+                    {profile.phone}
+                  </a>
+                ) : (
+                  "—"
+                ),
+              ],
+              [
+                "Email",
+                profile.email ? (
+                  <a href={`mailto:${profile.email}`} className="text-blue-600 hover:underline">
+                    {profile.email}
+                  </a>
+                ) : (
+                  "—"
+                ),
+              ],
               [
                 "Owner",
                 profile.owner ? (
@@ -364,8 +413,37 @@ export default function ShopDetailPage() {
                   "—"
                 ),
               ],
-              ["Website", profile.website ?? "—"],
+              [
+                "Website",
+                profile.website ? (
+                  <a
+                    href={profile.website.startsWith("http") ? profile.website : `https://${profile.website}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    {profile.website}
+                  </a>
+                ) : (
+                  "—"
+                ),
+              ],
               ["Timezone", profile.timezone ?? "—"],
+              [
+                "Coordinates",
+                profile.lat != null && profile.lng != null ? (
+                  <a
+                    href={`https://www.openstreetmap.org/?mlat=${profile.lat}&mlon=${profile.lng}#map=16/${profile.lat}/${profile.lng}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-[12px] text-blue-600 hover:underline"
+                  >
+                    {profile.lat.toFixed(5)}, {profile.lng.toFixed(5)}
+                  </a>
+                ) : (
+                  <span className="text-amber-600" title="Missing from the network map">not geocoded</span>
+                ),
+              ],
               ["Labor rate", profile.laborRate !== null ? `$${profile.laborRate}/hr` : "—"],
               ["Active", profile.isActive ? "Yes" : "No"],
               ["Verified", profile.isVerified ? "Yes" : "No"],
@@ -674,6 +752,9 @@ export default function ShopDetailPage() {
               </span>
             </div>
           </div>
+          <p className="mb-3 text-[11px] text-slate-400">
+            Availability is derived live from shop hours minus bookings and blocks — open windows are computed, not pre-generated.
+          </p>
 
           {calendar === undefined && <Loading label="calendar" />}
           {calendar !== undefined && calendar.mechanics.length === 0 && (
@@ -727,7 +808,10 @@ export default function ShopDetailPage() {
                                           : "bg-white text-slate-600 ring-slate-200"
                                     }`}
                                   >
-                                    {s.start}
+                                    {/* Open windows show their range; booked/blocked show start + label. */}
+                                    {s.state === "available"
+                                      ? `${s.start}–${s.end}`
+                                      : `${s.start} ${s.note ?? s.title ?? ""}`.trim()}
                                   </span>
                                 ))}
                               </div>
@@ -806,6 +890,130 @@ export default function ShopDetailPage() {
             </div>
           )}
         </Card>
+      )}
+
+      {/* ---- Tab 7 · Insights ----------------------------------------------- */}
+      {tab === "Insights" && (
+        <div className="space-y-4">
+          {insights === undefined ? (
+            <Loading label="insights" />
+          ) : (
+            <>
+              {/* Quality rates */}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <Card>
+                  <div className="text-[11px] font-medium text-slate-500">Completed</div>
+                  <div className="mt-0.5 text-lg font-bold text-slate-900">{insights.stats.completed}</div>
+                  <div className="text-[11px] text-slate-400">of {insights.stats.total}</div>
+                </Card>
+                <Card>
+                  <div className="text-[11px] font-medium text-slate-500">Cancellation rate</div>
+                  <div className="mt-0.5 text-lg font-bold text-slate-900">
+                    {insights.stats.cancelRate != null ? `${Math.round(insights.stats.cancelRate * 100)}%` : "—"}
+                  </div>
+                  <div className="text-[11px] text-slate-400">{insights.stats.cancelled} cancelled</div>
+                </Card>
+                <Card>
+                  <div className="text-[11px] font-medium text-slate-500">No-show rate</div>
+                  <div className="mt-0.5 text-lg font-bold text-slate-900">
+                    {insights.stats.noShowRate != null ? `${Math.round(insights.stats.noShowRate * 100)}%` : "—"}
+                  </div>
+                  <div className="text-[11px] text-slate-400">{insights.stats.noShow} no-shows</div>
+                </Card>
+                <Card>
+                  <div className="text-[11px] font-medium text-slate-500">Stripe disputes</div>
+                  <div className="mt-0.5 text-lg font-bold text-slate-900">{insights.stats.disputeCount}</div>
+                </Card>
+              </div>
+
+              {/* Portfolio gallery */}
+              {insights.portfolio.length > 0 && (
+                <Card>
+                  <h2 className="text-sm font-semibold text-slate-900">Portfolio ({insights.portfolio.length})</h2>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {insights.portfolio.map((p) => (
+                      <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" title={p.caption ?? undefined}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={p.url} alt={p.caption ?? "portfolio"} className="h-24 w-32 rounded-lg object-cover ring-1 ring-slate-200 hover:ring-slate-400" />
+                      </a>
+                    ))}
+                  </div>
+                </Card>
+              )}
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                {/* Reviews */}
+                <Card>
+                  <h2 className="text-sm font-semibold text-slate-900">Reviews ({insights.reviews.length})</h2>
+                  {insights.reviews.length === 0 ? (
+                    <p className="mt-2 text-[13px] text-slate-400">No reviews for this shop yet.</p>
+                  ) : (
+                    <div className="mt-3 max-h-96 space-y-2 overflow-auto">
+                      {insights.reviews.map((r) => (
+                        <div key={r.id} className={`border-b border-slate-50 pb-2 last:border-0 ${r.hidden ? "opacity-50" : ""}`}>
+                          <div className="flex items-center gap-2">
+                            <span style={{ color: "#F59E0B" }}>{"★".repeat(Math.round(r.rating))}</span>
+                            {r.reviewer && (
+                              <Link href={`/ops/users/${r.reviewerId}`} className="text-[12px] font-medium text-blue-600 hover:underline">
+                                {r.reviewer}
+                              </Link>
+                            )}
+                            {r.mechanic && <span className="text-[11px] text-slate-400">· {r.mechanic}</span>}
+                            {r.hidden && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">hidden</span>}
+                            <span className="ml-auto text-[11px] text-slate-400">
+                              {new Date(r.at).toLocaleDateString()}
+                            </span>
+                          </div>
+                          {r.comment && <p className="mt-1 text-[12px] text-slate-600">{r.comment}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+
+                <div className="space-y-4">
+                  {/* Rate history */}
+                  <Card>
+                    <h2 className="text-sm font-semibold text-slate-900">Labor-rate history</h2>
+                    {insights.rateHistory.length === 0 ? (
+                      <p className="mt-2 text-[13px] text-slate-400">No rate changes recorded.</p>
+                    ) : (
+                      <ol className="mt-3 space-y-2">
+                        {insights.rateHistory.map((h, i) => (
+                          <li key={i} className="text-[12px]">
+                            <div className="text-slate-700">{h.detail ?? "rate changed"}</div>
+                            <div className="text-[11px] text-slate-400">
+                              {new Date(h.at).toLocaleString()} · {h.actor}
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </Card>
+
+                  {/* Fixed-price overrides */}
+                  <Card>
+                    <h2 className="text-sm font-semibold text-slate-900">Fixed-price overrides</h2>
+                    {insights.fixedPrices.length === 0 ? (
+                      <p className="mt-2 text-[13px] text-slate-400">No per-service flat prices set.</p>
+                    ) : (
+                      <div className="mt-3 space-y-1">
+                        {insights.fixedPrices.map((f, i) => (
+                          <div key={i} className="flex items-center justify-between text-[12px]">
+                            <span className="text-slate-700">
+                              {f.service} <span className="text-slate-400">· {f.tier}</span>
+                            </span>
+                            <span className="font-semibold text-slate-800">${f.price.toFixed(2)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       )}
 
       {/* ---- Rate-change ceremony -------------------------------------------- */}

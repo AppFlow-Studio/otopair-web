@@ -229,7 +229,8 @@ export default function OpsPaymentsPage() {
                   <th className="pb-2 pr-4">Created</th>
                   <th className="pb-2 pr-4">Amount</th>
                   <th className="pb-2 pr-4">Status</th>
-                  <th className="pb-2 pr-4">Method</th>
+                  <th className="pb-2 pr-4">Card</th>
+                  <th className="pb-2 pr-4">Service</th>
                   <th className="pb-2 pr-4">User</th>
                   <th className="pb-2 pr-4">Shop</th>
                   <th className="pb-2 pr-4">Booking</th>
@@ -254,14 +255,38 @@ export default function OpsPaymentsPage() {
                     </td>
                     <td className="py-2.5 pr-4">
                       <span className={statusPillClass(p.status)}>{p.status}</span>
+                      {p.hasDispute && (
+                        <span className={`${PILL} ml-1 bg-red-50 text-red-700`} title="Has a dispute">
+                          disputed
+                        </span>
+                      )}
                       {p.backfilled && (
                         <span className={`${PILL} ml-1 bg-slate-100 text-slate-500`}>
                           backfill
                         </span>
                       )}
                     </td>
+                    <td className="py-2.5 pr-4 whitespace-nowrap text-slate-600">
+                      {p.cardLast4 ? (
+                        <span>
+                          <span className="capitalize">{p.cardBrand ?? "card"}</span>
+                          <span className="ml-1 font-mono text-slate-400">···· {p.cardLast4}</span>
+                        </span>
+                      ) : (
+                        p.paymentOrigin ?? p.paymentMethod ?? "—"
+                      )}
+                    </td>
                     <td className="py-2.5 pr-4 text-slate-600">
-                      {p.paymentOrigin ?? p.paymentMethod ?? "—"}
+                      {p.service ? (
+                        <span>
+                          <span className="truncate">{p.service}</span>
+                          {p.vehicleYmm && (
+                            <span className="block text-[11px] text-slate-400">{p.vehicleYmm}</span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
                     </td>
                     <td className="py-2.5 pr-4 text-slate-600">
                       <Link href={`/ops/users/${p.userId}`} className="hover:underline">

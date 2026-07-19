@@ -36,6 +36,11 @@ type LedgerRow = {
   currency: string;
   status: string;
   transaction_type: string;
+  icon_type: string | null;
+  shop: string | null;
+  shop_id: string | null;
+  service: string | null;
+  vehicleYmm: string | null;
   payment_id: string | null;
   booking_id: string | null;
   mismatch: "amount" | "orphan_transaction" | null;
@@ -152,6 +157,7 @@ export default function OpsTransactionsPage() {
                 <th className="px-4 py-2">When</th>
                 <th className="px-2 py-2">User</th>
                 <th className="px-2 py-2">Description</th>
+                <th className="px-2 py-2">Shop</th>
                 <th className="px-2 py-2">Type</th>
                 <th className="px-2 py-2">Status</th>
                 <th className="px-2 py-2 text-right">Amount</th>
@@ -181,6 +187,20 @@ export default function OpsTransactionsPage() {
                       <span className="ml-1 text-[12px] text-slate-400">
                         · {t.sub_description}
                       </span>
+                    )}
+                    {(t.service || t.vehicleYmm) && (
+                      <span className="block text-[11px] text-slate-400">
+                        {[t.service, t.vehicleYmm].filter(Boolean).join(" · ")}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-2 py-2 text-slate-600">
+                    {t.shop_id && t.shop ? (
+                      <Link href={`/shops/all/${t.shop_id}`} className="hover:text-blue-700 hover:underline">
+                        {t.shop}
+                      </Link>
+                    ) : (
+                      <span className="text-slate-300">—</span>
                     )}
                   </td>
                   <td className="px-2 py-2">

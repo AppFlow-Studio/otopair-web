@@ -116,6 +116,7 @@ import type * as job_actuals from "../job_actuals.js";
 import type * as laborTimes from "../laborTimes.js";
 import type * as labor_quote_snapshots from "../labor_quote_snapshots.js";
 import type * as lib_appleMapsGeocode from "../lib/appleMapsGeocode.js";
+import type * as lib_bookingEnrichment from "../lib/bookingEnrichment.js";
 import type * as lib_booking_field_redaction from "../lib/booking_field_redaction.js";
 import type * as lib_brakeScope from "../lib/brakeScope.js";
 import type * as lib_checkin_questions from "../lib/checkin_questions.js";
@@ -354,6 +355,7 @@ import type * as vehicleEnrichment_capacityResolver from "../vehicleEnrichment/c
 import type * as vehicleEnrichment_claudeExtractor from "../vehicleEnrichment/claudeExtractor.js";
 import type * as vehicleEnrichment_completionGate from "../vehicleEnrichment/completionGate.js";
 import type * as vehicleEnrichment_contentSanitization from "../vehicleEnrichment/contentSanitization.js";
+import type * as vehicleEnrichment_drivetrainReconcile from "../vehicleEnrichment/drivetrainReconcile.js";
 import type * as vehicleEnrichment_endpointPartPriceMutations from "../vehicleEnrichment/endpointPartPriceMutations.js";
 import type * as vehicleEnrichment_evidenceConsensus from "../vehicleEnrichment/evidenceConsensus.js";
 import type * as vehicleEnrichment_extractionPrompts from "../vehicleEnrichment/extractionPrompts.js";
@@ -545,6 +547,7 @@ declare const fullApi: ApiFromModules<{
   laborTimes: typeof laborTimes;
   labor_quote_snapshots: typeof labor_quote_snapshots;
   "lib/appleMapsGeocode": typeof lib_appleMapsGeocode;
+  "lib/bookingEnrichment": typeof lib_bookingEnrichment;
   "lib/booking_field_redaction": typeof lib_booking_field_redaction;
   "lib/brakeScope": typeof lib_brakeScope;
   "lib/checkin_questions": typeof lib_checkin_questions;
@@ -783,6 +786,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/claudeExtractor": typeof vehicleEnrichment_claudeExtractor;
   "vehicleEnrichment/completionGate": typeof vehicleEnrichment_completionGate;
   "vehicleEnrichment/contentSanitization": typeof vehicleEnrichment_contentSanitization;
+  "vehicleEnrichment/drivetrainReconcile": typeof vehicleEnrichment_drivetrainReconcile;
   "vehicleEnrichment/endpointPartPriceMutations": typeof vehicleEnrichment_endpointPartPriceMutations;
   "vehicleEnrichment/evidenceConsensus": typeof vehicleEnrichment_evidenceConsensus;
   "vehicleEnrichment/extractionPrompts": typeof vehicleEnrichment_extractionPrompts;

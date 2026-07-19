@@ -25,6 +25,8 @@ type ShopReviewRow = {
   id: string;
   rating: number;
   comment: string | null;
+  reviewer: string | null;
+  reviewer_id: string | null;
   mechanic: string | null;
   mechanic_id: string | null;
   booking_id: string;
@@ -200,6 +202,19 @@ export default function ShopsReviewsPage() {
                     <div key={r.id} className={`px-4 py-2.5 ${r.hidden ? "opacity-50" : ""}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         <span style={{ color: "#F59E0B" }}>{"★".repeat(Math.round(r.rating))}</span>
+                        {r.reviewer && r.reviewer_id ? (
+                          <Link
+                            href={`/ops/users/${r.reviewer_id}`}
+                            className={`${pill} bg-slate-100 text-slate-600 hover:text-blue-700 hover:underline`}
+                            title="Reviewer"
+                          >
+                            {r.reviewer}
+                          </Link>
+                        ) : r.reviewer ? (
+                          <span className={`${pill} bg-slate-100 text-slate-600`} title="Reviewer">
+                            {r.reviewer}
+                          </span>
+                        ) : null}
                         {r.mechanic &&
                           (r.mechanic_id ? (
                             <Link

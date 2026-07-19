@@ -26,6 +26,11 @@ type PipelineCard = {
   shop_id: string;
   name: string;
   city: string | null;
+  phone: string | null;
+  owner: string | null;
+  owner_id: string | null;
+  bookings_30d: number;
+  revenue_30d: number;
   stage: string;
   stage_index: number;
   age_days: number | null;
@@ -150,6 +155,17 @@ export default function ShopsPipelinePage() {
                           </span>
                         )}
                       </div>
+                      {(c.owner || c.phone) && (
+                        <div className="mt-1 truncate text-[11px] text-slate-500">
+                          {[c.owner, c.phone].filter(Boolean).join(" · ")}
+                        </div>
+                      )}
+                      {c.bookings_30d > 0 && (
+                        <div className="mt-0.5 text-[11px] text-slate-400">
+                          {c.bookings_30d} bookings
+                          {c.revenue_30d > 0 && ` · $${Math.round(c.revenue_30d).toLocaleString()}`} · 30d
+                        </div>
+                      )}
                       {c.next_item && (
                         <div className="mt-1.5 text-[11px] text-slate-500">→ {c.next_item}</div>
                       )}

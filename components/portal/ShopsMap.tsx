@@ -72,11 +72,16 @@ export default function ShopsMap({
     for (const p of pins) {
       const s = stats?.[p.id];
       const marker = L.marker([p.lat, p.lng], { icon: pinIcon(p) });
+      const esc = (v: string) =>
+        v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
       marker.bindPopup(
-        `<div style="font:12px/1.5 Inter,system-ui,sans-serif;min-width:170px">
-           <b style="font-size:13px">${p.name}</b><br/>
-           <span style="color:#64748b">${p.city}</span><br/>
-           ${p.rating != null ? `★ ${p.rating.toFixed(1)} (${p.review_count})<br/>` : ""}
+        `<div style="font:12px/1.5 Inter,system-ui,sans-serif;min-width:190px">
+           <b style="font-size:13px">${esc(p.name)}</b><br/>
+           <span style="color:#64748b">${esc(p.city)}</span><br/>
+           ${p.address ? `<span style="color:#64748b">${esc(p.address)}</span><br/>` : ""}
+           ${p.phone ? `<a href="tel:${esc(p.phone)}" style="color:#2563eb">${esc(p.phone)}</a><br/>` : ""}
+           <span style="color:#334155">${p.mechanics} mechanic${p.mechanics === 1 ? "" : "s"}</span>
+           ${p.rating != null ? ` · ★ ${p.rating.toFixed(1)} (${p.review_count})` : ""}<br/>
            ${
              s
                ? `<span style="color:#334155">${s.bookings} bookings · $${Math.round(s.revenue).toLocaleString()} · 30d</span><br/>`

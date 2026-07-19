@@ -69,6 +69,7 @@ type BookingRow = {
   shopId: string | null;
   shop: string;
   vin: string;
+  vehicleYmm: string | null;
   services: string[];
   scheduledDate: string | null;
   scheduledTime: string | null;
@@ -76,7 +77,26 @@ type BookingRow = {
   status: string;
   liveStage: string | null;
   total: number | null;
+  quote: {
+    low: number | null;
+    high: number | null;
+    setPrice: number | null;
+    isFixed: boolean;
+  };
 };
+
+// The money to show on a card: the captured total when present, else the
+// quote (fixed/set price, or the disclosed low–high band) for quote-stage
+// bookings. Returns a display string + whether it's an estimate.
+function cardPrice(r: BookingRow): { text: string; estimate: boolean } | null {
+  if (r.total != null) return { text: money(r.total), estimate: false };
+  if (r.quote.setPrice != null)
+    return { text: money(r.quote.setPrice), estimate: !r.quote.isFixed };
+  if (r.quote.low != null && r.quote.high != null)
+    return { text: `${money(r.quote.low)}–${money(r.quote.high)}`, estimate: true };
+  if (r.quote.high != null) return { text: money(r.quote.high), estimate: true };
+  return null;
+}
 
 type BoardColumn = {
   status: string;
@@ -200,29 +220,56 @@ function BoardView({ token }: { token: string }) {
                 No {STATUS_LABEL[col.status]?.toLowerCase() ?? col.status} bookings.
               </div>
             )}
-            {col.cards.map((c: BookingRow) => (
-              <Link
-                key={c.id}
-                href={`/ops/bookings/${c.id}`}
-                className="block rounded-lg border border-slate-100 p-2.5 hover:border-slate-300 hover:bg-slate-50"
-              >
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="truncate text-[13px] font-semibold text-slate-800">{c.user}</span>
-                  <span className="shrink-0 text-[11px] text-slate-400">
-                    {c.scheduledDate ?? shortDate(c.createdAt)}
-                    {c.scheduledTime ? ` ${c.scheduledTime}` : ""}
-                  </span>
+            {col.cards.map((c: BookingRow) => {
+              const price = cardPrice(c);
+              return (
+                <div
+                  key={c.id}
+                  className="block rounded-lg border border-slate-100 p-2.5 hover:border-slate-300 hover:bg-slate-50"
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    {/* Customer links to their profile, not the booking. */}
+                    <Link
+                      href={`/ops/users/${c.userId}`}
+                      className="truncate text-[13px] font-semibold text-slate-800 hover:text-blue-600 hover:underline"
+                    >
+                      {c.user}
+                    </Link>
+                    <span className="shrink-0 text-[11px] text-slate-400">
+                      {c.scheduledDate ?? shortDate(c.createdAt)}
+                      {c.scheduledTime ? ` ${c.scheduledTime}` : ""}
+                    </span>
+                  </div>
+                  {/* Everything below opens the booking. */}
+                  <Link href={`/ops/bookings/${c.id}`} className="mt-0.5 block">
+                    <div className="truncate text-[12px] text-slate-500">{c.shop}</div>
+                    {c.vehicleYmm && (
+                      <div className="mt-0.5 truncate text-[12px] font-medium text-slate-700">
+                        {c.vehicleYmm}
+                      </div>
+                    )}
+                    <div className="mt-1 truncate text-[12px] text-slate-600">
+                      {c.services.filter((s) => s && s !== "—").join(", ") || "Service TBD"}
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                      <span className="truncate font-mono text-[10px] text-slate-400">
+                        {c.vin || "no VIN"}
+                      </span>
+                      {price ? (
+                        <span className="shrink-0 text-[12px] font-semibold text-slate-700">
+                          {price.text}
+                          {price.estimate && (
+                            <span className="ml-1 text-[10px] font-normal text-slate-400">est</span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="shrink-0 text-[11px] text-slate-400">awaiting quote</span>
+                      )}
+                    </div>
+                  </Link>
                 </div>
-                <div className="mt-0.5 truncate text-[12px] text-slate-500">{c.shop}</div>
-                <div className="mt-1 truncate text-[12px] text-slate-600">
-                  {c.services.join(", ") || "—"}
-                </div>
-                <div className="mt-1 flex items-center justify-between">
-                  <span className="font-mono text-[10px] text-slate-400">{c.vin || "no VIN"}</span>
-                  <span className="text-[12px] font-semibold text-slate-700">{money(c.total)}</span>
-                </div>
-              </Link>
-            ))}
+              );
+            })}
           </div>
         </div>
       ))}

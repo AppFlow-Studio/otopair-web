@@ -13,6 +13,19 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
 import type { Doc, Id } from "./_generated/dataModel";
+import { resolveVehicleDisplay, resolveServiceNames } from "./lib/bookingEnrichment";
+
+/** cents → dollars, null-safe. */
+const centsToDollars = (c: number | null | undefined): number | null =>
+  c == null ? null : c / 100;
+
+/** Short "Oil change +2 more" summary from resolved service names. */
+function serviceSummary(names: string[]): string | null {
+  const clean = names.filter((n) => n && n !== "—");
+  if (clean.length === 0) return null;
+  if (clean.length === 1) return clean[0];
+  return `${clean[0]} +${clean.length - 1} more`;
+}
 
 // --- Authored return types -----------------------------------------------------
 // Explicit handler return types are load-bearing (see convex/backfillTires.ts
@@ -28,6 +41,8 @@ export type OpsPaymentListItem = {
   status: string;
   paymentMethod: string | undefined;
   paymentOrigin: string | undefined;
+  cardBrand: string | undefined;
+  cardLast4: string | undefined;
   stripePaymentIntentId: string | undefined;
   userId: Id<"users">;
   userName: string;
@@ -35,6 +50,9 @@ export type OpsPaymentListItem = {
   shopName: string;
   bookingId: Id<"bookings">;
   bookingStatus: string | undefined;
+  service: string | null;
+  vehicleYmm: string | null;
+  hasDispute: boolean;
   backfilled: boolean;
 };
 export type OpsPaymentsListResult = {
@@ -52,6 +70,8 @@ export type OpsPaymentDetail = {
     status: string;
     paymentMethod: string | undefined;
     paymentOrigin: string | undefined;
+    cardBrand: string | undefined;
+    cardLast4: string | undefined;
     transactionId: string | undefined;
     stripePaymentIntentId: string | undefined;
     reauthPaymentIntentId: string | undefined;
@@ -72,6 +92,20 @@ export type OpsPaymentDetail = {
     status: string;
     scheduledDate: string | undefined;
     totalCost: number | undefined;
+    services: string[];
+    vehicleYmm: string | null;
+    vin: string | null;
+    // Price breakdown lives on the booking, not the payment. Dollars.
+    breakdown: {
+      parts: number | null;
+      labor: number | null;
+      tax: number | null;
+      serviceFee: number | null;
+      isRange: boolean; // true = disclosed low–high band; false = fixed quote
+      partsHigh: number | null;
+      taxHigh: number | null;
+      serviceFeeHigh: number | null;
+    } | null;
   } | null;
   history: {
     id: Id<"payment_status_history">;
@@ -100,6 +134,24 @@ export type OpsPaymentDetail = {
     closedAtMs: number | undefined;
     evidenceDueByMs: number | undefined;
   }[];
+  // Refund + capture reconciliation. Refunds proper live on the booking
+  // (refund_reason, dispute resolution refunds, voided auth) and the ledger —
+  // NOT as first-class payment fields — so we assemble them here.
+  refunds: {
+    bookingRefundReason: string | null;
+    authVoidedAtMs: number | null;
+    finalTotalCents: number | null;
+    finalCaptureAmountCents: number | null;
+    incrementedTotalCents: number | null;
+    // Refunds granted by resolving customer disputes.
+    disputeRefunds: {
+      amountCents: number;
+      resolution: string | null;
+      resolvedAtMs: number | null;
+    }[];
+    // Negative ledger rows linked to this payment (refund transactions).
+    ledgerRefunds: { amount: number; description: string; createdAt: number }[];
+  };
 };
 
 function personName(user: Doc<"users"> | null): string {
@@ -149,10 +201,19 @@ export const list = query({
 
     const items = await Promise.all(
       rows.map(async (p) => {
-        const [user, shop, booking] = await Promise.all([
+        const [user, shop, booking, dispute] = await Promise.all([
           ctx.db.get(p.user_id),
           ctx.db.get(p.shop_id),
           ctx.db.get(p.booking_id),
+          ctx.db
+            .query("payment_disputes")
+            .withIndex("by_payment_id", (q) => q.eq("payment_id", p._id))
+            .first(),
+        ]);
+        // Resolve what was bought + the car from the booking (already fetched).
+        const [services, vehicle] = await Promise.all([
+          booking ? resolveServiceNames(ctx, booking.service_ids) : Promise.resolve([]),
+          booking ? resolveVehicleDisplay(ctx, booking.vin) : Promise.resolve(null),
         ]);
         return {
           id: p._id,
@@ -162,6 +223,8 @@ export const list = query({
           status: p.status,
           paymentMethod: p.payment_method,
           paymentOrigin: p.payment_origin,
+          cardBrand: p.card_brand,
+          cardLast4: p.card_last4,
           stripePaymentIntentId: p.stripe_payment_intent_id,
           userId: p.user_id,
           userName: personName(user),
@@ -169,6 +232,9 @@ export const list = query({
           shopName: shop?.name ?? "—",
           bookingId: p.booking_id,
           bookingStatus: booking?.status,
+          service: serviceSummary(services),
+          vehicleYmm: vehicle?.ymm ?? null,
+          hasDispute: dispute != null,
           backfilled: p.backfilled_at_ms != null,
         };
       }),
@@ -189,23 +255,28 @@ export const detail = query({
     const p = await ctx.db.get(id);
     if (!p) return null;
 
-    const [user, shop, booking, history, transactions, disputes] = await Promise.all([
-      ctx.db.get(p.user_id),
-      ctx.db.get(p.shop_id),
-      ctx.db.get(p.booking_id),
-      ctx.db
-        .query("payment_status_history")
-        .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
-        .take(100),
-      ctx.db
-        .query("transactions")
-        .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
-        .take(25),
-      ctx.db
-        .query("payment_disputes")
-        .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
-        .take(10),
-    ]);
+    const [user, shop, booking, history, transactions, disputes, bookingDisputes] =
+      await Promise.all([
+        ctx.db.get(p.user_id),
+        ctx.db.get(p.shop_id),
+        ctx.db.get(p.booking_id),
+        ctx.db
+          .query("payment_status_history")
+          .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
+          .take(100),
+        ctx.db
+          .query("transactions")
+          .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
+          .take(25),
+        ctx.db
+          .query("payment_disputes")
+          .withIndex("by_payment_id", (q) => q.eq("payment_id", id))
+          .take(10),
+        ctx.db
+          .query("booking_disputes")
+          .withIndex("by_booking_id", (q) => q.eq("booking_id", p.booking_id))
+          .take(10),
+      ]);
 
     return {
       payment: {
@@ -216,6 +287,8 @@ export const detail = query({
         status: p.status,
         paymentMethod: p.payment_method,
         paymentOrigin: p.payment_origin,
+        cardBrand: p.card_brand,
+        cardLast4: p.card_last4,
         transactionId: p.transaction_id,
         stripePaymentIntentId: p.stripe_payment_intent_id,
         reauthPaymentIntentId: p.reauth_payment_intent_id,
@@ -241,6 +314,34 @@ export const detail = query({
             status: booking.status,
             scheduledDate: booking.scheduled_date,
             totalCost: booking.total_cost, // dollars
+            services: await resolveServiceNames(ctx, booking.service_ids),
+            vehicleYmm: (await resolveVehicleDisplay(ctx, booking.vin)).ymm,
+            vin: booking.vin ?? null,
+            // Prefer the fixed quoted breakdown; fall back to the disclosed
+            // low–high band so ops always sees parts/labor/tax/fee.
+            breakdown: booking.quoted_breakdown
+              ? {
+                  parts: centsToDollars(booking.quoted_breakdown.parts_cents),
+                  labor: centsToDollars(booking.quoted_breakdown.labor_cents),
+                  tax: centsToDollars(booking.quoted_breakdown.tax_cents),
+                  serviceFee: centsToDollars(booking.quoted_breakdown.service_fee_cents),
+                  isRange: false,
+                  partsHigh: null,
+                  taxHigh: null,
+                  serviceFeeHigh: null,
+                }
+              : booking.disclosed_breakdown
+                ? {
+                    parts: centsToDollars(booking.disclosed_breakdown.parts_low_cents),
+                    labor: centsToDollars(booking.disclosed_breakdown.labor_cents),
+                    tax: centsToDollars(booking.disclosed_breakdown.tax_low_cents),
+                    serviceFee: centsToDollars(booking.disclosed_breakdown.service_fee_low_cents),
+                    isRange: true,
+                    partsHigh: centsToDollars(booking.disclosed_breakdown.parts_high_cents),
+                    taxHigh: centsToDollars(booking.disclosed_breakdown.tax_high_cents),
+                    serviceFeeHigh: centsToDollars(booking.disclosed_breakdown.service_fee_high_cents),
+                  }
+                : null,
           }
         : null,
       history: history
@@ -272,6 +373,27 @@ export const detail = query({
         closedAtMs: d.closed_at_ms,
         evidenceDueByMs: d.evidence_due_by_ms,
       })),
+      refunds: {
+        bookingRefundReason: booking?.refund_reason ?? null,
+        authVoidedAtMs: booking?.stripe_authorization_voided_at_ms ?? null,
+        finalTotalCents: booking?.final_total_cents ?? null,
+        finalCaptureAmountCents: booking?.final_capture_amount_cents ?? null,
+        incrementedTotalCents: p.incremented_total_cents ?? null,
+        disputeRefunds: bookingDisputes
+          .filter((d) => d.resolution_refund_cents != null && d.resolution_refund_cents > 0)
+          .map((d) => ({
+            amountCents: d.resolution_refund_cents!,
+            resolution: d.resolution ?? null,
+            resolvedAtMs: d.resolved_at_ms ?? null,
+          })),
+        ledgerRefunds: transactions
+          .filter((t) => t.amount < 0)
+          .map((t) => ({
+            amount: t.amount,
+            description: t.description,
+            createdAt: t.created_at,
+          })),
+      },
     };
   },
 });

@@ -23,6 +23,8 @@ import {
 } from "@/components/portal/ChartKit";
 
 const fmtDT = (ms: number) => new Date(ms).toLocaleString();
+const fmtTok = (n: number) =>
+  n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
 type ConversationRow = {
   id: string;
@@ -32,6 +34,8 @@ type ConversationRow = {
   ended_at: number | null;
   scenario: string | null;
   mood: string | null;
+  model: string | null;
+  vehicleYmm: string | null;
   message_count: number | null;
   led_to_booking: boolean;
 };
@@ -41,6 +45,7 @@ type TranscriptMessage = {
   content: string;
   timestamp: number;
   confidence: number | null;
+  metadata: unknown;
 };
 
 export default function OpsOtoAiPage() {
@@ -121,6 +126,66 @@ export default function OpsOtoAiPage() {
         </div>
       </div>
 
+      {/* Token split + per-model spend */}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        <div className={CARD_STATIC}>
+          <div className={MICRO_H}>Token usage · 7d</div>
+          <div className="mt-3 grid grid-cols-3 gap-3 text-center">
+            <div className="rounded-lg bg-slate-50 p-3">
+              <div className="text-lg font-bold text-slate-900">
+                {usage === undefined ? "—" : fmtTok(usage.totals.tokens_in_7d)}
+              </div>
+              <div className="text-[11px] text-slate-500">Input</div>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <div className="text-lg font-bold text-slate-900">
+                {usage === undefined ? "—" : fmtTok(usage.totals.tokens_out_7d)}
+              </div>
+              <div className="text-[11px] text-slate-500">Output</div>
+            </div>
+            <div className="rounded-lg bg-slate-50 p-3">
+              <div className="text-lg font-bold text-slate-900">
+                {usage === undefined ? "—" : `${Math.round(usage.totals.cache_read_pct * 100)}%`}
+              </div>
+              <div className="text-[11px] text-slate-500">Cache read</div>
+            </div>
+          </div>
+        </div>
+
+        <div className={CARD_STATIC}>
+          <div className={MICRO_H}>Spend by model · 7d</div>
+          {usage === undefined ? (
+            <div className="mt-3 h-20 animate-pulse rounded bg-slate-100" />
+          ) : usage.totals.by_model.length === 0 ? (
+            <p className="mt-3 text-[12px] text-slate-400">No turns in the last 7 days.</p>
+          ) : (
+            <div className="mt-3 space-y-1.5">
+              {usage.totals.by_model.map((m) => {
+                const maxCost = Math.max(
+                  0.0001,
+                  ...usage.totals.by_model.map((x) => x.est_cost_usd),
+                );
+                const pct = Math.round((m.est_cost_usd / maxCost) * 100);
+                const shortModel = m.model.replace(/^claude-?/, "").replace(/-\d{8}$/, "");
+                return (
+                  <div key={m.model} className="flex items-center gap-2">
+                    <span className="w-24 shrink-0 truncate text-[12px] text-slate-600" title={m.model}>
+                      {shortModel}
+                    </span>
+                    <div className="h-4 flex-1 overflow-hidden rounded bg-slate-100">
+                      <div className="h-full rounded bg-emerald-400" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="w-28 shrink-0 text-right text-[11px] tabular-nums text-slate-500">
+                      {money(m.est_cost_usd, { cents: true })} · {fmtNum(m.turns)} turns
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* KPI strip */}
       <div className="grid grid-cols-3 gap-4">
         {data === undefined ? (
@@ -191,11 +256,22 @@ export default function OpsOtoAiPage() {
                     <span className={`${pill} bg-emerald-50 text-emerald-700`}>→ booking</span>
                   )}
                 </div>
-                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
+                {c.vehicleYmm && (
+                  <div className="mt-0.5 truncate text-[11px] font-medium text-slate-600">
+                    🚗 {c.vehicleYmm}
+                  </div>
+                )}
+                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400">
                   {fmtDT(c.started_at)}
                   {c.scenario && (
                     <span className={`${pill} bg-slate-100 text-slate-500`}>{c.scenario}</span>
                   )}
+                  {c.model && (
+                    <span className={`${pill} bg-violet-50 text-violet-600`}>
+                      {c.model.replace(/^claude-?/, "").replace(/-\d{8}$/, "")}
+                    </span>
+                  )}
+                  {c.mood && <span className={`${pill} bg-slate-100 text-slate-500`}>{c.mood}</span>}
                   {c.message_count != null && <span>{c.message_count} msgs</span>}
                 </div>
               </div>
@@ -219,6 +295,31 @@ export default function OpsOtoAiPage() {
             <p className="text-sm text-red-600">That conversation no longer exists.</p>
           ) : (
             <div className="space-y-3">
+              {(transcript.vehicleYmm || transcript.telemetry) && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-[12px]">
+                  {transcript.vehicleYmm && (
+                    <span className="font-medium text-slate-700">🚗 {transcript.vehicleYmm}</span>
+                  )}
+                  {transcript.telemetry && (
+                    <>
+                      <span className="text-slate-500">
+                        {transcript.telemetry.turns} turns ·{" "}
+                        {money(transcript.telemetry.estCostUsd, { cents: true })}
+                      </span>
+                      <span className="text-slate-400">
+                        {fmtTok(transcript.telemetry.tokensIn)} in /{" "}
+                        {fmtTok(transcript.telemetry.tokensOut)} out ·{" "}
+                        {fmtNum(transcript.telemetry.p50LatencyMs)}ms p50
+                      </span>
+                      {transcript.telemetry.models.map((mo: string) => (
+                        <span key={mo} className={`${pill} bg-violet-50 text-violet-600`}>
+                          {mo.replace(/^claude-?/, "").replace(/-\d{8}$/, "")}
+                        </span>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
               {transcript.arc && (
                 <div className="rounded-lg bg-slate-50 px-3 py-2 text-[12px] italic text-slate-500">
                   arc: {transcript.arc}
@@ -279,6 +380,55 @@ export default function OpsOtoAiPage() {
                   </span>
                 </div>
               )}
+              {focusMsg.metadata != null &&
+                (typeof focusMsg.metadata !== "object" ||
+                  Object.keys(focusMsg.metadata as object).length > 0) && (
+                  <div>
+                    <span className="text-slate-500">metadata</span>
+                    <pre className="mt-1 max-h-48 overflow-auto rounded bg-slate-50 p-2 text-[11px] leading-snug text-slate-600">
+                      {JSON.stringify(focusMsg.metadata, null, 2)}
+                    </pre>
+                  </div>
+                )}
+            </div>
+          )}
+
+          {/* Conversation-level telemetry (always shown once a transcript loads) */}
+          {transcript && transcript !== null && transcript.telemetry && (
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Conversation telemetry
+              </div>
+              <dl className="mt-2 space-y-1 text-[12px]">
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Turns</dt>
+                  <dd className="tabular-nums text-slate-700">{transcript.telemetry.turns}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Est. cost</dt>
+                  <dd className="tabular-nums text-slate-700">
+                    {money(transcript.telemetry.estCostUsd, { cents: true })}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Tokens (in/out)</dt>
+                  <dd className="tabular-nums text-slate-700">
+                    {fmtTok(transcript.telemetry.tokensIn)} / {fmtTok(transcript.telemetry.tokensOut)}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Cache read</dt>
+                  <dd className="tabular-nums text-slate-700">
+                    {fmtTok(transcript.telemetry.cacheRead)}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">p50 latency</dt>
+                  <dd className="tabular-nums text-slate-700">
+                    {fmtNum(transcript.telemetry.p50LatencyMs)} ms
+                  </dd>
+                </div>
+              </dl>
             </div>
           )}
         </div>

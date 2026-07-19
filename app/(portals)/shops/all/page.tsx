@@ -29,6 +29,10 @@ type DirectoryRow = {
   name: string;
   city: string;
   zip: string;
+  address: string | null;
+  phone: string | null;
+  email: string | null;
+  hasCoords: boolean;
   laborRate: number | null;
   rating: number | null;
   reviewCount: number;
@@ -158,6 +162,7 @@ export default function ShopsDirectoryPage() {
                 <tr className={`border-b border-slate-200 text-left ${MICRO_H}`}>
                   <th className="pb-2 pr-4">Shop</th>
                   <th className="pb-2 pr-4">City / ZIP</th>
+                  <th className="pb-2 pr-4">Contact</th>
                   <th className="pb-2 pr-4">$/hr</th>
                   <th className="pb-2 pr-4">Rating</th>
                   <th className="pb-2 pr-4">Mechanics</th>
@@ -191,9 +196,35 @@ export default function ShopsDirectoryPage() {
                       <td className="py-2.5 pr-4 text-slate-600">
                         {r.city}
                         {r.zip !== "—" && <span className="text-slate-400"> · {r.zip}</span>}
+                        {!r.hasCoords && (
+                          <span
+                            className="ml-1 text-[11px] text-amber-600"
+                            title="No coordinates — this shop is missing from the network map"
+                          >
+                            ⚑ no pin
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-4 text-[12px]">
+                        {r.phone ? (
+                          <a
+                            href={`tel:${r.phone}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-blue-600 hover:underline"
+                          >
+                            {r.phone}
+                          </a>
+                        ) : (
+                          <span className="text-slate-300">no phone</span>
+                        )}
+                        {r.address && (
+                          <div className="max-w-[180px] truncate text-slate-400" title={r.address}>
+                            {r.address}
+                          </div>
+                        )}
                       </td>
                       <td className="py-2.5 pr-4 text-slate-700">
-                        {r.laborRate !== null ? `$${r.laborRate}/hr` : <span className="text-slate-300">—</span>}
+                        {r.laborRate !== null ? `$${r.laborRate}/hr` : <span className="text-slate-300" title="Labor rate not set">not set</span>}
                       </td>
                       <td className="py-2.5 pr-4 text-slate-700">
                         {r.rating !== null ? (
@@ -212,7 +243,7 @@ export default function ShopsDirectoryPage() {
                         ) : s30 ? (
                           fmtNum(s30.bookings)
                         ) : (
-                          <span className="text-slate-300">—</span>
+                          <span className="text-slate-400" title="No bookings in the last 30 days">0</span>
                         )}
                       </td>
                       <td className="py-2.5 pr-4 tabular-nums text-slate-700">
@@ -221,7 +252,7 @@ export default function ShopsDirectoryPage() {
                         ) : s30 && s30.revenue > 0 ? (
                           money(s30.revenue)
                         ) : (
-                          <span className="text-slate-300">—</span>
+                          <span className="text-slate-400" title="No completed revenue in the last 30 days">$0</span>
                         )}
                       </td>
                       <td className="py-2.5 pr-4">

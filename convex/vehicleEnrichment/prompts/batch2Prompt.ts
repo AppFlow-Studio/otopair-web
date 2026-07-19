@@ -105,6 +105,8 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = {
   diff_fluid_months: "Differential fluid change interval in months",
   transfer_case_fluid_miles: "Transfer case fluid change interval in miles",
   transfer_case_fluid_months: "Transfer case fluid change interval in months",
+  ps_fluid_miles: "Power steering fluid flush/replacement interval in miles (hydraulic systems only; null for electric power steering)",
+  ps_fluid_months: "Power steering fluid flush/replacement interval in months (hydraulic systems only; null for electric power steering)",
   // Fluid capacities
   diff_fluid_capacity_qts: "Differential fluid drain-and-fill capacity in US quarts (rear diff for RWD/AWD; typical 0.5-4 qts). Convert from liters if needed (qts = L × 1.057).",
   transfer_case_fluid_capacity_qts: "Transfer case fluid drain-and-fill capacity in US quarts (AWD/4WD only; typical 0.5-3 qts). Convert from liters if needed.",

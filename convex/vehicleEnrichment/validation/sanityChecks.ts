@@ -79,16 +79,32 @@ const SANITY_RULES: SanityRule[] = [
     reason: "Transmission service interval outside typical range" },
   { field: "coolant_flush_miles", type: "range", min: 15001, max: 150000, severity: "reject",
     reason: "Coolant flush ≤15K miles — known training data contamination (kbb.com misparse)" },
-  { field: "coolant_flush_months", type: "range", min: 19, max: 120, severity: "reject",
-    reason: "Coolant flush ≤18 months — known training data contamination" },
+  // Reject only the LOW side (the ≤18-month training-data contamination) and
+  // an absurd high ceiling. Batch-3 audit: a CORRECT 132-month (11-yr) long-life
+  // interval (Subaru Super Coolant, Toyota SLLC first change) was REJECTED
+  // because the old max=120 caught the legitimate high end. Long-life first-fills
+  // legitimately reach ~132-180 months; only >240 is genuinely wrong.
+  { field: "coolant_flush_months", type: "range", min: 19, max: 240, severity: "reject",
+    reason: "Coolant flush interval invalid — ≤18 months (training-data contamination) or >240 months (absurd)" },
+  { field: "coolant_flush_months", type: "range", min: 19, max: 120, severity: "flag",
+    reason: "Coolant flush interval unusually long (>120 months / 10yr) — verify it's a long-life spec" },
   { field: "air_filter_miles", type: "range", min: 10000, max: 100000, severity: "flag",
     reason: "Air filter interval outside typical range" },
   { field: "cabin_filter_miles", type: "range", min: 10000, max: 60000, severity: "flag",
     reason: "Cabin filter interval outside typical range" },
   { field: "brake_pads_miles", type: "range", min: 15000, max: 80000, severity: "flag",
     reason: "Brake pad guidance outside typical range (15K-80K miles)" },
+  // Sub-15K "replace pads" figures are inspection cadences misread as
+  // replacement intervals (batch-2 audit: 2021 Atlas stored pads-every-10K at
+  // conf 0.9 with only the flag fired). Definitely wrong as guidance — reject.
+  { field: "brake_pads_miles", type: "range", min: 15000, max: 150000, severity: "reject",
+    reason: "Brake pad interval ≤15K miles — inspection cadence misread as replacement interval" },
   { field: "tire_rotation_miles", type: "range", min: 3000, max: 10000, severity: "flag",
     reason: "Tire rotation interval outside typical range (3K-10K miles)" },
+  { field: "serpentine_belt_miles", type: "range", min: 30000, max: 150000, severity: "flag",
+    reason: "Serpentine belt interval outside typical range (30K-150K miles)" },
+  { field: "ps_fluid_miles", type: "range", min: 20000, max: 150000, severity: "flag",
+    reason: "Power steering flush interval outside typical range (20K-150K miles)" },
 
   // ── Intervals (months) ──
   { field: "oil_change_months", type: "range", min: 3, max: 24, severity: "flag",
@@ -174,7 +190,12 @@ export function getCapacityBand(
     rejectMin: 3,
     rejectMax: 24,
     typicalMin: cylinders >= 8 ? 10 : 4,
-    typicalMax: cylinders === 4 ? 11 : 16,
+    // 4-cyl coolant typicalMax raised 11→13 (batch-3 audit): the correct 11.4 qt
+    // engine-loop capacity of the 2021 Sienna hybrid (A25A-FXS, dual-loop
+    // cooling) was flagged as "outside 4-11 qts". Large 2.5L 4-cyl and hybrid
+    // engine loops legitimately reach ~11-12 qt; a genuine liters-as-quarts
+    // misread still lands above 13 and flags. The reject ceiling is unchanged.
+    typicalMax: cylinders === 4 ? 13 : 16,
   };
 }
 
@@ -360,7 +381,16 @@ export function runSanityChecks(
       if (severity === "reject") {
         fields[rule.field] = { ...field, value: null, flagged: true, flag_reason: reason };
       } else {
-        fields[rule.field] = { ...field, flagged: true, flag_reason: reason };
+        // A fired flag means "suspicious, needs review" — it must not persist
+        // at extraction confidence (batch-2 audit: a flagged out-of-band
+        // interval stored at 0.9 read as solid data downstream). Cap at 0.6:
+        // below the 0.75 quote/consensus gates, above resolver floors.
+        fields[rule.field] = {
+          ...field,
+          flagged: true,
+          flag_reason: reason,
+          confidence: Math.min(field.confidence ?? 0.6, 0.6),
+        };
       }
     }
   }

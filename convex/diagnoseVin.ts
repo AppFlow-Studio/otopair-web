@@ -328,11 +328,10 @@ export const repairVin = internalAction({
     const { PACKAGE_RULES, TRIM_INFERENCE_RULES } = await import("./lib/packageRules");
     const halo = findHaloVariant(labels.make, labels.model, labels.trim ?? "");
 
-    const config = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfig, {
+    const config = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfigById, {
       vehicleConfigId: configId,
     });
-    const packagesNow: Array<{ code: string; [k: string]: any }> =
-      (config as any)?.packages_available ?? [];
+    const packagesNow = config?.packages_available ?? [];
 
     const removed: string[] = [];
     let remaining = packagesNow;
@@ -613,7 +612,7 @@ export const backfillEngineOilForVin = internalAction({
     const configId = (vehicle as any).vehicle_config_id;
     if (!configId) return { status: "no_config" as const, vin: normalized };
 
-    const config = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfig, {
+    const config = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfigById, {
       vehicleConfigId: configId,
     });
     if (!config) return { status: "no_config" as const, vin: normalized };

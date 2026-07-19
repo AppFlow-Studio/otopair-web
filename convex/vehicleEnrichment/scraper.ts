@@ -401,7 +401,7 @@ async function scrapeManual(
     internal.vehicleEnrichment.scraperQueries.getCachedScrape,
     { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: vehicle.trim ?? "", sourceType: "owner_manual" },
   );
-  if (cached) {
+  if (cached?.markdown && cached.url) {
     console.log(`[scraper] Cache hit: owner_manual for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
     return { markdown: cached.markdown, urls: [cached.url] };
   }

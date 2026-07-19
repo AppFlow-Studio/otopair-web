@@ -27,6 +27,7 @@ import { Id } from "./_generated/dataModel";
 import { extractPriceFirecrawl } from "./vehicleEnrichment/firecrawl";
 import { priceAllSources } from "./vehicleEnrichment/priceReextract";
 import { UNVERIFIED_PRICE_TYPE } from "./lib/priceTypes";
+import { roleHasCapability, type Capability, type DirectorRole } from "./directorGate";
 
 // ---------------------------------------------------------------------------
 // Audit-log writer (actions can't use ctx.db — go through a mutation).
@@ -71,14 +72,22 @@ const backfillRunArgs = {
 } as const;
 
 /** Validate the director session and return the audit actor. Throws on a
- *  missing/expired session — mirrors oto/simulate.ts simulateOtoForDirector. */
+ *  missing/expired session — mirrors oto/simulate.ts simulateOtoForDirector.
+ *  Actions can't use directorGate.requireDirector (no ctx.db), so this
+ *  validates via director_auth.validateSession and enforces the capability
+ *  with the shared roleHasCapability table. */
 async function requireDirector(
   ctx: { runQuery: (ref: any, args: any) => Promise<any> },
   token: string,
+  capability?: Capability,
 ): Promise<{ name: string; userId: Id<"director_users"> }> {
   const session = await ctx.runQuery(api.director_auth.validateSession, { token });
   if (!session) {
     throw new Error("unauthorized: invalid or expired director session");
+  }
+  const role = session.role as DirectorRole;
+  if (capability && !roleHasCapability(role, capability)) {
+    throw new Error(`forbidden: role '${role}' lacks capability '${capability}'`);
   }
   return { name: session.name, userId: session.userId };
 }
@@ -90,7 +99,7 @@ async function requireDirector(
 export const reEnrichConfig = action({
   args: backfillArgs,
   handler: async (ctx, args) => {
-    const actor = await requireDirector(ctx, args.token);
+    const actor = await requireDirector(ctx, args.token, "data.trigger");
     const resolved = await ctx.runQuery(
       internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
       { vehicleConfigId: args.id },
@@ -142,7 +151,7 @@ export const reEnrichConfig = action({
 export const backfillConfigParts = action({
   args: backfillArgs,
   handler: async (ctx, args) => {
-    const actor = await requireDirector(ctx, args.token);
+    const actor = await requireDirector(ctx, args.token, "data.trigger");
     const resolved = await ctx.runQuery(
       internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
       { vehicleConfigId: args.id },
@@ -214,7 +223,7 @@ export const backfillConfigParts = action({
 export const repriceConfigParts = action({
   args: backfillArgs,
   handler: async (ctx, args) => {
-    const actor = await requireDirector(ctx, args.token);
+    const actor = await requireDirector(ctx, args.token, "data.trigger");
     const resolved = await ctx.runQuery(
       internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
       { vehicleConfigId: args.id },

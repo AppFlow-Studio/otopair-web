@@ -11,6 +11,7 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
+import type { Doc } from "../_generated/dataModel";
 import type { FieldResult } from "./helpers";
 import { ENRICHMENT_FIELD_KEYS } from "./helpers";
 import { V4_FIELD_KEYS, buildEngineKey as buildV4EngineKey } from "./types";
@@ -203,7 +204,7 @@ export const runV3Test = internalAction({
         internal.vehicleEnrichment.pipelineTest.createTestVehicle,
         { vin: BMW_M550I.vin, year: BMW_M550I.year },
       );
-      vehicle = { _id: vehicleId } as any;
+      vehicle = { _id: vehicleId } as Doc<"vehicles">;
       console.log(`[TEST] Created test vehicle: ${vehicleId}`);
     } else {
       console.log(`[TEST] Found existing vehicle: ${vehicle._id}`);
@@ -370,7 +371,7 @@ export const runMultiTest = internalAction({
           internal.vehicleEnrichment.pipelineTest.createTestVehicle,
           { vin: tv.vin, year: tv.year },
         );
-        vehicle = { _id: vehicleId } as any;
+        vehicle = { _id: vehicleId } as Doc<"vehicles">;
         console.log(`[MULTI] Created vehicle: ${vehicleId}`);
       } else {
         console.log(`[MULTI] Found vehicle: ${vehicle._id}`);
@@ -441,7 +442,7 @@ export const runMultiTest = internalAction({
       // Log per-vehicle field details
       console.log(`[MULTI] ${tv.name}: ${m.overallFillRate}% (${m.totalFilled}/41) in ${timeS}s`);
       for (const key of ENRICHMENT_FIELD_KEYS) {
-        const f = enrichment[key as string];
+        const f = (enrichment as unknown as Record<string, FieldResult | undefined>)[key as string];
         if (f?.value != null) {
           console.log(`  ${key}: ${JSON.stringify(f.value)} (conf:${f.confidence})`);
         }
@@ -893,7 +894,7 @@ export const runV4Test = internalAction({
         internal.vehicleEnrichment.pipelineTest.createTestVehicle,
         { vin: BMW_M550I.vin, year: BMW_M550I.year },
       );
-      vehicle = { _id: vehicleId } as any;
+      vehicle = { _id: vehicleId } as Doc<"vehicles">;
       console.log(`[V4-TEST] Created test vehicle: ${vehicleId}`);
     } else {
       console.log(`[V4-TEST] Found existing vehicle: ${vehicle._id}`);
@@ -959,7 +960,7 @@ export const runV4Test = internalAction({
       let filled = 0;
       console.log(`\n── ${name} ──`);
       for (const key of keys) {
-        const f = enrichment[key];
+        const f = (enrichment as unknown as Record<string, FieldResult | undefined>)[key];
         const hasValue = f && f.value != null;
         if (hasValue) filled++;
         const v2Val = V2_KNOWN_VALUES[key] ?? "—";
@@ -990,7 +991,7 @@ export const runV4Test = internalAction({
     let confSum = 0, confCount = 0;
     let confBuckets = { high: 0, medium: 0, low: 0, empty: 0 };
     for (const key of V4_FIELD_KEYS) {
-      const f = enrichment[key as string];
+      const f = (enrichment as unknown as Record<string, FieldResult | undefined>)[key as string];
       if (!f || f.value == null) { confBuckets.empty++; continue; }
       const c = f.confidence ?? 0;
       confSum += c;
@@ -1002,7 +1003,11 @@ export const runV4Test = internalAction({
     const avgConf = confCount > 0 ? (confSum / confCount).toFixed(2) : "0";
 
     // Call log
-    const callLog = enrichment.callLog ?? [];
+    // Legacy v4 doc field — not present on vehicle_configs; kept for old stored docs.
+    const callLog =
+      (enrichment as unknown as {
+        callLog?: Array<{ call: string; tokensIn: number; tokensOut: number; webSearches: number; durationMs: number }>;
+      }).callLog ?? [];
     console.log(`\n── CALL LOG ──`);
     for (const call of callLog) {
       console.log(`  ${call.call}: ${call.tokensIn}in/${call.tokensOut}out, ${call.webSearches} searches, ${(call.durationMs / 1000).toFixed(1)}s`);
@@ -1016,8 +1021,8 @@ export const runV4Test = internalAction({
     console.log(`  Avg Confidence: ${avgConf}`);
     console.log(`  Confidence Distribution: high(>=0.85)=${confBuckets.high} medium(0.7-0.84)=${confBuckets.medium} low(<0.7)=${confBuckets.low} empty=${confBuckets.empty}`);
     console.log(`  Total Time: ${(totalTimeMs / 1000).toFixed(0)}s`);
-    console.log(`  Source URLs: ${(enrichment.sourceUrls ?? []).length}`);
-    console.log(`  Enrichment Version: ${enrichment.enrichmentVersion ?? "unknown"}`);
+    console.log(`  Source URLs: ${((enrichment as unknown as { sourceUrls?: string[] }).sourceUrls ?? []).length}`);
+    console.log(`  Enrichment Version: ${enrichment.enrichment_version ?? "unknown"}`);
     console.log(`  Sanity Flags: ${pipelineResult?.sanityFlags ?? "N/A"}`);
 
     // Category breakdown for comparison table

@@ -318,6 +318,10 @@ export const handlePaymentIntentEvent = internalMutation({
     // reflects reality even if the action-side _patchBookingCaptured didn't
     // run (e.g. capture call retried, webhook landed first).
     amountReceived: v.optional(v.number()),
+    // Card network + last-4 pulled from the charge's payment_method_details
+    // on payment_intent.succeeded — persisted so ops can show "Visa ···· 4242".
+    cardBrand: v.optional(v.string()),
+    cardLast4: v.optional(v.string()),
     livemode: v.optional(v.boolean()),
     stripeAccountId: v.optional(v.string()),
   },
@@ -357,6 +361,22 @@ export const handlePaymentIntentEvent = internalMutation({
         .unique();
     }
     if (!payment) return { matched: false };
+
+    // Persist card brand/last4 as soon as we have it (payment_intent.succeeded),
+    // independent of the status transition below — the action-side capture may
+    // have already moved the row to `completed`, which would short-circuit the
+    // no-op guard before we ever stamp the card. Only write when missing so
+    // replays and later events don't churn the row.
+    if (
+      (args.cardBrand != null || args.cardLast4 != null) &&
+      payment.card_last4 == null &&
+      payment.card_brand == null
+    ) {
+      await ctx.db.patch(payment._id, {
+        ...(args.cardBrand != null ? { card_brand: args.cardBrand } : {}),
+        ...(args.cardLast4 != null ? { card_last4: args.cardLast4 } : {}),
+      });
+    }
 
     // Idempotent no-op on same-state.
     if (payment.status === args.newStatus) return { matched: true, noop: true };
@@ -1811,8 +1831,8 @@ export const finalizeAndChargeForBooking = internalAction({
       const tax = computeBookingTax({
         laborDollars: laborCents / 100,
         partsDollars: partsSubtotalCents / 100,
-        state: (shop?.address_state as string | undefined) ?? null,
-        zip: (shop?.address_zip as string | undefined) ?? null,
+        state: shop?.state ?? null,
+        zip: shop?.zip ?? null,
       });
       const taxCents = Math.round((tax.taxDollars ?? 0) * 100);
       const feeCents = Math.round(
@@ -1853,8 +1873,8 @@ export const finalizeAndChargeForBooking = internalAction({
     const tax = computeBookingTax({
       laborDollars: laborCents / 100,
       partsDollars: partsSubtotalCents / 100,
-      state: (shop?.address_state as string | undefined) ?? null,
-      zip: (shop?.address_zip as string | undefined) ?? null,
+      state: shop?.state ?? null,
+      zip: shop?.zip ?? null,
     });
     const taxCents = Math.round((tax.taxDollars ?? 0) * 100);
     const feeCents = Math.round(

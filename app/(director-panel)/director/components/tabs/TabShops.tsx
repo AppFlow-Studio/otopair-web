@@ -81,7 +81,7 @@ const ShopModal = ({ shopId, onClose }: { shopId: Id<'shops'> | null; onClose: (
   const [saving, setSaving]             = useState(false)
   const [toast,  setToast]              = useState<string | null>(null)
   const [stripeLinkLoading, setStripeLinkLoading] = useState(false)
-  const detail   = useQuery(api.director.shopDetail, shopId ? { id: shopId } : 'skip')
+  const detail   = useQuery(api.director.shopDetail, shopId ? { id: shopId, token: session?.token ?? '' } : 'skip')
   const logView  = useMutation(api.director.logView)
   const updateBasics = useMutation(api.directorShopActions.updateShopBasics)
   const createOnboardingLink = useAction(api.directorStripeLive.createOrResendOnboardingLink)
@@ -489,6 +489,7 @@ const Stat = ({ label, value }: { label: string; value: string }) => (
 )
 
 export const TabShops = () => {
+  const session = useContext(DirectorSessionCtx)
   const [q, setQ]               = useState('')
   const [status, setStatus]     = useState('all')
   const [stripeOnly, setStripeOnly] = useState(false)
@@ -500,7 +501,7 @@ export const TabShops = () => {
     if (goto) setOpenId(goto.entityId as Id<'shops'>)
   }, [])
 
-  const shops = useQuery(api.director.shopsList)
+  const shops = useQuery(api.director.shopsList, { token: session?.token ?? '' })
 
   const filtered = (shops ?? []).filter(s => {
     if (q && !s.name.toLowerCase().includes(q.toLowerCase())) return false

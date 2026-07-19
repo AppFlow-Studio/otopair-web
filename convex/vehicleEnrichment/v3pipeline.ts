@@ -59,15 +59,42 @@ import {
 import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
+import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/partFitmentVerifier";
+import { reconcileDrivetrain } from "./drivetrainReconcile";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { laborFlagsFromEnv } from "./laborResearch";
 import type { Id } from "../_generated/dataModel";
 
+// ─── Authored return types ─────────────────────────────────────────
+// Explicit handler return types are load-bearing (see convex/backfillTires.ts
+// _listCandidates): this module references `internal.*` (a barrel
+// self-reference) inside its handlers, so without authored annotations TS must
+// infer each handler while resolving the whole ApiFromModules barrel — a
+// circular resolution that silently degrades api.* / internal.* types to `any`
+// for every file checked afterwards (the @ts-nocheck above hides the TS2589
+// that would otherwise surface here).
+
+export type EnrichVehicleBatchV3Result =
+  | { status: "already_enriching"; configId: Id<"vehicle_configs"> }
+  | { status: "cache_hit_validating"; configId: Id<"vehicle_configs"> }
+  | { status: "cache_hit"; configId: Id<"vehicle_configs"> }
+  | { status: "error"; reason: string }
+  | { status: "batch_submitted"; configKey: string; batchId: string };
+
 // ─── Constants ─────────────────────────────────────────────────────
 
 const MAX_POLL_ATTEMPTS = 180;
 const POLL_INTERVAL_MS = 1 * 60 * 1000;
+// Batch-1 slow-poll extension (5-VIN test, Jul 2026): a 3h Anthropic batch
+// queue is normal-tail, not dead — the Soul's batch completed after the old
+// 180-attempt cap had already abandoned the run, leaving a zombie "pending"
+// config and orphaned paid results. Batches resolve (or expire) within 24h,
+// so after the fast window we keep polling every 10 min out to ~24h total.
+// 10 min stays under the 15-min heartbeat-liveness window, so force-unstick
+// still treats the run as alive.
+const SLOW_POLL_INTERVAL_MS = 10 * 60 * 1000;
+const MAX_POLL_ATTEMPTS_TOTAL = MAX_POLL_ATTEMPTS + 126; // 3h fast + ~21h slow ≈ 24h
 
 const MAKES_WITH_BRAKE_PAD_SENSORS = new Set([
   "BMW", "Mercedes-Benz", "Porsche", "Audi", "Mini", "Rolls-Royce",
@@ -841,9 +868,11 @@ const INTERVAL_TO_SERVICE: Record<string, string> = {
   air_filter: "filter_replacement",
   cabin_filter: "filter_replacement",
   brake_fluid_flush: "brake_fluid_flush",
+  serpentine_belt: "serpentine_belt",
   timing_service: "timing_belt",
   diff_fluid: "differential_service",
   transfer_case_fluid: "differential_service",
+  ps_fluid: "power_steering_flush",
   // Wear/rotation guidance (2026-07): brake pads are wear-based — the value
   // is the manufacturer's INSPECTION/typical-life guidance, not a hard
   // replacement schedule. adversarialVerification bounds both.
@@ -1016,19 +1045,33 @@ async function writeNormalizedData(
   );
   const existingDrivetrain = currentVc?.drivetrain;
 
-  // Priority: Batch 1B > existing (if real) > "FWD" as absolute last resort
+  // Priority: the NHTSA-decoded value stored on the config (existingDrivetrain)
+  // is authoritative on the 2WD-vs-4WD axle count; Batch-1B only refines within
+  // that axle class. Batch-3 audit: the Sienna (4x2 FWD) and F-150 (4x2) had
+  // their correct 2WD decode overwritten by a Batch-1B "AWD" guess, shipping
+  // phantom diff/transfer-case service. reconcileDrivetrain keeps NHTSA's axle
+  // count and takes Batch-1B's specific label only when they agree on the axle.
   const isResolved = (val: string | undefined | null): val is string =>
     !!val && val !== "unknown";
 
-  const resolvedDrivetrain = isResolved(batch1Drivetrain)
-    ? batch1Drivetrain
-    : isResolved(existingDrivetrain)
-      ? existingDrivetrain
-      : "FWD"; // last resort — all sources exhausted
+  const resolvedDrivetrain =
+    reconcileDrivetrain(existingDrivetrain, batch1Drivetrain) ??
+    (isResolved(batch1Drivetrain)
+      ? batch1Drivetrain
+      : isResolved(existingDrivetrain)
+        ? existingDrivetrain
+        : "FWD"); // last resort — all sources exhausted
 
-  if (batch1Drivetrain && batch1Drivetrain !== existingDrivetrain) {
-    console.log(`[v8] Drivetrain resolved by Batch 1B: "${existingDrivetrain}" → "${batch1Drivetrain}"`);
-    // Update vehicle_config with the real drivetrain
+  if (resolvedDrivetrain !== existingDrivetrain) {
+    const overrode =
+      isResolved(batch1Drivetrain) && resolvedDrivetrain !== batch1Drivetrain;
+    console.log(
+      `[v8] Drivetrain "${existingDrivetrain}" → "${resolvedDrivetrain}"` +
+        (overrode
+          ? ` (kept NHTSA axle over Batch-1B guess "${batch1Drivetrain}")`
+          : ` (Batch 1B)`),
+    );
+    // Update vehicle_config with the reconciled drivetrain
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
       vehicle_config_id: vehicleConfigId,
       drivetrain: resolvedDrivetrain,
@@ -1407,7 +1450,7 @@ export const enrichVehicleBatchV3 = internalAction({
     // Omitted on the signup path → behavior is byte-identical.
     targetConfigId: v.optional(v.id("vehicle_configs")),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<EnrichVehicleBatchV3Result> => {
     const startTime = Date.now();
     const scope = args.writeScope ?? "full";
     const vehicle: VehicleInput = {
@@ -1542,11 +1585,16 @@ export const enrichVehicleBatchV3 = internalAction({
         args.displacement, vPicData?.cylinders ?? 4,
         vPicData?.fuel_type ?? "Gasoline", args.engineCode,
       );
-      if (resolved.source === "haiku" && !isNhtsaDescriptor(resolved.engineCode)) {
-        console.log(`[v8] Engine code resolved: "${args.engineCode}" → "${resolved.engineCode}"`);
+      if (resolved.source === "verified" && !isNhtsaDescriptor(resolved.engineCode)) {
+        console.log(`[v8] Engine code resolved+verified: "${args.engineCode}" → "${resolved.engineCode}"`);
         vehicle.engineCode = resolved.engineCode;
         configKey = buildEngineKey(vehicle);
         resolvedEngineCodeForPersist = resolved.engineCode;
+        // Thread the verified code through the whole scheduler chain: the
+        // poll bodies rebuild `vehicle` from args.engineCode, so without
+        // this the finalize named/keyed the config by the stale placeholder
+        // (batch-2 audit: Soul verified "U" yet completed as "2l_4cyl").
+        (args as any).engineCode = resolved.engineCode;
         // Check if a complete config already exists under the resolved key
         const resolvedConfig = await ctx.runQuery(
           internal.vehicleEnrichment.v3queries.getVehicleConfigByKey,
@@ -1560,6 +1608,11 @@ export const enrichVehicleBatchV3 = internalAction({
           );
           return { status: "cache_hit" as const, configId: resolvedConfig._id };
         }
+      } else if (resolved.source === "unverified") {
+        // 5-VIN test (Jul 2026): unverified codes were how CZDA/ERG/G4FJ
+        // poisoned config keys and extraction prompts. Keep the displacement
+        // placeholder — it is honest and still unique enough to key on.
+        console.warn(`[v8] Engine code candidate "${resolved.engineCode}" failed verification — keeping placeholder "${args.engineCode}"`);
       } else if (resolved.source === "unknown") {
         console.log(`[v8] Engine code resolution returned unknown — keeping placeholder "${args.engineCode}"`);
       }
@@ -2127,7 +2180,7 @@ export const _pollBatch1V3 = internalAction({
     // finalize after Batch-1 (no Batch-2). Defaults to "full".
     writeScope: v.optional(v.union(v.literal("full"), v.literal("parts"))),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<void> => {
     // Catch-all failure handler (Jun-9 review item 3): ANY unexpected throw in
     // the poll body must restore the config to a terminal status — 'pending'
     // before batch-1 data hit the normalized tables, 'partial' after — or the
@@ -2184,19 +2237,25 @@ async function runPollBatch1Body(
       console.warn(`[v8/_pollBatch1] getBatchStatus failed (attempt ${attempt}) — treating as not-ended:`, e);
     }
     if (status !== "ended") {
-      if (attempt >= MAX_POLL_ATTEMPTS) {
-        console.error(`[v8/_pollBatch1] Timed out after ${attempt} attempts`);
+      if (attempt >= MAX_POLL_ATTEMPTS_TOTAL) {
+        // ~24h: the batch should have ended or expired by now. Fail the run
+        // loudly (config back to retryable "pending"); this branch should be
+        // near-unreachable since Anthropic force-resolves batches at 24h.
+        console.error(`[v8/_pollBatch1] Batch not ended after ~24h (${attempt} attempts) — failing run`);
         await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
           run_id: args.runId,
           vehicle_config_id: args.vehicleConfigId,
           run_status: "failed",
-          errors: ["batch1_timeout"],
+          errors: ["batch1_timeout_24h"],
           config_status: "pending",
         });
         return;
       }
+      if (attempt === MAX_POLL_ATTEMPTS) {
+        console.warn(`[v8/_pollBatch1] Batch still queued after ${attempt} fast polls (~3h) — switching to 10-min slow poll (paid batch, will collect when it ends)`);
+      }
       await ctx.scheduler.runAfter(
-        POLL_INTERVAL_MS,
+        attempt >= MAX_POLL_ATTEMPTS ? SLOW_POLL_INTERVAL_MS : POLL_INTERVAL_MS,
         internal.vehicleEnrichment.v3pipeline._pollBatch1V3,
         { ...args, attempt: attempt + 1 },
       );
@@ -2536,14 +2595,26 @@ export const _pollBatch2V3 = internalAction({
     transmissionId: v.optional(v.id("transmissions")),
     makeId: v.id("makes"),
     runId: v.id("enrichment_runs"),
+    // Late-collection mode (batch-2 audit, Jul 2026): after the 3h timeout
+    // finalizes with batch-1 data, the PAID batch keeps processing at
+    // Anthropic — this flag keeps slow-polling it and applies the gap-fill
+    // when it ends instead of orphaning the results (Challenger case).
+    lateCollect: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<void> => {
     // Catch-all failure handler (Jun-9 review item 3): batch-1 data is always
     // written by the time this action runs, so any unexpected throw restores
     // the config to 'partial' instead of leaving it stuck 'enriching'.
     try {
       return await runPollBatch2Body(ctx, args);
     } catch (e) {
+      if (args.lateCollect) {
+        // The run already finalized at the 3h timeout — a late-collection
+        // failure must not re-mark it failed; the config's terminal state
+        // stands and only the bonus gap-fill is lost.
+        console.error(`[v8/_pollBatch2] late-collection failure (non-fatal, config already finalized):`, e);
+        return;
+      }
       console.error(`[v8/_pollBatch2] UNEXPECTED failure — restoring terminal status:`, e);
       try {
         await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
@@ -2598,12 +2669,37 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // Review item 6: on timeout the batch has NOT ended — reading its results
     // would throw (stuck config) or mis-mark the run 'complete'. Skip the
     // results entirely, finalize with batch-1 data only (r2 undefined), and
-    // record the run as 'timeout'.
+    // record the run as 'timeout'. NEW (batch-2 audit, Jul 2026): the paid
+    // batch keeps processing at Anthropic, so the timeout ALSO arms a
+    // late-collection chain that slow-polls to ~24h and applies the gap-fill
+    // through this same body when the batch finally ends (Challenger case:
+    // finalized thin at 3h while its batch completed into the void).
     let timedOut = false;
     if (status !== "ended") {
+      if (args.lateCollect) {
+        if (attempt >= MAX_POLL_ATTEMPTS_TOTAL) {
+          console.error("[v8/_pollBatch2] Late collection: batch never ended by ~24h — giving up (config already finalized)");
+          return;
+        }
+        await ctx.scheduler.runAfter(
+          SLOW_POLL_INTERVAL_MS,
+          internal.vehicleEnrichment.v3pipeline._pollBatch2V3,
+          { ...args, attempt: attempt + 1 },
+        );
+        return;
+      }
       if (attempt >= MAX_POLL_ATTEMPTS) {
-        console.error("[v8/_pollBatch2] Timed out — finalizing with batch-1 data only");
+        console.error("[v8/_pollBatch2] Timed out — finalizing with batch-1 data only; arming late collector for the paid batch");
         timedOut = true;
+        try {
+          await ctx.scheduler.runAfter(
+            SLOW_POLL_INTERVAL_MS,
+            internal.vehicleEnrichment.v3pipeline._pollBatch2V3,
+            { ...args, attempt: attempt + 1, lateCollect: true },
+          );
+        } catch (e) {
+          console.warn("[v8/_pollBatch2] failed to arm late collector (non-fatal):", e);
+        }
       } else {
         await ctx.scheduler.runAfter(
           POLL_INTERVAL_MS,
@@ -2612,6 +2708,8 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         );
         return;
       }
+    } else if (args.lateCollect) {
+      console.log("[v8/_pollBatch2] Late collection: paid batch ended — applying gap-fill to the finalized config");
     }
 
     const results = timedOut ? {} : await getBatchResults(args.batchId);
@@ -3480,6 +3578,86 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       (fieldsFilledCount / Math.max(1, V4_FIELD_KEYS.length - fieldsNotApplicable)) * 100,
     );
 
+    // ── Fitment verification gate (Jul 2026, 5-VIN test) ──────────────
+    // Format sanitization can't catch a REAL part number from the WRONG
+    // vehicle (HEMI filter on the 3.6, Golf pads on the Atlas, Seltos filter
+    // on the Soul). One adversarial web-search call cross-examines the
+    // core-role parts written this run; refuted fitments are deleted so the
+    // role falls to its universal fallback or an honest gap. "uncertain"
+    // never deletes. Disable with PARTS_FITMENT_VERIFY=0.
+    let fitmentRefutedErrors: string[] = [];
+    if ((process.env.PARTS_FITMENT_VERIFY ?? "1") !== "0" && !timedOut) {
+      try {
+        const allFitments = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getPartFitments,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        // Batch-2 v2: every priced non-universal part is eligible (a Genesis
+        // V6 o-ring shipped on a Soul because only priority roles were
+        // sampled); priority roles are verified first when the cap bites.
+        const candidates: { roleKey: string; oem: string; name: string }[] = [];
+        const seenOem = new Set<string>();
+        for (const f of allFitments) {
+          const part: any = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getOemPartById,
+            { partId: (f as any).part_id },
+          );
+          const sub = part?.subcategory ?? "";
+          const oem = part?.oem_part_number ?? "";
+          if (!oem || oem.startsWith("OTOPAIR-UNIV") || seenOem.has(oem)) continue;
+          seenOem.add(oem);
+          candidates.push({ roleKey: sub, oem, name: part?.name ?? sub });
+        }
+        candidates.sort((a, b) =>
+          Number(VERIFY_ROLE_KEYS.has(b.roleKey)) - Number(VERIFY_ROLE_KEYS.has(a.roleKey)),
+        );
+        const toVerify = candidates.slice(0, VERIFY_MAX_PARTS);
+        if (candidates.length > toVerify.length) {
+          console.log(`[fitment-verify] ${candidates.length - toVerify.length} lower-priority part(s) beyond the ${VERIFY_MAX_PARTS}-part cap left unverified`);
+        }
+        if (toVerify.length > 0) {
+          const verdicts = await verifyPartFitments(
+            {
+              year: args.year,
+              make: args.make,
+              model: args.model,
+              trim: args.trim,
+              engineCode: vehicle.engineCode,
+              displacement: args.displacement,
+              // Aspiration + transmission family feed the batch-3 hardening
+              // (NA-plug-on-turbo, DCT-filter-on-torque-converter). turbo is the
+              // boolean the extractor writes; the verifier prompt still confirms
+              // via search, this is just the seed hint.
+              aspiration:
+                allFields.turbo?.value === true ? "turbocharged" : undefined,
+              transmissionType:
+                (allFields.transmission_type?.value as string | null) ?? undefined,
+            },
+            toVerify,
+          );
+          const refuted = verdicts.filter((vd) => vd.verdict === "refuted");
+          console.log(
+            `[fitment-verify] ${toVerify.length} core parts checked: ` +
+              `${verdicts.filter((vd) => vd.verdict === "confirmed").length} confirmed, ` +
+              `${refuted.length} refuted, ` +
+              `${verdicts.filter((vd) => vd.verdict === "uncertain").length} uncertain`,
+          );
+          if (refuted.length > 0) {
+            await ctx.runMutation(
+              internal.vehicleEnrichment.v3mutations.removeRefutedFitments,
+              {
+                vehicle_config_id: args.vehicleConfigId,
+                refuted: refuted.map((r) => ({ oem: r.oem, reason: r.reason })),
+              },
+            );
+            fitmentRefutedErrors = refuted.map((r) => `fitment_refuted:${r.roleKey}:${r.oem}`);
+          }
+        }
+      } catch (e) {
+        console.warn("[fitment-verify] pass failed (non-fatal):", e);
+      }
+    }
+
     // Pattern-suspect sentinel: >=2 oem_part_rejected gaps in ONE run means
     // the make's part pattern is probably wrong, not the data — every pattern
     // gap found so far (BMW leading zeros, VAG G-numbers, Hyundai fluid SKUs)
@@ -3516,12 +3694,19 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       fields_changed: V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null),
       errors: [
         ...(timedOut ? ["batch2_timeout"] : []),
+        // The run finalized thin at the 3h timeout and this pass applied the
+        // paid batch's gap-fill afterwards — history marker, not an error.
+        ...(args.lateCollect ? ["late_collected"] : []),
         // Weak parts coverage routes into the manual review queue without
         // changing status semantics (a data-complete run stays "complete").
         ...(quotability && quotability.pct < 0.8 ? [`quotability:${quotability.pct}`] : []),
         // Repeated part rejections on one run = suspect make pattern, not bad
         // data — routes to review so unknown formats on NEW makes surface.
         ...(partRejectCount >= 2 ? [`part_pattern_suspect:${args.make}:${partRejectCount}`] : []),
+        // Fitment-verification refutations: wrong-vehicle parts removed at
+        // finalize (the fitment rows are already deleted; this is the audit
+        // trail + review-queue routing).
+        ...fitmentRefutedErrors,
         ...sanityFlags.map((f) => `sanity:${f.field}:${f.reason}`),
         ...oemFlags.map((f) => `oem:${f.field}:${f.reason}`),
       ],
@@ -3552,16 +3737,51 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       { vehicleConfigId: args.vehicleConfigId },
     );
 
-    // Update vehicle_config status — use the actual config_key from DB (may differ from
-    // buildEngineKey(vehicle) if the engine code was resolved from a NHTSA descriptor)
+    // Config-key migration (batch-2 audit, Jul 2026): when this run holds a
+    // REAL engine code (verified resolution threaded through args, or a
+    // clean decode) and the stored key differs — e.g. a reused row keyed by
+    // an old fabricated code — rename toward the correct key so future
+    // decodes cache-hit instead of spawning duplicates. Placeholder codes
+    // never migrate; conflicts keep the old key and self-report.
+    let finalConfigKey = currentVcForFinal?.config_key ?? buildEngineKey(vehicle);
+    {
+      const desiredKey = buildEngineKey(vehicle);
+      if (
+        currentVcForFinal &&
+        currentVcForFinal.config_key !== desiredKey &&
+        !isNhtsaDescriptor(vehicle.engineCode ?? "")
+      ) {
+        try {
+          const res: any = await ctx.runMutation(
+            internal.vehicleEnrichment.v3mutations.renameConfigKey,
+            { vehicle_config_id: args.vehicleConfigId, new_key: desiredKey },
+          );
+          if (res?.renamed) finalConfigKey = desiredKey;
+        } catch (e) {
+          console.warn("[v8] config_key migration failed (non-fatal):", e);
+        }
+      }
+    }
+
+    // Update vehicle_config status — use the (possibly migrated) key
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertVehicleConfig, {
-      config_key: currentVcForFinal?.config_key ?? buildEngineKey(vehicle),
+      config_key: finalConfigKey,
       year: args.year,
       make_id: args.makeId,
       model_id: (await ctx.runQuery(internal.vehicleEnrichment.v3queries.getModelByMakeAndName, { makeId: args.makeId, name: args.model }))?._id ?? args.makeId as any,
       engine_id: args.engineId,
       transmission_id: args.transmissionId,
-      drivetrain: (allFields.drivetrain?.value as string) ?? currentVcForFinal?.drivetrain ?? "FWD",
+      // The resolved config drivetrain (NHTSA axle-authoritative) wins over the
+      // raw LLM field here too — otherwise finalize re-overwrites the reconciled
+      // value with the same Batch-1B guess (batch-3 drivetrain fix).
+      drivetrain:
+        reconcileDrivetrain(
+          currentVcForFinal?.drivetrain,
+          allFields.drivetrain?.value as string | null,
+        ) ??
+        currentVcForFinal?.drivetrain ??
+        (allFields.drivetrain?.value as string) ??
+        "FWD",
       trim_name: args.trim,
       trim_slug: slugify(args.trim),
       enrichment_status: (() => {

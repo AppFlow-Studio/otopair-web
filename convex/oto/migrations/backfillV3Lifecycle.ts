@@ -172,10 +172,11 @@ export const runBackfillV3Lifecycle = internalAction({
     const startedAt = Date.now();
 
     // Init or pick up the oto_migrations row.
-    let cursorMs: number | undefined = await ctx.runMutation(
-      internal.oto.migrations.backfillV3Lifecycle._initMigrationRow,
-      { startedAt },
-    );
+    let cursorMs: number | undefined =
+      (await ctx.runMutation(
+        internal.oto.migrations.backfillV3Lifecycle._initMigrationRow,
+        { startedAt },
+      )) ?? undefined;
 
     let totalProcessed = 0;
     let totalPatched = 0;

@@ -101,7 +101,7 @@ const AddUserModal = ({ onClose, actorName, actorId }: { onClose: () => void; ac
   const addUser = useAction(api.director_auth.addUser)
   const [name,   setName]   = useState('')
   const [email,  setEmail]  = useState('')
-  const [role,   setRole]   = useState<'superadmin'|'admin'|'viewer'>('admin')
+  const [role,   setRole]   = useState<'super_admin'|'ops_admin'|'support'|'readonly'|'data_admin'|'shop_success'>('ops_admin')
   const [secret, setSecret] = useState<{ text: string; forName: string; email: string } | null>(null)
   const [error,  setError]  = useState('')
   const [nameWarn, setNameWarn] = useState<{ existingEmail?: string } | null>(null)
@@ -156,8 +156,8 @@ const AddUserModal = ({ onClose, actorName, actorId }: { onClose: () => void; ac
             </div>
             <div style={{ marginBottom: 20 }}>
               <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-600)', display: 'block', marginBottom: 6 }}>Role</label>
-              <Select value={role} onChange={e => setRole(e.target.value as 'superadmin'|'admin'|'viewer')}
-                options={[{ value:'superadmin', label:'Superadmin' },{ value:'admin', label:'Admin' },{ value:'viewer', label:'Viewer' }]}
+              <Select value={role} onChange={e => setRole(e.target.value as 'super_admin'|'ops_admin'|'support'|'readonly'|'data_admin'|'shop_success')}
+                options={[{ value:'super_admin', label:'Super Admin' },{ value:'ops_admin', label:'Ops Admin' },{ value:'support', label:'Support' },{ value:'readonly', label:'Read-only' },{ value:'data_admin', label:'Data Admin' },{ value:'shop_success', label:'Shop Success' }]}
                 style={{ width: '100%' }} />
             </div>
             {error && (
@@ -332,7 +332,7 @@ export const TabSettings = () => {
   const [addOpen, setAddOpen] = useState(false)
 
   const role         = session?.role ?? 'viewer'
-  const isSuperadmin = role === 'superadmin'
+  const isSuperadmin = role === 'super_admin'
   const actorName    = session?.name ?? 'Director'
   const actorId      = session?.userId as Id<'director_users'> | undefined
 
@@ -388,7 +388,7 @@ export const TabSettings = () => {
                 isSelf={isSelf}
                 actorName={actorName}
                 actorId={actorId}
-                canRemove={isSuperadmin && !isSelf && u.role !== 'superadmin'}
+                canRemove={isSuperadmin && !isSelf && u.role !== 'super_admin'}
                 canRegen={isSuperadmin && !isSelf}
                 canEditEmail={isSuperadmin}
               />

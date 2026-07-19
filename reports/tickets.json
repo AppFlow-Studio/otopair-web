@@ -1,0 +1,232 @@
+[
+  {
+    "title": "Shell route skeleton and session provider",
+    "portal": "shell",
+    "phase": "sprint-1",
+    "size": "M",
+    "owner": "Temur",
+    "depends_on": [],
+    "description": "Create /ops, /shops, /data App-Router route groups with a shared shell layout; lift the director session logic from AdminPanel.tsx into a layout-level session provider (DirectorSessionCtx). Legacy /director hash-SPA remains untouched. EXTEND; 12-20h (agent4 S1, agent5).",
+    "exit_check": "/ops, /shops and /data routes render behind the director TOTP session; unauthenticated visitors are redirected to the TOTP login; legacy /director still works."
+  },
+  {
+    "title": "Role enforcement and capability gate",
+    "portal": "shell",
+    "phase": "sprint-1",
+    "size": "L",
+    "owner": "Temur",
+    "depends_on": [],
+    "description": "Decision #2 implementation: widen director_users.role to the six spec roles with a one-shot mapping migration (superadmin->super_admin, admin->ops_admin, viewer->readonly); extend requireDirector(ctx, token, capability?) with a capability map; add UI can() helper. Touches 26+ gate call sites across 6 files plus inline copies. Closes the live hole where a viewer session can invoke any mutation. EXTEND; 16-24h (agent4 par.3, agent5). May span into sprint 2.",
+    "exit_check": "A readonly session receives 'forbidden' from a money mutation in an automated test; the role-mapping migration has run on dev; no director mutation remains on the role-less gate."
+  },
+  {
+    "title": "portal_stats KPI infrastructure",
+    "portal": "shell",
+    "phase": "sprint-1",
+    "size": "M",
+    "owner": "Waleed",
+    "depends_on": [],
+    "description": "Decision #3 implementation (agent3 R2): new portal_stats table (key, scope, value, computed_at, index by_key) + paginated internalMutation summarizer + crons.interval(5-15m) for MIN-class and crons.daily for DAY-class aggregates; SLO breach push via notification_outbox with per-day dedupe. Must paginate enrichment_evidence (28,420 rows; 32k read-limit warning already fired). NET-NEW; 10-18h (agent3 par.3, agent5).",
+    "exit_check": "portal_stats rows for users-total and enrichment_evidence-count refresh on cron without a read-limit warning; a query reading portal_stats reactively updates a test tile."
+  },
+  {
+    "title": "Environment banner",
+    "portal": "shell",
+    "phase": "sprint-1",
+    "size": "S",
+    "owner": "Daniel",
+    "depends_on": [],
+    "description": "Colored deployment banner derived from the NEXT_PUBLIC_CONVEX_URL slug (third-bird-914 = dev) shown across all internal portal pages. Nothing exists today. NET-NEW; 3-6h (agent4 S6).",
+    "exit_check": "Every portal page shows the deployment slug with the dev color scheme on third-bird-914; the banner text changes when the env URL changes."
+  },
+  {
+    "title": "Command palette and cross-entity search",
+    "portal": "shell",
+    "phase": "sprint-1",
+    "size": "L",
+    "owner": "Daniel",
+    "depends_on": ["Shell route skeleton and session provider"],
+    "description": "Real cmd-K palette (global keydown, hand-rolled on the existing Modal or cmdk dep) plus a NEW director-gated cross-entity search query (users by email/name, shops by name, bookings/payments by id) over existing indexes; no backing query exists anywhere today (Shell.tsx:44-49 is a visual placeholder). Constrain P0 to exact-ish lookups; defer fuzzy search indexes. NET-NEW; 16-28h (agent4 S3, agent5). May span into sprint 2.",
+    "exit_check": "Cmd-K finds a user by email, a shop by name and a booking by id, and Enter navigates to the matching detail route."
+  },
+  {
+    "title": "Write ceremony and audit drawer primitive",
+    "portal": "shell",
+    "phase": "sprint-2",
+    "size": "M",
+    "owner": "Temur",
+    "depends_on": ["Role enforcement and capability gate"],
+    "description": "Promote the TabUsers reason-required ConfirmDialog (Primitives.tsx:57-75) into a shared write-ceremony primitive paired with the directorMutation wrapper (gate + reason + audit_log insert); shared audit drawer using AuditLogCompact; extend audit_log fields (portal/reason/diff) per data-v2.1:766 'extend, do not duplicate'. EXTEND; 8-12h (agent4 S5, agent5).",
+    "exit_check": "director.softDeleteUser flows through the shared ceremony requiring a typed reason, and the resulting audit_log row (with reason) renders in the entity's audit drawer."
+  },
+  {
+    "title": "Sidebar, portal switcher, and badges",
+    "portal": "shell",
+    "phase": "sprint-2",
+    "size": "M",
+    "owner": "Temur",
+    "depends_on": ["Shell route skeleton and session provider", "portal_stats KPI infrastructure"],
+    "description": "Extend Shell.tsx (232px -> 240px) with grouped nav, a portal-switcher segmented control swapping the three nav trees, and count badges rewritten off director.sidebarCounts collect() scans onto indexed reads + portal_stats. EXTEND; 8-14h (agent4 S2, agent5).",
+    "exit_check": "Switcher swaps the Ops/Shops/Data nav trees; every badge count is served by an indexed read or portal_stats with zero .collect() on unbounded tables."
+  },
+  {
+    "title": "Ops Overview backend rewrite",
+    "portal": "ops",
+    "phase": "sprint-2",
+    "size": "M",
+    "owner": "Daniel",
+    "depends_on": ["portal_stats KPI infrastructure", "Shell route skeleton and session provider"],
+    "description": "Rebuild the Ops Overview page on R1 indexed window queries (bookings today, GMV, failed payments 24h, pending deletions, board counts) plus portal_stats reads, replacing the directorOverview.ts:46-146 and director.ts:6-66 full-table collect() layer that violates ops-v2:772 DoD. Frontend regroups TabOverview + Charts. EXTEND with backend rewrite; 10-16h (agent3 R3, agent5).",
+    "exit_check": "All Overview tiles are served by indexed window queries or portal_stats; the collect()-based overview queries are no longer called by the new portal."
+  },
+  {
+    "title": "Deletion queue page",
+    "portal": "ops",
+    "phase": "sprint-2",
+    "size": "S",
+    "owner": "Daniel",
+    "depends_on": ["Shell route skeleton and session provider"],
+    "description": "New listPendingDeletions query on users.by_isPendingDeletion (index exists) + queue page with oldest-age pill; wire existing softDeleteUser/restoreUser mutations through the ceremony once available. NET-NEW; 4-8h (agent5).",
+    "exit_check": "Pending-deletion users are listed via the by_isPendingDeletion index with an oldest-N-days pill, and restore executes with a reason and audit row."
+  },
+  {
+    "title": "review_queue table and stream backfills",
+    "portal": "data",
+    "phase": "sprint-2",
+    "size": "L",
+    "owner": "Waleed",
+    "depends_on": [],
+    "description": "Decision #4 implementation: create the thin review_queue table per data-v2.1:756-759 (source_stream consensus|correction|report|survey, entity refs, priority/status/assignee; indexes by_status/by_source_stream/by_assignee) + 4 idempotent per-stream backfills keyed on source doc ids + list/claim/resolve functions + trivial fact_reports list-open query (by_disposition index ready). Day-1 volume: consensus (412 runs) + corrections (15+20+6 rows); report/survey streams are empty. NET-NEW; 24-40h (agent2 par.5, agent5). Spans into week 3; UI is a separate backlog ticket.",
+    "exit_check": "review_queue is populated from the consensus and correction streams; re-running any backfill inserts zero duplicate rows; queue depth is queryable by index for the D3 tile."
+  },
+  {
+    "title": "Users list and detail",
+    "portal": "ops",
+    "phase": "backlog-P0",
+    "size": "L",
+    "owner": "Daniel",
+    "depends_on": ["Shell route skeleton and session provider", "Role enforcement and capability gate"],
+    "description": "Re-house TabUsers (425 ln) as /ops/users list + four-tab detail (Profile/Garage/Bookings/Money). Garage from directorCars.userVehicleHistory; Money tab needs a new join/summary over payments.getByUserId + transactions by_user_id_created_at (both exist). EXTEND; 20-32h (agent5).",
+    "exit_check": "Support can open a user by email, see garage, bookings and money tabs, and resolve a refund question without the Convex dashboard."
+  },
+  {
+    "title": "Bookings board, list, and detail",
+    "portal": "ops",
+    "phase": "backlog-P0",
+    "size": "L",
+    "owner": "Daniel",
+    "depends_on": ["Shell route skeleton and session provider"],
+    "description": "Board view is net-new; columns MUST derive from the measured status set (pending, pending_quote, quotes_ready, vehicle_at_shop, completed, cancelled, no_show — agent2 par.1c) after sign-off with Waleed, not the spec's fictional enum. List/detail regroup TabBookings + BookingDetailModal; state-machine archaeology in 14,630-line bookings.ts. EXTEND; 16-28h (agent5).",
+    "exit_check": "Board columns match the signed-off status set with by_status counts; clicking a card opens detail with status history and audit drawer."
+  },
+  {
+    "title": "Payments and payment detail",
+    "portal": "ops",
+    "phase": "backlog-P0",
+    "size": "M",
+    "owner": "Daniel",
+    "depends_on": ["Shell route skeleton and session provider"],
+    "description": "Regroup TabStripe (911 ln) onto /ops/payments using the five existing directorStripe read queries + payments/payment_disputes/stripe_webhook_events modules. REGROUP; 8-14h (agent1, agent5).",
+    "exit_check": "Payments list filters by status via index; detail shows dispute/webhook context; no new backend queries required."
+  },
+  {
+    "title": "Entity chips with hover preview",
+    "portal": "shell",
+    "phase": "backlog-P0",
+    "size": "M",
+    "owner": "Daniel",
+    "depends_on": ["Shell route skeleton and session provider"],
+    "description": "Shared typed chip (user/booking/shop/payment) with hover preview and deep link, built on Badge + gotoEntity pattern + light per-entity summary queries (subsets of existing detail queries). NET-NEW; 8-14h (agent4 S4, agent5).",
+    "exit_check": "A booking detail page renders user and shop chips whose hover shows a summary and whose click navigates to the entity route."
+  },
+  {
+    "title": "Shops directory and shop detail tabs",
+    "portal": "shops",
+    "phase": "backlog-P0",
+    "size": "L",
+    "owner": "Daniel",
+    "depends_on": ["Shell route skeleton and session provider", "Role enforcement and capability gate"],
+    "description": "Directory + Shop Detail tabs 1-6 (Profile, Hours, Services&Rate, Mechanics, Calendar, Bookings). Needs director-gated read wrappers over portal-scoped queries (shops_hours.list, shop_services.getByShopId, time_slots.getByShopAndDate/Month, mechanics.getByShopId, bookings.getByShopId) + rate-change ceremony mutation. Defer shops.owner_* field adds; read owner via shop_users join. Data on third-bird-914 is synthetic (9 shops) — decision #1 blocks the exit-test demo, not the build. EXTEND; 30-50h (agent5).",
+    "exit_check": "All six tabs render for a shop via director-gated wrappers; a labor-rate change requires ceremony and produces an audit row; a new shop can be created and made bookable via the portal alone (demonstrated on seeded data once decision #1 resolves)."
+  },
+  {
+    "title": "Stripe health read view",
+    "portal": "shops",
+    "phase": "backlog-P0",
+    "size": "M",
+    "owner": "Daniel",
+    "depends_on": ["Shell route skeleton and session provider"],
+    "description": "Regroup stripeShopRollup/stripeWebhookHealth/checkStripeConfig into a read-only Stripe health page. No stripe_account_status table needed — derive from stripe_webhook_events + shops stripe fields (agent2 par.1b). REGROUP; 8-14h (agent5).",
+    "exit_check": "Per-shop Stripe connect status, webhook health and refund breakdown render read-only from existing queries."
+  },
+  {
+    "title": "Shops network overview",
+    "portal": "shops",
+    "phase": "backlog-P0",
+    "size": "L",
+    "owner": "Waleed",
+    "depends_on": ["portal_stats KPI infrastructure"],
+    "description": "Net-new network KPI page: S1-S15 aggregates (league table, slot utilization 7d, needs-attention rules) on R1 windows + portal_stats rollups. Defer the stalled-onboarding rule (needs shop_onboarding table) to P2. Renders synthetic data until decision #1 resolves. NET-NEW; 16-30h (agent3 inventory, agent5).",
+    "exit_check": "Network tiles, league table and needs-attention list render from indexed reads/portal_stats with zero .collect(); utilization matches a hand-computed spot check for one shop."
+  },
+  {
+    "title": "Data SLO overview and Slack push",
+    "portal": "data",
+    "phase": "backlog-P0",
+    "size": "M",
+    "owner": "Waleed",
+    "depends_on": ["portal_stats KPI infrastructure", "review_queue table and stream backfills"],
+    "description": "Five SLO tiles (D1 success rate, D2 avg confidence, D3 queue depth, D4 variance rate, D5 confirmation rate) computed in the portal_stats summarizer; D3 reads review_queue depth; Slack breach push via notification_outbox with per-day dedupe (dispatcher crons exist, crons.ts:134-162). NET-NEW; 10-18h (agent5).",
+    "exit_check": "All five tiles render with green/amber/red thresholds from portal_stats; forcing a breach in dev produces exactly one Slack outbox row per day."
+  },
+  {
+    "title": "Pipeline control room",
+    "portal": "data",
+    "phase": "backlog-P0",
+    "size": "L",
+    "owner": "Temur",
+    "depends_on": ["Shell route skeleton and session provider", "Write ceremony and audit drawer primitive"],
+    "description": "Runs pane (director-gated public wrappers over internalQuery enrichment reads, v3queries.ts:15-290), vin_queue pane (ZERO queries exist today; 4 indexes ready), and the three director triggers extended to the spec contract — per-VIN resolution, ceremony, cooldown, linked outcomes (data-v2.1:803); existing mutations are per-config with neither (agent5 disagreement resolved as EXTEND). EXTEND; 24-40h (agent5).",
+    "exit_check": "vin_queue backlog renders by status with age bands; a re-enrich trigger requires reason, respects a cooldown, and links to the resulting run."
+  },
+  {
+    "title": "Catalog and config workspace with layer badges",
+    "portal": "data",
+    "phase": "backlog-P0",
+    "size": "L",
+    "owner": "Temur",
+    "depends_on": ["Shell route skeleton and session provider"],
+    "description": "Re-house TabVehicleConfigs (1,769 ln) into /data catalog workspace; add per-field layer/provenance badges via a new bounded query over enrichment_evidence by_entity_field (index exists; per-config lookups bounded despite 28,420-row table). Catalog-wide fill stats come from the DAY-class portal_stats cron. REGROUP/EXTEND; 24-40h (agent5).",
+    "exit_check": "Answering 'why is this spec value what it is?' for any config field takes under 2 minutes: badge shows source layer, confidence and evidence drill-down."
+  },
+  {
+    "title": "Labor command center",
+    "portal": "data",
+    "phase": "backlog-P0",
+    "size": "M",
+    "owner": "Temur",
+    "depends_on": ["Shell route skeleton and session provider"],
+    "description": "Read-only source ladder + test bench on directorRepairpal queries + labor_times (2,688 rows); new effective-value ladder query with selection reason. OPEN CHECK first: verify labor_times.source distinguishes the four ladder sources (data-v2.1:772) — possible source backfill if tagging is incomplete. EXTEND; 12-20h (agent5).",
+    "exit_check": "For a given service x config, the page shows the effective labor value, which ladder rung supplied it and why, matching a manual trace."
+  },
+  {
+    "title": "Locate real network and prod seeding plan",
+    "portal": "shops",
+    "phase": "backlog-P0",
+    "size": "M",
+    "owner": "Waleed",
+    "depends_on": [],
+    "description": "Decision #1 execution: determine which deployment holds the 38-shop/87-mechanic network (third-bird-914 has 9/4/2, cloned from BUGGED ardent-crab-641); design and build a selective ID-remapping seeder (the clone script is dev-to-dev and destructive); plan prod cutover from an empty auth surface (0 director_users, 0 shop_users on --prod). Non-page work, decision-gated; 16-32h (agent2 par.3, agent5 par.4).",
+    "exit_check": "The real network's location is documented with measured counts; the seeder dry-runs against a scratch deployment with ID remapping verified and zero destructive operations against prod."
+  },
+  {
+    "title": "7-to-4 category migration",
+    "portal": "data",
+    "phase": "backlog-P0",
+    "size": "M",
+    "owner": "Waleed",
+    "depends_on": ["Locate real network and prod seeding plan"],
+    "description": "Decision #5 execution once Yassin names the 4 categories: apply the mechanical mapping strawman (Appendix C of the plan), delete the phantom 8th 'Maintenance' category (0 services, dev-only), update the 4 hard-coded 7-category code sites (oto/tools.ts x2, maintenance_pipeline.ts:158, seeds/seedServices.ts), and bundle execution into the prod seeding migration since prod already holds 7 categories with prod-local IDs. 12-20h (agent2 par.4, agent5 par.4).",
+    "exit_check": "All 23 services map to exactly 4 categories on dev; no code site enumerates 7 categories; the migration is idempotent and bundled in the seeding plan."
+  }
+]

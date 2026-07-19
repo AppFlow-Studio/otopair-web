@@ -37,19 +37,27 @@ import { scrapeWheelSizeOptions, type TireOption } from "./vehicleEnrichment/uti
  * — Convex doesn't support index-time "is missing" predicates on optional
  * fields, so we paginate-then-filter in JS.
  */
+type Candidate = {
+  _id: Id<"vehicle_configs">;
+  config_key: string | null;
+  year: number | null;
+  had_trim_specs: boolean;
+  had_tire_options: boolean;
+};
+
 export const _listCandidates = internalQuery({
   args: {
     limit: v.number(),
     skipExisting: v.boolean(),
   },
-  handler: async (ctx, { limit, skipExisting }) => {
-    const out: Array<{
-      _id: Id<"vehicle_configs">;
-      config_key: string | null;
-      year: number | null;
-      had_trim_specs: boolean;
-      had_tire_options: boolean;
-    }> = [];
+  // Explicit return type is load-bearing: `run` below calls this function
+  // through `internal.backfillTires.*` — a same-module barrel self-reference.
+  // Without the annotation TS must infer this handler while resolving the
+  // whole ApiFromModules barrel, a circular resolution measured at ~17s per
+  // expression that exhausts the checker's instantiation budget and silently
+  // degrades unrelated api.* types to `any` elsewhere in the repo.
+  handler: async (ctx, { limit, skipExisting }): Promise<Candidate[]> => {
+    const out: Candidate[] = [];
 
     // Walk vehicle_configs newest-first; we want the most recently added
     // configs to be filled in first since they're most likely to be queried.
@@ -135,13 +143,7 @@ export const run = action({
   }> => {
     const max = Math.min(Math.max(1, limit), 300); // free-tier daily quota cap
 
-    const candidates: Array<{
-      _id: Id<"vehicle_configs">;
-      config_key: string | null;
-      year: number | null;
-      had_trim_specs: boolean;
-      had_tire_options: boolean;
-    }> = await ctx.runQuery(internal.backfillTires._listCandidates, {
+    const candidates: Candidate[] = await ctx.runQuery(internal.backfillTires._listCandidates, {
       limit: max,
       skipExisting,
     });

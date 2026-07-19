@@ -1,3 +1,7 @@
+// DEPRECATED (Jul 13 2026): seeds the OLD 7-category taxonomy. The live
+// taxonomy is 4 categories (Routine / Tires & Brakes / Scheduled Service /
+// Inspections) — use convex/seeds/seedServices.ts for fresh deployments and
+// convex/migrations/categoryConsolidation.ts to convert existing ones.
 import { mutation } from "./_generated/server";
 
 /**

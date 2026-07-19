@@ -151,7 +151,7 @@ async function accrueShopConfigPreference(
   }
 }
 
-async function accrueVehiclePreference(
+export async function accrueVehiclePreference(
   ctx: any,
   {
     vin,

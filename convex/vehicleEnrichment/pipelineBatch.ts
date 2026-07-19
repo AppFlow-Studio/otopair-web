@@ -531,13 +531,13 @@ export const enrichVehicleBatch = internalAction({
       internal.vehicleEnrichment.queries.getByEngineKey,
       { engineKey },
     );
-    if (existing && (existing.fillRate ?? 0) > 70) {
-      console.log(`[v7] Cache hit for ${engineKey} (fillRate=${existing.fillRate}%)`);
+    if (existing && (existing.fill_rate ?? 0) > 70) {
+      console.log(`[v7] Cache hit for ${engineKey} (fillRate=${existing.fill_rate}%)`);
       await ctx.runMutation(
         internal.vehicleEnrichment.mutations.attachToVehicle,
         { vehicleId: args.vehicleId, enrichedDataId: existing._id },
       );
-      return { status: "cache_hit" as const, engineKey, fillRate: existing.fillRate };
+      return { status: "cache_hit" as const, engineKey, fillRate: existing.fill_rate };
     }
 
     // Step 1: Read vehicle identity from DB

@@ -23,6 +23,7 @@ import { findHaloVariant } from "./lib/haloVariantRules";
 import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
+import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -283,6 +284,35 @@ export const processVin = internalAction({
         return null;
       }
 
+      // ── Identity consistency: trim vs engine (batch-2 audit, Jul 2026) ──
+      // The cross-source merge can build a chimera: VDB's trim string embeds
+      // an engine qualifier that contradicts the engine NHTSA won (a real
+      // 3.6L Atlas decoded as trim "2.0T SE" + engine 3.6 FSI, and the
+      // contradiction then poisoned the config key, the trim label users
+      // see, and the engine-code verifier's input). When the trim's embedded
+      // displacement or cylinder token disagrees with the merged engine,
+      // strip the token — the rest of the trim ("SE") is still right.
+      {
+        const dispNum = parseFloat(merged.displacement || "");
+        const cyl = merged.cylinders || 0;
+        let trim = merged.trim;
+        const dispTok = trim.match(/(\d\.\d)\s*T?(?:SI|FSI|DI)?L?\b/i);
+        if (dispTok && dispNum && Math.abs(parseFloat(dispTok[1]) - dispNum) > 0.15) {
+          trim = trim.replace(dispTok[0], "").replace(/\s{2,}/g, " ").trim();
+          console.warn(
+            `[decode] Trim/engine contradiction — trim "${merged.trim}" embeds ${dispTok[1]}L but engine is ${dispNum}L; using trim "${trim || "Base"}"`,
+          );
+        }
+        const cylTok = trim.match(/\b[VvIiHh](\d{1,2})\b/);
+        if (cylTok && cyl && parseInt(cylTok[1]) !== cyl) {
+          trim = trim.replace(cylTok[0], "").replace(/\s{2,}/g, " ").trim();
+          console.warn(
+            `[decode] Trim/engine contradiction — trim "${merged.trim}" says ${cylTok[0]} but engine has ${cyl} cylinders; using trim "${trim || "Base"}"`,
+          );
+        }
+        merged.trim = trim || "Base";
+      }
+
       // ════════════════════════════════════════════════════════════
       // ENGINE CODE RESOLUTION
       // Priority: VDB code → NHTSA code (filtered) → Claude norm → web search + Haiku → synthetic
@@ -422,11 +452,16 @@ export const processVin = internalAction({
         modelId, name: finalTrim, year: merged.year,
       });
 
-      // Drivetrain: AI normalized > NHTSA mapped > VDB > unknown
-      const nhtsaDrivetrain = mapNhtsaDriveType(merged.driveType);
-      const canonicalDrivetrain = drivetrainType
+      // Drivetrain: NHTSA VIN-decoded axle count is authoritative (2WD vs 4WD);
+      // the AI only refines within that class. Prevents the batch-3 failure
+      // where a "4x2" VIN (dropped by the old mapNhtsaDriveType) let the LLM's
+      // AWD guess win and phantom transfer-case/diff services shipped.
+      const aiCanonicalDrivetrain = drivetrainType
         ? toCanonicalDrivetrain(drivetrainType)
-        : nhtsaDrivetrain;
+        : undefined;
+      const canonicalDrivetrain =
+        reconcileDrivetrain(merged.driveType, aiCanonicalDrivetrain, merged.bodyClass) ??
+        mapNhtsaDriveType(merged.driveType);
       if (canonicalDrivetrain && canonicalDrivetrain !== "unknown") {
         await ctx.runMutation(api.chassis_variants.upsertChassisVariant, {
           trim_id: trimId,
@@ -612,7 +647,7 @@ export const enrichVehicleSpecs = internalAction({
     let effectiveEngineCode = args.engineCode?.trim() ?? "";
     if (!effectiveEngineCode) {
       const engine = await ctx.runQuery(internal.vehicle_mutations.getEngine, { engineId: args.engineId });
-      if (engine) {
+      if (engine?.trim_id) {
         const trimEngines = await ctx.runQuery(internal.vehicle_mutations.getEnginesByTrim, {
           trimId: engine.trim_id,
         });
@@ -710,7 +745,7 @@ export const enrichVehicleSpecs = internalAction({
               internal.vehicle_mutations.getEngine,
               { engineId: args.engineId }
             );
-            if (engine) {
+            if (engine?.trim_id) {
               await ctx.runMutation(internal.vehicle_mutations.patchTrim, {
                 trimId: engine.trim_id,
                 steeringType,
@@ -792,7 +827,7 @@ export const enrichVehicleSpecs = internalAction({
           if (specs.trim_specs) {
             const { flat: trimFlat } = flattenPerFieldSpecs(specs.trim_specs);
             const engine = await ctx.runQuery(internal.vehicle_mutations.getEngine, { engineId: args.engineId });
-            if (engine) {
+            if (engine?.trim_id) {
               await ctx.runMutation(internal.vehicle_mutations.storeTrimSpecs, {
                 trimId: engine.trim_id,
                 specs: trimFlat,
@@ -881,14 +916,22 @@ export const enrichVehicleSpecs = internalAction({
       // Base specs already exist — pull values for pricing prompt context
       oilViscosity = existingSpecs.oil_viscosity || "N/A";
       oilCapacityQts = existingSpecs.oil_capacity_qts || 0;
-      confidenceScore = existingSpecs.confidence_score || 0.75;
+      // engines docs don't store a confidence score — use the same default the
+      // fresh-enrichment path falls back to.
+      confidenceScore = 0.75;
+      // Reverse of updateEngineAttributes' column mapping: has_turbocharger is
+      // persisted as `aspiration`, fuel_injection_type as `fuel_injection`;
+      // power_steering / transmission / drivetrain are not stored on engines.
       vehicleAttributes = {
-        power_steering_type: existingSpecs.power_steering_type ?? null,
+        power_steering_type: null,
         timing_system: existingSpecs.timing_system ?? null,
-        has_turbocharger: existingSpecs.has_turbocharger ?? null,
-        fuel_injection_type: existingSpecs.fuel_injection_type ?? null,
-        transmission_type: existingSpecs.transmission_type ?? null,
-        drivetrain_type: existingSpecs.drivetrain_type ?? null,
+        has_turbocharger:
+          existingSpecs.aspiration != null
+            ? existingSpecs.aspiration === "turbocharged"
+            : null,
+        fuel_injection_type: existingSpecs.fuel_injection ?? null,
+        transmission_type: null,
+        drivetrain_type: null,
       };
       const existingVehicleSpecs = await ctx.runQuery(internal.vehicle_mutations.getVehicleSpecs, {
         engineId: args.engineId,
@@ -1059,7 +1102,7 @@ export const enrichVehicleSpecs = internalAction({
         // Build slug → service ID map
         const slugToService = new Map<string, any>();
         for (const svc of services) {
-          slugToService.set(svc.slug, svc);
+          if (svc.slug) slugToService.set(svc.slug, svc);
         }
 
         // Loop through results and upsert

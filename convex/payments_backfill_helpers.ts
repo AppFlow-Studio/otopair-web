@@ -151,6 +151,66 @@ export const _upsertPaymentFromBackfill = internalMutation({
 });
 
 /**
+ * Candidate rows for the card-details backfill: have a Stripe PI but no
+ * card_last4 yet. Paged by _creationTime via the by_created_at index.
+ */
+export const _paymentsMissingCard = internalQuery({
+  args: { limit: v.optional(v.number()), cursor: v.optional(v.number()) },
+  handler: async (ctx, { limit, cursor }) => {
+    const take = Math.min(Math.max(limit ?? 50, 1), 200);
+    const q =
+      cursor != null
+        ? ctx.db
+            .query("payments")
+            .withIndex("by_created_at", (ix: any) => ix.lt("created_at", cursor))
+            .order("desc")
+        : ctx.db.query("payments").withIndex("by_created_at").order("desc");
+    const rows = await q.take(take);
+    // Return the raw scan boundary so the caller can page correctly even though
+    // most scanned rows are filtered out (already have a card, or no PI).
+    return {
+      candidates: rows
+        .filter(
+          (r) => r.stripe_payment_intent_id != null && r.card_last4 == null,
+        )
+        .map((r) => ({
+          _id: r._id,
+          stripe_payment_intent_id: r.stripe_payment_intent_id as string,
+        })),
+      scanned: rows.length,
+      // Oldest created_at in this raw window — the next cursor. Rows written
+      // before created_at existed fall back to _creationTime.
+      nextCursor:
+        rows.length > 0
+          ? rows[rows.length - 1].created_at ??
+            rows[rows.length - 1]._creationTime
+          : null,
+      exhausted: rows.length < take,
+    };
+  },
+});
+
+/** Stamp card brand/last4 on a payment row (backfill; only when missing). */
+export const _patchPaymentCard = internalMutation({
+  args: {
+    paymentId: v.id("payments"),
+    cardBrand: v.optional(v.string()),
+    cardLast4: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<"patched" | "unchanged"> => {
+    const p = await ctx.db.get(args.paymentId);
+    if (!p) return "unchanged";
+    if (p.card_last4 != null || p.card_brand != null) return "unchanged";
+    if (args.cardBrand == null && args.cardLast4 == null) return "unchanged";
+    await ctx.db.patch(args.paymentId, {
+      ...(args.cardBrand != null ? { card_brand: args.cardBrand } : {}),
+      ...(args.cardLast4 != null ? { card_last4: args.cardLast4 } : {}),
+    });
+    return "patched";
+  },
+});
+
+/**
  * Diagnostic read for verifying the live booking flow is producing rows.
  * Returns recent payments rows + a summary of statuses + how many came from
  * backfill vs the live webhook. Auth-gated by the wrapping action.

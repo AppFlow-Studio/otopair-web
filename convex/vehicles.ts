@@ -506,6 +506,19 @@ export const saveVehicleImageUrl = mutation({
   },
 });
 
+/** Stamp a resolved image straight onto a vehicle_configs row — the path for
+ *  YMMT-only resolutions (no VIN to hang the cache on). First-fetched-wins,
+ *  same rule as the saveVehicleImageUrl promotion above. */
+export const _stampConfigImage = internalMutation({
+  args: { vehicle_config_id: v.id("vehicle_configs"), image_url: v.string() },
+  handler: async (ctx, { vehicle_config_id, image_url }) => {
+    const cfg = await ctx.db.get(vehicle_config_id);
+    if (cfg && !cfg.image_url) {
+      await ctx.db.patch(vehicle_config_id, { image_url });
+    }
+  },
+});
+
 // MUTATIONS
 
 /**

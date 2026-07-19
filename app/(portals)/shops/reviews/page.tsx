@@ -26,11 +26,15 @@ type ShopReviewRow = {
   rating: number;
   comment: string | null;
   reviewer: string | null;
-  reviewer_id: string | null;
+  reviewer_id: string;
   mechanic: string | null;
   mechanic_id: string | null;
   booking_id: string;
+  vehicle: { ymm: string | null; imageUrl: string | null };
+  service_names: string[];
   hidden: boolean;
+  hidden_reason: string | null;
+  hidden_by: string | null;
   at: number;
 };
 type ShopReviewGroup = {
@@ -227,7 +231,12 @@ export default function ShopsReviewsPage() {
                             <span className={`${pill} bg-slate-100 text-slate-600`}>{r.mechanic}</span>
                           ))}
                         {r.hidden && (
-                          <span className={`${pill} bg-slate-100 text-slate-500`}>hidden</span>
+                          <span
+                            className={`${pill} bg-slate-100 text-slate-500`}
+                            title={r.hidden_reason ?? undefined}
+                          >
+                            hidden
+                          </span>
                         )}
                         <Link
                           href={`/ops/bookings/${r.booking_id}`}
@@ -237,6 +246,16 @@ export default function ShopsReviewsPage() {
                         </Link>
                         <span className="ml-auto text-[12px] text-slate-400">{fmtDate(r.at)}</span>
                       </div>
+                      {(r.vehicle.ymm || r.service_names.length > 0) && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[12px] text-slate-500">
+                          {r.vehicle.ymm && (
+                            <span className={`${pill} bg-slate-50 text-slate-600`}>{r.vehicle.ymm}</span>
+                          )}
+                          {r.service_names.length > 0 && (
+                            <span className="text-slate-400">{r.service_names.join(", ")}</span>
+                          )}
+                        </div>
+                      )}
                       {r.comment && <p className="mt-1 text-[13px] text-slate-600">{r.comment}</p>}
                     </div>
                   ))}

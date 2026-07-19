@@ -12,7 +12,7 @@ import { requireDirector, logAudit } from "./directorGate";
 import type { Doc, Id } from "./_generated/dataModel";
 import { listAvailableWindowsForShopDate } from "./lib/timeSlotAvailability";
 import { SLOT_GRID_MINUTES } from "./lib/schedule_overlap";
-import { userDisplayName } from "./lib/bookingEnrichment";
+import { resolveVehicleDisplay, enrichReviews } from "./lib/bookingEnrichment";
 
 // Booking statuses that no longer occupy a bay (mirrors the availability
 // engine's TERMINAL_BOOKING_STATUSES so the portal calendar agrees with what
@@ -154,14 +154,34 @@ export const shopProfile = query({
       lat: shop.lat ?? null,
       lng: shop.lng ?? null,
       description: shop.description ?? null,
+      logo: shop.logo ?? null,
       laborRate: shop.labor_rate ?? null,
+      laborRatesByTier: shop.labor_rates_by_tier ?? null,
+      declinedTiers: shop.declined_tiers ?? [],
+      laborRatesUpdatedAt: shop.labor_rates_updated_at ?? null,
       rating: shop.rating ?? null,
       reviewCount: shop.review_count ?? 0,
       isActive: !!shop.is_active,
       isVerified: !!shop.is_verified,
+      onboardingComplete: !!shop.onboarding_complete,
       stripeAccountId: shop.stripe_connect_account_id ?? null,
       stripeChargesEnabled: !!shop.stripe_charges_enabled,
       stripePayoutsEnabled: !!shop.stripe_payouts_enabled,
+      stripeOnboardingCompletedAt: shop.stripe_onboarding_completed_at ?? null,
+      stripeRequirementsDue: shop.stripe_requirements_currently_due ?? [],
+      // Scheduling configuration — internal knobs, never surfaced before.
+      scheduling: {
+        bufferMinutes: shop.buffer_minutes ?? null,
+        noShowThresholdMinutes: shop.no_show_threshold_minutes ?? null,
+        maxBookingsPerMechanicRollingHour:
+          shop.max_bookings_per_mechanic_rolling_hour ?? null,
+        appointmentReminderLeadMinutes: shop.appointment_reminder_lead_minutes ?? null,
+        overrunDefaultExtensionPercent: shop.overrun_default_extension_percent ?? null,
+        overrunExtensionFloorMinutes: shop.overrun_extension_floor_minutes ?? null,
+        overrunEscalationMinutes: shop.overrun_escalation_minutes ?? null,
+        overrunAutoApplyMinutes: shop.overrun_auto_apply_minutes ?? null,
+        entityLabelMode: shop.entity_label_mode ?? null,
+      },
       mechanicCount: mechanics.filter((m) => m.is_active !== false).length,
       createdAt: shop._creationTime,
       health,
@@ -222,6 +242,14 @@ export const shopServicesList = query({
           category: categoryName ?? "Uncategorized",
           isOffered: r.is_offered,
           defaultLaborHours: svc?.default_labor_hours ?? null,
+          description: svc?.description ?? null,
+          partsKind: svc?.parts_kind ?? null,
+          laborDeterminant: svc?.labor_determinant ?? null,
+          minModelYear: svc?.min_model_year ?? null,
+          repairpalSlug: svc?.repairpal_slug ?? null,
+          isLaborOnly: !!svc?.is_labor_only,
+          requiresParts: !!svc?.requires_parts,
+          hasOptions: !!svc?.has_options,
         };
       }),
     );
@@ -436,24 +464,36 @@ export const shopBookings = query({
 
     return Promise.all(
       rows.map(async (b) => {
-        const user = await ctx.db.get(b.user_id);
-        const serviceNames = await Promise.all(
-          b.service_ids.map(async (sid) => {
-            const s = await ctx.db.get(sid);
-            return s?.name ?? "—";
-          }),
-        );
+        const [user, vehicle, serviceNames] = await Promise.all([
+          ctx.db.get(b.user_id),
+          resolveVehicleDisplay(ctx, b.vin),
+          Promise.all(
+            b.service_ids.map(async (sid) => {
+              const s = await ctx.db.get(sid);
+              return s?.name ?? "—";
+            }),
+          ),
+        ]);
         return {
           id: b._id,
           user: user
             ? `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || user.email || "Unknown"
             : "Unknown",
           user_id: String(b.user_id),
+          vehicle: vehicle.ymm,
           services: serviceNames,
           status: b.status,
           date: b.scheduled_date ?? null,
           time: b.scheduled_time ?? null,
           total: b.total_cost ?? null,
+          laborCost: b.labor_cost ?? null,
+          partsCost: b.parts_cost ?? null,
+          estLaborMinutes: b.estimated_labor_minutes ?? null,
+          actualDurationMinutes: b.actual_duration_minutes ?? null,
+          invoiceNumber: b.invoice_number ?? null,
+          customerNotes: b.customer_notes ?? null,
+          recommendationState: b.recommendation_state ?? null,
+          rescheduled: b.previous_scheduled_date != null,
           createdAt: b.created_at ?? b._creationTime,
         };
       }),
@@ -513,38 +553,16 @@ export const shopInsights = query({
       )
     ).filter((x): x is { id: string; url: string; caption: string | null } => x.url != null);
 
-    // Reviews (visible + hidden), reviewer + mechanic resolved.
-    const userName = new Map<string, string | null>();
-    const mechName = new Map<string, string | null>();
-    const reviews = await Promise.all(
-      reviewRows
-        .sort((a, b) => (b.created_at ?? b._creationTime) - (a.created_at ?? a._creationTime))
-        .slice(0, 50)
-        .map(async (r) => {
-          const uid = String(r.user_id);
-          if (!userName.has(uid)) userName.set(uid, userDisplayName(await ctx.db.get(r.user_id)));
-          let mechanic: string | null = null;
-          if (r.mechanic_id) {
-            const mid = String(r.mechanic_id);
-            if (!mechName.has(mid)) {
-              const m = await ctx.db.get(r.mechanic_id);
-              const mo = m as { first_name?: string; last_name?: string } | null;
-              mechName.set(mid, mo ? [mo.first_name, mo.last_name].filter(Boolean).join(" ") || null : null);
-            }
-            mechanic = mechName.get(mid) ?? null;
-          }
-          return {
-            id: String(r._id),
-            rating: r.rating,
-            comment: r.comment ?? null,
-            reviewer: userName.get(uid) ?? null,
-            reviewerId: uid,
-            mechanic,
-            hidden: r.hidden_at != null,
-            at: r.created_at ?? r._creationTime,
-          };
-        }),
-    );
+    // Reviews (visible + hidden) — shared enriched shape (reviewer / mechanic /
+    // car / services / booking), deduped across the set.
+    const reviews = (
+      await enrichReviews(
+        ctx,
+        reviewRows.sort(
+          (a, b) => (b.created_at ?? b._creationTime) - (a.created_at ?? a._creationTime),
+        ),
+      )
+    ).slice(0, 50);
 
     // Rate-change history from the audit trail.
     const rateHistory = auditRows
@@ -575,11 +593,49 @@ export const shopInsights = query({
     const cancelled = bookings.filter((b) => b.status === "cancelled").length;
     const noShow = bookings.filter((b) => b.status === "no_show").length;
 
+    // Labor-estimate accuracy (QA "surprises") derived from the bookings window:
+    // compare estimated vs actual labor minutes where both exist. A job is
+    // "flagged" when it overran/underran by more than 25%.
+    const varianceSamples: number[] = [];
+    let flaggedJobs = 0;
+    for (const b of bookings) {
+      const est = b.estimated_labor_minutes;
+      const act = b.actual_duration_minutes;
+      if (est != null && est > 0 && act != null) {
+        const v = (act - est) / est;
+        varianceSamples.push(v);
+        if (Math.abs(v) > 0.25) flaggedJobs++;
+      }
+    }
+    const laborQa = {
+      sampled: varianceSamples.length,
+      flagged: flaggedJobs,
+      avgVariancePct:
+        varianceSamples.length > 0
+          ? varianceSamples.reduce((s, v) => s + v, 0) / varianceSamples.length
+          : null,
+    };
+
+    // Dispute detail (not just a count) — reason / status / amount / opened.
+    const disputeRows = disputes
+      .sort((a, b) => b.opened_at_ms - a.opened_at_ms)
+      .map((d) => ({
+        id: String(d._id),
+        booking_id: d.booking_id ? String(d.booking_id) : null,
+        reason: d.reason ?? null,
+        status: d.status,
+        amount: d.amount_cents / 100,
+        openedAt: d.opened_at_ms,
+        closedAt: d.closed_at_ms ?? null,
+      }));
+
     return {
       reviews,
       rateHistory,
       fixedPrices,
       portfolio,
+      laborQa,
+      disputes: disputeRows,
       stats: {
         total,
         completed,

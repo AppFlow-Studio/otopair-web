@@ -14,6 +14,7 @@ import {
   bookingVisibleUnderScope,
   getCurrentNotificationScope,
 } from "./lib/notificationScope";
+import { metaMakeModel } from "./lib/bookingEnrichment";
 
 async function getCurrentUserOrNull(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
@@ -94,17 +95,27 @@ async function resolveVehicleDisplay(ctx: any, vin?: string | null): Promise<str
   if (!vehicle) return null;
   const parts: string[] = [];
   if (vehicle.year != null) parts.push(String(vehicle.year));
+  let make = "";
+  let model = "";
   if (vehicle.trim_id) {
     const trim = await ctx.db.get(vehicle.trim_id);
     if (trim) {
-      const model = await ctx.db.get(trim.model_id);
-      if (model) {
-        const make = await ctx.db.get(model.make_id);
-        if (make) parts.push(make.name);
-        parts.push(model.name);
+      const m = await ctx.db.get(trim.model_id);
+      if (m) {
+        model = m.name ?? "";
+        const mk = await ctx.db.get(m.make_id);
+        if (mk) make = mk.name ?? "";
       }
     }
   }
+  // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+  if (!make || !model) {
+    const meta = metaMakeModel(vehicle.metadata);
+    if (!make) make = meta.make;
+    if (!model) model = meta.model;
+  }
+  if (make) parts.push(make);
+  if (model) parts.push(model);
   return parts.length > 0 ? parts.join(" ") : null;
 }
 

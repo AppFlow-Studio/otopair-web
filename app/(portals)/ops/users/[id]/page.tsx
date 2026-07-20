@@ -264,6 +264,63 @@ function ProfileTab({ profile }: { profile: Profile }) {
 }
 
 // ---------------------------------------------------------------------------
+// Recent Oto conversations — vehicle + what Oto did + booking outcome. Reuses
+// the shared summarizer so this matches /ops/oto-ai exactly.
+// ---------------------------------------------------------------------------
+function OtoActivityCard({ userId }: { userId: Id<"users"> }) {
+  const { token } = usePortalSession();
+  const convos: FunctionReturnType<typeof api.opsUsers.otoConversations> | undefined =
+    useQuery(api.opsUsers.otoConversations, { token, id: userId });
+
+  if (convos === undefined)
+    return <div className="py-6 text-center text-sm text-slate-400">Loading Oto activity…</div>;
+  if (convos.length === 0)
+    return <div className="py-6 text-center text-sm text-slate-400">No Oto conversations yet.</div>;
+
+  return (
+    <div className="mt-3 space-y-2">
+      {convos.map((c) => (
+        <div key={c.id} className="rounded-lg border border-slate-100 p-3">
+          <div className="flex flex-wrap items-center gap-2 text-[12px] text-slate-500">
+            <span className="font-medium text-slate-700">{c.vehicleYmm ?? "Vehicle —"}</span>
+            <span>{fmtDate(c.started_at)}</span>
+            {c.mood && (
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500">
+                {c.mood}
+              </span>
+            )}
+            {c.message_count != null && <span>{c.message_count} msgs</span>}
+            {c.bookingOutcome.state === "created" && (
+              <Link
+                href={`/ops/bookings/${c.bookingOutcome.bookingId}`}
+                className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:underline"
+              >
+                → booking · {c.bookingOutcome.status.replace(/_/g, " ")}
+              </Link>
+            )}
+            {c.bookingOutcome.state === "not_created" && (
+              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                booking mentioned, none created
+              </span>
+            )}
+          </div>
+          {c.actions.length > 0 && (
+            <ul className="mt-1.5 space-y-0.5">
+              {c.actions.map((a, i) => (
+                <li key={i} className="text-[12px] text-slate-600">
+                  <span className="font-medium">{a.label}</span>
+                  {a.detail ? <span className="text-slate-400"> — {a.detail}</span> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Engagement tab — acquisition/referral attribution + notification prefs.
 // ---------------------------------------------------------------------------
 function EngagementTab({ userId }: { userId: Id<"users"> }) {
@@ -278,6 +335,12 @@ function EngagementTab({ userId }: { userId: Id<"users"> }) {
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
+      {/* Recent Oto conversations — what Oto did + booking outcomes. */}
+      <div className={`${CARD} lg:col-span-2`}>
+        <h2 className="text-sm font-semibold text-slate-900">Recent Oto conversations</h2>
+        <OtoActivityCard userId={userId} />
+      </div>
+
       {/* Acquisition */}
       <div className={CARD}>
         <h2 className="text-sm font-semibold text-slate-900">Acquisition</h2>
@@ -725,7 +788,7 @@ function BookingsTab({ userId }: { userId: Id<"users"> }) {
           <table className="w-full text-[13px]">
             <thead>
               <tr>
-                {["Status", "Shop", "Services", "Scheduled", "Created", "Total", ""].map((h, i) => (
+                {["Status", "Shop", "Vehicle", "Services", "Scheduled", "Created", "Total", ""].map((h, i) => (
                   <th
                     key={i}
                     className="border-b border-slate-200 pb-2 pr-4 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400"
@@ -755,6 +818,7 @@ function BookingsTab({ userId }: { userId: Id<"users"> }) {
                       b.shop
                     )}
                   </td>
+                  <td className="py-2.5 pr-4 text-slate-600">{b.vehicleYmm ?? "—"}</td>
                   <td className="py-2.5 pr-4 text-slate-600">
                     {b.services.length > 0 ? b.services.join(", ") : "—"}
                   </td>

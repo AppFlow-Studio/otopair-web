@@ -11,6 +11,12 @@ import {
   resolveVehicleDisplayById,
   userDisplayName,
 } from "./lib/bookingEnrichment";
+import {
+  summarizeOtoActions,
+  resolveBookingOutcome,
+  type OtoAction,
+  type OtoBookingOutcome,
+} from "./lib/otoActivity";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -40,6 +46,9 @@ export type ConversationRow = {
   vehicleYmm: string | null;
   message_count: number | null;
   led_to_booking: boolean;
+  /** Status of the linked booking when led_to_booking — lets the list pill
+   *  show the real outcome (pending / completed / cancelled) not just "→". */
+  booking_status: string | null;
 };
 export type ConversationsResult = {
   rows: ConversationRow[];
@@ -74,6 +83,11 @@ export const conversations = query({
         }
         ymm = vehicleYmm.get(vid) ?? null;
       }
+      // Resolve the linked booking's status (only for the few rows that have one).
+      let bookingStatus: string | null = null;
+      if (c.booking_id) {
+        bookingStatus = (await ctx.db.get(c.booking_id))?.status ?? null;
+      }
       out.push({
         id: String(c._id),
         user: userName.get(uid) ?? null,
@@ -86,6 +100,7 @@ export const conversations = query({
         vehicleYmm: ymm,
         message_count: c.message_count ?? null,
         led_to_booking: c.led_to_booking === true,
+        booking_status: bookingStatus,
       });
     }
     const since7d = Date.now() - 7 * DAY;
@@ -149,6 +164,11 @@ export type TranscriptResult = {
     p50LatencyMs: number;
     models: string[];
   } | null;
+  // What Oto DID this conversation (renders + data/memory writes), from
+  // conversation_audit.tool_calls with a telemetry-name fallback for older rows.
+  actions: OtoAction[];
+  // Whether the conversation actually produced a booking (or over-claimed one).
+  bookingOutcome: OtoBookingOutcome;
 };
 
 export const transcript = query({
@@ -157,7 +177,7 @@ export const transcript = query({
     await requireDirector(ctx, token);
     const convo = await ctx.db.get(conversationId);
     if (!convo) return null;
-    const [messages, telemetryRows, vehicle] = await Promise.all([
+    const [messages, telemetryRows, auditRows, vehicle] = await Promise.all([
       ctx.db
         .query("ai_messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
@@ -166,8 +186,17 @@ export const transcript = query({
         .query("oto_telemetry")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
         .take(500),
+      ctx.db
+        .query("conversation_audit")
+        .withIndex("by_conversation_turn", (q) => q.eq("conversation_id", conversationId))
+        .take(500),
       resolveVehicleDisplayById(ctx, convo.vehicle_id),
     ]);
+
+    // What Oto did + whether it actually booked. Shared with the director
+    // debug view and the user profile so the surfacing stays consistent.
+    const actions = summarizeOtoActions(auditRows, telemetryRows);
+    const bookingOutcome = await resolveBookingOutcome(ctx, convo, actions);
 
     const turns: TranscriptTurn[] = telemetryRows
       .map((t) => {
@@ -222,6 +251,8 @@ export const transcript = query({
       vehicleYmm: vehicle.ymm,
       turns,
       telemetry,
+      actions,
+      bookingOutcome,
     };
   },
 });

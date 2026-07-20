@@ -137,6 +137,7 @@ import type * as lib_mechanic_verification_logging from "../lib/mechanic_verific
 import type * as lib_mechanic_verifications from "../lib/mechanic_verifications.js";
 import type * as lib_modifiers from "../lib/modifiers.js";
 import type * as lib_notificationScope from "../lib/notificationScope.js";
+import type * as lib_otoActivity from "../lib/otoActivity.js";
 import type * as lib_packageRules from "../lib/packageRules.js";
 import type * as lib_partRoleQuantity from "../lib/partRoleQuantity.js";
 import type * as lib_partSubcategories from "../lib/partSubcategories.js";
@@ -568,6 +569,7 @@ declare const fullApi: ApiFromModules<{
   "lib/mechanic_verifications": typeof lib_mechanic_verifications;
   "lib/modifiers": typeof lib_modifiers;
   "lib/notificationScope": typeof lib_notificationScope;
+  "lib/otoActivity": typeof lib_otoActivity;
   "lib/packageRules": typeof lib_packageRules;
   "lib/partRoleQuantity": typeof lib_partRoleQuantity;
   "lib/partSubcategories": typeof lib_partSubcategories;

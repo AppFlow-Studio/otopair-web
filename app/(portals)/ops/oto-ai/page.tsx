@@ -26,6 +26,15 @@ const fmtDT = (ms: number) => new Date(ms).toLocaleString();
 const fmtTok = (n: number) =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
+// Action-kind → pill styling for the "Oto actions" timeline.
+const ACTION_KIND_STYLE: Record<string, string> = {
+  booking: "bg-emerald-50 text-emerald-700",
+  vehicle_update: "bg-blue-50 text-blue-700",
+  record_confirm: "bg-violet-50 text-violet-600",
+  memory: "bg-slate-100 text-slate-500",
+  other: "bg-slate-100 text-slate-500",
+};
+
 type ConversationRow = {
   id: string;
   user: string | null;
@@ -38,6 +47,7 @@ type ConversationRow = {
   vehicleYmm: string | null;
   message_count: number | null;
   led_to_booking: boolean;
+  booking_status: string | null;
 };
 type TranscriptMessage = {
   id: string;
@@ -253,7 +263,9 @@ export default function OpsOtoAiPage() {
                     {c.user ?? "Unknown user"}
                   </Link>
                   {c.led_to_booking && (
-                    <span className={`${pill} bg-emerald-50 text-emerald-700`}>→ booking</span>
+                    <span className={`${pill} bg-emerald-50 text-emerald-700`}>
+                      → booking{c.booking_status ? ` · ${c.booking_status.replace(/_/g, " ")}` : ""}
+                    </span>
                   )}
                 </div>
                 {c.vehicleYmm && (
@@ -320,6 +332,74 @@ export default function OpsOtoAiPage() {
                   )}
                 </div>
               )}
+              {/* Booking outcome — did Oto's "it's booked" actually land? */}
+              {transcript.bookingOutcome.state === "created" && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-[12px]">
+                  <span className="font-semibold text-emerald-800">✅ Booking created</span>
+                  {transcript.bookingOutcome.services.length > 0 && (
+                    <span className="text-emerald-700">
+                      {transcript.bookingOutcome.services.join(", ")}
+                    </span>
+                  )}
+                  <span className={`${pill} bg-white text-emerald-700`}>
+                    {transcript.bookingOutcome.status.replace(/_/g, " ")}
+                  </span>
+                  {(transcript.bookingOutcome.scheduledDate ||
+                    transcript.bookingOutcome.shopName) && (
+                    <span className="text-emerald-700">
+                      {[
+                        transcript.bookingOutcome.scheduledDate,
+                        transcript.bookingOutcome.scheduledTime,
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      {transcript.bookingOutcome.shopName
+                        ? ` · ${transcript.bookingOutcome.shopName}`
+                        : ""}
+                    </span>
+                  )}
+                  <Link
+                    href={`/ops/bookings/${transcript.bookingOutcome.bookingId}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="ml-auto font-medium text-emerald-800 underline"
+                  >
+                    open booking →
+                  </Link>
+                </div>
+              )}
+              {transcript.bookingOutcome.state === "not_created" && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800">
+                  ⚠️ Oto teed up a booking in this conversation, but none is linked —
+                  it may have over-claimed, or the user never finished the flow.
+                </div>
+              )}
+
+              {/* What Oto DID — action timeline (renders + data/memory writes). */}
+              {transcript.actions.length > 0 && (
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    Oto actions
+                  </div>
+                  <ul className="mt-1.5 space-y-1">
+                    {transcript.actions.map((a, idx) => (
+                      <li key={idx} className="flex items-start gap-2 text-[12px]">
+                        <span
+                          className={`${pill} ${ACTION_KIND_STYLE[a.kind] ?? "bg-slate-100 text-slate-600"}`}
+                        >
+                          {a.kind.replace(/_/g, " ")}
+                        </span>
+                        <span className="text-slate-700">
+                          <span className="font-medium">{a.label}</span>
+                          {a.detail ? (
+                            <span className="text-slate-500"> — {a.detail}</span>
+                          ) : null}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {transcript.arc && (
                 <div className="rounded-lg bg-slate-50 px-3 py-2 text-[12px] italic text-slate-500">
                   arc: {transcript.arc}

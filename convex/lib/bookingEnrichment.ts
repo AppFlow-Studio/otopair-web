@@ -40,6 +40,31 @@ export function userDisplayName(user: Doc<"users"> | null): string {
   );
 }
 
+/**
+ * Make/model/trim read from vehicles.metadata — the blob where MANUALLY-INPUT
+ * vehicles store year/make/model (they have no resolved trim_id, so the
+ * trim_id → trims → models → makes walk yields nothing and the display
+ * collapses to year-only). Tolerates the `Make`/`make` casing seen across
+ * writers (see convex/invoices.ts) and a non-object/absent metadata value.
+ * The single source of the fallback so every YMM builder can share it.
+ */
+export function metaMakeModel(metadata: unknown): {
+  make: string;
+  model: string;
+  trim: string;
+} {
+  const m =
+    metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>)
+      : {};
+  const s = (x: unknown): string => (typeof x === "string" ? x : "");
+  return {
+    make: s(m.make ?? m.Make),
+    model: s(m.model ?? m.Model),
+    trim: s(m.trim ?? m.Trim),
+  };
+}
+
 /** Resolve a VIN to a year/make/model string + image. Null vin → empty display. */
 export async function resolveVehicleDisplay(
   ctx: QueryCtx,
@@ -64,6 +89,12 @@ export async function resolveVehicleDisplay(
         if (mk) make = mk.name ?? "";
       }
     }
+  }
+  // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+  if (!make || !model) {
+    const meta = metaMakeModel(veh.metadata);
+    if (!make) make = meta.make;
+    if (!model) model = meta.model;
   }
   const ymm = [veh.year, make, model].filter(Boolean).join(" ") || veh.vin;
   return { vin, ymm, imageUrl: veh.image_url ?? null };
@@ -90,6 +121,12 @@ export async function resolveVehicleDisplayById(
         if (mk) make = mk.name ?? "";
       }
     }
+  }
+  // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+  if (!make || !model) {
+    const meta = metaMakeModel(veh.metadata);
+    if (!make) make = meta.make;
+    if (!model) model = meta.model;
   }
   const ymm = [veh.year, make, model].filter(Boolean).join(" ") || veh.vin;
   return { vin: veh.vin ?? null, ymm, imageUrl: veh.image_url ?? null };
